@@ -238,10 +238,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .layers-panel { grid-area: layers; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 .layers-panel.is-hidden { display: none; }
 .app-shell.layers-hidden { grid-template-columns: 58px 0 minmax(320px, 1fr) 292px; }
-.app-shell.layers-hidden .workspace, .app-shell.layers-hidden .workspace-closed { left: 70px; }
+.app-shell.layers-hidden .workspace { left: 70px; width: calc(100% - 374px); }
+.app-shell.layers-hidden .workspace-closed { left: 70px; }
 .app-shell.layers-hidden .logic-window { left: 92px; }
 .app-shell.layers-hidden .component-rack-drawer { left: 0; right: 0; }
-.app-shell.layers-hidden .floating-tool-window.is-expanded { left: 70px; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; min-height: 72px; padding: 13px 15px 11px; border-bottom: 1px solid #292f3b; }
 .panel-kicker { color: #777f90; font-size: 8px; font-weight: 800; letter-spacing: 1.5px; }
 .panel-heading h2 { margin: 4px 0 0; color: #e7e8ed; font-size: 14px; font-weight: 650; letter-spacing: -.2px; }
@@ -275,27 +275,36 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 
 .workspace {
-  resize: both;
   grid-area: workspace;
   position: absolute;
   left: 310px;
-  right: 304px;
   top: 68px;
-  bottom: 39px;
+  width: calc(100% - 614px);
+  height: calc(100% - 107px);
   z-index: 4;
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
+  min-width: 320px;
+  min-height: 180px;
+  resize: both;
   overflow: hidden;
   background: #11151d;
-  transition: left 160ms ease, right 160ms ease, top 160ms ease, bottom 160ms ease;
 }
-.workspace.is-minimized { bottom: auto; height: 39px; }
-.workspace.is-expanded { left: 310px; right: 304px; top: 68px; bottom: 39px; z-index: 40; }
-.app-shell.layers-hidden .workspace.is-expanded { left: 70px; }
+.workspace.is-minimized { height: 39px; min-height: 39px; resize: none; }
+.workspace.is-expanded {
+  left: 14px;
+  top: 68px;
+  width: calc(100% - 28px);
+  height: calc(100% - 107px);
+  min-width: 0;
+  min-height: 0;
+  resize: none;
+  z-index: 40;
+}
 
 .floating-window-header {
+  cursor: grab;
+  touch-action: none;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -307,6 +316,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   background: linear-gradient(180deg, #202735, #1a202c);
   user-select: none;
 }
+.floating-window-header:active { cursor: grabbing; }
 .floating-window-title { display: flex; align-items: baseline; gap: 9px; flex: 0 1 auto; min-width: 0; white-space: nowrap; }
 .floating-window-title strong { overflow: hidden; color: #dfe3ec; font-size: 11px; font-weight: 700; text-overflow: ellipsis; }
 .floating-window-title span { overflow: hidden; color: #768194; font-size: 8px; font-weight: 700; letter-spacing: .8px; text-overflow: ellipsis; }
@@ -368,13 +378,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   display: flex;
   flex-direction: column;
   min-width: 280px;
-  min-height: 0;
+  min-height: 170px;
   overflow: hidden;
   border: 1px solid #394354;
   border-radius: 10px;
   background: #171e29;
   box-shadow: 0 20px 58px rgba(0, 0, 0, .48), 0 4px 12px rgba(0, 0, 0, .3);
-  transition: top 160ms ease, left 160ms ease, right 160ms ease, bottom 160ms ease, width 160ms ease, height 160ms ease;
 }
 .floating-tool-window:hover { z-index: 32; }
 .logic-window { left: 332px; top: 91px; width: 350px; height: 385px; }
@@ -383,12 +392,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .floating-tool-window.is-minimized { height: 39px; min-height: 39px; resize: none; }
 .workspace.is-minimized { height: 39px; min-height: 39px; resize: none; }
 .floating-tool-window.is-expanded {
-  left: 310px;
-  right: 304px;
+  left: 14px;
   top: 68px;
-  bottom: 39px;
-  width: auto;
-  height: auto;
+  width: calc(100% - 28px);
+  height: calc(100% - 107px);
+  min-width: 0;
+  min-height: 0;
+  resize: none;
   z-index: 42;
 }
 
@@ -513,9 +523,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 
 @media (max-width: 1120px) {
   .app-shell { grid-template-columns: 54px 210px minmax(300px, 1fr) 254px; }
-  .workspace, .workspace-closed { left: 276px; right: 266px; }
-  .workspace.is-expanded { left: 276px; right: 266px; }
-  .floating-tool-window.is-expanded { left: 276px; right: 266px; }
+  .workspace { left: 276px; width: calc(100% - 542px); }
+  .workspace-closed { left: 276px; right: 266px; }
+  .app-shell.layers-hidden { grid-template-columns: 54px 0 minmax(300px, 1fr) 254px; }
+  .app-shell.layers-hidden .workspace { left: 66px; width: calc(100% - 332px); }
+  .app-shell.layers-hidden .workspace-closed { left: 66px; right: 266px; }
   .logic-window { left: 292px; }
   .component-canvas-window { right: 278px; }
   .component-rack-drawer { left: 0; right: 0; }
@@ -529,9 +541,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
     grid-template-areas: "toolbar toolbar toolbar" "tools layers workspace" "footer footer footer";
   }
   .inspector-panel { display: none; }
-  .workspace, .workspace-closed { left: 268px; right: 12px; }
-  .workspace.is-expanded { left: 268px; right: 12px; }
-  .floating-tool-window.is-expanded { left: 268px; right: 12px; }
+  .workspace { left: 268px; width: calc(100% - 280px); }
+  .workspace-closed { left: 268px; right: 12px; }
+  .app-shell.layers-hidden { grid-template-columns: 54px 0 minmax(280px, 1fr); }
+  .app-shell.layers-hidden .workspace { left: 66px; width: calc(100% - 78px); }
+  .app-shell.layers-hidden .workspace-closed { left: 66px; right: 12px; }
   .logic-window { left: 278px; }
   .component-canvas-window { right: 20px; }
   .code-window { left: 24%; width: min(620px, 70vw); }
@@ -557,9 +571,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
     grid-template-areas: "toolbar toolbar" "tools workspace" "footer footer";
   }
   .layers-panel { display: none; }
-  .workspace, .workspace-closed { left: 60px; right: 12px; }
-  .workspace.is-expanded { left: 60px; right: 12px; }
-  .floating-tool-window.is-expanded { left: 60px; right: 12px; }
+  .workspace { left: 60px; width: calc(100% - 72px); }
+  .workspace-closed { left: 60px; right: 12px; }
+  .app-shell.layers-hidden { grid-template-columns: 48px minmax(0, 1fr); }
   .logic-window { left: 60px; top: 96px; width: min(350px, calc(100vw - 76px)); }
   .component-canvas-window { left: 60px; right: 12px; top: 112px; width: auto; }
   .code-window { left: 60px; right: 12px; top: 128px; width: auto; }
