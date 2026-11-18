@@ -61,12 +61,13 @@ export function App() {
   const [layersVisible, setLayersVisible] = useState(true);
   const [canvasMinimized, setCanvasMinimized] = useState(false);
   const [canvasClosed, setCanvasClosed] = useState(false);
-  const [canvasMaximized, setCanvasMaximized] = useState(false);
-  const [canvasFloating, setCanvasFloating] = useState(false);
+  const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating' | 'maximized'>('docked');
+  const canvasFloating = canvasWindowMode === 'floating';
+  const canvasMaximized = canvasWindowMode === 'maximized';
   const [canvasPosition, setCanvasPosition] = useState({ x: 100, y: 92 });
   const [canvasSize, setCanvasSize] = useState({ width: 860, height: 620 });
   const canvasDrag = useRef<{ pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
-  const canvasResize = useRef<{ pointerX: number; pointerY: number; width: number; height: number } | null>(null);
+  const canvasResize = useRef<{ pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -182,7 +183,7 @@ export function App() {
           </div>
           <div class="global-panel-toggles" aria-label="Workspace panels">
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
-            <button class="global-panel-toggle canvas-header-toggle" type="button" title="Create / open Canvas window" aria-label="Create or open Canvas window" onClick={() => { setCanvasClosed(false); setCanvasMinimized(false); setCanvasFloating(true); setCanvasMaximized(false); }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', 'Create or reopen the Canvas window.')}><Icon name="canvas" /></button>
+            <button class="global-panel-toggle canvas-header-toggle" type="button" title="Create / open Canvas window" aria-label="Create or open Canvas window" onClick={() => { setCanvasClosed(false); setCanvasMinimized(false); setCanvasWindowMode('floating'); }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', 'Create or reopen the Canvas window.')}><Icon name="canvas" /></button>
             <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
           </div>
         </nav>
@@ -325,14 +326,12 @@ export function App() {
               <button type="button" class="window-control" title="Minimize canvas" aria-label="Minimize canvas" onClick={() => setCanvasMinimized(true)}>—</button>
               <button type="button" class="window-control" title={canvasMaximized ? "Restore to floating window" : "Maximize canvas"} aria-label={canvasMaximized ? "Restore to floating window" : "Maximize canvas"} aria-pressed={canvasMaximized} onClick={() => {
                 if (canvasMaximized) {
-                  setCanvasFloating(true);
-                  setCanvasMaximized(false);
+                  setCanvasWindowMode('floating');
                 } else {
-                  setCanvasFloating(true);
-                  setCanvasMaximized(true);
+                  setCanvasWindowMode('maximized');
                 }
               }}>{canvasMaximized ? "❐" : "□"}</button>
-              <button type="button" class="window-control window-control-close" title="Close Canvas window" aria-label="Close Canvas window" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); setCanvasMaximized(false); setCanvasFloating(false); }}>×</button>
+              <button type="button" class="window-control window-control-close" title="Close Canvas window" aria-label="Close Canvas window" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); setCanvasWindowMode('docked'); }}>×</button>
             </div>
           </div>
         </div>
@@ -347,19 +346,23 @@ export function App() {
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
-        {canvasFloating && !canvasMaximized && (
+        {canvasFloating && !canvasMaximized && ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map((direction) => (
           <div
-            class="workspace-resize-handle"
+            key={direction}
+            class={`workspace-resize-handle resize-${direction}`}
             role="presentation"
-            aria-label="Resize Canvas window"
+            aria-label={`Resize Canvas window from ${direction}`}
             onPointerDown={(event) => {
               event.preventDefault();
               event.stopPropagation();
               canvasResize.current = {
                 pointerX: event.clientX,
                 pointerY: event.clientY,
+                left: canvasPosition.x,
+                top: canvasPosition.y,
                 width: canvasSize.width,
                 height: canvasSize.height,
+                direction,
               };
               (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
             }}
@@ -368,17 +371,31 @@ export function App() {
               if (!resize) return;
               const shell = (event.currentTarget as HTMLElement).closest('.app-shell') as HTMLElement | null;
               const bounds = shell?.getBoundingClientRect();
-              const maxWidth = Math.max(280, (bounds?.right ?? window.innerWidth) - canvasPosition.x - 8);
-              const maxHeight = Math.max(220, (bounds?.bottom ?? window.innerHeight) - canvasPosition.y - 35);
-              setCanvasSize({
-                width: Math.max(280, Math.min(maxWidth, resize.width + event.clientX - resize.pointerX)),
-                height: Math.max(220, Math.min(maxHeight, resize.height + event.clientY - resize.pointerY)),
-              });
+              const dx = event.clientX - resize.pointerX;
+              const dy = event.clientY - resize.pointerY;
+              const shellWidth = bounds?.width ?? window.innerWidth;
+              const shellHeight = bounds?.height ?? window.innerHeight;
+              let left = resize.left;
+              let top = resize.top;
+              let width = resize.width;
+              let height = resize.height;
+              if (direction.includes('e')) width = Math.min(resize.width + dx, shellWidth - resize.left - 8);
+              if (direction.includes('s')) height = Math.min(resize.height + dy, shellHeight - resize.top - 35);
+              if (direction.includes('w')) {
+                left = Math.max(0, Math.min(resize.left + dx, resize.left + resize.width - 280));
+                width = resize.width + resize.left - left;
+              }
+              if (direction.includes('n')) {
+                top = Math.max(56, Math.min(resize.top + dy, resize.top + resize.height - 220));
+                height = resize.height + resize.top - top;
+              }
+              setCanvasPosition({ x: left, y: top });
+              setCanvasSize({ width: Math.max(280, width), height: Math.max(220, height) });
             }}
             onPointerUp={() => { canvasResize.current = null; }}
             onPointerCancel={() => { canvasResize.current = null; }}
           />
-        )}
+        ))}
       </main>}
 
       <aside class="inspector-panel" onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
