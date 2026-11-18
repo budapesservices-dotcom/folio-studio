@@ -907,7 +907,7 @@ export function App() {
         </div>
       </aside>
 
-      {!canvasClosed && !canvasMinimized && !(componentCanvasOpen && !componentCanvasFloating && !canvasFloating) && !(nodeLogicOpen && !nodeLogicFloating) && <main
+      {!canvasClosed && !canvasMinimized && !(componentCanvasOpen && !componentCanvasFloating && !canvasFloating) && !(nodeLogicOpen && !nodeLogicFloating && !canvasFloating) && <main
         class={`workspace${canvasFloating ? " canvas-floating" : ""}`}
         style={canvasFloating ? {
           left: `${canvasPosition.x}px`,
@@ -971,7 +971,7 @@ export function App() {
             key={direction}
             class={`workspace-resize-handle resize-${direction}`}
             role="presentation"
-            aria-label={`Resize Component Canvas window from ${direction}`}
+            aria-label={`Resize Canvas window from ${direction}`}
             onPointerDown={(event) => startCanvasResize(event, direction)}
           />
         ))}
@@ -1045,7 +1045,7 @@ export function App() {
             key={direction}
             class={`workspace-resize-handle resize-${direction}`}
             role="presentation"
-            aria-label={`Resize Canvas window from ${direction}`}
+            aria-label={`Resize Component Canvas window from ${direction}`}
             onPointerDown={(event) => startComponentCanvasResize(event, direction)}
           />
         ))}
@@ -1061,7 +1061,7 @@ export function App() {
             onPointerDown={startCanvasDrag}
           >
             <Icon name="canvas" />
-            <strong>{componentState.project.document.name}</strong>
+            <strong>{state.project.document.name}</strong>
             <button type="button" class="minimized-restore-control" title="Restore Canvas" aria-label="Restore Canvas" onClick={() => setCanvasMinimized(false)}></button>
             <button type="button" title="Close Canvas" aria-label="Close Canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); }}>×</button>
           </div>
@@ -1081,6 +1081,70 @@ export function App() {
             <strong>Component Canvas</strong>
             <button type="button" class="minimized-restore-control" title="Restore Component Canvas" aria-label="Restore Component Canvas" onClick={() => setComponentCanvasMinimized(false)}></button>
             <button type="button" title="Close Component Canvas" aria-label="Close Component Canvas" onClick={() => { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); }}>×</button>
+          </div>
+        </div>
+      )}
+
+      {!nodeLogicClosed && !nodeLogicMinimized && <main
+        class={`workspace node-logic-window${nodeLogicFloating ? " canvas-floating" : " node-logic-docked"}`}
+        style={nodeLogicFloating ? {
+          left: `${nodeLogicPosition.x}px`,
+          top: `${nodeLogicPosition.y}px`,
+          width: `${nodeLogicSize.width}px`,
+          height: `${nodeLogicSize.height}px`,
+        } : undefined}
+        onMouseEnter={() => updateToolbarHint('NODE LOGIC', 'Node Logic workspace for building visual logic flows.')}
+      >
+        <div
+          class={`workspace-toolbar${nodeLogicFloating ? " workspace-toolbar-draggable" : ""}`}
+          onPointerDown={nodeLogicFloating ? startNodeLogicDrag : undefined}
+        >
+          <div class="breadcrumb">
+            <Icon name="logicNodes" />
+            <strong>Node Logic</strong>
+          </div>
+          <div class="canvas-window-tools">
+            <div class="workspace-window-controls" aria-label="Node Logic window controls">
+              <button type="button" class="window-control window-control-minimize" title="Minimize Node Logic" aria-label="Minimize Node Logic" onClick={() => setNodeLogicMinimized(true)}></button>
+              <button type="button" class="window-control" title={nodeLogicFloating ? "Dock Node Logic" : "Float Node Logic"} aria-label={nodeLogicFloating ? "Dock Node Logic" : "Float Node Logic"} aria-pressed={nodeLogicFloating} onClick={() => setNodeLogicWindowMode(nodeLogicFloating ? 'docked' : 'floating')}>{nodeLogicFloating ? "▣" : "□"}</button>
+              <button type="button" class="window-control window-control-close" title="Close Node Logic window" aria-label="Close Node Logic window" onClick={() => { setNodeLogicClosed(true); setNodeLogicMinimized(false); setNodeLogicWindowMode('floating'); }}>×</button>
+            </div>
+          </div>
+        </div>
+        <div class="node-logic-workspace">
+          <div class="node-logic-empty">
+            <div class="node-logic-empty-icon"><Icon name="logicNodes" /></div>
+            <span class="panel-kicker">VISUAL LOGIC</span>
+            <strong>Node Logic</strong>
+            <p>Build and connect logic nodes in this independent workspace.</p>
+            <span class="node-logic-empty-note">NODE EDITOR · SEPARATE FROM DESIGN CANVAS</span>
+          </div>
+        </div>
+        {nodeLogicFloating && ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map((direction) => (
+          <div
+            key={direction}
+            class="workspace-resize-handle"
+            className={`workspace-resize-handle resize-${direction}`}
+            role="presentation"
+            aria-label={`Resize Node Logic window from ${direction}`}
+            onPointerDown={(event) => startNodeLogicResize(event, direction)}
+          />
+        ))}
+      </main>}
+
+      {nodeLogicMinimized && !nodeLogicClosed && (
+        <div
+          class="canvas-minimized-window node-logic-minimized"
+          style={{ left: nodeLogicPosition.x + "px", top: nodeLogicPosition.y + "px" }}
+        >
+          <div
+            class="canvas-minimized-titlebar"
+            onPointerDown={nodeLogicFloating ? startNodeLogicDrag : undefined}
+          >
+            <Icon name="logicNodes" />
+            <strong>Node Logic</strong>
+            <button type="button" class="minimized-restore-control" title="Restore Node Logic" aria-label="Restore Node Logic" onClick={() => setNodeLogicMinimized(false)}></button>
+            <button type="button" title="Close Node Logic" aria-label="Close Node Logic" onClick={() => { setNodeLogicClosed(true); setNodeLogicMinimized(false); }}>×</button>
           </div>
         </div>
       )}
