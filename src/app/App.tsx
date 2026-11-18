@@ -794,7 +794,7 @@ export function App() {
             <strong>Component Canvas</strong>
           </div>
           <div class="canvas-window-tools">
-            <div class="component-canvas-create-tools" aria-label="Create component elements">
+            <div class="workspace-tools component-canvas-create-tools" aria-label="Create component elements">
               <button type="button" title="Add rectangle" aria-label="Add rectangle" onClick={() => componentDispatch({ type: 'add-node', node: createNode('rect', componentState.project.document.nodes.length) })}><Icon name="rect" /></button>
               <button type="button" title="Add ellipse" aria-label="Add ellipse" onClick={() => componentDispatch({ type: 'add-node', node: createNode('ellipse', componentState.project.document.nodes.length) })}><Icon name="ellipse" /></button>
               <button type="button" title="Add text" aria-label="Add text" onClick={() => componentDispatch({ type: 'add-node', node: createNode('text', componentState.project.document.nodes.length) })}><Icon name="text" /></button>
