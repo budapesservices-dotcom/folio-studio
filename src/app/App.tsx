@@ -95,17 +95,13 @@ export function App() {
       const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
       const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
       const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-      const maxX = Math.max(0, viewportWidth - canvasSize.width);
-      const maxY = Math.max(56, viewportHeight - 27 - canvasSize.height);
       const savedX = Number.isFinite(saved?.position?.x) ? saved.position.x : 48;
       const savedY = Number.isFinite(saved?.position?.y) ? saved.position.y : 80;
-      // Old saved coordinates could put a full-size window flush against an edge.
-      // Reset only out-of-range coordinates to a reachable, draggable starting point.
-      const preferredX = savedX <= maxX ? savedX : Math.min(48, maxX);
-      const preferredY = savedY <= maxY ? savedY : Math.min(80, maxY);
+      // Horizontal and bottom placement are intentionally unbounded; only keep
+      // the titlebar below the app header so the window can always be recovered.
       return {
-        x: Math.max(0, preferredX),
-        y: Math.max(56, preferredY),
+        x: savedX,
+        y: Math.max(56, savedY),
       };
     } catch { return { x: 48, y: 80 }; }
   });
@@ -238,16 +234,14 @@ export function App() {
       const shellTop = bounds?.top ?? 0;
       const visibleWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
       const visibleHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
-      const windowWidth = canvasMinimized ? 260 : canvasSize.width;
-      const windowHeight = canvasMinimized ? 42 : canvasSize.height;
-      const maxX = Math.max(0, visibleWidth - windowWidth);
-      const maxY = Math.max(56, visibleHeight - 27 - windowHeight);
-      const clamp = (value: number, minimum: number, maximum: number) =>
-        Math.min(maximum, Math.max(minimum, value));
+      const nextX = drag.originX + moveEvent.clientX - drag.pointerX;
+      const nextY = drag.originY + moveEvent.clientY - drag.pointerY;
 
+      // Let the window travel beyond left/right/bottom edges. Keep only its
+      // titlebar above the app header to avoid losing the window permanently.
       setCanvasPosition({
-        x: clamp(drag.originX + moveEvent.clientX - drag.pointerX, 0, maxX),
-        y: clamp(drag.originY + moveEvent.clientY - drag.pointerY, 56, maxY),
+        x: nextX,
+        y: Math.max(56, nextY),
       });
     };
 
