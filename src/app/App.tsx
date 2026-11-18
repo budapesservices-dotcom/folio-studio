@@ -691,7 +691,7 @@ export function App() {
           width: `${canvasSize.width}px`,
           height: `${canvasSize.height}px`,
         } : undefined}
-        onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
+        onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
       >
         <div
           class={`workspace-toolbar${canvasFloating ? " workspace-toolbar-draggable" : ""}`}
@@ -747,7 +747,7 @@ export function App() {
             key={direction}
             class={`workspace-resize-handle resize-${direction}`}
             role="presentation"
-            aria-label={`Resize Canvas window from ${direction}`}
+            aria-label={`Resize Component Canvas window from ${direction}`}
             onPointerDown={(event) => startCanvasResize(event, direction)}
           />
         ))}
