@@ -15,8 +15,17 @@ npm run check && npm run test && npm run build
 5. Resize a single object from each of the eight handles. The opposite edge should remain anchored.
 6. Resize a multi-selection from a corner or edge. The selected objects should scale together as one group.
 7. Use the six alignment controls to align left, horizontal center, right, top, vertical center, and bottom.
-8. Try Undo once after a drag, resize, or alignment. Each complete gesture should be a single history step. Redo should restore it.
-9. Verify a locked layer cannot be dragged or resized.
-10. Refresh the browser and confirm the final geometry is restored by autosave.
+8. Select at least three objects and use **Distribute horizontally** or **Distribute vertically**. The outermost edges should remain fixed, gaps should become equal, and object sizes/order should remain unchanged.
+9. Verify distribute controls are disabled with fewer than three selected objects.
+10. Hold **Space** and drag the canvas to pan. Repeat with the middle mouse button. The gesture must not move or select artwork.
+11. Release the pan gesture and verify regular selection, object dragging and resize still work. Space must remain usable in text inputs and buttons.
+12. Try Undo once after a drag, resize, alignment, or distribution. Each complete gesture should be a single history step. Redo should restore it.
+13. Verify a locked layer cannot be dragged or resized.
+14. Refresh the browser and confirm the final geometry is restored by autosave.
 
-Do not begin the next engine until these checks pass in the target browser.
+## Regression gate
+
+- Existing snapping guides and selection behavior continue to work.
+- Canvas pan does not alter document geometry or create an undo history entry.
+- Distribution changes position only; dimensions and appearance remain unchanged.
+- Do not begin the next engine until the automated checks and manual checks pass in the target browser.
