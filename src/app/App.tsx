@@ -266,7 +266,8 @@ export function App() {
     <div class={`app-shell ${layersVisible ? "" : "layers-hidden"}`} onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}>
       <header class="global-toolbar-slot" aria-label="FOLIO application toolbar">
         <nav class="global-menu-bar" aria-label="Application menus">
-          <div class="global-toolbar-left">\n          <div class="global-menu-items">
+          <div class="global-toolbar-left">
+          <div class="global-menu-items">
             <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('FILE', 'Project actions and .flop file commands will be organized here.')}>File</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}>Edit</span>
