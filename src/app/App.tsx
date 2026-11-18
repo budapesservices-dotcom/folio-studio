@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
-import { createInitialProject, createNode } from '../core/document/factory';
-import type { DesignNode, FolioProject } from '../core/document/types';
+import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
+import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
+import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
 import { Canvas } from '../engines/canvas/Canvas';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
@@ -57,32 +58,25 @@ const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
 };
 
 export function App() {
-  const initialEditorState = useMemo(() => {
-    const project = createInitialProject('Main Page');
-    try {
-      project.metadata.name = window.localStorage.getItem('folio.project-name')?.trim() || 'First canvas';
-    } catch { project.metadata.name = 'First canvas'; }
-    return createEditorState(project);
-  }, []);
+  const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const [state, dispatch] = useReducer(editorReducer, initialEditorState);
   const componentInitialState = useMemo(() => {
-    const project = createInitialProject('Component Library');
+    const project = createInitialProject('Component Canvas');
     project.metadata.id = 'folio-component-canvas';
-    project.document.name = 'Component Library';
-    project.document.nodes = [];
+    const page = getActivePage(project);
+    page.name = 'Component Canvas';
+    page.document.name = 'Component Canvas';
+    page.document.nodes = [];
     return createEditorState(project);
   }, []);
   const [componentState, componentDispatch] = useReducer(editorReducer, componentInitialState);
   const [componentReady, setComponentReady] = useState(false);
-  const [ready, setReady] = useState(false);
+  const [isProjectLoaded, setIsProjectLoaded] = useState(false);
+  const isHydrating = !isProjectLoaded || !componentReady;
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [notice, setNotice] = useState('');
   const [zoom, setZoom] = useState(0.82);
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
-  const [projectName, setProjectName] = useState(() => {
-    try { return window.localStorage.getItem('folio.project-name')?.trim() || 'First canvas'; }
-    catch { return 'First canvas'; }
-  });
   const [projectNameEditing, setProjectNameEditing] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState('');
   const projectNameCancelRef = useRef(false);
@@ -91,25 +85,11 @@ export function App() {
   const [componentRackOpen, setComponentRackOpen] = useState(false);
   const [pagesRackOpen, setPagesRackOpen] = useState(false);
   const [pageNameDraft, setPageNameDraft] = useState('');
-  const [pages, setPages] = useState<{ id: string; name: string; path: string; kind: 'main' | '404' | 'page' }[]>(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.pages') ?? 'null');
-      if (Array.isArray(saved) && saved.some((page) => page.id === 'main') && saved.some((page) => page.id === '404')) return saved;
-    } catch { /* use defaults */ }
-    return [
-      { id: 'main', name: 'Main Page', path: '/', kind: 'main' },
-      { id: '404', name: '404 Page', path: '/404', kind: '404' },
-    ];
-  });
-  const [activePageId, setActivePageId] = useState(() => window.localStorage.getItem('folio.active-page') ?? 'main');
+  const pages = state.project.pages;
+  const activePageId = state.project.activePageId;
 
   const [componentRackSearch, setComponentRackSearch] = useState('');
-  const [ownedComponents, setOwnedComponents] = useState<{ id: string; name: string; nodes: DesignNode[]; updatedAt: string }[]>(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.component-rack') ?? '[]');
-      return Array.isArray(saved) ? saved : [];
-    } catch { return []; }
-  });
+  const ownedComponents = state.project.components;
   const [canvasMinimized, setCanvasMinimized] = useState(false);
   const [canvasClosed, setCanvasClosed] = useState(false);
   const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating'>(() => {
