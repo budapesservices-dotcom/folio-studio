@@ -1,0 +1,69 @@
+.artboard {
+  touch-action: none;
+  user-select: none;
+  cursor: default;
+}
+.canvas-node {
+  user-select: none;
+}
+.canvas-selection-outline {
+  fill: none;
+  stroke: #8b7cf6;
+  stroke-width: 2;
+  stroke-dasharray: 7 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.canvas-resize-handle {
+  fill: #f8f7ff;
+  stroke: #806ff0;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: all;
+}
+.canvas-guide {
+  stroke: #a494ff;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.alignment-tools {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  margin-right: 10px;
+  padding: 3px;
+  border: 1px solid #303746;
+  border-radius: 7px;
+  background: #131821;
+}
+.alignment-tools button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 25px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #a7afbe;
+  background: transparent;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.alignment-tools button:hover {
+  border-color: #514976;
+  color: #f0edff;
+  background: #302b4b;
+}
+@media (max-width: 1060px) {
+  .alignment-tools {
+    gap: 1px;
+    margin-right: 4px;
+  }
+  .alignment-tools button {
+    width: 22px;
+  }
+}

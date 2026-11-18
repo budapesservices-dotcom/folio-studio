@@ -68,8 +68,8 @@ The v1 format stores vector/text nodes only. Binary assets, multiple pages, nest
 
 ## Planned stages
 
-1. **Foundation (current):** application shell, AST v1, SVG canvas, local persistence, native file import/export, basic history.
-2. **Canvas & layout:** zoom/pan model, pointer selection, resize handles, snapping, align/distribute, frames and constraints.
+1. **Foundation (complete):** application shell, AST v1, SVG canvas, local persistence, native file import/export, and basic history.
+2. **Canvas & layout (current):** pointer selection, drag, eight resize handles, multi-selection, snapping guides, group alignment, and single-step gesture history. Pan, distribute, frames, and constraints remain planned follow-ups.
 3. **Design system:** reusable styles, variables/tokens, components, variants and assets.
 4. **Prototype engine:** links, events, overlays, navigation and preview mode.
 5. **Animation engine:** timeline, tracks, keyframes, easing and playback.

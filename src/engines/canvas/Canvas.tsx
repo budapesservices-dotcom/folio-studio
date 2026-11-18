@@ -1,31 +1,68 @@
+import { useRef, useState } from 'preact/hooks';
+import type { JSX } from 'preact';
 import type { DesignNode, FolioDocument } from '../../core/document/types';
+import {
+  getBounds,
+  resizeNodes,
+  snapTranslation,
+  type Bounds,
+  type ResizeHandle,
+  type SnapGuide,
+} from './geometry';
+import './canvas.css';
 
 interface CanvasProps {
   document: FolioDocument;
-  selectedNodeId: string | null;
+  selectedNodeIds: string[];
   zoom: number;
-  onSelect: (nodeId: string | null) => void;
+  onSelectionChange: (nodeIds: string[]) => void;
+  onTransformCommit: (nodes: DesignNode[]) => void;
 }
 
-function NodeArtwork({ node, onSelect }: {
-  node: DesignNode;
-  onSelect: (nodeId: string) => void;
-}) {
-  const transform = node.rotation ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})` : undefined;
-  const common = {
-    opacity: node.opacity,
-    onClick: (event: MouseEvent) => {
-      event.stopPropagation();
-      if (!node.locked) onSelect(node.id);
-    },
-    style: { cursor: node.locked ? 'default' : 'pointer' },
+interface DragSession {
+  pointerId: number;
+  mode: 'move' | 'resize';
+  start: { x: number; y: number };
+  nodes: DesignNode[];
+  bounds: Bounds;
+  ids: string[];
+  handle?: ResizeHandle;
+}
+
+const HANDLE_SIZE = 10;
+
+function toCanvasPoint(svg: SVGSVGElement, clientX: number, clientY: number): { x: number; y: number } {
+  const matrix = svg.getScreenCTM();
+  if (matrix) {
+    const point = svg.createSVGPoint();
+    point.x = clientX;
+    point.y = clientY;
+    const local = point.matrixTransform(matrix.inverse());
+    return { x: local.x, y: local.y };
+  }
+
+  const rect = svg.getBoundingClientRect();
+  return {
+    x: ((clientX - rect.left) / Math.max(1, rect.width)) * Number(svg.viewBox.baseVal.width),
+    y: ((clientY - rect.top) / Math.max(1, rect.height)) * Number(svg.viewBox.baseVal.height),
   };
+}
+
+function NodeArtwork({ node }: { node: DesignNode }) {
+  const transform = node.rotation
+    ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
+    : undefined;
 
   return (
-    <g transform={transform}>
+    <g
+      data-node-id={node.id}
+      transform={transform}
+      opacity={node.opacity}
+      class="canvas-node"
+      style={{ cursor: node.locked ? 'default' : 'grab' }}
+    >
       {node.type === 'rect' && (
         <rect
-          {...common}
           x={node.x}
           y={node.y}
           width={node.width}
@@ -38,7 +75,6 @@ function NodeArtwork({ node, onSelect }: {
       )}
       {node.type === 'ellipse' && (
         <ellipse
-          {...common}
           cx={node.x + node.width / 2}
           cy={node.y + node.height / 2}
           rx={node.width / 2}
@@ -50,7 +86,6 @@ function NodeArtwork({ node, onSelect }: {
       )}
       {node.type === 'text' && (
         <text
-          {...common}
           x={node.x}
           y={node.y}
           fill={node.style.fill}
@@ -61,7 +96,7 @@ function NodeArtwork({ node, onSelect }: {
           dominantBaseline="hanging"
         >
           {node.text.split('\n').map((line, index) => (
-            <tspan key={`${node.id}-${index}`} x={node.x} dy={index === 0 ? 0 : node.style.fontSize * node.style.lineHeight}>
+            <tspan key={node.id + '-' + index} x={node.x} dy={index === 0 ? 0 : node.style.fontSize * node.style.lineHeight}>
               {line || ' '}
             </tspan>
           ))}
@@ -71,53 +106,238 @@ function NodeArtwork({ node, onSelect }: {
   );
 }
 
-
-function SelectionOutline({ node }: { node: DesignNode }) {
-  const transform = node.rotation
-    ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
-    : undefined;
+function SelectionOverlay({ bounds, canResize }: { bounds: Bounds; canResize: boolean }) {
+  const left = bounds.x;
+  const right = bounds.x + bounds.width;
+  const top = bounds.y;
+  const bottom = bounds.y + bounds.height;
+  const middleX = left + bounds.width / 2;
+  const middleY = top + bounds.height / 2;
+  const handles: { id: ResizeHandle; x: number; y: number }[] = [
+    { id: 'nw', x: left, y: top },
+    { id: 'n', x: middleX, y: top },
+    { id: 'ne', x: right, y: top },
+    { id: 'e', x: right, y: middleY },
+    { id: 'se', x: right, y: bottom },
+    { id: 's', x: middleX, y: bottom },
+    { id: 'sw', x: left, y: bottom },
+    { id: 'w', x: left, y: middleY },
+  ];
 
   return (
-    <g transform={transform} pointerEvents="none">
+    <g class="canvas-selection" pointerEvents="none">
       <rect
-        x={node.x - 7}
-        y={node.y - 7}
-        width={node.width + 14}
-        height={node.height + 14}
-        fill="none"
-        stroke="#8B7CF6"
-        strokeWidth="2"
-        strokeDasharray="7 5"
+        class="canvas-selection-outline"
+        x={left}
+        y={top}
+        width={Math.max(1, bounds.width)}
+        height={Math.max(1, bounds.height)}
       />
+      {canResize && handles.map((handle) => (
+        <rect
+          key={handle.id}
+          data-resize-handle={handle.id}
+          class="canvas-resize-handle"
+          x={handle.x - HANDLE_SIZE / 2}
+          y={handle.y - HANDLE_SIZE / 2}
+          width={HANDLE_SIZE}
+          height={HANDLE_SIZE}
+          rx="2"
+          pointerEvents="all"
+        />
+      ))}
     </g>
   );
 }
 
-export function Canvas({ document, selectedNodeId, zoom, onSelect }: CanvasProps) {
-  const selectedNode = document.nodes.find((node) => node.id === selectedNodeId && node.visible) ?? null;
+export function Canvas({
+  document,
+  selectedNodeIds,
+  zoom,
+  onSelectionChange,
+  onTransformCommit,
+}: CanvasProps) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<DragSession | null>(null);
+  const previewRef = useRef<DesignNode[] | null>(null);
+  const [previewNodes, setPreviewNodes] = useState<DesignNode[] | null>(null);
+  const [guides, setGuides] = useState<SnapGuide[]>([]);
+
+  const updatePreview = (nodes: DesignNode[] | null) => {
+    previewRef.current = nodes;
+    setPreviewNodes(nodes);
+  };
+
+  const displayedNodes = previewNodes
+    ? document.nodes.map((node) => previewNodes.find((preview) => preview.id === node.id) ?? node)
+    : document.nodes;
+
+  const selectedNodes = displayedNodes.filter(
+    (node) => selectedNodeIds.includes(node.id) && node.visible,
+  );
+  const selectionBounds = getBounds(selectedNodes);
+  const canResize = selectedNodes.length > 0 && selectedNodes.every((node) => !node.locked);
+
+  const capturePointer = (svg: SVGSVGElement, pointerId: number) => {
+    try {
+      svg.setPointerCapture(pointerId);
+    } catch {
+      // Pointer capture can fail when the browser cancels the initiating pointer.
+    }
+  };
+
+  const handlePointerDown = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    if (event.button !== 0) return;
+    const svg = event.currentTarget;
+    const target = event.target as Element;
+    const handleElement = target.closest('[data-resize-handle]');
+    const point = toCanvasPoint(svg, event.clientX, event.clientY);
+
+    if (handleElement) {
+      if (!canResize || !selectionBounds) return;
+      const handle = handleElement.getAttribute('data-resize-handle') as ResizeHandle | null;
+      if (!handle) return;
+      dragRef.current = {
+        pointerId: event.pointerId,
+        mode: 'resize',
+        start: point,
+        nodes: selectedNodes,
+        bounds: selectionBounds,
+        ids: selectedNodes.map((node) => node.id),
+        handle,
+      };
+      capturePointer(svg, event.pointerId);
+      event.preventDefault();
+      return;
+    }
+
+    const nodeElement = target.closest('[data-node-id]');
+    const nodeId = nodeElement?.getAttribute('data-node-id') ?? null;
+
+    if (!nodeId) {
+      onSelectionChange([]);
+      return;
+    }
+
+    const hitNode = document.nodes.find((node) => node.id === nodeId);
+    if (!hitNode || !hitNode.visible || hitNode.locked) return;
+
+    const modifier = event.shiftKey || event.ctrlKey || event.metaKey;
+    const wasSelected = selectedNodeIds.includes(nodeId);
+    const nextIds = modifier
+      ? (wasSelected
+        ? selectedNodeIds.filter((id) => id !== nodeId)
+        : [...selectedNodeIds, nodeId])
+      : (wasSelected ? selectedNodeIds : [nodeId]);
+
+    onSelectionChange(nextIds);
+    if (modifier && wasSelected) return;
+
+    const movingNodes = document.nodes.filter((node) => nextIds.includes(node.id) && node.visible);
+    if (movingNodes.length === 0 || movingNodes.some((node) => node.locked)) return;
+    const bounds = getBounds(movingNodes);
+    if (!bounds) return;
+
+    dragRef.current = {
+      pointerId: event.pointerId,
+      mode: 'move',
+      start: point,
+      nodes: movingNodes,
+      bounds,
+      ids: movingNodes.map((node) => node.id),
+    };
+    capturePointer(svg, event.pointerId);
+    event.preventDefault();
+  };
+
+  const handlePointerMove = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    const session = dragRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+
+    const point = toCanvasPoint(event.currentTarget, event.clientX, event.clientY);
+    const dx = point.x - session.start.x;
+    const dy = point.y - session.start.y;
+    if (Math.abs(dx) + Math.abs(dy) < 0.25) return;
+
+    if (session.mode === 'move') {
+      const scale = document.width / Math.max(1, event.currentTarget.clientWidth);
+      const tolerance = 8 * scale;
+      const otherNodes = document.nodes.filter(
+        (node) => node.visible && !session.ids.includes(node.id),
+      );
+      const snapped = snapTranslation(
+        session.nodes,
+        dx,
+        dy,
+        { x: 0, y: 0, width: document.width, height: document.height },
+        otherNodes,
+        tolerance,
+      );
+      const updated = session.nodes.map((node) => ({
+        ...node,
+        x: node.x + snapped.dx,
+        y: node.y + snapped.dy,
+      }));
+      updatePreview(updated);
+      setGuides(snapped.guides);
+    } else if (session.handle) {
+      updatePreview(resizeNodes(session.nodes, session.bounds, session.handle, dx, dy));
+      setGuides([]);
+    }
+  };
+
+  const finishPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    const session = dragRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+
+    const preview = previewRef.current;
+    const changed = Boolean(preview?.some((node) => {
+      const original = session.nodes.find((item) => item.id === node.id);
+      return original && (
+        Math.abs(original.x - node.x) > 0.01 ||
+        Math.abs(original.y - node.y) > 0.01 ||
+        Math.abs(original.width - node.width) > 0.01 ||
+        Math.abs(original.height - node.height) > 0.01 ||
+        (original.type === 'text' && node.type === 'text' && Math.abs(original.style.fontSize - node.style.fontSize) > 0.01)
+      );
+    }));
+
+    if (changed && preview) onTransformCommit(preview);
+    dragRef.current = null;
+    updatePreview(null);
+    setGuides([]);
+  };
+
   return (
     <div class="canvas-scroll-area">
-      <div class="canvas-stage" style={{ width: `${zoom * 100}%` }}>
+      <div class="canvas-stage" style={{ width: String(zoom * 100) + '%' }}>
         <div class="artboard-label">
           <span>{document.name}</span>
           <span>{document.width} × {document.height}</span>
         </div>
         <svg
+          ref={svgRef}
           class="artboard"
-          viewBox={`0 0 ${document.width} ${document.height}`}
-          role="img"
-          aria-label="Folio design artboard"
-          onClick={() => onSelect(null)}
+          viewBox={'0 0 ' + document.width + ' ' + document.height}
+          role="application"
+          aria-label="Folio design artboard. Drag to move; Shift-click to select multiple layers."
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={finishPointer}
+          onPointerCancel={finishPointer}
         >
           <rect x="0" y="0" width={document.width} height={document.height} fill={document.background} />
-          {document.nodes.filter((node) => node.visible).map((node) => (
-            <NodeArtwork
-              key={node.id}
-              node={node}
-              onSelect={onSelect}
-            />
+          {displayedNodes.filter((node) => node.visible).map((node) => (
+            <NodeArtwork key={node.id} node={node} />
           ))}
-          {selectedNode && <SelectionOutline node={selectedNode} />}
+          {selectionBounds && (
+            <SelectionOverlay bounds={selectionBounds} canResize={canResize} />
+          )}
+          {guides.map((guide, index) => (
+            guide.axis === 'x'
+              ? <line key={'guide-x-' + index} class="canvas-guide" x1={guide.position} x2={guide.position} y1="0" y2={document.height} />
+              : <line key={'guide-y-' + index} class="canvas-guide" x1="0" x2={document.width} y1={guide.position} y2={guide.position} />
+          ))}
         </svg>
       </div>
     </div>

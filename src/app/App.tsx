@@ -4,6 +4,7 @@ import type { DesignNode } from '../core/document/types';
 import { loadMostRecentProject, saveProject } from '../core/persistence/indexedDb';
 import { downloadProject, readProjectFile } from '../core/persistence/projectFile';
 import { Canvas } from '../engines/canvas/Canvas';
+import { alignNodes, type Alignment } from '../engines/canvas/geometry';
 import { createEditorState, editorReducer } from './editorReducer';
 
 function Icon({ name }: { name: string }) {
@@ -106,6 +107,12 @@ export function App() {
       type: 'replace-node',
       node: { ...selectedNode, style: { ...selectedNode.style, ...patch } } as DesignNode,
     });
+  };
+
+  const alignSelection = (alignment: Alignment) => {
+    const selected = state.project.document.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
+    if (selected.length < 2) return;
+    dispatch({ type: 'transform-nodes', nodes: alignNodes(selected, alignment) });
   };
 
   const handleImport = async (event: Event) => {
@@ -225,8 +232,18 @@ export function App() {
           {[...state.project.document.nodes].reverse().map((node) => (
             <button
               key={node.id}
-              class={`layer-row ${state.selectedNodeId === node.id ? 'selected' : ''} ${node.visible ? '' : 'layer-hidden'}`}
-              onClick={() => dispatch({ type: 'select-node', nodeId: node.id })}
+              class={"layer-row " + (state.selectedNodeIds.includes(node.id) ? "selected " : "") + (node.visible ? "" : "layer-hidden")}
+              onClick={(event) => {
+                const selected = state.selectedNodeIds;
+                if (event.shiftKey || event.metaKey || event.ctrlKey) {
+                  const next = selected.includes(node.id)
+                    ? selected.filter((id) => id !== node.id)
+                    : [...selected, node.id];
+                  dispatch({ type: 'select-nodes', nodeIds: next });
+                } else {
+                  dispatch({ type: 'select-node', nodeId: node.id });
+                }
+              }}
               title={`Select ${node.name}`}
             >
               <LayerIcon type={node.type} />
@@ -247,6 +264,16 @@ export function App() {
       <main class="workspace">
         <div class="workspace-toolbar">
           <div class="breadcrumb"><span>Canvas</span><Icon name="chevron" /><strong>{state.project.document.name}</strong></div>
+          {state.selectedNodeIds.length > 1 && (
+            <div class="alignment-tools" aria-label="Align selected layers">
+              <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
+              <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
+              <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
+              <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
+              <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
+              <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
+            </div>
+          )}
           <div class="workspace-tools">
             <button class="history-button" title="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><Icon name="undo" /></button>
             <button class="history-button" title="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}><Icon name="redo" /></button>
@@ -259,9 +286,10 @@ export function App() {
         <div class="canvas-workspace">
           <Canvas
             document={state.project.document}
-            selectedNodeId={state.selectedNodeId}
+            selectedNodeIds={state.selectedNodeIds}
             zoom={zoom}
-            onSelect={(nodeId) => dispatch({ type: 'select-node', nodeId })}
+            onSelectionChange={(nodeIds) => dispatch({ type: 'select-nodes', nodeIds })}
+            onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
           <div class="canvas-hint">SELECT A LAYER · EDIT ITS PROPERTIES</div>
         </div>
@@ -333,6 +361,12 @@ export function App() {
               <label class="toggle-row"><span>Visible</span><input type="checkbox" checked={selectedNode.visible} onChange={(event) => updateSelected({ visible: event.currentTarget.checked })} /></label>
               <label class="toggle-row"><span>Locked</span><input type="checkbox" checked={selectedNode.locked} onChange={(event) => updateSelected({ locked: event.currentTarget.checked })} /></label>
             </section>
+          </div>
+        ) : state.selectedNodeIds.length > 1 ? (
+          <div class="inspector-empty multi-inspector">
+            <div class="empty-icon"><Icon name="layers" /></div>
+            <strong>{state.selectedNodeIds.length} layers selected</strong>
+            <p>Drag to move the group, use the resize handles, or choose an alignment control above the canvas.</p>
           </div>
         ) : (
           <div class="inspector-empty">
