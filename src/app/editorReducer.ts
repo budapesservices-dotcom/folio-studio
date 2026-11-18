@@ -98,7 +98,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'transform-nodes': {
-      const updates = new Map(action.nodes.map((node) => [node.id, node]));
+      const updates = new Map(action.nodes.map((node) => [node.id, node] as const));
       let changed = false;
       const nodes = state.project.document.nodes.map((node) => {
         const replacement = updates.get(node.id);
