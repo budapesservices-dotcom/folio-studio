@@ -58,6 +58,9 @@ export function App() {
   const [zoom, setZoom] = useState(0.82);
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
   const [layersVisible, setLayersVisible] = useState(true);
+  const [canvasMinimized, setCanvasMinimized] = useState(false);
+  const [canvasClosed, setCanvasClosed] = useState(false);
+  const [canvasMaximized, setCanvasMaximized] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -261,7 +264,7 @@ export function App() {
         </div>
       </aside>
 
-      <main class="workspace" onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}>
+      <main class={`workspace${canvasMaximized ? " canvas-maximized" : ""}${canvasClosed ? " canvas-closed" : ""}`} onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}>
         <div class="workspace-toolbar">
           <div class="breadcrumb"><strong>{state.project.document.name}</strong></div>
           <div class="canvas-window-tools">
@@ -277,6 +280,12 @@ export function App() {
                 <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
               </div>
             )}
+            <div class="workspace-window-controls" aria-label="Canvas window controls">
+              {(canvasClosed || canvasMinimized) && <button type="button" class="window-control window-control-restore" title="Restore canvas" aria-label="Restore canvas" onClick={() => { setCanvasClosed(false); setCanvasMinimized(false); }}>↗</button>}
+              <button type="button" class="window-control" title={canvasMinimized ? "Restore canvas" : "Minimize canvas"} aria-label={canvasMinimized ? "Restore canvas" : "Minimize canvas"} onClick={() => { setCanvasMinimized((value) => !value); setCanvasClosed(false); }}>{canvasMinimized ? "▢" : "—"}</button>
+              <button type="button" class="window-control" title={canvasMaximized ? "Restore window size" : "Maximize canvas"} aria-label={canvasMaximized ? "Restore window size" : "Maximize canvas"} aria-pressed={canvasMaximized} onClick={() => setCanvasMaximized((value) => !value)}>{canvasMaximized ? "❐" : "□"}</button>
+              <button type="button" class="window-control window-control-close" title="Close canvas" aria-label="Close canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); setCanvasMaximized(false); }}>×</button>
+            </div>
             <div class="workspace-tools">
               <button class="history-button" title="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><Icon name="undo" /></button>
               <button class="history-button" title="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}><Icon name="redo" /></button>
@@ -287,7 +296,7 @@ export function App() {
             </div>
           </div>
         </div>
-        <div class="canvas-workspace">
+        {!canvasClosed && !canvasMinimized ? <div class="canvas-workspace">
           <Canvas
             document={state.project.document}
             selectedNodeIds={state.selectedNodeIds}
@@ -297,7 +306,7 @@ export function App() {
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
-        </div>
+        </div> : <div class="canvas-window-placeholder"><span>{canvasClosed ? "CANVAS WINDOW CLOSED" : "CANVAS MINIMIZED"}</span><button type="button" onClick={() => { setCanvasClosed(false); setCanvasMinimized(false); }}>Open Canvas</button></div>}
       </main>
 
       <aside class="inspector-panel" onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
