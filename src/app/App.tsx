@@ -74,18 +74,19 @@ export function App() {
       const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
       const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
       const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-      const maxWidth = Math.max(280, viewportWidth - 24);
-      const maxHeight = Math.max(220, viewportHeight - 56 - 27 - 16);
+      // Keep enough free screen area around the window for reliable dragging.
+      const maxWidth = Math.max(280, Math.min(viewportWidth * 0.82, viewportWidth - 24));
+      const maxHeight = Math.max(220, Math.min(viewportHeight * 0.68, viewportHeight - 56 - 27 - 16));
       const preferredWidth = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(860, viewportWidth * 0.78);
-      const preferredHeight = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(620, viewportHeight * 0.68);
+      const preferredHeight = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(620, viewportHeight * 0.58);
       return {
         width: Math.min(maxWidth, Math.max(280, preferredWidth)),
         height: Math.min(maxHeight, Math.max(220, preferredHeight)),
       };
     } catch {
       return {
-        width: Math.max(280, Math.min(860, window.innerWidth * 0.78)),
-        height: Math.max(220, Math.min(620, window.innerHeight * 0.68)),
+        width: Math.max(280, Math.min(860, window.innerWidth * 0.78, window.innerWidth * 0.82)),
+        height: Math.max(220, Math.min(620, window.innerHeight * 0.58, window.innerHeight * 0.68 - 99)),
       };
     }
   });
