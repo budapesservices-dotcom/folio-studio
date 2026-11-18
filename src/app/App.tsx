@@ -182,7 +182,7 @@ export function App() {
         y: Math.max(56, Number.isFinite(saved?.position?.y) ? saved.position.y : 112),
       };
     } catch { return { x: Math.max(24, window.innerWidth - 700), y: 112 }; }
-  }); pointerX: number; pointerY: number; originX: number; originY: number } | null>(null); pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+  });
 
   const [nodeLogicClosed, setNodeLogicClosed] = useState(true);
   const [nodeLogicMinimized, setNodeLogicMinimized] = useState(false);
@@ -222,7 +222,7 @@ export function App() {
         y: Math.max(56, Number.isFinite(saved?.position?.y) ? saved.position.y : 146),
       };
     } catch { return { x: Math.max(40, Math.round((window.innerWidth - 720) * 0.18)), y: 146 }; }
-  }); pointerX: number; pointerY: number; originX: number; originY: number } | null>(null); pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+  });
 
   const [canvasPosition, setCanvasPosition] = useState(() => {
     try {
@@ -236,7 +236,7 @@ export function App() {
         y: Math.max(56, savedY),
       };
     } catch { return { x: 48, y: 80 }; }
-  }); pointerX: number; pointerY: number; originX: number; originY: number } | null>(null); pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+  });
 
   useEffect(() => {
     try { window.localStorage.setItem('folio.main-canvas-view', JSON.stringify(mainView)); }
@@ -530,6 +530,7 @@ export function App() {
 
   useEffect(() => {
     const onResize = () => { recoverWindow('main-canvas'); recoverWindow('component-canvas'); recoverWindow('node-logic'); };
+    onResize();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [canvasPosition, canvasSize, componentCanvasPosition, componentCanvasSize, nodeLogicPosition, nodeLogicSize]);
@@ -640,7 +641,7 @@ export function App() {
           )}
         </div>
           <div class="global-panel-toggles" aria-label="Workspace panels">
-            <button class={`global-panel-toggle pages-rack-header-toggle ${pagesRackOpen ? 'active' : ''}`} type="button" title={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-label={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-pressed={pagesRackOpen} onClick={() => { setPagesRackOpen((value) => !value); setComponentRackOpen(false); }} onMouseEnter={() => updateToolbarHint('PAGES RACK', 'Manage the pages in this project.')}><Icon name="pages" /></button>
+            <button class={`global-panel-toggle pages-rack-header-toggle ${pagesRackOpen ? 'active' : ''}`} type="button" title={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-label={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-pressed={pagesRackOpen} onClick={() => { focusWindow('pages'); setPagesRackOpen((value) => !value); setComponentRackOpen(false); }} onMouseEnter={() => updateToolbarHint('PAGES RACK', 'Manage the pages in this project.')}><Icon name="pages" /></button>
             <button class={`global-panel-toggle component-rack-header-toggle ${componentRackOpen ? 'active' : ''}`} type="button" title={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-label={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-pressed={componentRackOpen} onClick={() => { setComponentRackOpen((value) => !value); setPagesRackOpen(false); }} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse and reuse components saved to your personal library.')}><Icon name="rack" /></button>
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
             <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) openMainCanvas(); else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
@@ -662,7 +663,7 @@ export function App() {
         </div>
       </header>
       <nav class="tool-rail" aria-label="Insert tools" onMouseEnter={() => updateToolbarHint('TOOLS', 'Choose Select, Rectangle, Ellipse or Text from the tool rail.')}>
-        <button class="tool-button active" title="Select layer" aria-label="Select layer" onClick={() => dispatch({ type: 'select-node', nodeId: null })}>
+        <button class="tool-button active" title="Select layer" aria-label="Select layer" onClick={() => dispatchFocused({ type: 'select-node', nodeId: null })}>
           <Icon name="cursor" />
         </button>
         <div class="rail-separator" />
@@ -947,9 +948,9 @@ export function App() {
       )}
 
       <aside class={`inspector-panel ${inspectorVisible ? "" : "is-hidden"}`} onFocusOut={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) dispatchFocused({ type: 'commit-edit' });
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) { dispatch({ type: 'commit-edit' }); componentDispatch({ type: 'commit-edit' }); }
       }} onKeyDown={(event) => {
-        if (event.key === 'Enter' && (event.target as HTMLElement).matches('input')) dispatchFocused({ type: 'commit-edit' });
+        if (event.key === 'Enter' && (event.target as HTMLElement).matches('input')) { dispatch({ type: 'commit-edit' }); componentDispatch({ type: 'commit-edit' }); }
       }} onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
         <div class="panel-heading inspector-heading">
           <div>
