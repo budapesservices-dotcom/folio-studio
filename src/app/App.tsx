@@ -69,25 +69,45 @@ export function App() {
     } catch { return 'docked'; }
   });
   const canvasFloating = canvasWindowMode === 'floating';
-  const [canvasPosition, setCanvasPosition] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
-      return Number.isFinite(saved?.position?.x) && Number.isFinite(saved?.position?.y)
-        ? { x: Math.max(0, saved.position.x), y: Math.max(56, saved.position.y) }
-        : { x: 100, y: 92 };
-    } catch { return { x: 100, y: 92 }; }
-  });
   const [canvasSize, setCanvasSize] = useState(() => {
     try {
       const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
-      return Number.isFinite(saved?.size?.width) && Number.isFinite(saved?.size?.height)
-        ? { width: Math.max(280, saved.size.width), height: Math.max(220, saved.size.height) }
-        : { width: 860, height: 620 };
-    } catch { return { width: 860, height: 620 }; }
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+      const maxWidth = Math.max(280, viewportWidth - 24);
+      const maxHeight = Math.max(220, viewportHeight - 56 - 27 - 16);
+      const preferredWidth = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(860, viewportWidth * 0.78);
+      const preferredHeight = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(620, viewportHeight * 0.68);
+      return {
+        width: Math.min(maxWidth, Math.max(280, preferredWidth)),
+        height: Math.min(maxHeight, Math.max(220, preferredHeight)),
+      };
+    } catch {
+      return {
+        width: Math.max(280, Math.min(860, window.innerWidth * 0.78)),
+        height: Math.max(220, Math.min(620, window.innerHeight * 0.68)),
+      };
+    }
+  });
+  const [canvasPosition, setCanvasPosition] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+      const maxX = Math.max(0, viewportWidth - canvasSize.width);
+      const maxY = Math.max(56, viewportHeight - 27 - canvasSize.height);
+      const preferredX = Number.isFinite(saved?.position?.x) ? saved.position.x : 48;
+      const preferredY = Number.isFinite(saved?.position?.y) ? saved.position.y : 80;
+      return {
+        x: Math.min(maxX, Math.max(0, preferredX)),
+        y: Math.min(maxY, Math.max(56, preferredY)),
+      };
+    } catch { return { x: 48, y: 80 }; }
   });
   const canvasDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
   const canvasDragCleanup = useRef<(() => void) | null>(null);
-  const canvasResize = useRef<{ pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+  const canvasResize = useRef<{ pointerId: number; pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+  const canvasResizeCleanup = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     try {
@@ -99,6 +119,7 @@ export function App() {
 
   useEffect(() => () => {
     canvasDragCleanup.current?.();
+    canvasResizeCleanup.current?.();
   }, []);
 
   useEffect(() => {
@@ -190,8 +211,7 @@ export function App() {
 
     event.preventDefault();
     event.stopPropagation();
-
-    // End any stale drag session before starting a new one.
+    canvasResizeCleanup.current?.();
     canvasDragCleanup.current?.();
 
     const drag = {
@@ -204,27 +224,25 @@ export function App() {
     const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
     canvasDrag.current = drag;
 
-    // Track movement on window rather than on the titlebar. This keeps dragging
-    // alive when the pointer leaves the handle or the Preact tree re-renders.
     const handlePointerMove = (moveEvent: PointerEvent) => {
       if (canvasDrag.current !== drag || moveEvent.pointerId !== drag.pointerId) return;
-
       moveEvent.preventDefault();
+
       const bounds = shell?.getBoundingClientRect();
-      const shellWidth = bounds?.width ?? window.innerWidth;
-      const shellHeight = bounds?.height ?? window.innerHeight;
+      const shellLeft = bounds?.left ?? 0;
+      const shellTop = bounds?.top ?? 0;
+      const visibleWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
+      const visibleHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
       const windowWidth = canvasMinimized ? 260 : canvasSize.width;
       const windowHeight = canvasMinimized ? 42 : canvasSize.height;
-      const availableHeight = Math.max(0, shellHeight - 83);
-      const visibleHeight = Math.min(windowHeight, availableHeight);
-      const maxX = Math.max(0, shellWidth - Math.min(windowWidth, shellWidth));
-      const maxY = Math.max(0, shellHeight - 27 - visibleHeight);
+      const maxX = Math.max(0, visibleWidth - windowWidth);
+      const maxY = Math.max(56, visibleHeight - 27 - windowHeight);
       const clamp = (value: number, minimum: number, maximum: number) =>
         Math.min(maximum, Math.max(minimum, value));
 
       setCanvasPosition({
         x: clamp(drag.originX + moveEvent.clientX - drag.pointerX, 0, maxX),
-        y: clamp(drag.originY + moveEvent.clientY - drag.pointerY, 0, maxY),
+        y: clamp(drag.originY + moveEvent.clientY - drag.pointerY, 56, maxY),
       });
     };
 
@@ -246,6 +264,88 @@ export function App() {
       window.removeEventListener('pointercancel', finishPointerDrag);
       canvasDrag.current = null;
       canvasDragCleanup.current = null;
+    };
+  };
+
+  const startCanvasResize = (event: JSX.TargetedPointerEvent<HTMLDivElement>, direction: string) => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    event.preventDefault();
+    event.stopPropagation();
+    canvasDragCleanup.current?.();
+    canvasResizeCleanup.current?.();
+
+    const resize = {
+      pointerId: event.pointerId,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      left: canvasPosition.x,
+      top: canvasPosition.y,
+      width: canvasSize.width,
+      height: canvasSize.height,
+      direction,
+    };
+    const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
+    canvasResize.current = resize;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (canvasResize.current !== resize || moveEvent.pointerId !== resize.pointerId) return;
+      moveEvent.preventDefault();
+
+      const bounds = shell?.getBoundingClientRect();
+      const shellLeft = bounds?.left ?? 0;
+      const shellTop = bounds?.top ?? 0;
+      const shellWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
+      const shellHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
+      const dx = moveEvent.clientX - resize.pointerX;
+      const dy = moveEvent.clientY - resize.pointerY;
+      const contentBottom = shellHeight - 27;
+      const clamp = (value: number, minimum: number, maximum: number) =>
+        Math.min(maximum, Math.max(minimum, value));
+
+      let left = resize.left;
+      let top = resize.top;
+      let width = resize.width;
+      let height = resize.height;
+
+      if (direction.includes('e')) {
+        width = clamp(resize.width + dx, 280, Math.max(280, shellWidth - resize.left));
+      }
+      if (direction.includes('s')) {
+        height = clamp(resize.height + dy, 220, Math.max(220, contentBottom - resize.top));
+      }
+      if (direction.includes('w')) {
+        const maxLeft = Math.max(0, Math.min(resize.left + resize.width - 280, shellWidth - 280));
+        left = clamp(resize.left + dx, 0, maxLeft);
+        width = Math.min(resize.width + resize.left - left, Math.max(280, shellWidth - left));
+      }
+      if (direction.includes('n')) {
+        const maxTop = Math.max(56, Math.min(resize.top + resize.height - 220, contentBottom - 220));
+        top = clamp(resize.top + dy, 56, maxTop);
+        height = Math.min(resize.height + resize.top - top, Math.max(220, contentBottom - top));
+      }
+
+      setCanvasPosition({ x: left, y: top });
+      setCanvasSize({ width, height });
+    };
+
+    const finishPointerResize = (endEvent: PointerEvent) => {
+      if (canvasResize.current !== resize || endEvent.pointerId !== resize.pointerId) return;
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerResize);
+      window.removeEventListener('pointercancel', finishPointerResize);
+      canvasResize.current = null;
+      canvasResizeCleanup.current = null;
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', finishPointerResize);
+    window.addEventListener('pointercancel', finishPointerResize);
+    canvasResizeCleanup.current = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerResize);
+      window.removeEventListener('pointercancel', finishPointerResize);
+      canvasResize.current = null;
+      canvasResizeCleanup.current = null;
     };
   };
 
@@ -378,8 +478,6 @@ export function App() {
           top: `${canvasPosition.y}px`,
           width: `${canvasSize.width}px`,
           height: `${canvasSize.height}px`,
-          maxWidth: `calc(100% - ${canvasPosition.x}px)`,
-          maxHeight: `calc(100% - ${canvasPosition.y}px - 27px)`,
         } : undefined}
         onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
       >
@@ -435,49 +533,7 @@ export function App() {
             class={`workspace-resize-handle resize-${direction}`}
             role="presentation"
             aria-label={`Resize Canvas window from ${direction}`}
-            onPointerDown={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              canvasResize.current = {
-                pointerX: event.clientX,
-                pointerY: event.clientY,
-                left: canvasPosition.x,
-                top: canvasPosition.y,
-                width: canvasSize.width,
-                height: canvasSize.height,
-                direction,
-              };
-              (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-            }}
-            onPointerMove={(event) => {
-              const resize = canvasResize.current;
-              if (!resize) return;
-              const shell = (event.currentTarget as HTMLElement).closest('.app-shell') as HTMLElement | null;
-              const bounds = shell?.getBoundingClientRect();
-              const dx = event.clientX - resize.pointerX;
-              const dy = event.clientY - resize.pointerY;
-              const shellWidth = bounds?.width ?? window.innerWidth;
-              const shellHeight = bounds?.height ?? window.innerHeight;
-              const contentBottom = Math.max(56 + 220, shellHeight - 27);
-              let left = resize.left;
-              let top = resize.top;
-              let width = resize.width;
-              let height = resize.height;
-              if (direction.includes('e')) width = Math.min(resize.width + dx, Math.max(280, shellWidth - resize.left));
-              if (direction.includes('s')) height = Math.min(resize.height + dy, Math.max(220, contentBottom - resize.top));
-              if (direction.includes('w')) {
-                left = Math.max(0, Math.min(resize.left + dx, resize.left + resize.width - 280));
-                width = resize.width + resize.left - left;
-              }
-              if (direction.includes('n')) {
-                top = Math.max(56, Math.min(resize.top + dy, Math.min(resize.top + resize.height - 220, contentBottom - 220)));
-                height = resize.height + resize.top - top;
-              }
-              setCanvasPosition({ x: left, y: top });
-              setCanvasSize({ width: Math.max(280, width), height: Math.max(220, height) });
-            }}
-            onPointerUp={() => { canvasResize.current = null; }}
-            onPointerCancel={() => { canvasResize.current = null; }}
+            onPointerDown={(event) => startCanvasResize(event, direction)}
           />
         ))}
       </main>}
