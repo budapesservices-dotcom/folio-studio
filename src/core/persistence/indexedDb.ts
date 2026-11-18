@@ -79,11 +79,14 @@ function readLegacyWorkspacePages(): Array<{ id: string; name: string; route: st
       const item = page as Record<string, unknown>;
       return typeof item.id === 'string' && typeof item.name === 'string' &&
         typeof (item.path ?? item.route) === 'string';
-    }).map((page) => ({
-      id: page.id,
-      name: page.name,
-      route: page.route,
-    }));
+    }).map((page) => {
+      const item = page as unknown as Record<string, unknown>;
+      return {
+        id: String(item.id),
+        name: String(item.name),
+        route: String(item.path ?? item.route),
+      };
+    });
   } catch {
     return [];
   }
@@ -100,7 +103,6 @@ function readLegacyPageSnapshot(pageId: string): unknown | null {
 
 function migrateLegacyWorkspace(
   baseProject: FolioProject,
-  storedProjects: unknown[],
   legacyPageRecords: Array<{ id: string; metadata: { id: string }; project: FolioProject }>,
 ): FolioProject {
   let legacyPages = readLegacyWorkspacePages();
@@ -276,7 +278,10 @@ export async function loadMostRecentProject(): Promise<FolioProject | null> {
   const baseStored = candidates[0];
   let project = migrateProjectToV2(baseStored);
   const legacyPageRecords = records
-    .filter((stored) => (stored as { metadata: { id: string } }).metadata.id.startsWith('folio-page-'))
+    .filter((stored) => {
+      const id = (stored as { metadata: { id: string } }).metadata.id;
+      return id.startsWith('folio-page-') && id !== project.metadata.id;
+    })
     .map((stored) => {
       const id = (stored as { metadata: { id: string } }).metadata.id;
       return { id, metadata: (stored as { metadata: { id: string } }).metadata, project: migrateProjectToV2(stored) };
@@ -293,7 +298,7 @@ export async function loadMostRecentProject(): Promise<FolioProject | null> {
 
   if (isLegacyProject || hasLegacySplitWorkspace) {
     const oldPageIds = readLegacyWorkspacePages().map((page) => page.id);
-    project = migrateLegacyWorkspace(project, storedProjects, legacyPageRecords);
+    project = migrateLegacyWorkspace(project, legacyPageRecords);
     await saveProject(project);
     await deleteLegacyPageProjects(legacyPageRecords.map((record) => record.id));
     clearLegacyWorkspaceStorage(oldPageIds.length > 0 ? oldPageIds : ['main', '404']);
