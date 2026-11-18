@@ -230,3 +230,40 @@ export function distributeNodes(
     [positionKey]: positions.get(node.id) ?? node[positionKey],
   }));
 }
+
+
+export type DistributionAxis = 'horizontal' | 'vertical';
+
+export function distributeNodes(
+  nodes: readonly DesignNode[],
+  axis: DistributionAxis,
+): DesignNode[] {
+  if (nodes.length < 3) return [...nodes];
+
+  const positionKey = axis === 'horizontal' ? 'x' : 'y';
+  const sizeKey = axis === 'horizontal' ? 'width' : 'height';
+  const sorted = [...nodes].sort((a, b) => {
+    const positionDifference = a[positionKey] - b[positionKey];
+    if (positionDifference !== 0) return positionDifference;
+    const secondaryA = axis === 'horizontal' ? a.y : a.x;
+    const secondaryB = axis === 'horizontal' ? b.y : b.x;
+    return secondaryA - secondaryB || a.id.localeCompare(b.id);
+  });
+
+  const start = Math.min(...sorted.map((node) => node[positionKey]));
+  const end = Math.max(...sorted.map((node) => node[positionKey] + node[sizeKey]));
+  const occupied = sorted.reduce((total, node) => total + node[sizeKey], 0);
+  const gap = (end - start - occupied) / (sorted.length - 1);
+
+  const positions = new Map<string, number>();
+  let cursor = start;
+  for (const node of sorted) {
+    positions.set(node.id, cursor);
+    cursor += node[sizeKey] + gap;
+  }
+
+  return nodes.map((node) => ({
+    ...node,
+    [positionKey]: positions.get(node.id) ?? node[positionKey],
+  }));
+}
