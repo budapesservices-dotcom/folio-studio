@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useReducer, useState } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
 import { createInitialProject, createNode } from '../core/document/factory';
 import type { DesignNode } from '../core/document/types';
 import { loadMostRecentProject, saveProject } from '../core/persistence/indexedDb';
@@ -24,6 +25,12 @@ function Icon({ name }: { name: string }) {
     save: 'M5 4h12l3 3v13H4V4h1zm2 0v6h10V4M8 20v-7h8v7',
     maximize: 'M8 3H3v5M3 3l6 6M16 3h5v5m0-5-6 6M3 16v5h5m-5 0 6-6m12 1v5h-5m5 0-6-6',
     minimize: 'M8 3v5H3m5-5L3 8M16 3v5h5m-5-5 5 5M3 16h5v5m-5-5 5 5m8 0v-5h5m-5 5 5-5',
+    canvas: 'M3 4h18v13H3zM8 21h8M12 17v4',
+    nodes: 'M5 5h5v5H5zM14 14h5v5h-5zM10 7h5v2h-5M15 9v5',
+    rack: 'M4 4h16v4H4zM4 10h7v10H4zM13 10h7v10h-7z',
+    components: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+    code: 'm8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16',
+    close: 'M6 6l12 12M18 6 6 18',
   };
 
   return (
@@ -49,6 +56,57 @@ const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
   shortcuts: ['SPACE + DRAG', 'SHIFT + CLICK'],
 };
 
+type PanelKey = 'canvas' | 'logic' | 'rack' | 'componentCanvas' | 'code';
+
+type PanelState = {
+  open: boolean;
+  minimized: boolean;
+  expanded: boolean;
+};
+
+type WindowHeaderProps = {
+  title: string;
+  subtitle?: string;
+  minimized: boolean;
+  expanded: boolean;
+  onMinimize: () => void;
+  onExpand: () => void;
+  onClose: () => void;
+  children?: ComponentChildren;
+};
+
+function WindowHeader({
+  title,
+  subtitle,
+  minimized,
+  expanded,
+  onMinimize,
+  onExpand,
+  onClose,
+  children,
+}: WindowHeaderProps) {
+  return (
+    <header class="floating-window-header">
+      <div class="floating-window-title">
+        <strong>{title}</strong>
+        {subtitle && <span>{subtitle}</span>}
+      </div>
+      <div class="floating-window-header-tools">{children}</div>
+      <div class="floating-window-controls">
+        <button class="window-control-button" type="button" title={minimized ? 'Restore panel' : 'Minimize panel'} aria-label={minimized ? 'Restore panel' : 'Minimize panel'} onClick={onMinimize}>
+          <span class="window-minimize-glyph">−</span>
+        </button>
+        <button class="window-control-button" type="button" title={expanded ? 'Restore panel size' : 'Expand panel'} aria-label={expanded ? 'Restore panel size' : 'Expand panel'} onClick={onExpand}>
+          <Icon name={expanded ? 'minimize' : 'maximize'} />
+        </button>
+        <button class="window-control-button window-close-button" type="button" title="Close panel" aria-label="Close panel" onClick={onClose}>
+          <Icon name="close" />
+        </button>
+      </div>
+    </header>
+  );
+}
+
 export function App() {
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const [state, dispatch] = useReducer(editorReducer, initialEditorState);
@@ -57,6 +115,13 @@ export function App() {
   const [notice, setNotice] = useState('');
   const [zoom, setZoom] = useState(0.82);
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
+  const [panels, setPanels] = useState<Record<PanelKey, PanelState>>({
+    canvas: { open: true, minimized: false, expanded: false },
+    logic: { open: false, minimized: false, expanded: false },
+    rack: { open: false, minimized: false, expanded: false },
+    componentCanvas: { open: false, minimized: false, expanded: false },
+    code: { open: false, minimized: false, expanded: false },
+  });
 
   useEffect(() => {
     let active = true;
@@ -133,6 +198,28 @@ export function App() {
     setToolbarHint({ panel, description, shortcuts });
   };
 
+  const togglePanel = (key: PanelKey) => {
+    setPanels((current) => ({
+      ...current,
+      [key]: { ...current[key], open: !current[key].open, minimized: false },
+    }));
+  };
+
+  const updatePanel = (key: PanelKey, patch: Partial<PanelState>) => {
+    setPanels((current) => ({
+      ...current,
+      [key]: { ...current[key], ...patch },
+    }));
+  };
+
+  const toggleMinimize = (key: PanelKey) => {
+    updatePanel(key, { minimized: !panels[key].minimized });
+  };
+
+  const toggleExpand = (key: PanelKey) => {
+    updatePanel(key, { expanded: !panels[key].expanded, minimized: false });
+  };
+
   const statusLabel = saveStatus === 'loading'
     ? 'LOADING'
     : saveStatus === 'saving'
@@ -157,6 +244,17 @@ export function App() {
             <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('OPTION', 'Application and workspace preferences will be organized here.')}>Option</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('HELP', 'Keyboard reference, documentation and support will be organized here.')}>Help</span>
+          </div>
+          <div class="global-project-name" title={`${state.project.metadata.name}.flop`}>
+            <span class="global-project-label">{state.project.metadata.name}</span>
+            <span class="global-project-extension">.flop</span>
+          </div>
+          <div class="global-panel-toggles" aria-label="Workspace panels">
+            <button class={`global-panel-toggle ${panels.canvas.open ? 'active' : ''}`} type="button" title="Show / hide Canvas" aria-label="Show or hide Canvas" aria-pressed={panels.canvas.open} onMouseEnter={() => updateToolbarHint('CANVAS', 'Open or close the floating canvas workspace.')} onClick={() => togglePanel('canvas')}><Icon name="canvas" /></button>
+            <button class={`global-panel-toggle ${panels.logic.open ? 'active' : ''}`} type="button" title="Show / hide Logic Nodes" aria-label="Show or hide Logic Nodes" aria-pressed={panels.logic.open} onMouseEnter={() => updateToolbarHint('LOGIC NODES', 'Open or close the logic node workspace.')} onClick={() => togglePanel('logic')}><Icon name="nodes" /></button>
+            <button class={`global-panel-toggle ${panels.rack.open ? 'active' : ''}`} type="button" title="Show / hide Component Rack" aria-label="Show or hide Component Rack" aria-pressed={panels.rack.open} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Open or close the component rack drawer from the bottom.')} onClick={() => togglePanel('rack')}><Icon name="rack" /></button>
+            <button class={`global-panel-toggle ${panels.componentCanvas.open ? 'active' : ''}`} type="button" title="Show / hide Component Canvas" aria-label="Show or hide Component Canvas" aria-pressed={panels.componentCanvas.open} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'Open or close the floating component canvas.')} onClick={() => togglePanel('componentCanvas')}><Icon name="components" /></button>
+            <button class={`global-panel-toggle ${panels.code.open ? 'active' : ''}`} type="button" title="Show / hide Code View" aria-label="Show or hide Code View" aria-pressed={panels.code.open} onMouseEnter={() => updateToolbarHint('CODE VIEW', 'Open or close the floating visual-to-code panel.')} onClick={() => togglePanel('code')}><Icon name="code" /></button>
           </div>
         </nav>
         <div class="global-hint-bar" role="status" aria-live="polite">
@@ -244,9 +342,18 @@ export function App() {
         </div>
       </aside>
 
-      <main class="workspace" onMouseEnter={() => updateToolbarHint('CANVAS', 'Drag objects to move them, or pan the viewport without moving artwork.', ['SPACE + DRAG', 'MIDDLE-DRAG'])}>
-        <div class="workspace-toolbar">
-          <div class="breadcrumb"><span>Canvas</span><Icon name="chevron" /><strong>{state.project.document.name}</strong></div>
+      {panels.canvas.open ? (
+        <main class={`workspace floating-window ${panels.canvas.minimized ? 'is-minimized' : ''} ${panels.canvas.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('CANVAS', 'Drag objects to move them, or pan the viewport without moving artwork.', ['SPACE + DRAG', 'MIDDLE-DRAG'])}>
+          <WindowHeader
+            title="Canvas"
+            subtitle={state.project.document.name}
+            minimized={panels.canvas.minimized}
+            expanded={panels.canvas.expanded}
+            onMinimize={() => toggleMinimize('canvas')}
+            onExpand={() => toggleExpand('canvas')}
+            onClose={() => updatePanel('canvas', { open: false })}
+          >
+          <div class="canvas-window-tools">
           {state.selectedNodeIds.length > 1 && (
             <div class="alignment-tools" aria-label="Align selected layers">
               <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
@@ -267,8 +374,8 @@ export function App() {
             <span class="zoom-value">{Math.round(zoom * 100)}%</span>
             <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
           </div>
-        </div>
-        <div class="canvas-workspace">
+          </WindowHeader>
+        {!panels.canvas.minimized && <div class="canvas-workspace">
           <Canvas
             document={state.project.document}
             selectedNodeIds={state.selectedNodeIds}
@@ -277,8 +384,65 @@ export function App() {
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
           <div class="canvas-hint">SPACE + DRAG / MIDDLE-DRAG TO PAN · DRAG TO MOVE · SHIFT-CLICK MULTI-SELECT</div>
+        </div>}
+        </main>
+      ) : (
+        <div class="workspace-closed">
+          <strong>Canvas closed</strong>
+          <span>Use the Canvas button in the top bar to reopen this workspace.</span>
         </div>
-      </main>
+      )}
+
+      {panels.logic.open && (
+        <section class={`floating-tool-window logic-window ${panels.logic.minimized ? 'is-minimized' : ''} ${panels.logic.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('LOGIC NODES', 'A floating workspace reserved for visual logic and interaction nodes.')}>
+          <WindowHeader title="Logic Nodes" subtitle="INTERACTION GRAPH" minimized={panels.logic.minimized} expanded={panels.logic.expanded} onMinimize={() => toggleMinimize('logic')} onExpand={() => toggleExpand('logic')} onClose={() => updatePanel('logic', { open: false })} />
+          {!panels.logic.minimized && <div class="floating-window-body logic-node-surface">
+            <div class="panel-empty-symbol">◇</div>
+            <strong>Logic workspace</strong>
+            <p>Build behavior and interaction flows with connected nodes. The node engine will be developed in a later stage.</p>
+            <span class="panel-engine-tag">LOGIC ENGINE · PLANNED</span>
+          </div>}
+        </section>
+      )}
+
+      {panels.componentCanvas.open && (
+        <section class={`floating-tool-window component-canvas-window ${panels.componentCanvas.minimized ? 'is-minimized' : ''} ${panels.componentCanvas.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'A floating workspace for arranging and editing reusable components.')}>
+          <WindowHeader title="Component Canvas" subtitle="REUSABLE DESIGN" minimized={panels.componentCanvas.minimized} expanded={panels.componentCanvas.expanded} onMinimize={() => toggleMinimize('componentCanvas')} onExpand={() => toggleExpand('componentCanvas')} onClose={() => updatePanel('componentCanvas', { open: false })} />
+          {!panels.componentCanvas.minimized && <div class="floating-window-body component-canvas-surface">
+            <div class="component-canvas-grid">
+              <div class="component-placeholder-card"><span>01</span><strong>Component</strong><small>Reusable item</small></div>
+              <div class="component-placeholder-card"><span>02</span><strong>Variant</strong><small>State and props</small></div>
+            </div>
+            <p class="panel-footnote">Component editing and variants are planned for the Design System stage.</p>
+          </div>}
+        </section>
+      )}
+
+      {panels.code.open && (
+        <section class={`floating-tool-window code-window ${panels.code.minimized ? 'is-minimized' : ''} ${panels.code.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('CODE VIEW', 'A floating preview area for generated HTML, CSS and JavaScript.')}>
+          <WindowHeader title="Code View" subtitle="VISUAL TO CODE" minimized={panels.code.minimized} expanded={panels.code.expanded} onMinimize={() => toggleMinimize('code')} onExpand={() => toggleExpand('code')} onClose={() => updatePanel('code', { open: false })} />
+          {!panels.code.minimized && <div class="floating-window-body code-view-surface">
+            <div class="code-view-language">HTML <span>·</span> CSS <span>·</span> JAVASCRIPT</div>
+            <div class="code-view-empty">
+              <strong>Generated code will appear here</strong>
+              <p>The visual-to-code engine is planned. This panel is a workspace placeholder for now.</p>
+            </div>
+          </div>}
+        </section>
+      )}
+
+      {panels.rack.open && (
+        <section class={`component-rack-drawer ${panels.rack.minimized ? 'is-minimized' : ''} ${panels.rack.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse reusable building blocks and component categories.')}>
+          <div class="component-rack-header">
+            <div class="floating-window-title"><strong>Component Rack</strong><span>LIBRARY</span></div>
+            <button class="window-control-button window-close-button" type="button" title="Close Component Rack" aria-label="Close Component Rack" onClick={() => updatePanel('rack', { open: false })}><Icon name="close" /></button>
+          </div>
+          {!panels.rack.minimized && <div class="component-rack-content">
+            <div class="rack-category-list"><span class="rack-category active">All</span><span class="rack-category">Basic</span><span class="rack-category">Layout</span><span class="rack-category">Forms</span><span class="rack-category">Media</span></div>
+            <div class="rack-empty-state"><div class="panel-empty-symbol">▦</div><strong>No saved components yet</strong><p>Reusable components will appear here when the component library is connected.</p></div>
+          </div>}
+        </section>
+      )}
 
       <aside class="inspector-panel" onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
         <div class="panel-heading inspector-heading">
