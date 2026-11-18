@@ -1118,29 +1118,68 @@ export function App() {
 
             <section class="property-section">
               <div class="section-title">Appearance</div>
-              <label class="field-label">Fill</label>
-              <div class="color-field-wrap">
-                <input
-                  class="color-swatch"
-                  type="color"
-                  value={selectedNode.style.fill.startsWith('#') && selectedNode.style.fill.length === 7 ? selectedNode.style.fill : '#8B7CF6'}
-                  onChange={(event) => updateSelectedStyle({ fill: event.currentTarget.value })}
-                />
-                <span class="color-value">{selectedNode.style.fill.toUpperCase()}</span>
-              </div>
-              {selectedNode.type === 'rect' && (
-                <label class="field-label range-label">Corner radius
-                  <input class="number-field" type="number" min="0" value={selectedNode.style.radius ?? 0} onChange={(event) => updateSelectedStyle({ radius: Math.max(0, Number(event.currentTarget.value) || 0) })} />
-                </label>
-              )}
-              {selectedNode.type === 'text' && (
+              {selectedNode.type === 'component-instance' ? (
                 <>
-                  <label class="field-label text-content-label">Text content</label>
-                  <textarea class="text-area-field" rows={3} value={selectedNode.text} onChange={(event) => updateSelected({ text: event.currentTarget.value })} />
-                  <div class="field-grid single-row">
-                    <label class="field-label">Font size<input class="number-field" type="number" min="1" value={selectedNode.style.fontSize} onChange={(event) => updateSelectedStyle({ fontSize: Math.max(1, Number(event.currentTarget.value) || 1) })} /></label>
-                    <label class="field-label">Weight<input class="number-field" type="number" min="100" max="900" step="100" value={selectedNode.style.fontWeight} onChange={(event) => updateSelectedStyle({ fontWeight: Math.min(900, Math.max(100, Number(event.currentTarget.value) || 400)) })} /></label>
+                  <span class="field-help">LINKED MASTER · {selectedInstanceComponent?.name ?? 'Missing component'}</span>
+                  {instanceOverrideTargets?.fillNode && (() => {
+                    const target = instanceOverrideTargets.fillNode!;
+                    const value = selectedNode.overrides[target.id]?.fill ?? target.style.fill;
+                    return (
+                      <>
+                        <label class="field-label">Instance fill override</label>
+                        <div class="color-field-wrap">
+                          <input class="color-swatch" type="color"
+                            value={value.startsWith('#') && value.length === 7 ? value : '#8B7CF6'}
+                            onChange={(event) => updateInstanceOverride(target.id, { fill: event.currentTarget.value })} />
+                          <span class="color-value">{value.toUpperCase()}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                  {instanceOverrideTargets?.textNode && (() => {
+                    const target = instanceOverrideTargets.textNode!;
+                    return (
+                      <>
+                        <label class="field-label text-content-label">Instance text override</label>
+                        <textarea class="text-area-field" rows={3}
+                          value={selectedNode.overrides[target.id]?.text ?? target.text}
+                          onChange={(event) => updateInstanceOverride(target.id, { text: event.currentTarget.value })} />
+                      </>
+                    );
+                  })()}
+                  <div class="instance-actions">
+                    <button type="button" onClick={resetInstanceOverrides}
+                      disabled={Object.keys(selectedNode.overrides).length === 0}>Reset Overrides</button>
+                    <button type="button" onClick={detachSelectedInstance}>Detach Instance</button>
                   </div>
+                </>
+              ) : (
+                <>
+                  <label class="field-label">Fill</label>
+                  <div class="color-field-wrap">
+                    <input
+                      class="color-swatch"
+                      type="color"
+                      value={selectedNode.style.fill.startsWith('#') && selectedNode.style.fill.length === 7 ? selectedNode.style.fill : '#8B7CF6'}
+                      onChange={(event) => updateSelectedStyle({ fill: event.currentTarget.value })}
+                    />
+                    <span class="color-value">{selectedNode.style.fill.toUpperCase()}</span>
+                  </div>
+                  {selectedNode.type === 'rect' && (
+                    <label class="field-label range-label">Corner radius
+                      <input class="number-field" type="number" min="0" value={selectedNode.style.radius ?? 0} onChange={(event) => updateSelectedStyle({ radius: Math.max(0, Number(event.currentTarget.value) || 0) })} />
+                    </label>
+                  )}
+                  {selectedNode.type === 'text' && (
+                    <>
+                      <label class="field-label text-content-label">Text content</label>
+                      <textarea class="text-area-field" rows={3} value={selectedNode.text} onChange={(event) => updateSelected({ text: event.currentTarget.value })} />
+                      <div class="field-grid single-row">
+                        <label class="field-label">Font size<input class="number-field" type="number" min="1" value={selectedNode.style.fontSize} onChange={(event) => updateSelectedStyle({ fontSize: Math.max(1, Number(event.currentTarget.value) || 1) })} /></label>
+                        <label class="field-label">Weight<input class="number-field" type="number" min="100" max="900" step="100" value={selectedNode.style.fontWeight} onChange={(event) => updateSelectedStyle({ fontWeight: Math.min(900, Math.max(100, Number(event.currentTarget.value) || 400)) })} /></label>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </section>
