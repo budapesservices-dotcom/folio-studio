@@ -283,7 +283,7 @@ export function App() {
               <span class="workspace-divider" />
               <button class="zoom-button" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}><Icon name="minus" /></button>
               <span class="zoom-value">{Math.round(zoom * 100)}%</span>
-              <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
+              <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(2, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
             </div>
           </div>
         </div>
