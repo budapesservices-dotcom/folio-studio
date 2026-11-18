@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
-import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
+import type { ComponentDefinition, DesignNode, FolioPage } from '../core/document/types';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
 import { Canvas } from '../engines/canvas/Canvas';
@@ -909,7 +909,17 @@ export function App() {
         : 'ALL CHANGES SAVED';
 
   return (
-    <div class={`app-shell ${layersVisible ? "" : "layers-hidden"} ${inspectorVisible ? "" : "inspector-hidden"}`} onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}>
+    <div
+      class={`app-shell ${layersVisible ? "" : "layers-hidden"} ${inspectorVisible ? "" : "inspector-hidden"} ${isHydrating ? "is-hydrating" : ""}`}
+      aria-busy={isHydrating}
+      onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}
+      onKeyDown={(event) => {
+        if (isHydrating) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+    >
       <header class="global-toolbar-slot" aria-label="FOLIO application toolbar">
         <nav class="global-menu-bar" aria-label="Application menus">
           <div class="global-toolbar-left">
@@ -1076,14 +1086,14 @@ export function App() {
           <div class="canvas-window-tools">
             {state.selectedNodeIds.length > 1 && (
               <div class="alignment-tools" aria-label="Align selected layers">
-                <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left', 'component')}>⇤</button>
-                <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center', 'component')}>↔</button>
-                <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right', 'component')}>⇥</button>
-                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal', 'component')}>⇌</button>
-                <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top', 'component')}>⇡</button>
-                <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center', 'component')}>↕</button>
-                <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom', 'component')}>⇣</button>
-                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical', 'component')}>⇅</button>
+                <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
+                <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
+                <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
+                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal')}>⇌</button>
+                <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
+                <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
+                <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
+                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
               </div>
             )}
             <div class="workspace-tools">
@@ -1437,9 +1447,16 @@ export function App() {
       <footer class="statusbar">
         <div><span class="status-brand">F</span><span>Folio Studio <b>0.1.0</b></span></div>
         <div class="status-center">{activeDocument.nodes.length} LAYERS <span>·</span> {activeDocument.width} × {activeDocument.height} PX</div>
-        <div class={`status-right save-${saveStatus}`} role="status" aria-live="polite"><span class="status-ready-dot" /> {statusLabel}</div>
+        <div class={`status-right save-${saveStatus}`} role="status" aria-live="polite"><span class="status-ready-dot" /> {isHydrating ? 'RESTORING PROJECT…' : statusLabel}</div>
       </footer>
 
+      {isHydrating && (
+        <div class="project-hydration-overlay" role="status" aria-live="polite">
+          <div class="project-hydration-indicator" />
+          <strong>RESTORING PROJECT</strong>
+          <span>Loading your pages and component library from local storage</span>
+        </div>
+      )}
       {notice && <div class="toast" role="status">{notice}</div>}
     </div>
   );
