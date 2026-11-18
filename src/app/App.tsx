@@ -642,7 +642,7 @@ export function App() {
     };
   };
 
-  const startComponentCanvasDrag = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+  const startNodeLogicDrag = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
     if ((!nodeLogicFloating && !nodeLogicMinimized) || event.button !== 0 || !event.isPrimary) return;
 
     const target = event.target as Element;
@@ -671,7 +671,7 @@ export function App() {
 
       // Let the window travel beyond left/right/bottom edges. Keep only its
       // titlebar above the app header to avoid losing the window permanently.
-      setComponentCanvasPosition({
+      setNodeLogicPosition({
         x: nextX,
         y: Math.max(56, nextY),
       });
@@ -698,7 +698,7 @@ export function App() {
     };
   };
 
-  const startComponentCanvasResize = (event: JSX.TargetedPointerEvent<HTMLDivElement>, direction: string) => {
+  const startNodeLogicResize = (event: JSX.TargetedPointerEvent<HTMLDivElement>, direction: string) => {
     if (event.button !== 0 || !event.isPrimary) return;
     event.preventDefault();
     event.stopPropagation();
@@ -755,8 +755,8 @@ export function App() {
         height = Math.min(resize.height + resize.top - top, Math.max(220, contentBottom - top));
       }
 
-      setComponentCanvasPosition({ x: left, y: top });
-      setComponentCanvasSize({ width, height });
+      setNodeLogicPosition({ x: left, y: top });
+      setNodeLogicSize({ width, height });
     };
 
     const finishPointerResize = (endEvent: PointerEvent) => {
