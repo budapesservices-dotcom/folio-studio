@@ -350,6 +350,62 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 .canvas-minimized-window.component-canvas-minimized { z-index: 111; }
 
+.workspace.node-logic-window.canvas-floating { z-index: 112; }
+.workspace.node-logic-docked {
+  grid-area: workspace;
+  position: relative;
+  z-index: 10;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.canvas-minimized-window.node-logic-minimized { z-index: 112; }
+.node-logic-workspace {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  background-color: #151a25;
+  background-image: radial-gradient(#65718a30 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+.node-logic-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 340px;
+  padding: 28px;
+  color: #8b96aa;
+  text-align: center;
+}
+.node-logic-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 5px;
+  border: 1px solid #7166b65c;
+  border-radius: 13px;
+  color: #b8adff;
+  background: #39335470;
+  box-shadow: 0 10px 30px #0003;
+}
+.node-logic-empty-icon .icon-svg { width: 23px; height: 23px; }
+.node-logic-empty > strong { color: #e0e5ef; font-size: 16px; font-weight: 650; }
+.node-logic-empty > p { margin: 0; color: #8994a8; font-size: 11px; line-height: 1.6; }
+.node-logic-empty-note { margin-top: 7px; color: #656f82; font-size: 8px; font-weight: 750; letter-spacing: 1.2px; }
+
+
+
 .workspace-resize-handle {
   position: absolute;
   z-index: 3;
