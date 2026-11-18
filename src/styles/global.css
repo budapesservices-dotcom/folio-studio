@@ -430,6 +430,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   }
   .inspector-panel { position: absolute; top: 56px; right: 0; bottom: 27px; z-index: 75; display: flex; flex-direction: column; width: 254px; min-height: 0; border-left: 1px solid var(--line); box-shadow: -14px 0 34px #0005; }
   .app-shell.layers-hidden { grid-template-columns: 54px 0 minmax(280px, 1fr); }
+  .app-shell.inspector-hidden { grid-template-columns: 54px 202px minmax(280px, 1fr); }
+  .app-shell.layers-hidden.inspector-hidden { grid-template-columns: 54px 0 minmax(280px, 1fr); }
       .canvas-scroll-area { padding: 35px 22px 45px; }
 }
 
@@ -452,6 +454,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   }
   .layers-panel { display: none; }
   .app-shell.layers-hidden { grid-template-columns: 48px minmax(0, 1fr); }
+  .app-shell.inspector-hidden,
+  .app-shell.layers-hidden.inspector-hidden { grid-template-columns: 48px minmax(0, 1fr); }
     .global-project-name { max-width: 120px; margin-left: 4px; padding-left: 8px; }
   .global-menu-bar { gap: 7px; padding-right: 7px; padding-left: 10px; }
   .global-panel-toggles { gap: 3px; }
