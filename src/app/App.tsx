@@ -261,7 +261,7 @@ export function App() {
         </div>
       </aside>
 
-      <main class="workspace" onMouseEnter={() => updateToolbarHint('CANVAS', 'Design and arrange objects on the document canvas.', ['SPACE + DRAG', 'MIDDLE-DRAG'])}>
+      <main class="workspace" onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}>
         <div class="workspace-toolbar">
           <div class="breadcrumb"><strong>{state.project.document.name}</strong></div>
           <div class="canvas-window-tools">
@@ -296,7 +296,7 @@ export function App() {
             onSelectionChange={(nodeIds) => dispatch({ type: 'select-nodes', nodeIds })}
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
-          <div class="canvas-hint">SPACE + DRAG / MIDDLE-DRAG TO PAN · DRAG TO MOVE · SHIFT-CLICK MULTI-SELECT</div>
+          <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
       </main>
 
