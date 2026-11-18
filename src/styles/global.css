@@ -46,6 +46,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .app-shell:fullscreen::backdrop { background: var(--chrome-deep); }
 .global-toolbar-slot {
   grid-area: toolbar;
+  position: relative;
+  z-index: 100;
   display: grid;
   grid-template-rows: 29px 27px;
   min-width: 0;
@@ -223,7 +225,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .status-right.save-saving .status-ready-dot { background: #e9bd72; }
 .status-right.save-error .status-ready-dot { background: #ed7777; }
 
-.tool-rail { grid-area: tools; display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 14px 0; background: #171b24; border-right: 1px solid var(--line); }
+.tool-rail { position: relative; z-index: 80; grid-area: tools; display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 14px 0; background: #171b24; border-right: 1px solid var(--line); }
 .tool-button, .history-button, .zoom-button, .icon-button {
   display: grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px;
   border: 1px solid transparent; border-radius: 7px; color: #8791a2; background: transparent; cursor: pointer;
@@ -235,7 +237,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .rail-separator { width: 24px; height: 1px; margin: 4px 0; background: #303642; }
 .rail-bottom { display: flex; flex-direction: column; gap: 5px; margin-top: auto; }
 
-.layers-panel, .inspector-panel { min-height: 0; background: var(--panel); }
+.layers-panel, .inspector-panel { position: relative; z-index: 70; min-height: 0; background: var(--panel); }
 .layers-panel { grid-area: layers; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 .layers-panel.is-hidden { display: none; }
 .app-shell.layers-hidden { grid-template-columns: 58px 0 minmax(320px, 1fr) 292px; }
@@ -264,9 +266,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 
 .app-shell { position: relative; overflow: hidden; isolation: isolate; }
 
+/* Workspace depth contract: chrome stays above all docked and floating panels. */
+/* Future floating windows: z-index 90; component rack: 80; window menu: 60; app background: 0. */
+
 .workspace {
   grid-area: workspace;
   position: relative;
+  z-index: 10;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -285,12 +291,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .history-button .icon-svg, .zoom-button .icon-svg { width: 14px; height: 14px; }
 .workspace-divider { width: 1px; height: 17px; margin: 0 6px; background: #343b48; }
 .zoom-value { min-width: 39px; color: #a6aebd; text-align: center; font-size: 10px; font-variant-numeric: tabular-nums; }
-.canvas-workspace { position: relative; display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; overflow: hidden; border-radius: 0 0 9px 9px; background-color: #11151d; background-image: radial-gradient(#343b48 0.8px, transparent 0.8px); background-size: 19px 19px; }
+.canvas-workspace { position: relative; display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; overflow: hidden; border-radius: 0 0 9px 9px; background: #fff; }
 
 .canvas-scroll-area { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; overflow: hidden; padding: 45px 35px 52px; touch-action: none; }
 .canvas-stage { flex: 0 0 auto; max-width: 100%; filter: drop-shadow(0 16px 28px #0007); }
 .artboard-label { display: flex; justify-content: space-between; margin: 0 0 9px; color: #7d8797; font-size: 9px; letter-spacing: .2px; }
-.artboard { display: block; width: 100%; height: auto; aspect-ratio: 1440 / 900; overflow: visible; background: #f5f2ec; box-shadow: 0 0 0 1px #ffffff18; }
+.artboard { display: block; width: 100%; height: auto; aspect-ratio: 1440 / 900; overflow: visible; background: #fff; box-shadow: 0 0 0 1px #00000012; }
 .canvas-hint { position: absolute; right: 18px; bottom: 14px; color: #606b7e; font-size: 8px; letter-spacing: 1.1px; font-weight: 700; }
 
 .inspector-panel { grid-area: inspector; display: flex; flex-direction: column; border-left: 1px solid var(--line); }
@@ -325,7 +331,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .quick-add button { border: 1px solid #3a4050; border-radius: 5px; padding: 7px 9px; color: #aaa2e9; background: #24243a; font-size: 9px; cursor: pointer; }
 .quick-add button:hover { background: #302e4b; }
 
-.statusbar { grid-area: footer; display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border-top: 1px solid #2b303c; background: #171b24; color: #737d8d; font-size: 8px; letter-spacing: .5px; }
+.statusbar { position: relative; z-index: 100; grid-area: footer; display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border-top: 1px solid #2b303c; background: #171b24; color: #737d8d; font-size: 8px; letter-spacing: .5px; }
 .statusbar > div { display: flex; align-items: center; gap: 7px; }
 .status-brand { display: grid; place-items: center; width: 14px; height: 14px; border-radius: 4px; color: #181522; background: #a494ff; font-size: 9px; font-weight: 900; }
 .statusbar b { color: #a4acbb; font-weight: 650; }
