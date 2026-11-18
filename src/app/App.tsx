@@ -321,7 +321,7 @@ export function App() {
             </div>
           </div>
         </div>
-        {!canvasClosed && !canvasMinimized ? <div class="canvas-workspace">
+        <div class="canvas-workspace">
           <Canvas
             document={state.project.document}
             selectedNodeIds={state.selectedNodeIds}
