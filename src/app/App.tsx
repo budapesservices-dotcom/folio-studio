@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from 'preact/hooks';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import { createInitialProject, createNode } from '../core/document/factory';
 import type { DesignNode } from '../core/document/types';
 import { loadMostRecentProject, saveProject } from '../core/persistence/indexedDb';
@@ -24,6 +24,7 @@ function Icon({ name }: { name: string }) {
     save: 'M5 4h12l3 3v13H4V4h1zm2 0v6h10V4M8 20v-7h8v7',
     fullscreen: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5',
     sidebar: 'M4 4h16v16H4zM9 4v16',
+    canvas: 'M3 4h18v16H3zM7 8h10v8H7z',
   };
 
   return (
@@ -61,6 +62,9 @@ export function App() {
   const [canvasMinimized, setCanvasMinimized] = useState(false);
   const [canvasClosed, setCanvasClosed] = useState(false);
   const [canvasMaximized, setCanvasMaximized] = useState(false);
+  const [canvasFloating, setCanvasFloating] = useState(false);
+  const [canvasPosition, setCanvasPosition] = useState({ x: 100, y: 92 });
+  const canvasDrag = useRef<{ pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -176,6 +180,7 @@ export function App() {
           </div>
           <div class="global-panel-toggles" aria-label="Workspace panels">
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
+            <button class="global-panel-toggle canvas-header-toggle" type="button" title="Create / open Canvas window" aria-label="Create or open Canvas window" onClick={() => { setCanvasClosed(false); setCanvasMinimized(false); setCanvasFloating(true); setCanvasMaximized(false); }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', 'Create or reopen the Canvas window.')}><Icon name="canvas" /></button>
             <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
           </div>
         </nav>
@@ -264,8 +269,29 @@ export function App() {
         </div>
       </aside>
 
-      <main class={`workspace${canvasMaximized ? " canvas-maximized" : ""}${canvasClosed ? " canvas-closed" : ""}`} onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}>
-        <div class="workspace-toolbar">
+      {!canvasClosed && !canvasMinimized && <main
+        class={`workspace${canvasMaximized ? " canvas-maximized" : ""}${canvasFloating && !canvasMaximized ? " canvas-floating" : ""}`}
+        style={canvasFloating && !canvasMaximized ? { left: `${canvasPosition.x}px`, top: `${canvasPosition.y}px` } : undefined}
+        onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
+      >
+        <div
+          class={`workspace-toolbar${canvasFloating && !canvasMaximized ? " workspace-toolbar-draggable" : ""}`}
+          onPointerDown={(event) => {
+            if (!canvasFloating || canvasMaximized || (event.target as HTMLElement).closest('button')) return;
+            canvasDrag.current = { pointerX: event.clientX, pointerY: event.clientY, originX: canvasPosition.x, originY: canvasPosition.y };
+            (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            const drag = canvasDrag.current;
+            if (!drag) return;
+            setCanvasPosition({
+              x: Math.max(0, drag.originX + event.clientX - drag.pointerX),
+              y: Math.max(56, drag.originY + event.clientY - drag.pointerY),
+            });
+          }}
+          onPointerUp={() => { canvasDrag.current = null; }}
+          onPointerCancel={() => { canvasDrag.current = null; }}
+        >
           <div class="breadcrumb"><strong>{state.project.document.name}</strong></div>
           <div class="canvas-window-tools">
             {state.selectedNodeIds.length > 1 && (
@@ -289,10 +315,9 @@ export function App() {
               <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(2, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
             </div>
             <div class="workspace-window-controls" aria-label="Canvas window controls">
-              {(canvasClosed || canvasMinimized) && <button type="button" class="window-control window-control-restore" title="Restore canvas" aria-label="Restore canvas" onClick={() => { setCanvasClosed(false); setCanvasMinimized(false); }}>↗</button>}
-              <button type="button" class="window-control" title={canvasMinimized ? "Restore canvas" : "Minimize canvas"} aria-label={canvasMinimized ? "Restore canvas" : "Minimize canvas"} onClick={() => { setCanvasMinimized((value) => !value); setCanvasClosed(false); }}>{canvasMinimized ? "▢" : "—"}</button>
-              <button type="button" class="window-control" title={canvasMaximized ? "Restore window size" : "Maximize canvas"} aria-label={canvasMaximized ? "Restore window size" : "Maximize canvas"} aria-pressed={canvasMaximized} onClick={() => setCanvasMaximized((value) => !value)}>{canvasMaximized ? "❐" : "□"}</button>
-              <button type="button" class="window-control window-control-close" title="Close canvas" aria-label="Close canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); setCanvasMaximized(false); }}>×</button>
+              <button type="button" class="window-control" title="Minimize canvas" aria-label="Minimize canvas" onClick={() => setCanvasMinimized(true)}>—</button>
+              <button type="button" class="window-control" title={canvasMaximized ? "Restore to floating window" : "Maximize canvas"} aria-label={canvasMaximized ? "Restore to floating window" : "Maximize canvas"} aria-pressed={canvasMaximized} onClick={() => { setCanvasFloating(true); setCanvasMaximized((value) => !value); }}>{canvasMaximized ? "❐" : "□"}</button>
+              <button type="button" class="window-control window-control-close" title="Close Canvas window" aria-label="Close Canvas window" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); setCanvasMaximized(false); setCanvasFloating(false); }}>×</button>
             </div>
           </div>
         </div>
@@ -306,8 +331,8 @@ export function App() {
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
-        </div> : canvasMinimized ? <div class="canvas-window-placeholder"><span>CANVAS MINIMIZED</span><button type="button" onClick={() => setCanvasMinimized(false)}>Restore Canvas</button></div> : null}
-      </main>
+        </div>
+      </main>}
 
       <aside class="inspector-panel" onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
         <div class="panel-heading inspector-heading">
