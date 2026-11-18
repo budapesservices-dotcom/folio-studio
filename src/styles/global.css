@@ -674,3 +674,41 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   .global-panel-toggle { width: 22px; height: 22px; }
 }
 
+
+
+/* Block all workspace interaction until the project aggregate is hydrated. */
+.project-hydration-overlay {
+  position: absolute;
+  z-index: 2000;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #e7e9f1;
+  background: rgba(12, 15, 22, .78);
+  backdrop-filter: blur(5px);
+  cursor: progress;
+}
+.project-hydration-overlay strong {
+  color: #d9d4ff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+}
+.project-hydration-overlay span {
+  color: #929bad;
+  font-size: 10px;
+}
+.project-hydration-indicator {
+  width: 27px;
+  height: 27px;
+  border: 2px solid #4b456e;
+  border-top-color: #a494ff;
+  border-radius: 50%;
+  animation: folio-hydration-spin .8s linear infinite;
+}
+@keyframes folio-hydration-spin {
+  to { transform: rotate(360deg); }
+}
