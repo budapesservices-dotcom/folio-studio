@@ -61,13 +61,38 @@ export function App() {
   const [layersVisible, setLayersVisible] = useState(true);
   const [canvasMinimized, setCanvasMinimized] = useState(false);
   const [canvasClosed, setCanvasClosed] = useState(false);
-  const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating' | 'maximized'>('docked');
+  const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating' | 'maximized'>(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
+      return saved?.mode === 'floating' || saved?.mode === 'maximized' ? saved.mode : 'docked';
+    } catch { return 'docked'; }
+  });
   const canvasFloating = canvasWindowMode === 'floating';
   const canvasMaximized = canvasWindowMode === 'maximized';
-  const [canvasPosition, setCanvasPosition] = useState({ x: 100, y: 92 });
-  const [canvasSize, setCanvasSize] = useState({ width: 860, height: 620 });
+  const [canvasPosition, setCanvasPosition] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
+      return Number.isFinite(saved?.position?.x) && Number.isFinite(saved?.position?.y) ? saved.position : { x: 100, y: 92 };
+    } catch { return { x: 100, y: 92 }; }
+  });
+  const [canvasSize, setCanvasSize] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
+      return Number.isFinite(saved?.size?.width) && Number.isFinite(saved?.size?.height)
+        ? { width: Math.max(280, saved.size.width), height: Math.max(220, saved.size.height) }
+        : { width: 860, height: 620 };
+    } catch { return { width: 860, height: 620 }; }
+  });
   const canvasDrag = useRef<{ pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
   const canvasResize = useRef<{ pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('folio.canvas-window', JSON.stringify({ mode: canvasWindowMode, position: canvasPosition, size: canvasSize }));
+    } catch (error) {
+      console.warn('Folio could not persist Canvas window layout:', error);
+    }
+  }, [canvasWindowMode, canvasPosition, canvasSize]);
 
   useEffect(() => {
     let active = true;
