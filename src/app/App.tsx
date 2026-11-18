@@ -211,26 +211,43 @@ export function App() {
   };
 
   const startWindowDrag = (event: PointerEvent, selector: string) => {
-    if ((event.target as HTMLElement).closest('button')) return;
+    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
     const header = event.currentTarget as HTMLElement;
     const win = header.closest(selector) as HTMLElement | null;
-    if (!win || win.classList.contains('is-expanded')) return;
+    const shell = win?.offsetParent as HTMLElement | null;
+    if (!win || !shell || win.classList.contains('is-expanded')) return;
+
+    event.preventDefault();
+    win.style.zIndex = '60';
+    const pointerId = event.pointerId;
     const startX = event.clientX;
     const startY = event.clientY;
     const rect = win.getBoundingClientRect();
-    const base = (win.offsetParent as HTMLElement).getBoundingClientRect();
+    const bounds = shell.getBoundingClientRect();
+    const startLeft = rect.left - bounds.left;
+    const startTop = rect.top - bounds.top;
+
     const move = (moveEvent: PointerEvent) => {
-      win.style.left = `${Math.max(0, rect.left - base.left + moveEvent.clientX - startX)}px`;
-      win.style.top = `${Math.max(56, rect.top - base.top + moveEvent.clientY - startY)}px`;
+      if (moveEvent.pointerId !== pointerId) return;
+      const maxLeft = Math.max(0, bounds.width - Math.min(win.offsetWidth, 220));
+      const maxTop = Math.max(68, bounds.height - 46);
+      const nextLeft = Math.min(maxLeft, Math.max(0, startLeft + moveEvent.clientX - startX));
+      const nextTop = Math.min(maxTop, Math.max(68, startTop + moveEvent.clientY - startY));
+      win.style.left = `${nextLeft}px`;
+      win.style.top = `${nextTop}px`;
       win.style.right = 'auto';
       win.style.bottom = 'auto';
     };
-    const stop = () => {
+
+    const stop = (stopEvent: PointerEvent) => {
+      if (stopEvent.pointerId !== pointerId) return;
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
     };
     window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', stop, { once: true });
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
   };
 
   const enterFullscreen = () => {
@@ -246,11 +263,28 @@ export function App() {
     }));
   };
 
+  const resetPanelGeometry = (key: PanelKey) => {
+    const selectors: Record<PanelKey, string> = {
+      canvas: '.workspace',
+      logic: '.logic-window',
+      rack: '.component-rack-drawer',
+      componentCanvas: '.component-canvas-window',
+      code: '.code-window',
+    };
+    const element = document.querySelector(selectors[key]) as HTMLElement | null;
+    if (!element) return;
+    ['left', 'right', 'top', 'bottom', 'width', 'height', 'z-index'].forEach((property) => {
+      element.style.removeProperty(property);
+    });
+  };
+
   const toggleMinimize = (key: PanelKey) => {
-    updatePanel(key, { minimized: !panels[key].minimized });
+    if (panels[key].expanded) resetPanelGeometry(key);
+    updatePanel(key, { minimized: !panels[key].minimized, expanded: false });
   };
 
   const toggleExpand = (key: PanelKey) => {
+    resetPanelGeometry(key);
     updatePanel(key, { expanded: !panels[key].expanded, minimized: false });
   };
 
