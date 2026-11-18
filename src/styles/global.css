@@ -574,6 +574,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   .workspace { left: 60px; width: calc(100% - 72px); }
   .workspace-closed { left: 60px; right: 12px; }
   .app-shell.layers-hidden { grid-template-columns: 48px minmax(0, 1fr); }
+  .app-shell.layers-hidden .workspace { left: 60px; width: calc(100% - 72px); }
   .logic-window { left: 60px; top: 96px; width: min(350px, calc(100vw - 76px)); }
   .component-canvas-window { left: 60px; right: 12px; top: 112px; width: auto; }
   .code-window { left: 60px; right: 12px; top: 128px; width: auto; }
