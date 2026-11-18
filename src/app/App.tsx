@@ -170,7 +170,7 @@ export function App() {
           </div>
         </div>
       </header>
-      <nav class="tool-rail" aria-label="Insert tools" onMouseEnter={() => updateToolbarHint('TOOLS', 'Choose Select, Rectangle, Ellipse or Text from the tool rail.', ['SPACE + DRAG'])}>
+      <nav class="tool-rail" aria-label="Insert tools" onMouseEnter={() => updateToolbarHint('TOOLS', 'Choose Select, Rectangle, Ellipse or Text from the tool rail.')}>
         <button class="tool-button active" title="Select layer" aria-label="Select layer" onClick={() => dispatch({ type: 'select-node', nodeId: null })}>
           <Icon name="cursor" />
         </button>
