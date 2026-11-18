@@ -1,4 +1,4 @@
-import { requireValidProject } from '../document/validation';
+import { migrateProjectToV2 } from '../document/migrations';
 import type { FolioProject } from '../document/types';
 
 function safeFileName(name: string): string {
@@ -35,5 +35,5 @@ export async function readProjectFile(file: File): Promise<FolioProject> {
     throw new Error('The selected file is not valid JSON.');
   }
 
-  return requireValidProject(parsed);
+  return migrateProjectToV2(parsed);
 }
