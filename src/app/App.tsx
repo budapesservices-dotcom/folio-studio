@@ -68,6 +68,7 @@ type PanelState = {
 
 type WindowHeaderProps = {
   title: string;
+  onPointerDown?: (event: PointerEvent) => void;
   subtitle?: string;
   minimized: boolean;
   expanded: boolean;
@@ -86,9 +87,10 @@ function WindowHeader({
   onExpand,
   onClose,
   children,
+  onPointerDown,
 }: WindowHeaderProps) {
   return (
-    <header class="floating-window-header">
+    <header class="floating-window-header" onPointerDown={onPointerDown}>
       <div class="floating-window-title">
         <strong>{title}</strong>
         {subtitle && <span>{subtitle}</span>}
