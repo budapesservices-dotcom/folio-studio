@@ -1,4 +1,5 @@
-import type { DesignNode, FolioProject } from '../core/document/types';
+import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
+import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 
 const HISTORY_LIMIT = 60;
 
@@ -14,10 +15,15 @@ export type EditorAction =
   | { type: 'select-node'; nodeId: string | null }
   | { type: 'select-nodes'; nodeIds: string[] }
   | { type: 'add-node'; node: DesignNode }
+  | { type: 'add-nodes'; nodes: DesignNode[] }
   | { type: 'replace-node'; node: DesignNode }
   | { type: 'transform-nodes'; nodes: DesignNode[] }
   | { type: 'delete-node'; nodeId: string }
   | { type: 'rename-project'; name: string }
+  | { type: 'add-page'; page: FolioPage }
+  | { type: 'set-active-page'; pageId: string }
+  | { type: 'add-component'; component: ComponentDefinition }
+  | { type: 'delete-component'; componentId: string }
   | { type: 'replace-project'; project: FolioProject }
   | { type: 'undo' }
   | { type: 'redo' };
@@ -49,19 +55,17 @@ function touch(project: FolioProject): FolioProject {
 }
 
 function existingSelection(project: FolioProject, ids: string[]): string[] {
-  const available = new Set(project.document.nodes.map((node) => node.id));
+  const available = new Set(getActiveDocument(project).nodes.map((node) => node.id));
   return [...new Set(ids)].filter((id) => available.has(id));
 }
 
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
+  const document = getActiveDocument(state.project);
+
   switch (action.type) {
     case 'select-node': {
       const ids = action.nodeId ? existingSelection(state.project, [action.nodeId]) : [];
-      return {
-        ...state,
-        selectedNodeId: ids[0] ?? null,
-        selectedNodeIds: ids,
-      };
+      return { ...state, selectedNodeId: ids[0] ?? null, selectedNodeIds: ids };
     }
 
     case 'select-nodes': {
@@ -73,34 +77,34 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       };
     }
 
-    case 'add-node': {
-      const next = touch({
-        ...state.project,
-        document: {
-          ...state.project.document,
-          nodes: [...state.project.document.nodes, action.node],
-        },
-      });
-      return withSnapshot(state, next, action.node.id, [action.node.id]);
+    case 'add-node':
+      return editorReducer(state, { type: 'add-nodes', nodes: [action.node] });
+
+    case 'add-nodes': {
+      if (action.nodes.length === 0) return state;
+      const nextDocument = {
+        ...document,
+        nodes: [...document.nodes, ...action.nodes],
+      };
+      const next = touch(updateActiveDocument(state.project, nextDocument));
+      const ids = action.nodes.map((node) => node.id);
+      return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
     }
 
     case 'replace-node': {
-      const exists = state.project.document.nodes.some((node) => node.id === action.node.id);
+      const exists = document.nodes.some((node) => node.id === action.node.id);
       if (!exists) return state;
-      const next = touch({
-        ...state.project,
-        document: {
-          ...state.project.document,
-          nodes: state.project.document.nodes.map((node) => (node.id === action.node.id ? action.node : node)),
-        },
-      });
-      return withSnapshot(state, next);
+      const nextDocument = {
+        ...document,
+        nodes: document.nodes.map((node) => (node.id === action.node.id ? action.node : node)),
+      };
+      return withSnapshot(state, touch(updateActiveDocument(state.project, nextDocument)));
     }
 
     case 'transform-nodes': {
       const updates = new Map(action.nodes.map((node) => [node.id, node] as const));
       let changed = false;
-      const nodes = state.project.document.nodes.map((node) => {
+      const nodes = document.nodes.map((node) => {
         const replacement = updates.get(node.id);
         if (!replacement) return node;
         if (
@@ -109,28 +113,21 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           replacement.width === node.width &&
           replacement.height === node.height &&
           (node.type !== 'text' || replacement.type !== 'text' || replacement.style.fontSize === node.style.fontSize)
-        ) {
-          return node;
-        }
+        ) return node;
         changed = true;
         return replacement;
       });
       if (!changed) return state;
-
-      const next = touch({
-        ...state.project,
-        document: { ...state.project.document, nodes },
-      });
-      return withSnapshot(state, next);
+      return withSnapshot(
+        state,
+        touch(updateActiveDocument(state.project, { ...document, nodes })),
+      );
     }
 
     case 'delete-node': {
-      const nodes = state.project.document.nodes.filter((node) => node.id !== action.nodeId);
-      if (nodes.length === state.project.document.nodes.length) return state;
-      const next = touch({
-        ...state.project,
-        document: { ...state.project.document, nodes },
-      });
+      const nodes = document.nodes.filter((node) => node.id !== action.nodeId);
+      if (nodes.length === document.nodes.length) return state;
+      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       const selected = state.selectedNodeIds.filter((id) => id !== action.nodeId);
       return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
     }
@@ -143,6 +140,49 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         metadata: { ...state.project.metadata, name },
       });
       return withSnapshot(state, next);
+    }
+
+    case 'add-page': {
+      if (state.project.pages.some((page) => page.id === action.page.id || page.route === action.page.route)) return state;
+      const next = touch({
+        ...state.project,
+        activePageId: action.page.id,
+        pages: [...state.project.pages, action.page],
+      });
+      return {
+        project: next,
+        past: [],
+        future: [],
+        selectedNodeId: null,
+        selectedNodeIds: [],
+      };
+    }
+
+    case 'set-active-page': {
+      if (!state.project.pages.some((page) => page.id === action.pageId)) return state;
+      if (state.project.activePageId === action.pageId) return state;
+      return {
+        ...state,
+        project: touch({ ...state.project, activePageId: action.pageId }),
+        past: [],
+        future: [],
+        selectedNodeId: null,
+        selectedNodeIds: [],
+      };
+    }
+
+    case 'add-component': {
+      if (state.project.components.some((component) => component.id === action.component.id)) return state;
+      return withSnapshot(state, touch({
+        ...state.project,
+        components: [...state.project.components, action.component],
+      }));
+    }
+
+    case 'delete-component': {
+      const components = state.project.components.filter((component) => component.id !== action.componentId);
+      if (components.length === state.project.components.length) return state;
+      return withSnapshot(state, touch({ ...state.project, components }));
     }
 
     case 'replace-project':
