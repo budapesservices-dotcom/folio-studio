@@ -1107,7 +1107,7 @@ export function App() {
             <div class="workspace-window-controls" aria-label="Node Logic window controls">
               <button type="button" class="window-control window-control-minimize" title="Minimize Node Logic" aria-label="Minimize Node Logic" onClick={() => setNodeLogicMinimized(true)}></button>
               <button type="button" class="window-control" title={nodeLogicFloating ? "Dock Node Logic" : "Float Node Logic"} aria-label={nodeLogicFloating ? "Dock Node Logic" : "Float Node Logic"} aria-pressed={nodeLogicFloating} onClick={() => setNodeLogicWindowMode(nodeLogicFloating ? 'docked' : 'floating')}>{nodeLogicFloating ? "▣" : "□"}</button>
-              <button type="button" class="window-control window-control-close" title="Close Node Logic window" aria-label="Close Node Logic window" onClick={() => { setNodeLogicClosed(true); setNodeLogicMinimized(false); setNodeLogicWindowMode('floating'); }}>×</button>
+              <button type="button" class="window-control window-control-close" title="Close Node Logic window" aria-label="Close Node Logic window" onClick={() => { setNodeLogicClosed(true); setNodeLogicMinimized(false); setNodeLogicWindowMode('docked'); }}>×</button>
             </div>
           </div>
         </div>
