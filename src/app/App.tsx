@@ -928,7 +928,7 @@ export function App() {
           </div>
 
           </div>
-                  <div class="global-project-name" title={`${projectName}.flop`}>
+                  <div class="global-project-name" title={`${state.project.metadata.name}.flop`}>
           {projectNameEditing ? (
             <input
               class="global-project-rename-input"
@@ -946,14 +946,14 @@ export function App() {
                 if (event.key === 'Escape') {
                   event.preventDefault();
                   projectNameCancelRef.current = true;
-                  setProjectNameDraft(projectName);
+                  setProjectNameDraft(state.project.metadata.name);
                   setProjectNameEditing(false);
                 }
               }}
             />
           ) : (
-            <button type="button" class="global-project-rename-button" title="Rename project" onClick={() => { setProjectNameDraft(projectName); projectNameCancelRef.current = false; setProjectNameEditing(true); }}>
-              <span class="global-project-label">{projectName}</span>
+            <button type="button" class="global-project-rename-button" title="Rename project" onClick={() => { setProjectNameDraft(state.project.metadata.name); projectNameCancelRef.current = false; setProjectNameEditing(true); }}>
+              <span class="global-project-label">{state.project.metadata.name}</span>
               <span class="global-project-extension">.flop</span>
               <Icon name="edit" />
             </button>
@@ -1015,15 +1015,15 @@ export function App() {
         </div>
         <div class="page-row">
           <span class="page-indicator" />
-          <span>{state.project.document.name}</span>
-          <span class="page-size">{state.project.document.width} × {state.project.document.height}</span>
+          <span>{getActiveDocument(state.project).name}</span>
+          <span class="page-size">{getActiveDocument(state.project).width} × {getActiveDocument(state.project).height}</span>
         </div>
         <div class="layer-list-heading">
           <span>LAYERS</span>
-          <span>{state.project.document.nodes.length}</span>
+          <span>{getActiveDocument(state.project).nodes.length}</span>
         </div>
         <div class="layer-list">
-          {[...state.project.document.nodes].reverse().map((node) => (
+          {[...getActiveDocument(state.project).nodes].reverse().map((node) => (
             <button
               key={node.id}
               class={"layer-row " + (state.selectedNodeIds.includes(node.id) ? "selected " : "") + (node.visible ? "" : "layer-hidden")}
@@ -1046,7 +1046,7 @@ export function App() {
               <span class="layer-eye">{node.visible ? '◉' : '○'}</span>
             </button>
           ))}
-          {state.project.document.nodes.length === 0 && (
+          {getActiveDocument(state.project).nodes.length === 0 && (
             <div class="empty-layers">Your layers will appear here.</div>
           )}
         </div>
@@ -1071,19 +1071,19 @@ export function App() {
           onPointerDown={canvasFloating ? startCanvasDrag : undefined}
         >
           <div class="breadcrumb">
-            <strong>{state.project.document.name}</strong>
+            <strong>{activeDocument.name}</strong>
           </div>
           <div class="canvas-window-tools">
             {state.selectedNodeIds.length > 1 && (
               <div class="alignment-tools" aria-label="Align selected layers">
-                <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
-                <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
-                <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
-                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal')}>⇌</button>
-                <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
-                <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
-                <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
-                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
+                <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left', 'component')}>⇤</button>
+                <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center', 'component')}>↔</button>
+                <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right', 'component')}>⇥</button>
+                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal', 'component')}>⇌</button>
+                <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top', 'component')}>⇡</button>
+                <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center', 'component')}>↕</button>
+                <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom', 'component')}>⇣</button>
+                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical', 'component')}>⇅</button>
               </div>
             )}
             <div class="workspace-tools">
@@ -1103,7 +1103,7 @@ export function App() {
         </div>
         <div class="canvas-workspace">
           <Canvas
-            document={state.project.document}
+            document={activeDocument}
             selectedNodeIds={state.selectedNodeIds}
             zoom={zoom}
             onZoomChange={setZoom}
@@ -1146,22 +1146,22 @@ export function App() {
           </div>
           <div class="canvas-window-tools">
             <div class="workspace-tools component-canvas-create-tools" aria-label="Create component elements">
-              <button type="button" title="Add rectangle" aria-label="Add rectangle" onClick={() => componentDispatch({ type: 'add-node', node: createNode('rect', componentState.project.document.nodes.length) })}><Icon name="rect" /></button>
-              <button type="button" title="Add ellipse" aria-label="Add ellipse" onClick={() => componentDispatch({ type: 'add-node', node: createNode('ellipse', componentState.project.document.nodes.length) })}><Icon name="ellipse" /></button>
-              <button type="button" title="Add text" aria-label="Add text" onClick={() => componentDispatch({ type: 'add-node', node: createNode('text', componentState.project.document.nodes.length) })}><Icon name="text" /></button>
+              <button type="button" title="Add rectangle" aria-label="Add rectangle" onClick={() => componentDispatch({ type: 'add-node', node: createNode('rect', getActiveDocument(componentState.project).nodes.length) })}><Icon name="rect" /></button>
+              <button type="button" title="Add ellipse" aria-label="Add ellipse" onClick={() => componentDispatch({ type: 'add-node', node: createNode('ellipse', getActiveDocument(componentState.project).nodes.length) })}><Icon name="ellipse" /></button>
+              <button type="button" title="Add text" aria-label="Add text" onClick={() => componentDispatch({ type: 'add-node', node: createNode('text', getActiveDocument(componentState.project).nodes.length) })}><Icon name="text" /></button>
               <span class="workspace-divider" />
               <button type="button" title="Save selected as reusable component" aria-label="Save selected as reusable component" disabled={selectedComponentNodes.length === 0} onClick={() => saveNodesAsComponent(selectedComponentNodes)}><Icon name="save" /></button>
             </div>
             {componentState.selectedNodeIds.length > 1 && (
               <div class="alignment-tools" aria-label="Align selected layers">
-                <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
-                <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
-                <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
-                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={componentState.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal')}>⇌</button>
-                <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
-                <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
-                <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
-                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={componentState.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
+                <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left', 'component')}>⇤</button>
+                <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center', 'component')}>↔</button>
+                <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right', 'component')}>⇥</button>
+                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={componentState.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal', 'component')}>⇌</button>
+                <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top', 'component')}>⇡</button>
+                <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center', 'component')}>↕</button>
+                <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom', 'component')}>⇣</button>
+                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={componentState.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical', 'component')}>⇅</button>
               </div>
             )}
             <div class="workspace-tools">
@@ -1181,7 +1181,7 @@ export function App() {
         </div>
         <div class="canvas-workspace">
           <Canvas
-            document={componentState.project.document}
+            document={componentDocument}
             selectedNodeIds={componentState.selectedNodeIds}
             zoom={componentCanvasZoom}
             onZoomChange={setComponentCanvasZoom}
@@ -1211,7 +1211,7 @@ export function App() {
             onPointerDown={startCanvasDrag}
           >
             <Icon name="canvas" />
-            <strong>{state.project.document.name}</strong>
+            <strong>{activeDocument.name}</strong>
             <button type="button" class="minimized-restore-control" title="Restore Canvas" aria-label="Restore Canvas" onClick={() => setCanvasMinimized(false)}></button>
             <button type="button" title="Close Canvas" aria-label="Close Canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); }}>×</button>
           </div>
@@ -1398,8 +1398,8 @@ export function App() {
           {pages.map((page) => (
             <button type="button" key={page.id} class={`pages-rack-card ${activePageId === page.id ? 'is-active' : ''}`} onClick={() => switchPage(page)} aria-current={activePageId === page.id ? 'page' : undefined}>
               <span class="pages-rack-card-icon"><Icon name="pages" /></span>
-              <span class="pages-rack-card-copy"><strong>{page.name}</strong><small>{page.path}</small></span>
-              <span class="pages-rack-card-kind">{page.kind === 'main' ? 'HOME' : page.kind === '404' ? '404' : 'PAGE'}</span>
+              <span class="pages-rack-card-copy"><strong>{page.name}</strong><small>{page.route}</small></span>
+              <span class="pages-rack-card-kind">{page.route === '/' ? 'HOME' : page.route === '/404' ? '404' : 'PAGE'}</span>
             </button>
           ))}
         </div>
@@ -1422,11 +1422,11 @@ export function App() {
           {ownedComponents.filter((component) => component.name.toLowerCase().includes(componentRackSearch.toLowerCase())).map((component) => (
             <article class="component-rack-card" key={component.id}>
               <button type="button" class="component-rack-preview" title={`Insert ${component.name} into the current page`} onClick={() => insertOwnedComponent(component)}>
-                <span class="component-rack-preview-shapes">{component.nodes.slice(0, 5).map((node) => <span class={`component-preview-shape shape-${node.type}`} style={node.type === 'text' ? { color: node.style.fill } : { background: node.style.fill }} />)}</span>
+                <span class="component-rack-preview-shapes">{component.document.nodes.slice(0, 5).map((node) => <span class={`component-preview-shape shape-${node.type}`} style={node.type === 'text' ? { color: node.style.fill } : { background: node.style.fill }} />)}</span>
                 <span class="component-rack-card-name">{component.name}</span>
-                <span class="component-rack-card-meta">{component.nodes.length} layer{component.nodes.length === 1 ? '' : 's'}</span>
+                <span class="component-rack-card-meta">{component.document.nodes.length} layer{component.document.nodes.length === 1 ? '' : 's'}</span>
               </button>
-              <button type="button" class="component-rack-delete" title={`Delete ${component.name}`} aria-label={`Delete ${component.name}`} onClick={() => setOwnedComponents((items) => items.filter((item) => item.id !== component.id))}>×</button>
+              <button type="button" class="component-rack-delete" title={`Delete ${component.name}`} aria-label={`Delete ${component.name}`} onClick={() => dispatch({ type: 'delete-component', componentId: component.id })}>×</button>
             </article>
           ))}
           {ownedComponents.length === 0 && <div class="component-rack-empty"><Icon name="rack" /><strong>Your component library is empty</strong><span>Select layers on the canvas and choose “Save selection” to keep reusable components here.</span></div>}
@@ -1436,7 +1436,7 @@ export function App() {
 
       <footer class="statusbar">
         <div><span class="status-brand">F</span><span>Folio Studio <b>0.1.0</b></span></div>
-        <div class="status-center">{state.project.document.nodes.length} LAYERS <span>·</span> {state.project.document.width} × {state.project.document.height} PX</div>
+        <div class="status-center">{activeDocument.nodes.length} LAYERS <span>·</span> {activeDocument.width} × {activeDocument.height} PX</div>
         <div class={`status-right save-${saveStatus}`} role="status" aria-live="polite"><span class="status-ready-dot" /> {statusLabel}</div>
       </footer>
 
