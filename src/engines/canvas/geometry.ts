@@ -130,25 +130,34 @@ export function resizeNodes(
       ? scaleY
       : Math.min(scaleX, scaleY);
 
-  return nodes.map((node) => {
-    const resized = {
-      ...node,
-      x: left + (node.x - bounds.x) * scaleX,
-      y: top + (node.y - bounds.y) * scaleY,
-      width: Math.max(minimum, node.width * scaleX),
-      height: Math.max(minimum, node.height * scaleY),
-    };
+  return nodes.map((node): DesignNode => {
+    const x = left + (node.x - bounds.x) * scaleX;
+    const y = top + (node.y - bounds.y) * scaleY;
+    const width = Math.max(minimum, node.width * scaleX);
+    const height = Math.max(minimum, node.height * scaleY);
 
+    // Preserve each discriminated node type and its corresponding style schema.
     if (node.type === 'text') {
       return {
-        ...resized,
-        style: { ...node.style, fontSize: Math.max(8, node.style.fontSize * fontScale) },
+        ...node,
+        x,
+        y,
+        width,
+        height,
+        style: {
+          ...node.style,
+          fontSize: Math.max(8, node.style.fontSize * fontScale),
+        },
       };
     }
 
     if (node.type === 'rect') {
       return {
-        ...resized,
+        ...node,
+        x,
+        y,
+        width,
+        height,
         style: {
           ...node.style,
           radius: node.style.radius === undefined ? undefined : node.style.radius * fontScale,
@@ -156,7 +165,7 @@ export function resizeNodes(
       };
     }
 
-    return resized;
+    return { ...node, x, y, width, height };
   });
 }
 
