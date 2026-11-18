@@ -26,6 +26,7 @@ function Icon({ name }: { name: string }) {
     fullscreen: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5',
     sidebar: 'M4 4h16v16H4zM9 4v16',
     canvas: 'M3 4h18v16H3zM7 8h10v8H7z',
+    inspector: 'M4 4h16v16H4zM15 4v16',
   };
 
   return (
@@ -60,6 +61,7 @@ export function App() {
   const [zoom, setZoom] = useState(0.82);
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
   const [layersVisible, setLayersVisible] = useState(true);
+  const [inspectorVisible, setInspectorVisible] = useState(true);
   const [canvasMinimized, setCanvasMinimized] = useState(false);
   const [canvasClosed, setCanvasClosed] = useState(false);
   const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating'>(() => {
@@ -167,6 +169,7 @@ export function App() {
 
   const addNode = (type: DesignNode['type']) => {
     dispatch({ type: 'add-node', node: createNode(type, state.project.document.nodes.length) });
+    setInspectorVisible(true);
   };
 
   const updateSelected = (patch: Partial<DesignNode>) => {
@@ -357,7 +360,7 @@ export function App() {
         : 'ALL CHANGES SAVED';
 
   return (
-    <div class={`app-shell ${layersVisible ? "" : "layers-hidden"}`} onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}>
+    <div class={`app-shell ${layersVisible ? "" : "layers-hidden"} ${inspectorVisible ? "" : "inspector-hidden"}`} onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}>
       <header class="global-toolbar-slot" aria-label="FOLIO application toolbar">
         <nav class="global-menu-bar" aria-label="Application menus">
           <div class="global-toolbar-left">
@@ -382,6 +385,7 @@ export function App() {
           <div class="global-panel-toggles" aria-label="Workspace panels">
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
             <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) { setCanvasClosed(false); setCanvasMinimized(false); } else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
+            <button class={`global-panel-toggle inspector-header-toggle ${inspectorVisible ? 'active' : ''}`} type="button" title={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-label={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-pressed={inspectorVisible} onClick={() => setInspectorVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('INSPECTOR', inspectorVisible ? 'Hide the properties Inspector. Selecting an object opens it automatically.' : 'Show the properties Inspector. Selecting an object also opens it automatically.')}><Icon name="inspector" /></button>
             <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
           </div>
         </nav>
@@ -444,6 +448,7 @@ export function App() {
               class={"layer-row " + (state.selectedNodeIds.includes(node.id) ? "selected " : "") + (node.visible ? "" : "layer-hidden")}
               onClick={(event) => {
                 const selected = state.selectedNodeIds;
+                setInspectorVisible(true);
                 if (event.shiftKey || event.metaKey || event.ctrlKey) {
                   const next = selected.includes(node.id)
                     ? selected.filter((id) => id !== node.id)
@@ -521,7 +526,10 @@ export function App() {
             selectedNodeIds={state.selectedNodeIds}
             zoom={zoom}
             onZoomChange={setZoom}
-            onSelectionChange={(nodeIds) => dispatch({ type: 'select-nodes', nodeIds })}
+            onSelectionChange={(nodeIds) => {
+              dispatch({ type: 'select-nodes', nodeIds });
+              if (nodeIds.length > 0) setInspectorVisible(true);
+            }}
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
@@ -554,7 +562,7 @@ export function App() {
         </div>
       )}
 
-      <aside class="inspector-panel" onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
+      <aside class={`inspector-panel ${inspectorVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
         <div class="panel-heading inspector-heading">
           <div>
             <span class="panel-kicker">PROPERTIES</span>
