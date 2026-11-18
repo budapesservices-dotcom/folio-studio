@@ -1,0 +1,26 @@
+{
+  "name": "folio-studio",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Folio Studio — hybrid visual design, prototyping, animation and visual-to-code workspace.",
+  "engines": {
+    "node": ">=24.11.0 <27"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run check && vite build",
+    "preview": "vite preview",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "preact": "^10.28.2"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.0",
+    "vitest": "^4.1.0"
+  }
+}
