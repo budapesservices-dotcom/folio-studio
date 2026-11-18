@@ -262,6 +262,15 @@ export function Canvas({
   };
 
   const handlePanPointerDown = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+    if (event.button === 1 && event.ctrlKey && event.shiftKey) {
+      event.preventDefault();
+      panRef.current = null;
+      setIsPanning(false);
+      setPan({ x: 0, y: 0 });
+      onZoomChange(1);
+      return;
+    }
+
     const isMiddleDrag = event.button === 1;
     const isSpaceDrag = event.button === 0 && spaceHeld;
     if (!isMiddleDrag && !isSpaceDrag) return;
