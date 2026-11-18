@@ -76,7 +76,7 @@ export function App() {
       const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
       // Keep enough free screen area around the window for reliable dragging.
       const maxWidth = Math.max(280, Math.min(viewportWidth * 0.82, viewportWidth - 24));
-      const maxHeight = Math.max(220, Math.min(viewportHeight * 0.68, viewportHeight - 56 - 27 - 16));
+      const maxHeight = Math.max(220, Math.min(viewportHeight * 0.60, viewportHeight - 56 - 27 - 16));
       const preferredWidth = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(860, viewportWidth * 0.78);
       const preferredHeight = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(620, viewportHeight * 0.58);
       return {
@@ -86,7 +86,7 @@ export function App() {
     } catch {
       return {
         width: Math.max(280, Math.min(860, window.innerWidth * 0.78, window.innerWidth * 0.82)),
-        height: Math.max(220, Math.min(620, window.innerHeight * 0.58, window.innerHeight * 0.68 - 99)),
+        height: Math.max(220, Math.min(620, window.innerHeight * 0.58)),
       };
     }
   });
@@ -97,11 +97,15 @@ export function App() {
       const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
       const maxX = Math.max(0, viewportWidth - canvasSize.width);
       const maxY = Math.max(56, viewportHeight - 27 - canvasSize.height);
-      const preferredX = Number.isFinite(saved?.position?.x) ? saved.position.x : 48;
-      const preferredY = Number.isFinite(saved?.position?.y) ? saved.position.y : 80;
+      const savedX = Number.isFinite(saved?.position?.x) ? saved.position.x : 48;
+      const savedY = Number.isFinite(saved?.position?.y) ? saved.position.y : 80;
+      // Old saved coordinates could put a full-size window flush against an edge.
+      // Reset only out-of-range coordinates to a reachable, draggable starting point.
+      const preferredX = savedX <= maxX ? savedX : Math.min(48, maxX);
+      const preferredY = savedY <= maxY ? savedY : Math.min(80, maxY);
       return {
-        x: Math.min(maxX, Math.max(0, preferredX)),
-        y: Math.min(maxY, Math.max(56, preferredY)),
+        x: Math.max(0, preferredX),
+        y: Math.max(56, preferredY),
       };
     } catch { return { x: 48, y: 80 }; }
   });
