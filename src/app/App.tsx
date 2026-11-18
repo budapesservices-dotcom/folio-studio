@@ -64,7 +64,9 @@ export function App() {
   const [canvasMaximized, setCanvasMaximized] = useState(false);
   const [canvasFloating, setCanvasFloating] = useState(false);
   const [canvasPosition, setCanvasPosition] = useState({ x: 100, y: 92 });
+  const [canvasSize, setCanvasSize] = useState({ width: 860, height: 620 });
   const canvasDrag = useRef<{ pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
+  const canvasResize = useRef<{ pointerX: number; pointerY: number; width: number; height: number } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -271,7 +273,12 @@ export function App() {
 
       {!canvasClosed && !canvasMinimized && <main
         class={`workspace${canvasMaximized ? " canvas-maximized" : ""}${canvasFloating && !canvasMaximized ? " canvas-floating" : ""}`}
-        style={canvasFloating && !canvasMaximized ? { left: `${canvasPosition.x}px`, top: `${canvasPosition.y}px` } : undefined}
+        style={canvasFloating && !canvasMaximized ? {
+          left: `${canvasPosition.x}px`,
+          top: `${canvasPosition.y}px`,
+          width: `${canvasSize.width}px`,
+          height: `${canvasSize.height}px`,
+        } : undefined}
         onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
       >
         <div
@@ -316,7 +323,15 @@ export function App() {
             </div>
             <div class="workspace-window-controls" aria-label="Canvas window controls">
               <button type="button" class="window-control" title="Minimize canvas" aria-label="Minimize canvas" onClick={() => setCanvasMinimized(true)}>—</button>
-              <button type="button" class="window-control" title={canvasMaximized ? "Restore to floating window" : "Maximize canvas"} aria-label={canvasMaximized ? "Restore to floating window" : "Maximize canvas"} aria-pressed={canvasMaximized} onClick={() => { setCanvasFloating(true); setCanvasMaximized((value) => !value); }}>{canvasMaximized ? "❐" : "□"}</button>
+              <button type="button" class="window-control" title={canvasMaximized ? "Restore to floating window" : "Maximize canvas"} aria-label={canvasMaximized ? "Restore to floating window" : "Maximize canvas"} aria-pressed={canvasMaximized} onClick={() => {
+                if (canvasMaximized) {
+                  setCanvasFloating(true);
+                  setCanvasMaximized(false);
+                } else {
+                  setCanvasFloating(true);
+                  setCanvasMaximized(true);
+                }
+              }}>{canvasMaximized ? "❐" : "□"}</button>
               <button type="button" class="window-control window-control-close" title="Close Canvas window" aria-label="Close Canvas window" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); setCanvasMaximized(false); setCanvasFloating(false); }}>×</button>
             </div>
           </div>
@@ -332,6 +347,38 @@ export function App() {
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
+        {canvasFloating && !canvasMaximized && (
+          <div
+            class="workspace-resize-handle"
+            role="presentation"
+            aria-label="Resize Canvas window"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              canvasResize.current = {
+                pointerX: event.clientX,
+                pointerY: event.clientY,
+                width: canvasSize.width,
+                height: canvasSize.height,
+              };
+              (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              const resize = canvasResize.current;
+              if (!resize) return;
+              const shell = (event.currentTarget as HTMLElement).closest('.app-shell') as HTMLElement | null;
+              const bounds = shell?.getBoundingClientRect();
+              const maxWidth = Math.max(280, (bounds?.right ?? window.innerWidth) - canvasPosition.x - 8);
+              const maxHeight = Math.max(220, (bounds?.bottom ?? window.innerHeight) - canvasPosition.y - 35);
+              setCanvasSize({
+                width: Math.max(280, Math.min(maxWidth, resize.width + event.clientX - resize.pointerX)),
+                height: Math.max(220, Math.min(maxHeight, resize.height + event.clientY - resize.pointerY)),
+              });
+            }}
+            onPointerUp={() => { canvasResize.current = null; }}
+            onPointerCancel={() => { canvasResize.current = null; }}
+          />
+        )}
       </main>}
 
       <aside class="inspector-panel" onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
