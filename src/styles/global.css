@@ -37,6 +37,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   background: var(--chrome-deep);
 }
 
+.app-shell:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+}
+.app-shell:fullscreen::backdrop { background: var(--chrome-deep); }
+.fullscreen-button { border-color: #343b49; color: #c5bdff; }
+.fullscreen-button:hover { border-color: #6559a5; }
+
 .topbar {
   grid-area: header;
   display: flex;
