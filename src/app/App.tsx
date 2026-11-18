@@ -305,6 +305,8 @@ export function App() {
           top: `${canvasPosition.y}px`,
           width: `${canvasSize.width}px`,
           height: `${canvasSize.height}px`,
+          maxWidth: `calc(100% - ${canvasPosition.x}px)`,
+          maxHeight: `calc(100% - ${canvasPosition.y}px - 27px)`,
         } : undefined}
         onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
       >
