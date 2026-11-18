@@ -298,7 +298,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .window-control { border-color: #46516a; background: #293449; }
 .window-control-restore { color: #d0caff; border-color: #766bc0; background: #383456; }
 .workspace-window-controls { display: flex; align-items: center; gap: 4px; padding-left: 6px; border-left: 1px solid #343b48; }
-.window-control { display: grid; place-items: center; flex: 0 0 22px; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 5px; color: #929bad; background: transparent; font-size: 12px; line-height: 1; cursor: pointer; }
+.window-control { display: grid; place-items: center; flex: 0 0 22px; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 5px; color: #929bad; background: transparent; font-size: 14px; line-height: 1; cursor: pointer; }
 .window-control:hover { color: #f0edff; border-color: #514976; background: #302b4b; }
 .window-control-close:hover { color: #fff; border-color: #8f414b; background: #71313b; }
 .window-control-restore { color: #b8adff; }
