@@ -15,10 +15,30 @@ if [ ! -f "$ROOT_DIR/package.json" ]; then
   cp -a "$TMP_DIR/folio-studio/." "$ROOT_DIR/"
   cp "$TMP_DIR/README.md.keep" "$ROOT_DIR/README.md"
 
-  # Remove only temporary bootstrap payload files after a successful extract.
+  # Remove temporary bootstrap files before creating the permanent source commit.
   rm -rf "$ROOT_DIR/.devcontainer/payload"
   rm -f "$ROOT_DIR"/.devcontainer/source-*.b64
   rm -f "$ROOT_DIR/.devcontainer/bootstrap.sh"
+
+  # Materialize the source tree as normal tracked files on the repository's main branch.
+  if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$ROOT_DIR" add -A
+    if ! git -C "$ROOT_DIR" diff --cached --quiet; then
+      if ! git -C "$ROOT_DIR" config user.name >/dev/null 2>&1; then
+        git -C "$ROOT_DIR" config user.name "FOLIO Bootstrap"
+      fi
+      if ! git -C "$ROOT_DIR" config user.email >/dev/null 2>&1; then
+        git -C "$ROOT_DIR" config user.email "folio-bootstrap@users.noreply.github.com"
+      fi
+      git -C "$ROOT_DIR" commit -m "chore: materialize Folio Studio foundation"
+      if git -C "$ROOT_DIR" push origin HEAD:main; then
+        echo "[FOLIO] Foundation source committed and pushed to GitHub main."
+      else
+        echo "[FOLIO] Automatic push was rejected. Source is safe in this Codespace."
+        echo "[FOLIO] After resolving the branch/authentication issue, run: git push origin HEAD:main"
+      fi
+    fi
+  fi
 fi
 
 echo "[FOLIO] Installing dependencies..."
