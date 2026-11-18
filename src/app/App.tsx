@@ -73,6 +73,8 @@ export function App() {
   const [notice, setNotice] = useState('');
   const [zoom, setZoom] = useState(0.82);
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
+  const [projectNameEditing, setProjectNameEditing] = useState(false);
+  const [projectNameDraft, setProjectNameDraft] = useState('');
   const [layersVisible, setLayersVisible] = useState(true);
   const [inspectorVisible, setInspectorVisible] = useState(true);
   const [componentRackOpen, setComponentRackOpen] = useState(false);
@@ -945,11 +947,38 @@ export function App() {
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('HELP', 'Keyboard reference, documentation and support will be organized here.')}>Help</span>
           </div>
-          <div class="global-project-name" title={`${state.project.metadata.name}.flop`}>
-            <span class="global-project-label">{state.project.metadata.name}</span>
-            <span class="global-project-extension">.flop</span>
+
           </div>
-          </div>
+                  <div class="global-project-name" title={`${state.project.metadata.name}.flop`}>
+          {projectNameEditing ? (
+            <input
+              class="global-project-rename-input"
+              autoFocus
+              value={projectNameDraft}
+              aria-label="Project name"
+              onInput={(event) => setProjectNameDraft(event.currentTarget.value)}
+              onBlur={() => {
+                const name = projectNameDraft.trim();
+                if (name && name !== state.project.metadata.name) {
+                  const project = { ...state.project, metadata: { ...state.project.metadata, name }, document: { ...state.project.document, name } };
+                  dispatch({ type: 'replace-project', project });
+                  setPages((items) => items.map((page) => page.id === activePageId ? { ...page, name } : page));
+                }
+                setProjectNameEditing(false);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') (event.currentTarget as HTMLInputElement).blur();
+                if (event.key === 'Escape') { setProjectNameDraft(state.project.metadata.name); setProjectNameEditing(false); }
+              }}
+            />
+          ) : (
+            <button type="button" class="global-project-rename-button" title="Rename project" onClick={() => { setProjectNameDraft(state.project.metadata.name); setProjectNameEditing(true); }}>
+              <span class="global-project-label">{state.project.metadata.name}</span>
+              <span class="global-project-extension">.flop</span>
+              <Icon name="edit" />
+            </button>
+          )}
+        </div>
           <div class="global-panel-toggles" aria-label="Workspace panels">
             <button class={`global-panel-toggle pages-rack-header-toggle ${pagesRackOpen ? 'active' : ''}`} type="button" title={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-label={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-pressed={pagesRackOpen} onClick={() => { setPagesRackOpen((value) => !value); setComponentRackOpen(false); }} onMouseEnter={() => updateToolbarHint('PAGES RACK', 'Manage the pages in this project.')}><Icon name="pages" /></button>
             <button class={`global-panel-toggle component-rack-header-toggle ${componentRackOpen ? 'active' : ''}`} type="button" title={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-label={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-pressed={componentRackOpen} onClick={() => { setComponentRackOpen((value) => !value); setPagesRackOpen(false); }} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse and reuse components saved to your personal library.')}><Icon name="rack" /></button>
