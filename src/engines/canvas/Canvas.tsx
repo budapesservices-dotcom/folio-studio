@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
-import type { DesignNode, FolioDocument } from '../../core/document/types';
+import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from '../../core/document/types';
+import { applyComponentOverrides } from '../../core/document/components';
 import {
   getBounds,
   resizeNodes,
@@ -13,6 +14,7 @@ import './canvas.css';
 
 interface CanvasProps {
   document: FolioDocument;
+  components?: ComponentDefinition[];
   selectedNodeIds: string[];
   zoom: number;
   pan: { x: number; y: number };
@@ -58,54 +60,28 @@ function toCanvasPoint(svg: SVGSVGElement, clientX: number, clientY: number): { 
   };
 }
 
-function NodeArtwork({ node }: { node: DesignNode }) {
+type PrimitiveNode = Exclude<DesignNode, ComponentInstanceNode>;
+
+function NodeShape({ node }: { node: PrimitiveNode }) {
   const transform = node.rotation
     ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
     : undefined;
 
   return (
-    <g
-      data-node-id={node.id}
-      transform={transform}
-      opacity={node.opacity}
-      class="canvas-node"
-      style={{ cursor: node.locked ? 'default' : 'grab' }}
-    >
+    <g transform={transform} opacity={node.opacity} class="canvas-node" style={{ cursor: node.locked ? 'default' : 'grab' }}>
       {node.type === 'rect' && (
-        <rect
-          x={node.x}
-          y={node.y}
-          width={node.width}
-          height={node.height}
-          rx={node.style.radius ?? 0}
-          fill={node.style.fill}
-          stroke={node.style.stroke}
-          strokeWidth={node.style.strokeWidth}
-        />
+        <rect x={node.x} y={node.y} width={node.width} height={node.height}
+          rx={node.style.radius ?? 0} fill={node.style.fill} stroke={node.style.stroke} strokeWidth={node.style.strokeWidth} />
       )}
       {node.type === 'ellipse' && (
-        <ellipse
-          cx={node.x + node.width / 2}
-          cy={node.y + node.height / 2}
-          rx={node.width / 2}
-          ry={node.height / 2}
-          fill={node.style.fill}
-          stroke={node.style.stroke}
-          strokeWidth={node.style.strokeWidth}
-        />
+        <ellipse cx={node.x + node.width / 2} cy={node.y + node.height / 2}
+          rx={node.width / 2} ry={node.height / 2} fill={node.style.fill} stroke={node.style.stroke} strokeWidth={node.style.strokeWidth} />
       )}
       {node.type === 'text' && (
-        <text
-          x={node.x}
-          y={node.y}
-          fill={node.style.fill}
-          fontSize={node.style.fontSize}
-          fontFamily={node.style.fontFamily}
-          fontWeight={node.style.fontWeight}
-          letterSpacing={node.style.letterSpacing}
-          dominantBaseline="hanging"
-        >
-          {node.text.split('\n').map((line, index) => (
+        <text x={node.x} y={node.y} fill={node.style.fill} fontSize={node.style.fontSize}
+          fontFamily={node.style.fontFamily} fontWeight={node.style.fontWeight}
+          letterSpacing={node.style.letterSpacing} dominantBaseline="hanging">
+          {node.text.split('\\n').map((line, index) => (
             <tspan key={node.id + '-' + index} x={node.x} dy={index === 0 ? 0 : node.style.fontSize * node.style.lineHeight}>
               {line || ' '}
             </tspan>
@@ -114,6 +90,36 @@ function NodeArtwork({ node }: { node: DesignNode }) {
       )}
     </g>
   );
+}
+
+function NodeArtwork({ node, components = [] }: { node: DesignNode; components?: ComponentDefinition[] }) {
+  if (node.type === 'component-instance') {
+    const component = components.find((item) => item.id === node.componentId);
+    const scaleX = component ? node.width / Math.max(1, component.document.width) : 1;
+    const scaleY = component ? node.height / Math.max(1, component.document.height) : 1;
+    const transform = node.rotation
+      ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
+      : undefined;
+    return (
+      <g data-node-id={node.id} transform={transform} opacity={node.opacity} class="canvas-node component-instance-artwork">
+        {component ? (
+          <g transform={'translate(' + node.x + ' ' + node.y + ') scale(' + scaleX + ' ' + scaleY + ')'}>
+            {component.document.nodes.map((child) => {
+              const effective = applyComponentOverrides(child, node.overrides);
+              return effective.type === 'component-instance'
+                ? null
+                : <NodeShape key={child.id} node={effective} />;
+            })}
+          </g>
+        ) : (
+          <rect x={node.x} y={node.y} width={node.width} height={node.height}
+            fill="none" stroke="#D45B5B" strokeDasharray="6 4" strokeWidth="2" />
+        )}
+      </g>
+    );
+  }
+
+  return <g data-node-id={node.id}><NodeShape node={node} /></g>;
 }
 
 function SelectionOverlay({ bounds, canResize }: { bounds: Bounds; canResize: boolean }) {
@@ -162,6 +168,7 @@ function SelectionOverlay({ bounds, canResize }: { bounds: Bounds; canResize: bo
 
 export function Canvas({
   document,
+  components = [],
   selectedNodeIds,
   zoom,
   pan,
@@ -492,7 +499,7 @@ export function Canvas({
         >
           <rect x="0" y="0" width={document.width} height={document.height} fill={document.background} />
           {displayedNodes.filter((node) => node.visible).map((node) => (
-            <NodeArtwork key={node.id} node={node} />
+            <NodeArtwork key={node.id} node={node} components={components} />
           ))}
           {selectionBounds && (
             <SelectionOverlay bounds={selectionBounds} canResize={canResize} />
