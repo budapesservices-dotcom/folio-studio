@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createRectNode } from '../src/core/document/factory';
+import { createInitialProject, createRectNode } from '../src/core/document/factory';
+import { createEditorState, editorReducer } from '../src/app/editorReducer';
 import {
   alignNodes,
   getBounds,
@@ -55,4 +56,27 @@ describe('Canvas geometry engine', () => {
     expect(aligned.map((node) => node.x)).toEqual([25, 25]);
     expect(aligned.map((node) => node.width)).toEqual([80, 40]);
   });
+  it('commits a group transform as one undoable history step', () => {
+    const project = createInitialProject();
+    const selected = project.document.nodes.slice(0, 2);
+    const state = editorReducer(createEditorState(project), {
+      type: 'select-nodes',
+      nodeIds: selected.map((node) => node.id),
+    });
+    const moved = editorReducer(state, {
+      type: 'transform-nodes',
+      nodes: selected.map((node) => ({ ...node, x: node.x + 24 })),
+    });
+
+    expect(moved.selectedNodeIds).toEqual(selected.map((node) => node.id));
+    expect(moved.selectedNodeId).toBeNull();
+    expect(moved.past).toHaveLength(1);
+    expect(moved.project.document.nodes[0].x).toBe(selected[0].x + 24);
+
+    const undone = editorReducer(moved, { type: 'undo' });
+    expect(undone.project.document.nodes[0].x).toBe(selected[0].x);
+    const redone = editorReducer(undone, { type: 'redo' });
+    expect(redone.project.document.nodes[0].x).toBe(selected[0].x + 24);
+  });
+
 });
