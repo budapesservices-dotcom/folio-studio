@@ -286,22 +286,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   background: #11151d;
 }
 
-.workspace-toolbar { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: 0 0 42px; height: 42px; min-height: 42px; min-width: 0; padding: 0 10px 0 14px; border-bottom: 1px solid #39445a; background: #202838; }
-.workspace-toolbar-draggable { cursor: grab; touch-action: none; user-select: none; }
+.workspace-toolbar { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 36px; height: 36px; min-height: 36px; min-width: 0; padding: 0 8px 0 10px; border-bottom: 1px solid #39445a; background: #202838; }
+.workspace-toolbar-draggable { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
 .workspace-toolbar-draggable:active { cursor: grabbing; }
 .workspace-toolbar-draggable > .breadcrumb { flex: 1 1 auto; min-width: 70px; height: 100%; }
-.workspace-toolbar-draggable::before { content: "DRAG"; flex: 0 0 auto; order: 0; margin-right: 9px; color: #8f9bb1; font-size: 8px; font-weight: 800; letter-spacing: 1px; }
-.workspace-toolbar-draggable > .breadcrumb { order: 1; }
-.workspace-toolbar-draggable > .canvas-window-tools { order: 2; }
 .breadcrumb { display: flex; align-items: center; gap: 8px; color: #7f899a; font-size: 10px; }
 .breadcrumb .icon-svg { width: 11px; height: 11px; }
 .breadcrumb strong { color: #c5cad4; font-weight: 600; }
-.canvas-window-tools { display: flex; align-items: center; justify-content: flex-end; flex: 0 1 auto; gap: 9px; min-width: 0; max-width: calc(100% - 100px); }
+.canvas-window-tools { display: flex; align-items: center; justify-content: flex-end; flex: 0 1 auto; gap: 6px; min-width: 0; max-width: calc(100% - 80px); }
 .workspace-window-controls { flex: 0 0 auto; }
 .window-control { border-color: #46516a; background: #293449; }
 .window-control-restore { color: #d0caff; border-color: #766bc0; background: #383456; }
-.workspace-window-controls { display: flex; align-items: center; gap: 5px; padding-left: 8px; border-left: 1px solid #343b48; }
-.window-control { display: grid; place-items: center; flex: 0 0 25px; width: 25px; height: 25px; padding: 0; border: 1px solid transparent; border-radius: 5px; color: #929bad; background: transparent; font-size: 13px; line-height: 1; cursor: pointer; }
+.workspace-window-controls { display: flex; align-items: center; gap: 4px; padding-left: 6px; border-left: 1px solid #343b48; }
+.window-control { display: grid; place-items: center; flex: 0 0 22px; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 5px; color: #929bad; background: transparent; font-size: 12px; line-height: 1; cursor: pointer; }
 .window-control:hover { color: #f0edff; border-color: #514976; background: #302b4b; }
 .window-control-close:hover { color: #fff; border-color: #8f414b; background: #71313b; }
 .window-control-restore { color: #b8adff; }
@@ -333,7 +330,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   touch-action: none;
 }
 .workspace-resize-handle.resize-n,
-.workspace-resize-handle.resize-s { left: 12px; right: 12px; height: 8px; cursor: ns-resize; }
+.workspace-resize-handle.resize-s { left: 12px; right: 12px; height: 6px; cursor: ns-resize; }
 .workspace-resize-handle.resize-n { top: 0; }
 .workspace-resize-handle.resize-s { bottom: 0; }
 .workspace-resize-handle.resize-e,
@@ -343,7 +340,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .workspace-resize-handle.resize-ne,
 .workspace-resize-handle.resize-nw,
 .workspace-resize-handle.resize-se,
-.workspace-resize-handle.resize-sw { width: 18px; height: 18px; }
+.workspace-resize-handle.resize-sw { width: 14px; height: 14px; }
 .workspace-resize-handle.resize-ne { top: 0; right: 0; cursor: nesw-resize; }
 .workspace-resize-handle.resize-nw { top: 0; left: 0; cursor: nwse-resize; }
 .workspace-resize-handle.resize-se { right: 0; bottom: 0; cursor: nwse-resize; }
@@ -392,14 +389,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .quick-add button { border: 1px solid #3a4050; border-radius: 5px; padding: 7px 9px; color: #aaa2e9; background: #24243a; font-size: 9px; cursor: pointer; }
 .quick-add button:hover { background: #302e4b; }
 
-.canvas-drag-handle { position: relative; z-index: 4; display: flex; align-items: center; align-self: stretch; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; pointer-events: auto; }
-.canvas-drag-handle * { pointer-events: none; }
-.canvas-drag-handle:active { cursor: grabbing; }
 .canvas-minimized-window { position: absolute; z-index: 110; width: 260px; height: 42px; overflow: hidden; border: 1px solid #59657b; border-radius: 8px; background: #252e40; box-shadow: 0 12px 34px #0009; }
 .canvas-minimized-titlebar { display: flex; align-items: center; gap: 9px; width: 100%; height: 100%; padding: 0 8px 0 12px; color: #e8edf7; cursor: grab; touch-action: none; user-select: none; }
 .canvas-minimized-titlebar:active { cursor: grabbing; }
 .canvas-minimized-titlebar strong { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.canvas-minimized-titlebar button { width: 25px; height: 25px; border: 1px solid #46516a; border-radius: 5px; color: #dce4f4; background: #303b50; cursor: pointer; }
+.canvas-minimized-titlebar button { width: 22px; height: 22px; border: 1px solid #46516a; border-radius: 5px; color: #dce4f4; background: #303b50; cursor: pointer; }
 .statusbar { position: relative; z-index: 100; grid-area: footer; display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border-top: 1px solid #2b303c; background: #171b24; color: #737d8d; font-size: 8px; letter-spacing: .5px; }
 .statusbar > div { display: flex; align-items: center; gap: 7px; }
 .status-brand { display: grid; place-items: center; width: 14px; height: 14px; border-radius: 4px; color: #181522; background: #a494ff; font-size: 9px; font-weight: 900; }
