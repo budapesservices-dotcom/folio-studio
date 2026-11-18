@@ -73,12 +73,12 @@ describe('Canvas geometry engine', () => {
     expect(moved.selectedNodeIds).toEqual(selected.map((node) => node.id));
     expect(moved.selectedNodeId).toBeNull();
     expect(moved.past).toHaveLength(1);
-    expect(moved.getActiveDocument(project).nodes[0].x).toBe(selected[0].x + 24);
+    expect(getActiveDocument(moved.project).nodes[0].x).toBe(selected[0].x + 24);
 
     const undone = editorReducer(moved, { type: 'undo' });
-    expect(undone.getActiveDocument(project).nodes[0].x).toBe(selected[0].x);
+    expect(getActiveDocument(undone.project).nodes[0].x).toBe(selected[0].x);
     const redone = editorReducer(undone, { type: 'redo' });
-    expect(redone.getActiveDocument(project).nodes[0].x).toBe(selected[0].x + 24);
+    expect(getActiveDocument(redone.project).nodes[0].x).toBe(selected[0].x + 24);
   });
 
   it('distributes objects horizontally with equal gaps and fixed outer edges', () => {
