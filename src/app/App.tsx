@@ -350,14 +350,14 @@ export function App() {
   };
 
   const selectedNodes = state.project.document.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
-  const saveSelectionAsComponent = () => {
-    if (selectedNodes.length === 0) return;
-    const name = selectedNodes.length === 1 ? selectedNodes[0].name : `Component ${ownedComponents.length + 1}`;
+  const saveNodesAsComponent = (nodes: DesignNode[]) => {
+    if (nodes.length === 0) return;
+    const name = nodes.length === 1 ? nodes[0].name : `Component ${ownedComponents.length + 1}`;
     const bounds = {
-      x: Math.min(...selectedNodes.map((node) => node.x)),
-      y: Math.min(...selectedNodes.map((node) => node.y)),
+      x: Math.min(...nodes.map((node) => node.x)),
+      y: Math.min(...nodes.map((node) => node.y)),
     };
-    const normalizedNodes = selectedNodes.map((node) => ({ ...node, x: node.x - bounds.x, y: node.y - bounds.y }));
+    const normalizedNodes = nodes.map((node) => ({ ...node, x: node.x - bounds.x, y: node.y - bounds.y }));
     setOwnedComponents((items) => [{
       id: globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`,
       name,
@@ -367,6 +367,10 @@ export function App() {
     setComponentRackOpen(true);
     setNotice(`“${name}” saved to Component Rack.`);
   };
+  const saveSelectionAsComponent = () => saveNodesAsComponent(selectedNodes);
+  const selectedComponentNodes = componentState.project.document.nodes.filter(
+    (node) => componentState.selectedNodeIds.includes(node.id),
+  );
   const insertOwnedComponent = (component: { id: string; name: string; nodes: DesignNode[] }) => {
     const offsetX = 140 + (state.project.document.nodes.length % 4) * 28;
     const offsetY = 130 + (state.project.document.nodes.length % 4) * 28;
@@ -1049,6 +1053,7 @@ export function App() {
               <button type="button" title="Add ellipse" aria-label="Add ellipse" onClick={() => componentDispatch({ type: 'add-node', node: createNode('ellipse', componentState.project.document.nodes.length) })}><Icon name="ellipse" /></button>
               <button type="button" title="Add text" aria-label="Add text" onClick={() => componentDispatch({ type: 'add-node', node: createNode('text', componentState.project.document.nodes.length) })}><Icon name="text" /></button>
               <span class="workspace-divider" />
+              <button type="button" title="Save selected as reusable component" aria-label="Save selected as reusable component" disabled={selectedComponentNodes.length === 0} onClick={() => saveNodesAsComponent(selectedComponentNodes)}><Icon name="save" /></button>
             </div>
             {componentState.selectedNodeIds.length > 1 && (
               <div class="alignment-tools" aria-label="Align selected layers">
