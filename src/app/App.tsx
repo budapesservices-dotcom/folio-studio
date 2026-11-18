@@ -223,7 +223,7 @@ export function App() {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
     const header = event.currentTarget as HTMLElement;
     const win = header.closest(selector) as HTMLElement | null;
-    const shell = win?.offsetParent as HTMLElement | null;
+    const shell = document.querySelector('.app-shell') as HTMLElement | null;
     if (!win || !shell || win.classList.contains('is-expanded')) return;
 
     event.preventDefault();
@@ -233,28 +233,36 @@ export function App() {
     const startY = event.clientY;
     const rect = win.getBoundingClientRect();
     const bounds = shell.getBoundingClientRect();
-    const startLeft = rect.left - bounds.left;
-    const startTop = rect.top - bounds.top;
 
+    // Drag in viewport coordinates so every window follows the pointer exactly,
+    // regardless of its CSS anchor (left/right) or offsetParent.
+    win.style.position = 'fixed';
     win.style.width = `${rect.width}px`;
     win.style.height = `${rect.height}px`;
-    win.style.left = `${startLeft}px`;
-    win.style.top = `${startTop}px`;
+    win.style.left = `${rect.left}px`;
+    win.style.top = `${rect.top}px`;
     win.style.right = 'auto';
     win.style.bottom = 'auto';
 
     const move = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
-      const maxLeft = Math.max(0, bounds.width - Math.min(rect.width, 220));
-      const maxTop = Math.max(68, bounds.height - 46);
-      const nextLeft = Math.min(maxLeft, Math.max(0, startLeft + moveEvent.clientX - startX));
-      const nextTop = Math.min(maxTop, Math.max(68, startTop + moveEvent.clientY - startY));
+      const maxLeft = Math.max(bounds.left, bounds.right - Math.min(rect.width, 220));
+      const maxTop = Math.max(bounds.top + 68, bounds.bottom - 46);
+      const nextLeft = Math.min(maxLeft, Math.max(bounds.left, rect.left + moveEvent.clientX - startX));
+      const nextTop = Math.min(maxTop, Math.max(bounds.top + 68, rect.top + moveEvent.clientY - startY));
       win.style.left = `${nextLeft}px`;
       win.style.top = `${nextTop}px`;
     };
 
     const stop = (stopEvent: PointerEvent) => {
       if (stopEvent.pointerId !== pointerId) return;
+      const finalRect = win.getBoundingClientRect();
+      const shellRect = shell.getBoundingClientRect();
+      win.style.position = 'absolute';
+      win.style.left = `${finalRect.left - shellRect.left}px`;
+      win.style.top = `${finalRect.top - shellRect.top}px`;
+      win.style.right = 'auto';
+      win.style.bottom = 'auto';
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', stop);
       window.removeEventListener('pointercancel', stop);
