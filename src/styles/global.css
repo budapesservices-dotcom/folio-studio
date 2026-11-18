@@ -308,8 +308,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   grid-area: auto;
   width: min(860px, calc(100vw - 100px));
   height: min(620px, calc(100vh - 120px));
-  min-width: 460px;
-  min-height: 300px;
+  min-width: min(460px, calc(100vw - 24px));
+  min-height: min(300px, calc(100vh - 80px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 72px);
   resize: both;
   overflow: hidden;
   border: 1px solid #444d60;
