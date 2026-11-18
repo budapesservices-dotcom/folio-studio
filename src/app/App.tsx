@@ -468,6 +468,7 @@ export function App() {
     dispatch({ type: 'delete-component', componentId: component.id });
     if (editingComponentId === component.id) {
       setEditingComponentId(null);
+      componentDispatch({ type: 'replace-project', project: componentInitialState.project });
       setComponentCanvasClosed(true);
       setComponentCanvasMinimized(false);
       setActiveEditorId('main');
@@ -540,10 +541,8 @@ export function App() {
     const offset = state.project.pages.find((page) => page.id === state.project.activePageId)?.document.nodes.length ?? 0;
     const instance = createComponentInstance(component, 150 + (offset % 4) * 28, 130 + (offset % 4) * 28);
     dispatch({ type: 'add-node', node: instance });
-    setActiveEditorId('main');
+    openMainCanvas();
     setInspectorVisible(true);
-    setCanvasClosed(false);
-    setCanvasMinimized(false);
     setNotice(`Linked instance of “${component.name}” added to Main Canvas.`);
   };
 
