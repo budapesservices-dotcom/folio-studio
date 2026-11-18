@@ -41,6 +41,20 @@ export async function saveProject(project: FolioProject): Promise<void> {
   }
 }
 
+export async function loadProjectById(projectId: string): Promise<FolioProject | null> {
+  const database = await openDatabase();
+  try {
+    return await new Promise<FolioProject | null>((resolve, reject) => {
+      const transaction = database.transaction(PROJECT_STORE, 'readonly');
+      const request = transaction.objectStore(PROJECT_STORE).get(projectId);
+      request.onsuccess = () => resolve((request.result as FolioProject | undefined) ?? null);
+      request.onerror = () => reject(request.error ?? new Error('Could not load the requested project.'));
+    });
+  } finally {
+    database.close();
+  }
+}
+
 export async function loadMostRecentProject(): Promise<FolioProject | null> {
   const database = await openDatabase();
 
