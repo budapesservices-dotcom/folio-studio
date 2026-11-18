@@ -230,6 +230,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 
 .layers-panel, .inspector-panel { min-height: 0; background: var(--panel); }
 .layers-panel { grid-area: layers; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.layers-panel.is-hidden { display: none; }
+.app-shell.layers-hidden { grid-template-columns: 58px 0 minmax(320px, 1fr) 292px; }
+.app-shell.layers-hidden .workspace, .app-shell.layers-hidden .workspace-closed { left: 70px; }
+.app-shell.layers-hidden .logic-window { left: 92px; }
+.app-shell.layers-hidden .component-rack-drawer { left: 0; right: 0; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; min-height: 72px; padding: 13px 15px 11px; border-bottom: 1px solid #292f3b; }
 .panel-kicker { color: #777f90; font-size: 8px; font-weight: 800; letter-spacing: 1.5px; }
 .panel-heading h2 { margin: 4px 0 0; color: #e7e8ed; font-size: 14px; font-weight: 650; letter-spacing: -.2px; }
@@ -365,7 +370,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .logic-window { left: 332px; top: 91px; width: 350px; height: 385px; }
 .component-canvas-window { right: 316px; top: 108px; width: 410px; height: 370px; }
 .code-window { left: 27%; top: 28%; width: min(690px, 58vw); height: 390px; }
-.floating-tool-window.is-minimized { height: 39px; min-height: 39px; }
+.floating-tool-window.is-minimized { height: 39px; min-height: 39px; resize: none; }\n.floating-window.is-minimized { height: 39px; min-height: 39px; resize: none; }
 .floating-tool-window.is-expanded {
   left: 14px;
   right: 14px;
@@ -428,7 +433,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   animation: rack-slide-up 180ms ease-out;
 }
 .component-rack-drawer.is-minimized { height: 38px; }
-.component-rack-drawer.is-expanded { left: 14px; right: 14px; height: min(58vh, 470px); }
+.component-rack-drawer.is-expanded { left: 0; right: 0; height: min(58vh, 470px); }
 .component-rack-header {
   display: flex;
   align-items: center;
@@ -500,7 +505,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   .workspace, .workspace-closed { left: 276px; right: 266px; }
   .logic-window { left: 292px; }
   .component-canvas-window { right: 278px; }
-  .component-rack-drawer { left: 54px; right: 254px; }
+  .component-rack-drawer { left: 0; right: 0; }
 }
 
 @media (max-width: 900px) {
@@ -515,7 +520,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   .logic-window { left: 278px; }
   .component-canvas-window { right: 20px; }
   .code-window { left: 24%; width: min(620px, 70vw); }
-  .component-rack-drawer { left: 54px; right: 12px; }
+  .component-rack-drawer { left: 0; right: 0; }
   .canvas-scroll-area { padding: 35px 22px 45px; }
 }
 
@@ -541,7 +546,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   .logic-window { left: 60px; top: 96px; width: min(350px, calc(100vw - 76px)); }
   .component-canvas-window { left: 60px; right: 12px; top: 112px; width: auto; }
   .code-window { left: 60px; right: 12px; top: 128px; width: auto; }
-  .component-rack-drawer { left: 48px; right: 0; }
+  .component-rack-drawer { left: 0; right: 0; }
   .canvas-window-tools { gap: 4px; }
   .floating-window-header { gap: 5px; padding-left: 9px; }
   .floating-window-title span { display: none; }
