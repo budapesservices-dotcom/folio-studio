@@ -2,9 +2,9 @@
 
 Run the checks from the repository root:
 
-\`\`\`bash
+```bash
 npm run check && npm run test && npm run build
-\`\`\`
+```
 
 ## Pointer and selection checks
 
