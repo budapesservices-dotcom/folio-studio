@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createInitialProject, createNode } from '../core/document/factory';
-import type { DesignNode } from '../core/document/types';
+import type { DesignNode, FolioProject } from '../core/document/types';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
 import { Canvas } from '../engines/canvas/Canvas';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
@@ -30,6 +30,7 @@ function Icon({ name }: { name: string }) {
     logicNodes: 'M4 4h6v6H4zM14 14h6v6h-6zM10 7h3a3 3 0 0 1 3 3v4',
     inspector: 'M4 4h16v16H4zM15 4v16',
     rack: 'M3 5h18v14H3zM7 9h4v6H7zM14 9h3M14 12h3M14 15h3',
+    pages: 'M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h8',
   };
 
   return (
@@ -75,6 +76,20 @@ export function App() {
   const [layersVisible, setLayersVisible] = useState(true);
   const [inspectorVisible, setInspectorVisible] = useState(true);
   const [componentRackOpen, setComponentRackOpen] = useState(false);
+  const [pagesRackOpen, setPagesRackOpen] = useState(false);
+  const [pageNameDraft, setPageNameDraft] = useState('');
+  const [pages, setPages] = useState<{ id: string; name: string; path: string; kind: 'main' | '404' | 'page' }[]>(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.pages') ?? 'null');
+      if (Array.isArray(saved) && saved.some((page) => page.id === 'main') && saved.some((page) => page.id === '404')) return saved;
+    } catch { /* use defaults */ }
+    return [
+      { id: 'main', name: 'Main Page', path: '/', kind: 'main' },
+      { id: '404', name: '404 Page', path: '/404', kind: '404' },
+    ];
+  });
+  const [activePageId, setActivePageId] = useState(() => window.localStorage.getItem('folio.active-page') ?? 'main');
+
   const [componentRackSearch, setComponentRackSearch] = useState('');
   const [ownedComponents, setOwnedComponents] = useState<{ id: string; name: string; nodes: DesignNode[]; updatedAt: string }[]>(() => {
     try {
@@ -310,6 +325,26 @@ export function App() {
 
 
 
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('folio.pages', JSON.stringify(pages));
+      window.localStorage.setItem('folio.active-page', activePageId);
+    } catch (error) {
+      console.warn('Folio could not save Pages Rack:', error);
+      setNotice('Pages Rack storage is unavailable.');
+    }
+  }, [pages, activePageId]);
+
+  useEffect(() => {
+    if (!ready) return;
+    try {
+      window.localStorage.setItem(`folio.page-project:${activePageId}`, JSON.stringify(state.project));
+    } catch (error) {
+      console.warn('Folio could not save page document snapshot:', error);
+    }
+  }, [state.project, activePageId, ready]);
+
   useEffect(() => {
     try {
       window.localStorage.setItem('folio.component-rack', JSON.stringify(ownedComponents));
@@ -367,6 +402,58 @@ export function App() {
     setComponentRackOpen(true);
     setNotice(`“${name}” saved to Component Rack.`);
   };
+
+  const switchPage = (page: { id: string; name: string; path: string; kind: 'main' | '404' | 'page' }) => {
+    if (page.id === activePageId) return;
+    try {
+      const stored = window.localStorage.getItem(`folio.page-project:${page.id}`);
+      let project: FolioProject;
+      if (stored) project = JSON.parse(stored) as FolioProject;
+      else {
+        project = createInitialProject(page.name);
+        project.metadata.id = `folio-page-${page.id}`;
+        project.metadata.name = page.name;
+        project.document.id = `folio-document-${page.id}`;
+        project.document.name = page.name;
+        project.document.nodes = [];
+      }
+      project.metadata.name = page.name;
+      project.document.name = page.name;
+      dispatch({ type: 'replace-project', project });
+      setActivePageId(page.id);
+      setPagesRackOpen(false);
+      setInspectorVisible(true);
+      setNotice(`Switched to ${page.name}.`);
+    } catch (error) {
+      console.error('Folio could not open page:', error);
+      setNotice('This page could not be opened.');
+    }
+  };
+
+  const addPage = () => {
+    const name = pageNameDraft.trim();
+    if (!name) return;
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `page-${pages.length + 1}`;
+    const path = `/${slug}`;
+    if (pages.some((page) => page.path === path)) {
+      setNotice('A page with this URL already exists.');
+      return;
+    }
+    const id = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}`;
+    const project = createInitialProject(name);
+    project.metadata.id = `folio-page-${id}`;
+    project.metadata.name = name;
+    project.document.id = `folio-document-${id}`;
+    project.document.name = name;
+    project.document.nodes = [];
+    try { window.localStorage.setItem(`folio.page-project:${id}`, JSON.stringify(project)); }
+    catch (error) { console.warn('Folio could not initialize page snapshot:', error); }
+    const page = { id, name, path, kind: 'page' as const };
+    setPages((items) => [...items, page]);
+    setPageNameDraft('');
+    switchPage(page);
+  };
+
   const saveSelectionAsComponent = () => saveNodesAsComponent(selectedNodes);
   const selectedComponentNodes = componentState.project.document.nodes.filter(
     (node) => componentState.selectedNodeIds.includes(node.id),
@@ -864,6 +951,7 @@ export function App() {
           </div>
           </div>
           <div class="global-panel-toggles" aria-label="Workspace panels">
+            <button class={`global-panel-toggle pages-rack-header-toggle ${pagesRackOpen ? 'active' : ''}`} type="button" title={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-label={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-pressed={pagesRackOpen} onClick={() => { setPagesRackOpen((value) => !value); setComponentRackOpen(false); }} onMouseEnter={() => updateToolbarHint('PAGES RACK', 'Manage the pages in this project.')}><Icon name="pages" /></button>
             <button class={`global-panel-toggle component-rack-header-toggle ${componentRackOpen ? 'active' : ''}`} type="button" title={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-label={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-pressed={componentRackOpen} onClick={() => setComponentRackOpen((value) => !value)} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse and reuse components saved to your personal library.')}><Icon name="rack" /></button>
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
             <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) { setCanvasClosed(false); setCanvasMinimized(false); } else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
@@ -1286,6 +1374,27 @@ export function App() {
           </div>
         )}
       </aside>
+
+
+      <section class={`pages-rack-panel ${pagesRackOpen ? 'is-open' : ''}`} aria-label="Pages Rack" aria-hidden={!pagesRackOpen}>
+        <div class="pages-rack-heading">
+          <div class="pages-rack-title"><span class="panel-kicker">PROJECT STRUCTURE</span><strong>Pages</strong><span class="pages-rack-count">{pages.length}</span></div>
+          <div class="pages-rack-actions">
+            <input class="pages-rack-name-input" type="text" placeholder="New page name..." value={pageNameDraft} onInput={(event) => setPageNameDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') addPage(); }} aria-label="New page name" />
+            <button type="button" class="pages-rack-add" onClick={addPage} disabled={!pageNameDraft.trim()}>＋ Add page</button>
+            <button type="button" class="component-rack-close" title="Close Pages Rack" aria-label="Close Pages Rack" onClick={() => setPagesRackOpen(false)}>×</button>
+          </div>
+        </div>
+        <div class="pages-rack-list">
+          {pages.map((page) => (
+            <button type="button" key={page.id} class={`pages-rack-card ${activePageId === page.id ? 'is-active' : ''}`} onClick={() => switchPage(page)} aria-current={activePageId === page.id ? 'page' : undefined}>
+              <span class="pages-rack-card-icon"><Icon name="pages" /></span>
+              <span class="pages-rack-card-copy"><strong>{page.name}</strong><small>{page.path}</small></span>
+              <span class="pages-rack-card-kind">{page.kind === 'main' ? 'HOME' : page.kind === '404' ? '404' : 'PAGE'}</span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <section class={`component-rack-panel ${componentRackOpen ? 'is-open' : ''}`} aria-label="Component Rack" aria-hidden={!componentRackOpen}>
         <div class="component-rack-heading">
