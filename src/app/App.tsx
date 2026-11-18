@@ -286,16 +286,12 @@ export function App() {
       originX: canvasPosition.x,
       originY: canvasPosition.y,
     };
-    const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
     canvasDrag.current = drag;
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       if (canvasDrag.current !== drag || moveEvent.pointerId !== drag.pointerId) return;
       moveEvent.preventDefault();
 
-      const bounds = shell?.getBoundingClientRect();
-      const shellLeft = bounds?.left ?? 0;
-      const shellTop = bounds?.top ?? 0;
       const nextX = drag.originX + moveEvent.clientX - drag.pointerX;
       const nextY = drag.originY + moveEvent.clientY - drag.pointerY;
 
@@ -428,16 +424,12 @@ export function App() {
       originX: componentCanvasPosition.x,
       originY: componentCanvasPosition.y,
     };
-    const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
     componentCanvasDrag.current = drag;
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       if (componentCanvasDrag.current !== drag || moveEvent.pointerId !== drag.pointerId) return;
       moveEvent.preventDefault();
 
-      const bounds = shell?.getBoundingClientRect();
-      const shellLeft = bounds?.left ?? 0;
-      const shellTop = bounds?.top ?? 0;
       const nextX = drag.originX + moveEvent.clientX - drag.pointerX;
       const nextY = drag.originY + moveEvent.clientY - drag.pointerY;
 
