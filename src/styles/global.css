@@ -24,6 +24,7 @@ button { color: inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #a494ff; outline-offset: 2px; }
 
 .app-shell {
+  position: relative;
   display: grid;
   width: 100%;
   height: 100%;
