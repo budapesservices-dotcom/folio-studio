@@ -370,7 +370,7 @@ export function App() {
   const instanceOverrideTargets = selectedInstanceComponent ? getComponentOverrideTargets(selectedInstanceComponent) : null;
   const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
 
-  const addNode = (type: DesignNode['type']) => {
+  const addNode = (type: 'rect' | 'ellipse' | 'text') => {
     if (isHydrating) return;
     dispatchFocused({ type: 'add-node', node: createNode(type, focusedDocument.nodes.length) });
     setInspectorVisible(true);

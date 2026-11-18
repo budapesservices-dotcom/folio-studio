@@ -8,7 +8,7 @@ export function createComponentInstance(
   component: ComponentDefinition,
   x: number,
   y: number,
-  id = globalThis.crypto?.randomUUID?.() ?? `instance-${Date.now()}`,
+  id: string = globalThis.crypto?.randomUUID?.() ?? `instance-${Date.now()}`,
 ): ComponentInstanceNode {
   return {
     id, type: 'component-instance', componentId: component.id, name: component.name,

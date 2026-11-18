@@ -212,6 +212,7 @@ describe('linked master components and instances', () => {
     const instance = createComponentInstance(master, 80, 120, 'instance-card');
     const first = resolveComponentInstanceNodes(instance, master);
     expect(first[0].type).toBe('rect');
+    if (first[0].type !== 'rect') throw new Error('Expected a resolved rectangle.');
     expect(first[0].style.fill).toBe(source.style.fill);
 
     const updatedMaster = {
@@ -220,6 +221,7 @@ describe('linked master components and instances', () => {
       document: { ...master.document, nodes: [{ ...source, style: { ...source.style, fill: '#123456' } }] },
     };
     const afterMasterEdit = resolveComponentInstanceNodes(instance, updatedMaster);
+    if (afterMasterEdit[0].type !== 'rect') throw new Error('Expected an updated rectangle.');
     expect(afterMasterEdit[0].style.fill).toBe('#123456');
     expect(instance.componentId).toBe(master.id);
   });

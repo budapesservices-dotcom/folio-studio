@@ -107,7 +107,7 @@ function NodeArtwork({ node, components = [] }: { node: DesignNode; components?:
             {resolveComponentInstanceNodes(node, component).map((effective) => {
               return effective.type === 'component-instance'
                 ? null
-                : <NodeShape key={child.id} node={effective} />;
+                : <NodeShape key={effective.id} node={effective} />;
             })}
           </g>
         ) : (

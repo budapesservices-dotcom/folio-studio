@@ -61,7 +61,7 @@ export function createTextNode(index = 0): TextNode {
   };
 }
 
-export function createNode(type: DesignNode['type'], index = 0): DesignNode {
+export function createNode(type: 'rect' | 'ellipse' | 'text', index = 0): Exclude<DesignNode, { type: 'component-instance' }> {
   switch (type) {
     case 'rect':
       return createRectNode(index);
