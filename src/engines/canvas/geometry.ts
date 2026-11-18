@@ -124,7 +124,11 @@ export function resizeNodes(
 
   const scaleX = (right - left) / Math.max(minimum, bounds.width);
   const scaleY = (bottom - top) / Math.max(minimum, bounds.height);
-  const fontScale = Math.min(scaleX, scaleY);
+  const fontScale = handle === 'e' || handle === 'w'
+    ? scaleX
+    : handle === 'n' || handle === 's'
+      ? scaleY
+      : Math.min(scaleX, scaleY);
 
   return nodes.map((node) => {
     const resized = {
