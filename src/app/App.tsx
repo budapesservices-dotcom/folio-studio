@@ -312,30 +312,33 @@ export function App() {
       >
         <div
           class={`workspace-toolbar${canvasFloating ? " workspace-toolbar-draggable" : ""}`}
-          onPointerMove={(event) => {
-            const drag = canvasDrag.current;
-            if (!drag) return;
-            const shell = (event.currentTarget as HTMLElement).closest('.app-shell') as HTMLElement | null;
-            const bounds = shell?.getBoundingClientRect();
-            const shellWidth = bounds?.width ?? window.innerWidth;
-            const shellHeight = bounds?.height ?? window.innerHeight;
-            const maxX = Math.max(0, shellWidth - Math.min(canvasSize.width, shellWidth));
-            const maxY = Math.max(56, shellHeight - 27 - 42);
-            setCanvasPosition({
-              x: Math.max(0, Math.min(drag.originX + event.clientX - drag.pointerX, maxX)),
-              y: Math.max(56, Math.min(drag.originY + event.clientY - drag.pointerY, maxY)),
-            });
-          }}
-          onPointerUp={() => { canvasDrag.current = null; }}
-          onPointerCancel={() => { canvasDrag.current = null; }}
         >
           <div
             class={`breadcrumb${canvasFloating ? " canvas-drag-handle" : ""}`}
             onPointerDown={(event) => {
-              if (!canvasFloating || (event.target as HTMLElement).closest('button')) return;
+              if (!canvasFloating || event.button !== 0) return;
+              event.preventDefault();
+              event.stopPropagation();
               canvasDrag.current = { pointerX: event.clientX, pointerY: event.clientY, originX: canvasPosition.x, originY: canvasPosition.y };
               (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
             }}
+            onPointerMove={(event) => {
+              const drag = canvasDrag.current;
+              if (!drag) return;
+              const shell = (event.currentTarget as HTMLElement).closest('.app-shell') as HTMLElement | null;
+              const bounds = shell?.getBoundingClientRect();
+              const shellWidth = bounds?.width ?? window.innerWidth;
+              const shellHeight = bounds?.height ?? window.innerHeight;
+              const maxX = Math.max(0, shellWidth - Math.min(canvasSize.width, shellWidth));
+              const maxY = Math.max(56, shellHeight - 69);
+              setCanvasPosition({
+                x: Math.max(0, Math.min(drag.originX + event.clientX - drag.pointerX, maxX)),
+                y: Math.max(56, Math.min(drag.originY + event.clientY - drag.pointerY, maxY)),
+              });
+            }}
+            onPointerUp={() => { canvasDrag.current = null; }}
+            onPointerCancel={() => { canvasDrag.current = null; }}
+            onLostPointerCapture={() => { canvasDrag.current = null; }}
           >
             <strong>{state.project.document.name}</strong>
           </div>
@@ -435,28 +438,31 @@ export function App() {
         <div
           class="canvas-minimized-window"
           style={{ left: canvasPosition.x + "px", top: canvasPosition.y + "px" }}
-          onPointerMove={(event) => {
-            const drag = canvasDrag.current;
-            if (!drag) return;
-            const shell = (event.currentTarget as HTMLElement).closest('.app-shell') as HTMLElement | null;
-            const bounds = shell?.getBoundingClientRect();
-            const shellWidth = bounds?.width ?? window.innerWidth;
-            const shellHeight = bounds?.height ?? window.innerHeight;
-            setCanvasPosition({
-              x: Math.max(0, Math.min(drag.originX + event.clientX - drag.pointerX, Math.max(0, shellWidth - 260))),
-              y: Math.max(56, Math.min(drag.originY + event.clientY - drag.pointerY, Math.max(56, shellHeight - 69))),
-            });
-          }}
-          onPointerUp={() => { canvasDrag.current = null; }}
-          onPointerCancel={() => { canvasDrag.current = null; }}
         >
           <div
             class="canvas-minimized-titlebar"
             onPointerDown={(event) => {
-              if ((event.target as HTMLElement).closest('button')) return;
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.stopPropagation();
               canvasDrag.current = { pointerX: event.clientX, pointerY: event.clientY, originX: canvasPosition.x, originY: canvasPosition.y };
               (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
             }}
+            onPointerMove={(event) => {
+              const drag = canvasDrag.current;
+              if (!drag) return;
+              const shell = (event.currentTarget as HTMLElement).closest('.app-shell') as HTMLElement | null;
+              const bounds = shell?.getBoundingClientRect();
+              const shellWidth = bounds?.width ?? window.innerWidth;
+              const shellHeight = bounds?.height ?? window.innerHeight;
+              setCanvasPosition({
+                x: Math.max(0, Math.min(drag.originX + event.clientX - drag.pointerX, Math.max(0, shellWidth - 260))),
+                y: Math.max(56, Math.min(drag.originY + event.clientY - drag.pointerY, Math.max(56, shellHeight - 69))),
+              });
+            }}
+            onPointerUp={() => { canvasDrag.current = null; }}
+            onPointerCancel={() => { canvasDrag.current = null; }}
+            onLostPointerCapture={() => { canvasDrag.current = null; }}
           >
             <Icon name="canvas" />
             <strong>{state.project.document.name}</strong>
