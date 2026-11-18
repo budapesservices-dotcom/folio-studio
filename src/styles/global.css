@@ -267,7 +267,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .app-shell { position: relative; overflow: hidden; isolation: isolate; }
 
 /* Workspace depth contract: chrome stays above all docked and floating panels. */
-/* Future floating windows: z-index 90; component rack: 80; window menu: 60; app background: 0. */
+.tool-rail, .component-rack { position: relative; z-index: 80; }
+.layers-panel, .inspector-panel { position: relative; z-index: 70; }
+.window-menu { position: relative; z-index: 60; }
+.floating-window { position: absolute; z-index: 90; }
+.app-shell { background: var(--chrome-deep); }
 
 .workspace {
   grid-area: workspace;
