@@ -63,7 +63,9 @@ export async function loadMostRecentProject(): Promise<FolioProject | null> {
       const transaction = database.transaction(PROJECT_STORE, 'readonly');
       const request = transaction.objectStore(PROJECT_STORE).getAll();
       request.onsuccess = () => {
-        const projects = request.result as FolioProject[];
+        const projects = (request.result as FolioProject[]).filter(
+          (project) => project.metadata.id !== 'folio-component-canvas',
+        );
         projects.sort((a, b) => Date.parse(b.metadata.updatedAt) - Date.parse(a.metadata.updatedAt));
         resolve(projects[0] ?? null);
       };
