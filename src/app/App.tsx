@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
-import type { ComponentDefinition, DesignNode, FolioPage } from '../core/document/types';
+import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage } from '../core/document/types';
+import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
 import { Canvas } from '../engines/canvas/Canvas';
@@ -113,7 +114,11 @@ export function App() {
   const activePageId = state.project.activePageId;
 
   const [componentRackSearch, setComponentRackSearch] = useState('');
+  const [editingComponentId, setEditingComponentId] = useState<string | null>(null);
+  const [renamingComponentId, setRenamingComponentId] = useState<string | null>(null);
+  const [componentNameDraft, setComponentNameDraft] = useState('');
   const ownedComponents = state.project.components;
+  const editingComponent = ownedComponents.find((component) => component.id === editingComponentId) ?? null;
   const [canvasMinimized, setCanvasMinimized] = useState(false);
   const [canvasClosed, setCanvasClosed] = useState(false);
   const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating'>(() => {
@@ -358,6 +363,11 @@ export function App() {
   const focusedDocument = focusedEditor.document;
   const selectedNode = focusedEditor.selectedNode;
   const selectedNodes = focusedEditor.selectedNodes;
+  const selectedInstance = selectedNode?.type === 'component-instance' ? selectedNode : null;
+  const selectedInstanceComponent = selectedInstance
+    ? state.project.components.find((component) => component.id === selectedInstance.componentId) ?? null
+    : null;
+  const instanceOverrideTargets = selectedInstanceComponent ? getComponentOverrideTargets(selectedInstanceComponent) : null;
   const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
 
   const addNode = (type: DesignNode['type']) => {
@@ -366,12 +376,13 @@ export function App() {
     setInspectorVisible(true);
   };
   const saveNodesAsComponent = (nodes: DesignNode[]) => {
-    if (isHydrating || nodes.length === 0) return;
-    const name = nodes.length === 1 ? nodes[0].name : `Component ${ownedComponents.length + 1}`;
-    const minX = Math.min(...nodes.map((node) => node.x));
-    const minY = Math.min(...nodes.map((node) => node.y));
-    const maxX = Math.max(...nodes.map((node) => node.x + node.width));
-    const maxY = Math.max(...nodes.map((node) => node.y + node.height));
+    const reusableNodes = nodes.filter((node) => node.type !== 'component-instance');
+    if (isHydrating || reusableNodes.length === 0) return;
+    const name = reusableNodes.length === 1 ? reusableNodes[0].name : `Component ${ownedComponents.length + 1}`;
+    const minX = Math.min(...reusableNodes.map((node) => node.x));
+    const minY = Math.min(...reusableNodes.map((node) => node.y));
+    const maxX = Math.max(...reusableNodes.map((node) => node.x + node.width));
+    const maxY = Math.max(...reusableNodes.map((node) => node.y + node.height));
     const now = new Date().toISOString();
     const component: ComponentDefinition = {
       id: globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`,
@@ -379,7 +390,7 @@ export function App() {
       document: {
         ...createEmptyDocument(name, Math.max(1, maxX - minX), Math.max(1, maxY - minY)),
         background: '#00000000',
-        nodes: nodes.map((node) => ({ ...node, x: node.x - minX, y: node.y - minY })),
+        nodes: reusableNodes.map((node) => ({ ...node, x: node.x - minX, y: node.y - minY })),
       },
       createdAt: now,
       updatedAt: now,
@@ -388,6 +399,92 @@ export function App() {
     setComponentRackOpen(true);
     setNotice(`“${name}” saved to this project’s Component Rack.`);
   };
+
+  const openMasterComponent = (component: ComponentDefinition) => {
+    const editorProject = createInitialProject(component.name);
+    editorProject.metadata.id = 'folio-component-canvas';
+    editorProject.metadata.name = component.name;
+    editorProject.pages[0].name = component.name;
+    editorProject.pages[0].route = '/';
+    editorProject.pages[0].document = {
+      ...component.document,
+      name: component.name,
+      nodes: component.document.nodes.map((node) => ({ ...node })),
+    };
+    componentDispatch({ type: 'replace-project', project: editorProject });
+    setEditingComponentId(component.id);
+    setComponentCanvasClosed(false);
+    setComponentCanvasMinimized(false);
+    setActiveEditorId('component');
+    focusWindow('component-canvas');
+    setInspectorVisible(true);
+    setComponentRackOpen(false);
+    setNotice(`Editing master: ${component.name}.`);
+  };
+
+  const createNewMasterComponent = () => {
+    if (isHydrating) return;
+    const now = new Date().toISOString();
+    const name = `Component ${ownedComponents.length + 1}`;
+    const component: ComponentDefinition = {
+      id: globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`,
+      name,
+      document: { ...createEmptyDocument(name, 420, 280), background: '#00000000' },
+      createdAt: now,
+      updatedAt: now,
+    };
+    dispatch({ type: 'add-component', component });
+    openMasterComponent(component);
+  };
+
+  const renameComponent = (componentId: string) => {
+    const name = componentNameDraft.trim();
+    if (!name) return;
+    dispatch({ type: 'rename-component', componentId, name });
+    setRenamingComponentId(null);
+    setNotice(`Component renamed to “${name}”.`);
+  };
+
+  const duplicateComponent = (component: ComponentDefinition) => {
+    const now = new Date().toISOString();
+    const copy: ComponentDefinition = {
+      ...component,
+      id: globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`,
+      name: `${component.name} copy`,
+      document: {
+        ...component.document,
+        id: globalThis.crypto?.randomUUID?.() ?? `document-${Date.now()}`,
+        name: `${component.name} copy`,
+        nodes: component.document.nodes.map((node) => ({ ...node })),
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+    dispatch({ type: 'add-component', component: copy });
+    setNotice(`“${component.name}” duplicated.`);
+  };
+
+  const deleteComponent = (component: ComponentDefinition) => {
+    dispatch({ type: 'delete-component', componentId: component.id });
+    if (editingComponentId === component.id) setEditingComponentId(null);
+    setNotice(`“${component.name}” deleted; any linked instances were detached.`);
+  };
+
+  useEffect(() => {
+    if (!componentReady || !editingComponentId) return;
+    const master = state.project.components.find((component) => component.id === editingComponentId);
+    if (!master) return;
+    const editedDocument = getActiveDocument(componentState.project);
+    if (master.document === editedDocument) return;
+    dispatch({
+      type: 'update-component',
+      component: {
+        ...master,
+        document: editedDocument,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  }, [componentState.project.pages, editingComponentId, componentReady]);
 
   const switchPage = (page: FolioPage) => {
     if (isHydrating || page.id === activePageId) return;
@@ -435,17 +532,14 @@ export function App() {
   );
   const insertOwnedComponent = (component: ComponentDefinition) => {
     if (isHydrating) return;
-    const offsetX = 140 + (focusedDocument.nodes.length % 4) * 28;
-    const offsetY = 130 + (focusedDocument.nodes.length % 4) * 28;
-    const nodes = component.document.nodes.map((node) => ({
-      ...node,
-      id: globalThis.crypto?.randomUUID?.() ?? `node-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      x: node.x + offsetX,
-      y: node.y + offsetY,
-    }));
-    dispatchFocused({ type: 'add-nodes', nodes });
+    const offset = state.project.pages.find((page) => page.id === state.project.activePageId)?.document.nodes.length ?? 0;
+    const instance = createComponentInstance(component, 150 + (offset % 4) * 28, 130 + (offset % 4) * 28);
+    dispatch({ type: 'add-node', node: instance });
+    setActiveEditorId('main');
     setInspectorVisible(true);
-    setNotice(`“${component.name}” added to the page.`);
+    setCanvasClosed(false);
+    setCanvasMinimized(false);
+    setNotice(`Linked instance of “${component.name}” added to Main Canvas.`);
   };
 
   const updateSelected = (patch: Partial<DesignNode>) => {
@@ -457,8 +551,40 @@ export function App() {
   };
 
   const updateSelectedStyle = (patch: Record<string, string | number>) => {
-    if (!selectedNode) return;
+    if (!selectedNode || selectedNode.type === 'component-instance') return;
     dispatchFocused({ type: 'edit-node', coalesceKey: 'inspector:' + selectedNode.id, node: { ...selectedNode, style: { ...selectedNode.style, ...patch } } as DesignNode });
+  };
+
+  const updateInstanceOverride = (childNodeId: string, patch: { fill?: string; text?: string }) => {
+    if (!selectedNode || selectedNode.type !== 'component-instance') return;
+    const instance = selectedNode as ComponentInstanceNode;
+    const overrides = {
+      ...instance.overrides,
+      [childNodeId]: { ...instance.overrides[childNodeId], ...patch },
+    };
+    dispatchFocused({
+      type: 'edit-node',
+      coalesceKey: 'instance-override:' + instance.id,
+      node: { ...instance, overrides },
+    });
+  };
+
+  const resetInstanceOverrides = () => {
+    if (!selectedNode || selectedNode.type !== 'component-instance') return;
+    dispatchFocused({
+      type: 'edit-node',
+      coalesceKey: 'instance-override:' + selectedNode.id,
+      node: { ...selectedNode, overrides: {} },
+    });
+  };
+
+  const detachSelectedInstance = () => {
+    if (!selectedNode || selectedNode.type !== 'component-instance') return;
+    const master = state.project.components.find((component) => component.id === selectedNode.componentId);
+    if (!master) { setNotice('The linked master component could not be found.'); return; }
+    const detached = detachComponentInstance(selectedNode, master);
+    dispatchFocused({ type: 'replace-node-with-nodes', nodeId: selectedNode.id, nodes: detached });
+    setNotice('Instance detached. Its nodes can now be edited independently.');
   };
 
   const alignSelection = (alignment: Alignment, target: EditorTarget = activeEditorId) => {
@@ -792,6 +918,7 @@ export function App() {
         <div class="canvas-workspace">
           <Canvas
             document={activeDocument}
+            components={state.project.components}
             selectedNodeIds={state.selectedNodeIds}
             zoom={zoom}
             pan={mainView.pan}
@@ -826,7 +953,7 @@ export function App() {
         >
           <div class="breadcrumb">
             <Icon name="componentCanvas" />
-            <strong>Component Canvas</strong>
+            <strong>{editingComponent ? editingComponent.name + ' · Master' : 'Component Canvas'}</strong>
           </div>
           <div class="canvas-window-tools">
             <div class="workspace-tools component-canvas-create-tools" aria-label="Create component elements">
@@ -866,6 +993,7 @@ export function App() {
         <div class="canvas-workspace">
           <Canvas
             document={componentDocument}
+            components={state.project.components}
             selectedNodeIds={componentState.selectedNodeIds}
             zoom={componentCanvasZoom}
             pan={componentView.pan}
@@ -1072,6 +1200,7 @@ export function App() {
           </div>
           <div class="component-rack-actions">
             <input class="component-rack-search" type="search" placeholder="Search components..." value={componentRackSearch} onInput={(event) => setComponentRackSearch(event.currentTarget.value)} />
+            <button type="button" class="component-rack-save" onClick={createNewMasterComponent} title="Create a new master component">＋ New component</button>
             <button type="button" class="component-rack-save" disabled={selectedNodes.length === 0} onClick={saveSelectionAsComponent} title="Save selected layers as a reusable component">Save selection</button>
             <button type="button" class="component-rack-close" title="Close Component Rack" aria-label="Close Component Rack" onClick={() => setComponentRackOpen(false)}>×</button>
           </div>
@@ -1079,12 +1208,25 @@ export function App() {
         <div class="component-rack-list">
           {ownedComponents.filter((component) => component.name.toLowerCase().includes(componentRackSearch.toLowerCase())).map((component) => (
             <article class="component-rack-card" key={component.id}>
-              <button type="button" class="component-rack-preview" title={`Insert ${component.name} into the current page`} onClick={() => insertOwnedComponent(component)}>
-                <span class="component-rack-preview-shapes">{component.document.nodes.slice(0, 5).map((node) => <span class={`component-preview-shape shape-${node.type}`} style={node.type === 'text' ? { color: node.style.fill } : { background: node.style.fill }} />)}</span>
+              <button type="button" class="component-rack-preview" title={`Insert linked ${component.name} into Main Canvas`} onClick={() => insertOwnedComponent(component)}>
+                <span class="component-rack-preview-shapes">{component.document.nodes.slice(0, 5).map((node) => <span class={`component-preview-shape shape-${node.type}`} style={node.type === 'text' ? { color: node.style.fill } : node.type === 'component-instance' ? {} : { background: node.style.fill }} />)}</span>
                 <span class="component-rack-card-name">{component.name}</span>
-                <span class="component-rack-card-meta">{component.document.nodes.length} layer{component.document.nodes.length === 1 ? '' : 's'}</span>
+                <span class="component-rack-card-meta">{component.document.nodes.length} master layer{component.document.nodes.length === 1 ? '' : 's'}</span>
               </button>
-              <button type="button" class="component-rack-delete" title={`Delete ${component.name}`} aria-label={`Delete ${component.name}`} onClick={() => dispatch({ type: 'delete-component', componentId: component.id })}>×</button>
+              <div class="component-rack-card-actions">
+                <button type="button" title={`Edit ${component.name} master`} onClick={() => openMasterComponent(component)}>Edit Master</button>
+                {renamingComponentId === component.id ? (
+                  <form onSubmit={(event) => { event.preventDefault(); renameComponent(component.id); }}>
+                    <input aria-label={`Rename ${component.name}`} value={componentNameDraft} onInput={(event) => setComponentNameDraft(event.currentTarget.value)} />
+                    <button type="submit">Save</button>
+                    <button type="button" onClick={() => setRenamingComponentId(null)}>Cancel</button>
+                  </form>
+                ) : (
+                  <button type="button" title={`Rename ${component.name}`} onClick={() => { setRenamingComponentId(component.id); setComponentNameDraft(component.name); }}>Rename</button>
+                )}
+                <button type="button" title={`Duplicate ${component.name}`} onClick={() => duplicateComponent(component)}>Duplicate</button>
+                <button type="button" class="component-rack-delete" title={`Delete ${component.name}`} aria-label={`Delete ${component.name}`} onClick={() => deleteComponent(component)}>Delete</button>
+              </div>
             </article>
           ))}
           {ownedComponents.length === 0 && <div class="component-rack-empty"><Icon name="rack" /><strong>Your component library is empty</strong><span>Select layers on the canvas and choose “Save selection” to keep reusable components here.</span></div>}
