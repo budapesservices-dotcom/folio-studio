@@ -4,7 +4,7 @@ import type { DesignNode } from '../core/document/types';
 import { loadMostRecentProject, saveProject } from '../core/persistence/indexedDb';
 import { downloadProject, readProjectFile } from '../core/persistence/projectFile';
 import { Canvas } from '../engines/canvas/Canvas';
-import { alignNodes, type Alignment } from '../engines/canvas/geometry';
+import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
 import { createEditorState, editorReducer } from './editorReducer';
 
 function Icon({ name }: { name: string }) {
@@ -113,6 +113,12 @@ export function App() {
     const selected = state.project.document.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
     if (selected.length < 2) return;
     dispatch({ type: 'transform-nodes', nodes: alignNodes(selected, alignment) });
+  };
+
+  const distributeSelection = (axis: DistributionAxis) => {
+    const selected = state.project.document.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
+    if (selected.length < 3) return;
+    dispatch({ type: 'transform-nodes', nodes: distributeNodes(selected, axis) });
   };
 
   const handleImport = async (event: Event) => {
@@ -269,9 +275,11 @@ export function App() {
               <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
               <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
               <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
+              <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal')}>⇌</button>
               <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
               <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
               <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
+              <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
             </div>
           )}
           <div class="workspace-tools">
@@ -291,7 +299,7 @@ export function App() {
             onSelectionChange={(nodeIds) => dispatch({ type: 'select-nodes', nodeIds })}
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
-          <div class="canvas-hint">DRAG TO MOVE · RESIZE WITH HANDLES · SHIFT-CLICK TO MULTI-SELECT</div>
+          <div class="canvas-hint">SPACE + DRAG / MIDDLE-DRAG TO PAN · DRAG TO MOVE · SHIFT-CLICK MULTI-SELECT</div>
         </div>
       </main>
 
