@@ -530,10 +530,15 @@ export function App() {
 
   useEffect(() => {
     const onResize = () => { recoverWindow('main-canvas'); recoverWindow('component-canvas'); recoverWindow('node-logic'); };
-    onResize();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [canvasPosition, canvasSize, componentCanvasPosition, componentCanvasSize, nodeLogicPosition, nodeLogicSize]);
+
+  useEffect(() => {
+    recoverWindow('main-canvas');
+    recoverWindow('component-canvas');
+    recoverWindow('node-logic');
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
