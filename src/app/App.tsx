@@ -466,7 +466,12 @@ export function App() {
 
   const deleteComponent = (component: ComponentDefinition) => {
     dispatch({ type: 'delete-component', componentId: component.id });
-    if (editingComponentId === component.id) setEditingComponentId(null);
+    if (editingComponentId === component.id) {
+      setEditingComponentId(null);
+      setComponentCanvasClosed(true);
+      setComponentCanvasMinimized(false);
+      setActiveEditorId('main');
+    }
     setNotice(`“${component.name}” deleted; any linked instances were detached.`);
   };
 

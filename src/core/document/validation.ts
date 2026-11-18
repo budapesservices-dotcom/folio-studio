@@ -78,7 +78,9 @@ function isDesignNode(value: unknown): value is DesignNode {
   }
 
   if (value.type === 'component-instance') {
-    if (!isString(value.componentId) || !value.componentId || !isRecord(value.overrides)) return false;
+    if (!isString(value.componentId) || !value.componentId || !isRecord(value.overrides) ||
+        !isFiniteNumber(value.width) || value.width <= 0 ||
+        !isFiniteNumber(value.height) || value.height <= 0) return false;
     return Object.values(value.overrides).every((override) =>
       isRecord(override) &&
       (override.fill === undefined || isString(override.fill)) &&
@@ -230,8 +232,15 @@ export function validateProject(input: unknown): ValidationResult {
   const knownComponentIds = new Set((input.components as Array<{ id: string }>).map((component) => component.id));
   for (const page of input.pages as Array<{ document: FolioDocument }>) {
     for (const node of page.document.nodes) {
-      if (node.type === 'component-instance' && !knownComponentIds.has(node.componentId)) {
-        return { ok: false, error: `A page references missing component: ${node.componentId}.` };
+      if (node.type === 'component-instance') {
+        if (!knownComponentIds.has(node.componentId)) {
+          return { ok: false, error: `A page references missing component: ${node.componentId}.` };
+        }
+        const master = (input.components as Array<{ id: string; document: FolioDocument }>).find((item) => item.id === node.componentId)!;
+        const childIds = new Set(master.document.nodes.map((child) => child.id));
+        if (Object.keys(node.overrides).some((childId) => !childIds.has(childId))) {
+          return { ok: false, error: `An instance of ${node.componentId} contains an override for a missing master layer.` };
+        }
       }
     }
   }

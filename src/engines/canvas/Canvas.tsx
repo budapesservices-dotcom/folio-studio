@@ -104,7 +104,7 @@ function NodeArtwork({ node, components = [] }: { node: DesignNode; components?:
       <g data-node-id={node.id} transform={transform} opacity={node.opacity} class="canvas-node component-instance-artwork">
         {component ? (
           <g transform={'translate(' + node.x + ' ' + node.y + ') scale(' + scaleX + ' ' + scaleY + ')'}>
-            {resolveComponentInstanceNodes(node, component).map((effective) => {
+            {resolveComponentInstanceNodes(node, component).filter((child) => child.visible).map((effective) => {
               return effective.type === 'component-instance'
                 ? null
                 : <NodeShape key={effective.id} node={effective} />;

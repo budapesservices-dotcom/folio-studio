@@ -259,7 +259,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ...page, document: replaceComponentInstancesInDocument(page.document, target),
       }));
       const components = state.project.components.filter((component) => component.id !== action.componentId);
-      return withSnapshot(state, touch({ ...state.project, pages, components }));
+      const next = touch({ ...state.project, pages, components });
+      const selected = existingSelection(next, state.selectedNodeIds);
+      return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
     }
 
     case 'replace-project':

@@ -224,6 +224,57 @@ describe('linked master components and instances', () => {
     if (afterMasterEdit[0].type !== 'rect') throw new Error('Expected an updated rectangle.');
     expect(afterMasterEdit[0].style.fill).toBe('#123456');
     expect(instance.componentId).toBe(master.id);
+
+    const secondInstance = createComponentInstance(master, 320, 180, 'instance-card-second');
+    const secondPage = {
+      ...project.pages[0],
+      id: 'page-secondary',
+      name: 'Secondary',
+      route: '/secondary',
+      document: {
+        ...project.pages[0].document,
+        id: 'doc-secondary',
+        name: 'Secondary',
+        nodes: [secondInstance],
+      },
+    };
+    const linkedProject = {
+      ...project,
+      components: [master],
+      pages: [
+        { ...project.pages[0], document: { ...project.pages[0].document, nodes: [instance] } },
+        secondPage,
+      ],
+    };
+    const synced = editorReducer(createEditorState(linkedProject), { type: 'update-component', component: updatedMaster });
+    for (const page of synced.project.pages) {
+      const pageInstance = page.document.nodes.find((node) => node.type === 'component-instance');
+      if (!pageInstance || pageInstance.type !== 'component-instance') throw new Error('Missing linked page instance.');
+      const visibleNodes = resolveComponentInstanceNodes(pageInstance, synced.project.components[0]);
+      if (visibleNodes[0].type !== 'rect') throw new Error('Expected an updated instance rectangle.');
+      expect(visibleNodes[0].style.fill).toBe('#123456');
+    }
+  });
+
+  it('rejects linked instances with missing masters or stale override targets', async () => {
+    const { createComponentInstance } = await import('../src/core/document/components');
+    const project = createInitialProject();
+    const master = {
+      id: 'master-validation', name: 'Validation',
+      createdAt: '2026-11-19T00:00:00.000Z', updatedAt: '2026-11-19T00:00:00.000Z',
+      document: { ...project.pages[0].document, id: 'master-validation-doc', nodes: [createRectNode()] },
+    };
+    const orphan = createComponentInstance(master, 10, 10, 'orphan-instance');
+    const missingMaster = { ...project, pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [orphan] } })) };
+    expect(validateProject(missingMaster).ok).toBe(false);
+
+    const invalidOverride = { ...orphan, overrides: { 'missing-layer': { fill: '#FFFFFF' } } };
+    const invalidProject = {
+      ...project,
+      components: [master],
+      pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [invalidOverride] } })),
+    };
+    expect(validateProject(invalidProject).ok).toBe(false);
   });
 
   it('applies per-instance overrides without changing the master', async () => {
