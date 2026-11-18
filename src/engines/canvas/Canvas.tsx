@@ -231,9 +231,12 @@ export function Canvas({
 
   const handleWheel = (event: JSX.TargetedWheelEvent<HTMLDivElement>) => {
     event.preventDefault();
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? event.currentTarget.clientHeight : 1;
+    const deltaX = event.deltaX * unit * 0.55;
+    const deltaY = event.deltaY * unit * 0.55;
 
     if (event.ctrlKey || event.metaKey) {
-      const direction = event.deltaY > 0 ? -1 : 1;
+      const direction = deltaY > 0 ? -1 : 1;
       const nextZoom = Math.min(2, Math.max(0.35, Number((zoom * (direction > 0 ? 1.1 : 1 / 1.1)).toFixed(3))));
       if (nextZoom === zoom) return;
 
@@ -250,12 +253,12 @@ export function Canvas({
     }
 
     if (event.shiftKey) {
-      const delta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
+      const delta = deltaX !== 0 ? deltaX : deltaY;
       setPan((current) => ({ ...current, x: current.x - delta }));
       return;
     }
 
-    setPan((current) => ({ ...current, y: current.y - event.deltaY }));
+    setPan((current) => ({ ...current, y: current.y - deltaY }));
   };
 
   const handlePanPointerDown = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
@@ -454,6 +457,8 @@ export function Canvas({
           style={{
             width: String(zoom * 100) + '%',
             transform: 'translate(' + pan.x + 'px, ' + pan.y + 'px)',
+            transition: isPanning ? 'none' : 'transform 110ms ease-out',
+            willChange: 'transform',
           }}
         >
         <div class="artboard-label">
