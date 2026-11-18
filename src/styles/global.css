@@ -53,6 +53,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 
 .global-menu-bar {
+  position: relative;
   display: flex;
   align-items: center;
   min-width: 0;
@@ -61,6 +62,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   border-bottom: 1px solid #ffffff08;
 }
 
+.global-toolbar-left { display: flex; align-items: center; min-width: 0; flex: 0 1 auto; }
 .global-project-name {
   display: flex;
   align-items: baseline;
@@ -78,11 +80,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .global-project-extension { flex: 0 0 auto; color: #747f91; font-size: 10px; font-weight: 500; }
 
 .global-panel-toggles {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   gap: 5px;
   flex: 0 0 auto;
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .global-panel-toggle {
@@ -268,6 +274,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 
 .workspace {
+  resize: both;
   grid-area: workspace;
   position: absolute;
   left: 310px;
@@ -354,6 +361,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 
 .floating-tool-window {
   position: absolute;
+  resize: both;
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -370,7 +378,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .logic-window { left: 332px; top: 91px; width: 350px; height: 385px; }
 .component-canvas-window { right: 316px; top: 108px; width: 410px; height: 370px; }
 .code-window { left: 27%; top: 28%; width: min(690px, 58vw); height: 390px; }
-.floating-tool-window.is-minimized { height: 39px; min-height: 39px; resize: none; }\n.floating-window.is-minimized { height: 39px; min-height: 39px; resize: none; }
+.floating-tool-window.is-minimized { height: 39px; min-height: 39px; resize: none; }
+.workspace.is-minimized { height: 39px; min-height: 39px; resize: none; }
 .floating-tool-window.is-expanded {
   left: 14px;
   right: 14px;
@@ -417,8 +426,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .component-rack-drawer {
   position: absolute;
   z-index: 45;
-  left: 58px;
-  right: 292px;
+  left: 0;
+  right: 0;
   bottom: 27px;
   display: flex;
   flex-direction: column;
