@@ -324,10 +324,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   position: absolute;
   z-index: 90;
   inset: 56px 0 27px;
-  width: auto;
-  height: auto;
+  /* Override dimensions written by the browser resize handle. */
+  width: auto !important;
+  height: auto !important;
   min-width: 0;
   min-height: 0;
+  max-width: none !important;
+  max-height: none !important;
   resize: none;
   border: 0;
   border-radius: 0;
