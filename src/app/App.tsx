@@ -23,6 +23,8 @@ function Icon({ name }: { name: string }) {
     minus: 'M5 12h14',
     chevron: 'm9 18 6-6-6-6',
     save: 'M5 4h12l3 3v13H4V4h1zm2 0v6h10V4M8 20v-7h8v7',
+    maximize: 'M8 3H3v5M3 3l6 6M16 3h5v5m0-5-6 6M3 16v5h5m-5 0 6-6m12 1v5h-5m5 0-6-6',
+    minimize: 'M8 3v5H3m5-5L3 8M16 3v5h5m-5-5 5 5M3 16h5v5m-5-5 5 5m8 0v-5h5m-5 5 5-5',
   };
 
   return (
@@ -44,7 +46,18 @@ export function App() {
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [notice, setNotice] = useState('');
   const [zoom, setZoom] = useState(0.82);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const appShellRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      setIsFullscreen(document.fullscreenElement === appShellRef.current);
+    };
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    syncFullscreenState();
+    return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
+  }, []);
 
   useEffect(() => {
     setProjectNameDraft(state.project.metadata.name);
@@ -140,6 +153,25 @@ export function App() {
     dispatch({ type: 'replace-project', project: createInitialProject('Untitled project') });
   };
 
+  const toggleFullscreen = async () => {
+    const shell = appShellRef.current;
+    if (!shell) return;
+    try {
+      if (document.fullscreenElement === shell) {
+        await document.exitFullscreen();
+        return;
+      }
+      if (!document.fullscreenEnabled || typeof shell.requestFullscreen !== 'function') {
+        setNotice('True Fullscreen tidak tersedia di browser atau konteks halaman ini. Buka FOLIO melalui HTTPS atau localhost.');
+        return;
+      }
+      await shell.requestFullscreen();
+    } catch (error) {
+      console.error('Folio could not enter fullscreen:', error);
+      setNotice('Browser menolak permintaan fullscreen. Coba klik tombol Fullscreen langsung dari halaman FOLIO.');
+    }
+  };
+
   const statusLabel = saveStatus === 'loading'
     ? 'LOADING'
     : saveStatus === 'saving'
@@ -149,7 +181,7 @@ export function App() {
         : 'ALL CHANGES SAVED';
 
   return (
-    <div class="app-shell">
+    <div class="app-shell" ref={appShellRef}>
       <header class="topbar">
         <div class="brand-lockup">
           <div class="brand-mark">F</div>
@@ -183,6 +215,16 @@ export function App() {
         </button>
         <button class="top-button primary" onClick={() => downloadProject(state.project)} title="Export .flop project">
           <Icon name="export" /> <span>Export</span>
+        </button>
+        <button
+          class="top-button subtle fullscreen-button"
+          onClick={toggleFullscreen}
+          aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          aria-pressed={isFullscreen}
+          title={isFullscreen ? 'Exit fullscreen (Esc)' : 'Enter true fullscreen'}
+        >
+          <Icon name={isFullscreen ? 'minimize' : 'maximize'} />
+          <span>{isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}</span>
         </button>
         <input
           ref={fileInputRef}
