@@ -67,3 +67,21 @@
     width: 22px;
   }
 }
+
+
+.canvas-pan-ready,
+.canvas-panning {
+  user-select: none;
+}
+.canvas-pan-ready {
+  cursor: grab;
+}
+.canvas-panning {
+  cursor: grabbing;
+}
+.canvas-pan-ready .artboard,
+.canvas-pan-ready .canvas-node,
+.canvas-panning .artboard,
+.canvas-panning .canvas-node {
+  cursor: inherit !important;
+}
