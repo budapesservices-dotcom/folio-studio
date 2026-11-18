@@ -29,6 +29,7 @@ function Icon({ name }: { name: string }) {
     componentCanvas: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
     logicNodes: 'M4 4h6v6H4zM14 14h6v6h-6zM10 7h3a3 3 0 0 1 3 3v4',
     inspector: 'M4 4h16v16H4zM15 4v16',
+    rack: 'M3 5h18v14H3zM7 9h4v6H7zM14 9h3M14 12h3M14 15h3',
   };
 
   return (
@@ -73,6 +74,14 @@ export function App() {
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
   const [layersVisible, setLayersVisible] = useState(true);
   const [inspectorVisible, setInspectorVisible] = useState(true);
+  const [componentRackOpen, setComponentRackOpen] = useState(false);
+  const [componentRackSearch, setComponentRackSearch] = useState('');
+  const [ownedComponents, setOwnedComponents] = useState<{ id: string; name: string; nodes: DesignNode[]; updatedAt: string }[]>(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.component-rack') ?? '[]');
+      return Array.isArray(saved) ? saved : [];
+    } catch { return []; }
+  });
   const [canvasMinimized, setCanvasMinimized] = useState(false);
   const [canvasClosed, setCanvasClosed] = useState(false);
   const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating'>(() => {
@@ -302,6 +311,15 @@ export function App() {
 
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem('folio.component-rack', JSON.stringify(ownedComponents));
+    } catch (error) {
+      console.warn('Folio could not save Component Rack:', error);
+      setNotice('Component Rack storage is full or unavailable.');
+    }
+  }, [ownedComponents]);
+
+  useEffect(() => {
     if (!ready) return;
     setSaveStatus('saving');
     const timer = window.setTimeout(() => {
@@ -329,6 +347,35 @@ export function App() {
   const addNode = (type: DesignNode['type']) => {
     dispatch({ type: 'add-node', node: createNode(type, state.project.document.nodes.length) });
     setInspectorVisible(true);
+  };
+
+  const selectedNodes = state.project.document.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
+  const saveSelectionAsComponent = () => {
+    if (selectedNodes.length === 0) return;
+    const name = selectedNodes.length === 1 ? selectedNodes[0].name : `Component ${ownedComponents.length + 1}`;
+    const bounds = {
+      x: Math.min(...selectedNodes.map((node) => node.x)),
+      y: Math.min(...selectedNodes.map((node) => node.y)),
+    };
+    const normalizedNodes = selectedNodes.map((node) => ({ ...node, x: node.x - bounds.x, y: node.y - bounds.y }));
+    setOwnedComponents((items) => [{
+      id: globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`,
+      name,
+      nodes: normalizedNodes,
+      updatedAt: new Date().toISOString(),
+    }, ...items]);
+    setComponentRackOpen(true);
+    setNotice(`“${name}” saved to Component Rack.`);
+  };
+  const insertOwnedComponent = (component: { id: string; name: string; nodes: DesignNode[] }) => {
+    const offsetX = 140 + (state.project.document.nodes.length % 4) * 28;
+    const offsetY = 130 + (state.project.document.nodes.length % 4) * 28;
+    component.nodes.forEach((node) => {
+      const id = globalThis.crypto?.randomUUID?.() ?? `node-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      dispatch({ type: 'add-node', node: { ...node, id, x: node.x + offsetX, y: node.y + offsetY } as DesignNode });
+    });
+    setInspectorVisible(true);
+    setNotice(`“${component.name}” added to the page.`);
   };
 
   const updateSelected = (patch: Partial<DesignNode>) => {
@@ -813,6 +860,7 @@ export function App() {
           </div>
           </div>
           <div class="global-panel-toggles" aria-label="Workspace panels">
+            <button class={`global-panel-toggle component-rack-header-toggle ${componentRackOpen ? 'active' : ''}`} type="button" title={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-label={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-pressed={componentRackOpen} onClick={() => setComponentRackOpen((value) => !value)} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse and reuse components saved to your personal library.')}><Icon name="rack" /></button>
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
             <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) { setCanvasClosed(false); setCanvasMinimized(false); } else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
             <button class={`global-panel-toggle component-canvas-header-toggle ${componentCanvasOpen ? 'active' : ''}`} type="button" title={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-label={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-pressed={componentCanvasOpen} onClick={() => { if (componentCanvasClosed || componentCanvasMinimized) { setComponentCanvasClosed(false); setComponentCanvasMinimized(false); } else { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', componentCanvasClosed || componentCanvasMinimized ? 'Open the Component Canvas window.' : 'Close the Component Canvas window.')}><Icon name="componentCanvas" /></button>
@@ -1233,6 +1281,35 @@ export function App() {
           </div>
         )}
       </aside>
+
+      <section class={`component-rack-panel ${componentRackOpen ? 'is-open' : ''}`} aria-label="Component Rack" aria-hidden={!componentRackOpen}>
+        <div class="component-rack-heading">
+          <div class="component-rack-title">
+            <span class="panel-kicker">YOUR LIBRARY</span>
+            <strong>Component Rack</strong>
+            <span class="component-rack-count">{ownedComponents.length}</span>
+          </div>
+          <div class="component-rack-actions">
+            <input class="component-rack-search" type="search" placeholder="Search components..." value={componentRackSearch} onInput={(event) => setComponentRackSearch(event.currentTarget.value)} />
+            <button type="button" class="component-rack-save" disabled={selectedNodes.length === 0} onClick={saveSelectionAsComponent} title="Save selected layers as a reusable component">Save selection</button>
+            <button type="button" class="component-rack-close" title="Close Component Rack" aria-label="Close Component Rack" onClick={() => setComponentRackOpen(false)}>×</button>
+          </div>
+        </div>
+        <div class="component-rack-list">
+          {ownedComponents.filter((component) => component.name.toLowerCase().includes(componentRackSearch.toLowerCase())).map((component) => (
+            <article class="component-rack-card" key={component.id}>
+              <button type="button" class="component-rack-preview" title={`Insert ${component.name} into the current page`} onClick={() => insertOwnedComponent(component)}>
+                <span class="component-rack-preview-shapes">{component.nodes.slice(0, 5).map((node) => <span class={`component-preview-shape shape-${node.type}`} style={node.type === 'text' ? { color: node.style.fill } : { background: node.style.fill }} />)}</span>
+                <span class="component-rack-card-name">{component.name}</span>
+                <span class="component-rack-card-meta">{component.nodes.length} layer{component.nodes.length === 1 ? '' : 's'}</span>
+              </button>
+              <button type="button" class="component-rack-delete" title={`Delete ${component.name}`} aria-label={`Delete ${component.name}`} onClick={() => setOwnedComponents((items) => items.filter((item) => item.id !== component.id))}>×</button>
+            </article>
+          ))}
+          {ownedComponents.length === 0 && <div class="component-rack-empty"><Icon name="rack" /><strong>Your component library is empty</strong><span>Select layers on the canvas and choose “Save selection” to keep reusable components here.</span></div>}
+          {ownedComponents.length > 0 && ownedComponents.every((component) => !component.name.toLowerCase().includes(componentRackSearch.toLowerCase())) && <div class="component-rack-empty">No components match “{componentRackSearch}”.</div>}
+        </div>
+      </section>
 
       <footer class="statusbar">
         <div><span class="status-brand">F</span><span>Folio Studio <b>0.1.0</b></span></div>
