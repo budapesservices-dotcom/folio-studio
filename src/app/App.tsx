@@ -31,6 +31,8 @@ function Icon({ name }: { name: string }) {
     components: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
     code: 'm8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16',
     close: 'M6 6l12 12M18 6 6 18',
+    fullscreen: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5',
+    sidebar: 'M4 4h16v16H4zM9 4v16',
   };
 
   return (
@@ -115,6 +117,7 @@ export function App() {
   const [notice, setNotice] = useState('');
   const [zoom, setZoom] = useState(0.82);
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
+  const [layersVisible, setLayersVisible] = useState(true);
   const [panels, setPanels] = useState<Record<PanelKey, PanelState>>({
     canvas: { open: true, minimized: false, expanded: false },
     logic: { open: false, minimized: false, expanded: false },
@@ -205,6 +208,35 @@ export function App() {
     }));
   };
 
+  const startWindowDrag = (event: PointerEvent, selector: string) => {
+    if ((event.target as HTMLElement).closest('button')) return;
+    const header = event.currentTarget as HTMLElement;
+    const win = header.closest(selector) as HTMLElement | null;
+    if (!win || win.classList.contains('is-expanded')) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const rect = win.getBoundingClientRect();
+    const base = (win.offsetParent as HTMLElement).getBoundingClientRect();
+    const move = (moveEvent: PointerEvent) => {
+      win.style.left = `${Math.max(0, rect.left - base.left + moveEvent.clientX - startX)}px`;
+      win.style.top = `${Math.max(56, rect.top - base.top + moveEvent.clientY - startY)}px`;
+      win.style.right = 'auto';
+      win.style.bottom = 'auto';
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop, { once: true });
+  };
+
+  const enterFullscreen = () => {
+    const root = document.querySelector('.app-shell') as HTMLElement | null;
+    if (!document.fullscreenElement) root?.requestFullscreen?.().catch(() => setNotice('Fullscreen is unavailable in this browser.'));
+    else document.exitFullscreen?.();
+  };
+
   const updatePanel = (key: PanelKey, patch: Partial<PanelState>) => {
     setPanels((current) => ({
       ...current,
@@ -229,10 +261,10 @@ export function App() {
         : 'ALL CHANGES SAVED';
 
   return (
-    <div class="app-shell" onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}>
+    <div class={`app-shell ${layersVisible ? "" : "layers-hidden"}`} onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}>
       <header class="global-toolbar-slot" aria-label="FOLIO application toolbar">
         <nav class="global-menu-bar" aria-label="Application menus">
-          <div class="global-menu-items">
+          <div class="global-toolbar-left">\n          <div class="global-menu-items">
             <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('FILE', 'Project actions and .flop file commands will be organized here.')}>File</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}>Edit</span>
@@ -249,12 +281,15 @@ export function App() {
             <span class="global-project-label">{state.project.metadata.name}</span>
             <span class="global-project-extension">.flop</span>
           </div>
+          </div>
           <div class="global-panel-toggles" aria-label="Workspace panels">
+            <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
             <button class={`global-panel-toggle ${panels.canvas.open ? 'active' : ''}`} type="button" title="Show / hide Canvas" aria-label="Show or hide Canvas" aria-pressed={panels.canvas.open} onMouseEnter={() => updateToolbarHint('CANVAS', 'Open or close the floating canvas workspace.')} onClick={() => togglePanel('canvas')}><Icon name="canvas" /></button>
             <button class={`global-panel-toggle ${panels.logic.open ? 'active' : ''}`} type="button" title="Show / hide Logic Nodes" aria-label="Show or hide Logic Nodes" aria-pressed={panels.logic.open} onMouseEnter={() => updateToolbarHint('LOGIC NODES', 'Open or close the logic node workspace.')} onClick={() => togglePanel('logic')}><Icon name="nodes" /></button>
             <button class={`global-panel-toggle ${panels.rack.open ? 'active' : ''}`} type="button" title="Show / hide Component Rack" aria-label="Show or hide Component Rack" aria-pressed={panels.rack.open} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Open or close the component rack drawer from the bottom.')} onClick={() => togglePanel('rack')}><Icon name="rack" /></button>
             <button class={`global-panel-toggle ${panels.componentCanvas.open ? 'active' : ''}`} type="button" title="Show / hide Component Canvas" aria-label="Show or hide Component Canvas" aria-pressed={panels.componentCanvas.open} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'Open or close the floating component canvas.')} onClick={() => togglePanel('componentCanvas')}><Icon name="components" /></button>
             <button class={`global-panel-toggle ${panels.code.open ? 'active' : ''}`} type="button" title="Show / hide Code View" aria-label="Show or hide Code View" aria-pressed={panels.code.open} onMouseEnter={() => updateToolbarHint('CODE VIEW', 'Open or close the floating visual-to-code panel.')} onClick={() => togglePanel('code')}><Icon name="code" /></button>
+            <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
           </div>
         </nav>
         <div class="global-hint-bar" role="status" aria-live="polite">
@@ -292,7 +327,7 @@ export function App() {
         </div>
       </nav>
 
-      <aside class="layers-panel" onMouseEnter={() => updateToolbarHint('LAYERS', 'Select layers or extend a selection with modifier-click.', ['SHIFT + CLICK', 'CTRL/CMD + CLICK'])}>
+      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Select layers or extend a selection with modifier-click.', ['SHIFT + CLICK', 'CTRL/CMD + CLICK'])}>
         <div class="panel-heading">
           <div>
             <span class="panel-kicker">DOCUMENT</span>
@@ -352,6 +387,7 @@ export function App() {
             onMinimize={() => toggleMinimize('canvas')}
             onExpand={() => toggleExpand('canvas')}
             onClose={() => updatePanel('canvas', { open: false })}
+            onPointerDown={(event) => startWindowDrag(event, '.workspace')}
           >
           <div class="canvas-window-tools">
           {state.selectedNodeIds.length > 1 && (
@@ -396,7 +432,7 @@ export function App() {
 
       {panels.logic.open && (
         <section class={`floating-tool-window logic-window ${panels.logic.minimized ? 'is-minimized' : ''} ${panels.logic.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('LOGIC NODES', 'A floating workspace reserved for visual logic and interaction nodes.')}>
-          <WindowHeader title="Logic Nodes" subtitle="INTERACTION GRAPH" minimized={panels.logic.minimized} expanded={panels.logic.expanded} onMinimize={() => toggleMinimize('logic')} onExpand={() => toggleExpand('logic')} onClose={() => updatePanel('logic', { open: false })} />
+          <WindowHeader title="Logic Nodes" subtitle="INTERACTION GRAPH" minimized={panels.logic.minimized} expanded={panels.logic.expanded} onPointerDown={(event) => startWindowDrag(event, '.logic-window')} onMinimize={() => toggleMinimize('logic')} onExpand={() => toggleExpand('logic')} onClose={() => updatePanel('logic', { open: false })} />
           {!panels.logic.minimized && <div class="floating-window-body logic-node-surface">
             <div class="panel-empty-symbol">◇</div>
             <strong>Logic workspace</strong>
@@ -408,7 +444,7 @@ export function App() {
 
       {panels.componentCanvas.open && (
         <section class={`floating-tool-window component-canvas-window ${panels.componentCanvas.minimized ? 'is-minimized' : ''} ${panels.componentCanvas.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'A floating workspace for arranging and editing reusable components.')}>
-          <WindowHeader title="Component Canvas" subtitle="REUSABLE DESIGN" minimized={panels.componentCanvas.minimized} expanded={panels.componentCanvas.expanded} onMinimize={() => toggleMinimize('componentCanvas')} onExpand={() => toggleExpand('componentCanvas')} onClose={() => updatePanel('componentCanvas', { open: false })} />
+          <WindowHeader title="Component Canvas" subtitle="REUSABLE DESIGN" minimized={panels.componentCanvas.minimized} expanded={panels.componentCanvas.expanded} onPointerDown={(event) => startWindowDrag(event, '.component-canvas-window')} onMinimize={() => toggleMinimize('componentCanvas')} onExpand={() => toggleExpand('componentCanvas')} onClose={() => updatePanel('componentCanvas', { open: false })} />
           {!panels.componentCanvas.minimized && <div class="floating-window-body component-canvas-surface">
             <div class="component-canvas-grid">
               <div class="component-placeholder-card"><span>01</span><strong>Component</strong><small>Reusable item</small></div>
@@ -421,7 +457,7 @@ export function App() {
 
       {panels.code.open && (
         <section class={`floating-tool-window code-window ${panels.code.minimized ? 'is-minimized' : ''} ${panels.code.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('CODE VIEW', 'A floating preview area for generated HTML, CSS and JavaScript.')}>
-          <WindowHeader title="Code View" subtitle="VISUAL TO CODE" minimized={panels.code.minimized} expanded={panels.code.expanded} onMinimize={() => toggleMinimize('code')} onExpand={() => toggleExpand('code')} onClose={() => updatePanel('code', { open: false })} />
+          <WindowHeader title="Code View" subtitle="VISUAL TO CODE" minimized={panels.code.minimized} expanded={panels.code.expanded} onPointerDown={(event) => startWindowDrag(event, '.code-window')} onMinimize={() => toggleMinimize('code')} onExpand={() => toggleExpand('code')} onClose={() => updatePanel('code', { open: false })} />
           {!panels.code.minimized && <div class="floating-window-body code-view-surface">
             <div class="code-view-language">HTML <span>·</span> CSS <span>·</span> JAVASCRIPT</div>
             <div class="code-view-empty">
