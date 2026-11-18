@@ -154,7 +154,6 @@ export function App() {
   });
   const componentCanvasFloating = componentCanvasWindowMode === 'floating';
   const componentCanvasOpen = !componentCanvasClosed && !componentCanvasMinimized;
-  const [componentCanvasZoom, setComponentCanvasZoom] = useState(0.82);
   const [componentCanvasSize, setComponentCanvasSize] = useState(() => {
     try {
       const saved = JSON.parse(window.localStorage.getItem('folio.component-canvas-window') ?? 'null');
@@ -183,9 +182,7 @@ export function App() {
         y: Math.max(56, Number.isFinite(saved?.position?.y) ? saved.position.y : 112),
       };
     } catch { return { x: Math.max(24, window.innerWidth - 700), y: 112 }; }
-  });
-  const componentCanvasDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
-  const componentCanvasResize = useRef<{ pointerId: number; pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+  }); pointerX: number; pointerY: number; originX: number; originY: number } | null>(null); pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
 
   const [nodeLogicClosed, setNodeLogicClosed] = useState(true);
   const [nodeLogicMinimized, setNodeLogicMinimized] = useState(false);
@@ -225,9 +222,7 @@ export function App() {
         y: Math.max(56, Number.isFinite(saved?.position?.y) ? saved.position.y : 146),
       };
     } catch { return { x: Math.max(40, Math.round((window.innerWidth - 720) * 0.18)), y: 146 }; }
-  });
-  const nodeLogicDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
-  const nodeLogicResize = useRef<{ pointerId: number; pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+  }); pointerX: number; pointerY: number; originX: number; originY: number } | null>(null); pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
 
   const [canvasPosition, setCanvasPosition] = useState(() => {
     try {
@@ -241,9 +236,7 @@ export function App() {
         y: Math.max(56, savedY),
       };
     } catch { return { x: 48, y: 80 }; }
-  });
-  const canvasDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
-  const canvasResize = useRef<{ pointerId: number; pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+  }); pointerX: number; pointerY: number; originX: number; originY: number } | null>(null); pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
 
   useEffect(() => {
     try { window.localStorage.setItem('folio.main-canvas-view', JSON.stringify(mainView)); }
@@ -584,6 +577,7 @@ export function App() {
   return (
     <div
       class={`app-shell ${layersVisible ? "" : "layers-hidden"} ${inspectorVisible ? "" : "inspector-hidden"} ${isHydrating ? "is-hydrating" : ""}`}
+      data-active-window={activeWindowId}
       aria-busy={isHydrating}
       onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}
       onKeyDown={(event) => {
@@ -601,7 +595,10 @@ export function App() {
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}>Edit</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and fullscreen controls will be organized here.')}>View</span>
+            <div class="global-menu-entry">
+              <button type="button" class="global-menu-item menu-trigger" aria-expanded={viewMenuOpen} onClick={() => setViewMenuOpen((open) => !open)} onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}>View</button>
+              {viewMenuOpen && <div class="global-menu-dropdown" role="menu"><button type="button" role="menuitem" onClick={resetWindowLayout}>Reset Window Layout</button></div>}
+            </div>
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('TOOLS', 'Design tools and tool-specific settings will be organized here.')}>Tools</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
@@ -646,9 +643,9 @@ export function App() {
             <button class={`global-panel-toggle pages-rack-header-toggle ${pagesRackOpen ? 'active' : ''}`} type="button" title={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-label={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-pressed={pagesRackOpen} onClick={() => { setPagesRackOpen((value) => !value); setComponentRackOpen(false); }} onMouseEnter={() => updateToolbarHint('PAGES RACK', 'Manage the pages in this project.')}><Icon name="pages" /></button>
             <button class={`global-panel-toggle component-rack-header-toggle ${componentRackOpen ? 'active' : ''}`} type="button" title={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-label={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-pressed={componentRackOpen} onClick={() => { setComponentRackOpen((value) => !value); setPagesRackOpen(false); }} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse and reuse components saved to your personal library.')}><Icon name="rack" /></button>
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
-            <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) { setCanvasClosed(false); setCanvasMinimized(false); } else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
-            <button class={`global-panel-toggle component-canvas-header-toggle ${componentCanvasOpen ? 'active' : ''}`} type="button" title={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-label={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-pressed={componentCanvasOpen} onClick={() => { if (componentCanvasClosed || componentCanvasMinimized) { setComponentCanvasClosed(false); setComponentCanvasMinimized(false); } else { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', componentCanvasClosed || componentCanvasMinimized ? 'Open the Component Canvas window.' : 'Close the Component Canvas window.')}><Icon name="componentCanvas" /></button>
-            <button class={`global-panel-toggle node-logic-header-toggle ${nodeLogicOpen ? 'active' : ''}`} type="button" title={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-label={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-pressed={nodeLogicOpen} onClick={() => { if (nodeLogicClosed || nodeLogicMinimized) { setNodeLogicClosed(false); setNodeLogicMinimized(false); } else { setNodeLogicClosed(true); setNodeLogicMinimized(false); } }} onMouseEnter={() => updateToolbarHint('NODE LOGIC', nodeLogicClosed || nodeLogicMinimized ? 'Open the Node Logic workspace.' : 'Close the Node Logic workspace.')}><Icon name="logicNodes" /></button>
+            <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) openMainCanvas(); else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
+            <button class={`global-panel-toggle component-canvas-header-toggle ${componentCanvasOpen ? 'active' : ''}`} type="button" title={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-label={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-pressed={componentCanvasOpen} onClick={() => { if (componentCanvasClosed || componentCanvasMinimized) openComponentCanvas(); else { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', componentCanvasClosed || componentCanvasMinimized ? 'Open the Component Canvas window.' : 'Close the Component Canvas window.')}><Icon name="componentCanvas" /></button>
+            <button class={`global-panel-toggle node-logic-header-toggle ${nodeLogicOpen ? 'active' : ''}`} type="button" title={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-label={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-pressed={nodeLogicOpen} onClick={() => { if (nodeLogicClosed || nodeLogicMinimized) openNodeLogic(); else { setNodeLogicClosed(true); setNodeLogicMinimized(false); } }} onMouseEnter={() => updateToolbarHint('NODE LOGIC', nodeLogicClosed || nodeLogicMinimized ? 'Open the Node Logic workspace.' : 'Close the Node Logic workspace.')}><Icon name="logicNodes" /></button>
             <button class={`global-panel-toggle inspector-header-toggle ${inspectorVisible ? 'active' : ''}`} type="button" title={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-label={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-pressed={inspectorVisible} onClick={() => setInspectorVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('INSPECTOR', inspectorVisible ? 'Hide the properties Inspector. Selecting an object opens it automatically.' : 'Show the properties Inspector. Selecting an object also opens it automatically.')}><Icon name="inspector" /></button>
             <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
           </div>
@@ -679,10 +676,10 @@ export function App() {
           <Icon name="text" />
         </button>
         <div class="rail-bottom">
-          <button class="tool-button" title="Undo" aria-label="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}>
+          <button class="tool-button" title="Undo" aria-label="Undo" disabled={focusedEditor.state.past.length === 0} onClick={() => dispatchFocused({ type: 'undo' })}>
             <Icon name="undo" />
           </button>
-          <button class="tool-button" title="Redo" aria-label="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}>
+          <button class="tool-button" title="Redo" aria-label="Redo" disabled={focusedEditor.state.future.length === 0} onClick={() => dispatchFocused({ type: 'redo' })}>
             <Icon name="redo" />
           </button>
         </div>
@@ -692,34 +689,34 @@ export function App() {
         <div class="panel-heading">
           <div>
             <span class="panel-kicker">DOCUMENT</span>
-            <h2>Layers</h2>
+            <h2>Layers</h2><span class="panel-context-indicator">{activeEditorId === 'component' ? 'COMPONENT CANVAS' : 'MAIN PAGE'}</span>
           </div>
           <button class="icon-button" title="Add rectangle" onClick={() => addNode('rect')}><Icon name="plus" /></button>
         </div>
         <div class="page-row">
           <span class="page-indicator" />
-          <span>{getActiveDocument(state.project).name}</span>
-          <span class="page-size">{getActiveDocument(state.project).width} × {getActiveDocument(state.project).height}</span>
+          <span>{focusedDocument.name}</span>
+          <span class="page-size">{focusedDocument.width} × {focusedDocument.height}</span>
         </div>
         <div class="layer-list-heading">
           <span>LAYERS</span>
-          <span>{getActiveDocument(state.project).nodes.length}</span>
+          <span>{focusedDocument.nodes.length}</span>
         </div>
         <div class="layer-list">
-          {[...getActiveDocument(state.project).nodes].reverse().map((node) => (
+          {[...focusedDocument.nodes].reverse().map((node) => (
             <button
               key={node.id}
-              class={"layer-row " + (state.selectedNodeIds.includes(node.id) ? "selected " : "") + (node.visible ? "" : "layer-hidden")}
+              class={"layer-row " + (focusedEditor.state.selectedNodeIds.includes(node.id) ? "selected " : "") + (node.visible ? "" : "layer-hidden")}
               onClick={(event) => {
-                const selected = state.selectedNodeIds;
+                const selected = focusedEditor.state.selectedNodeIds;
                 setInspectorVisible(true);
                 if (event.shiftKey || event.metaKey || event.ctrlKey) {
                   const next = selected.includes(node.id)
                     ? selected.filter((id) => id !== node.id)
                     : [...selected, node.id];
-                  dispatch({ type: 'select-nodes', nodeIds: next });
+                  dispatchFocused({ type: 'select-nodes', nodeIds: next });
                 } else {
-                  dispatch({ type: 'select-node', nodeId: node.id });
+                  dispatchFocused({ type: 'select-node', nodeId: node.id });
                 }
               }}
               title={`Select ${node.name}`}
@@ -729,7 +726,7 @@ export function App() {
               <span class="layer-eye">{node.visible ? '◉' : '○'}</span>
             </button>
           ))}
-          {getActiveDocument(state.project).nodes.length === 0 && (
+          {focusedDocument.nodes.length === 0 && (
             <div class="empty-layers">Your layers will appear here.</div>
           )}
         </div>
@@ -739,19 +736,21 @@ export function App() {
         </div>
       </aside>
 
-      {!canvasClosed && !canvasMinimized && !(componentCanvasOpen && !componentCanvasFloating && !canvasFloating) && !(nodeLogicOpen && !nodeLogicFloating && !canvasFloating) && <main
-        class={`workspace${canvasFloating ? " canvas-floating" : ""}`}
-        style={canvasFloating ? {
-          left: `${canvasPosition.x}px`,
-          top: `${canvasPosition.y}px`,
-          width: `${canvasSize.width}px`,
-          height: `${canvasSize.height}px`,
-        } : undefined}
+      {!canvasClosed && !canvasMinimized && !(componentCanvasOpen && !componentCanvasFloating && !canvasFloating) && !(nodeLogicOpen && !nodeLogicFloating && !canvasFloating) && <FloatingWindow
+        as="main"
+        id="main-canvas"
+        className={`workspace${canvasFloating ? " canvas-floating" : ""}`}
+        floating={canvasFloating}
+        draggable={canvasFloating}
+        position={canvasPosition}
+        size={canvasSize}
+        zIndex={getWindowZIndex(windowOrder, 'main-canvas')}
+        onPositionChange={setCanvasPosition}
+        onSizeChange={setCanvasSize}
+        onFocus={() => { focusWindow('main-canvas'); setActiveEditorId('main'); }}
         onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
-      >
-        <div
+      >        <div
           class={`workspace-toolbar${canvasFloating ? " workspace-toolbar-draggable" : ""}`}
-          onPointerDown={canvasFloating ? startCanvasDrag : undefined}
         >
           <div class="breadcrumb">
             <strong>{activeDocument.name}</strong>
@@ -770,8 +769,8 @@ export function App() {
               </div>
             )}
             <div class="workspace-tools">
-              <button class="history-button" title="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><Icon name="undo" /></button>
-              <button class="history-button" title="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}><Icon name="redo" /></button>
+              <button class="history-button" title="Undo" disabled={focusedEditor.state.past.length === 0} onClick={() => dispatchFocused({ type: 'undo' })}><Icon name="undo" /></button>
+              <button class="history-button" title="Redo" disabled={focusedEditor.state.future.length === 0} onClick={() => dispatchFocused({ type: 'redo' })}><Icon name="redo" /></button>
               <span class="workspace-divider" />
               <button class="zoom-button" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}><Icon name="minus" /></button>
               <span class="zoom-value">{Math.round(zoom * 100)}%</span>
@@ -789,6 +788,8 @@ export function App() {
             document={activeDocument}
             selectedNodeIds={state.selectedNodeIds}
             zoom={zoom}
+            pan={mainView.pan}
+            onPanChange={setMainPan}
             onZoomChange={setZoom}
             onSelectionChange={(nodeIds) => {
               dispatch({ type: 'select-nodes', nodeIds });
@@ -798,30 +799,24 @@ export function App() {
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
-        {canvasFloating && ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map((direction) => (
-          <div
-            key={direction}
-            class={`workspace-resize-handle resize-${direction}`}
-            role="presentation"
-            aria-label={`Resize Canvas window from ${direction}`}
-            onPointerDown={(event) => startCanvasResize(event, direction)}
-          />
-        ))}
-      </main>}
 
-      {!componentCanvasClosed && !componentCanvasMinimized && !(nodeLogicOpen && !nodeLogicFloating && !componentCanvasFloating) && <main
-        class={`workspace component-canvas-window${componentCanvasFloating ? " canvas-floating" : " component-canvas-docked"}` }
-        style={componentCanvasFloating ? {
-          left: `${componentCanvasPosition.x}px`,
-          top: `${componentCanvasPosition.y}px`,
-          width: `${componentCanvasSize.width}px`,
-          height: `${componentCanvasSize.height}px`,
-        } : undefined}
+      </FloatingWindow>}
+
+      {!componentCanvasClosed && !componentCanvasMinimized && !(nodeLogicOpen && !nodeLogicFloating && !componentCanvasFloating) && <FloatingWindow
+        as="main"
+        id="component-canvas"
+        className={`workspace component-canvas-window${componentCanvasFloating ? " canvas-floating" : " component-canvas-docked"}`}
+        floating={componentCanvasFloating}
+        draggable={componentCanvasFloating}
+        position={componentCanvasPosition}
+        size={componentCanvasSize}
+        zIndex={getWindowZIndex(windowOrder, 'component-canvas')}
+        onPositionChange={setComponentCanvasPosition}
+        onSizeChange={setComponentCanvasSize}
+        onFocus={() => { focusWindow('component-canvas'); setActiveEditorId('component'); }}
         onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
-      >
-        <div
+      >        <div
           class={`workspace-toolbar${componentCanvasFloating ? " workspace-toolbar-draggable" : ""}`}
-          onPointerDown={componentCanvasFloating ? startComponentCanvasDrag : undefined}
         >
           <div class="breadcrumb">
             <Icon name="componentCanvas" />
@@ -867,70 +862,54 @@ export function App() {
             document={componentDocument}
             selectedNodeIds={componentState.selectedNodeIds}
             zoom={componentCanvasZoom}
+            pan={componentView.pan}
+            onPanChange={setComponentCanvasPan}
             onZoomChange={setComponentCanvasZoom}
             onSelectionChange={(nodeIds) => componentDispatch({ type: 'select-nodes', nodeIds })}
             onTransformCommit={(nodes) => componentDispatch({ type: 'transform-nodes', nodes })}
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
-        {componentCanvasFloating && ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map((direction) => (
-          <div
-            key={direction}
-            class={`workspace-resize-handle resize-${direction}`}
-            role="presentation"
-            aria-label={`Resize Component Canvas window from ${direction}`}
-            onPointerDown={(event) => startComponentCanvasResize(event, direction)}
-          />
-        ))}
-      </main>}
+
+      </FloatingWindow>}
 
       {canvasMinimized && !canvasClosed && (
-        <div
-          class="canvas-minimized-window"
-          style={{ left: canvasPosition.x + "px", top: canvasPosition.y + "px" }}
-        >
-          <div
-            class="canvas-minimized-titlebar"
-            onPointerDown={startCanvasDrag}
-          >
+        <FloatingWindow as="div" id="main-canvas" className="canvas-minimized-window" minimized draggable position={canvasPosition} size={canvasSize} zIndex={getWindowZIndex(windowOrder, 'main-canvas')} onPositionChange={setCanvasPosition} onSizeChange={setCanvasSize} onFocus={() => { focusWindow('main-canvas'); setActiveEditorId('main'); }}>
+          <div class="canvas-minimized-titlebar">
             <Icon name="canvas" />
             <strong>{activeDocument.name}</strong>
             <button type="button" class="minimized-restore-control" title="Restore Canvas" aria-label="Restore Canvas" onClick={() => setCanvasMinimized(false)}></button>
             <button type="button" title="Close Canvas" aria-label="Close Canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); }}>×</button>
           </div>
-        </div>
+        </FloatingWindow>
       )}
 
       {componentCanvasMinimized && !componentCanvasClosed && (
-        <div
-          class="canvas-minimized-window component-canvas-minimized"
-          style={{ left: componentCanvasPosition.x + "px", top: componentCanvasPosition.y + "px" }}
-        >
-          <div
-            class="canvas-minimized-titlebar"
-            onPointerDown={componentCanvasFloating ? startComponentCanvasDrag : undefined}
-          >
+        <FloatingWindow as="div" id="component-canvas" className="canvas-minimized-window component-canvas-minimized" minimized draggable position={componentCanvasPosition} size={componentCanvasSize} zIndex={getWindowZIndex(windowOrder, 'component-canvas')} onPositionChange={setComponentCanvasPosition} onSizeChange={setComponentCanvasSize} onFocus={() => { focusWindow('component-canvas'); setActiveEditorId('component'); }}>
+          <div class="canvas-minimized-titlebar">
             <Icon name="componentCanvas" />
             <strong>Component Canvas</strong>
             <button type="button" class="minimized-restore-control" title="Restore Component Canvas" aria-label="Restore Component Canvas" onClick={() => setComponentCanvasMinimized(false)}></button>
             <button type="button" title="Close Component Canvas" aria-label="Close Component Canvas" onClick={() => { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); }}>×</button>
           </div>
-        </div>
+        </FloatingWindow>
       )}
 
-      {!nodeLogicClosed && !nodeLogicMinimized && <main
-        class={`workspace node-logic-window${nodeLogicFloating ? " canvas-floating" : " node-logic-docked"}`}
-        style={nodeLogicFloating ? {
-          left: `${nodeLogicPosition.x}px`,
-          top: `${nodeLogicPosition.y}px`,
-          width: `${nodeLogicSize.width}px`,
-          height: `${nodeLogicSize.height}px`,
-        } : undefined}
+      {!nodeLogicClosed && !nodeLogicMinimized && <FloatingWindow
+        as="main"
+        id="node-logic"
+        className={`workspace node-logic-window${nodeLogicFloating ? " canvas-floating" : " node-logic-docked"}`}
+        floating={nodeLogicFloating}
+        draggable={nodeLogicFloating}
+        position={nodeLogicPosition}
+        size={nodeLogicSize}
+        zIndex={getWindowZIndex(windowOrder, 'node-logic')}
+        onPositionChange={setNodeLogicPosition}
+        onSizeChange={setNodeLogicSize}
+        onFocus={() => focusWindow('node-logic')}
         onMouseEnter={() => updateToolbarHint('NODE LOGIC', 'Node Logic workspace for building visual logic flows.')}
-      >
-        <div
+      >        <div
           class={`workspace-toolbar${nodeLogicFloating ? " workspace-toolbar-draggable" : ""}`}
-          onPointerDown={nodeLogicFloating ? startNodeLogicDrag : undefined}
         >
           <div class="breadcrumb">
             <Icon name="logicNodes" />
@@ -953,41 +932,31 @@ export function App() {
             <span class="node-logic-empty-note">NODE EDITOR · SEPARATE FROM DESIGN CANVAS</span>
           </div>
         </div>
-        {nodeLogicFloating && ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map((direction) => (
-          <div
-            key={direction}
-            class={`workspace-resize-handle resize-${direction}`}
-            role="presentation"
-            aria-label={`Resize Node Logic window from ${direction}`}
-            onPointerDown={(event) => startNodeLogicResize(event, direction)}
-          />
-        ))}
-      </main>}
+
+      </FloatingWindow>}
 
       {nodeLogicMinimized && !nodeLogicClosed && (
-        <div
-          class="canvas-minimized-window node-logic-minimized"
-          style={{ left: nodeLogicPosition.x + "px", top: nodeLogicPosition.y + "px" }}
-        >
-          <div
-            class="canvas-minimized-titlebar"
-            onPointerDown={nodeLogicFloating ? startNodeLogicDrag : undefined}
-          >
+        <FloatingWindow as="div" id="node-logic" className="canvas-minimized-window node-logic-minimized" minimized draggable={nodeLogicFloating} position={nodeLogicPosition} size={nodeLogicSize} zIndex={getWindowZIndex(windowOrder, 'node-logic')} onPositionChange={setNodeLogicPosition} onSizeChange={setNodeLogicSize} onFocus={() => focusWindow('node-logic')}>
+          <div class="canvas-minimized-titlebar">
             <Icon name="logicNodes" />
             <strong>Node Logic</strong>
             <button type="button" class="minimized-restore-control" title="Restore Node Logic" aria-label="Restore Node Logic" onClick={() => setNodeLogicMinimized(false)}></button>
             <button type="button" title="Close Node Logic" aria-label="Close Node Logic" onClick={() => { setNodeLogicClosed(true); setNodeLogicMinimized(false); }}>×</button>
           </div>
-        </div>
+        </FloatingWindow>
       )}
 
-      <aside class={`inspector-panel ${inspectorVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
+      <aside class={`inspector-panel ${inspectorVisible ? "" : "is-hidden"}`} onFocusOut={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) dispatchFocused({ type: 'commit-edit' });
+      }} onKeyDown={(event) => {
+        if (event.key === 'Enter' && (event.target as HTMLElement).matches('input')) dispatchFocused({ type: 'commit-edit' });
+      }} onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
         <div class="panel-heading inspector-heading">
           <div>
             <span class="panel-kicker">PROPERTIES</span>
-            <h2>Inspector</h2>
+            <h2>Inspector</h2><span class="panel-context-indicator">{activeEditorId === 'component' ? 'COMPONENT CANVAS' : 'MAIN PAGE'}</span>
           </div>
-          {selectedNode && <button class="icon-button danger" title="Delete selected layer" onClick={() => dispatch({ type: 'delete-node', nodeId: selectedNode.id })}><Icon name="trash" /></button>}
+          {selectedNode && <button class="icon-button danger" title="Delete selected layer" onClick={() => dispatchFocused({ type: 'delete-node', nodeId: selectedNode.id })}><Icon name="trash" /></button>}
         </div>
 
         {selectedNode ? (
@@ -1007,8 +976,8 @@ export function App() {
               <div class="field-grid">
                 <label class="field-label">X<input class="number-field" type="number" value={Math.round(selectedNode.x)} onChange={(event) => updateSelected({ x: Number(event.currentTarget.value) || 0 })} /></label>
                 <label class="field-label">Y<input class="number-field" type="number" value={Math.round(selectedNode.y)} onChange={(event) => updateSelected({ y: Number(event.currentTarget.value) || 0 })} /></label>
-                <label class="field-label">W<input class="number-field" type="number" min="1" value={Math.round(selectedNode.width)} onChange={(event) => updateSelected({ width: Math.max(1, Number(event.currentTarget.value) || 1) })} /></label>
-                <label class="field-label">H<input class="number-field" type="number" min="1" value={Math.round(selectedNode.height)} onChange={(event) => updateSelected({ height: Math.max(1, Number(event.currentTarget.value) || 1) })} /></label>
+                <label class="field-label">W<input class="number-field" type="number" min="1" value={Math.round(selectedNode.width)} onChange={(event) => updateSelected({ width: normalizePositiveDimension(event.currentTarget.valueAsNumber, selectedNode.width) })} /></label>
+                <label class="field-label">H<input class="number-field" type="number" min="1" value={Math.round(selectedNode.height)} onChange={(event) => updateSelected({ height: normalizePositiveDimension(event.currentTarget.valueAsNumber, selectedNode.height) })} /></label>
               </div>
               <label class="field-label rotation-field">Rotation<input class="number-field" type="number" value={selectedNode.rotation} onChange={(event) => updateSelected({ rotation: Number(event.currentTarget.value) || 0 })} /></label>
             </section>
@@ -1048,10 +1017,10 @@ export function App() {
               <label class="toggle-row"><span>Locked</span><input type="checkbox" checked={selectedNode.locked} onChange={(event) => updateSelected({ locked: event.currentTarget.checked })} /></label>
             </section>
           </div>
-        ) : state.selectedNodeIds.length > 1 ? (
+        ) : focusedEditor.state.selectedNodeIds.length > 1 ? (
           <div class="inspector-empty multi-inspector">
             <div class="empty-icon"><Icon name="layers" /></div>
-            <strong>{state.selectedNodeIds.length} layers selected</strong>
+            <strong>{focusedEditor.state.selectedNodeIds.length} layers selected</strong>
             <p>Drag to move the group, use the resize handles, or choose an alignment control above the canvas.</p>
           </div>
         ) : (
@@ -1068,7 +1037,7 @@ export function App() {
       </aside>
 
 
-      <section class={`pages-rack-panel ${pagesRackOpen ? 'is-open' : ''}`} aria-label="Pages Rack" aria-hidden={!pagesRackOpen}>
+      <section class={`pages-rack-panel ${pagesRackOpen ? 'is-open' : ''}`} style={{ zIndex: getWindowZIndex(windowOrder, 'pages') }} onPointerDown={() => focusWindow('pages')} aria-label="Pages Rack" aria-hidden={!pagesRackOpen}>
         <div class="pages-rack-heading">
           <div class="pages-rack-title"><span class="panel-kicker">PROJECT STRUCTURE</span><strong>Pages</strong><span class="pages-rack-count">{pages.length}</span></div>
           <div class="pages-rack-actions">

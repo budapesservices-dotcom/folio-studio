@@ -249,10 +249,10 @@ export function Canvas({
       const pointerX = event.clientX - rect.left - rect.width / 2;
       const pointerY = event.clientY - rect.top - rect.height / 2;
       const ratio = nextZoom / zoom;
-      setPan((current) => ({
-        x: pointerX - (pointerX - current.x) * ratio,
-        y: pointerY - (pointerY - current.y) * ratio,
-      }));
+      onPanChange({
+        x: pointerX - (pointerX - pan.x) * ratio,
+        y: pointerY - (pointerY - pan.y) * ratio,
+      });
       onZoomChange(nextZoom);
       return;
     }
