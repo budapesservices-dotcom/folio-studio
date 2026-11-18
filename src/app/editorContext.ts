@@ -12,6 +12,10 @@ export interface ActiveEditorContext {
   selectedNodes: DesignNode[];
 }
 
+export function getTransformableNodes(nodes: readonly DesignNode[]): DesignNode[] {
+  return nodes.filter((node) => !node.locked);
+}
+
 export function getActiveEditorContext(
   target: EditorTarget,
   mainState: EditorState,

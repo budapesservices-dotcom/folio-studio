@@ -7,7 +7,7 @@ import { Canvas } from '../engines/canvas/Canvas';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
 import { createEditorState, editorReducer, normalizePositiveDimension } from './editorReducer';
 import { FloatingWindow } from './FloatingWindow';
-import { getActiveEditorContext, type EditorTarget } from './editorContext';
+import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
 
 function Icon({ name }: { name: string }) {
@@ -464,7 +464,7 @@ export function App() {
   const alignSelection = (alignment: Alignment, target: EditorTarget = activeEditorId) => {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
-    const selected = getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id));
+    const selected = getTransformableNodes(getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
     if (selected.length < 2) return;
     const nextNodes = alignNodes(selected, alignment);
     if (target === 'main') dispatch({ type: 'transform-nodes', nodes: nextNodes });
@@ -474,7 +474,7 @@ export function App() {
   const distributeSelection = (axis: DistributionAxis, target: EditorTarget = activeEditorId) => {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
-    const selected = getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id));
+    const selected = getTransformableNodes(getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
     if (selected.length < 3) return;
     const nextNodes = distributeNodes(selected, axis);
     if (target === 'main') dispatch({ type: 'transform-nodes', nodes: nextNodes });
@@ -547,7 +547,7 @@ export function App() {
       if (target?.isContentEditable || target?.matches('input, textarea, select, [contenteditable="true"]')) return;
       const context = getActiveEditorContext(activeEditorId, state, componentState);
       const emit = activeEditorId === 'main' ? dispatch : componentDispatch;
-      const nodes = context.selectedNodes;
+      const nodes = getTransformableNodes(context.selectedNodes);
       const ids = context.state.selectedNodeIds;
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();

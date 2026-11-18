@@ -3,6 +3,7 @@ import {
   bringWindowToFront,
   getWindowZIndex,
   recoverWindowLayout,
+  clampWindowPosition,
   resizeWindowFromPointer,
 } from '../src/app/windowManager';
 
@@ -28,6 +29,12 @@ describe('Window Manager', () => {
     expect(recovered.position.x + recovered.size.width).toBeLessThanOrEqual(1280);
     expect(recovered.position.y).toBeGreaterThanOrEqual(56);
     expect(recovered.position.y + recovered.size.height).toBeLessThanOrEqual(800 - 27);
+  });
+
+  it('clamps a dragged window so it remains reachable inside the viewport', () => {
+    const position = clampWindowPosition({ x: 9000, y: -400 }, { width: 420, height: 320 }, { width: 1280, height: 800 });
+    expect(position.x).toBe(1280 - 420);
+    expect(position.y).toBe(56);
   });
 
   it('resizes from all eight directions without crossing the viewport chrome', () => {

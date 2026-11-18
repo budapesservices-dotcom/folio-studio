@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createInitialProject, createRectNode } from '../src/core/document/factory';
 import { getActiveDocument } from '../src/core/document/project';
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
-import { getActiveEditorContext } from '../src/app/editorContext';
+import { getActiveEditorContext, getTransformableNodes } from '../src/app/editorContext';
 
 describe('Context-aware editor panels', () => {
   it('switches layer and inspector context between Main Page and Component Canvas', () => {
@@ -23,5 +23,17 @@ describe('Context-aware editor panels', () => {
     expect(componentContext.document.name).toBe('Main Page');
     expect(componentContext.selectedNode?.name).toBe('Component node');
     expect(componentContext.state).toBe(componentState);
+  });
+
+  it('excludes locked layers from group transforms without changing editor selection', () => {
+    const project = createInitialProject('Component');
+    const movable = createRectNode();
+    const locked = { ...createRectNode(), locked: true };
+    project.pages[0].document.nodes = [movable, locked];
+    const state = editorReducer(createEditorState(project), { type: 'select-nodes', nodeIds: [movable.id, locked.id] });
+    const mainState = createEditorState(createInitialProject('Main'));
+    const context = getActiveEditorContext('component', mainState, state);
+    expect(context.state.selectedNodeIds).toEqual([movable.id, locked.id]);
+    expect(getTransformableNodes(context.selectedNodes).map((node) => node.id)).toEqual([movable.id]);
   });
 });
