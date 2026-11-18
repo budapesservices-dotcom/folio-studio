@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useReducer, useState } from 'preact/hooks';
 import { createInitialProject, createNode } from '../core/document/factory';
 import type { DesignNode } from '../core/document/types';
 import { loadMostRecentProject, saveProject } from '../core/persistence/indexedDb';
-import { downloadProject, readProjectFile } from '../core/persistence/projectFile';
 import { Canvas } from '../engines/canvas/Canvas';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
 import { createEditorState, editorReducer } from './editorReducer';
@@ -41,27 +40,10 @@ function LayerIcon({ type }: { type: DesignNode['type'] }) {
 export function App() {
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const [state, dispatch] = useReducer(editorReducer, initialEditorState);
-  const [projectNameDraft, setProjectNameDraft] = useState(state.project.metadata.name);
   const [ready, setReady] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [notice, setNotice] = useState('');
   const [zoom, setZoom] = useState(0.82);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const appShellRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    const syncFullscreenState = () => {
-      setIsFullscreen(document.fullscreenElement === appShellRef.current);
-    };
-    document.addEventListener('fullscreenchange', syncFullscreenState);
-    syncFullscreenState();
-    return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
-  }, []);
-
-  useEffect(() => {
-    setProjectNameDraft(state.project.metadata.name);
-  }, [state.project.metadata.id, state.project.metadata.name]);
 
   useEffect(() => {
     let active = true;
@@ -134,44 +116,6 @@ export function App() {
     dispatch({ type: 'transform-nodes', nodes: distributeNodes(selected, axis) });
   };
 
-  const handleImport = async (event: Event) => {
-    const input = event.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    try {
-      const project = await readProjectFile(file);
-      dispatch({ type: 'replace-project', project });
-      setNotice(`Opened ${file.name}`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Could not open this project file.');
-    } finally {
-      input.value = '';
-    }
-  };
-
-  const handleNewProject = () => {
-    dispatch({ type: 'replace-project', project: createInitialProject('Untitled project') });
-  };
-
-  const toggleFullscreen = async () => {
-    const shell = appShellRef.current;
-    if (!shell) return;
-    try {
-      if (document.fullscreenElement === shell) {
-        await document.exitFullscreen();
-        return;
-      }
-      if (!document.fullscreenEnabled || typeof shell.requestFullscreen !== 'function') {
-        setNotice('True Fullscreen tidak tersedia di browser atau konteks halaman ini. Buka FOLIO melalui HTTPS atau localhost.');
-        return;
-      }
-      await shell.requestFullscreen();
-    } catch (error) {
-      console.error('Folio could not enter fullscreen:', error);
-      setNotice('Browser menolak permintaan fullscreen. Coba klik tombol Fullscreen langsung dari halaman FOLIO.');
-    }
-  };
-
   const statusLabel = saveStatus === 'loading'
     ? 'LOADING'
     : saveStatus === 'saving'
@@ -181,60 +125,7 @@ export function App() {
         : 'ALL CHANGES SAVED';
 
   return (
-    <div class="app-shell" ref={appShellRef}>
-      <header class="topbar">
-        <div class="brand-lockup">
-          <div class="brand-mark">F</div>
-          <div class="brand-name">FOLIO<span>STUDIO</span></div>
-          <span class="beta-tag">EARLY ACCESS</span>
-        </div>
-
-        <div class="project-title-wrap">
-          <input
-            class="project-title-input"
-            aria-label="Project name"
-            value={projectNameDraft}
-            onChange={(event) => setProjectNameDraft(event.currentTarget.value)}
-            onBlur={() => dispatch({ type: 'rename-project', name: projectNameDraft })}
-          />
-          <span class="project-extension">.flop</span>
-        </div>
-
-        <div class="topbar-spacer" />
-
-        <div class={`save-indicator save-${saveStatus}`}>
-          <span class="save-dot" />
-          {statusLabel}
-        </div>
-        <div class="topbar-divider" />
-        <button class="top-button subtle" onClick={handleNewProject} title="Create new project">
-          <Icon name="plus" /> <span>New</span>
-        </button>
-        <button class="top-button subtle" onClick={() => fileInputRef.current?.click()} title="Open .flop project">
-          <Icon name="import" /> <span>Open</span>
-        </button>
-        <button class="top-button primary" onClick={() => downloadProject(state.project)} title="Export .flop project">
-          <Icon name="export" /> <span>Export</span>
-        </button>
-        <button
-          class="top-button subtle fullscreen-button"
-          onClick={toggleFullscreen}
-          aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-          aria-pressed={isFullscreen}
-          title={isFullscreen ? 'Exit fullscreen (Esc)' : 'Enter true fullscreen'}
-        >
-          <Icon name={isFullscreen ? 'minimize' : 'maximize'} />
-          <span>{isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}</span>
-        </button>
-        <input
-          ref={fileInputRef}
-          class="visually-hidden"
-          type="file"
-          accept=".flop,application/json"
-          onChange={handleImport}
-        />
-      </header>
-
+    <div class="app-shell">
       <nav class="tool-rail" aria-label="Insert tools">
         <button class="tool-button active" title="Select layer" aria-label="Select layer" onClick={() => dispatch({ type: 'select-node', nodeId: null })}>
           <Icon name="cursor" />
@@ -434,7 +325,7 @@ export function App() {
       <footer class="statusbar">
         <div><span class="status-brand">F</span><span>Folio Studio <b>0.1.0</b></span></div>
         <div class="status-center">{state.project.document.nodes.length} LAYERS <span>·</span> {state.project.document.width} × {state.project.document.height} PX</div>
-        <div class="status-right"><span class="status-ready-dot" /> LOCAL WORKSPACE</div>
+        <div class={`status-right save-${saveStatus}`} role="status" aria-live="polite"><span class="status-ready-dot" /> {statusLabel}</div>
       </footer>
 
       {notice && <div class="toast" role="status">{notice}</div>}
