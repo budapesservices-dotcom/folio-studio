@@ -310,9 +310,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .canvas-workspace { position: relative; display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; overflow: hidden; border-radius: 0 0 9px 9px; background: #fff; }
 .workspace.canvas-floating {
   position: absolute;
-  inset: auto !important;
-  right: auto !important;
-  bottom: auto !important;
+  /* left/top are supplied by the window position state; keep this anchored
+     to the app shell's top-left corner so grid static positioning cannot win. */
+  left: 0;
+  top: 0;
+  right: auto;
+  bottom: auto;
   grid-area: auto;
   z-index: 110;
   min-width: 280px;
