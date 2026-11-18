@@ -312,7 +312,12 @@ export async function loadMostRecentProject(): Promise<FolioProject | null> {
     ])];
     project = migrateLegacyWorkspace(project, legacyPageRecords);
     await saveProject(project);
-    await deleteLegacyPageProjects(legacyPageRecords.map((record) => record.id));
+    try {
+      await deleteLegacyPageProjects(legacyPageRecords.map((record) => record.id));
+    } catch (error) {
+      // The unified project is already safe; a cleanup failure must not abort hydration.
+      console.warn('Folio could not remove stale legacy page records:', error);
+    }
     clearLegacyWorkspaceStorage(oldPageIds.length > 0 ? oldPageIds : ['main', '404']);
   } else if ((baseStored as { formatVersion?: unknown }).formatVersion !== 2) {
     await saveProject(project);
