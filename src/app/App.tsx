@@ -312,11 +312,6 @@ export function App() {
       >
         <div
           class={`workspace-toolbar${canvasFloating ? " workspace-toolbar-draggable" : ""}`}
-          onPointerDown={(event) => {
-            if (!canvasFloating || (event.target as HTMLElement).closest('button')) return;
-            canvasDrag.current = { pointerX: event.clientX, pointerY: event.clientY, originX: canvasPosition.x, originY: canvasPosition.y };
-            (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-          }}
           onPointerMove={(event) => {
             const drag = canvasDrag.current;
             if (!drag) return;
@@ -334,7 +329,16 @@ export function App() {
           onPointerUp={() => { canvasDrag.current = null; }}
           onPointerCancel={() => { canvasDrag.current = null; }}
         >
-          <div class="breadcrumb"><strong>{state.project.document.name}</strong></div>
+          <div
+            class={`breadcrumb${canvasFloating ? " canvas-drag-handle" : ""}`}
+            onPointerDown={(event) => {
+              if (!canvasFloating || (event.target as HTMLElement).closest('button')) return;
+              canvasDrag.current = { pointerX: event.clientX, pointerY: event.clientY, originX: canvasPosition.x, originY: canvasPosition.y };
+              (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+            }}
+          >
+            <strong>{state.project.document.name}</strong>
+          </div>
           <div class="canvas-window-tools">
             {state.selectedNodeIds.length > 1 && (
               <div class="alignment-tools" aria-label="Align selected layers">
@@ -428,17 +432,38 @@ export function App() {
       </main>}
 
       {canvasMinimized && !canvasClosed && (
-        <button
-          type="button"
-          class="canvas-taskbar-item"
-          title="Restore Canvas window"
-          aria-label="Restore Canvas window"
-          onClick={() => setCanvasMinimized(false)}
+        <div
+          class="canvas-minimized-window"
+          style={{ left: canvasPosition.x + "px", top: canvasPosition.y + "px" }}
+          onPointerMove={(event) => {
+            const drag = canvasDrag.current;
+            if (!drag) return;
+            const shell = (event.currentTarget as HTMLElement).closest('.app-shell') as HTMLElement | null;
+            const bounds = shell?.getBoundingClientRect();
+            const shellWidth = bounds?.width ?? window.innerWidth;
+            const shellHeight = bounds?.height ?? window.innerHeight;
+            setCanvasPosition({
+              x: Math.max(0, Math.min(drag.originX + event.clientX - drag.pointerX, Math.max(0, shellWidth - 260))),
+              y: Math.max(56, Math.min(drag.originY + event.clientY - drag.pointerY, Math.max(56, shellHeight - 69))),
+            });
+          }}
+          onPointerUp={() => { canvasDrag.current = null; }}
+          onPointerCancel={() => { canvasDrag.current = null; }}
         >
-          <Icon name="canvas" />
-          <span>{state.project.document.name}</span>
-          <span class="taskbar-restore-mark">↗</span>
-        </button>
+          <div
+            class="canvas-minimized-titlebar"
+            onPointerDown={(event) => {
+              if ((event.target as HTMLElement).closest('button')) return;
+              canvasDrag.current = { pointerX: event.clientX, pointerY: event.clientY, originX: canvasPosition.x, originY: canvasPosition.y };
+              (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+            }}
+          >
+            <Icon name="canvas" />
+            <strong>{state.project.document.name}</strong>
+            <button type="button" title="Restore Canvas" aria-label="Restore Canvas" onClick={() => setCanvasMinimized(false)}>↗</button>
+            <button type="button" title="Close Canvas" aria-label="Close Canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); }}>×</button>
+          </div>
+        </div>
       )}
 
       <aside class="inspector-panel" onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
