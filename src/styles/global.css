@@ -47,7 +47,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .global-toolbar-slot {
   grid-area: toolbar;
   position: relative;
-  z-index: 100;
+  z-index: 1200;
   display: grid;
   grid-template-rows: 29px 27px;
   min-width: 0;
@@ -460,7 +460,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   right: auto;
   bottom: auto;
   grid-area: auto;
-  z-index: 110;
   min-width: 280px;
   min-height: 220px;
   max-width: 100%;
@@ -470,11 +469,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   border-radius: 8px;
   box-shadow: 0 18px 55px #0009, 0 0 0 1px #ffffff0a;
 }
-.workspace.component-canvas-window.canvas-floating { z-index: 111; }
 .workspace.component-canvas-docked {
   grid-area: workspace;
   position: relative;
-  z-index: 111;
+  z-index: 10;
   min-width: 0;
   min-height: 0;
   max-width: none;
@@ -483,9 +481,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   border-radius: 0;
   box-shadow: none;
 }
-.canvas-minimized-window.component-canvas-minimized { z-index: 111; }
 
-.workspace.node-logic-window.canvas-floating { z-index: 112; }
 .workspace.node-logic-docked {
   grid-area: workspace;
   position: relative;
@@ -498,7 +494,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   border-radius: 0;
   box-shadow: none;
 }
-.canvas-minimized-window.node-logic-minimized { z-index: 112; }
 .node-logic-workspace {
   position: relative;
   display: flex;
@@ -616,7 +611,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .window-control-minimize::before { content: ""; display: block; width: 9px; height: 1px; border-radius: 1px; background: currentColor; }
 .canvas-minimized-titlebar .minimized-restore-control:hover { color: #fff; }
 .canvas-minimized-titlebar button:last-child:hover { color: #fff; background: #71313b; }
-.statusbar { position: relative; z-index: 100; grid-area: footer; display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border-top: 1px solid #2b303c; background: #171b24; color: #737d8d; font-size: 8px; letter-spacing: .5px; }
+.statusbar { position: relative; z-index: 1200; grid-area: footer; display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border-top: 1px solid #2b303c; background: #171b24; color: #737d8d; font-size: 8px; letter-spacing: .5px; }
 .statusbar > div { display: flex; align-items: center; gap: 7px; }
 .status-brand { display: grid; place-items: center; width: 14px; height: 14px; border-radius: 4px; color: #181522; background: #a494ff; font-size: 9px; font-weight: 900; }
 .statusbar b { color: #a4acbb; font-weight: 650; }
@@ -711,4 +706,48 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 @keyframes folio-hydration-spin {
   to { transform: rotate(360deg); }
+}
+
+/* The app chrome is intentionally above all dynamic workspace windows. */
+.global-toolbar-slot { z-index: 1200; }
+.global-toolbar-slot .global-menu-entry { position: relative; display: flex; align-items: center; height: 100%; }
+.global-toolbar-slot .menu-trigger { border: 0; background: transparent; cursor: pointer; }
+.global-menu-dropdown {
+  position: absolute;
+  z-index: 1400;
+  top: calc(100% - 1px);
+  left: 0;
+  min-width: 190px;
+  padding: 5px;
+  border: 1px solid #394153;
+  border-radius: 7px;
+  background: #1b2230;
+  box-shadow: 0 12px 30px #0009;
+}
+.global-menu-dropdown button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 4px;
+  color: #d8dce6;
+  background: transparent;
+  text-align: left;
+  font-size: 10px;
+  cursor: pointer;
+}
+.global-menu-dropdown button:hover { background: #302b4b; color: #f0edff; }
+.panel-context-indicator {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 5px;
+  padding: 3px 5px;
+  border: 1px solid #4a426f;
+  border-radius: 4px;
+  color: #c5bcff;
+  background: #28243d;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .65px;
+  white-space: nowrap;
 }

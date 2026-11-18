@@ -9,6 +9,7 @@ export interface EditorState {
   future: FolioProject[];
   selectedNodeId: string | null;
   selectedNodeIds: string[];
+  historyGroup: string | null;
 }
 
 export type EditorAction =
@@ -17,6 +18,9 @@ export type EditorAction =
   | { type: 'add-node'; node: DesignNode }
   | { type: 'add-nodes'; nodes: DesignNode[] }
   | { type: 'replace-node'; node: DesignNode }
+  | { type: 'edit-node'; node: DesignNode; coalesceKey: string }
+  | { type: 'commit-edit' }
+  | { type: 'delete-nodes'; nodeIds: string[] }
   | { type: 'transform-nodes'; nodes: DesignNode[] }
   | { type: 'delete-node'; nodeId: string }
   | { type: 'rename-project'; name: string }
@@ -29,7 +33,7 @@ export type EditorAction =
   | { type: 'redo' };
 
 export function createEditorState(project: FolioProject): EditorState {
-  return { project, past: [], future: [], selectedNodeId: null, selectedNodeIds: [] };
+  return { project, past: [], future: [], selectedNodeId: null, selectedNodeIds: [], historyGroup: null };
 }
 
 function withSnapshot(
@@ -44,6 +48,7 @@ function withSnapshot(
     future: [],
     selectedNodeId,
     selectedNodeIds,
+    historyGroup: null,
   };
 }
 
@@ -57,6 +62,10 @@ function touch(project: FolioProject): FolioProject {
 function existingSelection(project: FolioProject, ids: string[]): string[] {
   const available = new Set(getActiveDocument(project).nodes.map((node) => node.id));
   return [...new Set(ids)].filter((id) => available.has(id));
+}
+
+export function normalizePositiveDimension(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
@@ -91,6 +100,29 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
     }
 
+    case 'edit-node': {
+      const exists = document.nodes.some((node) => node.id === action.node.id);
+      if (!exists) return state;
+      const nextDocument = {
+        ...document,
+        nodes: document.nodes.map((node) => (node.id === action.node.id ? action.node : node)),
+      };
+      const nextProject = touch(updateActiveDocument(state.project, nextDocument));
+      const past = state.historyGroup === action.coalesceKey
+        ? state.past
+        : [...state.past, state.project].slice(-HISTORY_LIMIT);
+      return {
+        ...state,
+        project: nextProject,
+        past,
+        future: [],
+        historyGroup: action.coalesceKey,
+      };
+    }
+
+    case 'commit-edit':
+      return state.historyGroup ? { ...state, historyGroup: null } : state;
+
     case 'replace-node': {
       const exists = document.nodes.some((node) => node.id === action.node.id);
       if (!exists) return state;
@@ -124,6 +156,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       );
     }
 
+    case 'delete-nodes': {
+      const ids = new Set(action.nodeIds);
+      const nodes = document.nodes.filter((node) => !ids.has(node.id));
+      if (nodes.length === document.nodes.length) return state;
+      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
+      const selected = state.selectedNodeIds.filter((id) => !ids.has(id));
+      return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
+    }
+
     case 'delete-node': {
       const nodes = document.nodes.filter((node) => node.id !== action.nodeId);
       if (nodes.length === document.nodes.length) return state;
@@ -155,6 +196,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         future: [],
         selectedNodeId: null,
         selectedNodeIds: [],
+        historyGroup: null,
       };
     }
 
@@ -168,6 +210,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         future: [],
         selectedNodeId: null,
         selectedNodeIds: [],
+        historyGroup: null,
       };
     }
 
@@ -198,6 +241,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         future: [state.project, ...state.future].slice(0, HISTORY_LIMIT),
         selectedNodeId: selected.length === 1 ? selected[0] : null,
         selectedNodeIds: selected,
+        historyGroup: null,
       };
     }
 
@@ -211,6 +255,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         future: state.future.slice(1),
         selectedNodeId: selected.length === 1 ? selected[0] : null,
         selectedNodeIds: selected,
+        historyGroup: null,
       };
     }
 

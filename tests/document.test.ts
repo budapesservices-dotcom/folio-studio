@@ -160,4 +160,38 @@ describe('Folio unified project v2', () => {
     const deleted = editorReducer(added, { type: 'delete-component', componentId: 'component-button' });
     expect(deleted.project.components).toHaveLength(0);
   });
+  it('inserts a multi-node component as one undoable batch', () => {
+    const project = createInitialProject();
+    const state = createEditorState(project);
+    const nodes = [createRectNode(), createRectNode()];
+    const inserted = editorReducer(state, { type: 'add-nodes', nodes });
+    expect(inserted.past).toHaveLength(1);
+    expect(getActiveDocument(inserted.project).nodes).toHaveLength(getActiveDocument(project).nodes.length + 2);
+    const undone = editorReducer(inserted, { type: 'undo' });
+    expect(getActiveDocument(undone.project).nodes).toHaveLength(getActiveDocument(project).nodes.length);
+  });
+
+  it('coalesces inspector keystrokes into one undo snapshot until edit commit', () => {
+    const project = createInitialProject();
+    const node = getActiveDocument(project).nodes[0];
+    let state = createEditorState(project);
+    state = editorReducer(state, { type: 'edit-node', coalesceKey: 'inspector:' + node.id, node: { ...node, name: 'B' } });
+    state = editorReducer(state, { type: 'edit-node', coalesceKey: 'inspector:' + node.id, node: { ...node, name: 'Bu' } });
+    state = editorReducer(state, { type: 'edit-node', coalesceKey: 'inspector:' + node.id, node: { ...node, name: 'Button' } });
+    expect(state.past).toHaveLength(1);
+    state = editorReducer(state, { type: 'commit-edit' });
+    state = editorReducer(state, { type: 'edit-node', coalesceKey: 'inspector:' + node.id, node: { ...node, name: 'Button 2' } });
+    expect(state.past).toHaveLength(2);
+    const undone = editorReducer(state, { type: 'undo' });
+    expect(getActiveDocument(undone.project).nodes[0].name).toBe('Button');
+  });
+
+  it('rejects zero, negative and non-finite dimensions while preserving the current value', async () => {
+    const { normalizePositiveDimension } = await import('../src/app/editorReducer');
+    expect(normalizePositiveDimension(0, 120)).toBe(120);
+    expect(normalizePositiveDimension(-10, 120)).toBe(120);
+    expect(normalizePositiveDimension(Number.NaN, 120)).toBe(120);
+    expect(normalizePositiveDimension(42, 120)).toBe(42);
+  });
+
 });

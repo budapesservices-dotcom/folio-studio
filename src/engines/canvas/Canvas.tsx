@@ -15,6 +15,8 @@ interface CanvasProps {
   document: FolioDocument;
   selectedNodeIds: string[];
   zoom: number;
+  pan: { x: number; y: number };
+  onPanChange: (pan: { x: number; y: number }) => void;
   onZoomChange: (zoom: number) => void;
   onSelectionChange: (nodeIds: string[]) => void;
   onTransformCommit: (nodes: DesignNode[]) => void;
@@ -162,6 +164,8 @@ export function Canvas({
   document,
   selectedNodeIds,
   zoom,
+  pan,
+  onPanChange,
   onZoomChange,
   onSelectionChange,
   onTransformCommit,
@@ -172,7 +176,6 @@ export function Canvas({
   const [previewNodes, setPreviewNodes] = useState<DesignNode[] | null>(null);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const panRef = useRef<PanSession | null>(null);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
 
@@ -215,11 +218,13 @@ export function Canvas({
     ? document.nodes.map((node) => previewNodes.find((preview) => preview.id === node.id) ?? node)
     : document.nodes;
 
+  // Locked layers may remain selected in the Layers panel, but they never
+  // participate in canvas group transforms or resize bounds.
   const selectedNodes = displayedNodes.filter(
-    (node) => selectedNodeIds.includes(node.id) && node.visible,
+    (node) => selectedNodeIds.includes(node.id) && node.visible && !node.locked,
   );
   const selectionBounds = getBounds(selectedNodes);
-  const canResize = selectedNodes.length > 0 && selectedNodes.every((node) => !node.locked);
+  const canResize = selectedNodes.length > 0;
 
   const capturePointer = (svg: SVGSVGElement, pointerId: number) => {
     try {
@@ -254,11 +259,11 @@ export function Canvas({
 
     if (event.shiftKey) {
       const delta = deltaX !== 0 ? deltaX : deltaY;
-      setPan((current) => ({ ...current, x: current.x - delta }));
+      onPanChange({ ...pan, x: pan.x - delta });
       return;
     }
 
-    setPan((current) => ({ ...current, y: current.y - deltaY }));
+    onPanChange({ ...pan, y: pan.y - deltaY });
   };
 
   const handlePanPointerDown = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
@@ -266,7 +271,7 @@ export function Canvas({
       event.preventDefault();
       panRef.current = null;
       setIsPanning(false);
-      setPan({ x: 0, y: 0 });
+      onPanChange({ x: 0, y: 0 });
       onZoomChange(1);
       return;
     }
@@ -294,7 +299,7 @@ export function Canvas({
     const session = panRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
 
-    setPan({
+    onPanChange({
       x: session.startPan.x + event.clientX - session.startClientX,
       y: session.startPan.y + event.clientY - session.startClientY,
     });
@@ -312,7 +317,7 @@ export function Canvas({
   const cancelPan = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
     const session = panRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
-    setPan(session.startPan);
+    onPanChange(session.startPan);
     panRef.current = null;
     setIsPanning(false);
     event.preventDefault();
@@ -365,8 +370,8 @@ export function Canvas({
     onSelectionChange(nextIds);
     if (modifier && wasSelected) return;
 
-    const movingNodes = document.nodes.filter((node) => nextIds.includes(node.id) && node.visible);
-    if (movingNodes.length === 0 || movingNodes.some((node) => node.locked)) return;
+    const movingNodes = document.nodes.filter((node) => nextIds.includes(node.id) && node.visible && !node.locked);
+    if (movingNodes.length === 0) return;
     const bounds = getBounds(movingNodes);
     if (!bounds) return;
 
