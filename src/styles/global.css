@@ -309,7 +309,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   bottom: auto !important;
   grid-area: auto;
   z-index: 90;
-  grid-area: auto;
   min-width: 280px;
   min-height: 220px;
   overflow: hidden;
@@ -340,25 +339,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .workspace-resize-handle.resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 .workspace-toolbar-draggable { cursor: grab; touch-action: none; user-select: none; }
 .workspace-toolbar-draggable:active { cursor: grabbing; }
-.workspace.canvas-maximized {
-  position: absolute;
-  z-index: 90;
-  left: 0;
-  top: 56px;
-  right: 0;
-  bottom: 27px;
-  inset: 56px 0 27px;
-  /* Override dimensions written by the browser resize handle. */
-  width: auto !important;
-  height: auto !important;
-  min-width: 0;
-  min-height: 0;
-  max-width: none !important;
-  max-height: none !important;
-  resize: none;
-  border: 0;
-  border-radius: 0;
-}
 .canvas-window-placeholder { display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; gap: 12px; color: #818a9a; background: #11151d; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
 .canvas-window-placeholder button { padding: 7px 11px; border: 1px solid #48406d; border-radius: 5px; color: #c9c1ff; background: #302b4b; font-size: 10px; cursor: pointer; }
 .canvas-window-placeholder button:hover { background: #3a345c; }
