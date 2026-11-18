@@ -269,6 +269,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .app-shell { position: relative; overflow: hidden; isolation: isolate; }
 
 .floating-window {
+  position: absolute;
   box-sizing: border-box;
   border: 1px solid #343d4c;
   border-radius: 10px;
