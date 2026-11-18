@@ -292,6 +292,7 @@ export function App() {
             document={state.project.document}
             selectedNodeIds={state.selectedNodeIds}
             zoom={zoom}
+            onZoomChange={setZoom}
             onSelectionChange={(nodeIds) => dispatch({ type: 'select-nodes', nodeIds })}
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
