@@ -1,4 +1,4 @@
-import { useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { DesignNode, FolioDocument } from '../../core/document/types';
 import {
@@ -27,6 +27,13 @@ interface DragSession {
   bounds: Bounds;
   ids: string[];
   handle?: ResizeHandle;
+}
+
+interface PanSession {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startPan: { x: number; y: number };
 }
 
 const HANDLE_SIZE = 10;
@@ -162,6 +169,40 @@ export function Canvas({
   const previewRef = useRef<DesignNode[] | null>(null);
   const [previewNodes, setPreviewNodes] = useState<DesignNode[] | null>(null);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
+  const panRef = useRef<PanSession | null>(null);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+
+  useEffect(() => {
+    const isInteractiveTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+      return target.isContentEditable || target.matches('input, textarea, select, button, a, [role="button"]');
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' || isInteractiveTarget(event.target)) return;
+      setSpaceHeld(true);
+      event.preventDefault();
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code === 'Space') setSpaceHeld(false);
+    };
+    const handleWindowBlur = () => {
+      setSpaceHeld(false);
+      panRef.current = null;
+      setIsPanning(false);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, []);
 
   const updatePreview = (nodes: DesignNode[] | null) => {
     previewRef.current = nodes;
@@ -186,8 +227,56 @@ export function Canvas({
     }
   };
 
+  const handlePanPointerDown = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+    const isMiddleDrag = event.button === 1;
+    const isSpaceDrag = event.button === 0 && spaceHeld;
+    if (!isMiddleDrag && !isSpaceDrag) return;
+
+    event.preventDefault();
+    panRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPan: pan,
+    };
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may fail if the browser cancels the initiating pointer.
+    }
+    setIsPanning(true);
+  };
+
+  const handlePanPointerMove = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+    const session = panRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+
+    setPan({
+      x: session.startPan.x + event.clientX - session.startClientX,
+      y: session.startPan.y + event.clientY - session.startClientY,
+    });
+    event.preventDefault();
+  };
+
+  const finishPan = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+    const session = panRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    panRef.current = null;
+    setIsPanning(false);
+    event.preventDefault();
+  };
+
+  const cancelPan = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+    const session = panRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    setPan(session.startPan);
+    panRef.current = null;
+    setIsPanning(false);
+    event.preventDefault();
+  };
+
   const handlePointerDown = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || spaceHeld) return;
     const svg = event.currentTarget;
     const target = event.target as Element;
     const handleElement = target.closest('[data-resize-handle]');
@@ -308,9 +397,33 @@ export function Canvas({
     setGuides([]);
   };
 
+  const cancelPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    const session = dragRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    updatePreview(null);
+    setGuides([]);
+  };
+
   return (
-    <div class="canvas-scroll-area">
-      <div class="canvas-stage" style={{ width: String(zoom * 100) + '%' }}>
+    <div
+      class={
+        'canvas-scroll-area' +
+        (spaceHeld ? ' canvas-pan-ready' : '') +
+        (isPanning ? ' canvas-panning' : '')
+      }
+      onPointerDown={handlePanPointerDown}
+      onPointerMove={handlePanPointerMove}
+      onPointerUp={finishPan}
+      onPointerCancel={cancelPan}
+    >
+      <div
+          class="canvas-stage"
+          style={{
+            width: String(zoom * 100) + '%',
+            transform: 'translate(' + pan.x + 'px, ' + pan.y + 'px)',
+          }}
+        >
         <div class="artboard-label">
           <span>{document.name}</span>
           <span>{document.width} × {document.height}</span>
@@ -324,7 +437,7 @@ export function Canvas({
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={finishPointer}
-          onPointerCancel={finishPointer}
+          onPointerCancel={cancelPointer}
         >
           <rect x="0" y="0" width={document.width} height={document.height} fill={document.background} />
           {displayedNodes.filter((node) => node.visible).map((node) => (
