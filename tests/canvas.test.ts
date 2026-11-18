@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialProject, createRectNode } from '../src/core/document/factory';
+import { getActiveDocument } from '../src/core/document/project';
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
 import {
   alignNodes,
@@ -59,7 +60,7 @@ describe('Canvas geometry engine', () => {
   });
   it('commits a group transform as one undoable history step', () => {
     const project = createInitialProject();
-    const selected = project.document.nodes.slice(0, 2);
+    const selected = getActiveDocument(project).nodes.slice(0, 2);
     const state = editorReducer(createEditorState(project), {
       type: 'select-nodes',
       nodeIds: selected.map((node) => node.id),
@@ -72,12 +73,12 @@ describe('Canvas geometry engine', () => {
     expect(moved.selectedNodeIds).toEqual(selected.map((node) => node.id));
     expect(moved.selectedNodeId).toBeNull();
     expect(moved.past).toHaveLength(1);
-    expect(moved.project.document.nodes[0].x).toBe(selected[0].x + 24);
+    expect(moved.getActiveDocument(project).nodes[0].x).toBe(selected[0].x + 24);
 
     const undone = editorReducer(moved, { type: 'undo' });
-    expect(undone.project.document.nodes[0].x).toBe(selected[0].x);
+    expect(undone.getActiveDocument(project).nodes[0].x).toBe(selected[0].x);
     const redone = editorReducer(undone, { type: 'redo' });
-    expect(redone.project.document.nodes[0].x).toBe(selected[0].x + 24);
+    expect(redone.getActiveDocument(project).nodes[0].x).toBe(selected[0].x + 24);
   });
 
   it('distributes objects horizontally with equal gaps and fixed outer edges', () => {
