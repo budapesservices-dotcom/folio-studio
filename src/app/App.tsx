@@ -361,100 +361,83 @@ export function App() {
 
   const selectedNodes = activeDocument.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
   const saveNodesAsComponent = (nodes: DesignNode[]) => {
-    if (nodes.length === 0) return;
+    if (isHydrating || nodes.length === 0) return;
     const name = nodes.length === 1 ? nodes[0].name : `Component ${ownedComponents.length + 1}`;
-    const bounds = {
-      x: Math.min(...nodes.map((node) => node.x)),
-      y: Math.min(...nodes.map((node) => node.y)),
-    };
-    const normalizedNodes = nodes.map((node) => ({ ...node, x: node.x - bounds.x, y: node.y - bounds.y }));
-    setOwnedComponents((items) => [{
+    const minX = Math.min(...nodes.map((node) => node.x));
+    const minY = Math.min(...nodes.map((node) => node.y));
+    const maxX = Math.max(...nodes.map((node) => node.x + node.width));
+    const maxY = Math.max(...nodes.map((node) => node.y + node.height));
+    const now = new Date().toISOString();
+    const component: ComponentDefinition = {
       id: globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`,
       name,
-      nodes: normalizedNodes,
-      updatedAt: new Date().toISOString(),
-    }, ...items]);
+      document: {
+        ...createEmptyDocument(name, Math.max(1, maxX - minX), Math.max(1, maxY - minY)),
+        background: '#00000000',
+        nodes: nodes.map((node) => ({ ...node, x: node.x - minX, y: node.y - minY })),
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+    dispatch({ type: 'add-component', component });
     setComponentRackOpen(true);
-    setNotice(`“${name}” saved to Component Rack.`);
+    setNotice(`“${name}” saved to this project’s Component Rack.`);
   };
 
-  const switchPage = (page: { id: string; name: string; path: string; kind: 'main' | '404' | 'page' }) => {
-    if (page.id === activePageId) return;
-    try {
-      const stored = window.localStorage.getItem(`folio.page-project:${page.id}`);
-      let project: FolioProject;
-      if (stored) project = JSON.parse(stored) as FolioProject;
-      else {
-        project = createInitialProject(page.name);
-        project.metadata.id = `folio-page-${page.id}`;
-        project.document.id = `folio-document-${page.id}`;
-        project.document.name = page.name;
-        project.document.nodes = [];
-      }
-      // Project identity belongs to the whole .flop project; only the page
-      // document name changes when the user switches pages.
-      project.metadata.name = projectName;
-      project.document.name = page.name;
-      dispatch({ type: 'replace-project', project });
-      setActivePageId(page.id);
-      setPagesRackOpen(false);
-      setInspectorVisible(true);
-      setNotice(`Switched to ${page.name}.`);
-    } catch (error) {
-      console.error('Folio could not open page:', error);
-      setNotice('This page could not be opened.');
-    }
+  const switchPage = (page: FolioPage) => {
+    if (isHydrating || page.id === activePageId) return;
+    dispatch({ type: 'set-active-page', pageId: page.id });
+    setPagesRackOpen(false);
+    setInspectorVisible(true);
+    setNotice(`Switched to ${page.name}.`);
   };
 
   const addPage = () => {
+    if (isHydrating) return;
     const name = pageNameDraft.trim();
     if (!name) return;
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `page-${pages.length + 1}`;
-    const path = `/${slug}`;
-    if (pages.some((page) => page.path === path)) {
-      setNotice('A page with this URL already exists.');
+    const route = `/${slug}`;
+    if (pages.some((page) => page.route === route)) {
+      setNotice('A page with this route already exists.');
       return;
     }
     const id = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}`;
-    const project = createInitialProject(name);
-    project.metadata.id = `folio-page-${id}`;
-    project.metadata.name = projectName;
-    project.document.id = `folio-document-${id}`;
-    project.document.name = name;
-    project.document.nodes = [];
-    try { window.localStorage.setItem(`folio.page-project:${id}`, JSON.stringify(project)); }
-    catch (error) { console.warn('Folio could not initialize page snapshot:', error); }
-    const page = { id, name, path, kind: 'page' as const };
-    setPages((items) => [...items, page]);
+    const document = {
+      ...createEmptyDocument(name, activeDocument.width, activeDocument.height),
+      background: activeDocument.background,
+    };
+    dispatch({ type: 'add-page', page: { id, name, route, document } });
     setPageNameDraft('');
-    switchPage(page);
+    setPagesRackOpen(false);
+    setInspectorVisible(true);
+    setNotice(`Created ${name}.`);
   };
 
   const saveSelectionAsComponent = () => saveNodesAsComponent(selectedNodes);
 
   const commitProjectName = (value: string) => {
+    if (isHydrating) return;
     const name = value.trim();
-    if (!name) return;
-    setProjectName(name);
-    try { window.localStorage.setItem('folio.project-name', name); }
-    catch (error) { console.warn('Folio could not persist the project name:', error); }
-    if (state.project.metadata.name !== name) {
-      dispatch({
-        type: 'replace-project',
-        project: { ...state.project, metadata: { ...state.project.metadata, name } },
-      });
+    if (name && name !== state.project.metadata.name) {
+      dispatch({ type: 'rename-project', name });
     }
   };
-  const selectedComponentNodes = componentState.project.document.nodes.filter(
+
+  const selectedComponentNodes = componentDocument.nodes.filter(
     (node) => componentState.selectedNodeIds.includes(node.id),
   );
-  const insertOwnedComponent = (component: { id: string; name: string; nodes: DesignNode[] }) => {
-    const offsetX = 140 + (state.project.document.nodes.length % 4) * 28;
-    const offsetY = 130 + (state.project.document.nodes.length % 4) * 28;
-    component.nodes.forEach((node) => {
-      const id = globalThis.crypto?.randomUUID?.() ?? `node-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      dispatch({ type: 'add-node', node: { ...node, id, x: node.x + offsetX, y: node.y + offsetY } as DesignNode });
-    });
+  const insertOwnedComponent = (component: ComponentDefinition) => {
+    if (isHydrating) return;
+    const offsetX = 140 + (activeDocument.nodes.length % 4) * 28;
+    const offsetY = 130 + (activeDocument.nodes.length % 4) * 28;
+    const nodes = component.document.nodes.map((node) => ({
+      ...node,
+      id: globalThis.crypto?.randomUUID?.() ?? `node-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      x: node.x + offsetX,
+      y: node.y + offsetY,
+    }));
+    dispatch({ type: 'add-nodes', nodes });
     setInspectorVisible(true);
     setNotice(`“${component.name}” added to the page.`);
   };
@@ -472,16 +455,24 @@ export function App() {
     });
   };
 
-  const alignSelection = (alignment: Alignment) => {
-    const selected = state.project.document.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
+  const alignSelection = (alignment: Alignment, target: 'main' | 'component' = 'main') => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const selected = getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id));
     if (selected.length < 2) return;
-    dispatch({ type: 'transform-nodes', nodes: alignNodes(selected, alignment) });
+    const nextNodes = alignNodes(selected, alignment);
+    if (target === 'main') dispatch({ type: 'transform-nodes', nodes: nextNodes });
+    else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
   };
 
-  const distributeSelection = (axis: DistributionAxis) => {
-    const selected = state.project.document.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
+  const distributeSelection = (axis: DistributionAxis, target: 'main' | 'component' = 'main') => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const selected = getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id));
     if (selected.length < 3) return;
-    dispatch({ type: 'transform-nodes', nodes: distributeNodes(selected, axis) });
+    const nextNodes = distributeNodes(selected, axis);
+    if (target === 'main') dispatch({ type: 'transform-nodes', nodes: nextNodes });
+    else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
   };
 
   const updateToolbarHint = (panel: string, description: string, shortcuts: string[] = []) => {
