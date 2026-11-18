@@ -4,11 +4,11 @@ FOLIO Studio is a lightweight-first hybrid visual UI/UX design, prototyping, ani
 
 ## Open in GitHub Codespaces
 
-This repository is prepared for Codespaces and includes a one-time bootstrap archive.
+This repository is prepared for Codespaces and includes a first-run bootstrap archive.
 
 1. Open this repository on GitHub.
 2. Choose **Code → Codespaces → Create codespace on main**.
-3. Let the dev container finish creating. The first-run bootstrap restores the TypeScript/Preact source tree and installs dependencies.
+3. Let the dev container finish creating. It restores the Stage 1 TypeScript/Preact source tree and installs dependencies automatically.
 4. In the Codespaces terminal, start the editor:
 
 ```bash
@@ -17,7 +17,19 @@ npm run dev
 
 5. Open the forwarded **Folio Studio** port (5173) from the Ports panel.
 
-After the project source is restored, run the checks:
+## Save the source tree to GitHub (first run only)
+
+The first Codespace bootstrap extracts the complete source tree into the workspace and removes the temporary encoded archive parts. Commit those restored files once so they become the normal tracked repository contents:
+
+```bash
+git add -A
+git commit -m "chore: add Folio Studio foundation"
+git push origin main
+```
+
+After this commit, future Codespaces open the tracked source directly; the bootstrap script will only run `npm install`.
+
+## Verify the foundation
 
 ```bash
 npm run check
@@ -47,7 +59,7 @@ npm run dev
 
 Open `http://127.0.0.1:5173` locally.
 
-See `docs/ARCHITECTURE.md`, `docs/CODESPACES.md`, and `docs/ACCEPTANCE_TESTS.md` for the architecture, development workflow, and Stage 1 acceptance criteria.
+See `docs/ARCHITECTURE.md`, `docs/CODESPACES.md`, and `docs/ACCEPTANCE_TESTS.md` for architecture and Stage 1 acceptance criteria.
 
 ## Development rule
 
