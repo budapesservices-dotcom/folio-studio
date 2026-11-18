@@ -374,6 +374,7 @@ export function App() {
             <span class="zoom-value">{Math.round(zoom * 100)}%</span>
             <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
           </div>
+          </div>
           </WindowHeader>
         {!panels.canvas.minimized && <div class="canvas-workspace">
           <Canvas
