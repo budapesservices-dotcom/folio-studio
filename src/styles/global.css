@@ -150,7 +150,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   body { min-width: 640px; }
   .app-shell { grid-template-columns: 54px 190px minmax(280px, 1fr); grid-template-areas: "tools layers workspace" "footer footer footer"; }
   .inspector-panel { display: none; }
-  .save-indicator { display: none; }
   .canvas-scroll-area { padding: 35px 22px 45px; }
 }
 
