@@ -26,6 +26,7 @@ function Icon({ name }: { name: string }) {
     fullscreen: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5',
     sidebar: 'M4 4h16v16H4zM9 4v16',
     canvas: 'M3 4h18v16H3zM7 8h10v8H7z',
+    componentCanvas: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
     inspector: 'M4 4h16v16H4zM15 4v16',
   };
 
@@ -92,6 +93,51 @@ export function App() {
       };
     }
   });
+  const [componentCanvasClosed, setComponentCanvasClosed] = useState(true);
+  const [componentCanvasMinimized, setComponentCanvasMinimized] = useState(false);
+  const [componentCanvasWindowMode, setComponentCanvasWindowMode] = useState<'docked' | 'floating'>(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.component-canvas-window') ?? 'null');
+      return saved?.mode === 'docked' ? 'docked' : 'floating';
+    } catch { return 'floating'; }
+  });
+  const componentCanvasFloating = componentCanvasWindowMode === 'floating';
+  const componentCanvasOpen = !componentCanvasClosed && !componentCanvasMinimized;
+  const [componentCanvasZoom, setComponentCanvasZoom] = useState(0.82);
+  const [componentCanvasSize, setComponentCanvasSize] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.component-canvas-window') ?? 'null');
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(680, viewportWidth * 0.72);
+      const height = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(500, viewportHeight * 0.58);
+      return {
+        width: Math.min(Math.max(280, viewportWidth - 24), Math.max(280, width)),
+        height: Math.min(Math.max(220, viewportHeight - 100), Math.max(220, height)),
+      };
+    } catch {
+      return {
+        width: Math.max(280, Math.min(680, window.innerWidth * 0.72)),
+        height: Math.max(220, Math.min(500, window.innerHeight * 0.58)),
+      };
+    }
+  });
+  const [componentCanvasPosition, setComponentCanvasPosition] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.component-canvas-window') ?? 'null');
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(680, viewportWidth * 0.72);
+      return {
+        x: Number.isFinite(saved?.position?.x) ? saved.position.x : Math.max(24, viewportWidth - width - 48),
+        y: Math.max(56, Number.isFinite(saved?.position?.y) ? saved.position.y : 112),
+      };
+    } catch { return { x: Math.max(24, window.innerWidth - 700), y: 112 }; }
+  });
+  const componentCanvasDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
+  const componentCanvasDragCleanup = useRef<(() => void) | null>(null);
+  const componentCanvasResize = useRef<{ pointerId: number; pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+  const componentCanvasResizeCleanup = useRef<(() => void) | null>(null);
+
   const [canvasPosition, setCanvasPosition] = useState(() => {
     try {
       const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
@@ -119,6 +165,23 @@ export function App() {
       console.warn('Folio could not persist Canvas window layout:', error);
     }
   }, [canvasWindowMode, canvasPosition, canvasSize]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('folio.component-canvas-window', JSON.stringify({
+        mode: componentCanvasWindowMode,
+        position: componentCanvasPosition,
+        size: componentCanvasSize,
+      }));
+    } catch (error) {
+      console.warn('Folio could not persist Component Canvas window layout:', error);
+    }
+  }, [componentCanvasWindowMode, componentCanvasPosition, componentCanvasSize]);
+
+  useEffect(() => () => {
+    componentCanvasDragCleanup.current?.();
+    componentCanvasResizeCleanup.current?.();
+  }, []);
 
   useEffect(() => () => {
     canvasDragCleanup.current?.();
@@ -351,6 +414,150 @@ export function App() {
     };
   };
 
+  const startComponentCanvasDrag = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+    if ((!componentCanvasFloating && !componentCanvasMinimized) || event.button !== 0 || !event.isPrimary) return;
+
+    const target = event.target as Element;
+    if (target.closest('button, a, input, select, textarea')) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    componentCanvasResizeCleanup.current?.();
+    componentCanvasDragCleanup.current?.();
+
+    const drag = {
+      pointerId: event.pointerId,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      originX: componentCanvasPosition.x,
+      originY: componentCanvasPosition.y,
+    };
+    const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
+    componentCanvasDrag.current = drag;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (componentCanvasDrag.current !== drag || moveEvent.pointerId !== drag.pointerId) return;
+      moveEvent.preventDefault();
+
+      const bounds = shell?.getBoundingClientRect();
+      const shellLeft = bounds?.left ?? 0;
+      const shellTop = bounds?.top ?? 0;
+      const visibleWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
+      const visibleHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
+      const nextX = drag.originX + moveEvent.clientX - drag.pointerX;
+      const nextY = drag.originY + moveEvent.clientY - drag.pointerY;
+
+      // Let the window travel beyond left/right/bottom edges. Keep only its
+      // titlebar above the app header to avoid losing the window permanently.
+      setComponentCanvasPosition({
+        x: nextX,
+        y: Math.max(56, nextY),
+      });
+    };
+
+    const finishPointerDrag = (endEvent: PointerEvent) => {
+      if (componentCanvasDrag.current !== drag || endEvent.pointerId !== drag.pointerId) return;
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerDrag);
+      window.removeEventListener('pointercancel', finishPointerDrag);
+      componentCanvasDrag.current = null;
+      componentCanvasDragCleanup.current = null;
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', finishPointerDrag);
+    window.addEventListener('pointercancel', finishPointerDrag);
+    componentCanvasDragCleanup.current = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerDrag);
+      window.removeEventListener('pointercancel', finishPointerDrag);
+      componentCanvasDrag.current = null;
+      componentCanvasDragCleanup.current = null;
+    };
+  };
+
+  const startComponentCanvasResize = (event: JSX.TargetedPointerEvent<HTMLDivElement>, direction: string) => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    event.preventDefault();
+    event.stopPropagation();
+    componentCanvasDragCleanup.current?.();
+    componentCanvasResizeCleanup.current?.();
+
+    const resize = {
+      pointerId: event.pointerId,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      left: componentCanvasPosition.x,
+      top: componentCanvasPosition.y,
+      width: componentCanvasSize.width,
+      height: componentCanvasSize.height,
+      direction,
+    };
+    const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
+    componentCanvasResize.current = resize;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (componentCanvasResize.current !== resize || moveEvent.pointerId !== resize.pointerId) return;
+      moveEvent.preventDefault();
+
+      const bounds = shell?.getBoundingClientRect();
+      const shellLeft = bounds?.left ?? 0;
+      const shellTop = bounds?.top ?? 0;
+      const shellWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
+      const shellHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
+      const dx = moveEvent.clientX - resize.pointerX;
+      const dy = moveEvent.clientY - resize.pointerY;
+      const contentBottom = shellHeight - 27;
+      const clamp = (value: number, minimum: number, maximum: number) =>
+        Math.min(maximum, Math.max(minimum, value));
+
+      let left = resize.left;
+      let top = resize.top;
+      let width = resize.width;
+      let height = resize.height;
+
+      if (direction.includes('e')) {
+        width = clamp(resize.width + dx, 280, Math.max(280, shellWidth - resize.left));
+      }
+      if (direction.includes('s')) {
+        height = clamp(resize.height + dy, 220, Math.max(220, contentBottom - resize.top));
+      }
+      if (direction.includes('w')) {
+        const maxLeft = Math.max(0, Math.min(resize.left + resize.width - 280, shellWidth - 280));
+        left = clamp(resize.left + dx, 0, maxLeft);
+        width = Math.min(resize.width + resize.left - left, Math.max(280, shellWidth - left));
+      }
+      if (direction.includes('n')) {
+        const maxTop = Math.max(56, Math.min(resize.top + resize.height - 220, contentBottom - 220));
+        top = clamp(resize.top + dy, 56, maxTop);
+        height = Math.min(resize.height + resize.top - top, Math.max(220, contentBottom - top));
+      }
+
+      setComponentCanvasPosition({ x: left, y: top });
+      setComponentCanvasSize({ width, height });
+    };
+
+    const finishPointerResize = (endEvent: PointerEvent) => {
+      if (componentCanvasResize.current !== resize || endEvent.pointerId !== resize.pointerId) return;
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerResize);
+      window.removeEventListener('pointercancel', finishPointerResize);
+      componentCanvasResize.current = null;
+      componentCanvasResizeCleanup.current = null;
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', finishPointerResize);
+    window.addEventListener('pointercancel', finishPointerResize);
+    componentCanvasResizeCleanup.current = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerResize);
+      window.removeEventListener('pointercancel', finishPointerResize);
+      componentCanvasResize.current = null;
+      componentCanvasResizeCleanup.current = null;
+    };
+  };
+
   const statusLabel = saveStatus === 'loading'
     ? 'LOADING'
     : saveStatus === 'saving'
@@ -385,6 +592,7 @@ export function App() {
           <div class="global-panel-toggles" aria-label="Workspace panels">
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
             <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) { setCanvasClosed(false); setCanvasMinimized(false); } else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
+            <button class={`global-panel-toggle component-canvas-header-toggle ${componentCanvasOpen ? 'active' : ''}`} type="button" title={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-label={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-pressed={componentCanvasOpen} onClick={() => { if (componentCanvasClosed || componentCanvasMinimized) { setComponentCanvasClosed(false); setComponentCanvasMinimized(false); } else { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', componentCanvasClosed || componentCanvasMinimized ? 'Open the Component Canvas window.' : 'Close the Component Canvas window.')}><Icon name="componentCanvas" /></button>
             <button class={`global-panel-toggle inspector-header-toggle ${inspectorVisible ? 'active' : ''}`} type="button" title={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-label={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-pressed={inspectorVisible} onClick={() => setInspectorVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('INSPECTOR', inspectorVisible ? 'Hide the properties Inspector. Selecting an object opens it automatically.' : 'Show the properties Inspector. Selecting an object also opens it automatically.')}><Icon name="inspector" /></button>
             <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
           </div>
@@ -475,7 +683,7 @@ export function App() {
         </div>
       </aside>
 
-      {!canvasClosed && !canvasMinimized && <main
+      {!canvasClosed && !canvasMinimized && !(componentCanvasOpen && !componentCanvasFloating && !canvasFloating) && <main
         class={`workspace${canvasFloating ? " canvas-floating" : ""}`}
         style={canvasFloating ? {
           left: `${canvasPosition.x}px`,
@@ -545,6 +753,76 @@ export function App() {
         ))}
       </main>}
 
+      {!componentCanvasClosed && !componentCanvasMinimized && <main
+        class={`workspace component-canvas-window${componentCanvasFloating ? " canvas-floating" : " component-canvas-docked"}` }
+        style={componentCanvasFloating ? {
+          left: `${componentCanvasPosition.x}px`,
+          top: `${componentCanvasPosition.y}px`,
+          width: `${componentCanvasSize.width}px`,
+          height: `${componentCanvasSize.height}px`,
+        } : undefined}
+        onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
+      >
+        <div
+          class={`workspace-toolbar${componentCanvasFloating ? " workspace-toolbar-draggable" : ""}`}
+          onPointerDown={componentCanvasFloating ? startComponentCanvasDrag : undefined}
+        >
+          <div class="breadcrumb">
+            <strong>{Component Canvas</strong>
+          </div>
+          <div class="canvas-window-tools">
+            {state.selectedNodeIds.length > 1 && (
+              <div class="alignment-tools" aria-label="Align selected layers">
+                <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
+                <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
+                <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
+                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal')}>⇌</button>
+                <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
+                <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
+                <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
+                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
+              </div>
+            )}
+            <div class="workspace-tools">
+              <button class="history-button" title="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><Icon name="undo" /></button>
+              <button class="history-button" title="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}><Icon name="redo" /></button>
+              <span class="workspace-divider" />
+              <button class="zoom-button" title="Zoom out" onClick={() => setComponentCanvasZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}><Icon name="minus" /></button>
+              <span class="zoom-value">{Math.round(componentCanvasZoom * 100)}%</span>
+              <button class="zoom-button" title="Zoom in" onClick={() => setComponentCanvasZoom((value) => Math.min(2, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
+            </div>
+            <div class="workspace-window-controls" aria-label="Component Canvas window controls">
+              <button type="button" class="window-control window-control-minimize" title="Minimize Component Canvas" aria-label="Minimize Component Canvas" onClick={() => setComponentCanvasMinimized(true)}></button>
+              <button type="button" class="window-control" title={componentCanvasFloating ? "Dock Component Canvas" : "Float Component Canvas"} aria-label={componentCanvasFloating ? "Dock Component Canvas" : "Float Component Canvas"} aria-pressed={componentCanvasFloating} onClick={() => setComponentCanvasWindowMode(componentCanvasFloating ? 'docked' : 'floating')}>{componentCanvasFloating ? "▣" : "□"}</button>
+              <button type="button" class="window-control window-control-close" title="Close Component Canvas window" aria-label="Close Component Canvas window" onClick={() => { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); setComponentCanvasWindowMode('docked'); }}>×</button>
+            </div>
+          </div>
+        </div>
+        <div class="canvas-workspace">
+          <Canvas
+            document={state.project.document}
+            selectedNodeIds={state.selectedNodeIds}
+            zoom={componentCanvasZoom}
+            onZoomChange={setComponentCanvasZoom}
+            onSelectionChange={(nodeIds) => {
+              dispatch({ type: 'select-nodes', nodeIds });
+              if (nodeIds.length > 0) setInspectorVisible(true);
+            }}
+            onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
+          />
+          <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
+        </div>
+        {componentCanvasFloating && ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map((direction) => (
+          <div
+            key={direction}
+            class={`workspace-resize-handle resize-${direction}`}
+            role="presentation"
+            aria-label={`Resize Canvas window from ${direction}`}
+            onPointerDown={(event) => startComponentCanvasResize(event, direction)}
+          />
+        ))}
+      </main>}
+
       {canvasMinimized && !canvasClosed && (
         <div
           class="canvas-minimized-window"
@@ -558,6 +836,23 @@ export function App() {
             <strong>{state.project.document.name}</strong>
             <button type="button" class="minimized-restore-control" title="Restore Canvas" aria-label="Restore Canvas" onClick={() => setCanvasMinimized(false)}></button>
             <button type="button" title="Close Canvas" aria-label="Close Canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); }}>×</button>
+          </div>
+        </div>
+      )}
+
+      {componentCanvasMinimized && !componentCanvasClosed && (
+        <div
+          class="canvas-minimized-window component-canvas-minimized"
+          style={{ left: componentCanvasPosition.x + "px", top: componentCanvasPosition.y + "px" }}
+        >
+          <div
+            class="canvas-minimized-titlebar"
+            onPointerDown={componentCanvasFloating ? startComponentCanvasDrag : undefined}
+          >
+            <Icon name="componentCanvas" />
+            <strong>Component Canvas</strong>
+            <button type="button" class="minimized-restore-control" title="Restore Component Canvas" aria-label="Restore Component Canvas" onClick={() => setComponentCanvasMinimized(false)}></button>
+            <button type="button" title="Close Component Canvas" aria-label="Close Component Canvas" onClick={() => { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); }}>×</button>
           </div>
         </div>
       )}
