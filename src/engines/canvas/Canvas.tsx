@@ -15,6 +15,7 @@ interface CanvasProps {
   document: FolioDocument;
   selectedNodeIds: string[];
   zoom: number;
+  onZoomChange: (zoom: number) => void;
   onSelectionChange: (nodeIds: string[]) => void;
   onTransformCommit: (nodes: DesignNode[]) => void;
 }
@@ -161,6 +162,7 @@ export function Canvas({
   document,
   selectedNodeIds,
   zoom,
+  onZoomChange,
   onSelectionChange,
   onTransformCommit,
 }: CanvasProps) {
@@ -225,6 +227,35 @@ export function Canvas({
     } catch {
       // Pointer capture can fail when the browser cancels the initiating pointer.
     }
+  };
+
+  const handleWheel = (event: JSX.TargetedWheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+
+    if (event.ctrlKey || event.metaKey) {
+      const direction = event.deltaY > 0 ? -1 : 1;
+      const nextZoom = Math.min(2, Math.max(0.35, Number((zoom * (direction > 0 ? 1.1 : 1 / 1.1)).toFixed(3))));
+      if (nextZoom === zoom) return;
+
+      const rect = event.currentTarget.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left - rect.width / 2;
+      const pointerY = event.clientY - rect.top - rect.height / 2;
+      const ratio = nextZoom / zoom;
+      setPan((current) => ({
+        x: pointerX - (pointerX - current.x) * ratio,
+        y: pointerY - (pointerY - current.y) * ratio,
+      }));
+      onZoomChange(nextZoom);
+      return;
+    }
+
+    if (event.shiftKey) {
+      const delta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
+      setPan((current) => ({ ...current, x: current.x - delta }));
+      return;
+    }
+
+    setPan((current) => ({ ...current, y: current.y - event.deltaY }));
   };
 
   const handlePanPointerDown = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
@@ -412,6 +443,7 @@ export function Canvas({
         (spaceHeld ? ' canvas-pan-ready' : '') +
         (isPanning ? ' canvas-panning' : '')
       }
+      onWheel={handleWheel}
       onPointerDown={handlePanPointerDown}
       onPointerMove={handlePanPointerMove}
       onPointerUp={finishPan}
