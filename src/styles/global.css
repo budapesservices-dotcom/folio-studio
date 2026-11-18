@@ -290,8 +290,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .breadcrumb .icon-svg { width: 11px; height: 11px; }
 .breadcrumb strong { color: #c5cad4; font-weight: 600; }
 .canvas-window-tools { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; }
-.workspace-window-controls { display: flex; align-items: center; gap: 3px; padding-left: 8px; border-left: 1px solid #343b48; }
-.window-control { display: grid; place-items: center; width: 21px; height: 21px; padding: 0; border: 1px solid transparent; border-radius: 4px; color: #929bad; background: transparent; font-size: 13px; line-height: 1; cursor: pointer; }
+.workspace-window-controls { display: flex; align-items: center; gap: 5px; padding-left: 8px; border-left: 1px solid #343b48; }
+.window-control { display: grid; place-items: center; flex: 0 0 25px; width: 25px; height: 25px; padding: 0; border: 1px solid transparent; border-radius: 5px; color: #929bad; background: transparent; font-size: 13px; line-height: 1; cursor: pointer; }
 .window-control:hover { color: #f0edff; border-color: #514976; background: #302b4b; }
 .window-control-close:hover { color: #fff; border-color: #8f414b; background: #71313b; }
 .window-control-restore { color: #b8adff; }
