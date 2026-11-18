@@ -1,10 +1,11 @@
 /**
- * The native Folio document model.
+ * The native Folio project model.
  * Keep this layer independent from Preact and browser rendering APIs.
  */
 
 export const FOLIO_FORMAT = 'folio-project' as const;
-export const FOLIO_FORMAT_VERSION = 1 as const;
+export const FOLIO_LEGACY_FORMAT_VERSION = 1 as const;
+export const FOLIO_FORMAT_VERSION = 2 as const;
 
 export interface NodeBase {
   id: string;
@@ -60,15 +61,86 @@ export interface FolioDocument {
   nodes: DesignNode[];
 }
 
-export interface FolioProject {
+export interface ProjectMetadata {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FolioPage {
+  id: string;
+  name: string;
+  route: string;
+  document: FolioDocument;
+}
+
+export interface ComponentDefinition {
+  id: string;
+  name: string;
+  document: FolioDocument;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Reserved, versioned node graph contract for the upcoming Node Logic engine. */
+export interface LogicNode {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  data: Record<string, string | number | boolean | null>;
+}
+
+export interface LogicConnection {
+  id: string;
+  sourceNodeId: string;
+  sourcePortId: string;
+  targetNodeId: string;
+  targetPortId: string;
+}
+
+export interface LogicGraph {
+  id: string;
+  name: string;
+  scope: 'project' | 'page' | 'component';
+  targetId: string | null;
+  nodes: LogicNode[];
+  connections: LogicConnection[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AssetReference {
+  id: string;
+  name: string;
+  kind: 'image' | 'font' | 'file';
+  mimeType: string;
+  source: string;
+  createdAt: string;
+}
+
+/** Legacy single-document project accepted only at migration boundaries. */
+export interface FolioProjectV1 {
+  format: typeof FOLIO_FORMAT;
+  formatVersion: typeof FOLIO_LEGACY_FORMAT_VERSION;
+  appVersion: string;
+  metadata: ProjectMetadata;
+  document: FolioDocument;
+}
+
+/** Unified native project. All workspace content belongs to this aggregate. */
+export interface FolioProjectV2 {
   format: typeof FOLIO_FORMAT;
   formatVersion: typeof FOLIO_FORMAT_VERSION;
   appVersion: string;
-  metadata: {
-    id: string;
-    name: string;
-    createdAt: string;
-    updatedAt: string;
-  };
-  document: FolioDocument;
+  metadata: ProjectMetadata;
+  activePageId: string;
+  pages: FolioPage[];
+  components: ComponentDefinition[];
+  logicGraphs: LogicGraph[];
+  assets: AssetReference[];
 }
+
+/** Current project alias used by the editor, persistence and file I/O. */
+export type FolioProject = FolioProjectV2;
