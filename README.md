@@ -4,11 +4,11 @@ FOLIO Studio is a lightweight-first hybrid visual UI/UX design, prototyping, ani
 
 ## Open in GitHub Codespaces
 
-This repository is prepared for Codespaces and includes a first-run bootstrap archive.
+This repository is prepared for Codespaces and includes a verified first-run source bootstrap.
 
 1. Open this repository on GitHub.
 2. Choose **Code → Codespaces → Create codespace on main**.
-3. Let the dev container finish creating. It restores the Stage 1 TypeScript/Preact source tree and installs dependencies automatically.
+3. Let the dev container finish creating. It restores the Stage 1 TypeScript/Preact source tree, removes the temporary payload, automatically creates a source commit, and attempts to push that commit to `main`.
 4. In the Codespaces terminal, start the editor:
 
 ```bash
@@ -17,17 +17,11 @@ npm run dev
 
 5. Open the forwarded **Folio Studio** port (5173) from the Ports panel.
 
-## Save the source tree to GitHub (first run only)
-
-The first Codespace bootstrap extracts the complete source tree into the workspace and removes the temporary encoded archive parts. Commit those restored files once so they become the normal tracked repository contents:
+The automatic source push uses the GitHub credentials available in Codespaces. If GitHub rejects the push because of an authentication or branch conflict, the source remains in the Codespace and the bootstrap prints the recovery command:
 
 ```bash
-git add -A
-git commit -m "chore: add Folio Studio foundation"
-git push origin main
+git push origin HEAD:main
 ```
-
-After this commit, future Codespaces open the tracked source directly; the bootstrap script will only run `npm install`.
 
 ## Verify the foundation
 
@@ -50,7 +44,7 @@ npm run build
 
 ## Local development
 
-Requirements: Node.js 24.11+ (Node.js 26 LTS recommended), npm, and a modern browser.
+Requirements: Node.js 26 LTS (or Node.js 24.11+), npm, and a modern browser.
 
 ```bash
 npm install
