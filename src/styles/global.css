@@ -108,6 +108,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   transition: color 130ms ease, background 130ms ease, border-color 130ms ease, box-shadow 130ms ease;
 }
 .global-panel-toggle .icon-svg { width: 13px; height: 13px; }
+.canvas-header-toggle .icon-svg { width: 14px; height: 14px; }
 .global-panel-toggle:hover {
   color: #e8e4ff;
   border-color: #7770bc88;
@@ -301,7 +302,34 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .workspace-divider { width: 1px; height: 17px; margin: 0 6px; background: #343b48; }
 .zoom-value { min-width: 39px; color: #a6aebd; text-align: center; font-size: 10px; font-variant-numeric: tabular-nums; }
 .canvas-workspace { position: relative; display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; overflow: hidden; border-radius: 0 0 9px 9px; background: #fff; }
-.workspace.canvas-maximized { position: absolute; z-index: 90; inset: 56px 0 27px; }
+.workspace.canvas-floating {
+  position: absolute;
+  z-index: 90;
+  grid-area: auto;
+  width: min(860px, calc(100vw - 100px));
+  height: min(620px, calc(100vh - 120px));
+  min-width: 460px;
+  min-height: 300px;
+  resize: both;
+  overflow: hidden;
+  border: 1px solid #444d60;
+  border-radius: 8px;
+  box-shadow: 0 18px 55px #0009, 0 0 0 1px #ffffff0a;
+}
+.workspace-toolbar-draggable { cursor: grab; touch-action: none; user-select: none; }
+.workspace-toolbar-draggable:active { cursor: grabbing; }
+.workspace.canvas-maximized {
+  position: absolute;
+  z-index: 90;
+  inset: 56px 0 27px;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  border-radius: 0;
+}
 .canvas-window-placeholder { display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; gap: 12px; color: #818a9a; background: #11151d; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
 .canvas-window-placeholder button { padding: 7px 11px; border: 1px solid #48406d; border-radius: 5px; color: #c9c1ff; background: #302b4b; font-size: 10px; cursor: pointer; }
 .canvas-window-placeholder button:hover { background: #3a345c; }
