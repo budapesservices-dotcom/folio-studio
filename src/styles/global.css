@@ -305,6 +305,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .window-control:hover { color: #f0edff; border-color: #514976; background: #302b4b; }
 .window-control-close:hover { color: #fff; border-color: #8f414b; background: #71313b; }
 .window-control-restore { color: #b8adff; }
+.component-canvas-create-tools { display: flex; align-items: center; gap: 4px; }
+.component-canvas-create-tools button { display: grid; place-items: center; width: 27px; height: 27px; border: 1px solid transparent; border-radius: 6px; color: var(--text-secondary); background: transparent; cursor: pointer; }
+.component-canvas-create-tools button:hover { border-color: var(--line); color: var(--text-primary); background: var(--surface-hover); }
+.component-canvas-create-tools .icon-svg { width: 14px; height: 14px; }
+
 .workspace-tools { display: flex; align-items: center; gap: 5px; }
 .history-button, .zoom-button { width: 25px; height: 25px; }
 .history-button .icon-svg, .zoom-button .icon-svg { width: 14px; height: 14px; }
