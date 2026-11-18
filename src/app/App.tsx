@@ -280,12 +280,6 @@ export function App() {
                 <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
               </div>
             )}
-            <div class="workspace-window-controls" aria-label="Canvas window controls">
-              {(canvasClosed || canvasMinimized) && <button type="button" class="window-control window-control-restore" title="Restore canvas" aria-label="Restore canvas" onClick={() => { setCanvasClosed(false); setCanvasMinimized(false); }}>↗</button>}
-              <button type="button" class="window-control" title={canvasMinimized ? "Restore canvas" : "Minimize canvas"} aria-label={canvasMinimized ? "Restore canvas" : "Minimize canvas"} onClick={() => { setCanvasMinimized((value) => !value); setCanvasClosed(false); }}>{canvasMinimized ? "▢" : "—"}</button>
-              <button type="button" class="window-control" title={canvasMaximized ? "Restore window size" : "Maximize canvas"} aria-label={canvasMaximized ? "Restore window size" : "Maximize canvas"} aria-pressed={canvasMaximized} onClick={() => setCanvasMaximized((value) => !value)}>{canvasMaximized ? "❐" : "□"}</button>
-              <button type="button" class="window-control window-control-close" title="Close canvas" aria-label="Close canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); setCanvasMaximized(false); }}>×</button>
-            </div>
             <div class="workspace-tools">
               <button class="history-button" title="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><Icon name="undo" /></button>
               <button class="history-button" title="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}><Icon name="redo" /></button>
@@ -293,6 +287,12 @@ export function App() {
               <button class="zoom-button" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}><Icon name="minus" /></button>
               <span class="zoom-value">{Math.round(zoom * 100)}%</span>
               <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(2, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
+            </div>
+            <div class="workspace-window-controls" aria-label="Canvas window controls">
+              {(canvasClosed || canvasMinimized) && <button type="button" class="window-control window-control-restore" title="Restore canvas" aria-label="Restore canvas" onClick={() => { setCanvasClosed(false); setCanvasMinimized(false); }}>↗</button>}
+              <button type="button" class="window-control" title={canvasMinimized ? "Restore canvas" : "Minimize canvas"} aria-label={canvasMinimized ? "Restore canvas" : "Minimize canvas"} onClick={() => { setCanvasMinimized((value) => !value); setCanvasClosed(false); }}>{canvasMinimized ? "▢" : "—"}</button>
+              <button type="button" class="window-control" title={canvasMaximized ? "Restore window size" : "Maximize canvas"} aria-label={canvasMaximized ? "Restore window size" : "Maximize canvas"} aria-pressed={canvasMaximized} onClick={() => setCanvasMaximized((value) => !value)}>{canvasMaximized ? "❐" : "□"}</button>
+              <button type="button" class="window-control window-control-close" title="Close canvas" aria-label="Close canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); setCanvasMaximized(false); }}>×</button>
             </div>
           </div>
         </div>
@@ -306,7 +306,7 @@ export function App() {
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
-        </div> : <div class="canvas-window-placeholder"><span>{canvasClosed ? "CANVAS WINDOW CLOSED" : "CANVAS MINIMIZED"}</span><button type="button" onClick={() => { setCanvasClosed(false); setCanvasMinimized(false); }}>Open Canvas</button></div>}
+        </div> : canvasMinimized ? <div class="canvas-window-placeholder"><span>CANVAS MINIMIZED</span><button type="button" onClick={() => setCanvasMinimized(false)}>Restore Canvas</button></div> : null}
       </main>
 
       <aside class="inspector-panel" onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
