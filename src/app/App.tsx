@@ -1123,8 +1123,7 @@ export function App() {
         {nodeLogicFloating && ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map((direction) => (
           <div
             key={direction}
-            class="workspace-resize-handle"
-            className={`workspace-resize-handle resize-${direction}`}
+            class={`workspace-resize-handle resize-${direction}`}
             role="presentation"
             aria-label={`Resize Node Logic window from ${direction}`}
             onPointerDown={(event) => startNodeLogicResize(event, direction)}
