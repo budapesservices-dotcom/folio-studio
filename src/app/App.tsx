@@ -27,6 +27,7 @@ function Icon({ name }: { name: string }) {
     sidebar: 'M4 4h16v16H4zM9 4v16',
     canvas: 'M3 4h18v16H3zM7 8h10v8H7z',
     componentCanvas: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+    logicNodes: 'M4 4h6v6H4zM14 14h6v6h-6zM10 7h3a3 3 0 0 1 3 3v4',
     inspector: 'M4 4h16v16H4zM15 4v16',
   };
 
@@ -147,6 +148,50 @@ export function App() {
   const componentCanvasResize = useRef<{ pointerId: number; pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
   const componentCanvasResizeCleanup = useRef<(() => void) | null>(null);
 
+  const [nodeLogicClosed, setNodeLogicClosed] = useState(true);
+  const [nodeLogicMinimized, setNodeLogicMinimized] = useState(false);
+  const [nodeLogicWindowMode, setNodeLogicWindowMode] = useState<'docked' | 'floating'>(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.node-logic-window') ?? 'null');
+      return saved?.mode === 'docked' ? 'docked' : 'floating';
+    } catch { return 'floating'; }
+  });
+  const nodeLogicFloating = nodeLogicWindowMode === 'floating';
+  const nodeLogicOpen = !nodeLogicClosed && !nodeLogicMinimized;
+  const [nodeLogicSize, setNodeLogicSize] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.node-logic-window') ?? 'null');
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(720, viewportWidth * 0.74);
+      const height = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(540, viewportHeight * 0.60);
+      return {
+        width: Math.min(Math.max(280, viewportWidth - 24), Math.max(280, width)),
+        height: Math.min(Math.max(220, viewportHeight - 100), Math.max(220, height)),
+      };
+    } catch {
+      return {
+        width: Math.max(280, Math.min(720, window.innerWidth * 0.74)),
+        height: Math.max(220, Math.min(540, window.innerHeight * 0.60)),
+      };
+    }
+  });
+  const [nodeLogicPosition, setNodeLogicPosition] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('folio.node-logic-window') ?? 'null');
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(720, viewportWidth * 0.74);
+      return {
+        x: Number.isFinite(saved?.position?.x) ? saved.position.x : Math.max(40, Math.round((viewportWidth - width) * 0.18)),
+        y: Math.max(56, Number.isFinite(saved?.position?.y) ? saved.position.y : 146),
+      };
+    } catch { return { x: Math.max(40, Math.round((window.innerWidth - 720) * 0.18)), y: 146 }; }
+  });
+  const nodeLogicDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
+  const nodeLogicDragCleanup = useRef<(() => void) | null>(null);
+  const nodeLogicResize = useRef<{ pointerId: number; pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
+  const nodeLogicResizeCleanup = useRef<(() => void) | null>(null);
+
   const [canvasPosition, setCanvasPosition] = useState(() => {
     try {
       const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
@@ -185,9 +230,26 @@ export function App() {
     }
   }, [componentCanvasWindowMode, componentCanvasPosition, componentCanvasSize]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('folio.node-logic-window', JSON.stringify({
+        mode: nodeLogicWindowMode,
+        position: nodeLogicPosition,
+        size: nodeLogicSize,
+      }));
+    } catch (error) {
+      console.warn('Folio could not persist Node Logic window layout:', error);
+    }
+  }, [nodeLogicWindowMode, nodeLogicPosition, nodeLogicSize]);
+
   useEffect(() => () => {
     componentCanvasDragCleanup.current?.();
     componentCanvasResizeCleanup.current?.();
+  }, []);
+
+  useEffect(() => () => {
+    nodeLogicDragCleanup.current?.();
+    nodeLogicResizeCleanup.current?.();
   }, []);
 
   useEffect(() => () => {
@@ -580,6 +642,145 @@ export function App() {
     };
   };
 
+  const startComponentCanvasDrag = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+    if ((!nodeLogicFloating && !nodeLogicMinimized) || event.button !== 0 || !event.isPrimary) return;
+
+    const target = event.target as Element;
+    if (target.closest('button, a, input, select, textarea')) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    nodeLogicResizeCleanup.current?.();
+    nodeLogicDragCleanup.current?.();
+
+    const drag = {
+      pointerId: event.pointerId,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      originX: nodeLogicPosition.x,
+      originY: nodeLogicPosition.y,
+    };
+    nodeLogicDrag.current = drag;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (nodeLogicDrag.current !== drag || moveEvent.pointerId !== drag.pointerId) return;
+      moveEvent.preventDefault();
+
+      const nextX = drag.originX + moveEvent.clientX - drag.pointerX;
+      const nextY = drag.originY + moveEvent.clientY - drag.pointerY;
+
+      // Let the window travel beyond left/right/bottom edges. Keep only its
+      // titlebar above the app header to avoid losing the window permanently.
+      setComponentCanvasPosition({
+        x: nextX,
+        y: Math.max(56, nextY),
+      });
+    };
+
+    const finishPointerDrag = (endEvent: PointerEvent) => {
+      if (nodeLogicDrag.current !== drag || endEvent.pointerId !== drag.pointerId) return;
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerDrag);
+      window.removeEventListener('pointercancel', finishPointerDrag);
+      nodeLogicDrag.current = null;
+      nodeLogicDragCleanup.current = null;
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', finishPointerDrag);
+    window.addEventListener('pointercancel', finishPointerDrag);
+    nodeLogicDragCleanup.current = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerDrag);
+      window.removeEventListener('pointercancel', finishPointerDrag);
+      nodeLogicDrag.current = null;
+      nodeLogicDragCleanup.current = null;
+    };
+  };
+
+  const startComponentCanvasResize = (event: JSX.TargetedPointerEvent<HTMLDivElement>, direction: string) => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    event.preventDefault();
+    event.stopPropagation();
+    nodeLogicDragCleanup.current?.();
+    nodeLogicResizeCleanup.current?.();
+
+    const resize = {
+      pointerId: event.pointerId,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      left: nodeLogicPosition.x,
+      top: nodeLogicPosition.y,
+      width: nodeLogicSize.width,
+      height: nodeLogicSize.height,
+      direction,
+    };
+    const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
+    nodeLogicResize.current = resize;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (nodeLogicResize.current !== resize || moveEvent.pointerId !== resize.pointerId) return;
+      moveEvent.preventDefault();
+
+      const bounds = shell?.getBoundingClientRect();
+      const shellLeft = bounds?.left ?? 0;
+      const shellTop = bounds?.top ?? 0;
+      const shellWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
+      const shellHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
+      const dx = moveEvent.clientX - resize.pointerX;
+      const dy = moveEvent.clientY - resize.pointerY;
+      const contentBottom = shellHeight - 27;
+      const clamp = (value: number, minimum: number, maximum: number) =>
+        Math.min(maximum, Math.max(minimum, value));
+
+      let left = resize.left;
+      let top = resize.top;
+      let width = resize.width;
+      let height = resize.height;
+
+      if (direction.includes('e')) {
+        width = clamp(resize.width + dx, 280, Math.max(280, shellWidth - resize.left));
+      }
+      if (direction.includes('s')) {
+        height = clamp(resize.height + dy, 220, Math.max(220, contentBottom - resize.top));
+      }
+      if (direction.includes('w')) {
+        const maxLeft = Math.max(0, Math.min(resize.left + resize.width - 280, shellWidth - 280));
+        left = clamp(resize.left + dx, 0, maxLeft);
+        width = Math.min(resize.width + resize.left - left, Math.max(280, shellWidth - left));
+      }
+      if (direction.includes('n')) {
+        const maxTop = Math.max(56, Math.min(resize.top + resize.height - 220, contentBottom - 220));
+        top = clamp(resize.top + dy, 56, maxTop);
+        height = Math.min(resize.height + resize.top - top, Math.max(220, contentBottom - top));
+      }
+
+      setComponentCanvasPosition({ x: left, y: top });
+      setComponentCanvasSize({ width, height });
+    };
+
+    const finishPointerResize = (endEvent: PointerEvent) => {
+      if (nodeLogicResize.current !== resize || endEvent.pointerId !== resize.pointerId) return;
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerResize);
+      window.removeEventListener('pointercancel', finishPointerResize);
+      nodeLogicResize.current = null;
+      nodeLogicResizeCleanup.current = null;
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', finishPointerResize);
+    window.addEventListener('pointercancel', finishPointerResize);
+    nodeLogicResizeCleanup.current = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerResize);
+      window.removeEventListener('pointercancel', finishPointerResize);
+      nodeLogicResize.current = null;
+      nodeLogicResizeCleanup.current = null;
+    };
+  };
+
+
   const statusLabel = saveStatus === 'loading'
     ? 'LOADING'
     : saveStatus === 'saving'
@@ -615,6 +816,7 @@ export function App() {
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
             <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) { setCanvasClosed(false); setCanvasMinimized(false); } else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
             <button class={`global-panel-toggle component-canvas-header-toggle ${componentCanvasOpen ? 'active' : ''}`} type="button" title={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-label={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-pressed={componentCanvasOpen} onClick={() => { if (componentCanvasClosed || componentCanvasMinimized) { setComponentCanvasClosed(false); setComponentCanvasMinimized(false); } else { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', componentCanvasClosed || componentCanvasMinimized ? 'Open the Component Canvas window.' : 'Close the Component Canvas window.')}><Icon name="componentCanvas" /></button>
+            <button class={`global-panel-toggle node-logic-header-toggle ${nodeLogicOpen ? 'active' : ''}`} type="button" title={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-label={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-pressed={nodeLogicOpen} onClick={() => { if (nodeLogicClosed || nodeLogicMinimized) { setNodeLogicClosed(false); setNodeLogicMinimized(false); } else { setNodeLogicClosed(true); setNodeLogicMinimized(false); } }} onMouseEnter={() => updateToolbarHint('NODE LOGIC', nodeLogicClosed || nodeLogicMinimized ? 'Open the Node Logic workspace.' : 'Close the Node Logic workspace.')}><Icon name="logicNodes" /></button>
             <button class={`global-panel-toggle inspector-header-toggle ${inspectorVisible ? 'active' : ''}`} type="button" title={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-label={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-pressed={inspectorVisible} onClick={() => setInspectorVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('INSPECTOR', inspectorVisible ? 'Hide the properties Inspector. Selecting an object opens it automatically.' : 'Show the properties Inspector. Selecting an object also opens it automatically.')}><Icon name="inspector" /></button>
             <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
           </div>
@@ -705,7 +907,7 @@ export function App() {
         </div>
       </aside>
 
-      {!canvasClosed && !canvasMinimized && !(componentCanvasOpen && !componentCanvasFloating && !canvasFloating) && <main
+      {!canvasClosed && !canvasMinimized && !(componentCanvasOpen && !componentCanvasFloating && !canvasFloating) && !(nodeLogicOpen && !nodeLogicFloating) && <main
         class={`workspace${canvasFloating ? " canvas-floating" : ""}`}
         style={canvasFloating ? {
           left: `${canvasPosition.x}px`,
@@ -775,7 +977,7 @@ export function App() {
         ))}
       </main>}
 
-      {!componentCanvasClosed && !componentCanvasMinimized && <main
+      {!componentCanvasClosed && !componentCanvasMinimized && !(nodeLogicOpen && !nodeLogicFloating && !componentCanvasFloating) && <main
         class={`workspace component-canvas-window${componentCanvasFloating ? " canvas-floating" : " component-canvas-docked"}` }
         style={componentCanvasFloating ? {
           left: `${componentCanvasPosition.x}px`,
