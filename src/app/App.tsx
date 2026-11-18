@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
-import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
 import type { ComponentDefinition, DesignNode, FolioPage } from '../core/document/types';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
 import { Canvas } from '../engines/canvas/Canvas';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
-import { createEditorState, editorReducer } from './editorReducer';
+import { createEditorState, editorReducer, normalizePositiveDimension } from './editorReducer';
+import { FloatingWindow } from './FloatingWindow';
+import { getActiveEditorContext, type EditorTarget } from './editorContext';
+import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
 
 function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
@@ -57,6 +59,17 @@ const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
   shortcuts: ['SPACE + DRAG', 'SHIFT + CLICK'],
 };
 
+type CanvasViewState = { zoom: number; pan: { x: number; y: number } };
+function readCanvasViewState(key: string): CanvasViewState {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(key) ?? 'null');
+    return {
+      zoom: Number.isFinite(value?.zoom) ? Math.min(2, Math.max(0.35, value.zoom)) : 0.82,
+      pan: { x: Number.isFinite(value?.pan?.x) ? value.pan.x : 0, y: Number.isFinite(value?.pan?.y) ? value.pan.y : 0 },
+    };
+  } catch { return { zoom: 0.82, pan: { x: 0, y: 0 } }; }
+}
+
 export function App() {
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const [state, dispatch] = useReducer(editorReducer, initialEditorState);
@@ -75,13 +88,24 @@ export function App() {
   const isHydrating = !isProjectLoaded || !componentReady;
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [notice, setNotice] = useState('');
-  const [zoom, setZoom] = useState(0.82);
+  const [mainView, setMainView] = useState<CanvasViewState>(() => readCanvasViewState('folio.main-canvas-view'));
+  const [componentView, setComponentView] = useState<CanvasViewState>(() => readCanvasViewState('folio.component-canvas-view'));
+  const zoom = mainView.zoom;
+  const setZoom = (next: number | ((current: number) => number)) => setMainView((view) => ({ ...view, zoom: typeof next === 'function' ? next(view.zoom) : next }));
+  const componentCanvasZoom = componentView.zoom;
+  const setComponentCanvasZoom = (next: number | ((current: number) => number)) => setComponentView((view) => ({ ...view, zoom: typeof next === 'function' ? next(view.zoom) : next }));
+  const setMainPan = (pan: { x: number; y: number }) => setMainView((view) => ({ ...view, pan }));
+  const setComponentCanvasPan = (pan: { x: number; y: number }) => setComponentView((view) => ({ ...view, pan }));
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
   const [projectNameEditing, setProjectNameEditing] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState('');
   const projectNameCancelRef = useRef(false);
   const [layersVisible, setLayersVisible] = useState(true);
   const [inspectorVisible, setInspectorVisible] = useState(true);
+  const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
+  const [windowOrder, setWindowOrder] = useState<WindowId[]>(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
+  const [activeWindowId, setActiveWindowId] = useState<WindowId>('main-canvas');
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [componentRackOpen, setComponentRackOpen] = useState(false);
   const [pagesRackOpen, setPagesRackOpen] = useState(false);
   const [pageNameDraft, setPageNameDraft] = useState('');
@@ -161,9 +185,7 @@ export function App() {
     } catch { return { x: Math.max(24, window.innerWidth - 700), y: 112 }; }
   });
   const componentCanvasDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
-  const componentCanvasDragCleanup = useRef<(() => void) | null>(null);
   const componentCanvasResize = useRef<{ pointerId: number; pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
-  const componentCanvasResizeCleanup = useRef<(() => void) | null>(null);
 
   const [nodeLogicClosed, setNodeLogicClosed] = useState(true);
   const [nodeLogicMinimized, setNodeLogicMinimized] = useState(false);
@@ -205,9 +227,7 @@ export function App() {
     } catch { return { x: Math.max(40, Math.round((window.innerWidth - 720) * 0.18)), y: 146 }; }
   });
   const nodeLogicDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
-  const nodeLogicDragCleanup = useRef<(() => void) | null>(null);
   const nodeLogicResize = useRef<{ pointerId: number; pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
-  const nodeLogicResizeCleanup = useRef<(() => void) | null>(null);
 
   const [canvasPosition, setCanvasPosition] = useState(() => {
     try {
@@ -223,9 +243,17 @@ export function App() {
     } catch { return { x: 48, y: 80 }; }
   });
   const canvasDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
-  const canvasDragCleanup = useRef<(() => void) | null>(null);
   const canvasResize = useRef<{ pointerId: number; pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
-  const canvasResizeCleanup = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    try { window.localStorage.setItem('folio.main-canvas-view', JSON.stringify(mainView)); }
+    catch (error) { console.warn('Folio could not persist Main Canvas view:', error); }
+  }, [mainView]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem('folio.component-canvas-view', JSON.stringify(componentView)); }
+    catch (error) { console.warn('Folio could not persist Component Canvas view:', error); }
+  }, [componentView]);
 
   useEffect(() => {
     try {
@@ -258,21 +286,6 @@ export function App() {
       console.warn('Folio could not persist Node Logic window layout:', error);
     }
   }, [nodeLogicWindowMode, nodeLogicPosition, nodeLogicSize]);
-
-  useEffect(() => () => {
-    componentCanvasDragCleanup.current?.();
-    componentCanvasResizeCleanup.current?.();
-  }, []);
-
-  useEffect(() => () => {
-    nodeLogicDragCleanup.current?.();
-    nodeLogicResizeCleanup.current?.();
-  }, []);
-
-  useEffect(() => () => {
-    canvasDragCleanup.current?.();
-    canvasResizeCleanup.current?.();
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -348,18 +361,17 @@ export function App() {
 
   const activeDocument = getActiveDocument(state.project);
   const componentDocument = getActiveDocument(componentState.project);
-  const selectedNode = useMemo(
-    () => activeDocument.nodes.find((node) => node.id === state.selectedNodeId) ?? null,
-    [activeDocument.nodes, state.selectedNodeId],
-  );
+  const focusedEditor = getActiveEditorContext(activeEditorId, state, componentState);
+  const focusedDocument = focusedEditor.document;
+  const selectedNode = focusedEditor.selectedNode;
+  const selectedNodes = focusedEditor.selectedNodes;
+  const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
 
   const addNode = (type: DesignNode['type']) => {
     if (isHydrating) return;
-    dispatch({ type: 'add-node', node: createNode(type, activeDocument.nodes.length) });
+    dispatchFocused({ type: 'add-node', node: createNode(type, focusedDocument.nodes.length) });
     setInspectorVisible(true);
   };
-
-  const selectedNodes = activeDocument.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
   const saveNodesAsComponent = (nodes: DesignNode[]) => {
     if (isHydrating || nodes.length === 0) return;
     const name = nodes.length === 1 ? nodes[0].name : `Component ${ownedComponents.length + 1}`;
@@ -386,6 +398,7 @@ export function App() {
 
   const switchPage = (page: FolioPage) => {
     if (isHydrating || page.id === activePageId) return;
+    setActiveEditorId('main');
     dispatch({ type: 'set-active-page', pageId: page.id });
     setPagesRackOpen(false);
     setInspectorVisible(true);
@@ -429,33 +442,33 @@ export function App() {
   );
   const insertOwnedComponent = (component: ComponentDefinition) => {
     if (isHydrating) return;
-    const offsetX = 140 + (activeDocument.nodes.length % 4) * 28;
-    const offsetY = 130 + (activeDocument.nodes.length % 4) * 28;
+    const offsetX = 140 + (focusedDocument.nodes.length % 4) * 28;
+    const offsetY = 130 + (focusedDocument.nodes.length % 4) * 28;
     const nodes = component.document.nodes.map((node) => ({
       ...node,
       id: globalThis.crypto?.randomUUID?.() ?? `node-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       x: node.x + offsetX,
       y: node.y + offsetY,
     }));
-    dispatch({ type: 'add-nodes', nodes });
+    dispatchFocused({ type: 'add-nodes', nodes });
     setInspectorVisible(true);
     setNotice(`“${component.name}” added to the page.`);
   };
 
   const updateSelected = (patch: Partial<DesignNode>) => {
     if (!selectedNode) return;
-    dispatch({ type: 'replace-node', node: { ...selectedNode, ...patch } as DesignNode });
+    const safePatch = { ...patch };
+    if ('width' in patch) safePatch.width = normalizePositiveDimension(Number(patch.width), selectedNode.width);
+    if ('height' in patch) safePatch.height = normalizePositiveDimension(Number(patch.height), selectedNode.height);
+    dispatchFocused({ type: 'edit-node', coalesceKey: 'inspector:' + selectedNode.id, node: { ...selectedNode, ...safePatch } as DesignNode });
   };
 
   const updateSelectedStyle = (patch: Record<string, string | number>) => {
     if (!selectedNode) return;
-    dispatch({
-      type: 'replace-node',
-      node: { ...selectedNode, style: { ...selectedNode.style, ...patch } } as DesignNode,
-    });
+    dispatchFocused({ type: 'edit-node', coalesceKey: 'inspector:' + selectedNode.id, node: { ...selectedNode, style: { ...selectedNode.style, ...patch } } as DesignNode });
   };
 
-  const alignSelection = (alignment: Alignment, target: 'main' | 'component' = 'main') => {
+  const alignSelection = (alignment: Alignment, target: EditorTarget = activeEditorId) => {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
     const selected = getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id));
@@ -465,7 +478,7 @@ export function App() {
     else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
   };
 
-  const distributeSelection = (axis: DistributionAxis, target: 'main' | 'component' = 'main') => {
+  const distributeSelection = (axis: DistributionAxis, target: EditorTarget = activeEditorId) => {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
     const selected = getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id));
@@ -485,419 +498,79 @@ export function App() {
     else document.exitFullscreen?.();
   };
 
-  const startCanvasDrag = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
-    if ((!canvasFloating && !canvasMinimized) || event.button !== 0 || !event.isPrimary) return;
-
-    const target = event.target as Element;
-    if (target.closest('button, a, input, select, textarea')) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-    canvasResizeCleanup.current?.();
-    canvasDragCleanup.current?.();
-
-    const drag = {
-      pointerId: event.pointerId,
-      pointerX: event.clientX,
-      pointerY: event.clientY,
-      originX: canvasPosition.x,
-      originY: canvasPosition.y,
-    };
-    canvasDrag.current = drag;
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      if (canvasDrag.current !== drag || moveEvent.pointerId !== drag.pointerId) return;
-      moveEvent.preventDefault();
-
-      const nextX = drag.originX + moveEvent.clientX - drag.pointerX;
-      const nextY = drag.originY + moveEvent.clientY - drag.pointerY;
-
-      // Let the window travel beyond left/right/bottom edges. Keep only its
-      // titlebar above the app header to avoid losing the window permanently.
-      setCanvasPosition({
-        x: nextX,
-        y: Math.max(56, nextY),
-      });
-    };
-
-    const finishPointerDrag = (endEvent: PointerEvent) => {
-      if (canvasDrag.current !== drag || endEvent.pointerId !== drag.pointerId) return;
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerDrag);
-      window.removeEventListener('pointercancel', finishPointerDrag);
-      canvasDrag.current = null;
-      canvasDragCleanup.current = null;
-    };
-
-    window.addEventListener('pointermove', handlePointerMove, { passive: false });
-    window.addEventListener('pointerup', finishPointerDrag);
-    window.addEventListener('pointercancel', finishPointerDrag);
-    canvasDragCleanup.current = () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerDrag);
-      window.removeEventListener('pointercancel', finishPointerDrag);
-      canvasDrag.current = null;
-      canvasDragCleanup.current = null;
-    };
+  const focusWindow = (id: WindowId) => {
+    setWindowOrder((current) => bringWindowToFront(current, id));
+    setActiveWindowId(id);
   };
 
-  const startCanvasResize = (event: JSX.TargetedPointerEvent<HTMLDivElement>, direction: string) => {
-    if (event.button !== 0 || !event.isPrimary) return;
-    event.preventDefault();
-    event.stopPropagation();
-    canvasDragCleanup.current?.();
-    canvasResizeCleanup.current?.();
+  const getViewport = () => ({
+    width: document.documentElement.clientWidth || window.innerWidth,
+    height: document.documentElement.clientHeight || window.innerHeight,
+  });
 
-    const resize = {
-      pointerId: event.pointerId,
-      pointerX: event.clientX,
-      pointerY: event.clientY,
-      left: canvasPosition.x,
-      top: canvasPosition.y,
-      width: canvasSize.width,
-      height: canvasSize.height,
-      direction,
-    };
-    const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
-    canvasResize.current = resize;
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      if (canvasResize.current !== resize || moveEvent.pointerId !== resize.pointerId) return;
-      moveEvent.preventDefault();
-
-      const bounds = shell?.getBoundingClientRect();
-      const shellLeft = bounds?.left ?? 0;
-      const shellTop = bounds?.top ?? 0;
-      const shellWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
-      const shellHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
-      const dx = moveEvent.clientX - resize.pointerX;
-      const dy = moveEvent.clientY - resize.pointerY;
-      const contentBottom = shellHeight - 27;
-      const clamp = (value: number, minimum: number, maximum: number) =>
-        Math.min(maximum, Math.max(minimum, value));
-
-      let left = resize.left;
-      let top = resize.top;
-      let width = resize.width;
-      let height = resize.height;
-
-      if (direction.includes('e')) {
-        width = clamp(resize.width + dx, 280, Math.max(280, shellWidth - resize.left));
-      }
-      if (direction.includes('s')) {
-        height = clamp(resize.height + dy, 220, Math.max(220, contentBottom - resize.top));
-      }
-      if (direction.includes('w')) {
-        const maxLeft = Math.max(0, Math.min(resize.left + resize.width - 280, shellWidth - 280));
-        left = clamp(resize.left + dx, 0, maxLeft);
-        width = Math.min(resize.width + resize.left - left, Math.max(280, shellWidth - left));
-      }
-      if (direction.includes('n')) {
-        const maxTop = Math.max(56, Math.min(resize.top + resize.height - 220, contentBottom - 220));
-        top = clamp(resize.top + dy, 56, maxTop);
-        height = Math.min(resize.height + resize.top - top, Math.max(220, contentBottom - top));
-      }
-
-      setCanvasPosition({ x: left, y: top });
-      setCanvasSize({ width, height });
-    };
-
-    const finishPointerResize = (endEvent: PointerEvent) => {
-      if (canvasResize.current !== resize || endEvent.pointerId !== resize.pointerId) return;
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerResize);
-      window.removeEventListener('pointercancel', finishPointerResize);
-      canvasResize.current = null;
-      canvasResizeCleanup.current = null;
-    };
-
-    window.addEventListener('pointermove', handlePointerMove, { passive: false });
-    window.addEventListener('pointerup', finishPointerResize);
-    window.addEventListener('pointercancel', finishPointerResize);
-    canvasResizeCleanup.current = () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerResize);
-      window.removeEventListener('pointercancel', finishPointerResize);
-      canvasResize.current = null;
-      canvasResizeCleanup.current = null;
-    };
+  const recoverWindow = (id: 'main-canvas' | 'component-canvas' | 'node-logic') => {
+    const viewport = getViewport();
+    if (id === 'main-canvas') {
+      const layout = recoverWindowLayout({ position: canvasPosition, size: canvasSize }, viewport);
+      setCanvasPosition(layout.position); setCanvasSize(layout.size);
+    } else if (id === 'component-canvas') {
+      const layout = recoverWindowLayout({ position: componentCanvasPosition, size: componentCanvasSize }, viewport);
+      setComponentCanvasPosition(layout.position); setComponentCanvasSize(layout.size);
+    } else {
+      const layout = recoverWindowLayout({ position: nodeLogicPosition, size: nodeLogicSize }, viewport);
+      setNodeLogicPosition(layout.position); setNodeLogicSize(layout.size);
+    }
   };
 
-  const startComponentCanvasDrag = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
-    if ((!componentCanvasFloating && !componentCanvasMinimized) || event.button !== 0 || !event.isPrimary) return;
+  const openMainCanvas = () => { recoverWindow('main-canvas'); setCanvasClosed(false); setCanvasMinimized(false); setActiveEditorId('main'); focusWindow('main-canvas'); };
+  const openComponentCanvas = () => { recoverWindow('component-canvas'); setComponentCanvasClosed(false); setComponentCanvasMinimized(false); setActiveEditorId('component'); focusWindow('component-canvas'); };
+  const openNodeLogic = () => { recoverWindow('node-logic'); setNodeLogicClosed(false); setNodeLogicMinimized(false); focusWindow('node-logic'); };
 
-    const target = event.target as Element;
-    if (target.closest('button, a, input, select, textarea')) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-    componentCanvasResizeCleanup.current?.();
-    componentCanvasDragCleanup.current?.();
-
-    const drag = {
-      pointerId: event.pointerId,
-      pointerX: event.clientX,
-      pointerY: event.clientY,
-      originX: componentCanvasPosition.x,
-      originY: componentCanvasPosition.y,
-    };
-    componentCanvasDrag.current = drag;
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      if (componentCanvasDrag.current !== drag || moveEvent.pointerId !== drag.pointerId) return;
-      moveEvent.preventDefault();
-
-      const nextX = drag.originX + moveEvent.clientX - drag.pointerX;
-      const nextY = drag.originY + moveEvent.clientY - drag.pointerY;
-
-      // Let the window travel beyond left/right/bottom edges. Keep only its
-      // titlebar above the app header to avoid losing the window permanently.
-      setComponentCanvasPosition({
-        x: nextX,
-        y: Math.max(56, nextY),
-      });
-    };
-
-    const finishPointerDrag = (endEvent: PointerEvent) => {
-      if (componentCanvasDrag.current !== drag || endEvent.pointerId !== drag.pointerId) return;
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerDrag);
-      window.removeEventListener('pointercancel', finishPointerDrag);
-      componentCanvasDrag.current = null;
-      componentCanvasDragCleanup.current = null;
-    };
-
-    window.addEventListener('pointermove', handlePointerMove, { passive: false });
-    window.addEventListener('pointerup', finishPointerDrag);
-    window.addEventListener('pointercancel', finishPointerDrag);
-    componentCanvasDragCleanup.current = () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerDrag);
-      window.removeEventListener('pointercancel', finishPointerDrag);
-      componentCanvasDrag.current = null;
-      componentCanvasDragCleanup.current = null;
-    };
+  const resetWindowLayout = () => {
+    const layouts = getDefaultWindowLayouts(getViewport());
+    setCanvasPosition(layouts['main-canvas'].position); setCanvasSize(layouts['main-canvas'].size);
+    setComponentCanvasPosition(layouts['component-canvas'].position); setComponentCanvasSize(layouts['component-canvas'].size);
+    setNodeLogicPosition(layouts['node-logic'].position); setNodeLogicSize(layouts['node-logic'].size);
+    setWindowOrder(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
+    setActiveWindowId('main-canvas'); setViewMenuOpen(false); setNotice('Window layout has been reset.');
   };
 
-  const startComponentCanvasResize = (event: JSX.TargetedPointerEvent<HTMLDivElement>, direction: string) => {
-    if (event.button !== 0 || !event.isPrimary) return;
-    event.preventDefault();
-    event.stopPropagation();
-    componentCanvasDragCleanup.current?.();
-    componentCanvasResizeCleanup.current?.();
+  useEffect(() => {
+    const onResize = () => { recoverWindow('main-canvas'); recoverWindow('component-canvas'); recoverWindow('node-logic'); };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [canvasPosition, canvasSize, componentCanvasPosition, componentCanvasSize, nodeLogicPosition, nodeLogicSize]);
 
-    const resize = {
-      pointerId: event.pointerId,
-      pointerX: event.clientX,
-      pointerY: event.clientY,
-      left: componentCanvasPosition.x,
-      top: componentCanvasPosition.y,
-      width: componentCanvasSize.width,
-      height: componentCanvasSize.height,
-      direction,
-    };
-    const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
-    componentCanvasResize.current = resize;
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      if (componentCanvasResize.current !== resize || moveEvent.pointerId !== resize.pointerId) return;
-      moveEvent.preventDefault();
-
-      const bounds = shell?.getBoundingClientRect();
-      const shellLeft = bounds?.left ?? 0;
-      const shellTop = bounds?.top ?? 0;
-      const shellWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
-      const shellHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
-      const dx = moveEvent.clientX - resize.pointerX;
-      const dy = moveEvent.clientY - resize.pointerY;
-      const contentBottom = shellHeight - 27;
-      const clamp = (value: number, minimum: number, maximum: number) =>
-        Math.min(maximum, Math.max(minimum, value));
-
-      let left = resize.left;
-      let top = resize.top;
-      let width = resize.width;
-      let height = resize.height;
-
-      if (direction.includes('e')) {
-        width = clamp(resize.width + dx, 280, Math.max(280, shellWidth - resize.left));
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isHydrating) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable || target?.matches('input, textarea, select, [contenteditable="true"]')) return;
+      const context = getActiveEditorContext(activeEditorId, state, componentState);
+      const emit = activeEditorId === 'main' ? dispatch : componentDispatch;
+      const nodes = context.selectedNodes;
+      const ids = context.state.selectedNodeIds;
+      const modifier = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (modifier && key === 'z') { event.preventDefault(); emit({ type: event.shiftKey ? 'redo' : 'undo' }); return; }
+      if (modifier && key === 'y') { event.preventDefault(); emit({ type: 'redo' }); return; }
+      if (modifier && key === 'd' && nodes.length > 0) {
+        event.preventDefault();
+        const copies = nodes.map((node, index) => ({ ...node, id: globalThis.crypto?.randomUUID?.() ?? 'duplicate-' + Date.now() + '-' + index, name: node.name + ' copy', x: node.x + 24, y: node.y + 24 }));
+        emit({ type: 'add-nodes', nodes: copies }); return;
       }
-      if (direction.includes('s')) {
-        height = clamp(resize.height + dy, 220, Math.max(220, contentBottom - resize.top));
+      if ((event.key === 'Delete' || event.key === 'Backspace') && ids.length > 0) { event.preventDefault(); emit({ type: 'delete-nodes', nodeIds: ids }); return; }
+      if (event.altKey && !event.shiftKey) {
+        const alignmentByKey: Record<string, Alignment> = { arrowleft: 'left', arrowright: 'right', arrowup: 'top', arrowdown: 'bottom' };
+        const alignment = alignmentByKey[key];
+        if (alignment && nodes.length > 1) { event.preventDefault(); emit({ type: 'transform-nodes', nodes: alignNodes(nodes, alignment) }); }
+      } else if (event.altKey && event.shiftKey && (key === 'h' || key === 'v') && nodes.length > 2) {
+        event.preventDefault(); emit({ type: 'transform-nodes', nodes: distributeNodes(nodes, key === 'h' ? 'horizontal' : 'vertical') });
       }
-      if (direction.includes('w')) {
-        const maxLeft = Math.max(0, Math.min(resize.left + resize.width - 280, shellWidth - 280));
-        left = clamp(resize.left + dx, 0, maxLeft);
-        width = Math.min(resize.width + resize.left - left, Math.max(280, shellWidth - left));
-      }
-      if (direction.includes('n')) {
-        const maxTop = Math.max(56, Math.min(resize.top + resize.height - 220, contentBottom - 220));
-        top = clamp(resize.top + dy, 56, maxTop);
-        height = Math.min(resize.height + resize.top - top, Math.max(220, contentBottom - top));
-      }
-
-      setComponentCanvasPosition({ x: left, y: top });
-      setComponentCanvasSize({ width, height });
     };
-
-    const finishPointerResize = (endEvent: PointerEvent) => {
-      if (componentCanvasResize.current !== resize || endEvent.pointerId !== resize.pointerId) return;
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerResize);
-      window.removeEventListener('pointercancel', finishPointerResize);
-      componentCanvasResize.current = null;
-      componentCanvasResizeCleanup.current = null;
-    };
-
-    window.addEventListener('pointermove', handlePointerMove, { passive: false });
-    window.addEventListener('pointerup', finishPointerResize);
-    window.addEventListener('pointercancel', finishPointerResize);
-    componentCanvasResizeCleanup.current = () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerResize);
-      window.removeEventListener('pointercancel', finishPointerResize);
-      componentCanvasResize.current = null;
-      componentCanvasResizeCleanup.current = null;
-    };
-  };
-
-  const startNodeLogicDrag = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
-    if ((!nodeLogicFloating && !nodeLogicMinimized) || event.button !== 0 || !event.isPrimary) return;
-
-    const target = event.target as Element;
-    if (target.closest('button, a, input, select, textarea')) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-    nodeLogicResizeCleanup.current?.();
-    nodeLogicDragCleanup.current?.();
-
-    const drag = {
-      pointerId: event.pointerId,
-      pointerX: event.clientX,
-      pointerY: event.clientY,
-      originX: nodeLogicPosition.x,
-      originY: nodeLogicPosition.y,
-    };
-    nodeLogicDrag.current = drag;
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      if (nodeLogicDrag.current !== drag || moveEvent.pointerId !== drag.pointerId) return;
-      moveEvent.preventDefault();
-
-      const nextX = drag.originX + moveEvent.clientX - drag.pointerX;
-      const nextY = drag.originY + moveEvent.clientY - drag.pointerY;
-
-      // Let the window travel beyond left/right/bottom edges. Keep only its
-      // titlebar above the app header to avoid losing the window permanently.
-      setNodeLogicPosition({
-        x: nextX,
-        y: Math.max(56, nextY),
-      });
-    };
-
-    const finishPointerDrag = (endEvent: PointerEvent) => {
-      if (nodeLogicDrag.current !== drag || endEvent.pointerId !== drag.pointerId) return;
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerDrag);
-      window.removeEventListener('pointercancel', finishPointerDrag);
-      nodeLogicDrag.current = null;
-      nodeLogicDragCleanup.current = null;
-    };
-
-    window.addEventListener('pointermove', handlePointerMove, { passive: false });
-    window.addEventListener('pointerup', finishPointerDrag);
-    window.addEventListener('pointercancel', finishPointerDrag);
-    nodeLogicDragCleanup.current = () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerDrag);
-      window.removeEventListener('pointercancel', finishPointerDrag);
-      nodeLogicDrag.current = null;
-      nodeLogicDragCleanup.current = null;
-    };
-  };
-
-  const startNodeLogicResize = (event: JSX.TargetedPointerEvent<HTMLDivElement>, direction: string) => {
-    if (event.button !== 0 || !event.isPrimary) return;
-    event.preventDefault();
-    event.stopPropagation();
-    nodeLogicDragCleanup.current?.();
-    nodeLogicResizeCleanup.current?.();
-
-    const resize = {
-      pointerId: event.pointerId,
-      pointerX: event.clientX,
-      pointerY: event.clientY,
-      left: nodeLogicPosition.x,
-      top: nodeLogicPosition.y,
-      width: nodeLogicSize.width,
-      height: nodeLogicSize.height,
-      direction,
-    };
-    const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
-    nodeLogicResize.current = resize;
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      if (nodeLogicResize.current !== resize || moveEvent.pointerId !== resize.pointerId) return;
-      moveEvent.preventDefault();
-
-      const bounds = shell?.getBoundingClientRect();
-      const shellLeft = bounds?.left ?? 0;
-      const shellTop = bounds?.top ?? 0;
-      const shellWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
-      const shellHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
-      const dx = moveEvent.clientX - resize.pointerX;
-      const dy = moveEvent.clientY - resize.pointerY;
-      const contentBottom = shellHeight - 27;
-      const clamp = (value: number, minimum: number, maximum: number) =>
-        Math.min(maximum, Math.max(minimum, value));
-
-      let left = resize.left;
-      let top = resize.top;
-      let width = resize.width;
-      let height = resize.height;
-
-      if (direction.includes('e')) {
-        width = clamp(resize.width + dx, 280, Math.max(280, shellWidth - resize.left));
-      }
-      if (direction.includes('s')) {
-        height = clamp(resize.height + dy, 220, Math.max(220, contentBottom - resize.top));
-      }
-      if (direction.includes('w')) {
-        const maxLeft = Math.max(0, Math.min(resize.left + resize.width - 280, shellWidth - 280));
-        left = clamp(resize.left + dx, 0, maxLeft);
-        width = Math.min(resize.width + resize.left - left, Math.max(280, shellWidth - left));
-      }
-      if (direction.includes('n')) {
-        const maxTop = Math.max(56, Math.min(resize.top + resize.height - 220, contentBottom - 220));
-        top = clamp(resize.top + dy, 56, maxTop);
-        height = Math.min(resize.height + resize.top - top, Math.max(220, contentBottom - top));
-      }
-
-      setNodeLogicPosition({ x: left, y: top });
-      setNodeLogicSize({ width, height });
-    };
-
-    const finishPointerResize = (endEvent: PointerEvent) => {
-      if (nodeLogicResize.current !== resize || endEvent.pointerId !== resize.pointerId) return;
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerResize);
-      window.removeEventListener('pointercancel', finishPointerResize);
-      nodeLogicResize.current = null;
-      nodeLogicResizeCleanup.current = null;
-    };
-
-    window.addEventListener('pointermove', handlePointerMove, { passive: false });
-    window.addEventListener('pointerup', finishPointerResize);
-    window.addEventListener('pointercancel', finishPointerResize);
-    nodeLogicResizeCleanup.current = () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishPointerResize);
-      window.removeEventListener('pointercancel', finishPointerResize);
-      nodeLogicResize.current = null;
-      nodeLogicResizeCleanup.current = null;
-    };
-  };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeEditorId, state, componentState, isHydrating]);
 
 
   const statusLabel = saveStatus === 'loading'

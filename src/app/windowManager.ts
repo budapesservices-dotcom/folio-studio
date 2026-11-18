@@ -18,6 +18,16 @@ export function getWindowZIndex(order: readonly WindowId[], id: WindowId, base =
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
 
+export function clampWindowPosition(position: WindowPosition, size: WindowSize, viewport: WindowViewport): WindowPosition {
+  const width = Math.min(Math.max(1, size.width), Math.max(1, viewport.width));
+  const height = Math.min(Math.max(1, size.height), Math.max(1, viewport.height - WINDOW_CHROME.header - WINDOW_CHROME.footer));
+  const minY = Math.min(WINDOW_CHROME.header, Math.max(0, viewport.height - WINDOW_CHROME.footer - height));
+  return {
+    x: clamp(Number.isFinite(position.x) ? position.x : 0, 0, Math.max(0, viewport.width - width)),
+    y: clamp(Number.isFinite(position.y) ? position.y : minY, minY, Math.max(minY, viewport.height - WINDOW_CHROME.footer - height)),
+  };
+}
+
 export function recoverWindowLayout(
   layout: WindowLayout,
   viewport: WindowViewport,
