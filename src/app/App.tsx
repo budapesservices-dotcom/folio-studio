@@ -768,7 +768,8 @@ export function App() {
           onPointerDown={componentCanvasFloating ? startComponentCanvasDrag : undefined}
         >
           <div class="breadcrumb">
-            <strong>{Component Canvas</strong>
+            <Icon name="componentCanvas" />
+            <strong>Component Canvas</strong>
           </div>
           <div class="canvas-window-tools">
             {state.selectedNodeIds.length > 1 && (
