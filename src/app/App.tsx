@@ -960,9 +960,8 @@ export function App() {
               onBlur={() => {
                 const name = projectNameDraft.trim();
                 if (name && name !== state.project.metadata.name) {
-                  const project = { ...state.project, metadata: { ...state.project.metadata, name }, document: { ...state.project.document, name } };
+                  const project = { ...state.project, metadata: { ...state.project.metadata, name } };
                   dispatch({ type: 'replace-project', project });
-                  setPages((items) => items.map((page) => page.id === activePageId ? { ...page, name } : page));
                 }
                 setProjectNameEditing(false);
               }}
