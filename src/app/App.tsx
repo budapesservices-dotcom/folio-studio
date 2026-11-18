@@ -126,6 +126,7 @@ export function App() {
 
   return (
     <div class="app-shell">
+      <div class="global-toolbar-slot" aria-hidden="true" />
       <nav class="tool-rail" aria-label="Insert tools">
         <button class="tool-button active" title="Select layer" aria-label="Select layer" onClick={() => dispatch({ type: 'select-node', nodeId: null })}>
           <Icon name="cursor" />
