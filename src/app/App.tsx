@@ -71,7 +71,9 @@ export function App() {
   const [canvasPosition, setCanvasPosition] = useState(() => {
     try {
       const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
-      return Number.isFinite(saved?.position?.x) && Number.isFinite(saved?.position?.y) ? saved.position : { x: 100, y: 92 };
+      return Number.isFinite(saved?.position?.x) && Number.isFinite(saved?.position?.y)
+        ? { x: Math.max(0, saved.position.x), y: Math.max(56, saved.position.y) }
+        : { x: 100, y: 92 };
     } catch { return { x: 100, y: 92 }; }
   });
   const [canvasSize, setCanvasSize] = useState(() => {
@@ -318,8 +320,10 @@ export function App() {
             if (!drag) return;
             const shell = (event.currentTarget as HTMLElement).closest('.app-shell') as HTMLElement | null;
             const bounds = shell?.getBoundingClientRect();
-            const maxX = Math.max(0, (bounds?.width ?? window.innerWidth) - canvasSize.width);
-            const maxY = Math.max(56, (bounds?.height ?? window.innerHeight) - 42);
+            const shellWidth = bounds?.width ?? window.innerWidth;
+            const shellHeight = bounds?.height ?? window.innerHeight;
+            const maxX = Math.max(0, shellWidth - Math.min(canvasSize.width, shellWidth));
+            const maxY = Math.max(56, shellHeight - 27 - 42);
             setCanvasPosition({
               x: Math.max(0, Math.min(drag.originX + event.clientX - drag.pointerX, maxX)),
               y: Math.max(56, Math.min(drag.originY + event.clientY - drag.pointerY, maxY)),
@@ -397,18 +401,19 @@ export function App() {
               const dy = event.clientY - resize.pointerY;
               const shellWidth = bounds?.width ?? window.innerWidth;
               const shellHeight = bounds?.height ?? window.innerHeight;
+              const contentBottom = Math.max(56 + 220, shellHeight - 27);
               let left = resize.left;
               let top = resize.top;
               let width = resize.width;
               let height = resize.height;
-              if (direction.includes('e')) width = Math.min(resize.width + dx, shellWidth - resize.left - 8);
-              if (direction.includes('s')) height = Math.min(resize.height + dy, shellHeight - resize.top - 35);
+              if (direction.includes('e')) width = Math.min(resize.width + dx, Math.max(280, shellWidth - resize.left));
+              if (direction.includes('s')) height = Math.min(resize.height + dy, Math.max(220, contentBottom - resize.top));
               if (direction.includes('w')) {
                 left = Math.max(0, Math.min(resize.left + dx, resize.left + resize.width - 280));
                 width = resize.width + resize.left - left;
               }
               if (direction.includes('n')) {
-                top = Math.max(56, Math.min(resize.top + dy, resize.top + resize.height - 220));
+                top = Math.max(56, Math.min(resize.top + dy, Math.min(resize.top + resize.height - 220, contentBottom - 220)));
                 height = resize.height + resize.top - top;
               }
               setCanvasPosition({ x: left, y: top });
