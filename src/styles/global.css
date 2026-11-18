@@ -298,7 +298,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .canvas-workspace { position: relative; display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; overflow: hidden; border-radius: 0 0 9px 9px; background: #fff; }
 
 .canvas-scroll-area { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; overflow: hidden; padding: 45px 35px 52px; touch-action: none; }
-.canvas-stage { flex: 0 0 auto; max-width: 100%; filter: drop-shadow(0 16px 28px #0007); }
+.canvas-stage { flex: 0 0 auto; max-width: none; filter: drop-shadow(0 16px 28px #0007); }
 .artboard-label { display: flex; justify-content: space-between; margin: 0 0 9px; color: #7d8797; font-size: 9px; letter-spacing: .2px; }
 .artboard { display: block; width: 100%; height: auto; aspect-ratio: 1440 / 900; overflow: visible; background: #fff; box-shadow: 0 0 0 1px #00000012; }
 .canvas-hint { position: absolute; right: 18px; bottom: 14px; color: #606b7e; font-size: 8px; letter-spacing: 1.1px; font-weight: 700; }
