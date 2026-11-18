@@ -86,6 +86,7 @@ export function App() {
     } catch { return { width: 860, height: 620 }; }
   });
   const canvasDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null);
+  const canvasDragCleanup = useRef<(() => void) | null>(null);
   const canvasResize = useRef<{ pointerX: number; pointerY: number; left: number; top: number; width: number; height: number; direction: string } | null>(null);
 
   useEffect(() => {
@@ -95,6 +96,10 @@ export function App() {
       console.warn('Folio could not persist Canvas window layout:', error);
     }
   }, [canvasWindowMode, canvasPosition, canvasSize]);
+
+  useEffect(() => () => {
+    canvasDragCleanup.current?.();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -178,56 +183,70 @@ export function App() {
   };
 
   const startCanvasDrag = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
-    if ((!canvasFloating && !canvasMinimized) || event.button !== 0) return;
+    if ((!canvasFloating && !canvasMinimized) || event.button !== 0 || !event.isPrimary) return;
 
-    const target = event.target as HTMLElement;
+    const target = event.target as Element;
     if (target.closest('button, a, input, select, textarea')) return;
 
     event.preventDefault();
     event.stopPropagation();
-    canvasDrag.current = {
+
+    // End any stale drag session before starting a new one.
+    canvasDragCleanup.current?.();
+
+    const drag = {
       pointerId: event.pointerId,
       pointerX: event.clientX,
       pointerY: event.clientY,
       originX: canvasPosition.x,
       originY: canvasPosition.y,
     };
-
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Keep the drag session active; the pointer may already have been captured.
-    }
-  };
-
-  const moveCanvasDrag = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
-    const drag = canvasDrag.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-
     const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
-    const bounds = shell?.getBoundingClientRect();
-    const shellWidth = bounds?.width ?? window.innerWidth;
-    const shellHeight = bounds?.height ?? window.innerHeight;
-    const windowWidth = canvasMinimized ? 260 : canvasSize.width;
-    const windowHeight = canvasMinimized ? 42 : canvasSize.height;
-    const availableHeight = Math.max(0, shellHeight - 83);
-    const visibleHeight = Math.min(windowHeight, availableHeight);
-    const maxX = Math.max(0, shellWidth - Math.min(windowWidth, shellWidth));
-    const maxY = Math.max(56, shellHeight - 27 - visibleHeight);
+    canvasDrag.current = drag;
 
-    const clamp = (value: number, minimum: number, maximum: number) =>
-      Math.min(maximum, Math.max(minimum, value));
+    // Track movement on window rather than on the titlebar. This keeps dragging
+    // alive when the pointer leaves the handle or the Preact tree re-renders.
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (canvasDrag.current !== drag || moveEvent.pointerId !== drag.pointerId) return;
 
-    setCanvasPosition({
-      x: clamp(drag.originX + event.clientX - drag.pointerX, 0, maxX),
-      y: clamp(drag.originY + event.clientY - drag.pointerY, 56, maxY),
-    });
-    event.preventDefault();
-  };
+      moveEvent.preventDefault();
+      const bounds = shell?.getBoundingClientRect();
+      const shellWidth = bounds?.width ?? window.innerWidth;
+      const shellHeight = bounds?.height ?? window.innerHeight;
+      const windowWidth = canvasMinimized ? 260 : canvasSize.width;
+      const windowHeight = canvasMinimized ? 42 : canvasSize.height;
+      const availableHeight = Math.max(0, shellHeight - 83);
+      const visibleHeight = Math.min(windowHeight, availableHeight);
+      const maxX = Math.max(0, shellWidth - Math.min(windowWidth, shellWidth));
+      const maxY = Math.max(0, shellHeight - 27 - visibleHeight);
+      const clamp = (value: number, minimum: number, maximum: number) =>
+        Math.min(maximum, Math.max(minimum, value));
 
-  const endCanvasDrag = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
-    if (canvasDrag.current?.pointerId !== event.pointerId) return;
-    canvasDrag.current = null;
+      setCanvasPosition({
+        x: clamp(drag.originX + moveEvent.clientX - drag.pointerX, 0, maxX),
+        y: clamp(drag.originY + moveEvent.clientY - drag.pointerY, 0, maxY),
+      });
+    };
+
+    const finishPointerDrag = (endEvent: PointerEvent) => {
+      if (canvasDrag.current !== drag || endEvent.pointerId !== drag.pointerId) return;
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerDrag);
+      window.removeEventListener('pointercancel', finishPointerDrag);
+      canvasDrag.current = null;
+      canvasDragCleanup.current = null;
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', finishPointerDrag);
+    window.addEventListener('pointercancel', finishPointerDrag);
+    canvasDragCleanup.current = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishPointerDrag);
+      window.removeEventListener('pointercancel', finishPointerDrag);
+      canvasDrag.current = null;
+      canvasDragCleanup.current = null;
+    };
   };
 
   const statusLabel = saveStatus === 'loading'
@@ -367,10 +386,6 @@ export function App() {
         <div
           class={`workspace-toolbar${canvasFloating ? " workspace-toolbar-draggable" : ""}`}
           onPointerDown={canvasFloating ? startCanvasDrag : undefined}
-          onPointerMove={canvasFloating ? moveCanvasDrag : undefined}
-          onPointerUp={canvasFloating ? endCanvasDrag : undefined}
-          onPointerCancel={canvasFloating ? endCanvasDrag : undefined}
-          onLostPointerCapture={canvasFloating ? endCanvasDrag : undefined}
         >
           <div class="breadcrumb">
             <strong>{state.project.document.name}</strong>
@@ -475,10 +490,6 @@ export function App() {
           <div
             class="canvas-minimized-titlebar"
             onPointerDown={startCanvasDrag}
-            onPointerMove={moveCanvasDrag}
-            onPointerUp={endCanvasDrag}
-            onPointerCancel={endCanvasDrag}
-            onLostPointerCapture={endCanvasDrag}
           >
             <Icon name="canvas" />
             <strong>{state.project.document.name}</strong>
