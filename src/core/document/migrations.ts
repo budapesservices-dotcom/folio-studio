@@ -44,7 +44,22 @@ export function migrateProjectToV2(input: unknown): FolioProject {
 
   const version = (input as { formatVersion?: unknown }).formatVersion;
   if (version === 1) return migrateProjectV1ToV2(input as FolioProjectV1);
-  if (version === FOLIO_FORMAT_VERSION) return requireValidProject(input);
+  if (version === FOLIO_FORMAT_VERSION) {
+    const candidate = input as Record<string, unknown>;
+    if (Array.isArray(candidate.pages) && candidate.pages.length > 0) {
+      const activePageExists = candidate.pages.some(
+        (page) => typeof page === 'object' && page !== null &&
+          (page as { id?: unknown }).id === candidate.activePageId,
+      );
+      if (!activePageExists) {
+        const firstPage = candidate.pages[0] as { id?: unknown };
+        if (typeof firstPage?.id === 'string') {
+          return requireValidProject({ ...candidate, activePageId: firstPage.id });
+        }
+      }
+    }
+    return requireValidProject(input);
+  }
 
   throw new Error(`Unsupported .flop format version: ${String(version)}.`);
 }
