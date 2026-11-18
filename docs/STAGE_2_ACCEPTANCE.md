@@ -23,6 +23,14 @@ npm run check && npm run test && npm run build
 13. Verify a locked layer cannot be dragged or resized.
 14. Refresh the browser and confirm the final geometry is restored by autosave.
 
+## Browser fullscreen checks
+
+1. Open FOLIO in a top-level browser tab over HTTPS or localhost.
+2. Click **Fullscreen** in the top bar. The app must call the browser Fullscreen API and the browser tab/address chrome should disappear.
+3. Press **Esc**. The browser must leave fullscreen and the toolbar button must return to **Fullscreen**.
+4. Click **Fullscreen** again, then click **Exit fullscreen**. The browser must leave fullscreen and the button state must stay synchronized.
+5. Verify browser denial or unsupported Fullscreen API produces a visible notice rather than a silent failure.
+
 ## Regression gate
 
 - Existing snapping guides and selection behavior continue to work.
