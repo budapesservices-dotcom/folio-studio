@@ -392,11 +392,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .quick-add button { border: 1px solid #3a4050; border-radius: 5px; padding: 7px 9px; color: #aaa2e9; background: #24243a; font-size: 9px; cursor: pointer; }
 .quick-add button:hover { background: #302e4b; }
 
-.canvas-minimized-window { position: absolute; z-index: 110; width: 260px; height: 42px; overflow: hidden; border: 1px solid #59657b; border-radius: 8px; background: #252e40; box-shadow: 0 12px 34px #0009; }
-.canvas-minimized-titlebar { display: flex; align-items: center; gap: 9px; width: 100%; height: 100%; padding: 0 8px 0 12px; color: #e8edf7; cursor: grab; touch-action: none; user-select: none; }
+.canvas-minimized-window { position: absolute; z-index: 110; width: 238px; height: 34px; overflow: hidden; border: 1px solid #46516a; border-radius: 7px; background: #252e40; box-shadow: 0 8px 22px #0007; }
+.canvas-minimized-titlebar { display: flex; align-items: center; gap: 8px; width: 100%; height: 100%; padding: 0 7px 0 10px; color: #e8edf7; cursor: grab; touch-action: none; user-select: none; }
 .canvas-minimized-titlebar:active { cursor: grabbing; }
-.canvas-minimized-titlebar strong { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.canvas-minimized-titlebar button { width: 22px; height: 22px; border: 1px solid #46516a; border-radius: 5px; color: #dce4f4; background: #303b50; cursor: pointer; }
+.canvas-minimized-titlebar strong { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 550; }
+.canvas-minimized-titlebar button { display: grid; place-items: center; flex: 0 0 20px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; color: #aeb8ca; background: transparent; cursor: pointer; }
+.canvas-minimized-titlebar button:hover { color: #fff; background: #ffffff12; }
+.canvas-minimized-titlebar .minimized-restore-control::before,
+.window-control-minimize::before { content: ""; display: block; width: 9px; height: 1px; border-radius: 1px; background: currentColor; }
+.canvas-minimized-titlebar .minimized-restore-control:hover { color: #fff; }
+.canvas-minimized-titlebar button:last-child:hover { color: #fff; background: #71313b; }
 .statusbar { position: relative; z-index: 100; grid-area: footer; display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border-top: 1px solid #2b303c; background: #171b24; color: #737d8d; font-size: 8px; letter-spacing: .5px; }
 .statusbar > div { display: flex; align-items: center; gap: 7px; }
 .status-brand { display: grid; place-items: center; width: 14px; height: 14px; border-radius: 4px; color: #181522; background: #a494ff; font-size: 9px; font-weight: 900; }
