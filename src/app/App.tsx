@@ -277,44 +277,25 @@ export function App() {
   useEffect(() => {
     let active = true;
     loadMostRecentProject()
-      .then((latestProject) => {
-        if (!active) return;
+      .then((loadedProject) => {
+        if (!active || !loadedProject) return;
 
-        // Restore the selected page snapshot first. IndexedDB is the fallback
-        // for projects created before Pages Rack snapshots existed.
-        let project: FolioProject | null = latestProject;
-        let activePageName = latestProject?.document.name ?? 'Main Page';
-        try {
-          const pageId = window.localStorage.getItem('folio.active-page') ?? 'main';
-          const pageSnapshot = window.localStorage.getItem(`folio.page-project:${pageId}`);
-          if (pageSnapshot) project = JSON.parse(pageSnapshot) as FolioProject;
-          const savedPages = JSON.parse(window.localStorage.getItem('folio.pages') ?? '[]') as Array<{ id: string; name: string }>;
-          activePageName = savedPages.find((page) => page.id === pageId)?.name ?? project?.document.name ?? activePageName;
-        } catch (error) {
-          console.warn('Folio could not restore the active page snapshot:', error);
-        }
-        if (!project) return;
-
-        let resolvedProjectName = project.metadata.name || 'First canvas';
-        try {
-          resolvedProjectName = window.localStorage.getItem('folio.project-name')?.trim() || resolvedProjectName;
-        } catch { /* use the name stored in the project */ }
-        setProjectName(resolvedProjectName);
+        // Restore explicitly from the project's activePageId. If an older or
+        // malformed v2 record points nowhere, use the first persisted page.
+        const activePage = loadedProject.pages.find((page) => page.id === loadedProject.activePageId)
+          ?? loadedProject.pages[0];
+        if (!activePage) throw new Error('The saved project does not contain a page.');
         dispatch({
           type: 'replace-project',
-          project: {
-            ...project,
-            metadata: { ...project.metadata, name: resolvedProjectName },
-            document: { ...project.document, name: activePageName },
-          },
+          project: { ...loadedProject, activePageId: activePage.id },
         });
       })
       .catch((error: unknown) => {
-        console.warn('Folio could not read local autosave:', error);
-        if (active) setNotice('Local storage is unavailable. You can still export .flop files.');
+        console.error('Folio could not restore the project from IndexedDB:', error);
+        if (active) setNotice('The saved project could not be restored. A new project is available.');
       })
       .finally(() => {
-        if (active) setReady(true);
+        if (active) setIsProjectLoaded(true);
       });
 
     return () => { active = false; };
@@ -345,39 +326,8 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [componentState.project, componentReady]);
 
-
-
-
   useEffect(() => {
-    try {
-      window.localStorage.setItem('folio.pages', JSON.stringify(pages));
-      window.localStorage.setItem('folio.active-page', activePageId);
-    } catch (error) {
-      console.warn('Folio could not save Pages Rack:', error);
-      setNotice('Pages Rack storage is unavailable.');
-    }
-  }, [pages, activePageId]);
-
-  useEffect(() => {
-    if (!ready) return;
-    try {
-      window.localStorage.setItem(`folio.page-project:${activePageId}`, JSON.stringify(state.project));
-    } catch (error) {
-      console.warn('Folio could not save page document snapshot:', error);
-    }
-  }, [state.project, activePageId, ready]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem('folio.component-rack', JSON.stringify(ownedComponents));
-    } catch (error) {
-      console.warn('Folio could not save Component Rack:', error);
-      setNotice('Component Rack storage is full or unavailable.');
-    }
-  }, [ownedComponents]);
-
-  useEffect(() => {
-    if (!ready) return;
+    if (!isProjectLoaded) return;
     setSaveStatus('saving');
     const timer = window.setTimeout(() => {
       saveProject(state.project)
@@ -388,7 +338,7 @@ export function App() {
         });
     }, 450);
     return () => window.clearTimeout(timer);
-  }, [state.project, ready]);
+  }, [state.project, isProjectLoaded]);
 
   useEffect(() => {
     if (!notice) return;
@@ -396,17 +346,20 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  const activeDocument = getActiveDocument(state.project);
+  const componentDocument = getActiveDocument(componentState.project);
   const selectedNode = useMemo(
-    () => state.project.document.nodes.find((node) => node.id === state.selectedNodeId) ?? null,
-    [state.project.document.nodes, state.selectedNodeId],
+    () => activeDocument.nodes.find((node) => node.id === state.selectedNodeId) ?? null,
+    [activeDocument.nodes, state.selectedNodeId],
   );
 
   const addNode = (type: DesignNode['type']) => {
-    dispatch({ type: 'add-node', node: createNode(type, state.project.document.nodes.length) });
+    if (isHydrating) return;
+    dispatch({ type: 'add-node', node: createNode(type, activeDocument.nodes.length) });
     setInspectorVisible(true);
   };
 
-  const selectedNodes = state.project.document.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
+  const selectedNodes = activeDocument.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
   const saveNodesAsComponent = (nodes: DesignNode[]) => {
     if (nodes.length === 0) return;
     const name = nodes.length === 1 ? nodes[0].name : `Component ${ownedComponents.length + 1}`;
