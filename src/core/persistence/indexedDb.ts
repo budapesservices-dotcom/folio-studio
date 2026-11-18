@@ -2,7 +2,7 @@ import type { ComponentDefinition, FolioPage, FolioProject } from '../document/t
 import { createEmptyDocument } from '../document/factory';
 import { getActiveDocument } from '../document/project';
 import { migrateProjectToV2 } from '../document/migrations';
-import { requireValidProject } from '../document/validation';
+import { requireValidProject, validateProject } from '../document/validation';
 
 const DATABASE_NAME = 'folio-studio';
 const DATABASE_VERSION = 1;
@@ -164,7 +164,7 @@ function migrateLegacyWorkspace(
       ? baseProject.activePageId
       : pages[0].id;
 
-  let components: ComponentDefinition[] = baseProject.components;
+  const components: ComponentDefinition[] = [...baseProject.components];
   try {
     const raw = window.localStorage.getItem('folio.component-rack');
     const parsed: unknown = raw ? JSON.parse(raw) : null;
@@ -181,7 +181,7 @@ function migrateLegacyWorkspace(
         const maxX = Math.max(...nodes.map((node) => node.x + node.width));
         const maxY = Math.max(...nodes.map((node) => node.y + node.height));
         const updatedAt = typeof legacy.updatedAt === 'string' ? legacy.updatedAt : new Date().toISOString();
-        migrated.push({
+        const candidate: ComponentDefinition = {
           id: legacy.id,
           name: legacy.name,
           document: {
@@ -191,9 +191,18 @@ function migrateLegacyWorkspace(
           },
           createdAt: updatedAt,
           updatedAt,
-        });
+        };
+        if (components.some((component) => component.id === candidate.id) ||
+            migrated.some((component) => component.id === candidate.id)) continue;
+        const candidateProject = {
+          ...baseProject,
+          activePageId,
+          pages,
+          components: [...components, ...migrated, candidate],
+        };
+        if (validateProject(candidateProject).ok) migrated.push(candidate);
       }
-      if (migrated.length > 0) components = migrated;
+      components.push(...migrated);
     }
   } catch {
     // An invalid legacy rack is ignored; the project document remains usable.
@@ -297,7 +306,10 @@ export async function loadMostRecentProject(): Promise<FolioProject | null> {
   })();
 
   if (isLegacyProject || hasLegacySplitWorkspace) {
-    const oldPageIds = readLegacyWorkspacePages().map((page) => page.id);
+    const oldPageIds = [...new Set([
+      ...readLegacyWorkspacePages().map((page) => page.id),
+      ...legacyPageRecords.map((record) => record.id.slice('folio-page-'.length)),
+    ])];
     project = migrateLegacyWorkspace(project, legacyPageRecords);
     await saveProject(project);
     await deleteLegacyPageProjects(legacyPageRecords.map((record) => record.id));
