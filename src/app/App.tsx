@@ -2,7 +2,7 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createInitialProject, createNode } from '../core/document/factory';
 import type { DesignNode } from '../core/document/types';
-import { loadMostRecentProject, saveProject } from '../core/persistence/indexedDb';
+import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
 import { Canvas } from '../engines/canvas/Canvas';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
 import { createEditorState, editorReducer } from './editorReducer';
@@ -56,6 +56,15 @@ const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
 export function App() {
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const [state, dispatch] = useReducer(editorReducer, initialEditorState);
+  const componentInitialState = useMemo(() => {
+    const project = createInitialProject('Component Library');
+    project.metadata.id = 'folio-component-canvas';
+    project.document.name = 'Component Library';
+    project.document.nodes = [];
+    return createEditorState(project);
+  }, []);
+  const [componentState, componentDispatch] = useReducer(editorReducer, componentInitialState);
+  const [componentReady, setComponentReady] = useState(false);
   const [ready, setReady] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [notice, setNotice] = useState('');
@@ -202,6 +211,33 @@ export function App() {
 
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    loadProjectById('folio-component-canvas')
+      .then((project) => {
+        if (active && project) componentDispatch({ type: 'replace-project', project });
+      })
+      .catch((error: unknown) => {
+        console.warn('Folio could not read Component Canvas autosave:', error);
+      })
+      .finally(() => {
+        if (active) setComponentReady(true);
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!componentReady) return;
+    const timer = window.setTimeout(() => {
+      saveProject(componentState.project).catch((error: unknown) => {
+        console.error('Folio Component Canvas autosave failed:', error);
+      });
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [componentState.project, componentReady]);
+
+
 
   useEffect(() => {
     if (!ready) return;
@@ -758,21 +794,27 @@ export function App() {
             <strong>Component Canvas</strong>
           </div>
           <div class="canvas-window-tools">
-            {state.selectedNodeIds.length > 1 && (
+            <div class="component-canvas-create-tools" aria-label="Create component elements">
+              <button type="button" title="Add rectangle" aria-label="Add rectangle" onClick={() => componentDispatch({ type: 'add-node', node: createNode('rect', componentState.project.document.nodes.length) })}><Icon name="rect" /></button>
+              <button type="button" title="Add ellipse" aria-label="Add ellipse" onClick={() => componentDispatch({ type: 'add-node', node: createNode('ellipse', componentState.project.document.nodes.length) })}><Icon name="ellipse" /></button>
+              <button type="button" title="Add text" aria-label="Add text" onClick={() => componentDispatch({ type: 'add-node', node: createNode('text', componentState.project.document.nodes.length) })}><Icon name="text" /></button>
+              <span class="workspace-divider" />
+            </div>
+            {componentState.selectedNodeIds.length > 1 && (
               <div class="alignment-tools" aria-label="Align selected layers">
                 <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
                 <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
                 <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
-                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal')}>⇌</button>
+                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={componentState.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal')}>⇌</button>
                 <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
                 <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
                 <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
-                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
+                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={componentState.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
               </div>
             )}
             <div class="workspace-tools">
-              <button class="history-button" title="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><Icon name="undo" /></button>
-              <button class="history-button" title="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}><Icon name="redo" /></button>
+              <button class="history-button" title="Undo" disabled={componentState.past.length === 0} onClick={() => componentDispatch({ type: 'undo' })}><Icon name="undo" /></button>
+              <button class="history-button" title="Redo" disabled={componentState.future.length === 0} onClick={() => componentDispatch({ type: 'redo' })}><Icon name="redo" /></button>
               <span class="workspace-divider" />
               <button class="zoom-button" title="Zoom out" onClick={() => setComponentCanvasZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}><Icon name="minus" /></button>
               <span class="zoom-value">{Math.round(componentCanvasZoom * 100)}%</span>
@@ -787,15 +829,12 @@ export function App() {
         </div>
         <div class="canvas-workspace">
           <Canvas
-            document={state.project.document}
-            selectedNodeIds={state.selectedNodeIds}
+            document={componentState.project.document}
+            selectedNodeIds={componentState.selectedNodeIds}
             zoom={componentCanvasZoom}
             onZoomChange={setComponentCanvasZoom}
-            onSelectionChange={(nodeIds) => {
-              dispatch({ type: 'select-nodes', nodeIds });
-              if (nodeIds.length > 0) setInspectorVisible(true);
-            }}
-            onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
+            onSelectionChange={(nodeIds) => componentDispatch({ type: 'select-nodes', nodeIds })}
+            onTransformCommit={(nodes) => componentDispatch({ type: 'transform-nodes', nodes })}
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
@@ -820,7 +859,7 @@ export function App() {
             onPointerDown={startCanvasDrag}
           >
             <Icon name="canvas" />
-            <strong>{state.project.document.name}</strong>
+            <strong>{componentState.project.document.name}</strong>
             <button type="button" class="minimized-restore-control" title="Restore Canvas" aria-label="Restore Canvas" onClick={() => setCanvasMinimized(false)}></button>
             <button type="button" title="Close Canvas" aria-label="Close Canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); }}>×</button>
           </div>
