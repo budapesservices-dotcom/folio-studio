@@ -751,3 +751,74 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   letter-spacing: .65px;
   white-space: nowrap;
 }
+
+
+/* Milestone 3 — master component and linked instance controls */
+.component-rack-card {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 220px);
+  min-height: 164px;
+}
+.component-rack-preview { min-height: 82px; flex: 1 1 auto; }
+.component-rack-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-top: 1px solid #303849;
+}
+.component-rack-card-actions > button,
+.component-rack-card-actions form button {
+  min-height: 23px;
+  padding: 3px 6px;
+  color: #bfc7d5;
+  background: #2b3444;
+  border: 1px solid #3a4558;
+  border-radius: 4px;
+  font-size: 8px;
+  cursor: pointer;
+}
+.component-rack-card-actions > button:hover,
+.component-rack-card-actions form button:hover { color: #fff; border-color: #8f83d9; }
+.component-rack-card-actions form { display: flex; flex: 1 1 100%; gap: 3px; }
+.component-rack-card-actions form input {
+  min-width: 0;
+  width: 70px;
+  flex: 1 1 auto;
+  color: #e7eaf1;
+  background: #171e2a;
+  border: 1px solid #434e63;
+  border-radius: 4px;
+  padding: 3px 5px;
+  font-size: 9px;
+}
+.component-rack-card-actions .component-rack-delete {
+  position: static;
+  width: auto;
+  height: 23px;
+  opacity: 1;
+  color: #e59a9a;
+}
+.field-help {
+  display: block;
+  margin: 0 0 9px;
+  color: #8e83d2;
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 1px;
+}
+.instance-actions { display: flex; gap: 6px; margin-top: 12px; }
+.instance-actions button {
+  min-height: 28px;
+  padding: 0 9px;
+  color: #d7d9e3;
+  background: #2b3040;
+  border: 1px solid #454c61;
+  border-radius: 5px;
+  font-size: 9px;
+  cursor: pointer;
+}
+.instance-actions button:disabled { opacity: .4; cursor: not-allowed; }
+.instance-actions button:hover:not(:disabled) { border-color: #8b7cf6; color: #fff; }
