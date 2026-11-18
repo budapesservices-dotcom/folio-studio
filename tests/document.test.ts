@@ -83,6 +83,12 @@ describe('Folio unified project v2', () => {
     expect(migrateProjectToV2(legacy).formatVersion).toBe(2);
   });
 
+  it('falls back to the first page when a v2 activePageId is stale', () => {
+    const project = createInitialProject();
+    const migrated = migrateProjectToV2({ ...project, activePageId: 'missing-page' });
+    expect(migrated.activePageId).toBe(project.pages[0].id);
+  });
+
   it('adds, undoes and redoes a layer on the active page', () => {
     const project = createInitialProject();
     const initialCount = getActiveDocument(project).nodes.length;
