@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from '../../core/document/types';
-import { applyComponentOverrides } from '../../core/document/components';
+import { resolveComponentInstanceNodes } from '../../core/document/components';
 import {
   getBounds,
   resizeNodes,
@@ -104,8 +104,7 @@ function NodeArtwork({ node, components = [] }: { node: DesignNode; components?:
       <g data-node-id={node.id} transform={transform} opacity={node.opacity} class="canvas-node component-instance-artwork">
         {component ? (
           <g transform={'translate(' + node.x + ' ' + node.y + ') scale(' + scaleX + ' ' + scaleY + ')'}>
-            {component.document.nodes.map((child) => {
-              const effective = applyComponentOverrides(child, node.overrides);
+            {resolveComponentInstanceNodes(node, component).map((effective) => {
               return effective.type === 'component-instance'
                 ? null
                 : <NodeShape key={child.id} node={effective} />;

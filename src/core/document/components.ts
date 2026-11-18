@@ -34,6 +34,14 @@ export function applyComponentOverrides(
   return node;
 }
 
+export function resolveComponentInstanceNodes(
+  instance: ComponentInstanceNode,
+  component: ComponentDefinition,
+): DesignNode[] {
+  if (instance.componentId !== component.id) return [];
+  return component.document.nodes.map((node) => applyComponentOverrides(node, instance.overrides));
+}
+
 export function getComponentOverrideTargets(component: ComponentDefinition): {
   textNode: Extract<DesignNode, { type: 'text' }> | undefined;
   fillNode: Extract<DesignNode, { type: 'rect' | 'ellipse' | 'text' }> | undefined;

@@ -195,3 +195,80 @@ describe('Folio unified project v2', () => {
   });
 
 });
+
+
+describe('linked master components and instances', () => {
+  it('resolves instances against the latest master definition', async () => {
+    const { createComponentInstance, resolveComponentInstanceNodes } = await import('../src/core/document/components');
+    const project = createInitialProject();
+    const source = createRectNode();
+    const master = {
+      id: 'master-card',
+      name: 'Card',
+      createdAt: '2026-11-19T00:00:00.000Z',
+      updatedAt: '2026-11-19T00:00:00.000Z',
+      document: { ...project.pages[0].document, id: 'master-doc', name: 'Card', width: 400, height: 280, nodes: [source] },
+    };
+    const instance = createComponentInstance(master, 80, 120, 'instance-card');
+    const first = resolveComponentInstanceNodes(instance, master);
+    expect(first[0].type).toBe('rect');
+    expect(first[0].style.fill).toBe(source.style.fill);
+
+    const updatedMaster = {
+      ...master,
+      updatedAt: '2026-11-19T00:01:00.000Z',
+      document: { ...master.document, nodes: [{ ...source, style: { ...source.style, fill: '#123456' } }] },
+    };
+    const afterMasterEdit = resolveComponentInstanceNodes(instance, updatedMaster);
+    expect(afterMasterEdit[0].style.fill).toBe('#123456');
+    expect(instance.componentId).toBe(master.id);
+  });
+
+  it('applies per-instance overrides without changing the master', async () => {
+    const { createComponentInstance, resolveComponentInstanceNodes } = await import('../src/core/document/components');
+    const project = createInitialProject();
+    const text = project.pages[0].document.nodes.find((node) => node.type === 'text');
+    if (!text || text.type !== 'text') throw new Error('Expected a text master child.');
+    const master = {
+      id: 'master-label', name: 'Label',
+      createdAt: '2026-11-19T00:00:00.000Z', updatedAt: '2026-11-19T00:00:00.000Z',
+      document: { ...project.pages[0].document, id: 'master-label-doc', name: 'Label', nodes: [text] },
+    };
+    const instance = {
+      ...createComponentInstance(master, 40, 50, 'instance-label'),
+      overrides: { [text.id]: { text: 'Instance only', fill: '#FF0000' } },
+    };
+    const resolved = resolveComponentInstanceNodes(instance, master)[0];
+    expect(resolved.type).toBe('text');
+    if (resolved.type !== 'text') throw new Error('Expected resolved text node.');
+    expect(resolved.text).toBe('Instance only');
+    expect(resolved.style.fill).toBe('#FF0000');
+    expect(master.document.nodes[0]).toEqual(text);
+    expect(text.text).not.toBe('Instance only');
+  });
+
+  it('detaches an instance to ordinary nodes and deletes a master without broken references', async () => {
+    const { createComponentInstance, detachComponentInstance } = await import('../src/core/document/components');
+    const project = createInitialProject();
+    const source = createRectNode();
+    const master = {
+      id: 'master-detach', name: 'Detach me',
+      createdAt: '2026-11-19T00:00:00.000Z', updatedAt: '2026-11-19T00:00:00.000Z',
+      document: { ...project.pages[0].document, id: 'master-detach-doc', width: 400, height: 280, nodes: [source] },
+    };
+    const instance = createComponentInstance(master, 100, 140, 'instance-detach');
+    const detached = detachComponentInstance(instance, master);
+    expect(detached).toHaveLength(1);
+    expect(detached[0].type).toBe('rect');
+    expect(detached[0].id).not.toBe(source.id);
+
+    const withMaster = editorReducer(createEditorState({
+      ...project,
+      components: [master],
+      pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [...page.document.nodes, instance] } })),
+    }), { type: 'delete-component', componentId: master.id });
+    expect(withMaster.project.components).toHaveLength(0);
+    expect(withMaster.project.pages[0].document.nodes.some((node) => node.type === 'component-instance')).toBe(false);
+    expect(validateProject(withMaster.project).ok).toBe(true);
+  });
+});
