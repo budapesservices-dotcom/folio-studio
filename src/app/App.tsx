@@ -316,9 +316,13 @@ export function App() {
           onPointerMove={(event) => {
             const drag = canvasDrag.current;
             if (!drag) return;
+            const shell = (event.currentTarget as HTMLElement).closest('.app-shell') as HTMLElement | null;
+            const bounds = shell?.getBoundingClientRect();
+            const maxX = Math.max(0, (bounds?.width ?? window.innerWidth) - canvasSize.width);
+            const maxY = Math.max(56, (bounds?.height ?? window.innerHeight) - 42);
             setCanvasPosition({
-              x: Math.max(0, drag.originX + event.clientX - drag.pointerX),
-              y: Math.max(56, Math.min(drag.originY + event.clientY - drag.pointerY, (event.currentTarget as HTMLElement).closest('.app-shell')?.clientHeight ?? window.innerHeight) - 42),
+              x: Math.max(0, Math.min(drag.originX + event.clientX - drag.pointerX, maxX)),
+              y: Math.max(56, Math.min(drag.originY + event.clientY - drag.pointerY, maxY)),
             });
           }}
           onPointerUp={() => { canvasDrag.current = null; }}
