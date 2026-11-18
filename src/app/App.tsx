@@ -37,6 +37,18 @@ function LayerIcon({ type }: { type: DesignNode['type'] }) {
   return <span class={`layer-type layer-type-${type}`}>{type === 'text' ? 'T' : type === 'ellipse' ? '○' : '□'}</span>;
 }
 
+type ToolbarHint = {
+  panel: string;
+  description: string;
+  shortcuts: string[];
+};
+
+const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
+  panel: 'WORKSPACE',
+  description: 'Point at a panel to see what it does and which shortcuts are available.',
+  shortcuts: ['SPACE + DRAG', 'SHIFT + CLICK'],
+};
+
 export function App() {
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const [state, dispatch] = useReducer(editorReducer, initialEditorState);
@@ -44,6 +56,7 @@ export function App() {
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [notice, setNotice] = useState('');
   const [zoom, setZoom] = useState(0.82);
+  const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
 
   useEffect(() => {
     let active = true;
@@ -116,6 +129,10 @@ export function App() {
     dispatch({ type: 'transform-nodes', nodes: distributeNodes(selected, axis) });
   };
 
+  const updateToolbarHint = (panel: string, description: string, shortcuts: string[] = []) => {
+    setToolbarHint({ panel, description, shortcuts });
+  };
+
   const statusLabel = saveStatus === 'loading'
     ? 'LOADING'
     : saveStatus === 'saving'
@@ -125,9 +142,35 @@ export function App() {
         : 'ALL CHANGES SAVED';
 
   return (
-    <div class="app-shell">
-      <div class="global-toolbar-slot" aria-hidden="true" />
-      <nav class="tool-rail" aria-label="Insert tools">
+    <div class="app-shell" onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}>
+      <header class="global-toolbar-slot" aria-label="FOLIO application toolbar">
+        <nav class="global-menu-bar" aria-label="Application menus">
+          <div class="global-menu-items">
+            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('FILE', 'Project actions and .flop file commands will be organized here.')}>File</span>
+            <span class="global-menu-separator" aria-hidden="true">|</span>
+            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}>Edit</span>
+            <span class="global-menu-separator" aria-hidden="true">|</span>
+            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and fullscreen controls will be organized here.')}>View</span>
+            <span class="global-menu-separator" aria-hidden="true">|</span>
+            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('TOOLS', 'Design tools and tool-specific settings will be organized here.')}>Tools</span>
+            <span class="global-menu-separator" aria-hidden="true">|</span>
+            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('OPTION', 'Application and workspace preferences will be organized here.')}>Option</span>
+            <span class="global-menu-separator" aria-hidden="true">|</span>
+            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('HELP', 'Keyboard reference, documentation and support will be organized here.')}>Help</span>
+          </div>
+        </nav>
+        <div class="global-hint-bar" role="status" aria-live="polite">
+          <span class="hint-panel-label">{toolbarHint.panel}</span>
+          <span class="hint-panel-description">{toolbarHint.description}</span>
+          <span class="hint-shortcut-divider" aria-hidden="true">·</span>
+          <div class="hint-shortcut-list">
+            {toolbarHint.shortcuts.length > 0
+              ? toolbarHint.shortcuts.map((shortcut) => <span class="hint-shortcut" key={shortcut}>{shortcut}</span>)
+              : <span class="hint-no-shortcuts">SHORTCUTS NOT ASSIGNED</span>}
+          </div>
+        </div>
+      </header>
+      <nav class="tool-rail" aria-label="Insert tools" onMouseEnter={() => updateToolbarHint('TOOLS', 'Choose Select, Rectangle, Ellipse or Text from the tool rail.', ['SPACE + DRAG'])}>
         <button class="tool-button active" title="Select layer" aria-label="Select layer" onClick={() => dispatch({ type: 'select-node', nodeId: null })}>
           <Icon name="cursor" />
         </button>
@@ -151,7 +194,7 @@ export function App() {
         </div>
       </nav>
 
-      <aside class="layers-panel">
+      <aside class="layers-panel" onMouseEnter={() => updateToolbarHint('LAYERS', 'Select layers or extend a selection with modifier-click.', ['SHIFT + CLICK', 'CTRL/CMD + CLICK'])}>
         <div class="panel-heading">
           <div>
             <span class="panel-kicker">DOCUMENT</span>
@@ -201,7 +244,7 @@ export function App() {
         </div>
       </aside>
 
-      <main class="workspace">
+      <main class="workspace" onMouseEnter={() => updateToolbarHint('CANVAS', 'Drag objects to move them, or pan the viewport without moving artwork.', ['SPACE + DRAG', 'MIDDLE-DRAG'])}>
         <div class="workspace-toolbar">
           <div class="breadcrumb"><span>Canvas</span><Icon name="chevron" /><strong>{state.project.document.name}</strong></div>
           {state.selectedNodeIds.length > 1 && (
@@ -237,7 +280,7 @@ export function App() {
         </div>
       </main>
 
-      <aside class="inspector-panel">
+      <aside class="inspector-panel" onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
         <div class="panel-heading inspector-heading">
           <div>
             <span class="panel-kicker">PROPERTIES</span>
