@@ -50,7 +50,14 @@ export interface TextNode extends NodeBase {
   };
 }
 
-export type DesignNode = RectNode | EllipseNode | TextNode;
+export interface ComponentNodeOverride { fill?: string; text?: string; }
+export type ComponentInstanceOverrides = Record<string, ComponentNodeOverride>;
+export interface ComponentInstanceNode extends NodeBase {
+  type: 'component-instance';
+  componentId: string;
+  overrides: ComponentInstanceOverrides;
+}
+export type DesignNode = RectNode | EllipseNode | TextNode | ComponentInstanceNode;
 
 export interface FolioDocument {
   id: string;

@@ -77,6 +77,15 @@ function isDesignNode(value: unknown): value is DesignNode {
     );
   }
 
+  if (value.type === 'component-instance') {
+    if (!isString(value.componentId) || !value.componentId || !isRecord(value.overrides)) return false;
+    return Object.values(value.overrides).every((override) =>
+      isRecord(override) &&
+      (override.fill === undefined || isString(override.fill)) &&
+      (override.text === undefined || isString(override.text)),
+    );
+  }
+
   return false;
 }
 
@@ -209,6 +218,22 @@ export function validateProject(input: unknown): ValidationResult {
     }
     if (componentIds.has(component.id)) return { ok: false, error: 'Component IDs must be unique within a project.' };
     componentIds.add(component.id);
+  }
+
+  for (const component of input.components as Array<Record<string, unknown>>) {
+    const definitionDocument = component.document as FolioDocument;
+    if (definitionDocument.nodes.some((node) => node.type === 'component-instance')) {
+      return { ok: false, error: 'Nested component instances are not supported inside master definitions.' };
+    }
+  }
+
+  const knownComponentIds = new Set((input.components as Array<{ id: string }>).map((component) => component.id));
+  for (const page of input.pages as Array<{ document: FolioDocument }>) {
+    for (const node of page.document.nodes) {
+      if (node.type === 'component-instance' && !knownComponentIds.has(node.componentId)) {
+        return { ok: false, error: `A page references missing component: ${node.componentId}.` };
+      }
+    }
   }
 
   if (!input.logicGraphs.every(isLogicGraph)) {

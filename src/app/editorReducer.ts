@@ -1,5 +1,6 @@
 import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
+import { replaceComponentInstancesInDocument } from '../core/document/components';
 
 const HISTORY_LIMIT = 60;
 
@@ -18,6 +19,7 @@ export type EditorAction =
   | { type: 'add-node'; node: DesignNode }
   | { type: 'add-nodes'; nodes: DesignNode[] }
   | { type: 'replace-node'; node: DesignNode }
+  | { type: 'replace-node-with-nodes'; nodeId: string; nodes: DesignNode[] }
   | { type: 'edit-node'; node: DesignNode; coalesceKey: string }
   | { type: 'commit-edit' }
   | { type: 'delete-nodes'; nodeIds: string[] }
@@ -27,6 +29,8 @@ export type EditorAction =
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }
   | { type: 'add-component'; component: ComponentDefinition }
+  | { type: 'update-component'; component: ComponentDefinition }
+  | { type: 'rename-component'; componentId: string; name: string }
   | { type: 'delete-component'; componentId: string }
   | { type: 'replace-project'; project: FolioProject }
   | { type: 'undo' }
@@ -96,6 +100,14 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         nodes: [...document.nodes, ...action.nodes],
       };
       const next = touch(updateActiveDocument(state.project, nextDocument));
+      const ids = action.nodes.map((node) => node.id);
+      return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
+    }
+
+    case 'replace-node-with-nodes': {
+      if (!document.nodes.some((node) => node.id === action.nodeId)) return state;
+      const nodes = document.nodes.flatMap((node) => node.id === action.nodeId ? action.nodes : [node]);
+      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       const ids = action.nodes.map((node) => node.id);
       return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
     }
@@ -222,10 +234,32 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       }));
     }
 
-    case 'delete-component': {
-      const components = state.project.components.filter((component) => component.id !== action.componentId);
-      if (components.length === state.project.components.length) return state;
+    case 'update-component': {
+      if (!state.project.components.some((component) => component.id === action.component.id)) return state;
+      const components = state.project.components.map((component) =>
+        component.id === action.component.id ? action.component : component);
       return withSnapshot(state, touch({ ...state.project, components }));
+    }
+
+    case 'rename-component': {
+      const name = action.name.trim();
+      const target = state.project.components.find((component) => component.id === action.componentId);
+      if (!target || !name || target.name === name) return state;
+      const now = new Date().toISOString();
+      const components = state.project.components.map((component) =>
+        component.id === action.componentId ? { ...component, name, updatedAt: now, document: { ...component.document, name } } : component);
+      return withSnapshot(state, touch({ ...state.project, components }));
+    }
+
+    case 'delete-component': {
+      const target = state.project.components.find((component) => component.id === action.componentId);
+      if (!target) return state;
+      // Detach all page instances so deleting a master never leaves broken references.
+      const pages = state.project.pages.map((page) => ({
+        ...page, document: replaceComponentInstancesInDocument(page.document, target),
+      }));
+      const components = state.project.components.filter((component) => component.id !== action.componentId);
+      return withSnapshot(state, touch({ ...state.project, pages, components }));
     }
 
     case 'replace-project':
