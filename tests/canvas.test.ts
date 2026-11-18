@@ -3,6 +3,7 @@ import { createInitialProject, createRectNode } from '../src/core/document/facto
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
 import {
   alignNodes,
+  distributeNodes,
   getBounds,
   resizeNodes,
   snapTranslation,
@@ -77,6 +78,30 @@ describe('Canvas geometry engine', () => {
     expect(undone.project.document.nodes[0].x).toBe(selected[0].x);
     const redone = editorReducer(undone, { type: 'redo' });
     expect(redone.project.document.nodes[0].x).toBe(selected[0].x + 24);
+  });
+
+  it('distributes objects horizontally with equal gaps and fixed outer edges', () => {
+    const first = { ...createRectNode(), x: 10, y: 0, width: 20, height: 20 };
+    const middle = { ...createRectNode(), x: 120, y: 0, width: 40, height: 20 };
+    const last = { ...createRectNode(), x: 260, y: 0, width: 60, height: 20 };
+
+    const distributed = distributeNodes([middle, last, first], 'horizontal');
+    const byId = new Map(distributed.map((node) => [node.id, node]));
+
+    expect(byId.get(first.id)?.x).toBe(10);
+    expect(byId.get(middle.id)?.x).toBe(125);
+    expect(byId.get(last.id)?.x).toBe(260);
+  });
+
+  it('distributes objects vertically without changing their dimensions', () => {
+    const first = { ...createRectNode(), x: 0, y: 10, width: 20, height: 20 };
+    const middle = { ...createRectNode(), x: 0, y: 120, width: 20, height: 40 };
+    const last = { ...createRectNode(), x: 0, y: 260, width: 20, height: 60 };
+
+    const distributed = distributeNodes([first, middle, last], 'vertical');
+
+    expect(distributed.map((node) => node.y)).toEqual([10, 125, 260]);
+    expect(distributed.map((node) => node.height)).toEqual([20, 40, 60]);
   });
 
 });
