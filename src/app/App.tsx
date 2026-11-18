@@ -141,8 +141,6 @@ export function App() {
   const [canvasPosition, setCanvasPosition] = useState(() => {
     try {
       const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
       const savedX = Number.isFinite(saved?.position?.x) ? saved.position.x : 48;
       const savedY = Number.isFinite(saved?.position?.y) ? saved.position.y : 80;
       // Horizontal and bottom placement are intentionally unbounded; only keep
@@ -298,8 +296,6 @@ export function App() {
       const bounds = shell?.getBoundingClientRect();
       const shellLeft = bounds?.left ?? 0;
       const shellTop = bounds?.top ?? 0;
-      const visibleWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
-      const visibleHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
       const nextX = drag.originX + moveEvent.clientX - drag.pointerX;
       const nextY = drag.originY + moveEvent.clientY - drag.pointerY;
 
@@ -442,8 +438,6 @@ export function App() {
       const bounds = shell?.getBoundingClientRect();
       const shellLeft = bounds?.left ?? 0;
       const shellTop = bounds?.top ?? 0;
-      const visibleWidth = Math.max(0, Math.min(bounds?.right ?? window.innerWidth, window.innerWidth) - Math.max(0, shellLeft));
-      const visibleHeight = Math.max(0, Math.min(bounds?.bottom ?? window.innerHeight, window.innerHeight) - Math.max(0, shellTop));
       const nextX = drag.originX + moveEvent.clientX - drag.pointerX;
       const nextY = drag.originY + moveEvent.clientY - drag.pointerY;
 
