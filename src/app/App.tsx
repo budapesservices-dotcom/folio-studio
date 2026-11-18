@@ -57,7 +57,13 @@ const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
 };
 
 export function App() {
-  const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
+  const initialEditorState = useMemo(() => {
+    const project = createInitialProject('Main Page');
+    try {
+      project.metadata.name = window.localStorage.getItem('folio.project-name')?.trim() || 'First canvas';
+    } catch { project.metadata.name = 'First canvas'; }
+    return createEditorState(project);
+  }, []);
   const [state, dispatch] = useReducer(editorReducer, initialEditorState);
   const componentInitialState = useMemo(() => {
     const project = createInitialProject('Component Library');
@@ -73,8 +79,13 @@ export function App() {
   const [notice, setNotice] = useState('');
   const [zoom, setZoom] = useState(0.82);
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
+  const [projectName, setProjectName] = useState(() => {
+    try { return window.localStorage.getItem('folio.project-name')?.trim() || 'First canvas'; }
+    catch { return 'First canvas'; }
+  });
   const [projectNameEditing, setProjectNameEditing] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState('');
+  const projectNameCancelRef = useRef(false);
   const [layersVisible, setLayersVisible] = useState(true);
   const [inspectorVisible, setInspectorVisible] = useState(true);
   const [componentRackOpen, setComponentRackOpen] = useState(false);
@@ -286,8 +297,36 @@ export function App() {
   useEffect(() => {
     let active = true;
     loadMostRecentProject()
-      .then((project) => {
-        if (active && project) dispatch({ type: 'replace-project', project });
+      .then((latestProject) => {
+        if (!active || !latestProject) return;
+
+        // Restore the currently selected page snapshot first. IndexedDB remains
+        // the fallback for projects created before Pages Rack snapshots existed.
+        let project = latestProject;
+        let activePageName = latestProject.document.name;
+        try {
+          const pageId = window.localStorage.getItem('folio.active-page') ?? 'main';
+          const pageSnapshot = window.localStorage.getItem(`folio.page-project:${pageId}`);
+          if (pageSnapshot) project = JSON.parse(pageSnapshot) as FolioProject;
+          const savedPages = JSON.parse(window.localStorage.getItem('folio.pages') ?? '[]') as Array<{ id: string; name: string }>;
+          activePageName = savedPages.find((page) => page.id === pageId)?.name ?? project.document.name;
+        } catch (error) {
+          console.warn('Folio could not restore the active page snapshot:', error);
+        }
+
+        let resolvedProjectName = project.metadata.name || 'First canvas';
+        try {
+          resolvedProjectName = window.localStorage.getItem('folio.project-name')?.trim() || resolvedProjectName;
+        } catch { /* use the name stored in the project */ }
+        setProjectName(resolvedProjectName);
+        dispatch({
+          type: 'replace-project',
+          project: {
+            ...project,
+            metadata: { ...project.metadata, name: resolvedProjectName },
+            document: { ...project.document, name: activePageName },
+          },
+        });
       })
       .catch((error: unknown) => {
         console.warn('Folio could not read local autosave:', error);
@@ -419,7 +458,9 @@ export function App() {
         project.document.name = page.name;
         project.document.nodes = [];
       }
-      project.metadata.name = page.name;
+      // Project identity belongs to the whole .flop project; only the page
+      // document name changes when the user switches pages.
+      project.metadata.name = projectName;
       project.document.name = page.name;
       dispatch({ type: 'replace-project', project });
       setActivePageId(page.id);
@@ -444,7 +485,7 @@ export function App() {
     const id = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}`;
     const project = createInitialProject(name);
     project.metadata.id = `folio-page-${id}`;
-    project.metadata.name = name;
+    project.metadata.name = projectName;
     project.document.id = `folio-document-${id}`;
     project.document.name = name;
     project.document.nodes = [];
@@ -457,6 +498,20 @@ export function App() {
   };
 
   const saveSelectionAsComponent = () => saveNodesAsComponent(selectedNodes);
+
+  const commitProjectName = (value: string) => {
+    const name = value.trim();
+    if (!name) return;
+    setProjectName(name);
+    try { window.localStorage.setItem('folio.project-name', name); }
+    catch (error) { console.warn('Folio could not persist the project name:', error); }
+    if (state.project.metadata.name !== name) {
+      dispatch({
+        type: 'replace-project',
+        project: { ...state.project, metadata: { ...state.project.metadata, name } },
+      });
+    }
+  };
   const selectedComponentNodes = componentState.project.document.nodes.filter(
     (node) => componentState.selectedNodeIds.includes(node.id),
   );
@@ -949,7 +1004,7 @@ export function App() {
           </div>
 
           </div>
-                  <div class="global-project-name" title={`${state.project.metadata.name}.flop`}>
+                  <div class="global-project-name" title={`${projectName}.flop`}>
           {projectNameEditing ? (
             <input
               class="global-project-rename-input"
@@ -958,21 +1013,23 @@ export function App() {
               aria-label="Project name"
               onInput={(event) => setProjectNameDraft(event.currentTarget.value)}
               onBlur={() => {
-                const name = projectNameDraft.trim();
-                if (name && name !== state.project.metadata.name) {
-                  const project = { ...state.project, metadata: { ...state.project.metadata, name } };
-                  dispatch({ type: 'replace-project', project });
-                }
+                if (!projectNameCancelRef.current) commitProjectName(projectNameDraft);
+                projectNameCancelRef.current = false;
                 setProjectNameEditing(false);
               }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') (event.currentTarget as HTMLInputElement).blur();
-                if (event.key === 'Escape') { setProjectNameDraft(state.project.metadata.name); setProjectNameEditing(false); }
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  projectNameCancelRef.current = true;
+                  setProjectNameDraft(projectName);
+                  setProjectNameEditing(false);
+                }
               }}
             />
           ) : (
-            <button type="button" class="global-project-rename-button" title="Rename project" onClick={() => { setProjectNameDraft(state.project.metadata.name); setProjectNameEditing(true); }}>
-              <span class="global-project-label">{state.project.metadata.name}</span>
+            <button type="button" class="global-project-rename-button" title="Rename project" onClick={() => { setProjectNameDraft(projectName); projectNameCancelRef.current = false; setProjectNameEditing(true); }}>
+              <span class="global-project-label">{projectName}</span>
               <span class="global-project-extension">.flop</span>
               <Icon name="edit" />
             </button>
