@@ -454,7 +454,6 @@ export function App() {
       else {
         project = createInitialProject(page.name);
         project.metadata.id = `folio-page-${page.id}`;
-        project.metadata.name = page.name;
         project.document.id = `folio-document-${page.id}`;
         project.document.name = page.name;
         project.document.nodes = [];
