@@ -65,33 +65,60 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   border-bottom: 1px solid #ffffff08;
 }
 
-.global-toolbar-left { display: flex; align-items: center; min-width: 0; flex: 0 1 auto; }
+.global-toolbar-left { display: flex; align-items: center; min-width: 0; flex: 1 1 auto; }
 .global-project-name {
+  position: absolute;
+  left: 50%;
+  top: 50%;
   display: flex;
-  align-items: baseline;
-  gap: 5px;
+  align-items: center;
+  justify-content: center;
   min-width: 0;
-  max-width: 280px;
-  margin-left: 8px;
-  padding-left: 16px;
-  border-left: 1px solid #ffffff19;
+  max-width: min(300px, 30vw);
+  transform: translate(-50%, -50%);
   color: #cbd0dc;
   font-size: 11px;
   font-weight: 600;
 }
+.global-project-rename-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  cursor: text;
+}
+.global-project-rename-button:hover { border-color: #ffffff1c; background: #ffffff08; }
+.global-project-rename-button .icon-svg { width: 11px; height: 11px; color: #8792a5; opacity: 0; transition: opacity 120ms ease; }
+.global-project-rename-button:hover .icon-svg { opacity: 1; }
 .global-project-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .global-project-extension { flex: 0 0 auto; color: #747f91; font-size: 10px; font-weight: 500; }
-
+.global-project-rename-input {
+  width: min(250px, 28vw);
+  height: 27px;
+  padding: 0 8px;
+  border: 1px solid #8174dc;
+  border-radius: 5px;
+  outline: none;
+  color: #f0edff;
+  background: #10151e;
+  font-size: 11px;
+  text-align: center;
+}
 .global-panel-toggles {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  position: static;
   display: flex;
   align-items: center;
   gap: 5px;
   flex: 0 0 auto;
-  margin-left: 0;
+  margin-left: auto;
+  transform: none;
 }
 
 .global-panel-toggle {
