@@ -392,7 +392,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .quick-add button { border: 1px solid #3a4050; border-radius: 5px; padding: 7px 9px; color: #aaa2e9; background: #24243a; font-size: 9px; cursor: pointer; }
 .quick-add button:hover { background: #302e4b; }
 
-.canvas-drag-handle { cursor: grab; touch-action: none; user-select: none; }
+.canvas-drag-handle { position: relative; z-index: 4; display: flex; align-items: center; align-self: stretch; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; pointer-events: auto; }
+.canvas-drag-handle * { pointer-events: none; }
 .canvas-drag-handle:active { cursor: grabbing; }
 .canvas-minimized-window { position: absolute; z-index: 110; width: 260px; height: 42px; overflow: hidden; border: 1px solid #59657b; border-radius: 8px; background: #252e40; box-shadow: 0 12px 34px #0009; }
 .canvas-minimized-titlebar { display: flex; align-items: center; gap: 9px; width: 100%; height: 100%; padding: 0 8px 0 12px; color: #e8edf7; cursor: grab; touch-action: none; user-select: none; }
