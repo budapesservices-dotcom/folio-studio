@@ -285,7 +285,24 @@ export function App() {
     code: '.code-window',
   })[key];
 
+  const restoreWindowGeometry = (key: PanelKey, element: HTMLElement) => {
+    const previous = expandedWindowGeometry.get(key);
+    if (previous) {
+      element.style.left = `${previous.left}px`;
+      element.style.top = `${previous.top}px`;
+      element.style.width = `${previous.width}px`;
+      element.style.height = `${previous.height}px`;
+      element.style.right = 'auto';
+      element.style.bottom = 'auto';
+    }
+    expandedWindowGeometry.delete(key);
+  };
+
   const toggleMinimize = (key: PanelKey) => {
+    if (panels[key].expanded) {
+      const element = document.querySelector(getWindowSelector(key)) as HTMLElement | null;
+      if (element) restoreWindowGeometry(key, element);
+    }
     updatePanel(key, { minimized: !panels[key].minimized, expanded: false });
   };
 
@@ -309,16 +326,7 @@ export function App() {
       });
       ['left', 'right', 'top', 'bottom', 'width', 'height'].forEach((property) => element.style.removeProperty(property));
     } else {
-      const previous = expandedWindowGeometry.get(key);
-      if (previous) {
-        element.style.left = `${previous.left}px`;
-        element.style.top = `${previous.top}px`;
-        element.style.width = `${previous.width}px`;
-        element.style.height = `${previous.height}px`;
-        element.style.right = 'auto';
-        element.style.bottom = 'auto';
-      }
-      expandedWindowGeometry.delete(key);
+      restoreWindowGeometry(key, element);
     }
 
     element.style.zIndex = String(++floatingWindowZIndex);
