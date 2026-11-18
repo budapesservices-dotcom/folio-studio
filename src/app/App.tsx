@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useReducer, useState } from 'preact/hooks';
-import type { ComponentChildren } from 'preact';
 import { createInitialProject, createNode } from '../core/document/factory';
 import type { DesignNode } from '../core/document/types';
 import { loadMostRecentProject, saveProject } from '../core/persistence/indexedDb';
@@ -23,14 +22,6 @@ function Icon({ name }: { name: string }) {
     minus: 'M5 12h14',
     chevron: 'm9 18 6-6-6-6',
     save: 'M5 4h12l3 3v13H4V4h1zm2 0v6h10V4M8 20v-7h8v7',
-    maximize: 'M8 3H3v5M3 3l6 6M16 3h5v5m0-5-6 6M3 16v5h5m-5 0 6-6m12 1v5h-5m5 0-6-6',
-    minimize: 'M8 3v5H3m5-5L3 8M16 3v5h5m-5-5 5 5M3 16h5v5m-5-5 5 5m8 0v-5h5m-5 5 5-5',
-    canvas: 'M3 4h18v13H3zM8 21h8M12 17v4',
-    nodes: 'M5 5h5v5H5zM14 14h5v5h-5zM10 7h5v2h-5M15 9v5',
-    rack: 'M4 4h16v4H4zM4 10h7v10H4zM13 10h7v10h-7z',
-    components: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
-    code: 'm8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16',
-    close: 'M6 6l12 12M18 6 6 18',
     fullscreen: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5',
     sidebar: 'M4 4h16v16H4zM9 4v16',
   };
@@ -58,63 +49,6 @@ const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
   shortcuts: ['SPACE + DRAG', 'SHIFT + CLICK'],
 };
 
-type PanelKey = 'canvas' | 'logic' | 'rack' | 'componentCanvas' | 'code';
-
-type WindowGeometry = { left: number; top: number; width: number; height: number };
-const expandedWindowGeometry = new Map<string, WindowGeometry>();
-let floatingWindowZIndex = 50;
-
-type PanelState = {
-  open: boolean;
-  minimized: boolean;
-  expanded: boolean;
-};
-
-type WindowHeaderProps = {
-  title: string;
-  onPointerDown?: (event: PointerEvent) => void;
-  subtitle?: string;
-  minimized: boolean;
-  expanded: boolean;
-  onMinimize: () => void;
-  onExpand: () => void;
-  onClose: () => void;
-  children?: ComponentChildren;
-};
-
-function WindowHeader({
-  title,
-  subtitle,
-  minimized,
-  expanded,
-  onMinimize,
-  onExpand,
-  onClose,
-  children,
-  onPointerDown,
-}: WindowHeaderProps) {
-  return (
-    <header class="floating-window-header" onPointerDown={onPointerDown}>
-      <div class="floating-window-title">
-        <strong>{title}</strong>
-        {subtitle && <span>{subtitle}</span>}
-      </div>
-      <div class="floating-window-header-tools">{children}</div>
-      <div class="floating-window-controls">
-        <button class="window-control-button" type="button" title={minimized ? 'Restore panel' : 'Minimize panel'} aria-label={minimized ? 'Restore panel' : 'Minimize panel'} onClick={onMinimize}>
-          <span class="window-minimize-glyph">−</span>
-        </button>
-        <button class="window-control-button" type="button" title={expanded ? 'Restore panel size' : 'Expand panel'} aria-label={expanded ? 'Restore panel size' : 'Expand panel'} onClick={onExpand}>
-          <Icon name={expanded ? 'minimize' : 'maximize'} />
-        </button>
-        <button class="window-control-button window-close-button" type="button" title="Close panel" aria-label="Close panel" onClick={onClose}>
-          <Icon name="close" />
-        </button>
-      </div>
-    </header>
-  );
-}
-
 export function App() {
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const [state, dispatch] = useReducer(editorReducer, initialEditorState);
@@ -124,13 +58,6 @@ export function App() {
   const [zoom, setZoom] = useState(0.82);
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
   const [layersVisible, setLayersVisible] = useState(true);
-  const [panels, setPanels] = useState<Record<PanelKey, PanelState>>({
-    canvas: { open: true, minimized: false, expanded: false },
-    logic: { open: false, minimized: false, expanded: false },
-    rack: { open: false, minimized: false, expanded: false },
-    componentCanvas: { open: false, minimized: false, expanded: false },
-    code: { open: false, minimized: false, expanded: false },
-  });
 
   useEffect(() => {
     let active = true;
@@ -207,136 +134,10 @@ export function App() {
     setToolbarHint({ panel, description, shortcuts });
   };
 
-  const togglePanel = (key: PanelKey) => {
-    setPanels((current) => ({
-      ...current,
-      [key]: { ...current[key], open: !current[key].open, minimized: false },
-    }));
-  };
-
-  const bringWindowToFront = (selector: string) => {
-    const element = document.querySelector(selector) as HTMLElement | null;
-    if (element) element.style.zIndex = String(++floatingWindowZIndex);
-  };
-
-  const startWindowDrag = (event: PointerEvent, selector: string) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
-    const header = event.currentTarget as HTMLElement;
-    const win = header.closest(selector) as HTMLElement | null;
-    const shell = document.querySelector('.app-shell') as HTMLElement | null;
-    if (!win || !shell || win.classList.contains('is-expanded')) return;
-
-    event.preventDefault();
-    win.style.zIndex = String(++floatingWindowZIndex);
-
-    // Every floating workspace window is positioned in the same coordinate
-    // system: absolute pixels measured from the app shell. Never switch
-    // positioning modes during a drag, so pointer-up cannot snap the window.
-    const shellRect = shell.getBoundingClientRect();
-    const windowRect = win.getBoundingClientRect();
-    const startPointerX = event.clientX;
-    const startPointerY = event.clientY;
-    const startLeft = windowRect.left - shellRect.left;
-    const startTop = windowRect.top - shellRect.top;
-    const pointerId = event.pointerId;
-
-    win.style.position = 'absolute';
-    win.style.left = `${startLeft}px`;
-    win.style.top = `${startTop}px`;
-    win.style.width = `${windowRect.width}px`;
-    win.style.height = `${windowRect.height}px`;
-    win.style.right = 'auto';
-    win.style.bottom = 'auto';
-
-    const move = (moveEvent: PointerEvent) => {
-      if (moveEvent.pointerId !== pointerId) return;
-      const maxLeft = Math.max(0, shell.clientWidth - Math.min(windowRect.width, 220));
-      const maxTop = Math.max(68, shell.clientHeight - 46);
-      const nextLeft = Math.min(maxLeft, Math.max(0, startLeft + moveEvent.clientX - startPointerX));
-      const nextTop = Math.min(maxTop, Math.max(68, startTop + moveEvent.clientY - startPointerY));
-      win.style.left = `${nextLeft}px`;
-      win.style.top = `${nextTop}px`;
-    };
-
-    const stop = (stopEvent: PointerEvent) => {
-      if (stopEvent.pointerId !== pointerId) return;
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', stop);
-      window.removeEventListener('pointercancel', stop);
-    };
-
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', stop);
-    window.addEventListener('pointercancel', stop);
-  };
-
   const enterFullscreen = () => {
     const root = document.querySelector('.app-shell') as HTMLElement | null;
     if (!document.fullscreenElement) root?.requestFullscreen?.().catch(() => setNotice('Fullscreen is unavailable in this browser.'));
     else document.exitFullscreen?.();
-  };
-
-  const updatePanel = (key: PanelKey, patch: Partial<PanelState>) => {
-    setPanels((current) => ({
-      ...current,
-      [key]: { ...current[key], ...patch },
-    }));
-  };
-
-  const getWindowSelector = (key: PanelKey) => ({
-    canvas: '.workspace',
-    logic: '.logic-window',
-    rack: '.component-rack-drawer',
-    componentCanvas: '.component-canvas-window',
-    code: '.code-window',
-  })[key];
-
-  const restoreWindowGeometry = (key: PanelKey, element: HTMLElement) => {
-    const previous = expandedWindowGeometry.get(key);
-    if (previous) {
-      element.style.left = `${previous.left}px`;
-      element.style.top = `${previous.top}px`;
-      element.style.width = `${previous.width}px`;
-      element.style.height = `${previous.height}px`;
-      element.style.right = 'auto';
-      element.style.bottom = 'auto';
-    }
-    expandedWindowGeometry.delete(key);
-  };
-
-  const toggleMinimize = (key: PanelKey) => {
-    if (panels[key].expanded) {
-      const element = document.querySelector(getWindowSelector(key)) as HTMLElement | null;
-      if (element) restoreWindowGeometry(key, element);
-    }
-    updatePanel(key, { minimized: !panels[key].minimized, expanded: false });
-  };
-
-  const toggleExpand = (key: PanelKey) => {
-    const selector = getWindowSelector(key);
-    const element = document.querySelector(selector) as HTMLElement | null;
-    if (!element) {
-      updatePanel(key, { expanded: !panels[key].expanded, minimized: false });
-      return;
-    }
-
-    if (!panels[key].expanded) {
-      const shell = element.offsetParent as HTMLElement;
-      const rect = element.getBoundingClientRect();
-      const bounds = shell.getBoundingClientRect();
-      expandedWindowGeometry.set(key, {
-        left: rect.left - bounds.left,
-        top: rect.top - bounds.top,
-        width: rect.width,
-        height: rect.height,
-      });
-      ['left', 'right', 'top', 'bottom', 'width', 'height'].forEach((property) => element.style.removeProperty(property));
-    } else {
-      restoreWindowGeometry(key, element);
-    }
-
-    element.style.zIndex = String(++floatingWindowZIndex);
-    updatePanel(key, { expanded: !panels[key].expanded, minimized: false });
   };
 
   const statusLabel = saveStatus === 'loading'
@@ -372,11 +173,6 @@ export function App() {
           </div>
           <div class="global-panel-toggles" aria-label="Workspace panels">
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
-            <button class={`global-panel-toggle ${panels.canvas.open ? 'active' : ''}`} type="button" title="Show / hide Canvas" aria-label="Show or hide Canvas" aria-pressed={panels.canvas.open} onPointerDown={() => bringWindowToFront('.workspace')} onMouseEnter={() => updateToolbarHint('CANVAS', 'Open or close the floating canvas workspace.')} onClick={() => togglePanel('canvas')}><Icon name="canvas" /></button>
-            <button class={`global-panel-toggle ${panels.logic.open ? 'active' : ''}`} type="button" title="Show / hide Logic Nodes" aria-label="Show or hide Logic Nodes" aria-pressed={panels.logic.open} onPointerDown={() => bringWindowToFront('.logic-window')} onMouseEnter={() => updateToolbarHint('LOGIC NODES', 'Open or close the logic node workspace.')} onClick={() => togglePanel('logic')}><Icon name="nodes" /></button>
-            <button class={`global-panel-toggle ${panels.rack.open ? 'active' : ''}`} type="button" title="Show / hide Component Rack" aria-label="Show or hide Component Rack" aria-pressed={panels.rack.open} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Open or close the component rack drawer from the bottom.')} onClick={() => togglePanel('rack')}><Icon name="rack" /></button>
-            <button class={`global-panel-toggle ${panels.componentCanvas.open ? 'active' : ''}`} type="button" title="Show / hide Component Canvas" aria-label="Show or hide Component Canvas" aria-pressed={panels.componentCanvas.open} onPointerDown={() => bringWindowToFront('.component-canvas-window')} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'Open or close the floating component canvas.')} onClick={() => togglePanel('componentCanvas')}><Icon name="components" /></button>
-            <button class={`global-panel-toggle ${panels.code.open ? 'active' : ''}`} type="button" title="Show / hide Code View" aria-label="Show or hide Code View" aria-pressed={panels.code.open} onPointerDown={() => bringWindowToFront('.code-window')} onMouseEnter={() => updateToolbarHint('CODE VIEW', 'Open or close the floating visual-to-code panel.')} onClick={() => togglePanel('code')}><Icon name="code" /></button>
             <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
           </div>
         </nav>
@@ -465,42 +261,33 @@ export function App() {
         </div>
       </aside>
 
-      {panels.canvas.open ? (
-        <main class={`workspace floating-window ${panels.canvas.minimized ? 'is-minimized' : ''} ${panels.canvas.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('CANVAS', 'Drag objects to move them, or pan the viewport without moving artwork.', ['SPACE + DRAG', 'MIDDLE-DRAG'])}>
-          <WindowHeader
-            title="Canvas"
-            subtitle={state.project.document.name}
-            minimized={panels.canvas.minimized}
-            expanded={panels.canvas.expanded}
-            onMinimize={() => toggleMinimize('canvas')}
-            onExpand={() => toggleExpand('canvas')}
-            onClose={() => updatePanel('canvas', { open: false })}
-            onPointerDown={(event) => startWindowDrag(event, '.workspace')}
-          >
+      <main class="workspace" onMouseEnter={() => updateToolbarHint('CANVAS', 'Design and arrange objects on the document canvas.', ['SPACE + DRAG', 'MIDDLE-DRAG'])}>
+        <div class="workspace-toolbar">
+          <div class="breadcrumb"><strong>{state.project.document.name}</strong></div>
           <div class="canvas-window-tools">
-          {state.selectedNodeIds.length > 1 && (
-            <div class="alignment-tools" aria-label="Align selected layers">
-              <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
-              <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
-              <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
-              <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal')}>⇌</button>
-              <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
-              <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
-              <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
-              <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
+            {state.selectedNodeIds.length > 1 && (
+              <div class="alignment-tools" aria-label="Align selected layers">
+                <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
+                <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
+                <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
+                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal')}>⇌</button>
+                <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
+                <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
+                <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
+                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
+              </div>
+            )}
+            <div class="workspace-tools">
+              <button class="history-button" title="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><Icon name="undo" /></button>
+              <button class="history-button" title="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}><Icon name="redo" /></button>
+              <span class="workspace-divider" />
+              <button class="zoom-button" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}><Icon name="minus" /></button>
+              <span class="zoom-value">{Math.round(zoom * 100)}%</span>
+              <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
             </div>
-          )}
-          <div class="workspace-tools">
-            <button class="history-button" title="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><Icon name="undo" /></button>
-            <button class="history-button" title="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}><Icon name="redo" /></button>
-            <span class="workspace-divider" />
-            <button class="zoom-button" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}><Icon name="minus" /></button>
-            <span class="zoom-value">{Math.round(zoom * 100)}%</span>
-            <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
           </div>
-          </div>
-          </WindowHeader>
-        {!panels.canvas.minimized && <div class="canvas-workspace">
+        </div>
+        <div class="canvas-workspace">
           <Canvas
             document={state.project.document}
             selectedNodeIds={state.selectedNodeIds}
@@ -509,65 +296,8 @@ export function App() {
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
           <div class="canvas-hint">SPACE + DRAG / MIDDLE-DRAG TO PAN · DRAG TO MOVE · SHIFT-CLICK MULTI-SELECT</div>
-        </div>}
-        </main>
-      ) : (
-        <div class="workspace-closed">
-          <strong>Canvas closed</strong>
-          <span>Use the Canvas button in the top bar to reopen this workspace.</span>
         </div>
-      )}
-
-      {panels.logic.open && (
-        <section class={`floating-window floating-tool-window logic-window ${panels.logic.minimized ? 'is-minimized' : ''} ${panels.logic.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('LOGIC NODES', 'A floating workspace reserved for visual logic and interaction nodes.')}>
-          <WindowHeader title="Logic Nodes" subtitle="INTERACTION GRAPH" minimized={panels.logic.minimized} expanded={panels.logic.expanded} onPointerDown={(event) => startWindowDrag(event, '.logic-window')} onMinimize={() => toggleMinimize('logic')} onExpand={() => toggleExpand('logic')} onClose={() => updatePanel('logic', { open: false })} />
-          {!panels.logic.minimized && <div class="floating-window-body logic-node-surface">
-            <div class="panel-empty-symbol">◇</div>
-            <strong>Logic workspace</strong>
-            <p>Build behavior and interaction flows with connected nodes. The node engine will be developed in a later stage.</p>
-            <span class="panel-engine-tag">LOGIC ENGINE · PLANNED</span>
-          </div>}
-        </section>
-      )}
-
-      {panels.componentCanvas.open && (
-        <section class={`floating-window floating-tool-window component-canvas-window ${panels.componentCanvas.minimized ? 'is-minimized' : ''} ${panels.componentCanvas.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'A floating workspace for arranging and editing reusable components.')}>
-          <WindowHeader title="Component Canvas" subtitle="REUSABLE DESIGN" minimized={panels.componentCanvas.minimized} expanded={panels.componentCanvas.expanded} onPointerDown={(event) => startWindowDrag(event, '.component-canvas-window')} onMinimize={() => toggleMinimize('componentCanvas')} onExpand={() => toggleExpand('componentCanvas')} onClose={() => updatePanel('componentCanvas', { open: false })} />
-          {!panels.componentCanvas.minimized && <div class="floating-window-body component-canvas-surface">
-            <div class="component-canvas-grid">
-              <div class="component-placeholder-card"><span>01</span><strong>Component</strong><small>Reusable item</small></div>
-              <div class="component-placeholder-card"><span>02</span><strong>Variant</strong><small>State and props</small></div>
-            </div>
-            <p class="panel-footnote">Component editing and variants are planned for the Design System stage.</p>
-          </div>}
-        </section>
-      )}
-
-      {panels.code.open && (
-        <section class={`floating-window floating-tool-window code-window ${panels.code.minimized ? 'is-minimized' : ''} ${panels.code.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('CODE VIEW', 'A floating preview area for generated HTML, CSS and JavaScript.')}>
-          <WindowHeader title="Code View" subtitle="VISUAL TO CODE" minimized={panels.code.minimized} expanded={panels.code.expanded} onPointerDown={(event) => startWindowDrag(event, '.code-window')} onMinimize={() => toggleMinimize('code')} onExpand={() => toggleExpand('code')} onClose={() => updatePanel('code', { open: false })} />
-          {!panels.code.minimized && <div class="floating-window-body code-view-surface">
-            <div class="code-view-language">HTML <span>·</span> CSS <span>·</span> JAVASCRIPT</div>
-            <div class="code-view-empty">
-              <strong>Generated code will appear here</strong>
-              <p>The visual-to-code engine is planned. This panel is a workspace placeholder for now.</p>
-            </div>
-          </div>}
-        </section>
-      )}
-
-      {panels.rack.open && (
-        <section class={`component-rack-drawer ${panels.rack.minimized ? 'is-minimized' : ''} ${panels.rack.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse reusable building blocks and component categories.')}>
-          <div class="component-rack-header">
-            <div class="floating-window-title"><strong>Component Rack</strong><span>LIBRARY</span></div>
-            <button class="window-control-button window-close-button" type="button" title="Close Component Rack" aria-label="Close Component Rack" onClick={() => updatePanel('rack', { open: false })}><Icon name="close" /></button>
-          </div>
-          {!panels.rack.minimized && <div class="component-rack-content">
-            <div class="rack-category-list"><span class="rack-category active">All</span><span class="rack-category">Basic</span><span class="rack-category">Layout</span><span class="rack-category">Forms</span><span class="rack-category">Media</span></div>
-            <div class="rack-empty-state"><div class="panel-empty-symbol">▦</div><strong>No saved components yet</strong><p>Reusable components will appear here when the component library is connected.</p></div>
-          </div>}
-        </section>
-      )}
+      </main>
 
       <aside class="inspector-panel" onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
         <div class="panel-heading inspector-heading">
