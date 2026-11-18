@@ -298,21 +298,22 @@ export function App() {
     let active = true;
     loadMostRecentProject()
       .then((latestProject) => {
-        if (!active || !latestProject) return;
+        if (!active) return;
 
-        // Restore the currently selected page snapshot first. IndexedDB remains
-        // the fallback for projects created before Pages Rack snapshots existed.
-        let project = latestProject;
-        let activePageName = latestProject.document.name;
+        // Restore the selected page snapshot first. IndexedDB is the fallback
+        // for projects created before Pages Rack snapshots existed.
+        let project: FolioProject | null = latestProject;
+        let activePageName = latestProject?.document.name ?? 'Main Page';
         try {
           const pageId = window.localStorage.getItem('folio.active-page') ?? 'main';
           const pageSnapshot = window.localStorage.getItem(`folio.page-project:${pageId}`);
           if (pageSnapshot) project = JSON.parse(pageSnapshot) as FolioProject;
           const savedPages = JSON.parse(window.localStorage.getItem('folio.pages') ?? '[]') as Array<{ id: string; name: string }>;
-          activePageName = savedPages.find((page) => page.id === pageId)?.name ?? project.document.name;
+          activePageName = savedPages.find((page) => page.id === pageId)?.name ?? project?.document.name ?? activePageName;
         } catch (error) {
           console.warn('Folio could not restore the active page snapshot:', error);
         }
+        if (!project) return;
 
         let resolvedProjectName = project.metadata.name || 'First canvas';
         try {
