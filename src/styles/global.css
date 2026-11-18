@@ -304,6 +304,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .canvas-workspace { position: relative; display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; overflow: hidden; border-radius: 0 0 9px 9px; background: #fff; }
 .workspace.canvas-floating {
   position: absolute;
+  inset: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  grid-area: auto;
   z-index: 90;
   grid-area: auto;
   min-width: 280px;
@@ -339,6 +343,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .workspace.canvas-maximized {
   position: absolute;
   z-index: 90;
+  left: 0;
+  top: 56px;
+  right: 0;
+  bottom: 27px;
   inset: 56px 0 27px;
   /* Override dimensions written by the browser resize handle. */
   width: auto !important;
