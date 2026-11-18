@@ -228,45 +228,43 @@ export function App() {
 
     event.preventDefault();
     win.style.zIndex = String(++floatingWindowZIndex);
-    const pointerId = event.pointerId;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const rect = win.getBoundingClientRect();
-    const bounds = shell.getBoundingClientRect();
 
-    // Drag in viewport coordinates so every window follows the pointer exactly,
-    // regardless of its CSS anchor (left/right) or offsetParent.
-    win.style.position = 'fixed';
-    win.style.width = `${rect.width}px`;
-    win.style.height = `${rect.height}px`;
-    win.style.left = `${rect.left}px`;
-    win.style.top = `${rect.top}px`;
+    // Every floating workspace window is positioned in the same coordinate
+    // system: absolute pixels measured from the app shell. Never switch
+    // positioning modes during a drag, so pointer-up cannot snap the window.
+    const shellRect = shell.getBoundingClientRect();
+    const windowRect = win.getBoundingClientRect();
+    const startPointerX = event.clientX;
+    const startPointerY = event.clientY;
+    const startLeft = windowRect.left - shellRect.left;
+    const startTop = windowRect.top - shellRect.top;
+    const pointerId = event.pointerId;
+
+    win.style.position = 'absolute';
+    win.style.left = `${startLeft}px`;
+    win.style.top = `${startTop}px`;
+    win.style.width = `${windowRect.width}px`;
+    win.style.height = `${windowRect.height}px`;
     win.style.right = 'auto';
     win.style.bottom = 'auto';
 
     const move = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
-      const maxLeft = Math.max(bounds.left, bounds.right - Math.min(rect.width, 220));
-      const maxTop = Math.max(bounds.top + 68, bounds.bottom - 46);
-      const nextLeft = Math.min(maxLeft, Math.max(bounds.left, rect.left + moveEvent.clientX - startX));
-      const nextTop = Math.min(maxTop, Math.max(bounds.top + 68, rect.top + moveEvent.clientY - startY));
+      const maxLeft = Math.max(0, shell.clientWidth - Math.min(windowRect.width, 220));
+      const maxTop = Math.max(68, shell.clientHeight - 46);
+      const nextLeft = Math.min(maxLeft, Math.max(0, startLeft + moveEvent.clientX - startPointerX));
+      const nextTop = Math.min(maxTop, Math.max(68, startTop + moveEvent.clientY - startPointerY));
       win.style.left = `${nextLeft}px`;
       win.style.top = `${nextTop}px`;
     };
 
     const stop = (stopEvent: PointerEvent) => {
       if (stopEvent.pointerId !== pointerId) return;
-      const finalRect = win.getBoundingClientRect();
-      const shellRect = shell.getBoundingClientRect();
-      win.style.position = 'absolute';
-      win.style.left = `${finalRect.left - shellRect.left}px`;
-      win.style.top = `${finalRect.top - shellRect.top}px`;
-      win.style.right = 'auto';
-      win.style.bottom = 'auto';
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', stop);
       window.removeEventListener('pointercancel', stop);
     };
+
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', stop);
     window.addEventListener('pointercancel', stop);
@@ -521,7 +519,7 @@ export function App() {
       )}
 
       {panels.logic.open && (
-        <section class={`floating-tool-window logic-window ${panels.logic.minimized ? 'is-minimized' : ''} ${panels.logic.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('LOGIC NODES', 'A floating workspace reserved for visual logic and interaction nodes.')}>
+        <section class={`floating-window floating-tool-window logic-window ${panels.logic.minimized ? 'is-minimized' : ''} ${panels.logic.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('LOGIC NODES', 'A floating workspace reserved for visual logic and interaction nodes.')}>
           <WindowHeader title="Logic Nodes" subtitle="INTERACTION GRAPH" minimized={panels.logic.minimized} expanded={panels.logic.expanded} onPointerDown={(event) => startWindowDrag(event, '.logic-window')} onMinimize={() => toggleMinimize('logic')} onExpand={() => toggleExpand('logic')} onClose={() => updatePanel('logic', { open: false })} />
           {!panels.logic.minimized && <div class="floating-window-body logic-node-surface">
             <div class="panel-empty-symbol">◇</div>
@@ -533,7 +531,7 @@ export function App() {
       )}
 
       {panels.componentCanvas.open && (
-        <section class={`floating-tool-window component-canvas-window ${panels.componentCanvas.minimized ? 'is-minimized' : ''} ${panels.componentCanvas.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'A floating workspace for arranging and editing reusable components.')}>
+        <section class={`floating-window floating-tool-window component-canvas-window ${panels.componentCanvas.minimized ? 'is-minimized' : ''} ${panels.componentCanvas.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'A floating workspace for arranging and editing reusable components.')}>
           <WindowHeader title="Component Canvas" subtitle="REUSABLE DESIGN" minimized={panels.componentCanvas.minimized} expanded={panels.componentCanvas.expanded} onPointerDown={(event) => startWindowDrag(event, '.component-canvas-window')} onMinimize={() => toggleMinimize('componentCanvas')} onExpand={() => toggleExpand('componentCanvas')} onClose={() => updatePanel('componentCanvas', { open: false })} />
           {!panels.componentCanvas.minimized && <div class="floating-window-body component-canvas-surface">
             <div class="component-canvas-grid">
@@ -546,7 +544,7 @@ export function App() {
       )}
 
       {panels.code.open && (
-        <section class={`floating-tool-window code-window ${panels.code.minimized ? 'is-minimized' : ''} ${panels.code.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('CODE VIEW', 'A floating preview area for generated HTML, CSS and JavaScript.')}>
+        <section class={`floating-window floating-tool-window code-window ${panels.code.minimized ? 'is-minimized' : ''} ${panels.code.expanded ? 'is-expanded' : ''}`} onMouseEnter={() => updateToolbarHint('CODE VIEW', 'A floating preview area for generated HTML, CSS and JavaScript.')}>
           <WindowHeader title="Code View" subtitle="VISUAL TO CODE" minimized={panels.code.minimized} expanded={panels.code.expanded} onPointerDown={(event) => startWindowDrag(event, '.code-window')} onMinimize={() => toggleMinimize('code')} onExpand={() => toggleExpand('code')} onClose={() => updatePanel('code', { open: false })} />
           {!panels.code.minimized && <div class="floating-window-body code-view-surface">
             <div class="code-view-language">HTML <span>·</span> CSS <span>·</span> JAVASCRIPT</div>
