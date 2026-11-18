@@ -291,7 +291,7 @@ export function App() {
             onSelectionChange={(nodeIds) => dispatch({ type: 'select-nodes', nodeIds })}
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
           />
-          <div class="canvas-hint">SELECT A LAYER · EDIT ITS PROPERTIES</div>
+          <div class="canvas-hint">DRAG TO MOVE · RESIZE WITH HANDLES · SHIFT-CLICK TO MULTI-SELECT</div>
         </div>
       </main>
 
