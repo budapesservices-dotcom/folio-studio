@@ -290,12 +290,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .breadcrumb .icon-svg { width: 11px; height: 11px; }
 .breadcrumb strong { color: #c5cad4; font-weight: 600; }
 .canvas-window-tools { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; }
+.workspace-window-controls { display: flex; align-items: center; gap: 3px; padding-left: 8px; border-left: 1px solid #343b48; }
+.window-control { display: grid; place-items: center; width: 21px; height: 21px; padding: 0; border: 1px solid transparent; border-radius: 4px; color: #929bad; background: transparent; font-size: 13px; line-height: 1; cursor: pointer; }
+.window-control:hover { color: #f0edff; border-color: #514976; background: #302b4b; }
+.window-control-close:hover { color: #fff; border-color: #8f414b; background: #71313b; }
+.window-control-restore { color: #b8adff; }
 .workspace-tools { display: flex; align-items: center; gap: 5px; }
 .history-button, .zoom-button { width: 25px; height: 25px; }
 .history-button .icon-svg, .zoom-button .icon-svg { width: 14px; height: 14px; }
 .workspace-divider { width: 1px; height: 17px; margin: 0 6px; background: #343b48; }
 .zoom-value { min-width: 39px; color: #a6aebd; text-align: center; font-size: 10px; font-variant-numeric: tabular-nums; }
 .canvas-workspace { position: relative; display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; overflow: hidden; border-radius: 0 0 9px 9px; background: #fff; }
+.workspace.canvas-maximized { position: absolute; z-index: 90; inset: 56px 0 27px; }
+.canvas-window-placeholder { display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; gap: 12px; color: #818a9a; background: #11151d; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+.canvas-window-placeholder button { padding: 7px 11px; border: 1px solid #48406d; border-radius: 5px; color: #c9c1ff; background: #302b4b; font-size: 10px; cursor: pointer; }
+.canvas-window-placeholder button:hover { background: #3a345c; }
 
 .canvas-scroll-area { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; overflow: hidden; padding: 45px 35px 52px; touch-action: none; }
 .canvas-stage { flex: 0 0 auto; max-width: none; filter: drop-shadow(0 16px 28px #0007); }
