@@ -877,10 +877,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .instance-actions button:disabled { opacity: .4; cursor: not-allowed; }
 .instance-actions button:hover:not(:disabled) { border-color: #8b7cf6; color: #fff; }
 
-/* Layer context menu: destructive actions are hidden until requested. */
-.layer-context-backdrop{position:fixed;inset:0;z-index:9998;border:0;padding:0;background:transparent;cursor:default}
-.layer-context-menu{z-index:9999;min-width:176px;padding:5px;border:1px solid var(--panel-border,#343946);border-radius:8px;background:var(--panel-bg,#20232b);box-shadow:0 10px 30px #0008}
-.layer-context-menu button{display:flex;width:100%;align-items:center;gap:9px;padding:8px 10px;border:0;border-radius:5px;background:transparent;color:var(--text-primary,#f3f4f6);text-align:left;cursor:pointer}
-.layer-context-menu button:hover{background:#ffffff12}
-.layer-context-menu .layer-context-menu-danger{color:#f87171}
+/* Layer context menu: destructive actions require an intentional right-click. */
+.layer-context-menu{z-index:9999;min-width:196px;padding:5px;border:1px solid #465064;border-radius:8px;background:#202633;box-shadow:0 12px 32px #0009;color:#dfe5ef;font-size:11px}
+.layer-context-menu button{display:flex;width:100%;min-height:30px;align-items:center;gap:9px;padding:7px 10px;border:0;border-radius:5px;background:transparent;color:inherit;text-align:left;cursor:pointer}
+.layer-context-menu button:hover{background:#ffffff12;color:#fff}
+.layer-context-menu .layer-context-menu-danger{color:#ff8585}
+.layer-context-menu .layer-context-menu-danger:hover{background:#5a292f;color:#ffaaaa}
 .layer-context-menu .icon-svg{width:14px;height:14px}
+.layer-context-menu-separator{height:1px;margin:4px 5px;background:#3a4353}

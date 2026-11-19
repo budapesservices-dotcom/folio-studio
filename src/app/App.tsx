@@ -86,6 +86,13 @@ type LayerRenameSession = {
   editorId: EditorTarget;
   existingNames: string[];
 };
+type LayerContextMenuState = {
+  nodeId: string;
+  nodeIds: string[];
+  editorId: EditorTarget;
+  x: number;
+  y: number;
+};
 const LAYER_COLOR_PRESETS = [
   '#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e',
   '#14b8a6', '#06b6d4', '#3b82f6', '#6366f1', '#a855f7',
@@ -135,7 +142,8 @@ export function App() {
   const [inspectorVisible, setInspectorVisible] = useState(true);
   const [collapsedLayers, setCollapsedLayers] = useState<Record<EditorTarget, string[]>>({ main: [], component: [] });
   const [layerDropTarget, setLayerDropTarget] = useState<{ nodeId: string; position: LayerDropPosition } | null>(null);
-  const [layerContextMenu, setLayerContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
+  const [layerContextMenu, setLayerContextMenu] = useState<LayerContextMenuState | null>(null);
+  const layerContextMenuRef = useRef<HTMLDivElement | null>(null);
   const layerDragSourceRef = useRef<string[] | null>(null);
   const layerDragEditorRef = useRef<EditorTarget | null>(null);
   const selectionSourceRef = useRef<'layers' | 'canvas'>('canvas');
@@ -488,6 +496,28 @@ export function App() {
   const layerSourceIds = new Set(layerSourceNodes.map((node) => node.id));
   const layerRows = getLayerPanelRows(layerSourceNodes, collapsedLayers[activeEditorId]);
   const layerEffectiveStates = getEffectiveLayerStates(layerSourceNodes);
+  const contextMenuEditor = layerContextMenu
+    ? getActiveEditorContext(layerContextMenu.editorId, state, componentState)
+    : null;
+  const contextMenuNodes = contextMenuEditor?.document.nodes.filter((node) => node.isCanvasInstance !== true) ?? [];
+  const contextMenuRootIds = layerContextMenu
+    ? getSelectedLayerRootIds(contextMenuNodes, layerContextMenu.nodeIds)
+    : [];
+  const contextMenuRootNodes = contextMenuRootIds
+    .map((id) => contextMenuNodes.find((node) => node.id === id))
+    .filter((node): node is DesignNode => node !== undefined);
+  const contextMenuCanGroup = contextMenuRootNodes.length > 1
+    || (contextMenuRootNodes.length === 1 && (
+      contextMenuRootNodes[0].type === 'group'
+      || contextMenuNodes.some((node) => node.parentId === contextMenuRootNodes[0].id)
+    ));
+  const contextMenuCanUngroup = contextMenuRootNodes.some((root) =>
+    contextMenuNodes.some((node) => node.parentId === root)
+  );
+  const contextMenuCanMask = contextMenuRootIds.length === 1
+    && Boolean(getClippingMaskBaseId(contextMenuNodes, contextMenuRootIds[0]));
+  const contextMenuCanUnmask = contextMenuRootIds.length === 1
+    && Boolean(contextMenuRootNodes[0]?.clipMaskBaseId);
   const beginLayerRename = (nodeId: string, batch: boolean) => {
     const selectedIds = focusedEditor.state.selectedNodeIds;
     const nodeIds = batch
@@ -544,6 +574,32 @@ export function App() {
     const targetDispatch = session.editorId === 'main' ? dispatch : componentDispatch;
     targetDispatch({ type: 'rename-nodes', updates });
   };
+
+  useEffect(() => {
+    if (!layerContextMenu) return;
+    const dismiss = () => setLayerContextMenu(null);
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && layerContextMenuRef.current?.contains(target)) return;
+      dismiss();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        dismiss();
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    document.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('resize', dismiss);
+    window.addEventListener('scroll', dismiss, true);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      document.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('resize', dismiss);
+      window.removeEventListener('scroll', dismiss, true);
+    };
+  }, [layerContextMenu]);
 
   useEffect(() => {
     if (!layerRename) return;
@@ -649,6 +705,33 @@ export function App() {
       dispatchFocused({ type: 'select-nodes', nodeIds: subtreeIds });
     }
     setInspectorVisible(true);
+  };
+
+  const openLayerContextMenu = (nodeId: string, event: JSX.TargetedMouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectionSourceRef.current = 'layers';
+
+    // Right-clicking a selected member preserves the current multi-selection.
+    // Otherwise, behave like a normal Layers-panel selection and include its subtree.
+    const currentSelection = focusedEditor.state.selectedNodeIds.filter((id) => layerSourceIds.has(id));
+    const menuNodeIds = currentSelection.includes(nodeId)
+      ? currentSelection
+      : expandSelectedLayerIds(layerSourceNodes, [nodeId]);
+
+    if (!currentSelection.includes(nodeId)) {
+      layerSelectionAnchorRef.current[activeEditorId] = nodeId;
+      dispatchFocused({ type: 'select-nodes', nodeIds: menuNodeIds });
+      setInspectorVisible(true);
+    }
+
+    setLayerContextMenu({
+      nodeId,
+      nodeIds: menuNodeIds,
+      editorId: activeEditorId,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 216)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 248)),
+    });
   };
 
   const toggleLayerCollapsed = (nodeId: string) => {
@@ -1115,9 +1198,15 @@ export function App() {
         emit({ type: 'add-nodes', nodes: copies }); return;
       }
       if ((event.key === 'Delete' || event.key === 'Backspace') && ids.length > 0) {
-        event.preventDefault();
-        if (selectionSourceRef.current === 'layers') emit({ type: 'delete-nodes', nodeIds: ids });
-        else emit({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: false });
+        if (selectionSourceRef.current === 'layers') {
+          // Master/source layers can only be deleted deliberately from the
+          // Layers context menu, never through an easy-to-hit keyboard key.
+          event.preventDefault();
+          setNotice('Right-click a layer and choose Delete to remove it from Layers and Canvas.');
+        } else {
+          event.preventDefault();
+          emit({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: false });
+        }
         return;
       }
       if (event.altKey && !event.shiftKey) {
@@ -1282,13 +1371,7 @@ export function App() {
                 class={'layer-row ' + (selected ? 'selected ' : '') + (!effective?.visible ? 'layer-hidden ' : '') + (effective?.locked ? 'layer-inherited-locked ' : '') + (node.clipMaskBaseId ? 'layer-row-clipped ' : '') + (isMaskBase ? 'layer-row-mask-base ' : '') + dropClass}
                 style={{ paddingLeft: (8 + depth * 15 + (node.clipMaskBaseId ? 14 : 0)) + 'px' }}
                 onClick={(event) => selectLayerFromPanel(node.id, event)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  selectionSourceRef.current = 'layers';
-                  if (!focusedEditor.state.selectedNodeIds.includes(node.id)) dispatchFocused({ type: 'select-node', nodeId: node.id });
-                  setLayerContextMenu({ nodeId: node.id, x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 90) });
-                }}
+                onContextMenu={(event) => openLayerContextMenu(node.id, event)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
@@ -1449,17 +1532,56 @@ export function App() {
           )}
         </div>
         {layerContextMenu && (
-          <>
-            <button type="button" aria-label="Close layer context menu" class="layer-context-backdrop" onClick={() => setLayerContextMenu(null)} />
-            <div class="layer-context-menu" role="menu" style={{ position: 'fixed', left: layerContextMenu.x + 'px', top: layerContextMenu.y + 'px' }}>
-              <button type="button" role="menuitem" class="layer-context-menu-danger" onClick={() => {
-                const nodeId = layerContextMenu.nodeId;
-                setLayerContextMenu(null);
-                selectionSourceRef.current = 'layers';
-                dispatchFocused({ type: 'delete-node', nodeId });
-              }}><Icon name="trash" /> Delete</button>
-            </div>
-          </>
+          <div
+            ref={layerContextMenuRef}
+            class="layer-context-menu"
+            role="menu"
+            aria-label={`Actions for ${contextMenuNodes.find((node) => node.id === layerContextMenu.nodeId)?.name ?? 'layer'}`}
+            style={{ position: 'fixed', left: layerContextMenu.x + 'px', top: layerContextMenu.y + 'px' }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button type="button" role="menuitem" onClick={() => {
+              const menu = layerContextMenu;
+              setLayerContextMenu(null);
+              beginLayerRename(menu.nodeId, false);
+            }}>Rename</button>
+            {contextMenuCanGroup && <button type="button" role="menuitem" onClick={() => {
+              const menu = layerContextMenu;
+              const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
+              setLayerContextMenu(null);
+              selectionSourceRef.current = 'layers';
+              targetDispatch({ type: 'group-layers', nodeIds: contextMenuRootIds });
+            }}>Group</button>}
+            {contextMenuCanUngroup && <button type="button" role="menuitem" onClick={() => {
+              const menu = layerContextMenu;
+              const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
+              setLayerContextMenu(null);
+              selectionSourceRef.current = 'layers';
+              targetDispatch({ type: 'ungroup-layers', nodeIds: contextMenuRootIds });
+            }}>Ungroup</button>}
+            {contextMenuCanMask && <button type="button" role="menuitem" onClick={() => {
+              const menu = layerContextMenu;
+              const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
+              setLayerContextMenu(null);
+              selectionSourceRef.current = 'layers';
+              targetDispatch({ type: 'mask-layer', nodeId: contextMenuRootIds[0] });
+            }}>Create Clipping Mask</button>}
+            {contextMenuCanUnmask && <button type="button" role="menuitem" onClick={() => {
+              const menu = layerContextMenu;
+              const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
+              setLayerContextMenu(null);
+              selectionSourceRef.current = 'layers';
+              targetDispatch({ type: 'unmask-layer', nodeId: contextMenuRootIds[0] });
+            }}>Release Clipping Mask</button>}
+            <div class="layer-context-menu-separator" role="separator" />
+            <button type="button" role="menuitem" class="layer-context-menu-danger" onClick={() => {
+              const menu = layerContextMenu;
+              const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
+              setLayerContextMenu(null);
+              selectionSourceRef.current = 'layers';
+              targetDispatch({ type: 'delete-nodes', nodeIds: menu.nodeIds });
+            }}><Icon name="trash" /> Delete{layerContextMenu.nodeIds.length > 1 ? ` (${layerContextMenu.nodeIds.length})` : ''}</button>
+          </div>
         )}
       </aside>
 
