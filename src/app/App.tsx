@@ -599,7 +599,7 @@ export function App() {
     const subtreeIsSelected = subtreeIds.length === selected.length
       && subtreeIds.every((id) => selected.includes(id));
 
-    if (modifiers.shiftKey && selected.length > 1 && selected.includes(nodeId) && !subtreeIsSelected) {
+    if (modifiers.shiftKey && selected.length > 1 && selected.includes(nodeId) && !subtreeIsSelected && getLayerAncestorIds(focusedDocument.nodes, nodeId).size === 0) {
       beginLayerRename(nodeId, true);
       return;
     }
