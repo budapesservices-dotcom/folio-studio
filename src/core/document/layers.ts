@@ -270,6 +270,8 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
     return true;
   });
   if (roots.length < 2) return nodes;
+  const order = new Map(nodes.map((node, index) => [node.id, index]));
+  roots.sort((left, right) => (order.get(left) ?? 0) - (order.get(right) ?? 0));
   const rootParentId = nodeById.get(roots[0])?.parentId ?? null;
   if (!roots.every((id) => (nodeById.get(id)?.parentId ?? null) === rootParentId)) return nodes;
   const groupRootId = roots[0];
@@ -286,6 +288,8 @@ export function ungroupLayers(nodes: DesignNode[], selectedIds: readonly string[
   return nodes.map((node) => {
     if (!node.parentId || !parents.has(node.parentId)) return node;
     const parentId = nodeById.get(node.parentId)?.parentId ?? undefined;
-    return { ...node, parentId };
+    if (parentId) return { ...node, parentId };
+    const { parentId: _parentId, ...promoted } = node;
+    return promoted;
   });
 }
