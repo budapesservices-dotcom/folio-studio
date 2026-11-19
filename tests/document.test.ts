@@ -186,6 +186,57 @@ describe('Folio unified project v2', () => {
     expect(getActiveDocument(undone.project).nodes[0].name).toBe('Button');
   });
 
+  it('preserves Inspector name, color, geometry and rotation edits after commit, with one undo step', () => {
+    const project = createInitialProject();
+    const original = getActiveDocument(project).nodes[0];
+    if (original.type !== 'rect') throw new Error('Expected the first sample layer to be a rectangle.');
+
+    let state = createEditorState(project);
+    let edited = { ...original };
+    const applyInput = (patch: Partial<typeof original>) => {
+      edited = { ...edited, ...patch };
+      state = editorReducer(state, {
+        type: 'edit-node',
+        coalesceKey: 'inspector:' + original.id,
+        node: edited,
+      });
+    };
+
+    applyInput({ name: 'Red card' });
+    applyInput({ x: 444, y: 222, width: 520, height: 310, rotation: 17 });
+    applyInput({ style: { ...edited.style, fill: '#FF0000', radius: 24 } });
+
+    state = editorReducer(state, { type: 'commit-edit' });
+    const committed = getActiveDocument(state.project).nodes.find((node) => node.id === original.id);
+    expect(committed).toMatchObject({
+      name: 'Red card',
+      x: 444,
+      y: 222,
+      width: 520,
+      height: 310,
+      rotation: 17,
+      style: { fill: '#FF0000', radius: 24 },
+    });
+    expect(state.historyGroup).toBeNull();
+    expect(state.past).toHaveLength(1);
+
+    const undone = editorReducer(state, { type: 'undo' });
+    const restored = getActiveDocument(undone.project).nodes.find((node) => node.id === original.id);
+    expect(restored).toEqual(original);
+
+    const redone = editorReducer(undone, { type: 'redo' });
+    const reapplied = getActiveDocument(redone.project).nodes.find((node) => node.id === original.id);
+    expect(reapplied).toMatchObject({
+      name: 'Red card',
+      x: 444,
+      y: 222,
+      width: 520,
+      height: 310,
+      rotation: 17,
+      style: { fill: '#FF0000', radius: 24 },
+    });
+  });
+
   it('rejects zero, negative and non-finite dimensions while preserving the current value', async () => {
     const { normalizePositiveDimension } = await import('../src/app/editorReducer');
     expect(normalizePositiveDimension(0, 120)).toBe(120);
