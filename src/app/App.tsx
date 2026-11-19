@@ -2,7 +2,7 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage } from '../core/document/types';
-import { expandSelectedLayers, getEffectiveLayerStates, getLayerPanelRows, type LayerDropPosition } from '../core/document/layers';
+import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, type LayerDropPosition } from '../core/document/layers';
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
@@ -65,8 +65,8 @@ type ToolbarHint = {
 
 const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
   panel: 'WORKSPACE',
-  description: 'Point at a panel to see what it does and which shortcuts are available.',
-  shortcuts: ['SPACE + DRAG', 'SHIFT + CLICK'],
+  description: 'Shift-click a nested object on the canvas to select that layer alone; Ctrl/Cmd-click toggles layer groups.',
+  shortcuts: ['SHIFT + CLICK: SUB-LAYER', 'CTRL/CMD + CLICK: GROUP'],
 };
 
 function parseNumericInput(value: string): number | null {
@@ -595,14 +595,19 @@ export function App() {
   const selectLayerFromPanel = (nodeId: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
     const selected = focusedEditor.state.selectedNodeIds;
     const additive = Boolean(modifiers.ctrlKey || modifiers.metaKey);
-    if (modifiers.shiftKey && selected.length > 1 && selected.includes(nodeId)) {
+    const subtreeIds = expandSelectedLayerIds(focusedDocument.nodes, [nodeId]);
+    const subtreeIsSelected = subtreeIds.length === selected.length
+      && subtreeIds.every((id) => selected.includes(id));
+
+    if (modifiers.shiftKey && selected.length > 1 && selected.includes(nodeId) && !subtreeIsSelected) {
       beginLayerRename(nodeId, true);
       return;
     }
-    if (!modifiers.shiftKey && !additive && selected.length === 1 && selected[0] === nodeId) {
+    if (!modifiers.shiftKey && !additive && subtreeIsSelected) {
       beginLayerRename(nodeId, false);
       return;
     }
+
     const orderedIds = layerRows.map((row) => row.node.id);
     if (modifiers.shiftKey) {
       const anchor = layerSelectionAnchorRef.current[activeEditorId];
@@ -611,22 +616,30 @@ export function App() {
       const end = orderedIds.indexOf(nodeId);
       if (start >= 0 && end >= 0) {
         const range = orderedIds.slice(Math.min(start, end), Math.max(start, end) + 1);
-        const next = additive ? [...new Set([...selected, ...range])] : range;
-        dispatchFocused({ type: 'select-nodes', nodeIds: next });
+        const requested = additive ? [...new Set([...selected, ...range])] : range;
+        dispatchFocused({ type: 'select-nodes', nodeIds: expandSelectedLayerIds(focusedDocument.nodes, requested) });
         setInspectorVisible(true);
         return;
       }
     }
+
     if (additive) {
-      const next = selected.includes(nodeId)
-        ? selected.filter((id) => id !== nodeId)
-        : [...selected, nodeId];
+      const groupIsSelected = subtreeIds.every((id) => selected.includes(id));
+      let next: string[];
+      if (groupIsSelected) {
+        // A child cannot stay implicitly selected through an ancestor after
+        // its own subtree is toggled off.
+        const removed = new Set([...subtreeIds, ...getLayerAncestorIds(focusedDocument.nodes, nodeId)]);
+        next = selected.filter((id) => !removed.has(id));
+      } else {
+        next = expandSelectedLayerIds(focusedDocument.nodes, [...selected, ...subtreeIds]);
+      }
       const anchor = layerSelectionAnchorRef.current[activeEditorId];
       if (!anchor || !selected.includes(anchor)) layerSelectionAnchorRef.current[activeEditorId] = nodeId;
       dispatchFocused({ type: 'select-nodes', nodeIds: next });
     } else {
       layerSelectionAnchorRef.current[activeEditorId] = nodeId;
-      dispatchFocused({ type: 'select-node', nodeId });
+      dispatchFocused({ type: 'select-nodes', nodeIds: subtreeIds });
     }
     setInspectorVisible(true);
   };
@@ -646,7 +659,7 @@ export function App() {
 
   const startLayerDrag = (nodeId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
     const currentSelection = focusedEditor.state.selectedNodeIds;
-    const draggedIds = currentSelection.includes(nodeId) ? currentSelection : [nodeId];
+    const draggedIds = currentSelection.includes(nodeId) ? currentSelection : expandSelectedLayerIds(focusedDocument.nodes, [nodeId]);
     layerDragSourceRef.current = draggedIds;
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = 'move';
@@ -841,7 +854,7 @@ export function App() {
     setNotice(`Created ${name}.`);
   };
 
-  const saveSelectionAsComponent = () => saveNodesAsComponent(expandSelectedLayers(focusedDocument.nodes, focusedEditor.state.selectedNodeIds));
+  const saveSelectionAsComponent = () => saveNodesAsComponent(focusedEditor.selectedNodes);
 
   const commitProjectName = (value: string) => {
     if (isHydrating) return;
@@ -851,7 +864,7 @@ export function App() {
     }
   };
 
-  const selectedComponentNodes = expandSelectedLayers(componentDocument.nodes, componentState.selectedNodeIds);
+  const selectedComponentNodes = componentDocument.nodes.filter((node) => componentState.selectedNodeIds.includes(node.id));
   const insertOwnedComponent = (component: ComponentDefinition) => {
     if (isHydrating) return;
     const offset = state.project.pages.find((page) => page.id === state.project.activePageId)?.document.nodes.length ?? 0;
@@ -912,7 +925,7 @@ export function App() {
     const editor = target === 'main' ? state : componentState;
     const document = getActiveDocument(editor.project);
     const layerStates = getEffectiveLayerStates(document.nodes);
-    const selected = getTransformableNodes(expandSelectedLayers(document.nodes, editor.selectedNodeIds).filter((node) => {
+    const selected = getTransformableNodes(document.nodes.filter((node) => editor.selectedNodeIds.includes(node.id)).filter((node) => {
       const effective = layerStates.get(node.id);
       return effective?.visible && !effective.locked;
     }));
@@ -999,7 +1012,7 @@ export function App() {
       const context = getActiveEditorContext(activeEditorId, state, componentState);
       const emit = activeEditorId === 'main' ? dispatch : componentDispatch;
       const layerStates = getEffectiveLayerStates(context.document.nodes);
-      const nodes = getTransformableNodes(expandSelectedLayers(context.document.nodes, context.state.selectedNodeIds).filter((node) => {
+      const nodes = getTransformableNodes(context.document.nodes.filter((node) => context.state.selectedNodeIds.includes(node.id)).filter((node) => {
         const effective = layerStates.get(node.id);
         return effective?.visible && !effective.locked;
       }));

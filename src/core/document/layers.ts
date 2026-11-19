@@ -126,10 +126,39 @@ export function getLayerDescendantIds(nodes: readonly DesignNode[], nodeId: stri
   return result;
 }
 
+/** Returns the ancestor chain for a layer, closest parent first. */
+export function getLayerAncestorIds(nodes: readonly DesignNode[], nodeId: string): Set<string> {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const result = new Set<string>();
+  let current = nodeById.get(nodeId);
+  let parentId = current ? getParentId(current, nodeById) : null;
+
+  while (parentId && !result.has(parentId)) {
+    result.add(parentId);
+    current = nodeById.get(parentId);
+    parentId = current ? getParentId(current, nodeById) : null;
+  }
+
+  return result;
+}
+
+/** Expands selected parent IDs into their complete nested subtrees in document order. */
+export function expandSelectedLayerIds(nodes: readonly DesignNode[], selectedIds: readonly string[]): string[] {
+  const available = new Set(nodes.map((node) => node.id));
+  const included = new Set<string>();
+
+  selectedIds.forEach((id) => {
+    if (!available.has(id)) return;
+    included.add(id);
+    getLayerDescendantIds(nodes, id).forEach((childId) => included.add(childId));
+  });
+
+  return nodes.filter((node) => included.has(node.id)).map((node) => node.id);
+}
+
 /** Selecting a parent layer also transforms its descendants as one visual hierarchy. */
 export function expandSelectedLayers(nodes: readonly DesignNode[], selectedIds: readonly string[]): DesignNode[] {
-  const included = new Set(selectedIds);
-  selectedIds.forEach((id) => getLayerDescendantIds(nodes, id).forEach((childId) => included.add(childId)));
+  const included = new Set(expandSelectedLayerIds(nodes, selectedIds));
   return nodes.filter((node) => included.has(node.id));
 }
 

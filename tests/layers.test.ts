@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createRectNode, createInitialProject } from '../src/core/document/factory';
 import {
+  expandSelectedLayerIds,
   expandSelectedLayers,
+  getLayerAncestorIds,
   getEffectiveLayerStates,
   getLayerPanelRows,
   getLayerRenderOrder,
@@ -122,9 +124,21 @@ describe('layer hierarchy and panel operations', () => {
     expect(moveLayer(nodes, 'parent', 'child', 'inside')).toBe(nodes);
   });
 
-  it('expands a selected parent to its sub-layers for group transforms', () => {
+  it('expands a selected parent into every nested layer in stable document order', () => {
     const nodes = [layer('parent'), layer('child', 'parent'), layer('leaf', 'child'), layer('other')];
+    expect(expandSelectedLayerIds(nodes, ['parent'])).toEqual(['parent', 'child', 'leaf']);
     expect(expandSelectedLayers(nodes, ['parent']).map((node) => node.id)).toEqual(['parent', 'child', 'leaf']);
+  });
+
+  it('keeps an individually selected sub-layer separate from its siblings', () => {
+    const nodes = [layer('parent'), layer('child-a', 'parent'), layer('leaf', 'child-a'), layer('child-b', 'parent')];
+    expect(expandSelectedLayerIds(nodes, ['child-b'])).toEqual(['child-b']);
+    expect(expandSelectedLayerIds(nodes, ['child-a'])).toEqual(['child-a', 'leaf']);
+  });
+
+  it('returns a cycle-safe ancestor chain for deselecting a nested layer', () => {
+    const nodes = [layer('parent'), layer('child', 'parent'), layer('leaf', 'child')];
+    expect([...getLayerAncestorIds(nodes, 'leaf')]).toEqual(['child', 'parent']);
   });
 
   it('promotes surviving children when a parent layer is deleted', () => {

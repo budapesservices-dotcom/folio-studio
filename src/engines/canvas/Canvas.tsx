@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from '../../core/document/types';
 import { resolveComponentInstanceNodes } from '../../core/document/components';
-import { expandSelectedLayers, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
+import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
 import {
   getBounds,
   resizeNodes,
@@ -243,7 +243,8 @@ export function Canvas({
   // Locked layers may remain selected in the Layers panel, but they never
   // participate in canvas group transforms or resize bounds.
   const layerStates = getEffectiveLayerStates(displayedNodes);
-  const selectedNodes = expandSelectedLayers(displayedNodes, selectedNodeIds).filter((node) => {
+  const selectedSet = new Set(selectedNodeIds);
+  const selectedNodes = displayedNodes.filter((node) => selectedSet.has(node.id)).filter((node) => {
     const effective = layerStates.get(node.id);
     return effective?.visible && !effective.locked;
   });
@@ -393,18 +394,29 @@ export function Canvas({
     const hitState = hitNode ? layerStates.get(hitNode.id) : undefined;
     if (!hitNode || !hitState?.visible || hitState.locked) return;
 
-    const modifier = event.shiftKey || event.ctrlKey || event.metaKey;
-    const wasSelected = selectedNodeIds.includes(nodeId);
-    const nextIds = modifier
-      ? (wasSelected
-        ? selectedNodeIds.filter((id) => id !== nodeId)
-        : [...selectedNodeIds, nodeId])
-      : (wasSelected ? selectedNodeIds : [nodeId]);
+    const groupIds = expandSelectedLayerIds(displayedNodes, [nodeId]);
+    const groupAlreadySelected = groupIds.every((id) => selectedNodeIds.includes(id));
+    const modifier = event.ctrlKey || event.metaKey;
+    let nextIds: string[];
+
+    if (event.shiftKey) {
+      // Shift-click is the precision override: select only the exact nested layer.
+      nextIds = [nodeId];
+    } else if (modifier && groupAlreadySelected) {
+      // If a selected child is toggled off, clear its selected ancestors too.
+      const removed = new Set([...groupIds, ...getLayerAncestorIds(displayedNodes, nodeId)]);
+      nextIds = selectedNodeIds.filter((id) => !removed.has(id));
+    } else if (modifier) {
+      nextIds = [...new Set([...selectedNodeIds, ...groupIds])];
+    } else {
+      nextIds = groupAlreadySelected ? selectedNodeIds : groupIds;
+    }
 
     onSelectionChange(nextIds);
-    if (modifier && wasSelected) return;
+    if (modifier && groupAlreadySelected) return;
 
-    const movingNodes = expandSelectedLayers(displayedNodes, nextIds).filter((node) => {
+    const movingSet = new Set(nextIds);
+    const movingNodes = displayedNodes.filter((node) => movingSet.has(node.id)).filter((node) => {
       const effective = layerStates.get(node.id);
       return effective?.visible && !effective.locked;
     });
@@ -490,14 +502,16 @@ export function Canvas({
         return left <= rect.x + rect.width && right >= rect.x &&
           top <= rect.y + rect.height && bottom >= rect.y;
       }).map((node) => node.id) : [];
+      const expandedHits = expandSelectedLayerIds(displayedNodes, hits);
       let nextIds: string[];
       if (marquee.subtractive) {
-        const hitSet = new Set(hits);
-        nextIds = marquee.initialIds.filter((id) => !hitSet.has(id));
+        const removed = new Set(expandedHits);
+        hits.forEach((id) => getLayerAncestorIds(displayedNodes, id).forEach((ancestorId) => removed.add(ancestorId)));
+        nextIds = marquee.initialIds.filter((id) => !removed.has(id));
       } else if (marquee.additive) {
-        nextIds = [...new Set([...marquee.initialIds, ...hits])];
+        nextIds = [...new Set([...marquee.initialIds, ...expandedHits])];
       } else {
-        nextIds = hits;
+        nextIds = expandedHits;
       }
       onSelectionChange(nextIds);
       marqueeRef.current = null;
@@ -571,7 +585,7 @@ export function Canvas({
           class="artboard"
           viewBox={'0 0 ' + document.width + ' ' + document.height}
           role="application"
-          aria-label="Folio design artboard. Drag empty space to marquee-select; Shift adds to selection, Ctrl or Command subtracts."
+          aria-label="Folio design artboard. Click a parent to select its group; Shift-click a nested layer to select it alone; Ctrl or Command-click toggles a group. Shift-drag adds to marquee selection and Ctrl or Command-drag subtracts."
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={finishPointer}
