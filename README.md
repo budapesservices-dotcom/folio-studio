@@ -2,6 +2,12 @@
 
 FOLIO Studio is a lightweight-first hybrid visual UI/UX design, prototyping, animation, and visual-to-code workspace.
 
+## Product vision and AI working context
+
+FOLIO's product vision and target architecture are documented in [FOLIO Architecture Blueprint](docs/FOLIO_ARCHITECTURE_BLUEPRINT.md). Repository-wide AI agent rules are in [AGENTS.md](AGENTS.md). GitHub Copilot also reads [.github/copilot-instructions.md](.github/copilot-instructions.md).
+
+Before every task, AI agents must read the blueprint, the current [Architecture](docs/ARCHITECTURE.md), and [Acceptance Tests](docs/ACCEPTANCE_TESTS.md). The blueprint defines intended direction; source code, tests, and the current architecture document define what is actually implemented. Planned capabilities must never be described as completed.
+
 ## Open in GitHub Codespaces
 
 This repository is prepared for Codespaces and includes a verified first-run source bootstrap.
@@ -53,8 +59,8 @@ npm run dev
 
 Open `http://127.0.0.1:5173` locally.
 
-See `docs/ARCHITECTURE.md`, `docs/CODESPACES.md`, and `docs/ACCEPTANCE_TESTS.md` for architecture and Stage 1 acceptance criteria.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/FOLIO_ARCHITECTURE_BLUEPRINT.md](docs/FOLIO_ARCHITECTURE_BLUEPRINT.md), [docs/CODESPACES.md](docs/CODESPACES.md), and [docs/ACCEPTANCE_TESTS.md](docs/ACCEPTANCE_TESTS.md) for architecture and Stage 1 acceptance criteria.
 
 ## Development rule
 
-Build one stage at a time. Do not begin the next engine until the current stage passes its automated and manual acceptance tests.
+Build one stage at a time. Do not begin the next engine until the current stage passes its automated and manual acceptance tests. All AI-assisted changes must follow [AGENTS.md](AGENTS.md).
