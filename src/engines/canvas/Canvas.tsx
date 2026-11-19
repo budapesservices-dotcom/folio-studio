@@ -2,21 +2,17 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from '../../core/document/types';
 import { resolveComponentInstanceNodes } from '../../core/document/components';
-import { expandSelectedLayerIds, getCanvasClickSelectionIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerRenderOrder, getLayerDescendantIds, getLayerClipMaskBaseIds } from '../../core/document/layers';
-import {
-  getBounds,
-  resizeNodes,
-  snapTranslation,
-  type Bounds,
-  type ResizeHandle,
-  type SnapGuide,
-} from './geometry';
+import { getEffectiveLayerStates, getLayerRenderOrder, getLayerDescendantIds, getLayerClipMaskBaseIds } from '../../core/document/layers';
+import { getBounds, type Bounds, type ResizeHandle, type SnapGuide } from './geometry';
+import { getCanvasTool } from './tools/registry';
+import type { CanvasToolContext, CanvasToolId, CanvasToolPointerInput, CanvasToolSession, CanvasToolTransition } from './tools/types';
 import './canvas.css';
 
 interface CanvasProps {
   document: FolioDocument;
   components?: ComponentDefinition[];
   selectedNodeIds: string[];
+  toolId: CanvasToolId;
   zoom: number;
   pan: { x: number; y: number };
   onPanChange: (pan: { x: number; y: number }) => void;
@@ -24,24 +20,6 @@ interface CanvasProps {
   onSelectionChange: (nodeIds: string[]) => void;
   onTransformCommit: (nodes: DesignNode[]) => void;
   onLayerDrop: (nodeIds: string[]) => void;
-}
-
-interface DragSession {
-  pointerId: number;
-  mode: 'move' | 'resize';
-  start: { x: number; y: number };
-  nodes: DesignNode[];
-  bounds: Bounds;
-  ids: string[];
-  handle?: ResizeHandle;
-}
-
-interface MarqueeSession {
-  pointerId: number;
-  start: { x: number; y: number };
-  additive: boolean;
-  subtractive: boolean;
-  initialIds: string[];
 }
 
 interface PanSession {
@@ -256,6 +234,7 @@ export function Canvas({
   document,
   components = [],
   selectedNodeIds,
+  toolId,
   zoom,
   pan,
   onPanChange,
@@ -265,13 +244,12 @@ export function Canvas({
   onLayerDrop,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const dragRef = useRef<DragSession | null>(null);
+  const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<DesignNode[] | null>(null);
   const [previewNodes, setPreviewNodes] = useState<DesignNode[] | null>(null);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const panRef = useRef<PanSession | null>(null);
-  const marqueeRef = useRef<MarqueeSession | null>(null);
-  const [marqueeRect, setMarqueeRect] = useState<Bounds | null>(null);
+  const [toolSession, setToolSession] = useState<CanvasToolSession | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
 
@@ -282,9 +260,10 @@ export function Canvas({
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code !== 'Space' || isInteractiveTarget(event.target)) return;
-      setSpaceHeld(true);
-      event.preventDefault();
+      if (event.code === 'Space' && !isInteractiveTarget(event.target)) {
+        setSpaceHeld(true);
+        event.preventDefault();
+      }
     };
     const handleKeyUp = (event: KeyboardEvent) => {
       if (event.code === 'Space') setSpaceHeld(false);
@@ -292,8 +271,10 @@ export function Canvas({
     const handleWindowBlur = () => {
       setSpaceHeld(false);
       panRef.current = null;
-      marqueeRef.current = null;
-      setMarqueeRect(null);
+      setToolSession(null);
+      previewRef.current = null;
+      setPreviewNodes(null);
+      setGuides([]);
       setIsPanning(false);
     };
 
@@ -327,6 +308,25 @@ export function Canvas({
   });
   const selectionBounds = getBounds(selectedNodes);
   const canResize = selectedNodes.length > 0;
+  const selectableNodes = canvasNodes.filter((node) => {
+    const effective = layerStates.get(node.id);
+    return effective?.visible && !effective.locked;
+  });
+  const activeTool = getCanvasTool(toolId);
+
+  const createToolContext = (): CanvasToolContext => ({
+    document,
+    canvasNodes,
+    selectableNodes,
+    otherNodes: selectableNodes,
+    selectedNodeIds,
+    selectedNodes,
+    selectionBounds,
+    zoom,
+    pan,
+    viewportWidth: scrollAreaRef.current?.clientWidth ?? document.width,
+    session: toolSession,
+  });
 
   const capturePointer = (svg: SVGSVGElement, pointerId: number) => {
     try {
@@ -445,216 +445,96 @@ export function Canvas({
     }
   };
 
-  const handlePointerDown = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
-    if (event.button !== 0 || spaceHeld) return;
-    const svg = event.currentTarget;
+  const createPointerInput = (event: JSX.TargetedPointerEvent<SVGSVGElement>): CanvasToolPointerInput => {
     const target = event.target as Element;
-    const handleElement = target.closest('[data-resize-handle]');
-    const point = toCanvasPoint(svg, event.clientX, event.clientY);
-
-    if (handleElement) {
-      if (!canResize || !selectionBounds) return;
-      const handle = handleElement.getAttribute('data-resize-handle') as ResizeHandle | null;
-      if (!handle) return;
-      dragRef.current = {
-        pointerId: event.pointerId,
-        mode: 'resize',
-        start: point,
-        nodes: selectedNodes,
-        bounds: selectionBounds,
-        ids: selectedNodes.map((node) => node.id),
-        handle,
-      };
-      capturePointer(svg, event.pointerId);
-      event.preventDefault();
-      return;
-    }
-
-    const nodeElement = target.closest('[data-node-id]');
-    const nodeId = nodeElement?.getAttribute('data-node-id') ?? null;
-
-    if (!nodeId) {
-      marqueeRef.current = {
-        pointerId: event.pointerId,
-        start: point,
-        additive: event.shiftKey,
-        subtractive: event.ctrlKey || event.metaKey,
-        initialIds: selectedNodeIds,
-      };
-      setMarqueeRect({ x: point.x, y: point.y, width: 0, height: 0 });
-      capturePointer(svg, event.pointerId);
-      event.preventDefault();
-      return;
-    }
-
-    const hitNode = canvasNodes.find((node) => node.id === nodeId);
-    const hitState = hitNode ? layerStates.get(hitNode.id) : undefined;
-    if (!hitNode || !hitState?.visible || hitState.locked) return;
-
-    const groupIds = getCanvasClickSelectionIds(canvasNodes, nodeId, event.shiftKey);
-    const groupAlreadySelected = groupIds.every((id) => selectedNodeIds.includes(id));
-    const modifier = event.ctrlKey || event.metaKey;
-    let nextIds: string[];
-
-    if (event.shiftKey) {
-      // Shift-click is the precision override: select only the exact nested layer.
-      nextIds = [nodeId];
-    } else if (modifier && groupAlreadySelected) {
-      // If a selected child is toggled off, clear its selected ancestors too.
-      const removed = new Set([...groupIds, ...getLayerAncestorIds(canvasNodes, nodeId)]);
-      nextIds = selectedNodeIds.filter((id) => !removed.has(id));
-    } else if (modifier) {
-      nextIds = [...new Set([...selectedNodeIds, ...groupIds])];
-    } else {
-      // A plain click always establishes the clicked layer's intended scope.
-      // This lets a child break away from an already-selected parent group.
-      nextIds = groupIds;
-    }
-
-    onSelectionChange(nextIds);
-    if (modifier && groupAlreadySelected) return;
-
-    const movingSet = new Set(nextIds);
-    const movingNodes = canvasNodes.filter((node) => movingSet.has(node.id)).filter((node) => {
-      const effective = layerStates.get(node.id);
-      return effective?.visible && !effective.locked;
-    });
-    if (movingNodes.length === 0) return;
-    const bounds = getBounds(movingNodes);
-    if (!bounds) return;
-
-    dragRef.current = {
+    const resizeElement = target.closest('[data-resize-handle]');
+    const resizeHandle = resizeElement?.getAttribute('data-resize-handle') as ResizeHandle | null;
+    const scrollRect = scrollAreaRef.current?.getBoundingClientRect();
+    return {
       pointerId: event.pointerId,
-      mode: 'move',
-      start: point,
-      nodes: movingNodes,
-      bounds,
-      ids: movingNodes.map((node) => node.id),
+      button: event.button,
+      point: toCanvasPoint(event.currentTarget, event.clientX, event.clientY),
+      clientX: event.clientX,
+      clientY: event.clientY,
+      viewportAnchor: scrollRect ? {
+        x: event.clientX - scrollRect.left - scrollRect.width / 2,
+        y: event.clientY - scrollRect.top - scrollRect.height / 2,
+      } : { x: 0, y: 0 },
+      targetNodeId: target.closest('[data-node-id]')?.getAttribute('data-node-id') ?? null,
+      resizeHandle,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
     };
-    capturePointer(svg, event.pointerId);
-    event.preventDefault();
+  };
+
+  const updatePreview = (nodes: DesignNode[] | null) => {
+    previewRef.current = nodes;
+    setPreviewNodes(nodes);
+  };
+
+  const applyToolTransition = (
+    transition: CanvasToolTransition,
+    svg?: SVGSVGElement,
+    pointerId?: number,
+    sourceEvent?: { preventDefault(): void },
+  ) => {
+    if ('session' in transition) setToolSession(transition.session ?? null);
+    if ('previewNodes' in transition) updatePreview(transition.previewNodes ?? null);
+    if ('selection' in transition) onSelectionChange(transition.selection ?? []);
+    if (transition.commitNodes) onTransformCommit(transition.commitNodes);
+    if (transition.pan) onPanChange(transition.pan);
+    if (transition.zoom !== undefined) onZoomChange(transition.zoom);
+    if (transition.guides) setGuides(transition.guides);
+    if (transition.capturePointer && svg && pointerId !== undefined) capturePointer(svg, pointerId);
+    if (transition.preventDefault) sourceEvent?.preventDefault();
+  };
+
+  const handlePointerDown = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    if (spaceHeld) return;
+    const input = createPointerInput(event);
+    const transition = activeTool.onPointerDown(input, createToolContext());
+    applyToolTransition(transition, event.currentTarget, event.pointerId, event);
   };
 
   const handlePointerMove = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
-    const marquee = marqueeRef.current;
-    if (marquee && marquee.pointerId === event.pointerId) {
-      const point = toCanvasPoint(event.currentTarget, event.clientX, event.clientY);
-      const x = Math.min(point.x, marquee.start.x);
-      const y = Math.min(point.y, marquee.start.y);
-      setMarqueeRect({ x, y, width: Math.abs(point.x - marquee.start.x), height: Math.abs(point.y - marquee.start.y) });
-      event.preventDefault();
-      return;
-    }
-    const session = dragRef.current;
-    if (!session || session.pointerId !== event.pointerId) return;
-
-    const point = toCanvasPoint(event.currentTarget, event.clientX, event.clientY);
-    const dx = point.x - session.start.x;
-    const dy = point.y - session.start.y;
-    if (Math.abs(dx) + Math.abs(dy) < 0.25) return;
-
-    if (session.mode === 'move') {
-      const scale = document.width / Math.max(1, event.currentTarget.clientWidth);
-      const tolerance = 8 * scale;
-      const otherNodes = canvasNodes.filter(
-        (node) => layerStates.get(node.id)?.visible && !session.ids.includes(node.id),
-      );
-      const snapped = snapTranslation(
-        session.nodes,
-        dx,
-        dy,
-        { x: 0, y: 0, width: document.width, height: document.height },
-        otherNodes,
-        tolerance,
-      );
-      const updated = session.nodes.map((node) => ({
-        ...node,
-        x: node.x + snapped.dx,
-        y: node.y + snapped.dy,
-      }));
-      updatePreview(updated);
-      setGuides(snapped.guides);
-    } else if (session.handle) {
-      updatePreview(resizeNodes(session.nodes, session.bounds, session.handle, dx, dy));
-      setGuides([]);
-    }
+    const input = createPointerInput(event);
+    const transition = activeTool.onPointerMove(input, createToolContext());
+    applyToolTransition(transition, event.currentTarget, event.pointerId, event);
   };
 
   const finishPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
-    const marquee = marqueeRef.current;
-    if (marquee && marquee.pointerId === event.pointerId) {
-      const point = toCanvasPoint(event.currentTarget, event.clientX, event.clientY);
-      const rect = {
-        x: Math.min(point.x, marquee.start.x),
-        y: Math.min(point.y, marquee.start.y),
-        width: Math.abs(point.x - marquee.start.x),
-        height: Math.abs(point.y - marquee.start.y),
-      };
-      const dragged = rect.width > 1 || rect.height > 1;
-      const hits = dragged ? canvasNodes.filter((node) => {
-        const effective = layerStates.get(node.id);
-        if (!effective?.visible || effective.locked) return false;
-        const left = node.x;
-        const top = node.y;
-        const right = node.x + node.width;
-        const bottom = node.y + node.height;
-        return left <= rect.x + rect.width && right >= rect.x &&
-          top <= rect.y + rect.height && bottom >= rect.y;
-      }).map((node) => node.id) : [];
-      const expandedHits = expandSelectedLayerIds(canvasNodes, hits);
-      let nextIds: string[];
-      if (marquee.subtractive) {
-        const removed = new Set(expandedHits);
-        hits.forEach((id) => getLayerAncestorIds(canvasNodes, id).forEach((ancestorId) => removed.add(ancestorId)));
-        nextIds = marquee.initialIds.filter((id) => !removed.has(id));
-      } else if (marquee.additive) {
-        nextIds = [...new Set([...marquee.initialIds, ...expandedHits])];
-      } else {
-        nextIds = expandedHits;
-      }
-      onSelectionChange(nextIds);
-      marqueeRef.current = null;
-      setMarqueeRect(null);
-      event.preventDefault();
-      return;
-    }
-    const session = dragRef.current;
-    if (!session || session.pointerId !== event.pointerId) return;
-
-    const preview = previewRef.current;
-    const changed = Boolean(preview?.some((node) => {
-      const original = session.nodes.find((item) => item.id === node.id);
-      return original && (
-        Math.abs(original.x - node.x) > 0.01 ||
-        Math.abs(original.y - node.y) > 0.01 ||
-        Math.abs(original.width - node.width) > 0.01 ||
-        Math.abs(original.height - node.height) > 0.01 ||
-        (original.type === 'text' && node.type === 'text' && Math.abs(original.style.fontSize - node.style.fontSize) > 0.01)
-      );
-    }));
-
-    if (changed && preview) onTransformCommit(preview);
-    dragRef.current = null;
-    updatePreview(null);
-    setGuides([]);
+    const input = createPointerInput(event);
+    const transition = activeTool.onPointerUp(input, createToolContext());
+    applyToolTransition(transition, event.currentTarget, event.pointerId, event);
   };
 
   const cancelPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
-    const marquee = marqueeRef.current;
-    if (marquee && marquee.pointerId === event.pointerId) {
-      marqueeRef.current = null;
-      setMarqueeRect(null);
-      return;
-    }
-    const session = dragRef.current;
-    if (!session || session.pointerId !== event.pointerId) return;
-    dragRef.current = null;
-    updatePreview(null);
-    setGuides([]);
+    const input = createPointerInput(event);
+    const transition = activeTool.onPointerCancel(input, createToolContext());
+    applyToolTransition(transition, event.currentTarget, event.pointerId, event);
   };
+
+  useEffect(() => {
+    const handleToolKeyDown = (event: KeyboardEvent) => {
+      const transition = getCanvasTool(toolId).onKeyDown({
+        key: event.key,
+        code: event.code,
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        altKey: event.altKey,
+      }, createToolContext());
+      applyToolTransition(transition);
+    };
+    window.addEventListener('keydown', handleToolKeyDown);
+    return () => window.removeEventListener('keydown', handleToolKeyDown);
+  }, [toolId, toolSession, selectedNodeIds, zoom, pan, document, previewNodes]);
 
   return (
     <div
+      ref={scrollAreaRef}
       class={
         'canvas-scroll-area' +
         (spaceHeld ? ' canvas-pan-ready' : '') +
@@ -684,9 +564,11 @@ export function Canvas({
         <svg
           ref={svgRef}
           class="artboard"
+          data-tool={toolId}
+          style={{ cursor: activeTool.cursorStyle(createToolContext()) }}
           viewBox={'0 0 ' + document.width + ' ' + document.height}
           role="application"
-          aria-label="Folio design artboard. Click a parent to select its whole hierarchy; click a nested layer to select only that layer. Shift-click selects the exact layer; Ctrl or Command-click toggles a group. Shift-drag adds to marquee selection and Ctrl or Command-drag subtracts."
+          aria-label="Folio design artboard. Use the active Tool Rack tool to select, navigate, or inspect artwork."
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={finishPointer}
@@ -724,18 +606,34 @@ export function Canvas({
               locked={Boolean(layerStates.get(node.id)?.locked)}
             />
           ))}
-          {marqueeRect && (
-            <rect
-              class="canvas-marquee"
-              x={marqueeRect.x}
-              y={marqueeRect.y}
-              width={marqueeRect.width}
-              height={marqueeRect.height}
-              pointerEvents="none"
-            />
-          )}
+          {activeTool.renderOverlay(createToolContext())?.kind === 'marquee' && (() => {
+            const overlay = activeTool.renderOverlay(createToolContext());
+            return overlay?.kind === 'marquee' ? (
+              <rect
+                class="canvas-marquee"
+                x={overlay.bounds.x}
+                y={overlay.bounds.y}
+                width={overlay.bounds.width}
+                height={overlay.bounds.height}
+                pointerEvents="none"
+              />
+            ) : null;
+          })()}
+          {activeTool.renderOverlay(createToolContext())?.kind === 'lasso' && (() => {
+            const overlay = activeTool.renderOverlay(createToolContext());
+            return overlay?.kind === 'lasso' ? (
+              <polyline
+                class="canvas-lasso"
+                points={overlay.points.map((point) => point.x + ',' + point.y).join(' ')}
+                pointerEvents="none"
+              />
+            ) : null;
+          })()}
           {selectionBounds && (
-            <SelectionOverlay bounds={selectionBounds} canResize={canResize} />
+            <SelectionOverlay
+              bounds={selectionBounds}
+              canResize={canResize && (toolId === 'select' || toolId === 'direct-selection')}
+            />
           )}
           {guides.map((guide, index) => (
             guide.axis === 'x'
