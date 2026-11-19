@@ -101,12 +101,11 @@ function NodeArtwork({ node, components = [] }: { node: DesignNode; components?:
       <g data-node-id={node.id} transform={transform} opacity={node.opacity} class="canvas-node component-instance-artwork">
         {component ? (
           <g transform={'translate(' + node.x + ' ' + node.y + ') scale(' + scaleX + ' ' + scaleY + ')'}>
-            {getLayerRenderOrder(resolvedChildren).filter((child) => child.onCanvas !== false && childStates.get(child.id)?.visible).map((effective) => {
-              const childState = childStates.get(effective.id);
-              return effective.type === 'component-instance'
+            {getLayerRenderOrder(resolvedChildren).filter((child) => child.onCanvas !== false && childStates.get(child.id)?.visible).map((effective) => (
+              effective.type === 'component-instance'
                 ? null
-                : <NodeShape key={effective.id} node={effective} />;
-            })}
+                : <NodeShape key={effective.id} node={effective} />
+            ))}
           </g>
         ) : (
           <rect x={node.x} y={node.y} width={node.width} height={node.height}
