@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from '../../core/document/types';
 import { resolveComponentInstanceNodes } from '../../core/document/components';
+import { expandSelectedLayers, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
 import {
   getBounds,
   resizeNodes,
@@ -62,13 +63,13 @@ function toCanvasPoint(svg: SVGSVGElement, clientX: number, clientY: number): { 
 
 type PrimitiveNode = Exclude<DesignNode, ComponentInstanceNode>;
 
-function NodeShape({ node }: { node: PrimitiveNode }) {
+function NodeShape({ node, locked = node.locked }: { node: PrimitiveNode; locked?: boolean }) {
   const transform = node.rotation
     ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
     : undefined;
 
   return (
-    <g transform={transform} opacity={node.opacity} class="canvas-node" style={{ cursor: node.locked ? 'default' : 'grab' }}>
+    <g transform={transform} opacity={node.opacity} class="canvas-node" style={{ cursor: locked ? 'default' : 'grab' }}>
       {node.type === 'rect' && (
         <rect x={node.x} y={node.y} width={node.width} height={node.height}
           rx={node.style.radius ?? 0} fill={node.style.fill} stroke={node.style.stroke} strokeWidth={node.style.strokeWidth} />
@@ -92,7 +93,7 @@ function NodeShape({ node }: { node: PrimitiveNode }) {
   );
 }
 
-function NodeArtwork({ node, components = [] }: { node: DesignNode; components?: ComponentDefinition[] }) {
+function NodeArtwork({ node, components = [], locked = node.locked }: { node: DesignNode; components?: ComponentDefinition[]; locked?: boolean }) {
   if (node.type === 'component-instance') {
     const component = components.find((item) => item.id === node.componentId);
     const scaleX = component ? node.width / Math.max(1, component.document.width) : 1;
@@ -100,14 +101,17 @@ function NodeArtwork({ node, components = [] }: { node: DesignNode; components?:
     const transform = node.rotation
       ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
       : undefined;
+    const resolvedChildren = component ? resolveComponentInstanceNodes(node, component) : [];
+    const childStates = getEffectiveLayerStates(resolvedChildren);
     return (
       <g data-node-id={node.id} transform={transform} opacity={node.opacity} class="canvas-node component-instance-artwork">
         {component ? (
           <g transform={'translate(' + node.x + ' ' + node.y + ') scale(' + scaleX + ' ' + scaleY + ')'}>
-            {resolveComponentInstanceNodes(node, component).filter((child) => child.visible).map((effective) => {
+            {getLayerRenderOrder(resolvedChildren).filter((child) => childStates.get(child.id)?.visible).map((effective) => {
+              const childState = childStates.get(effective.id);
               return effective.type === 'component-instance'
                 ? null
-                : <NodeShape key={effective.id} node={effective} />;
+                : <NodeShape key={effective.id} node={effective} locked={locked || Boolean(childState?.locked)} />;
             })}
           </g>
         ) : (
@@ -118,7 +122,7 @@ function NodeArtwork({ node, components = [] }: { node: DesignNode; components?:
     );
   }
 
-  return <g data-node-id={node.id}><NodeShape node={node} /></g>;
+  return <g data-node-id={node.id}><NodeShape node={node as PrimitiveNode} locked={locked} /></g>;
 }
 
 function SelectionOverlay({ bounds, canResize }: { bounds: Bounds; canResize: boolean }) {
@@ -226,9 +230,11 @@ export function Canvas({
 
   // Locked layers may remain selected in the Layers panel, but they never
   // participate in canvas group transforms or resize bounds.
-  const selectedNodes = displayedNodes.filter(
-    (node) => selectedNodeIds.includes(node.id) && node.visible && !node.locked,
-  );
+  const layerStates = getEffectiveLayerStates(displayedNodes);
+  const selectedNodes = expandSelectedLayers(displayedNodes, selectedNodeIds).filter((node) => {
+    const effective = layerStates.get(node.id);
+    return effective?.visible && !effective.locked;
+  });
   const selectionBounds = getBounds(selectedNodes);
   const canResize = selectedNodes.length > 0;
 
@@ -362,8 +368,9 @@ export function Canvas({
       return;
     }
 
-    const hitNode = document.nodes.find((node) => node.id === nodeId);
-    if (!hitNode || !hitNode.visible || hitNode.locked) return;
+    const hitNode = displayedNodes.find((node) => node.id === nodeId);
+    const hitState = hitNode ? layerStates.get(hitNode.id) : undefined;
+    if (!hitNode || !hitState?.visible || hitState.locked) return;
 
     const modifier = event.shiftKey || event.ctrlKey || event.metaKey;
     const wasSelected = selectedNodeIds.includes(nodeId);
@@ -376,7 +383,10 @@ export function Canvas({
     onSelectionChange(nextIds);
     if (modifier && wasSelected) return;
 
-    const movingNodes = document.nodes.filter((node) => nextIds.includes(node.id) && node.visible && !node.locked);
+    const movingNodes = expandSelectedLayers(displayedNodes, nextIds).filter((node) => {
+      const effective = layerStates.get(node.id);
+      return effective?.visible && !effective.locked;
+    });
     if (movingNodes.length === 0) return;
     const bounds = getBounds(movingNodes);
     if (!bounds) return;
@@ -405,8 +415,8 @@ export function Canvas({
     if (session.mode === 'move') {
       const scale = document.width / Math.max(1, event.currentTarget.clientWidth);
       const tolerance = 8 * scale;
-      const otherNodes = document.nodes.filter(
-        (node) => node.visible && !session.ids.includes(node.id),
+      const otherNodes = displayedNodes.filter(
+        (node) => layerStates.get(node.id)?.visible && !session.ids.includes(node.id),
       );
       const snapped = snapTranslation(
         session.nodes,
@@ -497,8 +507,8 @@ export function Canvas({
           onPointerCancel={cancelPointer}
         >
           <rect x="0" y="0" width={document.width} height={document.height} fill={document.background} />
-          {displayedNodes.filter((node) => node.visible).map((node) => (
-            <NodeArtwork key={node.id} node={node} components={components} />
+          {getLayerRenderOrder(displayedNodes).filter((node) => layerStates.get(node.id)?.visible).map((node) => (
+            <NodeArtwork key={node.id} node={node} components={components} locked={Boolean(layerStates.get(node.id)?.locked)} />
           ))}
           {selectionBounds && (
             <SelectionOverlay bounds={selectionBounds} canResize={canResize} />
