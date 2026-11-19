@@ -326,11 +326,12 @@ describe('layer hierarchy and panel operations', () => {
     const source = { ...layer('linked-edit-master'), onCanvas: false };
     const prepared = { ...project, pages: project.pages.map((page, index) => index === 0
       ? { ...page, document: { ...page.document, nodes: [source] } } : page) };
-    const copies = createLayerCanvasInstances([source], [source.id], { x: 300, y: 100 }, (id, index) => 'linked-edit-' + index);
+    const copies = createLayerCanvasInstances([source], [source.id], { x: 300, y: 100 }, () => 'linked-edit-0');
     const placed = editorReducer(createEditorState(prepared), {
       type: 'place-layer-instances', sourceNodeIds: [source.id], instanceNodes: copies,
     });
     const selectedInstance = copies[0];
+    if (!selectedInstance || selectedInstance.type !== 'rect') throw new Error('Expected the linked instance to be a rectangle.');
     const editedInstance = { ...selectedInstance, style: { ...selectedInstance.style, fill: '#22aa88' } };
     const updated = editorReducer(placed, { type: 'edit-node', node: editedInstance, coalesceKey: 'linked-instance-fill' });
     const nodes = getActiveDocument(updated.project).nodes;
