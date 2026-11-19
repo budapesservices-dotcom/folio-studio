@@ -34,6 +34,7 @@ function Icon({ name }: { name: string }) {
     plus: 'M12 5v14M5 12h14',
     minus: 'M5 12h14',
     chevron: 'm9 18 6-6-6-6',
+    clipArrow: 'M12 3v17m-7-7 7 7 7-7',
     save: 'M5 4h12l3 3v13H4V4h1zm2 0v6h10V4M8 20v-7h8v7',
     fullscreen: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5',
     sidebar: 'M4 4h16v16H4zM9 4v16',
@@ -1265,6 +1266,7 @@ export function App() {
             const clipBaseName = node.clipMaskBaseId
               ? layerSourceNodes.find((item) => item.id === node.clipMaskBaseId)?.name ?? 'another layer'
               : '';
+            const isMaskBase = layerSourceNodes.some((item) => item.clipMaskBaseId === node.id);
             const collapsed = (collapsedLayers[activeEditorId] ?? []).includes(node.id);
             const dropClass = layerDropTarget?.nodeId === node.id ? ('drop-' + layerDropTarget.position) : '';
             return (
@@ -1276,8 +1278,8 @@ export function App() {
                 aria-expanded={hasChildren ? !collapsed : undefined}
                 tabIndex={0}
                 draggable={true}
-                class={'layer-row ' + (selected ? 'selected ' : '') + (!effective?.visible ? 'layer-hidden ' : '') + (effective?.locked ? 'layer-inherited-locked ' : '') + dropClass}
-                style={{ paddingLeft: (8 + depth * 15) + 'px' }}
+                class={'layer-row ' + (selected ? 'selected ' : '') + (!effective?.visible ? 'layer-hidden ' : '') + (effective?.locked ? 'layer-inherited-locked ' : '') + (node.clipMaskBaseId ? 'layer-row-clipped ' : '') + (isMaskBase ? 'layer-row-mask-base ' : '') + dropClass}
+                style={{ paddingLeft: (8 + depth * 15 + (node.clipMaskBaseId ? 14 : 0)) + 'px' }}
                 onClick={(event) => selectLayerFromPanel(node.id, event)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
@@ -1304,7 +1306,7 @@ export function App() {
                   </button>
                 ) : <span class="layer-disclosure-spacer" />}
                 <LayerIcon type={node.type} />
-                {node.clipMaskBaseId && <span class="layer-clip-indicator" title={`Clipped to ${clipBaseName}`} aria-label={`Clipped to ${clipBaseName}`}>↳</span>}
+                {node.clipMaskBaseId && <span class="layer-clip-indicator" title={`Clipped to ${clipBaseName}`} aria-label={`Clipped to ${clipBaseName}`}><Icon name="clipArrow" /></span>}
                 {layerRename?.anchorId === node.id ? (
                   <input
                     ref={layerRenameInputRef}
@@ -1329,7 +1331,7 @@ export function App() {
                     onBlur={() => finishLayerRename(true)}
                   />
                 ) : (
-                  <span class="layer-name">{node.name}</span>
+                  <span class={'layer-name ' + (isMaskBase ? 'layer-mask-base-name' : '')}>{node.name}</span>
                 )}
                 <div class="layer-actions">
                   <button
