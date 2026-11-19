@@ -35,6 +35,14 @@ interface DragSession {
   handle?: ResizeHandle;
 }
 
+interface MarqueeSession {
+  pointerId: number;
+  start: { x: number; y: number };
+  additive: boolean;
+  subtractive: boolean;
+  initialIds: string[];
+}
+
 interface PanSession {
   pointerId: number;
   startClientX: number;
@@ -186,6 +194,8 @@ export function Canvas({
   const [previewNodes, setPreviewNodes] = useState<DesignNode[] | null>(null);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const panRef = useRef<PanSession | null>(null);
+  const marqueeRef = useRef<MarqueeSession | null>(null);
+  const [marqueeRect, setMarqueeRect] = useState<Bounds | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
 
@@ -206,6 +216,8 @@ export function Canvas({
     const handleWindowBlur = () => {
       setSpaceHeld(false);
       panRef.current = null;
+      marqueeRef.current = null;
+      setMarqueeRect(null);
       setIsPanning(false);
     };
 
@@ -364,7 +376,16 @@ export function Canvas({
     const nodeId = nodeElement?.getAttribute('data-node-id') ?? null;
 
     if (!nodeId) {
-      onSelectionChange([]);
+      marqueeRef.current = {
+        pointerId: event.pointerId,
+        start: point,
+        additive: event.shiftKey,
+        subtractive: event.ctrlKey || event.metaKey,
+        initialIds: selectedNodeIds,
+      };
+      setMarqueeRect({ x: point.x, y: point.y, width: 0, height: 0 });
+      capturePointer(svg, event.pointerId);
+      event.preventDefault();
       return;
     }
 
@@ -404,6 +425,15 @@ export function Canvas({
   };
 
   const handlePointerMove = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    const marquee = marqueeRef.current;
+    if (marquee && marquee.pointerId === event.pointerId) {
+      const point = toCanvasPoint(event.currentTarget, event.clientX, event.clientY);
+      const x = Math.min(point.x, marquee.start.x);
+      const y = Math.min(point.y, marquee.start.y);
+      setMarqueeRect({ x, y, width: Math.abs(point.x - marquee.start.x), height: Math.abs(point.y - marquee.start.y) });
+      event.preventDefault();
+      return;
+    }
     const session = dragRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
 
@@ -440,6 +470,41 @@ export function Canvas({
   };
 
   const finishPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    const marquee = marqueeRef.current;
+    if (marquee && marquee.pointerId === event.pointerId) {
+      const point = toCanvasPoint(event.currentTarget, event.clientX, event.clientY);
+      const rect = {
+        x: Math.min(point.x, marquee.start.x),
+        y: Math.min(point.y, marquee.start.y),
+        width: Math.abs(point.x - marquee.start.x),
+        height: Math.abs(point.y - marquee.start.y),
+      };
+      const dragged = rect.width > 1 || rect.height > 1;
+      const hits = dragged ? displayedNodes.filter((node) => {
+        const effective = layerStates.get(node.id);
+        if (!effective?.visible || effective.locked) return false;
+        const left = node.x;
+        const top = node.y;
+        const right = node.x + node.width;
+        const bottom = node.y + node.height;
+        return left <= rect.x + rect.width && right >= rect.x &&
+          top <= rect.y + rect.height && bottom >= rect.y;
+      }).map((node) => node.id) : [];
+      let nextIds: string[];
+      if (marquee.subtractive) {
+        const hitSet = new Set(hits);
+        nextIds = marquee.initialIds.filter((id) => !hitSet.has(id));
+      } else if (marquee.additive) {
+        nextIds = [...new Set([...marquee.initialIds, ...hits])];
+      } else {
+        nextIds = hits;
+      }
+      onSelectionChange(nextIds);
+      marqueeRef.current = null;
+      setMarqueeRect(null);
+      event.preventDefault();
+      return;
+    }
     const session = dragRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
 
@@ -462,6 +527,12 @@ export function Canvas({
   };
 
   const cancelPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    const marquee = marqueeRef.current;
+    if (marquee && marquee.pointerId === event.pointerId) {
+      marqueeRef.current = null;
+      setMarqueeRect(null);
+      return;
+    }
     const session = dragRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
     dragRef.current = null;
@@ -500,7 +571,7 @@ export function Canvas({
           class="artboard"
           viewBox={'0 0 ' + document.width + ' ' + document.height}
           role="application"
-          aria-label="Folio design artboard. Drag to move; Shift-click to select multiple layers."
+          aria-label="Folio design artboard. Drag empty space to marquee-select; Shift adds to selection, Ctrl or Command subtracts."
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={finishPointer}
@@ -510,6 +581,16 @@ export function Canvas({
           {getLayerRenderOrder(displayedNodes).filter((node) => layerStates.get(node.id)?.visible).map((node) => (
             <NodeArtwork key={node.id} node={node} components={components} locked={Boolean(layerStates.get(node.id)?.locked)} />
           ))}
+          {marqueeRect && (
+            <rect
+              class="canvas-marquee"
+              x={marqueeRect.x}
+              y={marqueeRect.y}
+              width={marqueeRect.width}
+              height={marqueeRect.height}
+              pointerEvents="none"
+            />
+          )}
           {selectionBounds && (
             <SelectionOverlay bounds={selectionBounds} canResize={canResize} />
           )}

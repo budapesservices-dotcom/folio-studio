@@ -20,6 +20,7 @@ export type EditorAction =
   | { type: 'add-node'; node: DesignNode }
   | { type: 'add-nodes'; nodes: DesignNode[] }
   | { type: 'replace-node'; node: DesignNode }
+  | { type: 'set-nodes-properties'; nodeIds: string[]; properties: Partial<Pick<DesignNode, 'visible' | 'locked'>> }
   | { type: 'replace-node-with-nodes'; nodeId: string; nodes: DesignNode[] }
   | { type: 'edit-node'; node: DesignNode; coalesceKey: string }
   | { type: 'commit-edit' }
@@ -136,6 +137,18 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'commit-edit':
       return state.historyGroup ? { ...state, historyGroup: null } : state;
+
+    case 'set-nodes-properties': {
+      const ids = new Set(action.nodeIds);
+      if (ids.size === 0) return state;
+      const nodes = document.nodes.map((node) => {
+        if (!ids.has(node.id)) return node;
+        const next = { ...node, ...action.properties };
+        return next.visible === node.visible && next.locked === node.locked ? node : next;
+      });
+      if (nodes.every((node, index) => node === document.nodes[index])) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
 
     case 'replace-node': {
       const exists = document.nodes.some((node) => node.id === action.node.id);

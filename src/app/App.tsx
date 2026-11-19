@@ -391,6 +391,16 @@ export function App() {
   const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
   const layerRows = getLayerPanelRows(focusedDocument.nodes, collapsedLayers[activeEditorId]);
   const layerEffectiveStates = getEffectiveLayerStates(focusedDocument.nodes);
+  const selectedLayerNodes = focusedDocument.nodes.filter((node) => focusedEditor.state.selectedNodeIds.includes(node.id));
+  const batchSetLayerProperty = (property: 'visible' | 'locked') => {
+    if (selectedLayerNodes.length === 0) return;
+    const shouldEnable = !selectedLayerNodes.every((node) => node[property]);
+    dispatchFocused({
+      type: 'set-nodes-properties',
+      nodeIds: selectedLayerNodes.map((node) => node.id),
+      properties: { [property]: shouldEnable },
+    });
+  };
 
   const selectLayerFromPanel = (nodeId: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
     const selected = focusedEditor.state.selectedNodeIds;
@@ -940,8 +950,18 @@ export function App() {
           <span class="page-size">{focusedDocument.width} × {focusedDocument.height}</span>
         </div>
         <div class="layer-list-heading">
-          <span>LAYERS</span>
-          <span>{focusedDocument.nodes.length}</span>
+          <span>LAYERS · {focusedDocument.nodes.length}</span>
+          {selectedLayerNodes.length > 0 && (
+            <div class="layer-batch-actions" aria-label="Actions for selected layers">
+              <span>{selectedLayerNodes.length} selected</span>
+              <button type="button" class="layer-control" title="Show selected layers (or hide if all are visible)" aria-label="Toggle visibility for selected layers" onClick={() => batchSetLayerProperty('visible')}>
+                <Icon name={selectedLayerNodes.every((node) => node.visible) ? 'eye' : 'eyeOff'} />
+              </button>
+              <button type="button" class="layer-control" title="Lock selected layers (or unlock if all are locked)" aria-label="Toggle lock for selected layers" onClick={() => batchSetLayerProperty('locked')}>
+                <Icon name={selectedLayerNodes.every((node) => node.locked) ? 'lock' : 'unlock'} />
+              </button>
+            </div>
+          )}
         </div>
         <div class="layer-list" role="tree" aria-label="Document layers">
           {layerRows.map(({ node, depth, hasChildren }) => {

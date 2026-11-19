@@ -840,3 +840,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 .instance-actions button:disabled { opacity: .4; cursor: not-allowed; }
 .instance-actions button:hover:not(:disabled) { border-color: #8b7cf6; color: #fff; }
+
+
+/* Batch layer actions */
+.layer-batch-actions { display: flex; align-items: center; gap: 4px; }
+.layer-batch-actions > span { margin-right: 3px; color: #8d97a8; font-size: 9px; font-variant-numeric: tabular-nums; }
+.layer-batch-actions .layer-control { width: 25px; height: 24px; color: #b9adff; background: #302b4b; border-color: #48406d; }
+.layer-batch-actions .layer-control:hover { color: #fff; background: #413963; }
