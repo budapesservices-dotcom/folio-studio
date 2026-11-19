@@ -2,7 +2,7 @@ name: FOLIO verification
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/canvas-pan-distribute]
   pull_request:
   workflow_dispatch:
 
