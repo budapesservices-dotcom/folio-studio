@@ -13,6 +13,79 @@ export interface EffectiveLayerState {
   locked: boolean;
 }
 
+/** Reduce a selection to its independent roots (a selected Group counts once). */
+export function getSelectedLayerRootIds(nodes: readonly DesignNode[], selectedIds: readonly string[]): string[] {
+  const available = new Set(nodes.map((node) => node.id));
+  const selected = new Set(selectedIds.filter((id) => available.has(id)));
+  return nodes
+    .filter((node) => selected.has(node.id))
+    .filter((node) => ![...getLayerAncestorIds(nodes, node.id)].some((ancestorId) => selected.has(ancestorId)))
+    .map((node) => node.id);
+}
+
+/** Photoshop-style clipping uses the immediately lower sibling as its base. */
+export function getClippingMaskBaseId(nodes: readonly DesignNode[], nodeId: string): string | null {
+  const node = nodes.find((item) => item.id === nodeId);
+  if (!node) return null;
+  const parentId = node.parentId ?? null;
+  const isInstance = node.isCanvasInstance === true;
+  const siblings = nodes.filter((item) =>
+    (item.parentId ?? null) === parentId && (item.isCanvasInstance === true) === isInstance);
+  const index = siblings.findIndex((item) => item.id === nodeId);
+  if (index <= 0) return null;
+  const base = siblings[index - 1];
+  const baseId = base.clipMaskBaseId && nodes.some((item) => item.id === base.clipMaskBaseId)
+    ? base.clipMaskBaseId
+    : base.id;
+  return baseId === nodeId ? null : baseId;
+}
+
+/** Creates an undoable clipping relationship without changing layer geometry. */
+export function createClippingMask(nodes: DesignNode[], nodeId: string): DesignNode[] {
+  const baseId = getClippingMaskBaseId(nodes, nodeId);
+  if (!baseId) return nodes;
+  const target = nodes.find((node) => node.id === nodeId);
+  if (!target || target.clipMaskBaseId === baseId) return nodes;
+  return nodes.map((node) => node.id === nodeId ? { ...node, clipMaskBaseId: baseId } : node);
+}
+
+/** Removes only the selected clipping relationship. */
+export function removeClippingMask(nodes: DesignNode[], nodeId: string): DesignNode[] {
+  const target = nodes.find((node) => node.id === nodeId);
+  if (!target?.clipMaskBaseId) return nodes;
+  return nodes.map((node) => node.id === nodeId ? { ...node, clipMaskBaseId: undefined } : node);
+}
+
+/** Returns inherited and local clipping bases for Canvas rendering. */
+export function getLayerClipMaskBaseIds(nodes: readonly DesignNode[], nodeId: string): string[] {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const result: string[] = [];
+  const visited = new Set<string>();
+
+  const collectOwnerAndAncestors = (ownerId: string) => {
+    const chain: DesignNode[] = [];
+    const localVisited = new Set<string>();
+    let current = nodeById.get(ownerId);
+    while (current && !localVisited.has(current.id)) {
+      localVisited.add(current.id);
+      chain.push(current);
+      current = current.parentId ? nodeById.get(current.parentId) : undefined;
+    }
+    chain.reverse().forEach((owner) => {
+      if (visited.has(owner.id)) return;
+      visited.add(owner.id);
+      const baseId = owner.clipMaskBaseId;
+      if (baseId && nodeById.has(baseId) && baseId !== owner.id) {
+        collectOwnerAndAncestors(baseId);
+        if (!result.includes(baseId)) result.push(baseId);
+      }
+    });
+  };
+
+  collectOwnerAndAncestors(nodeId);
+  return result;
+}
+
 function getParentId(node: DesignNode, nodeById: Map<string, DesignNode>): string | null {
   const parentId = node.parentId;
   return parentId && parentId !== node.id && nodeById.has(parentId) ? parentId : null;
@@ -192,6 +265,7 @@ export function createLayerCanvasInstances(
     ...node,
     id: idMap.get(node.id)!,
     parentId: node.parentId && idMap.has(node.parentId) ? idMap.get(node.parentId) : undefined,
+    clipMaskBaseId: node.clipMaskBaseId && idMap.has(node.clipMaskBaseId) ? idMap.get(node.clipMaskBaseId) : undefined,
     x: node.x + dx,
     y: node.y + dy,
     onCanvas: true,

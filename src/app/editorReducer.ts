@@ -1,7 +1,7 @@
 import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { replaceComponentInstancesInDocument } from '../core/document/components';
-import { moveLayer, moveLayers, removeLayersAndPromoteChildren, getLayerDescendantIds, groupLayers, ungroupLayers, expandSelectedLayerIds, type LayerDropPosition } from '../core/document/layers';
+import { moveLayer, moveLayers, removeLayersAndPromoteChildren, getLayerDescendantIds, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, type LayerDropPosition } from '../core/document/layers';
 
 const HISTORY_LIMIT = 60;
 
@@ -33,6 +33,8 @@ export type EditorAction =
   | { type: 'move-layers'; nodeIds: string[]; targetId: string; position: LayerDropPosition }
   | { type: 'group-layers'; nodeIds: string[] }
   | { type: 'ungroup-layers'; nodeIds: string[] }
+  | { type: 'mask-layer'; nodeId: string }
+  | { type: 'unmask-layer'; nodeId: string }
   | { type: 'rename-project'; name: string }
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }
@@ -84,7 +86,12 @@ function removeNodesAndCanvasInstances(nodes: DesignNode[], requestedIds: Iterab
     removeIds.add(instance.id);
     getLayerDescendantIds(nodes, instance.id).forEach((id) => removeIds.add(id));
   }
-  return removeLayersAndPromoteChildren(nodes, removeIds);
+  const remaining = removeLayersAndPromoteChildren(nodes, removeIds);
+  const remainingIds = new Set(remaining.map((node) => node.id));
+  // When a base is deleted, clipped layers return to independent visibility.
+  return remaining.map((node) => node.clipMaskBaseId && !remainingIds.has(node.clipMaskBaseId)
+    ? { ...node, clipMaskBaseId: undefined }
+    : node);
 }
 
 function existingSelection(project: FolioProject, ids: string[]): string[] {
@@ -256,6 +263,18 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         .map((node) => node.id);
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       return withSnapshot(state, next, promotedIds.length === 1 ? promotedIds[0] : null, promotedIds);
+    }
+
+    case 'mask-layer': {
+      const nodes = createClippingMask(document.nodes, action.nodeId);
+      if (nodes === document.nodes) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
+    case 'unmask-layer': {
+      const nodes = removeClippingMask(document.nodes, action.nodeId);
+      if (nodes === document.nodes) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
     }
 
     case 'set-nodes-canvas-state': {

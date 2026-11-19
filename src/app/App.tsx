@@ -2,7 +2,7 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage } from '../core/document/types';
-import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, createLayerCanvasInstances, type LayerDropPosition } from '../core/document/layers';
+import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, createLayerCanvasInstances, getSelectedLayerRootIds, getClippingMaskBaseId, type LayerDropPosition } from '../core/document/layers';
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
@@ -1075,6 +1075,36 @@ export function App() {
         }
         return;
       }
+      if (modifier && event.shiftKey && key === 'm') {
+        event.preventDefault();
+        const roots = getSelectedLayerRootIds(context.document.nodes, ids);
+        if (roots.length !== 1) {
+          setNotice('Select one layer or Group to unmask.');
+          return;
+        }
+        const target = context.document.nodes.find((node) => node.id === roots[0]);
+        if (!target?.clipMaskBaseId) {
+          setNotice('The selected layer is not masked.');
+          return;
+        }
+        emit({ type: 'unmask-layer', nodeId: target.id });
+        return;
+      }
+      if (modifier && !event.shiftKey && key === 'm') {
+        event.preventDefault();
+        const roots = getSelectedLayerRootIds(context.document.nodes, ids);
+        if (roots.length !== 1) {
+          setNotice('Multiple layers cannot be masked. Group them first.');
+          return;
+        }
+        const baseId = getClippingMaskBaseId(context.document.nodes, roots[0]);
+        if (!baseId) {
+          setNotice('No layer directly below to use as a clipping mask.');
+          return;
+        }
+        emit({ type: 'mask-layer', nodeId: roots[0] });
+        return;
+      }
       if (modifier && key === 'z') { event.preventDefault(); emit({ type: event.shiftKey ? 'redo' : 'undo' }); return; }
       if (modifier && key === 'y') { event.preventDefault(); emit({ type: 'redo' }); return; }
       if (modifier && key === 'd' && nodes.length > 0) {
@@ -1220,7 +1250,7 @@ export function App() {
         </div>
       </nav>
 
-      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Layers are reusable sources. Drag a layer or Group onto Canvas to create another independent instance; the source stays in this list.', ['CTRL/CMD + CLICK', 'SHIFT + CLICK', 'DRAG TO CANVAS'])}>
+      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Layers are reusable sources. Drag a layer or Group onto Canvas to create another independent instance; the source stays in this list.', ['CTRL/CMD + M: MASK', 'CTRL/CMD + SHIFT + M: UNMASK'])}>
         <div class="panel-heading">
           <h2>Layers</h2>
         </div>
@@ -1232,6 +1262,9 @@ export function App() {
           {layerRows.map(({ node, depth, hasChildren }) => {
             const selected = focusedEditor.state.selectedNodeIds.includes(node.id);
             const effective = layerEffectiveStates.get(node.id);
+            const clipBaseName = node.clipMaskBaseId
+              ? layerSourceNodes.find((item) => item.id === node.clipMaskBaseId)?.name ?? 'another layer'
+              : '';
             const collapsed = (collapsedLayers[activeEditorId] ?? []).includes(node.id);
             const dropClass = layerDropTarget?.nodeId === node.id ? ('drop-' + layerDropTarget.position) : '';
             return (
@@ -1271,6 +1304,7 @@ export function App() {
                   </button>
                 ) : <span class="layer-disclosure-spacer" />}
                 <LayerIcon type={node.type} />
+                {node.clipMaskBaseId && <span class="layer-clip-indicator" title={`Clipped to ${clipBaseName}`} aria-label={`Clipped to ${clipBaseName}`}>↳</span>}
                 {layerRename?.anchorId === node.id ? (
                   <input
                     ref={layerRenameInputRef}

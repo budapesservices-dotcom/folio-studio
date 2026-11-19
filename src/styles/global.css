@@ -653,6 +653,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .status-center span { margin: 0 5px; color: #525c6d; }
 .status-right { color: #788394; }
 .status-ready-dot { width: 5px; height: 5px; }
+.layer-clip-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 15px;
+  margin-left: 3px;
+  color: #b6aaff;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
 .toast { position: fixed; right: 295px; bottom: 43px; z-index: 1500; max-width: 420px; padding: 11px 14px; border: 1px solid #46405f; border-radius: 7px; color: #e7e2ff; background: #28243d; box-shadow: 0 8px 30px #0005; font-size: 11px; }
 
 @media (max-width: 1120px) {

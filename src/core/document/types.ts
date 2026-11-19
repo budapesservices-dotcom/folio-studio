@@ -28,6 +28,8 @@ export interface NodeBase {
   isCanvasInstance?: boolean;
   /** Source layer ID from which a Canvas instance was created. */
   sourceLayerId?: string;
+  /** Base layer ID whose alpha bounds this layer as a Photoshop-style clipping layer. */
+  clipMaskBaseId?: string;
 }
 
 export interface ShapeStyle {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from '../../core/document/types';
 import { resolveComponentInstanceNodes } from '../../core/document/components';
-import { expandSelectedLayerIds, getCanvasClickSelectionIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
+import { expandSelectedLayerIds, getCanvasClickSelectionIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerRenderOrder, getLayerDescendantIds, getLayerClipMaskBaseIds } from '../../core/document/layers';
 import {
   getBounds,
   resizeNodes,
@@ -72,7 +72,7 @@ function toCanvasPoint(svg: SVGSVGElement, clientX: number, clientY: number): { 
 
 type PrimitiveNode = Exclude<DesignNode, ComponentInstanceNode>;
 
-function NodeShape({ node, locked = node.locked }: { node: PrimitiveNode; locked?: boolean }) {
+function NodeShape({ node, locked = node.locked, mask = false }: { node: PrimitiveNode; locked?: boolean; mask?: boolean }) {
   const transform = node.rotation
     ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
     : undefined;
@@ -84,14 +84,18 @@ function NodeShape({ node, locked = node.locked }: { node: PrimitiveNode; locked
       )}
       {node.type === 'rect' && (
         <rect x={node.x} y={node.y} width={node.width} height={node.height}
-          rx={node.style.radius ?? 0} fill={node.style.fill} stroke={node.style.stroke} strokeWidth={node.style.strokeWidth} />
+          rx={node.style.radius ?? 0}
+          fill={mask ? (node.style.fill === 'none' ? 'none' : '#fff') : node.style.fill}
+          stroke={mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke} strokeWidth={node.style.strokeWidth} />
       )}
       {node.type === 'ellipse' && (
         <ellipse cx={node.x + node.width / 2} cy={node.y + node.height / 2}
-          rx={node.width / 2} ry={node.height / 2} fill={node.style.fill} stroke={node.style.stroke} strokeWidth={node.style.strokeWidth} />
+          rx={node.width / 2} ry={node.height / 2}
+          fill={mask ? (node.style.fill === 'none' ? 'none' : '#fff') : node.style.fill}
+          stroke={mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke} strokeWidth={node.style.strokeWidth} />
       )}
       {node.type === 'text' && (
-        <text x={node.x} y={node.y} fill={node.style.fill} fontSize={node.style.fontSize}
+        <text x={node.x} y={node.y} fill={mask ? '#fff' : node.style.fill} fontSize={node.style.fontSize}
           fontFamily={node.style.fontFamily} fontWeight={node.style.fontWeight}
           letterSpacing={node.style.letterSpacing} dominantBaseline="hanging">
           {node.text.split('\\n').map((line, index) => (
@@ -135,6 +139,48 @@ function NodeArtwork({ node, components = [], locked = node.locked }: { node: De
   }
 
   return <g data-node-id={node.id}><NodeShape node={node as PrimitiveNode} locked={locked} /></g>;
+}
+
+/** Paint a base layer's alpha silhouette into an SVG mask. Group bases use their descendants. */
+function ClipMaskArtwork({ node, nodes }: { node: DesignNode; nodes: DesignNode[] }) {
+  if (node.type === 'group') {
+    const states = getEffectiveLayerStates(nodes);
+    const descendants = [...getLayerDescendantIds(nodes, node.id)]
+      .map((id) => nodes.find((item) => item.id === id))
+      .filter((item): item is DesignNode => item !== undefined && item.type !== 'group' && states.get(item.id)?.visible);
+    if (descendants.length === 0) {
+      return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#fff" opacity={node.opacity} />;
+    }
+    return (
+      <g>
+        {descendants.map((child) => child.type === 'component-instance'
+          ? <rect key={child.id} x={child.x} y={child.y} width={child.width} height={child.height} fill="#fff" opacity={child.opacity} />
+          : <NodeShape key={child.id} node={child as PrimitiveNode} mask />)}
+      </g>
+    );
+  }
+
+  if (node.type === 'component-instance') {
+    const transform = node.rotation
+      ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
+      : undefined;
+    return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#fff" opacity={node.opacity} transform={transform} />;
+  }
+
+  return <NodeShape node={node as PrimitiveNode} mask />;
+}
+
+function MaskedNodeArtwork({ node, nodes, components, locked }: {
+  node: DesignNode;
+  nodes: DesignNode[];
+  components: ComponentDefinition[];
+  locked: boolean;
+}) {
+  const maskIds = getLayerClipMaskBaseIds(nodes, node.id);
+  return maskIds.reduceRight(
+    (artwork, maskId) => <g mask={`url(#folio-mask-${maskId})`}>{artwork}</g>,
+    <NodeArtwork node={node} components={components} locked={locked} />,
+  );
 }
 
 function SelectionOverlay({ bounds, canResize }: { bounds: Bounds; canResize: boolean }) {
@@ -622,9 +668,37 @@ export function Canvas({
           onPointerUp={finishPointer}
           onPointerCancel={cancelPointer}
         >
+          <defs>
+            {[...new Set(canvasNodes.flatMap((node) => getLayerClipMaskBaseIds(canvasNodes, node.id)))].map((baseId) => {
+              const base = canvasNodes.find((node) => node.id === baseId);
+              if (!base) return null;
+              return (
+                <mask
+                  key={baseId}
+                  id={'folio-mask-' + baseId}
+                  maskUnits="userSpaceOnUse"
+                  maskContentUnits="userSpaceOnUse"
+                  x="0" y="0" width={document.width} height={document.height}
+                >
+                  <rect x="0" y="0" width={document.width} height={document.height} fill="#000" />
+                  <ClipMaskArtwork node={base} nodes={canvasNodes} />
+                </mask>
+              );
+            })}
+          </defs>
           <rect x="0" y="0" width={document.width} height={document.height} fill={document.background} />
-          {getLayerRenderOrder(canvasNodes).filter((node) => layerStates.get(node.id)?.visible).map((node) => (
-            <NodeArtwork key={node.id} node={node} components={components} locked={Boolean(layerStates.get(node.id)?.locked)} />
+          {getLayerRenderOrder(canvasNodes).filter((node) => {
+            const state = layerStates.get(node.id);
+            if (!state?.visible) return false;
+            return getLayerClipMaskBaseIds(canvasNodes, node.id).every((baseId) => layerStates.get(baseId)?.visible);
+          }).map((node) => (
+            <MaskedNodeArtwork
+              key={node.id}
+              node={node}
+              nodes={canvasNodes}
+              components={components}
+              locked={Boolean(layerStates.get(node.id)?.locked)}
+            />
           ))}
           {marqueeRect && (
             <rect

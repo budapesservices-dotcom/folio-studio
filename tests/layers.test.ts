@@ -9,6 +9,11 @@ import {
   getLayerPanelRows,
   getLayerRenderOrder,
   createLayerCanvasInstances,
+  getSelectedLayerRootIds,
+  getClippingMaskBaseId,
+  createClippingMask,
+  removeClippingMask,
+  getLayerClipMaskBaseIds,
   moveLayer,
   moveLayers,
   removeLayersAndPromoteChildren,
@@ -165,6 +170,72 @@ describe('layer hierarchy and panel operations', () => {
   it('returns a cycle-safe ancestor chain for deselecting a nested layer', () => {
     const nodes = [layer('parent'), layer('child', 'parent'), layer('leaf', 'child')];
     expect([...getLayerAncestorIds(nodes, 'leaf')]).toEqual(['child', 'parent']);
+  });
+
+  it('creates a Photoshop-style clipping mask from the selected upper sibling to the layer below', () => {
+    const nodes = [
+      layer('base', undefined, { x: 10, y: 20 }),
+      layer('content', undefined, { x: 90, y: 100 }),
+      layer('top'),
+    ];
+    expect(getClippingMaskBaseId(nodes, 'content')).toBe('base');
+    const masked = createClippingMask(nodes, 'content');
+    expect(masked.find((node) => node.id === 'content')?.clipMaskBaseId).toBe('base');
+    expect(masked.find((node) => node.id === 'base')?.clipMaskBaseId).toBeUndefined();
+    expect(masked.find((node) => node.id === 'content')?.x).toBe(90);
+    expect(masked.find((node) => node.id === 'content')?.y).toBe(100);
+    expect(removeClippingMask(masked, 'content').find((node) => node.id === 'content')?.clipMaskBaseId).toBeUndefined();
+  });
+
+  it('clips Group content as one component and propagates its mask to descendants', () => {
+    const nodes = [
+      layer('base'),
+      layer('group', undefined, { type: 'group' }),
+      layer('group-child', 'group'),
+      layer('group-grandchild', 'group-child'),
+    ];
+    const selected = ['group', 'group-child', 'group-grandchild'];
+    expect(getSelectedLayerRootIds(nodes, selected)).toEqual(['group']);
+    const masked = createClippingMask(nodes, 'group');
+    expect(masked.find((node) => node.id === 'group')?.clipMaskBaseId).toBe('base');
+    expect(getLayerClipMaskBaseIds(masked, 'group-child')).toEqual(['base']);
+    expect(getLayerClipMaskBaseIds(masked, 'group-grandchild')).toEqual(['base']);
+  });
+
+  it('rejects a true multi-selection and keeps Canvas instance masks separate from sources', () => {
+    const nodes = [
+      layer('source-base'),
+      layer('source-content'),
+      layer('instance-base', undefined, { isCanvasInstance: true, sourceLayerId: 'source-base' }),
+      layer('instance-content', undefined, { isCanvasInstance: true, sourceLayerId: 'source-content' }),
+    ];
+    expect(getSelectedLayerRootIds(nodes, ['source-base', 'source-content'])).toEqual(['source-base', 'source-content']);
+    expect(getClippingMaskBaseId(nodes, 'instance-content')).toBe('instance-base');
+    expect(createClippingMask(nodes, 'source-content').find((node) => node.id === 'source-content')?.clipMaskBaseId).toBe('source-base');
+    expect(createClippingMask(nodes, 'instance-content').find((node) => node.id === 'instance-content')?.clipMaskBaseId).toBe('instance-base');
+  });
+
+  it('uses the ultimate base for a consecutive clipping stack', () => {
+    const nodes = [
+      layer('base'),
+      layer('clipped-one', undefined, { clipMaskBaseId: 'base' }),
+      layer('clipped-two'),
+    ];
+    expect(getClippingMaskBaseId(nodes, 'clipped-two')).toBe('base');
+    expect(createClippingMask(nodes, 'clipped-two').find((node) => node.id === 'clipped-two')?.clipMaskBaseId).toBe('base');
+  });
+
+  it('removes a clipping relationship when its base layer is deleted', () => {
+    const project = createInitialProject();
+    const document = getActiveDocument(project);
+    const base = { ...document.nodes[0], id: 'mask-base' };
+    const content = { ...document.nodes[1], id: 'mask-content', clipMaskBaseId: base.id };
+    const prepared = {
+      ...project,
+      pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [base, content] } })),
+    };
+    const result = editorReducer(createEditorState(prepared), { type: 'delete-nodes', nodeIds: [base.id] });
+    expect(getActiveDocument(result.project).nodes[0].clipMaskBaseId).toBeUndefined();
   });
 
   it('removes a layer from Canvas without deleting its Layers entry', () => {
