@@ -512,7 +512,7 @@ export function App() {
       || contextMenuNodes.some((node) => node.parentId === contextMenuRootNodes[0].id)
     ));
   const contextMenuCanUngroup = contextMenuRootNodes.some((root) =>
-    contextMenuNodes.some((node) => node.parentId === root)
+    contextMenuNodes.some((node) => node.parentId === root.id)
   );
   const contextMenuCanMask = contextMenuRootIds.length === 1
     && Boolean(getClippingMaskBaseId(contextMenuNodes, contextMenuRootIds[0]));
