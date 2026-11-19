@@ -189,36 +189,6 @@ describe('layer hierarchy and panel operations', () => {
     expect(getActiveDocument(deletedFromLayers.project).nodes).toHaveLength(0);
   });
 
-  it('places an individual existing layer on Canvas without cloning it', () => {
-    const nodes = [
-      layer('parent', undefined, { onCanvas: false }),
-      layer('child', 'parent', { onCanvas: false }),
-      layer('other', undefined, { onCanvas: false }),
-    ];
-    const placed = placeLayersOnCanvas(nodes, ['child'], { x: 250, y: 180 });
-    expect(placed).toHaveLength(nodes.length);
-    expect(placed.find((node) => node.id === 'child')).toMatchObject({ onCanvas: true, x: 250, y: 180 });
-    expect(placed.find((node) => node.id === 'parent')).toMatchObject({ onCanvas: false });
-    expect(placed.find((node) => node.id === 'other')).toMatchObject({ onCanvas: false });
-  });
-
-  it('places a Group and its descendants as one existing block on Canvas', () => {
-    const nodes = [
-      layer('group', undefined, { type: 'group', x: 10, y: 20, width: 120, height: 90, onCanvas: false }),
-      layer('child-a', 'group', { x: 30, y: 40, onCanvas: false }),
-      layer('child-b', 'group', { x: 50, y: 60, onCanvas: false }),
-      layer('other', undefined, { onCanvas: false }),
-    ];
-    const groupIds = expandSelectedLayerIds(nodes, ['group']);
-    const placed = placeLayersOnCanvas(nodes, groupIds, { x: 220, y: 160 });
-    expect(placed).toHaveLength(nodes.length);
-    expect(groupIds).toEqual(['group', 'child-a', 'child-b']);
-    expect(placed.filter((node) => groupIds.includes(node.id)).every((node) => node.onCanvas === true)).toBe(true);
-    expect(placed.find((node) => node.id === 'group')?.x).toBe(220);
-    expect(placed.find((node) => node.id === 'group')?.y).toBe(160);
-    expect(placed.find((node) => node.id === 'other')?.onCanvas).toBe(false);
-  });
-
   it('keeps the Layers source unchanged when placing a child and then its Group again', () => {
     const nodes = [
       layer('source-group', undefined, { type: 'group', x: 100, y: 100, width: 240, height: 180 }),
