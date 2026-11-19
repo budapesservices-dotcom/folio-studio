@@ -34,7 +34,7 @@ function Icon({ name }: { name: string }) {
     plus: 'M12 5v14M5 12h14',
     minus: 'M5 12h14',
     chevron: 'm9 18 6-6-6-6',
-    clipArrow: 'M12 3v17m-7-7 7 7 7-7',
+    clipArrow: 'M20 4H8V16m-4-4 4 4 4-4',
     save: 'M5 4h12l3 3v13H4V4h1zm2 0v6h10V4M8 20v-7h8v7',
     fullscreen: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5',
     sidebar: 'M4 4h16v16H4zM9 4v16',
@@ -1305,8 +1305,8 @@ export function App() {
                     <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} />
                   </button>
                 ) : <span class="layer-disclosure-spacer" />}
-                <LayerIcon type={node.type} />
                 {node.clipMaskBaseId && <span class="layer-clip-indicator" title={`Clipped to ${clipBaseName}`} aria-label={`Clipped to ${clipBaseName}`}><Icon name="clipArrow" /></span>}
+                <LayerIcon type={node.type} />
                 {layerRename?.anchorId === node.id ? (
                   <input
                     ref={layerRenameInputRef}
