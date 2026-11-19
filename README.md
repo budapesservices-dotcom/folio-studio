@@ -59,7 +59,7 @@ npm run dev
 
 Open `http://127.0.0.1:5173` locally.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/FOLIO_ARCHITECTURE_BLUEPRINT.md](docs/FOLIO_ARCHITECTURE_BLUEPRINT.md), [docs/CODESPACES.md](docs/CODESPACES.md), and [docs/ACCEPTANCE_TESTS.md](docs/ACCEPTANCE_TESTS.md) for architecture and Stage 1 acceptance criteria.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [FOLIO Architecture Blueprint](docs/FOLIO_ARCHITECTURE_BLUEPRINT.md), [Native AST v1 Specification](docs/specs/NATIVE_AST_V1.md), [docs/CODESPACES.md](docs/CODESPACES.md), and [docs/ACCEPTANCE_TESTS.md](docs/ACCEPTANCE_TESTS.md) for architecture and Stage 1 acceptance criteria.
 
 ## Development rule
 
