@@ -263,6 +263,22 @@ describe('layer hierarchy and panel operations', () => {
     expect(groupLayers(nodes, ['other'])).toBe(nodes);
   });
 
+  it('ungroups children dropped inside a regular layer while preserving the visual parent', () => {
+    const nodes = [layer('a'), layer('child-one', 'a'), layer('child-two', 'a'), layer('other')];
+    const ungrouped = ungroupLayers(nodes, ['child-one', 'child-two']);
+    expect(ungrouped.find((node) => node.id === 'a')).toBeDefined();
+    expect(ungrouped.find((node) => node.id === 'child-one')?.parentId).toBeUndefined();
+    expect(ungrouped.find((node) => node.id === 'child-two')?.parentId).toBeUndefined();
+  });
+
+  it('ungroups a selected regular parent by lifting children but keeping the parent', () => {
+    const nodes = [layer('a'), layer('child', 'a'), layer('leaf', 'child')];
+    const ungrouped = ungroupLayers(nodes, ['a', 'child', 'leaf']);
+    expect(ungrouped.find((node) => node.id === 'a')).toBeDefined();
+    expect(ungrouped.find((node) => node.id === 'child')?.parentId).toBeUndefined();
+    expect(ungrouped.find((node) => node.id === 'leaf')?.parentId).toBe('child');
+  });
+
   it('allows a Group container to be grouped again and ungrouped one level at a time', () => {
     const nodes = [layer('a'), layer('b'), layer('c')];
     const firstGroup = groupLayers(nodes, ['a', 'b']);

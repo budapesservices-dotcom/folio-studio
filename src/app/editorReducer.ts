@@ -229,12 +229,12 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'ungroup-layers': {
       const nodes = ungroupLayers(document.nodes, action.nodeIds);
       if (nodes === document.nodes) return state;
-      const remainingIds = new Set(nodes.map((node) => node.id));
-      const removedGroupIds = new Set(document.nodes
-        .filter((node) => node.type === 'group' && action.nodeIds.includes(node.id) && !remainingIds.has(node.id))
-        .map((node) => node.id));
+      const nextById = new Map(nodes.map((node) => [node.id, node]));
       const promotedIds = document.nodes
-        .filter((node) => node.parentId && removedGroupIds.has(node.parentId))
+        .filter((node) => {
+          const nextNode = nextById.get(node.id);
+          return nextNode && nextNode.parentId !== node.parentId;
+        })
         .map((node) => node.id);
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       return withSnapshot(state, next, promotedIds.length === 1 ? promotedIds[0] : null, promotedIds);

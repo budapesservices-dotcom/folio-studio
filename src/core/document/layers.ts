@@ -316,31 +316,47 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
   return next;
 }
 
-/** Removes selected Group containers and promotes their direct children. */
+/** Unwraps one selected hierarchy level.
+ * Group containers are removed; ordinary visual parents remain while their
+ * direct children are lifted to the parent's level.
+ */
 export function ungroupLayers(nodes: DesignNode[], selectedIds: readonly string[]): DesignNode[] {
-  const selected = new Set(selectedIds);
+  const selected = new Set(selectedIds.filter((id) => nodes.some((node) => node.id === id)));
+  if (selected.size === 0) return nodes;
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
-  // Canvas parent selection includes descendants. Only remove the outermost
-  // selected Group so Ctrl+Shift+G unwraps exactly one hierarchy level.
-  const groups = new Map(nodes
-    .filter((node) => node.type === 'group' && selected.has(node.id))
-    .filter((node) => {
-      let parentId = getParentId(node, nodeById);
-      const visited = new Set<string>();
-      while (parentId && !visited.has(parentId)) {
-        if (selected.has(parentId) && nodeById.get(parentId)?.type === 'group') return false;
-        visited.add(parentId);
-        const parent = nodeById.get(parentId);
-        parentId = parent ? getParentId(parent, nodeById) : null;
-      }
-      return true;
-    })
-    .map((node) => [node.id, node]));
-  if (groups.size === 0) return nodes;
-  return nodes.filter((node) => !groups.has(node.id)).map((node) => {
-    if (!node.parentId || !groups.has(node.parentId)) return node;
-    const parentId = groups.get(node.parentId)?.parentId ?? undefined;
-    if (parentId) return { ...node, parentId };
+  const children = getChildrenMap(nodes);
+  const selectedNodes = [...selected].map((id) => nodeById.get(id)!).filter(Boolean);
+  const commonParents = new Set(selectedNodes.map((node) => getParentId(node, nodeById)));
+  const inferredParent = commonParents.size === 1 ? [...commonParents][0] : null;
+
+  const candidates = new Set<string>();
+  for (const id of selected) {
+    if ((children.get(id)?.length ?? 0) > 0) candidates.add(id);
+  }
+  // After drag-into, the moved layers remain selected. Infer their common
+  // target parent so Ctrl+Shift+G works without requiring a re-selection.
+  if (inferredParent && (children.get(inferredParent)?.length ?? 0) > 0) candidates.add(inferredParent);
+  if (candidates.size === 0) return nodes;
+
+  const roots = [...candidates].filter((id) => {
+    let parentId = getParentId(nodeById.get(id)!, nodeById);
+    const visited = new Set<string>();
+    while (parentId && !visited.has(parentId)) {
+      if (candidates.has(parentId)) return false;
+      visited.add(parentId);
+      const parent = nodeById.get(parentId);
+      parentId = parent ? getParentId(parent, nodeById) : null;
+    }
+    return true;
+  });
+  const unwrap = new Set(roots);
+  const removedGroups = new Set(roots.filter((id) => nodeById.get(id)?.type === 'group'));
+  const parentById = new Map(roots.map((id) => [id, nodeById.get(id)?.parentId ?? undefined]));
+
+  return nodes.filter((node) => !removedGroups.has(node.id)).map((node) => {
+    if (!node.parentId || !unwrap.has(node.parentId)) return node;
+    const nextParentId = parentById.get(node.parentId);
+    if (nextParentId) return { ...node, parentId: nextParentId };
     const { parentId: _parentId, ...promoted } = node;
     return promoted;
   });
