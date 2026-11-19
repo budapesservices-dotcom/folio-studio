@@ -1,7 +1,7 @@
 import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { replaceComponentInstancesInDocument } from '../core/document/components';
-import { moveLayer, moveLayers, removeLayersAndPromoteChildren, getLayerDescendantIds, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, type LayerDropPosition } from '../core/document/layers';
+import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, collapseLegacyCanvasInstances, type LayerDropPosition } from '../core/document/layers';
 
 const HISTORY_LIMIT = 60;
 
@@ -19,7 +19,6 @@ export type EditorAction =
   | { type: 'select-nodes'; nodeIds: string[] }
   | { type: 'add-node'; node: DesignNode }
   | { type: 'add-nodes'; nodes: DesignNode[] }
-  | { type: 'place-layer-instances'; sourceNodeIds: string[]; instanceNodes: DesignNode[] }
   | { type: 'replace-node'; node: DesignNode }
   | { type: 'set-nodes-properties'; nodeIds: string[]; properties: Partial<Pick<DesignNode, 'visible' | 'locked' | 'layerColor'>> }
   | { type: 'rename-nodes'; updates: Array<{ nodeId: string; name: string }> }
@@ -48,7 +47,7 @@ export type EditorAction =
   | { type: 'redo' };
 
 export function createEditorState(project: FolioProject): EditorState {
-  return { project, past: [], future: [], selectedNodeId: null, selectedNodeIds: [], historyGroup: null };
+  return { project: normalizeProjectLayerDocuments(project), past: [], future: [], selectedNodeId: null, selectedNodeIds: [], historyGroup: null };
 }
 
 function withSnapshot(
@@ -74,94 +73,23 @@ function touch(project: FolioProject): FolioProject {
   };
 }
 
-function copyLinkedAppearance(target: DesignNode, source: DesignNode): DesignNode {
-  if (target.type !== source.type) return target;
-  const common = { name: source.name, opacity: source.opacity, visible: source.visible, locked: source.locked };
-  if (target.type === 'rect' && source.type === 'rect') return { ...target, ...common, style: source.style };
-  if (target.type === 'ellipse' && source.type === 'ellipse') return { ...target, ...common, style: source.style };
-  if (target.type === 'text' && source.type === 'text') return { ...target, ...common, text: source.text, style: source.style };
-  if (target.type === 'component-instance' && source.type === 'component-instance') {
-    return { ...target, ...common, componentId: source.componentId, overrides: source.overrides };
-  }
-  return { ...target, ...common };
+function normalizeProjectLayerDocuments(project: FolioProject): FolioProject {
+  return {
+    ...project,
+    pages: project.pages.map((page) => ({
+      ...page,
+      document: { ...page.document, nodes: collapseLegacyCanvasInstances(page.document.nodes) },
+    })),
+    components: project.components.map((component) => ({
+      ...component,
+      document: { ...component.document, nodes: collapseLegacyCanvasInstances(component.document.nodes) },
+    })),
+  };
 }
 
-function syncMasterNodeToInstances(nodes: DesignNode[], previousMaster: DesignNode, nextMaster: DesignNode): DesignNode[] {
-  const scaleX = nextMaster.width / Math.max(1, previousMaster.width);
-  const scaleY = nextMaster.height / Math.max(1, previousMaster.height);
-  const dx = nextMaster.x - previousMaster.x;
-  const dy = nextMaster.y - previousMaster.y;
-  const rotationDelta = nextMaster.rotation - previousMaster.rotation;
-  return nodes.map((node) => {
-    if (node.isCanvasInstance !== true || node.sourceLayerId !== previousMaster.id) return node;
-    const appearance = copyLinkedAppearance(node, nextMaster);
-    return {
-      ...appearance,
-      x: node.x + dx,
-      y: node.y + dy,
-      width: Math.max(1, node.width * scaleX),
-      height: Math.max(1, node.height * scaleY),
-      rotation: node.rotation + rotationDelta,
-    };
-  });
-}
-
-function syncChangedMasters(previousNodes: DesignNode[], nextNodes: DesignNode[], sourceIds: Iterable<string>): DesignNode[] {
-  let result = nextNodes;
-  for (const sourceId of new Set(sourceIds)) {
-    const previousMaster = previousNodes.find((node) => node.id === sourceId);
-    const nextMaster = result.find((node) => node.id === sourceId);
-    if (!previousMaster || !nextMaster || previousMaster.isCanvasInstance === true) continue;
-    result = syncMasterNodeToInstances(result, previousMaster, nextMaster);
-  }
-  return result;
-}
-
-function hasLinkedAppearanceChanges(previous: DesignNode, next: DesignNode): boolean {
-  if (previous.name !== next.name || previous.opacity !== next.opacity || previous.visible !== next.visible || previous.locked !== next.locked) return true;
-  if (previous.type !== next.type) return true;
-  if (previous.type === 'rect' && next.type === 'rect') return previous.style !== next.style;
-  if (previous.type === 'ellipse' && next.type === 'ellipse') return previous.style !== next.style;
-  if (previous.type === 'text' && next.type === 'text') return previous.text !== next.text || previous.style !== next.style;
-  if (previous.type === 'component-instance' && next.type === 'component-instance') return previous.componentId !== next.componentId || previous.overrides !== next.overrides;
-  return false;
-}
-
-function replaceNodeWithLinkedSync(nodes: DesignNode[], previousNode: DesignNode, nextNode: DesignNode): DesignNode[] {
-  let result = nodes.map((node) => node.id === nextNode.id ? nextNode : node);
-  if (previousNode.isCanvasInstance === true && previousNode.sourceLayerId && hasLinkedAppearanceChanges(previousNode, nextNode)) {
-    const sourceId = previousNode.sourceLayerId;
-    const source = nodes.find((node) => node.id === sourceId);
-    if (source) {
-      const updatedSource = copyLinkedAppearance(source, nextNode);
-      result = result.map((node) => {
-        if (node.id === sourceId) return updatedSource;
-        if (node.isCanvasInstance === true && node.sourceLayerId === sourceId) return copyLinkedAppearance(node, updatedSource);
-        return node;
-      });
-    }
-    return result;
-  }
-  if (previousNode.isCanvasInstance !== true) result = syncMasterNodeToInstances(result, previousNode, nextNode);
-  return result;
-}
-
-function removeNodesAndCanvasInstances(nodes: DesignNode[], requestedIds: Iterable<string>): DesignNode[] {
-  const requested = new Set(requestedIds);
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const sourceIds = new Set([...requested].filter((id) => {
-    const node = byId.get(id);
-    return node && node.isCanvasInstance !== true;
-  }));
-  const removeIds = new Set(requested);
-  for (const instance of nodes) {
-    if (instance.isCanvasInstance !== true || !instance.sourceLayerId || !sourceIds.has(instance.sourceLayerId)) continue;
-    removeIds.add(instance.id);
-    getLayerDescendantIds(nodes, instance.id).forEach((id) => removeIds.add(id));
-  }
-  const remaining = removeLayersAndPromoteChildren(nodes, removeIds);
+function removeNodesFromLayers(nodes: DesignNode[], requestedIds: Iterable<string>): DesignNode[] {
+  const remaining = removeLayersAndPromoteChildren(nodes, requestedIds);
   const remainingIds = new Set(remaining.map((node) => node.id));
-  // When a base is deleted, clipped layers return to independent visibility.
   return remaining.map((node) => node.clipMaskBaseId && !remainingIds.has(node.clipMaskBaseId)
     ? { ...node, clipMaskBaseId: undefined }
     : node);
@@ -208,25 +136,6 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
     }
 
-    case 'place-layer-instances': {
-      const sourceIds = new Set(action.sourceNodeIds);
-      const existingIds = new Set(document.nodes.map((node) => node.id));
-      const instances = action.instanceNodes.filter((node) =>
-        node.isCanvasInstance === true && Boolean(node.sourceLayerId) &&
-        sourceIds.has(node.sourceLayerId!) && !existingIds.has(node.id));
-      if (instances.length === 0) return state;
-
-      // Layers remain as reusable masters; the Canvas shows only linked instances.
-      const sourceNodes = document.nodes.map((node) =>
-        sourceIds.has(node.id) && node.isCanvasInstance !== true && node.onCanvas !== false
-          ? { ...node, onCanvas: false }
-          : node);
-      const nextDocument = { ...document, nodes: [...sourceNodes, ...instances] };
-      const next = touch(updateActiveDocument(state.project, nextDocument));
-      const ids = instances.map((node) => node.id);
-      return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
-    }
-
     case 'replace-node-with-nodes': {
       if (!document.nodes.some((node) => node.id === action.nodeId)) return state;
       const nodes = document.nodes.flatMap((node) => node.id === action.nodeId ? action.nodes : [node]);
@@ -236,10 +145,13 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'edit-node': {
-      const previous = document.nodes.find((node) => node.id === action.node.id);
-      if (!previous) return state;
-      const nodes = replaceNodeWithLinkedSync(document.nodes, previous, action.node);
-      const nextProject = touch(updateActiveDocument(state.project, { ...document, nodes }));
+      const exists = document.nodes.some((node) => node.id === action.node.id);
+      if (!exists) return state;
+      const nextDocument = {
+        ...document,
+        nodes: document.nodes.map((node) => (node.id === action.node.id ? action.node : node)),
+      };
+      const nextProject = touch(updateActiveDocument(state.project, nextDocument));
       const past = state.historyGroup === action.coalesceKey
         ? state.past
         : [...state.past, state.project].slice(-HISTORY_LIMIT);
@@ -258,7 +170,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'set-nodes-properties': {
       const ids = new Set(action.nodeIds);
       if (ids.size === 0) return state;
-      let nodes = document.nodes.map((node) => {
+      const nodes = document.nodes.map((node) => {
         if (!ids.has(node.id)) return node;
         const next = { ...node, ...action.properties };
         return next.visible === node.visible
@@ -268,8 +180,6 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           : next;
       });
       if (nodes.every((node, index) => node === document.nodes[index])) return state;
-      const changedSources = nodes.filter((node) => ids.has(node.id) && node.isCanvasInstance !== true).map((node) => node.id);
-      nodes = syncChangedMasters(document.nodes, nodes, changedSources);
       return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
     }
 
@@ -284,15 +194,17 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         return { ...node, name };
       });
       if (!changed) return state;
-      const synced = syncChangedMasters(document.nodes, nodes, updates.keys());
-      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes: synced })));
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
     }
 
     case 'replace-node': {
-      const previous = document.nodes.find((node) => node.id === action.node.id);
-      if (!previous) return state;
-      const nodes = replaceNodeWithLinkedSync(document.nodes, previous, action.node);
-      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+      const exists = document.nodes.some((node) => node.id === action.node.id);
+      if (!exists) return state;
+      const nextDocument = {
+        ...document,
+        nodes: document.nodes.map((node) => (node.id === action.node.id ? action.node : node)),
+      };
+      return withSnapshot(state, touch(updateActiveDocument(state.project, nextDocument)));
     }
 
     case 'transform-nodes': {
@@ -313,11 +225,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         return replacement;
       });
       if (!changed) return state;
-      const changedSources = action.nodes.filter((node) => node.isCanvasInstance !== true).map((node) => node.id);
-      const synced = syncChangedMasters(document.nodes, nodes, changedSources);
       return withSnapshot(
         state,
-        touch(updateActiveDocument(state.project, { ...document, nodes: synced })),
+        touch(updateActiveDocument(state.project, { ...document, nodes })),
       );
     }
 
@@ -383,7 +293,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'delete-nodes': {
       const ids = new Set(action.nodeIds);
-      const nodes = removeNodesAndCanvasInstances(document.nodes, ids);
+      const nodes = removeNodesFromLayers(document.nodes, ids);
       if (nodes.length === document.nodes.length) return state;
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       const remainingIds = new Set(nodes.map((node) => node.id));
@@ -392,7 +302,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'delete-node': {
-      const nodes = removeNodesAndCanvasInstances(document.nodes, [action.nodeId]);
+      const nodes = removeNodesFromLayers(document.nodes, [action.nodeId]);
       if (nodes.length === document.nodes.length) return state;
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       const remainingIds = new Set(nodes.map((node) => node.id));

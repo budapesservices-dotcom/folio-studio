@@ -2,7 +2,7 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage } from '../core/document/types';
-import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, createLayerCanvasInstances, getSelectedLayerRootIds, getClippingMaskBaseId, type LayerDropPosition } from '../core/document/layers';
+import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, getSelectedLayerRootIds, getClippingMaskBaseId, type LayerDropPosition } from '../core/document/layers';
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
@@ -492,20 +492,14 @@ export function App() {
     : null;
   const instanceOverrideTargets = selectedInstanceComponent ? getComponentOverrideTargets(selectedInstanceComponent) : null;
   const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
-  const layerSourceNodes = focusedDocument.nodes.filter((node) => node.isCanvasInstance !== true);
+  const layerSourceNodes = focusedDocument.nodes;
   const layerSourceIds = new Set(layerSourceNodes.map((node) => node.id));
-  const selectedLinkedSourceIds = new Set(focusedDocument.nodes
-    .filter((node) => focusedEditor.state.selectedNodeIds.includes(node.id) && node.isCanvasInstance === true && Boolean(node.sourceLayerId))
-    .map((node) => node.sourceLayerId!));
-  const selectedLinkedLayerSource = selectedNode?.isCanvasInstance === true && selectedNode.sourceLayerId
-    ? layerSourceNodes.find((node) => node.id === selectedNode.sourceLayerId) ?? null
-    : null;
   const layerRows = getLayerPanelRows(layerSourceNodes, collapsedLayers[activeEditorId]);
   const layerEffectiveStates = getEffectiveLayerStates(layerSourceNodes);
   const contextMenuEditor = layerContextMenu
     ? getActiveEditorContext(layerContextMenu.editorId, state, componentState)
     : null;
-  const contextMenuNodes = contextMenuEditor?.document.nodes.filter((node) => node.isCanvasInstance !== true) ?? [];
+  const contextMenuNodes = contextMenuEditor?.document.nodes ?? [];
   const contextMenuRootIds = layerContextMenu
     ? getSelectedLayerRootIds(contextMenuNodes, layerContextMenu.nodeIds)
     : [];
@@ -801,28 +795,46 @@ export function App() {
     setLayerDropTarget(null);
   };
 
-  const dropLayersOnCanvas = (nodeIds: string[], point: { x: number; y: number }, target: EditorTarget) => {
+  const dropLayersOnCanvas = (nodeIds: string[], target: EditorTarget) => {
     const source = layerDragEditorRef.current;
-    if (source && source !== target) {
-      setNotice('Drag layers into the Canvas that belongs to the active Layers editor.');
+    const clearDrag = () => {
       layerDragSourceRef.current = null;
       layerDragEditorRef.current = null;
+      setLayerDropTarget(null);
+    };
+    if (source && source !== target) {
+      setNotice('Drag layers into the Canvas that belongs to the active Layers editor.');
+      clearDrag();
       return;
     }
+
     const targetDocument = target === 'main' ? activeDocument : componentDocument;
     const targetDispatch = target === 'main' ? dispatch : componentDispatch;
-    const instances = createLayerCanvasInstances(targetDocument.nodes, nodeIds, point);
-    if (instances.length > 0) {
-      const sourceNodeIds = [...new Set(instances.map((node) => node.sourceLayerId).filter((id): id is string => Boolean(id)))];
-      targetDispatch({ type: 'place-layer-instances', sourceNodeIds, instanceNodes: instances });
-      selectionSourceRef.current = 'canvas';
-      setActiveEditorId(target);
-      setInspectorVisible(true);
-      setNotice(`Placed ${instances.length} linked Canvas instance${instances.length === 1 ? '' : 's'}; the reusable source stays in Layers.`);
+    const requested = new Set(nodeIds);
+    const droppedNodes = targetDocument.nodes.filter((node) => requested.has(node.id));
+    if (droppedNodes.length === 0) {
+      clearDrag();
+      return;
     }
-    layerDragSourceRef.current = null;
-    layerDragEditorRef.current = null;
-    setLayerDropTarget(null);
+
+    const ids = droppedNodes.map((node) => node.id);
+    const existing = droppedNodes.find((node) => node.onCanvas !== false);
+    selectionSourceRef.current = 'canvas';
+    setActiveEditorId(target);
+    setInspectorVisible(true);
+    targetDispatch({ type: 'select-nodes', nodeIds: ids });
+
+    if (existing) {
+      setNotice(`“${existing.name}” sudah ada di Canvas. FOLIO tidak membuat duplikat.`);
+      clearDrag();
+      return;
+    }
+
+    // Re-show the exact same nodes. The saved position, size, style and
+    // rotation remain on the original layer records; dropping never resets them.
+    targetDispatch({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: true });
+    setNotice(`“${droppedNodes[0].name}” dikembalikan ke Canvas dengan properti terakhirnya.`);
+    clearDrag();
   };
 
   const addNode = (type: 'rect' | 'ellipse' | 'text') => {
@@ -1348,7 +1360,7 @@ export function App() {
         </div>
       </nav>
 
-      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Layers are reusable masters. Drag a layer or Group onto Canvas to place a linked instance; the source stays in this list.', ['CTRL/CMD + M: MASK', 'CTRL/CMD + SHIFT + M: UNMASK'])}>
+      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Each Layer is one object. Drag an object that is off Canvas to restore it; an object already on Canvas cannot be duplicated by dragging.', ['CTRL/CMD + M: MASK', 'CTRL/CMD + SHIFT + M: UNMASK'])}>
         <div class="panel-heading">
           <h2>Layers</h2>
         </div>
@@ -1358,9 +1370,7 @@ export function App() {
         </div>
         <div class="layer-list" role="tree" aria-label="Document layers">
           {layerRows.map(({ node, depth, hasChildren }) => {
-            const selectedDirectly = focusedEditor.state.selectedNodeIds.includes(node.id);
-            const selectedLinked = selectedLinkedSourceIds.has(node.id);
-            const selected = selectedDirectly || selectedLinked;
+            const selected = focusedEditor.state.selectedNodeIds.includes(node.id);
             const effective = layerEffectiveStates.get(node.id);
             const clipBaseName = node.clipMaskBaseId
               ? layerSourceNodes.find((item) => item.id === node.clipMaskBaseId)?.name ?? 'another layer'
@@ -1377,7 +1387,7 @@ export function App() {
                 aria-expanded={hasChildren ? !collapsed : undefined}
                 tabIndex={0}
                 draggable={true}
-                class={'layer-row ' + (selected ? 'selected ' : '') + (selectedLinked && !selectedDirectly ? 'linked-source-selected ' : '') + (!effective?.visible ? 'layer-hidden ' : '') + (effective?.locked ? 'layer-inherited-locked ' : '') + (node.clipMaskBaseId ? 'layer-row-clipped ' : '') + (isMaskBase ? 'layer-row-mask-base ' : '') + dropClass}
+                class={'layer-row ' + (selected ? 'selected ' : '') + (node.onCanvas === false ? 'layer-not-on-canvas ' : '') + (!effective?.visible ? 'layer-hidden ' : '') + (effective?.locked ? 'layer-inherited-locked ' : '') + (node.clipMaskBaseId ? 'layer-row-clipped ' : '') + (isMaskBase ? 'layer-row-mask-base ' : '') + dropClass}
                 style={{ paddingLeft: (8 + depth * 15 + (node.clipMaskBaseId ? 14 : 0)) + 'px' }}
                 onClick={(event) => selectLayerFromPanel(node.id, event)}
                 onContextMenu={(event) => openLayerContextMenu(node.id, event)}
@@ -1392,7 +1402,7 @@ export function App() {
                 onDrop={(event) => dropLayer(node.id, event)}
                 onDragEnd={() => { layerDragSourceRef.current = null; layerDragEditorRef.current = null; setLayerDropTarget(null); }}
                 onDragLeave={() => setLayerDropTarget((current) => current?.nodeId === node.id ? null : current)}
-                title={'Select ' + node.name + '. Drag onto Canvas to place a linked instance, or above/below here to reorder and into the center to nest it.'}
+                title={node.onCanvas === false ? 'Restore ' + node.name + ' to Canvas. Its last position, size and appearance will be kept.' : 'Select ' + node.name + '. It is already on Canvas; dragging it there again will not create a duplicate.'}
               >
                 {hasChildren ? (
                   <button
@@ -1656,7 +1666,7 @@ export function App() {
               if (nodeIds.length > 0) setInspectorVisible(true);
             }}
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
-            onLayerDrop={(nodeIds, point) => dropLayersOnCanvas(nodeIds, point, 'main')}
+            onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'main')}
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
@@ -1732,7 +1742,7 @@ export function App() {
               componentDispatch({ type: 'select-nodes', nodeIds });
             }}
             onTransformCommit={(nodes) => componentDispatch({ type: 'transform-nodes', nodes })}
-            onLayerDrop={(nodeIds, point) => dropLayersOnCanvas(nodeIds, point, 'component')}
+            onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'component')}
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
@@ -1840,7 +1850,6 @@ export function App() {
           <div class="inspector-content">
             <section class="property-section">
               <div class="section-title">Layer</div>
-              {selectedLinkedLayerSource && <span class="field-help">LINKED INSTANCE · SOURCE {selectedLinkedLayerSource.name}</span>}
               <label class="field-label">Name</label>
               <input
                 class="text-field"
@@ -2021,7 +2030,7 @@ export function App() {
 
       <footer class="statusbar">
         <div><span class="status-brand">F</span><span>Folio Studio <b>0.1.0</b></span></div>
-        <div class="status-center">{activeDocument.nodes.filter((node) => node.isCanvasInstance !== true).length} LAYERS <span>·</span> {activeDocument.width} × {activeDocument.height} PX</div>
+        <div class="status-center">{activeDocument.nodes.length} LAYERS <span>·</span> {activeDocument.width} × {activeDocument.height} PX</div>
         <div class={`status-right save-${saveStatus}`} role="status" aria-live="polite"><span class="status-ready-dot" /> {isHydrating ? 'RESTORING PROJECT…' : statusLabel}</div>
       </footer>
 

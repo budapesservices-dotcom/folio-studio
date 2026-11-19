@@ -23,7 +23,7 @@ interface CanvasProps {
   onZoomChange: (zoom: number) => void;
   onSelectionChange: (nodeIds: string[]) => void;
   onTransformCommit: (nodes: DesignNode[]) => void;
-  onLayerDrop: (nodeIds: string[], point: { x: number; y: number }) => void;
+  onLayerDrop: (nodeIds: string[]) => void;
 }
 
 interface DragSession {
@@ -439,8 +439,7 @@ export function Canvas({
     try {
       const parsed: unknown = JSON.parse(payload);
       if (!Array.isArray(parsed) || !parsed.every((id) => typeof id === 'string')) return;
-      if (!svgRef.current) return;
-      onLayerDrop(parsed, toCanvasPoint(svgRef.current, event.clientX, event.clientY));
+      onLayerDrop(parsed);
     } catch {
       // Ignore malformed drag payloads instead of creating or moving arbitrary nodes.
     }

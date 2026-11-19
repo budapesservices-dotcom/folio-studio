@@ -28,9 +28,7 @@ export function getClippingMaskBaseId(nodes: readonly DesignNode[], nodeId: stri
   const node = nodes.find((item) => item.id === nodeId);
   if (!node) return null;
   const parentId = node.parentId ?? null;
-  const isInstance = node.isCanvasInstance === true;
-  const siblings = nodes.filter((item) =>
-    (item.parentId ?? null) === parentId && (item.isCanvasInstance === true) === isInstance);
+  const siblings = nodes.filter((item) => (item.parentId ?? null) === parentId);
   const index = siblings.findIndex((item) => item.id === nodeId);
   if (index <= 0) return null;
   const base = siblings[index - 1];
@@ -108,7 +106,7 @@ export function getLayerPanelRows(
   nodes: readonly DesignNode[],
   collapsedIds: readonly string[] = [],
 ): LayerPanelRow[] {
-  const layerNodes = nodes.filter((node) => node.isCanvasInstance !== true);
+  const layerNodes = nodes;
   const children = getChildrenMap(layerNodes);
   const collapsed = new Set(collapsedIds);
   const rows: LayerPanelRow[] = [];
@@ -231,47 +229,80 @@ export function expandSelectedLayerIds(nodes: readonly DesignNode[], selectedIds
 }
 
 /**
- * Create independent Canvas instances without mutating source layer geometry.
- * Selecting a parent clones its whole subtree; selecting a child clones only
- * that child's subtree. Parent IDs are remapped inside each new instance.
+ * Fold Canvas-only clones from earlier builds back into their source layer.
+ * The last visible clone is used, preserving its last edited geometry and
+ * appearance. If every old clone was hidden, the last clone is retained while
+ * the source stays off Canvas. New placements never create clone records.
  */
-export function createLayerCanvasInstances(
-  nodes: DesignNode[],
-  nodeIds: readonly string[],
-  point: { x: number; y: number },
-  createId: (sourceId: string, index: number) => string = (sourceId, index) =>
-    globalThis.crypto?.randomUUID?.() ?? `canvas-${Date.now()}-${index}-${sourceId}`,
-): DesignNode[] {
-  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return [];
-  const sources = nodes.filter((node) => node.isCanvasInstance !== true);
-  const nodeById = new Map(sources.map((node) => [node.id, node]));
-  const selected = new Set(nodeIds.filter((id) => nodeById.has(id)));
-  if (selected.size === 0) return [];
+type LegacyCanvasNode = DesignNode & { isCanvasInstance?: boolean; sourceLayerId?: string };
 
-  const roots = [...selected].filter((id) =>
-    ![...getLayerAncestorIds(sources, id)].some((ancestorId) => selected.has(ancestorId)));
-  const included = new Set<string>();
-  roots.forEach((rootId) => {
-    included.add(rootId);
-    getLayerDescendantIds(sources, rootId).forEach((id) => included.add(id));
-  });
-  const picked = sources.filter((node) => included.has(node.id));
-  if (picked.length === 0) return [];
+function stripLegacyCanvasFields(node: DesignNode): DesignNode {
+  const clean = { ...node } as LegacyCanvasNode;
+  delete clean.isCanvasInstance;
+  delete clean.sourceLayerId;
+  return clean;
+}
 
-  const dx = point.x - Math.min(...picked.map((node) => node.x));
-  const dy = point.y - Math.min(...picked.map((node) => node.y));
-  const idMap = new Map(picked.map((node, index) => [node.id, createId(node.id, index)]));
-  return picked.map((node) => ({
-    ...node,
-    id: idMap.get(node.id)!,
-    parentId: node.parentId && idMap.has(node.parentId) ? idMap.get(node.parentId) : undefined,
-    clipMaskBaseId: node.clipMaskBaseId && idMap.has(node.clipMaskBaseId) ? idMap.get(node.clipMaskBaseId) : undefined,
-    x: node.x + dx,
-    y: node.y + dy,
-    onCanvas: true,
-    isCanvasInstance: true,
-    sourceLayerId: node.id,
-  }));
+function mergeLegacyCanvasState(master: DesignNode, instance: DesignNode, onCanvas: boolean): DesignNode {
+  const common = {
+    ...master,
+    name: instance.name,
+    x: instance.x,
+    y: instance.y,
+    width: instance.width,
+    height: instance.height,
+    rotation: instance.rotation,
+    opacity: instance.opacity,
+    visible: instance.visible,
+    locked: instance.locked,
+    layerColor: instance.layerColor ?? master.layerColor,
+    onCanvas,
+  };
+  if (master.type === 'rect' && instance.type === 'rect') return { ...common, style: instance.style };
+  if (master.type === 'ellipse' && instance.type === 'ellipse') return { ...common, style: instance.style };
+  if (master.type === 'text' && instance.type === 'text') return { ...common, text: instance.text, style: instance.style };
+  if (master.type === 'component-instance' && instance.type === 'component-instance') {
+    return { ...common, componentId: instance.componentId, overrides: instance.overrides };
+  }
+  return common;
+}
+
+export function collapseLegacyCanvasInstances(nodes: readonly DesignNode[]): DesignNode[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const instancesBySource = new Map<string, DesignNode[]>();
+  const orphanIds = new Set<string>();
+
+  for (const node of nodes) {
+    const legacy = node as LegacyCanvasNode;
+    if (legacy.isCanvasInstance !== true) continue;
+    const sourceId = legacy.sourceLayerId;
+    const source = typeof sourceId === 'string' ? byId.get(sourceId) as LegacyCanvasNode | undefined : undefined;
+    if (source && source.isCanvasInstance !== true) {
+      const instances = instancesBySource.get(sourceId!) ?? [];
+      instances.push(node);
+      instancesBySource.set(sourceId!, instances);
+    } else {
+      orphanIds.add(node.id);
+    }
+  }
+
+  const normalized: DesignNode[] = [];
+  for (const node of nodes) {
+    const legacy = node as LegacyCanvasNode;
+    if (legacy.isCanvasInstance === true) {
+      if (orphanIds.has(node.id)) normalized.push(stripLegacyCanvasFields(node));
+      continue;
+    }
+    const instances = instancesBySource.get(node.id);
+    if (!instances?.length) {
+      normalized.push(stripLegacyCanvasFields(node));
+      continue;
+    }
+    const visibleInstances = instances.filter((instance) => instance.onCanvas !== false);
+    const latest = (visibleInstances.length > 0 ? visibleInstances : instances).at(-1)!;
+    normalized.push(stripLegacyCanvasFields(mergeLegacyCanvasState(node, latest, visibleInstances.length > 0)));
+  }
+  return normalized;
 }
 
 /**
@@ -426,7 +457,7 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
   const right = Math.max(...picked.map((node) => node.x + node.width));
   const bottom = Math.max(...picked.map((node) => node.y + node.height));
   const groupId = 'group-' + (globalThis.crypto?.randomUUID?.() ?? (Date.now() + '-' + Math.random().toString(16).slice(2)));
-  const group: DesignNode = { id: groupId, type: 'group', name: 'Group', x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y), rotation: 0, opacity: 1, visible: true, locked: false, onCanvas: picked.some((node) => node.onCanvas !== false), isCanvasInstance: picked.every((node) => node.isCanvasInstance === true), ...(parentId ? { parentId } : {}) };
+  const group: DesignNode = { id: groupId, type: 'group', name: 'Group', x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y), rotation: 0, opacity: 1, visible: true, locked: false, onCanvas: picked.some((node) => node.onCanvas !== false), ...(parentId ? { parentId } : {}) };
   const rootSet = new Set(roots);
   const firstIndex = Math.min(...roots.map((id) => order.get(id) ?? nodes.length));
   const next = nodes.map((node) => {
