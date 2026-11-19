@@ -884,7 +884,7 @@ export function App() {
   };
 
   const updateSelectedStyle = (patch: Record<string, string | number>) => {
-    if (!selectedNode || selectedNode.type === 'component-instance') return;
+    if (!selectedNode || selectedNode.type === 'component-instance' || selectedNode.type === 'group') return;
     dispatchFocused({ type: 'edit-node', coalesceKey: 'inspector:' + selectedNode.id, node: { ...selectedNode, style: { ...selectedNode.style, ...patch } } as DesignNode });
   };
 
@@ -1655,6 +1655,8 @@ export function App() {
                     <button type="button" onClick={detachSelectedInstance}>Detach Instance</button>
                   </div>
                 </>
+              ) : selectedNode.type === 'group' ? (
+                <span class="field-help">GROUP CONTAINER · Holds child layers as one hierarchy.</span>
               ) : (
                 <>
                   <label class="field-label">Fill</label>
@@ -1750,7 +1752,7 @@ export function App() {
           {ownedComponents.filter((component) => component.name.toLowerCase().includes(componentRackSearch.toLowerCase())).map((component) => (
             <article class="component-rack-card" key={component.id}>
               <button type="button" class="component-rack-preview" title={`Insert linked ${component.name} into Main Canvas`} onClick={() => insertOwnedComponent(component)}>
-                <span class="component-rack-preview-shapes">{component.document.nodes.slice(0, 5).map((node) => <span class={`component-preview-shape shape-${node.type}`} style={node.type === 'text' ? { color: node.style.fill } : node.type === 'component-instance' ? {} : { background: node.style.fill }} />)}</span>
+                <span class="component-rack-preview-shapes">{component.document.nodes.slice(0, 5).map((node) => <span class={`component-preview-shape shape-${node.type}`} style={node.type === 'text' ? { color: node.style.fill } : node.type === 'component-instance' || node.type === 'group' ? {} : { background: node.style.fill }} />)}</span>
                 <span class="component-rack-card-name">{component.name}</span>
                 <span class="component-rack-card-meta">{component.document.nodes.length} master layer{component.document.nodes.length === 1 ? '' : 's'}</span>
               </button>
