@@ -78,7 +78,7 @@ function NodeShape({ node, locked = node.locked, mask = false }: { node: Primiti
     : undefined;
 
   return (
-    <g transform={transform} opacity={node.opacity} class="canvas-node" style={{ cursor: locked ? 'default' : 'grab' }}>
+    <g transform={transform} opacity={node.opacity} class="canvas-node" style={{ cursor: locked ? 'default' : 'move' }}>
       {node.type === 'group' && (
         <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="transparent" pointerEvents="all" />
       )}

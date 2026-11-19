@@ -117,10 +117,35 @@ export function resizeNodes(
   let top = bounds.y;
   let bottom = bounds.y + bounds.height;
 
-  if (handle.includes('w')) left = Math.min(right - minimum, left + dx);
-  if (handle.includes('e')) right = Math.max(left + minimum, right + dx);
-  if (handle.includes('n')) top = Math.min(bottom - minimum, top + dy);
-  if (handle.includes('s')) bottom = Math.max(top + minimum, bottom + dy);
+  const isCorner = handle === 'nw' || handle === 'ne' || handle === 'se' || handle === 'sw';
+  if (isCorner) {
+    // Corner handles keep the selection's aspect ratio. The opposite corner
+    // stays anchored while the dominant pointer axis determines the scale.
+    const signedWidthChange = (handle.includes('e') ? dx : -dx) / Math.max(minimum, bounds.width);
+    const signedHeightChange = (handle.includes('s') ? dy : -dy) / Math.max(minimum, bounds.height);
+    const scaleChange = Math.abs(signedWidthChange) >= Math.abs(signedHeightChange)
+      ? signedWidthChange
+      : signedHeightChange;
+    const minimumScale = Math.max(
+      minimum / Math.max(minimum, bounds.width),
+      minimum / Math.max(minimum, bounds.height),
+    );
+    const scale = Math.max(minimumScale, 1 + scaleChange);
+    const nextWidth = bounds.width * scale;
+    const nextHeight = bounds.height * scale;
+
+    if (handle.includes('w')) left = right - nextWidth;
+    else right = left + nextWidth;
+
+    if (handle.includes('n')) top = bottom - nextHeight;
+    else bottom = top + nextHeight;
+  } else {
+    // Side handles resize on one axis only; the opposite edge stays anchored.
+    if (handle.includes('w')) left = Math.min(right - minimum, left + dx);
+    if (handle.includes('e')) right = Math.max(left + minimum, right + dx);
+    if (handle.includes('n')) top = Math.min(bottom - minimum, top + dy);
+    if (handle.includes('s')) bottom = Math.max(top + minimum, bottom + dy);
+  }
 
   const scaleX = (right - left) / Math.max(minimum, bounds.width);
   const scaleY = (bottom - top) / Math.max(minimum, bounds.height);

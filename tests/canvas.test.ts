@@ -50,6 +50,35 @@ describe('Canvas geometry engine', () => {
     expect(resized[0].height).toBe(80);
   });
 
+  it('keeps the aspect ratio when resizing from a corner', () => {
+    const node = { ...createRectNode(), x: 10, y: 20, width: 100, height: 50 };
+    const bounds = getBounds([node]);
+
+    expect(bounds).not.toBeNull();
+    const resized = resizeNodes([node], bounds!, 'se', 40, 0);
+
+    expect(resized[0].x).toBe(10);
+    expect(resized[0].y).toBe(20);
+    expect(resized[0].width).toBe(140);
+    expect(resized[0].height).toBe(70);
+    expect(resized[0].width / resized[0].height).toBe(2);
+  });
+
+  it('keeps the opposite corner anchored when resizing from the north-west handle', () => {
+    const node = { ...createRectNode(), x: 10, y: 20, width: 100, height: 50 };
+    const bounds = getBounds([node]);
+
+    expect(bounds).not.toBeNull();
+    const resized = resizeNodes([node], bounds!, 'nw', -20, -10);
+
+    expect(resized[0].x).toBe(-10);
+    expect(resized[0].y).toBe(10);
+    expect(resized[0].width).toBe(120);
+    expect(resized[0].height).toBe(60);
+    expect(resized[0].x + resized[0].width).toBe(110);
+    expect(resized[0].y + resized[0].height).toBe(70);
+  });
+
   it('aligns a group to the left edge without changing its dimensions', () => {
     const first = { ...createRectNode(), x: 25, y: 10, width: 80, height: 60 };
     const second = { ...createRectNode(), x: 180, y: 90, width: 40, height: 30 };
