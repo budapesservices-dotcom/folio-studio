@@ -24,6 +24,10 @@ export interface NodeBase {
   parentId?: string | null;
   /** Whether this source layer is currently placed on the Canvas. Missing means true for older projects. */
   onCanvas?: boolean;
+  /** True for a Canvas-only instance cloned from a Layers source; hidden from the Layers tree. */
+  isCanvasInstance?: boolean;
+  /** Source layer ID from which a Canvas instance was created. */
+  sourceLayerId?: string;
 }
 
 export interface ShapeStyle {

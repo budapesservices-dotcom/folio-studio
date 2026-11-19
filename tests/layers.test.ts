@@ -8,7 +8,7 @@ import {
   getEffectiveLayerStates,
   getLayerPanelRows,
   getLayerRenderOrder,
-  placeLayersOnCanvas,
+  createLayerCanvasInstances,
   moveLayer,
   moveLayers,
   removeLayersAndPromoteChildren,
@@ -217,6 +217,53 @@ describe('layer hierarchy and panel operations', () => {
     expect(placed.find((node) => node.id === 'group')?.x).toBe(220);
     expect(placed.find((node) => node.id === 'group')?.y).toBe(160);
     expect(placed.find((node) => node.id === 'other')?.onCanvas).toBe(false);
+  });
+
+  it('keeps the Layers source unchanged when placing a child and then its Group again', () => {
+    const nodes = [
+      layer('source-group', undefined, { type: 'group', x: 100, y: 100, width: 240, height: 180 }),
+      layer('source-child-a', 'source-group', { x: 120, y: 130, width: 80, height: 60 }),
+      layer('source-child-b', 'source-group', { x: 210, y: 150, width: 90, height: 70 }),
+    ];
+    let sequence = 0;
+    const idFactory = (sourceId: string) => `instance-${sourceId}-${++sequence}`;
+    const childInstance = createLayerCanvasInstances(nodes, ['source-child-a'], { x: 400, y: 300 }, idFactory);
+    const groupInstance = createLayerCanvasInstances(nodes, ['source-group'], { x: 700, y: 420 }, idFactory);
+
+    expect(nodes.map((node) => [node.id, node.x, node.y])).toEqual([
+      ['source-group', 100, 100], ['source-child-a', 120, 130], ['source-child-b', 210, 150],
+    ]);
+    expect(childInstance).toHaveLength(1);
+    expect(childInstance[0]).toMatchObject({ sourceLayerId: 'source-child-a', isCanvasInstance: true, x: 400, y: 300 });
+    expect(groupInstance).toHaveLength(3);
+    const groupCopy = groupInstance.find((node) => node.sourceLayerId === 'source-group')!;
+    const childA = groupInstance.find((node) => node.sourceLayerId === 'source-child-a')!;
+    const childB = groupInstance.find((node) => node.sourceLayerId === 'source-child-b')!;
+    expect(groupCopy).toMatchObject({ x: 700, y: 420, isCanvasInstance: true });
+    expect(childA).toMatchObject({ x: 720, y: 450, parentId: groupCopy.id });
+    expect(childB).toMatchObject({ x: 810, y: 470, parentId: groupCopy.id });
+    expect(new Set([...childInstance, ...groupInstance].map((node) => node.id)).size).toBe(4);
+  });
+
+  it('hides Canvas instances from Layers while preserving the master row', () => {
+    const nodes = [
+      layer('source'),
+      layer('canvas-copy', undefined, { isCanvasInstance: true, sourceLayerId: 'source' }),
+    ];
+    expect(getLayerPanelRows(nodes).map(({ node }) => node.id)).toEqual(['source']);
+  });
+
+  it('removes Canvas instances when the source is deleted from Layers', () => {
+    const project = createInitialProject();
+    const document = getActiveDocument(project);
+    const source = { ...document.nodes[0], id: 'source-to-delete' };
+    const copy = { ...source, id: 'canvas-copy-to-delete', isCanvasInstance: true, sourceLayerId: source.id };
+    const prepared = {
+      ...project,
+      pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [source, copy] } })),
+    };
+    const result = editorReducer(createEditorState(prepared), { type: 'delete-nodes', nodeIds: [source.id] });
+    expect(getActiveDocument(result.project).nodes).toHaveLength(0);
   });
 
   it('promotes surviving children when a parent layer is deleted', () => {

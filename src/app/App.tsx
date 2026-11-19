@@ -2,7 +2,7 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage } from '../core/document/types';
-import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, placeLayersOnCanvas, type LayerDropPosition } from '../core/document/layers';
+import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, createLayerCanvasInstances, type LayerDropPosition } from '../core/document/layers';
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
@@ -482,14 +482,16 @@ export function App() {
     : null;
   const instanceOverrideTargets = selectedInstanceComponent ? getComponentOverrideTargets(selectedInstanceComponent) : null;
   const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
-  const layerRows = getLayerPanelRows(focusedDocument.nodes, collapsedLayers[activeEditorId]);
-  const layerEffectiveStates = getEffectiveLayerStates(focusedDocument.nodes);
+  const layerSourceNodes = focusedDocument.nodes.filter((node) => node.isCanvasInstance !== true);
+  const layerSourceIds = new Set(layerSourceNodes.map((node) => node.id));
+  const layerRows = getLayerPanelRows(layerSourceNodes, collapsedLayers[activeEditorId]);
+  const layerEffectiveStates = getEffectiveLayerStates(layerSourceNodes);
   const beginLayerRename = (nodeId: string, batch: boolean) => {
     const selectedIds = focusedEditor.state.selectedNodeIds;
     const nodeIds = batch
       ? layerRows.filter(({ node }) => selectedIds.includes(node.id)).map(({ node }) => node.id)
       : [nodeId];
-    const clickedNode = focusedDocument.nodes.find((node) => node.id === nodeId);
+    const clickedNode = layerSourceNodes.find((node) => node.id === nodeId);
     if (!clickedNode || nodeIds.length === 0) return;
     const selectedSet = new Set(nodeIds);
     const session: LayerRenameSession = {
@@ -498,7 +500,7 @@ export function App() {
       value: batch ? clickedNode.name.replace(/\s+\d+$/, '') : clickedNode.name,
       batch,
       editorId: activeEditorId,
-      existingNames: focusedDocument.nodes.filter((node) => !selectedSet.has(node.id)).map((node) => node.name),
+      existingNames: layerSourceNodes.filter((node) => !selectedSet.has(node.id)).map((node) => node.name),
     };
     layerRenameRef.current = session;
     setLayerRename(session);
@@ -571,7 +573,7 @@ export function App() {
   const setLayerColorFromRow = (nodeId: string, color: string) => {
     const selectedIds = focusedEditor.state.selectedNodeIds;
     const targetIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId];
-    const validIds = focusedDocument.nodes.filter((node) => targetIds.includes(node.id)).map((node) => node.id);
+    const validIds = layerSourceNodes.filter((node) => targetIds.includes(node.id)).map((node) => node.id);
     if (validIds.length === 0) return;
     dispatchFocused({
       type: 'set-nodes-properties',
@@ -584,7 +586,7 @@ export function App() {
   const toggleLayerPropertyFromRow = (nodeId: string, property: 'visible' | 'locked') => {
     const selectedIds = focusedEditor.state.selectedNodeIds;
     const targetIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId];
-    const targets = focusedDocument.nodes.filter((node) => targetIds.includes(node.id));
+    const targets = layerSourceNodes.filter((node) => targetIds.includes(node.id));
     if (targets.length === 0) return;
     const shouldEnable = !targets.every((node) => node[property]);
     dispatchFocused({
@@ -598,11 +600,11 @@ export function App() {
     selectionSourceRef.current = 'layers';
     const selected = focusedEditor.state.selectedNodeIds;
     const additive = Boolean(modifiers.ctrlKey || modifiers.metaKey);
-    const subtreeIds = expandSelectedLayerIds(focusedDocument.nodes, [nodeId]);
+    const subtreeIds = expandSelectedLayerIds(layerSourceNodes, [nodeId]);
     const subtreeIsSelected = subtreeIds.length === selected.length
       && subtreeIds.every((id) => selected.includes(id));
 
-    if (modifiers.shiftKey && selected.length > 1 && selected.includes(nodeId) && !subtreeIsSelected && getLayerAncestorIds(focusedDocument.nodes, nodeId).size === 0) {
+    if (modifiers.shiftKey && selected.length > 1 && selected.includes(nodeId) && !subtreeIsSelected && getLayerAncestorIds(layerSourceNodes, nodeId).size === 0) {
       beginLayerRename(nodeId, true);
       return;
     }
@@ -620,7 +622,7 @@ export function App() {
       if (start >= 0 && end >= 0) {
         const range = orderedIds.slice(Math.min(start, end), Math.max(start, end) + 1);
         const requested = additive ? [...new Set([...selected, ...range])] : range;
-        dispatchFocused({ type: 'select-nodes', nodeIds: expandSelectedLayerIds(focusedDocument.nodes, requested) });
+        dispatchFocused({ type: 'select-nodes', nodeIds: expandSelectedLayerIds(layerSourceNodes, requested) });
         setInspectorVisible(true);
         return;
       }
@@ -632,10 +634,10 @@ export function App() {
       if (groupIsSelected) {
         // A child cannot stay implicitly selected through an ancestor after
         // its own subtree is toggled off.
-        const removed = new Set([...subtreeIds, ...getLayerAncestorIds(focusedDocument.nodes, nodeId)]);
+        const removed = new Set([...subtreeIds, ...getLayerAncestorIds(layerSourceNodes, nodeId)]);
         next = selected.filter((id) => !removed.has(id));
       } else {
-        next = expandSelectedLayerIds(focusedDocument.nodes, [...selected, ...subtreeIds]);
+        next = expandSelectedLayerIds(layerSourceNodes, [...selected, ...subtreeIds]);
       }
       const anchor = layerSelectionAnchorRef.current[activeEditorId];
       if (!anchor || !selected.includes(anchor)) layerSelectionAnchorRef.current[activeEditorId] = nodeId;
@@ -663,8 +665,9 @@ export function App() {
   const startLayerDrag = (nodeId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
     selectionSourceRef.current = 'layers';
     layerDragEditorRef.current = activeEditorId;
-    const currentSelection = focusedEditor.state.selectedNodeIds;
-    const draggedIds = currentSelection.includes(nodeId) ? currentSelection : expandSelectedLayerIds(focusedDocument.nodes, [nodeId]);
+    const currentSelection = focusedEditor.state.selectedNodeIds.filter((id) => layerSourceIds.has(id));
+    const requestedIds = currentSelection.includes(nodeId) ? currentSelection : [nodeId];
+    const draggedIds = expandSelectedLayerIds(layerSourceNodes, requestedIds);
     layerDragSourceRef.current = draggedIds;
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = 'move';
@@ -717,16 +720,13 @@ export function App() {
     }
     const targetDocument = target === 'main' ? activeDocument : componentDocument;
     const targetDispatch = target === 'main' ? dispatch : componentDispatch;
-    const placed = placeLayersOnCanvas(targetDocument.nodes, nodeIds, point);
-    if (placed !== targetDocument.nodes) {
-      const placedIds = new Set(nodeIds);
-      const movedNodes = placed.filter((node) => placedIds.has(node.id));
-      targetDispatch({ type: 'transform-nodes', nodes: movedNodes });
-      targetDispatch({ type: 'select-nodes', nodeIds: movedNodes.map((node) => node.id) });
+    const instances = createLayerCanvasInstances(targetDocument.nodes, nodeIds, point);
+    if (instances.length > 0) {
+      targetDispatch({ type: 'add-nodes', nodes: instances });
       selectionSourceRef.current = 'canvas';
       setActiveEditorId(target);
       setInspectorVisible(true);
-      setNotice(`Placed ${movedNodes.length} existing layer${movedNodes.length === 1 ? '' : 's'} on Canvas — no duplicate created.`);
+      setNotice(`Created ${instances.length} independent Canvas instance${instances.length === 1 ? '' : 's'}; the Layers source was left unchanged.`);
     }
     layerDragSourceRef.current = null;
     layerDragEditorRef.current = null;
@@ -1220,12 +1220,12 @@ export function App() {
         </div>
       </nav>
 
-      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Select layers, drag them onto Canvas to place the same nodes without duplication, or drag within this list to reorder and nest.', ['CTRL/CMD + CLICK', 'SHIFT + CLICK', 'DRAG TO CANVAS'])}>
+      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Layers are reusable sources. Drag a layer or Group onto Canvas to create another independent instance; the source stays in this list.', ['CTRL/CMD + CLICK', 'SHIFT + CLICK', 'DRAG TO CANVAS'])}>
         <div class="panel-heading">
           <h2>Layers</h2>
         </div>
         <div class="layer-list-heading" data-page-id={focusedPage?.id ?? undefined}>
-          <span>LAYERS · {focusedDocument.nodes.length}</span>
+          <span>LAYERS · {layerSourceNodes.length}</span>
           <span class="layer-page-context" title={layerContextTitle}>{layerContextLabel}</span>
         </div>
         <div class="layer-list" role="tree" aria-label="Document layers">
@@ -1257,7 +1257,7 @@ export function App() {
                 onDrop={(event) => dropLayer(node.id, event)}
                 onDragEnd={() => { layerDragSourceRef.current = null; layerDragEditorRef.current = null; setLayerDropTarget(null); }}
                 onDragLeave={() => setLayerDropTarget((current) => current?.nodeId === node.id ? null : current)}
-                title={'Select ' + node.name + '. Drag onto Canvas to place this same layer, or above/below here to reorder and into the center to nest it.'}
+                title={'Select ' + node.name + '. Drag onto Canvas to create an independent instance, or above/below here to reorder and into the center to nest it.'}
               >
                 {hasChildren ? (
                   <button
@@ -1400,7 +1400,7 @@ export function App() {
               </div>
             );
           })}
-          {focusedDocument.nodes.length === 0 && (
+          {layerSourceNodes.length === 0 && (
             <div class="empty-layers">Your layers will appear here.</div>
           )}
         </div>
@@ -1645,7 +1645,10 @@ export function App() {
             <span class="panel-kicker">PROPERTIES</span>
             <h2>Inspector</h2><span class="panel-context-indicator">{activeEditorId === 'component' ? 'COMPONENT CANVAS' : 'MAIN PAGE'}</span>
           </div>
-          {selectedNode && <button class="icon-button danger" title="Delete selected layer" onClick={() => dispatchFocused({ type: 'delete-node', nodeId: selectedNode.id })}><Icon name="trash" /></button>}
+          {selectedNode && <button class="icon-button danger" title={selectionSourceRef.current === 'layers' ? "Delete from Layers and Canvas" : "Remove from Canvas only"} onClick={() => {
+            if (selectionSourceRef.current === 'layers') dispatchFocused({ type: 'delete-node', nodeId: selectedNode.id });
+            else dispatchFocused({ type: 'set-nodes-canvas-state', nodeIds: [selectedNode.id], onCanvas: false });
+          }}><Icon name="trash" /></button>}
         </div>
 
         {selectedNode ? (
@@ -1832,7 +1835,7 @@ export function App() {
 
       <footer class="statusbar">
         <div><span class="status-brand">F</span><span>Folio Studio <b>0.1.0</b></span></div>
-        <div class="status-center">{activeDocument.nodes.length} LAYERS <span>·</span> {activeDocument.width} × {activeDocument.height} PX</div>
+        <div class="status-center">{activeDocument.nodes.filter((node) => node.isCanvasInstance !== true).length} LAYERS <span>·</span> {activeDocument.width} × {activeDocument.height} PX</div>
         <div class={`status-right save-${saveStatus}`} role="status" aria-live="polite"><span class="status-ready-dot" /> {isHydrating ? 'RESTORING PROJECT…' : statusLabel}</div>
       </footer>
 

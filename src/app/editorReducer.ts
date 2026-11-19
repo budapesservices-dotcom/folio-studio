@@ -1,7 +1,7 @@
 import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { replaceComponentInstancesInDocument } from '../core/document/components';
-import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, type LayerDropPosition } from '../core/document/layers';
+import { moveLayer, moveLayers, removeLayersAndPromoteChildren, getLayerDescendantIds, groupLayers, ungroupLayers, expandSelectedLayerIds, type LayerDropPosition } from '../core/document/layers';
 
 const HISTORY_LIMIT = 60;
 
@@ -69,6 +69,22 @@ function touch(project: FolioProject): FolioProject {
     ...project,
     metadata: { ...project.metadata, updatedAt: new Date().toISOString() },
   };
+}
+
+function removeNodesAndCanvasInstances(nodes: DesignNode[], requestedIds: Iterable<string>): DesignNode[] {
+  const requested = new Set(requestedIds);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const sourceIds = new Set([...requested].filter((id) => {
+    const node = byId.get(id);
+    return node && node.isCanvasInstance !== true;
+  }));
+  const removeIds = new Set(requested);
+  for (const instance of nodes) {
+    if (instance.isCanvasInstance !== true || !instance.sourceLayerId || !sourceIds.has(instance.sourceLayerId)) continue;
+    removeIds.add(instance.id);
+    getLayerDescendantIds(nodes, instance.id).forEach((id) => removeIds.add(id));
+  }
+  return removeLayersAndPromoteChildren(nodes, removeIds);
 }
 
 function existingSelection(project: FolioProject, ids: string[]): string[] {
@@ -257,18 +273,20 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'delete-nodes': {
       const ids = new Set(action.nodeIds);
-      const nodes = removeLayersAndPromoteChildren(document.nodes, ids);
+      const nodes = removeNodesAndCanvasInstances(document.nodes, ids);
       if (nodes.length === document.nodes.length) return state;
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
-      const selected = state.selectedNodeIds.filter((id) => !ids.has(id));
+      const remainingIds = new Set(nodes.map((node) => node.id));
+      const selected = state.selectedNodeIds.filter((id) => remainingIds.has(id));
       return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
     }
 
     case 'delete-node': {
-      const nodes = removeLayersAndPromoteChildren(document.nodes, [action.nodeId]);
+      const nodes = removeNodesAndCanvasInstances(document.nodes, [action.nodeId]);
       if (nodes.length === document.nodes.length) return state;
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
-      const selected = state.selectedNodeIds.filter((id) => id !== action.nodeId);
+      const remainingIds = new Set(nodes.map((node) => node.id));
+      const selected = state.selectedNodeIds.filter((id) => remainingIds.has(id));
       return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
     }
 

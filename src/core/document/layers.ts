@@ -35,7 +35,8 @@ export function getLayerPanelRows(
   nodes: readonly DesignNode[],
   collapsedIds: readonly string[] = [],
 ): LayerPanelRow[] {
-  const children = getChildrenMap(nodes);
+  const layerNodes = nodes.filter((node) => node.isCanvasInstance !== true);
+  const children = getChildrenMap(layerNodes);
   const collapsed = new Set(collapsedIds);
   const rows: LayerPanelRow[] = [];
   const visited = new Set<string>();
@@ -50,8 +51,8 @@ export function getLayerPanelRows(
   };
 
   [...(children.get(null) ?? [])].reverse().forEach((node) => visit(node, 0));
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
-  nodes.forEach((node) => {
+  const nodeById = new Map(layerNodes.map((node) => [node.id, node]));
+  layerNodes.forEach((node) => {
     if (visited.has(node.id)) return;
     // A collapsed ancestor has already been visited, but this descendant was
     // intentionally not traversed. Do not re-add it as a fallback root.
@@ -157,33 +158,46 @@ export function expandSelectedLayerIds(nodes: readonly DesignNode[], selectedIds
 }
 
 /**
- * Places existing Layers nodes onto Canvas without creating IDs or copies.
- * The supplied IDs define the payload: a Group moves with its subtree, while
- * an individually dragged node remains independent.
+ * Create independent Canvas instances without mutating source layer geometry.
+ * Selecting a parent clones its whole subtree; selecting a child clones only
+ * that child's subtree. Parent IDs are remapped inside each new instance.
  */
-export function placeLayersOnCanvas(
+export function createLayerCanvasInstances(
   nodes: DesignNode[],
   nodeIds: readonly string[],
   point: { x: number; y: number },
+  createId: (sourceId: string, index: number) => string = (sourceId, index) =>
+    globalThis.crypto?.randomUUID?.() ?? `canvas-${Date.now()}-${index}-${sourceId}`,
 ): DesignNode[] {
-  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return nodes;
-  const selected = new Set(nodeIds.filter((id) => nodes.some((node) => node.id === id)));
-  if (selected.size === 0) return nodes;
-  const moving = nodes.filter((node) => selected.has(node.id));
-  const minX = Math.min(...moving.map((node) => node.x));
-  const minY = Math.min(...moving.map((node) => node.y));
-  const dx = point.x - minX;
-  const dy = point.y - minY;
-  let changed = false;
-  const next = nodes.map((node) => {
-    if (!selected.has(node.id)) return node;
-    const x = node.x + dx;
-    const y = node.y + dy;
-    if (node.onCanvas !== false && Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return node;
-    changed = true;
-    return { ...node, x, y, onCanvas: true };
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return [];
+  const sources = nodes.filter((node) => node.isCanvasInstance !== true);
+  const nodeById = new Map(sources.map((node) => [node.id, node]));
+  const selected = new Set(nodeIds.filter((id) => nodeById.has(id)));
+  if (selected.size === 0) return [];
+
+  const roots = [...selected].filter((id) =>
+    ![...getLayerAncestorIds(sources, id)].some((ancestorId) => selected.has(ancestorId)));
+  const included = new Set<string>();
+  roots.forEach((rootId) => {
+    included.add(rootId);
+    getLayerDescendantIds(sources, rootId).forEach((id) => included.add(id));
   });
-  return changed ? next : nodes;
+  const picked = sources.filter((node) => included.has(node.id));
+  if (picked.length === 0) return [];
+
+  const dx = point.x - Math.min(...picked.map((node) => node.x));
+  const dy = point.y - Math.min(...picked.map((node) => node.y));
+  const idMap = new Map(picked.map((node, index) => [node.id, createId(node.id, index)]));
+  return picked.map((node) => ({
+    ...node,
+    id: idMap.get(node.id)!,
+    parentId: node.parentId && idMap.has(node.parentId) ? idMap.get(node.parentId) : undefined,
+    x: node.x + dx,
+    y: node.y + dy,
+    onCanvas: true,
+    isCanvasInstance: true,
+    sourceLayerId: node.id,
+  }));
 }
 
 /**
@@ -338,7 +352,7 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
   const right = Math.max(...picked.map((node) => node.x + node.width));
   const bottom = Math.max(...picked.map((node) => node.y + node.height));
   const groupId = 'group-' + (globalThis.crypto?.randomUUID?.() ?? (Date.now() + '-' + Math.random().toString(16).slice(2)));
-  const group: DesignNode = { id: groupId, type: 'group', name: 'Group', x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y), rotation: 0, opacity: 1, visible: true, locked: false, onCanvas: picked.some((node) => node.onCanvas !== false), ...(parentId ? { parentId } : {}) };
+  const group: DesignNode = { id: groupId, type: 'group', name: 'Group', x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y), rotation: 0, opacity: 1, visible: true, locked: false, onCanvas: picked.some((node) => node.onCanvas !== false), isCanvasInstance: picked.every((node) => node.isCanvasInstance === true), ...(parentId ? { parentId } : {}) };
   const rootSet = new Set(roots);
   const firstIndex = Math.min(...roots.map((id) => order.get(id) ?? nodes.length));
   const next = nodes.map((node) => rootSet.has(node.id) ? { ...node, parentId: groupId } : node);
