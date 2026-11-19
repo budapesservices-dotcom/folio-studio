@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import preact from '@preact/preset-vite';
 
 export default defineConfig({
+  // GitHub Pages serves this repository under /folio-studio/.
+  base: '/folio-studio/',
   plugins: [preact()],
   clearScreen: false,
   server: {
