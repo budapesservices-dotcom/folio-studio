@@ -257,7 +257,7 @@ export function removeLayersAndPromoteChildren(
 export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[]): DesignNode[] {
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const selected = new Set(selectedIds.filter((id) => nodeById.has(id)));
-  if (selected.size < 2) return nodes;
+  if (selected.size === 0) return nodes;
   const roots = [...selected].filter((id) => {
     let parentId = getParentId(nodeById.get(id)!, nodeById);
     const visited = new Set<string>();
@@ -269,7 +269,13 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
     }
     return true;
   });
-  if (roots.length < 2) return nodes;
+  if (roots.length === 0) return nodes;
+  // A single selected hierarchy can be wrapped again. This is essential for
+  // nested Groups and for a regular layer that already owns sub-layers.
+  if (roots.length === 1) {
+    const root = nodeById.get(roots[0])!;
+    if (root.type !== 'group' && getLayerDescendantIds(nodes, root.id).size === 0) return nodes;
+  }
   const order = new Map(nodes.map((node, index) => [node.id, index]));
   roots.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
   // Place the new container at the nearest common ancestor of the selected
@@ -289,7 +295,14 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
   });
   const firstChain = ancestorChains[0] ?? [];
   const parentId = firstChain.find((candidate) => ancestorChains.every((chain) => chain.includes(candidate))) ?? null;
-  const picked = roots.map((id) => nodeById.get(id)!);
+  // Include every nested descendant in the container bounds. A parent
+  // node's own rectangle may be smaller than content extending beyond it.
+  const memberIds = new Set<string>();
+  roots.forEach((id) => {
+    memberIds.add(id);
+    getLayerDescendantIds(nodes, id).forEach((childId) => memberIds.add(childId));
+  });
+  const picked = nodes.filter((node) => memberIds.has(node.id));
   const x = Math.min(...picked.map((node) => node.x));
   const y = Math.min(...picked.map((node) => node.y));
   const right = Math.max(...picked.map((node) => node.x + node.width));

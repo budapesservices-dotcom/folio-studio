@@ -213,6 +213,37 @@ describe('layer hierarchy and panel operations', () => {
     expect(ungroupLayers(grouped, group ? [group.id] : [])).toEqual(nodes);
   });
 
+  it('wraps a single parent hierarchy in a Group and ungroups it without losing children', () => {
+    const nodes = [
+      layer('parent', undefined, { width: 100, height: 80 }),
+      layer('child', 'parent', { x: 160, y: 140, width: 90, height: 70 }),
+      layer('grandchild', 'child', { x: 280, y: 220, width: 60, height: 50 }),
+    ];
+    // Panel/canvas selection may contain the parent and its descendants.
+    const grouped = groupLayers(nodes, ['parent', 'child', 'grandchild']);
+    const wrapper = grouped.find((node) => node.type === 'group');
+    expect(wrapper).toBeDefined();
+    expect(wrapper?.x).toBe(100);
+    expect(wrapper?.y).toBe(100);
+    expect(wrapper?.width).toBe(240);
+    expect(wrapper?.height).toBe(170);
+    expect(grouped.find((node) => node.id === 'parent')?.parentId).toBe(wrapper?.id);
+    expect(grouped.find((node) => node.id === 'child')?.parentId).toBe('parent');
+    expect(grouped.find((node) => node.id === 'grandchild')?.parentId).toBe('child');
+    expect(ungroupLayers(grouped, wrapper ? [wrapper.id] : [])).toEqual(nodes);
+  });
+
+  it('wraps an existing Group again even when only that Group ID is selected', () => {
+    const nodes = [layer('a'), layer('b')];
+    const first = groupLayers(nodes, ['a', 'b']);
+    const inner = first.find((node) => node.type === 'group')!;
+    const nested = groupLayers(first, [inner.id]);
+    const outer = nested.find((node) => node.type === 'group' && node.id !== inner.id);
+    expect(outer).toBeDefined();
+    expect(nested.find((node) => node.id === inner.id)?.parentId).toBe(outer?.id);
+    expect(ungroupLayers(nested, outer ? [outer.id, inner.id, 'a', 'b'] : [])).toEqual(first);
+  });
+
   it('groups selected layers from different parents without losing their subtrees', () => {
     const nodes = [
       layer('parent-a'),

@@ -1027,7 +1027,9 @@ export function App() {
         return;
       }
       if (modifier && !event.shiftKey && key === 'g') {
-        if (ids.length > 1) {
+        // Let the document operation decide whether this selection can be
+        // grouped: a single Group or a parent with descendants can be wrapped.
+        if (ids.length > 0) {
           event.preventDefault();
           emit({ type: 'group-layers', nodeIds: ids });
         }
