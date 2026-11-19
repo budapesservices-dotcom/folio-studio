@@ -825,7 +825,7 @@ export function App() {
     targetDispatch({ type: 'select-nodes', nodeIds: ids });
 
     if (existing) {
-      setNotice(`“${existing.name}” sudah ada di Canvas. FOLIO tidak membuat duplikat.`);
+      setNotice(`“${existing.name}” is already on the Canvas. Duplicate objects are not allowed.`);
       clearDrag();
       return;
     }
@@ -833,7 +833,7 @@ export function App() {
     // Re-show the exact same nodes. The saved position, size, style and
     // rotation remain on the original layer records; dropping never resets them.
     targetDispatch({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: true });
-    setNotice(`“${droppedNodes[0].name}” dikembalikan ke Canvas dengan properti terakhirnya.`);
+    setNotice(`“${droppedNodes[0].name}” has been restored to the Canvas with its previous properties.`);
     clearDrag();
   };
 
