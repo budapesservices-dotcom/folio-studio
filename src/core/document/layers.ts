@@ -245,7 +245,6 @@ function stripLegacyCanvasFields(node: DesignNode): DesignNode {
 
 function mergeLegacyCanvasState(master: DesignNode, instance: DesignNode, onCanvas: boolean): DesignNode {
   const common = {
-    ...master,
     name: instance.name,
     x: instance.x,
     y: instance.y,
@@ -258,13 +257,20 @@ function mergeLegacyCanvasState(master: DesignNode, instance: DesignNode, onCanv
     layerColor: instance.layerColor ?? master.layerColor,
     onCanvas,
   };
-  if (master.type === 'rect' && instance.type === 'rect') return { ...common, style: instance.style };
-  if (master.type === 'ellipse' && instance.type === 'ellipse') return { ...common, style: instance.style };
-  if (master.type === 'text' && instance.type === 'text') return { ...common, text: instance.text, style: instance.style };
-  if (master.type === 'component-instance' && instance.type === 'component-instance') {
-    return { ...common, componentId: instance.componentId, overrides: instance.overrides };
+
+  if (master.type === 'rect' && instance.type === 'rect') {
+    return { ...master, ...common, style: instance.style };
   }
-  return common;
+  if (master.type === 'ellipse' && instance.type === 'ellipse') {
+    return { ...master, ...common, style: instance.style };
+  }
+  if (master.type === 'text' && instance.type === 'text') {
+    return { ...master, ...common, text: instance.text, style: instance.style };
+  }
+  if (master.type === 'component-instance' && instance.type === 'component-instance') {
+    return { ...master, ...common, componentId: instance.componentId, overrides: instance.overrides };
+  }
+  return { ...master, ...common };
 }
 
 export function collapseLegacyCanvasInstances(nodes: readonly DesignNode[]): DesignNode[] {
