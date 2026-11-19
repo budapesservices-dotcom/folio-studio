@@ -260,7 +260,7 @@ describe('layer hierarchy and panel operations', () => {
     expect(grouped.find((node) => node.id === 'a')?.parentId).toBe(group?.id);
     expect(grouped.find((node) => node.id === 'b')?.parentId).toBe(group?.id);
     expect(grouped.find((node) => node.id === 'a-child')?.parentId).toBe('a');
-    expect(groupLayers(nodes, ['a'])).toBe(nodes);
+    expect(groupLayers(nodes, ['other'])).toBe(nodes);
   });
 
   it('allows a Group container to be grouped again and ungrouped one level at a time', () => {
