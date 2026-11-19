@@ -1278,7 +1278,12 @@ export function App() {
                             style={{ backgroundColor: color }}
                             title={color}
                             aria-label={`Apply ${color} to selected layers`}
-                            onClick={() => setLayerColorFromRow(node.id, color)}
+                            onClick={() => {
+                              setLayerColorFromRow(node.id, color);
+                              setLayerColorPickerKey(null);
+                              setLayerColorPickerPosition(null);
+                              layerColorAnchorRef.current = null;
+                            }}
                           />
                         ))}
                       </div>
