@@ -1019,6 +1019,14 @@ export function App() {
       const ids = context.state.selectedNodeIds;
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
+      if (modifier && !event.shiftKey && key === 'a') {
+        // Select every layer in the active document, just like a standard
+        // design-editor Select All command. Keep it scoped to the active
+        // canvas/component editor and never hijack text-field selection.
+        event.preventDefault();
+        emit({ type: 'select-nodes', nodeIds: context.document.nodes.map((node) => node.id) });
+        return;
+      }
       if (modifier && event.shiftKey && key === 'g') {
         if (ids.length > 0) {
           event.preventDefault();
