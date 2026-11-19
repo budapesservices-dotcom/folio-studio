@@ -9,7 +9,7 @@ import { magicWandTool, getMagicWandMatchIds } from '../src/engines/canvas/tools
 import { handTool } from '../src/engines/canvas/tools/hand';
 import { scrubbyZoomTool, calculateScrubbyZoom } from '../src/engines/canvas/tools/scrubby-zoom';
 import { pointInPolygon, polygonIntersectsBounds } from '../src/engines/canvas/tools/geometry';
-import type { CanvasToolContext, CanvasToolPointerInput, CanvasToolHandler } from '../src/engines/canvas/tools/types';
+import type { CanvasToolContext, CanvasToolPointerInput } from '../src/engines/canvas/tools/types';
 
 function rect(id: string, x: number, y: number, fill = '#8b7cf6'): DesignNode {
   return { ...createRectNode(), id, x, y, width: 30, height: 24, style: { fill, stroke: 'none', strokeWidth: 0, radius: 0 } };
