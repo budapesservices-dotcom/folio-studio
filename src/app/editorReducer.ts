@@ -29,7 +29,9 @@ export type EditorAction =
   | { type: 'transform-nodes'; nodes: DesignNode[] }
   | { type: 'delete-node'; nodeId: string }
   | { type: 'move-layer'; nodeId: string; targetId: string; position: LayerDropPosition }
-  | { type: 'move-layers'; nodeIds: string[]; targetId: string; position: LayerDropPosition }\n  | { type: 'group-layers'; nodeIds: string[] }\n  | { type: 'ungroup-layers'; nodeIds: string[] }
+  | { type: 'move-layers'; nodeIds: string[]; targetId: string; position: LayerDropPosition }
+  | { type: 'group-layers'; nodeIds: string[] }
+  | { type: 'ungroup-layers'; nodeIds: string[] }
   | { type: 'rename-project'; name: string }
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }

@@ -10,7 +10,9 @@ import {
   getLayerRenderOrder,
   moveLayer,
   moveLayers,
-  removeLayersAndPromoteChildren,\n  groupLayers,\n  ungroupLayers,
+  removeLayersAndPromoteChildren,
+  groupLayers,
+  ungroupLayers,
 } from '../src/core/document/layers';
 import { getActiveDocument } from '../src/core/document/project';
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
