@@ -1,7 +1,7 @@
 import { expandSelectedLayerIds, getCanvasClickSelectionIds, getLayerAncestorIds } from '../../../core/document/layers';
 import { getBounds } from '../geometry';
 import { polygonIntersectsBounds } from './geometry';
-import type { CanvasToolContext, CanvasToolHandler, CanvasToolTransition, LassoSelectionSession } from './types';
+import type { CanvasToolContext, CanvasToolHandler, LassoSelectionSession } from './types';
 
 function mergeSelection(session: LassoSelectionSession, hits: string[], nodes: CanvasToolContext['canvasNodes']): string[] {
   const roots = new Set<string>();

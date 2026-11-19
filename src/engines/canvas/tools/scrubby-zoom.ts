@@ -1,4 +1,4 @@
-import type { CanvasToolContext, CanvasToolHandler, CanvasToolTransition } from './types';
+import type { CanvasToolHandler, CanvasToolTransition } from './types';
 export function calculateScrubbyZoom(startZoom: number, deltaX: number, startPan: { x: number; y: number }, anchor: { x: number; y: number }): { zoom: number; pan: { x: number; y: number } } {
   const zoom = Math.min(2, Math.max(0.35, startZoom * Math.pow(2, deltaX / 240)));
   const ratio = zoom / startZoom;

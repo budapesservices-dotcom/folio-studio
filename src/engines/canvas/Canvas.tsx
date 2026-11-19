@@ -50,7 +50,7 @@ function toCanvasPoint(svg: SVGSVGElement, clientX: number, clientY: number): { 
 
 type PrimitiveNode = Exclude<DesignNode, ComponentInstanceNode>;
 
-function NodeShape({ node, locked = node.locked, mask = false }: { node: PrimitiveNode; locked?: boolean; mask?: boolean }) {
+function NodeShape({ node, mask = false }: { node: PrimitiveNode; mask?: boolean }) {
   const transform = node.rotation
     ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
     : undefined;
@@ -87,7 +87,7 @@ function NodeShape({ node, locked = node.locked, mask = false }: { node: Primiti
   );
 }
 
-function NodeArtwork({ node, components = [], locked = node.locked }: { node: DesignNode; components?: ComponentDefinition[]; locked?: boolean }) {
+function NodeArtwork({ node, components = [] }: { node: DesignNode; components?: ComponentDefinition[] }) {
   if (node.type === 'component-instance') {
     const component = components.find((item) => item.id === node.componentId);
     const scaleX = component ? node.width / Math.max(1, component.document.width) : 1;
@@ -105,7 +105,7 @@ function NodeArtwork({ node, components = [], locked = node.locked }: { node: De
               const childState = childStates.get(effective.id);
               return effective.type === 'component-instance'
                 ? null
-                : <NodeShape key={effective.id} node={effective} locked={locked || Boolean(childState?.locked)} />;
+                : <NodeShape key={effective.id} node={effective} />;
             })}
           </g>
         ) : (
@@ -116,7 +116,7 @@ function NodeArtwork({ node, components = [], locked = node.locked }: { node: De
     );
   }
 
-  return <g data-node-id={node.id}><NodeShape node={node as PrimitiveNode} locked={locked} /></g>;
+  return <g data-node-id={node.id}><NodeShape node={node as PrimitiveNode} /></g>;
 }
 
 /** Paint a base layer's alpha silhouette into an SVG mask. Group bases use their descendants. */
@@ -173,16 +173,15 @@ function ClipMaskArtwork({ node, nodes, components }: {
   return <NodeShape node={node as PrimitiveNode} mask />;
 }
 
-function MaskedNodeArtwork({ node, nodes, components, locked }: {
+function MaskedNodeArtwork({ node, nodes, components }: {
   node: DesignNode;
   nodes: DesignNode[];
   components: ComponentDefinition[];
-  locked: boolean;
 }) {
   const maskIds = getLayerClipMaskBaseIds(nodes, node.id);
   return maskIds.reduceRight(
     (artwork, maskId) => <g mask={`url(#folio-mask-${maskId})`}>{artwork}</g>,
-    <NodeArtwork node={node} components={components} locked={locked} />,
+    <NodeArtwork node={node} components={components} />,
   );
 }
 
@@ -598,7 +597,6 @@ export function Canvas({
               node={node}
               nodes={canvasNodes}
               components={components}
-              locked={Boolean(layerStates.get(node.id)?.locked)}
             />
           ))}
           {activeTool.renderOverlay(createToolContext())?.kind === 'marquee' && (() => {

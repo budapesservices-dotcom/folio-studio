@@ -1,4 +1,4 @@
-import type { CanvasToolContext, CanvasToolHandler, CanvasToolTransition } from './types';
+import type { CanvasToolHandler, CanvasToolTransition } from './types';
 export const handTool: CanvasToolHandler = {
   id: 'hand', label: 'Hand',
   description: 'Pan the Canvas viewport by dragging anywhere, without selecting or moving artwork.',

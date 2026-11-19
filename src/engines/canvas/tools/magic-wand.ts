@@ -1,5 +1,5 @@
 import type { DesignNode } from '../../../core/document/types';
-import type { CanvasToolContext, CanvasToolHandler, CanvasToolTransition } from './types';
+import type { CanvasToolHandler, CanvasToolTransition } from './types';
 
 function getFill(node: DesignNode): string | null {
   if (node.type !== 'rect' && node.type !== 'ellipse' && node.type !== 'text') return null;

@@ -1,6 +1,6 @@
 import { expandSelectedLayerIds, getCanvasClickSelectionIds, getLayerAncestorIds } from '../../../core/document/layers';
 import { getBounds, resizeNodes, snapTranslation } from '../geometry';
-import type { CanvasToolContext, CanvasToolHandler, CanvasToolId, CanvasToolTransition } from './types';
+import type { CanvasToolHandler, CanvasToolId, CanvasToolTransition } from './types';
 import { rectangleBounds } from './geometry';
 
 function createSelectTool(id: CanvasToolId, exactLayer: boolean): CanvasToolHandler {
