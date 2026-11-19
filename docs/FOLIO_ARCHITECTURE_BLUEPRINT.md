@@ -313,4 +313,4 @@ When target direction and current source differ, document the gap and plan a del
 
 ---
 
-**Next architecture milestone:** Native AST v1 — define canonical document/node structures, stable identity, typed properties, relationships, capabilities, and schema evolution so Canvas, Components, Node Logic, and Code share the same meaning.
+**Next architecture milestone:** [Native AST v1 Specification](specs/NATIVE_AST_V1.md) — define canonical document/node structures, stable identity, typed properties, relationships, capabilities, and schema evolution so Canvas, Components, Node Logic, and Code share the same meaning.
