@@ -65,6 +65,8 @@ export function detachComponentInstance(instance: ComponentInstanceNode, compone
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
 
+  const detachedIds = new Map(source.nodes.map((node) => [node.id, createNodeId(instance.id, node.id)]));
+
   return source.nodes.map((sourceNode) => {
     const effective = applyComponentOverrides(sourceNode, instance.overrides);
     const width = sourceNode.width * scaleX;
@@ -77,7 +79,8 @@ export function detachComponentInstance(instance: ComponentInstanceNode, compone
     const rotatedY = centerY + dx * sin + dy * cos;
     return {
       ...effective,
-      id: createNodeId(instance.id, sourceNode.id),
+      id: detachedIds.get(sourceNode.id)!,
+      parentId: sourceNode.parentId ? (detachedIds.get(sourceNode.parentId) ?? instance.parentId) : instance.parentId,
       name: sourceNode.name,
       x: rotatedX - width / 2,
       y: rotatedY - height / 2,

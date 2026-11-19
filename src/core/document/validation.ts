@@ -43,7 +43,8 @@ function isCommonNode(value: Record<string, unknown>): boolean {
     isFiniteNumber(value.rotation) &&
     isFiniteNumber(value.opacity) && value.opacity >= 0 && value.opacity <= 1 &&
     typeof value.visible === 'boolean' &&
-    typeof value.locked === 'boolean'
+    typeof value.locked === 'boolean' &&
+    (value.parentId === undefined || value.parentId === null || (isString(value.parentId) && value.parentId.length > 0))
   );
 }
 
@@ -91,6 +92,20 @@ function isDesignNode(value: unknown): value is DesignNode {
   return false;
 }
 
+function isValidLayerHierarchy(nodes: readonly DesignNode[]): boolean {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  for (const node of nodes) {
+    let parentId = node.parentId ?? undefined;
+    const visited = new Set<string>([node.id]);
+    while (parentId) {
+      if (visited.has(parentId) || !nodeById.has(parentId)) return false;
+      visited.add(parentId);
+      parentId = nodeById.get(parentId)?.parentId ?? undefined;
+    }
+  }
+  return true;
+}
+
 function isDocument(value: unknown): value is FolioDocument {
   if (!isRecord(value)) return false;
   if (
@@ -103,8 +118,9 @@ function isDocument(value: unknown): value is FolioDocument {
     !value.nodes.every(isDesignNode)
   ) return false;
 
-  const ids = (value.nodes as DesignNode[]).map((node) => node.id);
-  return new Set(ids).size === ids.length;
+  const nodes = value.nodes as DesignNode[];
+  const ids = nodes.map((node) => node.id);
+  return new Set(ids).size === ids.length && isValidLayerHierarchy(nodes);
 }
 
 function isMetadata(value: unknown): value is FolioProject['metadata'] {

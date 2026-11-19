@@ -18,6 +18,8 @@ export interface NodeBase {
   opacity: number;
   visible: boolean;
   locked: boolean;
+  /** Optional parent layer ID. Missing/null means top-level for backward compatibility. */
+  parentId?: string | null;
 }
 
 export interface ShapeStyle {

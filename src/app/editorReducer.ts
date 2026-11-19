@@ -1,6 +1,7 @@
 import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { replaceComponentInstancesInDocument } from '../core/document/components';
+import { moveLayer, removeLayersAndPromoteChildren, type LayerDropPosition } from '../core/document/layers';
 
 const HISTORY_LIMIT = 60;
 
@@ -25,6 +26,7 @@ export type EditorAction =
   | { type: 'delete-nodes'; nodeIds: string[] }
   | { type: 'transform-nodes'; nodes: DesignNode[] }
   | { type: 'delete-node'; nodeId: string }
+  | { type: 'move-layer'; nodeId: string; targetId: string; position: LayerDropPosition }
   | { type: 'rename-project'; name: string }
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }
@@ -168,9 +170,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       );
     }
 
+    case 'move-layer': {
+      const nodes = moveLayer(document.nodes, action.nodeId, action.targetId, action.position);
+      if (nodes === document.nodes) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
     case 'delete-nodes': {
       const ids = new Set(action.nodeIds);
-      const nodes = document.nodes.filter((node) => !ids.has(node.id));
+      const nodes = removeLayersAndPromoteChildren(document.nodes, ids);
       if (nodes.length === document.nodes.length) return state;
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       const selected = state.selectedNodeIds.filter((id) => !ids.has(id));
@@ -178,7 +186,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'delete-node': {
-      const nodes = document.nodes.filter((node) => node.id !== action.nodeId);
+      const nodes = removeLayersAndPromoteChildren(document.nodes, [action.nodeId]);
       if (nodes.length === document.nodes.length) return state;
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       const selected = state.selectedNodeIds.filter((id) => id !== action.nodeId);
