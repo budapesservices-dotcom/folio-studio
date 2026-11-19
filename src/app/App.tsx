@@ -381,6 +381,12 @@ export function App() {
   const componentDocument = getActiveDocument(componentState.project);
   const focusedEditor = getActiveEditorContext(activeEditorId, state, componentState);
   const focusedDocument = focusedEditor.document;
+  const focusedPage = activeEditorId === 'main' ? getActivePage(state.project) : null;
+  const layerContextName = focusedPage?.name ?? editingComponent?.name ?? componentDocument.name;
+  const layerContextLabel = focusedPage ? `EDITING: ${focusedPage.name}` : `COMPONENT: ${layerContextName}`;
+  const layerContextTitle = focusedPage
+    ? `Editing page ${focusedPage.name} (${focusedPage.route})`
+    : `Editing component ${layerContextName}`;
   const selectedNode = focusedEditor.selectedNode;
   const selectedNodes = focusedEditor.selectedNodes;
   const selectedInstance = selectedNode?.type === 'component-instance' ? selectedNode : null;
@@ -954,8 +960,9 @@ export function App() {
         <div class="panel-heading">
           <h2>Layers</h2>
         </div>
-        <div class="layer-list-heading">
+        <div class="layer-list-heading" data-page-id={focusedPage?.id ?? undefined}>
           <span>LAYERS · {focusedDocument.nodes.length}</span>
+          <span class="layer-page-context" title={layerContextTitle}>{layerContextLabel}</span>
         </div>
         <div class="layer-list" role="tree" aria-label="Document layers">
           {layerRows.map(({ node, depth, hasChildren }) => {

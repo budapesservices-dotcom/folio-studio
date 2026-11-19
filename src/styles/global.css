@@ -284,6 +284,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .page-indicator { width: 8px; height: 8px; background: #a494ff; border-radius: 2px; box-shadow: 0 0 9px #a494ff66; }
 .page-size { margin-left: auto; color: #6e7889; font-size: 9px; }
 .layer-list-heading { display: flex; justify-content: space-between; padding: 9px 12px 6px; color: #788294; font-size: 8px; font-weight: 800; letter-spacing: 1.2px; }
+.layer-page-context { display: inline-flex; align-items: center; gap: 5px; max-width: 58%; min-width: 0; overflow: hidden; padding: 3px 6px; border: 1px solid #353d4d; border-radius: 4px; color: #aeb8c9; background: #1a202c; font-size: 7px; font-weight: 650; letter-spacing: .45px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.layer-page-context::before { content: ''; flex: 0 0 4px; width: 4px; height: 4px; border-radius: 50%; background: #9a8dff; box-shadow: 0 0 6px #9a8dff70; }
 .layer-list { display: flex; flex-direction: column; gap: 2px; overflow: auto; padding: 0 8px 10px; }
 .layer-row { position: relative; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 0 5px; border: 1px solid transparent; border-radius: 5px; text-align: left; color: #aeb5c2; background: transparent; cursor: grab; user-select: none; }
 .layer-row:active { cursor: grabbing; }
