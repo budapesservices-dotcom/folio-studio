@@ -1,7 +1,7 @@
 import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { replaceComponentInstancesInDocument } from '../core/document/components';
-import { moveLayer, removeLayersAndPromoteChildren, type LayerDropPosition } from '../core/document/layers';
+import { moveLayer, moveLayers, removeLayersAndPromoteChildren, type LayerDropPosition } from '../core/document/layers';
 
 const HISTORY_LIMIT = 60;
 
@@ -28,6 +28,7 @@ export type EditorAction =
   | { type: 'transform-nodes'; nodes: DesignNode[] }
   | { type: 'delete-node'; nodeId: string }
   | { type: 'move-layer'; nodeId: string; targetId: string; position: LayerDropPosition }
+  | { type: 'move-layers'; nodeIds: string[]; targetId: string; position: LayerDropPosition }
   | { type: 'rename-project'; name: string }
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }
@@ -185,6 +186,12 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'move-layer': {
       const nodes = moveLayer(document.nodes, action.nodeId, action.targetId, action.position);
+      if (nodes === document.nodes) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
+    case 'move-layers': {
+      const nodes = moveLayers(document.nodes, action.nodeIds, action.targetId, action.position);
       if (nodes === document.nodes) return state;
       return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
     }

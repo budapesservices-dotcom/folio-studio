@@ -6,6 +6,7 @@ import {
   getLayerPanelRows,
   getLayerRenderOrder,
   moveLayer,
+  moveLayers,
   removeLayersAndPromoteChildren,
 } from '../src/core/document/layers';
 import { getActiveDocument } from '../src/core/document/project';
@@ -77,6 +78,30 @@ describe('layer hierarchy and panel operations', () => {
       ['grandparent', 0],
       ['child', 1],
     ]);
+  });
+
+
+  it('collapses a parent so nested layers disappear from the panel tree', () => {
+    const nodes = [layer('parent'), layer('child', 'parent'), layer('grandchild', 'child'), layer('other')];
+    expect(getLayerPanelRows(nodes, ['parent']).map(({ node }) => node.id)).toEqual(['parent', 'other']);
+    expect(getLayerPanelRows(nodes, ['child']).map(({ node }) => node.id)).toEqual(['parent', 'child', 'other']);
+  });
+
+  it('moves all selected layer roots into a target as one nested group', () => {
+    const nodes = [layer('first'), layer('second'), layer('target')];
+    const moved = moveLayers(nodes, ['first', 'second'], 'target', 'inside');
+    expect(moved.find((node) => node.id === 'first')?.parentId).toBe('target');
+    expect(moved.find((node) => node.id === 'second')?.parentId).toBe('target');
+    expect(getLayerPanelRows(moved).map(({ node, depth }) => [node.id, depth])).toEqual([
+      ['target', 0], ['second', 1], ['first', 1],
+    ]);
+  });
+
+  it('keeps descendants attached when a selected parent and child are both dragged', () => {
+    const nodes = [layer('selected-parent'), layer('selected-child', 'selected-parent'), layer('target')];
+    const moved = moveLayers(nodes, ['selected-parent', 'selected-child'], 'target', 'inside');
+    expect(moved.find((node) => node.id === 'selected-parent')?.parentId).toBe('target');
+    expect(moved.find((node) => node.id === 'selected-child')?.parentId).toBe('selected-parent');
   });
 
   it('records layer nesting in project history and restores it with undo/redo', () => {

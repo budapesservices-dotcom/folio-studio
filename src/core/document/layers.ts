@@ -119,46 +119,54 @@ export function expandSelectedLayers(nodes: readonly DesignNode[], selectedIds: 
   return nodes.filter((node) => included.has(node.id));
 }
 
-/** Moves a complete layer subtree while keeping the document array in paint order. */
-export function moveLayer(
-  nodes: DesignNode[],
-  nodeId: string,
-  targetId: string,
-  position: LayerDropPosition,
-): DesignNode[] {
-  const dragged = nodes.find((node) => node.id === nodeId);
-  const target = nodes.find((node) => node.id === targetId);
-  if (!dragged || !target || nodeId === targetId) return nodes;
+/** Moves one or more selected layer roots as a single block, preserving every nested subtree. */
+export function moveLayers(nodes: DesignNode[], nodeIds: readonly string[], targetId: string, position: LayerDropPosition): DesignNode[] {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const selected = new Set(nodeIds.filter((id) => nodeById.has(id)));
+  const target = nodeById.get(targetId);
+  if (selected.size === 0 || !target) return nodes;
 
-  const movedIds = getLayerDescendantIds(nodes, nodeId);
-  movedIds.add(nodeId);
+  // If a parent and its child are both selected, move only their common root.
+  const rootIds = new Set<string>();
+  for (const id of selected) {
+    let parentId = getParentId(nodeById.get(id)!, nodeById);
+    const visited = new Set<string>();
+    let hasSelectedAncestor = false;
+    while (parentId && !visited.has(parentId)) {
+      if (selected.has(parentId)) { hasSelectedAncestor = true; break; }
+      visited.add(parentId);
+      const parent = nodeById.get(parentId);
+      parentId = parent ? getParentId(parent, nodeById) : null;
+    }
+    if (!hasSelectedAncestor) rootIds.add(id);
+  }
+
+  const movedIds = new Set<string>();
+  for (const rootId of rootIds) {
+    movedIds.add(rootId);
+    getLayerDescendantIds(nodes, rootId).forEach((id) => movedIds.add(id));
+  }
   if (movedIds.has(targetId)) return nodes;
 
   const movedBlock = nodes.filter((node) => movedIds.has(node.id));
   const remaining = nodes.filter((node) => !movedIds.has(node.id));
   const targetBlock = getLayerDescendantIds(remaining, targetId);
   targetBlock.add(targetId);
-  const targetIndexes = remaining
-    .map((node, index) => targetBlock.has(node.id) ? index : -1)
-    .filter((index) => index >= 0);
+  const targetIndexes = remaining.map((node, index) => targetBlock.has(node.id) ? index : -1).filter((index) => index >= 0);
   if (targetIndexes.length === 0) return nodes;
 
   const parentId = position === 'inside' ? targetId : (target.parentId ?? undefined);
   if (parentId && movedIds.has(parentId)) return nodes;
-  const movedWithParent = movedBlock.map((node) =>
-    node.id === nodeId ? { ...node, parentId } : node,
-  );
+  const movedWithParents = movedBlock.map((node) => rootIds.has(node.id) ? { ...node, parentId } : node);
 
-  // "Before" means above in the panel; the paint order runs in reverse.
-  const insertionIndex = position === 'after'
-    ? Math.min(...targetIndexes)
-    : Math.max(...targetIndexes) + 1;
+  // Node storage is paint order (back-to-front), while the panel reads in reverse.
+  const insertionIndex = position === 'after' ? Math.min(...targetIndexes) : Math.max(...targetIndexes) + 1;
+  return [...remaining.slice(0, insertionIndex), ...movedWithParents, ...remaining.slice(insertionIndex)];
+}
 
-  return [
-    ...remaining.slice(0, insertionIndex),
-    ...movedWithParent,
-    ...remaining.slice(insertionIndex),
-  ];
+/** Backwards-compatible single-layer move helper. */
+export function moveLayer(nodes: DesignNode[], nodeId: string, targetId: string, position: LayerDropPosition): DesignNode[] {
+  return moveLayers(nodes, [nodeId], targetId, position);
 }
 
 /** Deleting a parent promotes surviving children to the nearest surviving ancestor. */

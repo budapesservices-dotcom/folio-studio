@@ -121,7 +121,7 @@ export function App() {
   const [inspectorVisible, setInspectorVisible] = useState(true);
   const [collapsedLayers, setCollapsedLayers] = useState<Record<EditorTarget, string[]>>({ main: [], component: [] });
   const [layerDropTarget, setLayerDropTarget] = useState<{ nodeId: string; position: LayerDropPosition } | null>(null);
-  const layerDragSourceRef = useRef<string | null>(null);
+  const layerDragSourceRef = useRef<string[] | null>(null);
   const layerSelectionAnchorRef = useRef<Record<EditorTarget, string | null>>({ main: null, component: null });
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
   const [windowOrder, setWindowOrder] = useState<WindowId[]>(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
@@ -391,13 +391,15 @@ export function App() {
   const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
   const layerRows = getLayerPanelRows(focusedDocument.nodes, collapsedLayers[activeEditorId]);
   const layerEffectiveStates = getEffectiveLayerStates(focusedDocument.nodes);
-  const selectedLayerNodes = focusedDocument.nodes.filter((node) => focusedEditor.state.selectedNodeIds.includes(node.id));
-  const batchSetLayerProperty = (property: 'visible' | 'locked') => {
-    if (selectedLayerNodes.length === 0) return;
-    const shouldEnable = !selectedLayerNodes.every((node) => node[property]);
+  const toggleLayerPropertyFromRow = (nodeId: string, property: 'visible' | 'locked') => {
+    const selectedIds = focusedEditor.state.selectedNodeIds;
+    const targetIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId];
+    const targets = focusedDocument.nodes.filter((node) => targetIds.includes(node.id));
+    if (targets.length === 0) return;
+    const shouldEnable = !targets.every((node) => node[property]);
     dispatchFocused({
       type: 'set-nodes-properties',
-      nodeIds: selectedLayerNodes.map((node) => node.id),
+      nodeIds: targets.map((node) => node.id),
       properties: { [property]: shouldEnable },
     });
   };
@@ -447,15 +449,18 @@ export function App() {
   };
 
   const startLayerDrag = (nodeId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
-    layerDragSourceRef.current = nodeId;
+    const currentSelection = focusedEditor.state.selectedNodeIds;
+    const draggedIds = currentSelection.includes(nodeId) ? currentSelection : [nodeId];
+    layerDragSourceRef.current = draggedIds;
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData('text/plain', nodeId);
+      event.dataTransfer.setData('application/x-folio-layer-ids', JSON.stringify(draggedIds));
+      event.dataTransfer.setData('text/plain', draggedIds.join(','));
     }
   };
 
   const updateLayerDropTarget = (nodeId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
-    if (!layerDragSourceRef.current) return;
+    if (!layerDragSourceRef.current?.length) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
     setLayerDropTarget({ nodeId, position: getLayerDropPosition(event) });
@@ -463,10 +468,19 @@ export function App() {
 
   const dropLayer = (targetId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const sourceId = event.dataTransfer?.getData('text/plain') || layerDragSourceRef.current;
+    let draggedIds = layerDragSourceRef.current ?? [];
+    const transferred = event.dataTransfer?.getData('application/x-folio-layer-ids');
+    if (transferred) {
+      try {
+        const parsed: unknown = JSON.parse(transferred);
+        if (Array.isArray(parsed) && parsed.every((id) => typeof id === 'string')) draggedIds = parsed;
+      } catch { /* Keep the in-memory drag selection as a safe fallback. */ }
+    } else if (!draggedIds.length) {
+      draggedIds = (event.dataTransfer?.getData('text/plain') ?? '').split(',').map((id) => id.trim()).filter(Boolean);
+    }
     const position = getLayerDropPosition(event);
-    if (sourceId && sourceId !== targetId) {
-      dispatchFocused({ type: 'move-layer', nodeId: sourceId, targetId, position });
+    if (draggedIds.length > 0) {
+      dispatchFocused({ type: 'move-layers', nodeIds: draggedIds, targetId, position });
       if (position === 'inside') {
         setCollapsedLayers((current) => ({
           ...current,
@@ -936,32 +950,12 @@ export function App() {
         </div>
       </nav>
 
-      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Select layers, Ctrl/Cmd-click to toggle multiple, Ctrl/Cmd + Shift for a range, and drag to reorder or nest.', ['CTRL/CMD + CLICK', 'CTRL/CMD + SHIFT + CLICK', 'DRAG TO REORDER / NEST'])}>
+      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Select layers, Ctrl/Cmd-click to toggle multiple, Shift-click for a range, and drag selected layers to reorder or nest.', ['CTRL/CMD + CLICK', 'SHIFT + CLICK', 'DRAG TO REORDER / NEST'])}>
         <div class="panel-heading">
-          <div>
-            <span class="panel-kicker">DOCUMENT</span>
-            <h2>Layers</h2><span class="panel-context-indicator">{activeEditorId === 'component' ? 'COMPONENT CANVAS' : 'MAIN PAGE'}</span>
-          </div>
-          <button class="icon-button" title="Add rectangle" onClick={() => addNode('rect')}><Icon name="plus" /></button>
-        </div>
-        <div class="page-row">
-          <span class="page-indicator" />
-          <span>{focusedDocument.name}</span>
-          <span class="page-size">{focusedDocument.width} × {focusedDocument.height}</span>
+          <h2>Layers</h2>
         </div>
         <div class="layer-list-heading">
           <span>LAYERS · {focusedDocument.nodes.length}</span>
-          {selectedLayerNodes.length > 0 && (
-            <div class="layer-batch-actions" aria-label="Actions for selected layers">
-              <span>{selectedLayerNodes.length} selected</span>
-              <button type="button" class="layer-control" title="Show selected layers (or hide if all are visible)" aria-label="Toggle visibility for selected layers" onClick={() => batchSetLayerProperty('visible')}>
-                <Icon name={selectedLayerNodes.every((node) => node.visible) ? 'eye' : 'eyeOff'} />
-              </button>
-              <button type="button" class="layer-control" title="Lock selected layers (or unlock if all are locked)" aria-label="Toggle lock for selected layers" onClick={() => batchSetLayerProperty('locked')}>
-                <Icon name={selectedLayerNodes.every((node) => node.locked) ? 'lock' : 'unlock'} />
-              </button>
-            </div>
-          )}
         </div>
         <div class="layer-list" role="tree" aria-label="Document layers">
           {layerRows.map(({ node, depth, hasChildren }) => {
@@ -1016,7 +1010,7 @@ export function App() {
                     aria-pressed={node.visible}
                     onClick={(event) => {
                       event.stopPropagation();
-                      dispatchFocused({ type: 'replace-node', node: { ...node, visible: !node.visible } });
+                      toggleLayerPropertyFromRow(node.id, 'visible');
                     }}
                   ><Icon name={node.visible ? 'eye' : 'eyeOff'} /></button>
                   <button
@@ -1027,7 +1021,7 @@ export function App() {
                     aria-pressed={node.locked}
                     onClick={(event) => {
                       event.stopPropagation();
-                      dispatchFocused({ type: 'replace-node', node: { ...node, locked: !node.locked } });
+                      toggleLayerPropertyFromRow(node.id, 'locked');
                     }}
                   ><Icon name={node.locked ? 'lock' : 'unlock'} /></button>
                 </div>
@@ -1037,10 +1031,6 @@ export function App() {
           {focusedDocument.nodes.length === 0 && (
             <div class="empty-layers">Your layers will appear here.</div>
           )}
-        </div>
-        <div class="layers-footnote">
-          <span class="footnote-dot" />
-          <span>Document is stored locally</span>
         </div>
       </aside>
 
