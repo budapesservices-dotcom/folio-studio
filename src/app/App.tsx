@@ -1019,15 +1019,15 @@ export function App() {
       const ids = context.state.selectedNodeIds;
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
-      if (modifier && event.altKey && key === 'g') {
+      if (modifier && event.shiftKey && key === 'g') {
         if (ids.length > 0) {
           event.preventDefault();
           emit({ type: 'ungroup-layers', nodeIds: ids });
         }
         return;
       }
-      if (modifier && !event.altKey && key === 'g') {
-        if (nodes.length > 1) {
+      if (modifier && !event.shiftKey && key === 'g') {
+        if (ids.length > 1) {
           event.preventDefault();
           emit({ type: 'group-layers', nodeIds: ids });
         }

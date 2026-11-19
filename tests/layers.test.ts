@@ -213,10 +213,35 @@ describe('layer hierarchy and panel operations', () => {
     expect(ungroupLayers(grouped, group ? [group.id] : [])).toEqual(nodes);
   });
 
-  it('does not group layers from different parents or a single selected layer', () => {
-    const nodes = [layer('parent'), layer('a', 'parent'), layer('b')];
-    expect(groupLayers(nodes, ['a', 'b'])).toBe(nodes);
+  it('groups selected layers from different parents without losing their subtrees', () => {
+    const nodes = [
+      layer('parent-a'),
+      layer('a', 'parent-a'),
+      layer('a-child', 'a'),
+      layer('parent-b'),
+      layer('b', 'parent-b'),
+      layer('other'),
+    ];
+    const grouped = groupLayers(nodes, ['a', 'b']);
+    const group = grouped.find((node) => node.type === 'group');
+    expect(group).toBeDefined();
+    expect(group?.parentId).toBeUndefined();
+    expect(grouped.find((node) => node.id === 'a')?.parentId).toBe(group?.id);
+    expect(grouped.find((node) => node.id === 'b')?.parentId).toBe(group?.id);
+    expect(grouped.find((node) => node.id === 'a-child')?.parentId).toBe('a');
     expect(groupLayers(nodes, ['a'])).toBe(nodes);
+  });
+
+  it('allows a Group container to be grouped again and ungrouped one level at a time', () => {
+    const nodes = [layer('a'), layer('b'), layer('c')];
+    const firstGroup = groupLayers(nodes, ['a', 'b']);
+    const inner = firstGroup.find((node) => node.type === 'group')!;
+    const outerNodes = groupLayers(firstGroup, [inner.id, 'c']);
+    const outer = outerNodes.find((node) => node.type === 'group' && node.id !== inner.id)!;
+    expect(outer).toBeDefined();
+    expect(outerNodes.find((node) => node.id === inner.id)?.parentId).toBe(outer.id);
+    expect(ungroupLayers(outerNodes, [outer.id])).toEqual(firstGroup);
+    expect(ungroupLayers(firstGroup, [inner.id])).toEqual(nodes);
   });
 
   it('records layer nesting in project history and restores it with undo/redo', () => {

@@ -272,8 +272,23 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
   if (roots.length < 2) return nodes;
   const order = new Map(nodes.map((node, index) => [node.id, index]));
   roots.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
-  const parentId = nodeById.get(roots[0])?.parentId ?? null;
-  if (!roots.every((id) => (nodeById.get(id)?.parentId ?? null) === parentId)) return nodes;
+  // Place the new container at the nearest common ancestor of the selected
+  // roots. This allows grouping layers from different nested branches while
+  // keeping every selected subtree intact.
+  const ancestorChains = roots.map((id) => {
+    const chain: string[] = [];
+    let parentId = getParentId(nodeById.get(id)!, nodeById);
+    const visited = new Set<string>();
+    while (parentId && !visited.has(parentId)) {
+      chain.push(parentId);
+      visited.add(parentId);
+      const parent = nodeById.get(parentId);
+      parentId = parent ? getParentId(parent, nodeById) : null;
+    }
+    return chain;
+  });
+  const firstChain = ancestorChains[0] ?? [];
+  const parentId = firstChain.find((candidate) => ancestorChains.every((chain) => chain.includes(candidate))) ?? null;
   const picked = roots.map((id) => nodeById.get(id)!);
   const x = Math.min(...picked.map((node) => node.x));
   const y = Math.min(...picked.map((node) => node.y));
