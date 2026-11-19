@@ -140,6 +140,46 @@ export function App() {
   const layerRenameRef = useRef<LayerRenameSession | null>(null);
   const layerRenameInputRef = useRef<HTMLInputElement | null>(null);
   const [layerColorPickerKey, setLayerColorPickerKey] = useState<string | null>(null);
+  const layerColorAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const layerColorPaletteRef = useRef<HTMLDivElement | null>(null);
+  const [layerColorPickerPosition, setLayerColorPickerPosition] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (!layerColorPickerKey) return;
+
+    const updatePalettePosition = () => {
+      const anchor = layerColorAnchorRef.current;
+      const palette = layerColorPaletteRef.current;
+      if (!anchor || !palette) return;
+
+      const anchorRect = anchor.getBoundingClientRect();
+      const paletteRect = palette.getBoundingClientRect();
+      const margin = 8;
+      const gap = 6;
+      const left = Math.max(
+        margin,
+        Math.min(window.innerWidth - paletteRect.width - margin, anchorRect.right - paletteRect.width),
+      );
+      const belowTop = anchorRect.bottom + gap;
+      const top = belowTop + paletteRect.height <= window.innerHeight - margin
+        ? belowTop
+        : Math.max(margin, anchorRect.top - paletteRect.height - gap);
+
+      setLayerColorPickerPosition((current) => (
+        current && Math.abs(current.top - top) < 0.5 && Math.abs(current.left - left) < 0.5
+          ? current
+          : { top, left }
+      ));
+    };
+
+    updatePalettePosition();
+    window.addEventListener('resize', updatePalettePosition);
+    window.addEventListener('scroll', updatePalettePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePalettePosition);
+      window.removeEventListener('scroll', updatePalettePosition, true);
+    };
+  }, [layerColorPickerKey]);
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
   const [windowOrder, setWindowOrder] = useState<WindowId[]>(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
   const [activeWindowId, setActiveWindowId] = useState<WindowId>('main-canvas');
@@ -1166,11 +1206,40 @@ export function App() {
                     onClick={(event) => {
                       event.stopPropagation();
                       const key = `${activeEditorId}:${node.id}`;
-                      setLayerColorPickerKey((current) => current === key ? null : key);
+                      if (layerColorPickerKey === key) {
+                        setLayerColorPickerKey(null);
+                        setLayerColorPickerPosition(null);
+                        layerColorAnchorRef.current = null;
+                        return;
+                      }
+
+                      const anchor = event.currentTarget as HTMLButtonElement;
+                      layerColorAnchorRef.current = anchor;
+                      const anchorRect = anchor.getBoundingClientRect();
+                      const estimatedWidth = 170;
+                      const estimatedHeight = 160;
+                      const margin = 8;
+                      const left = Math.max(
+                        margin,
+                        Math.min(window.innerWidth - estimatedWidth - margin, anchorRect.right - estimatedWidth),
+                      );
+                      const belowTop = anchorRect.bottom + 6;
+                      const top = belowTop + estimatedHeight <= window.innerHeight - margin
+                        ? belowTop
+                        : Math.max(margin, anchorRect.top - estimatedHeight - 6);
+                      setLayerColorPickerPosition({ top, left });
+                      setLayerColorPickerKey(key);
                     }}
                   />
                   {layerColorPickerKey === `${activeEditorId}:${node.id}` && (
-                    <div class="layer-color-palette" role="group" aria-label={`Color tags for ${node.name}`} onClick={(event) => event.stopPropagation()}>
+                    <div
+                      ref={layerColorPaletteRef}
+                      class="layer-color-palette"
+                      style={layerColorPickerPosition ? { top: `${layerColorPickerPosition.top}px`, left: `${layerColorPickerPosition.left}px` } : undefined}
+                      role="group"
+                      aria-label={`Color tags for ${node.name}`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
                       <span>Layer color</span>
                       <div class="layer-color-swatches">
                         {LAYER_COLOR_PRESETS.map((color) => (
