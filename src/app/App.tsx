@@ -60,6 +60,13 @@ const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
   shortcuts: ['SPACE + DRAG', 'SHIFT + CLICK'],
 };
 
+function parseNumericInput(value: string): number | null {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 type CanvasViewState = { zoom: number; pan: { x: number; y: number } };
 function readCanvasViewState(key: string): CanvasViewState {
   try {
@@ -1085,9 +1092,20 @@ export function App() {
       )}
 
       <aside class={`inspector-panel ${inspectorVisible ? "" : "is-hidden"}`} onFocusOut={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) { dispatch({ type: 'commit-edit' }); componentDispatch({ type: 'commit-edit' }); }
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          dispatch({ type: 'commit-edit' });
+          componentDispatch({ type: 'commit-edit' });
+        }
       }} onKeyDown={(event) => {
-        if (event.key === 'Enter' && (event.target as HTMLElement).matches('input')) { dispatch({ type: 'commit-edit' }); componentDispatch({ type: 'commit-edit' }); }
+        const target = event.target as HTMLElement;
+        if (event.key === 'Enter' && target.matches('input:not([type="checkbox"])')) {
+          // Enter confirms a single-line Inspector field. Blurring also runs
+          // the same commit path used when the user clicks outside the panel.
+          event.preventDefault();
+          target.blur();
+          dispatch({ type: 'commit-edit' });
+          componentDispatch({ type: 'commit-edit' });
+        }
       }} onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
         <div class="panel-heading inspector-heading">
           <div>
@@ -1105,19 +1123,19 @@ export function App() {
               <input
                 class="text-field"
                 value={selectedNode.name}
-                onChange={(event) => updateSelected({ name: event.currentTarget.value })}
+                onInput={(event) => updateSelected({ name: event.currentTarget.value })}
               />
             </section>
 
             <section class="property-section">
               <div class="section-title">Position</div>
               <div class="field-grid">
-                <label class="field-label">X<input class="number-field" type="number" value={Math.round(selectedNode.x)} onChange={(event) => updateSelected({ x: Number(event.currentTarget.value) || 0 })} /></label>
-                <label class="field-label">Y<input class="number-field" type="number" value={Math.round(selectedNode.y)} onChange={(event) => updateSelected({ y: Number(event.currentTarget.value) || 0 })} /></label>
-                <label class="field-label">W<input class="number-field" type="number" min="1" value={Math.round(selectedNode.width)} onChange={(event) => updateSelected({ width: normalizePositiveDimension(event.currentTarget.valueAsNumber, selectedNode.width) })} /></label>
-                <label class="field-label">H<input class="number-field" type="number" min="1" value={Math.round(selectedNode.height)} onChange={(event) => updateSelected({ height: normalizePositiveDimension(event.currentTarget.valueAsNumber, selectedNode.height) })} /></label>
+                <label class="field-label">X<input class="number-field" type="number" value={Math.round(selectedNode.x)} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelected({ x: value }); }} /></label>
+                <label class="field-label">Y<input class="number-field" type="number" value={Math.round(selectedNode.y)} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelected({ y: value }); }} /></label>
+                <label class="field-label">W<input class="number-field" type="number" min="1" value={Math.round(selectedNode.width)} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelected({ width: normalizePositiveDimension(value, selectedNode.width) }); }} /></label>
+                <label class="field-label">H<input class="number-field" type="number" min="1" value={Math.round(selectedNode.height)} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelected({ height: normalizePositiveDimension(value, selectedNode.height) }); }} /></label>
               </div>
-              <label class="field-label rotation-field">Rotation<input class="number-field" type="number" value={selectedNode.rotation} onChange={(event) => updateSelected({ rotation: Number(event.currentTarget.value) || 0 })} /></label>
+              <label class="field-label rotation-field">Rotation<input class="number-field" type="number" value={selectedNode.rotation} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelected({ rotation: value }); }} /></label>
             </section>
 
             <section class="property-section">
@@ -1134,7 +1152,7 @@ export function App() {
                         <div class="color-field-wrap">
                           <input class="color-swatch" type="color"
                             value={value.startsWith('#') && value.length === 7 ? value : '#8B7CF6'}
-                            onChange={(event) => updateInstanceOverride(target.id, { fill: event.currentTarget.value })} />
+                            onInput={(event) => updateInstanceOverride(target.id, { fill: event.currentTarget.value })} />
                           <span class="color-value">{value.toUpperCase()}</span>
                         </div>
                       </>
@@ -1147,7 +1165,7 @@ export function App() {
                         <label class="field-label text-content-label">Instance text override</label>
                         <textarea class="text-area-field" rows={3}
                           value={selectedNode.overrides[target.id]?.text ?? target.text}
-                          onChange={(event) => updateInstanceOverride(target.id, { text: event.currentTarget.value })} />
+                          onInput={(event) => updateInstanceOverride(target.id, { text: event.currentTarget.value })} />
                       </>
                     );
                   })()}
@@ -1165,22 +1183,22 @@ export function App() {
                       class="color-swatch"
                       type="color"
                       value={selectedNode.style.fill.startsWith('#') && selectedNode.style.fill.length === 7 ? selectedNode.style.fill : '#8B7CF6'}
-                      onChange={(event) => updateSelectedStyle({ fill: event.currentTarget.value })}
+                      onInput={(event) => updateSelectedStyle({ fill: event.currentTarget.value })}
                     />
                     <span class="color-value">{selectedNode.style.fill.toUpperCase()}</span>
                   </div>
                   {selectedNode.type === 'rect' && (
                     <label class="field-label range-label">Corner radius
-                      <input class="number-field" type="number" min="0" value={selectedNode.style.radius ?? 0} onChange={(event) => updateSelectedStyle({ radius: Math.max(0, Number(event.currentTarget.value) || 0) })} />
+                      <input class="number-field" type="number" min="0" value={selectedNode.style.radius ?? 0} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelectedStyle({ radius: Math.max(0, value) }); }} />
                     </label>
                   )}
                   {selectedNode.type === 'text' && (
                     <>
                       <label class="field-label text-content-label">Text content</label>
-                      <textarea class="text-area-field" rows={3} value={selectedNode.text} onChange={(event) => updateSelected({ text: event.currentTarget.value })} />
+                      <textarea class="text-area-field" rows={3} value={selectedNode.text} onInput={(event) => updateSelected({ text: event.currentTarget.value })} />
                       <div class="field-grid single-row">
-                        <label class="field-label">Font size<input class="number-field" type="number" min="1" value={selectedNode.style.fontSize} onChange={(event) => updateSelectedStyle({ fontSize: Math.max(1, Number(event.currentTarget.value) || 1) })} /></label>
-                        <label class="field-label">Weight<input class="number-field" type="number" min="100" max="900" step="100" value={selectedNode.style.fontWeight} onChange={(event) => updateSelectedStyle({ fontWeight: Math.min(900, Math.max(100, Number(event.currentTarget.value) || 400)) })} /></label>
+                        <label class="field-label">Font size<input class="number-field" type="number" min="1" value={selectedNode.style.fontSize} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelectedStyle({ fontSize: Math.max(1, value) }); }} /></label>
+                        <label class="field-label">Weight<input class="number-field" type="number" min="100" max="900" step="100" value={selectedNode.style.fontWeight} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelectedStyle({ fontWeight: Math.min(900, Math.max(100, value)) }); }} /></label>
                       </div>
                     </>
                   )}
