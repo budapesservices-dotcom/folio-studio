@@ -3,6 +3,7 @@ import { createRectNode, createInitialProject } from '../src/core/document/facto
 import {
   expandSelectedLayerIds,
   expandSelectedLayers,
+  getCanvasClickSelectionIds,
   getLayerAncestorIds,
   getEffectiveLayerStates,
   getLayerPanelRows,
@@ -134,6 +135,25 @@ describe('layer hierarchy and panel operations', () => {
     const nodes = [layer('parent'), layer('child-a', 'parent'), layer('leaf', 'child-a'), layer('child-b', 'parent')];
     expect(expandSelectedLayerIds(nodes, ['child-b'])).toEqual(['child-b']);
     expect(expandSelectedLayerIds(nodes, ['child-a'])).toEqual(['child-a', 'leaf']);
+  });
+
+  it('selects a parent hierarchy but selects a nested canvas layer as one object', () => {
+    const nodes = [
+      layer('parent'),
+      layer('child-a', 'parent'),
+      layer('leaf', 'child-a'),
+      layer('child-b', 'parent'),
+      layer('other'),
+    ];
+
+    expect(getCanvasClickSelectionIds(nodes, 'parent')).toEqual(['parent', 'child-a', 'leaf', 'child-b']);
+    expect(getCanvasClickSelectionIds(nodes, 'child-a')).toEqual(['child-a']);
+    expect(getCanvasClickSelectionIds(nodes, 'leaf')).toEqual(['leaf']);
+  });
+
+  it('lets Shift-click select an exact top-level parent without its children', () => {
+    const nodes = [layer('parent'), layer('child', 'parent')];
+    expect(getCanvasClickSelectionIds(nodes, 'parent', true)).toEqual(['parent']);
   });
 
   it('returns a cycle-safe ancestor chain for deselecting a nested layer', () => {

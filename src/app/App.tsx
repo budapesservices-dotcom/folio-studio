@@ -65,8 +65,8 @@ type ToolbarHint = {
 
 const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
   panel: 'WORKSPACE',
-  description: 'Shift-click a nested object on the canvas to select that layer alone; Ctrl/Cmd-click toggles layer groups.',
-  shortcuts: ['SHIFT + CLICK: SUB-LAYER', 'CTRL/CMD + CLICK: GROUP'],
+  description: 'Click a parent to select its full hierarchy; click a nested layer to select only that object.',
+  shortcuts: ['SHIFT + CLICK: EXACT LAYER', 'CTRL/CMD + CLICK: GROUP TOGGLE'],
 };
 
 function parseNumericInput(value: string): number | null {

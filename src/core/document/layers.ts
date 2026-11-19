@@ -156,6 +156,21 @@ export function expandSelectedLayerIds(nodes: readonly DesignNode[], selectedIds
   return nodes.filter((node) => included.has(node.id)).map((node) => node.id);
 }
 
+/**
+ * Canvas click behavior: top-level parents select their full hierarchy,
+ * while clicking any nested layer selects only that exact layer.
+ * Shift-click can force exact selection even for a top-level parent.
+ */
+export function getCanvasClickSelectionIds(
+  nodes: readonly DesignNode[],
+  nodeId: string,
+  exactLayer = false,
+): string[] {
+  if (!nodes.some((node) => node.id === nodeId)) return [];
+  if (exactLayer || getLayerAncestorIds(nodes, nodeId).size > 0) return [nodeId];
+  return expandSelectedLayerIds(nodes, [nodeId]);
+}
+
 /** Selecting a parent layer also transforms its descendants as one visual hierarchy. */
 export function expandSelectedLayers(nodes: readonly DesignNode[], selectedIds: readonly string[]): DesignNode[] {
   const included = new Set(expandSelectedLayerIds(nodes, selectedIds));

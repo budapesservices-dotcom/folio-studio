@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from '../../core/document/types';
 import { resolveComponentInstanceNodes } from '../../core/document/components';
-import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
+import { expandSelectedLayerIds, getCanvasClickSelectionIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
 import {
   getBounds,
   resizeNodes,
@@ -394,7 +394,7 @@ export function Canvas({
     const hitState = hitNode ? layerStates.get(hitNode.id) : undefined;
     if (!hitNode || !hitState?.visible || hitState.locked) return;
 
-    const groupIds = expandSelectedLayerIds(displayedNodes, [nodeId]);
+    const groupIds = getCanvasClickSelectionIds(displayedNodes, nodeId, event.shiftKey);
     const groupAlreadySelected = groupIds.every((id) => selectedNodeIds.includes(id));
     const modifier = event.ctrlKey || event.metaKey;
     let nextIds: string[];
@@ -409,7 +409,9 @@ export function Canvas({
     } else if (modifier) {
       nextIds = [...new Set([...selectedNodeIds, ...groupIds])];
     } else {
-      nextIds = groupAlreadySelected ? selectedNodeIds : groupIds;
+      // A plain click always establishes the clicked layer's intended scope.
+      // This lets a child break away from an already-selected parent group.
+      nextIds = groupIds;
     }
 
     onSelectionChange(nextIds);
@@ -585,7 +587,7 @@ export function Canvas({
           class="artboard"
           viewBox={'0 0 ' + document.width + ' ' + document.height}
           role="application"
-          aria-label="Folio design artboard. Click a parent to select its group; Shift-click a nested layer to select it alone; Ctrl or Command-click toggles a group. Shift-drag adds to marquee selection and Ctrl or Command-drag subtracts."
+          aria-label="Folio design artboard. Click a parent to select its whole hierarchy; click a nested layer to select only that layer. Shift-click selects the exact layer; Ctrl or Command-click toggles a group. Shift-drag adds to marquee selection and Ctrl or Command-drag subtracts."
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={finishPointer}
