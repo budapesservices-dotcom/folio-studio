@@ -5,6 +5,7 @@ Before each task, read:
 - `docs/FOLIO_ARCHITECTURE_BLUEPRINT.md` for product vision and target architecture.
 - `docs/ARCHITECTURE.md` for the current implementation.
 - `docs/ACCEPTANCE_TESTS.md` for the current acceptance expectations.
+- `docs/specs/NATIVE_AST_V1.md` for AST, document, layer, component, and identity tasks.
 
 Treat these as mandatory project context, not optional background reading.
 
