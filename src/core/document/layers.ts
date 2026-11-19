@@ -429,7 +429,18 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
   const group: DesignNode = { id: groupId, type: 'group', name: 'Group', x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y), rotation: 0, opacity: 1, visible: true, locked: false, onCanvas: picked.some((node) => node.onCanvas !== false), isCanvasInstance: picked.every((node) => node.isCanvasInstance === true), ...(parentId ? { parentId } : {}) };
   const rootSet = new Set(roots);
   const firstIndex = Math.min(...roots.map((id) => order.get(id) ?? nodes.length));
-  const next = nodes.map((node) => rootSet.has(node.id) ? { ...node, parentId: groupId } : node);
+  const next = nodes.map((node) => {
+    if (rootSet.has(node.id)) return { ...node, parentId: groupId };
+
+    // A layer clipped to one of the newly grouped roots must clip to the
+    // resulting Group as a whole. Otherwise its mask would keep referencing
+    // the original child layer and ignore the other grouped artwork.
+    const isExternalClippedLayer = !memberIds.has(node.id)
+      && node.clipMaskBaseId !== undefined
+      && rootSet.has(node.clipMaskBaseId)
+      && getParentId(node, nodeById) === parentId;
+    return isExternalClippedLayer ? { ...node, clipMaskBaseId: groupId } : node;
+  });
   next.splice(firstIndex, 0, group);
   return next;
 }

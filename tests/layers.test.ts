@@ -366,6 +366,24 @@ describe('layer hierarchy and panel operations', () => {
     expect(ungroupLayers(grouped, group ? [group.id] : [])).toEqual(nodes);
   });
 
+  it('rebinds external clipping layers to the new Group when their base is grouped with another layer', () => {
+    const nodes = [
+      layer('base'),
+      layer('group-companion'),
+      layer('clipped-content', undefined, { clipMaskBaseId: 'base' }),
+    ];
+
+    const grouped = groupLayers(nodes, ['base', 'group-companion']);
+    const group = grouped.find((node) => node.type === 'group' && !nodes.some((old) => old.id === node.id));
+
+    expect(group).toBeDefined();
+    expect(grouped.find((node) => node.id === 'base')?.parentId).toBe(group?.id);
+    expect(grouped.find((node) => node.id === 'group-companion')?.parentId).toBe(group?.id);
+    expect(grouped.find((node) => node.id === 'clipped-content')?.clipMaskBaseId).toBe(group?.id);
+    expect(getLayerClipMaskBaseIds(grouped, 'clipped-content')).toEqual([group?.id]);
+    expect([...getLayerDescendantIds(grouped, group!.id)]).toEqual(expect.arrayContaining(['base', 'group-companion']));
+  });
+
   it('wraps a single parent hierarchy in a Group and ungroups it without losing children', () => {
     const nodes = [
       layer('parent', undefined, { x: 100, y: 100, width: 100, height: 80 }),
