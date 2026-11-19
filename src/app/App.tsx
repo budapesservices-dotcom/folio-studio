@@ -172,10 +172,38 @@ export function App() {
       ));
     };
 
+    const closePalette = () => {
+      setLayerColorPickerKey(null);
+      setLayerColorPickerPosition(null);
+      layerColorAnchorRef.current = null;
+    };
+
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (layerColorPaletteRef.current?.contains(target)) return;
+      if (layerColorAnchorRef.current?.contains(target)) return;
+      // Like committing a layer rename with Enter: keep the applied color and dismiss.
+      closePalette();
+    };
+
+    const handlePaletteKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' && event.key !== 'Escape') return;
+      if (event.target instanceof Node && layerColorPaletteRef.current?.contains(event.target)) {
+        if (event.key === 'Enter' && event.target instanceof HTMLButtonElement) return;
+        event.preventDefault();
+        closePalette();
+      }
+    };
+
     updatePalettePosition();
+    document.addEventListener('pointerdown', handleOutsidePointerDown, true);
+    document.addEventListener('keydown', handlePaletteKeyDown, true);
     window.addEventListener('resize', updatePalettePosition);
     window.addEventListener('scroll', updatePalettePosition, true);
     return () => {
+      document.removeEventListener('pointerdown', handleOutsidePointerDown, true);
+      document.removeEventListener('keydown', handlePaletteKeyDown, true);
       window.removeEventListener('resize', updatePalettePosition);
       window.removeEventListener('scroll', updatePalettePosition, true);
     };
