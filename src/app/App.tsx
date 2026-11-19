@@ -135,6 +135,7 @@ export function App() {
   const [inspectorVisible, setInspectorVisible] = useState(true);
   const [collapsedLayers, setCollapsedLayers] = useState<Record<EditorTarget, string[]>>({ main: [], component: [] });
   const [layerDropTarget, setLayerDropTarget] = useState<{ nodeId: string; position: LayerDropPosition } | null>(null);
+  const [layerContextMenu, setLayerContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
   const layerDragSourceRef = useRef<string[] | null>(null);
   const layerDragEditorRef = useRef<EditorTarget | null>(null);
   const selectionSourceRef = useRef<'layers' | 'canvas'>('canvas');
@@ -1281,6 +1282,13 @@ export function App() {
                 class={'layer-row ' + (selected ? 'selected ' : '') + (!effective?.visible ? 'layer-hidden ' : '') + (effective?.locked ? 'layer-inherited-locked ' : '') + (node.clipMaskBaseId ? 'layer-row-clipped ' : '') + (isMaskBase ? 'layer-row-mask-base ' : '') + dropClass}
                 style={{ paddingLeft: (8 + depth * 15 + (node.clipMaskBaseId ? 14 : 0)) + 'px' }}
                 onClick={(event) => selectLayerFromPanel(node.id, event)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  selectionSourceRef.current = 'layers';
+                  if (!focusedEditor.state.selectedNodeIds.includes(node.id)) dispatchFocused({ type: 'select-node', nodeId: node.id });
+                  setLayerContextMenu({ nodeId: node.id, x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 90) });
+                }}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
@@ -1440,6 +1448,19 @@ export function App() {
             <div class="empty-layers">Your layers will appear here.</div>
           )}
         </div>
+        {layerContextMenu && (
+          <>
+            <button type="button" aria-label="Close layer context menu" class="layer-context-backdrop" onClick={() => setLayerContextMenu(null)} />
+            <div class="layer-context-menu" role="menu" style={{ position: 'fixed', left: layerContextMenu.x + 'px', top: layerContextMenu.y + 'px' }}>
+              <button type="button" role="menuitem" class="layer-context-menu-danger" onClick={() => {
+                const nodeId = layerContextMenu.nodeId;
+                setLayerContextMenu(null);
+                selectionSourceRef.current = 'layers';
+                dispatchFocused({ type: 'delete-node', nodeId });
+              }}><Icon name="trash" /> Delete</button>
+            </div>
+          </>
+        )}
       </aside>
 
       {!canvasClosed && !canvasMinimized && !(componentCanvasOpen && !componentCanvasFloating && !canvasFloating) && !(nodeLogicOpen && !nodeLogicFloating && !canvasFloating) && <FloatingWindow
@@ -1681,10 +1702,7 @@ export function App() {
             <span class="panel-kicker">PROPERTIES</span>
             <h2>Inspector</h2><span class="panel-context-indicator">{activeEditorId === 'component' ? 'COMPONENT CANVAS' : 'MAIN PAGE'}</span>
           </div>
-          {selectedNode && <button class="icon-button danger" title={selectionSourceRef.current === 'layers' ? "Delete from Layers and Canvas" : "Remove from Canvas only"} onClick={() => {
-            if (selectionSourceRef.current === 'layers') dispatchFocused({ type: 'delete-node', nodeId: selectedNode.id });
-            else dispatchFocused({ type: 'set-nodes-canvas-state', nodeIds: [selectedNode.id], onCanvas: false });
-          }}><Icon name="trash" /></button>}
+          {selectedNode && selectionSourceRef.current !== 'layers' && <button class="icon-button danger" title="Remove from Canvas only" onClick={() => dispatchFocused({ type: 'set-nodes-canvas-state', nodeIds: [selectedNode.id], onCanvas: false })}><Icon name="trash" /></button>}
         </div>
 
         {selectedNode ? (
