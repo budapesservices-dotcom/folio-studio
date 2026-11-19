@@ -138,6 +138,7 @@ export function App() {
   const layerSelectionAnchorRef = useRef<Record<EditorTarget, string | null>>({ main: null, component: null });
   const [layerRename, setLayerRename] = useState<LayerRenameSession | null>(null);
   const layerRenameRef = useRef<LayerRenameSession | null>(null);
+  const layerRenameInputRef = useRef<HTMLInputElement | null>(null);
   const [layerColorPickerKey, setLayerColorPickerKey] = useState<string | null>(null);
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
   const [windowOrder, setWindowOrder] = useState<WindowId[]>(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
@@ -469,6 +470,33 @@ export function App() {
     const targetDispatch = session.editorId === 'main' ? dispatch : componentDispatch;
     targetDispatch({ type: 'rename-nodes', updates });
   };
+
+  useEffect(() => {
+    if (!layerRename) return;
+
+    // autoFocus is unreliable when a conditional input is mounted in a keyed tree.
+    // Focus only after Preact has committed the input to the DOM.
+    const input = layerRenameInputRef.current;
+    if (input) {
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(0, input.value.length);
+    }
+
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const activeInput = layerRenameInputRef.current;
+      if (!activeInput) {
+        finishLayerRename(true);
+        return;
+      }
+      if (event.target instanceof Node && activeInput.contains(event.target)) return;
+      // Capture-phase pointerdown closes the editor before another layer/action
+      // receives its click, including clicks on empty workspace areas.
+      finishLayerRename(true);
+    };
+
+    document.addEventListener('pointerdown', handleOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handleOutsidePointerDown, true);
+  }, [layerRename?.anchorId]);
 
   const setLayerColorFromRow = (nodeId: string, color: string) => {
     const selectedIds = focusedEditor.state.selectedNodeIds;
@@ -1103,10 +1131,10 @@ export function App() {
                 <LayerIcon type={node.type} />
                 {layerRename?.anchorId === node.id ? (
                   <input
+                    ref={layerRenameInputRef}
                     class="layer-name-editor"
                     type="text"
                     value={layerRename.value}
-                    autoFocus
                     aria-label={layerRename.batch ? `Rename ${layerRename.nodeIds.length} selected layers` : `Rename ${node.name}`}
                     title={layerRename.batch ? `Batch rename ${layerRename.nodeIds.length} layers (numbered)` : 'Rename layer'}
                     onClick={(event) => event.stopPropagation()}
