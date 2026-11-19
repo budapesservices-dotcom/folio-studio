@@ -121,7 +121,7 @@ export function expandSelectedLayers(nodes: readonly DesignNode[], selectedIds: 
 
 /** Moves a complete layer subtree while keeping the document array in paint order. */
 export function moveLayer(
-  nodes: readonly DesignNode[],
+  nodes: DesignNode[],
   nodeId: string,
   targetId: string,
   position: LayerDropPosition,
@@ -163,7 +163,7 @@ export function moveLayer(
 
 /** Deleting a parent promotes surviving children to the nearest surviving ancestor. */
 export function removeLayersAndPromoteChildren(
-  nodes: readonly DesignNode[],
+  nodes: DesignNode[],
   removedIds: Iterable<string>,
 ): DesignNode[] {
   const removed = new Set(removedIds);
