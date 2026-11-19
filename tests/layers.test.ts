@@ -5,6 +5,7 @@ import {
   expandSelectedLayers,
   getCanvasClickSelectionIds,
   getLayerAncestorIds,
+  getLayerDescendantIds,
   getEffectiveLayerStates,
   getLayerPanelRows,
   getLayerRenderOrder,
