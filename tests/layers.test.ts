@@ -8,6 +8,7 @@ import {
   getEffectiveLayerStates,
   getLayerPanelRows,
   getLayerRenderOrder,
+  placeLayersOnCanvas,
   moveLayer,
   moveLayers,
   removeLayersAndPromoteChildren,
@@ -164,6 +165,58 @@ describe('layer hierarchy and panel operations', () => {
   it('returns a cycle-safe ancestor chain for deselecting a nested layer', () => {
     const nodes = [layer('parent'), layer('child', 'parent'), layer('leaf', 'child')];
     expect([...getLayerAncestorIds(nodes, 'leaf')]).toEqual(['child', 'parent']);
+  });
+
+  it('removes a layer from Canvas without deleting its Layers entry', () => {
+    const project = createInitialProject();
+    const document = getActiveDocument(project);
+    const original = { ...document.nodes[0], id: 'canvas-only-remove' };
+    const prepared = {
+      ...project,
+      pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [original] } })),
+    };
+    const initial = createEditorState(prepared);
+    const removedFromCanvas = editorReducer(initial, {
+      type: 'set-nodes-canvas-state',
+      nodeIds: [original.id],
+      onCanvas: false,
+    });
+    const remaining = getActiveDocument(removedFromCanvas.project).nodes;
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].id).toBe(original.id);
+    expect(remaining[0].onCanvas).toBe(false);
+    const deletedFromLayers = editorReducer(removedFromCanvas, { type: 'delete-nodes', nodeIds: [original.id] });
+    expect(getActiveDocument(deletedFromLayers.project).nodes).toHaveLength(0);
+  });
+
+  it('places an individual existing layer on Canvas without cloning it', () => {
+    const nodes = [
+      layer('parent', undefined, { onCanvas: false }),
+      layer('child', 'parent', { onCanvas: false }),
+      layer('other', undefined, { onCanvas: false }),
+    ];
+    const placed = placeLayersOnCanvas(nodes, ['child'], { x: 250, y: 180 });
+    expect(placed).toHaveLength(nodes.length);
+    expect(placed.find((node) => node.id === 'child')).toMatchObject({ onCanvas: true, x: 250, y: 180 });
+    expect(placed.find((node) => node.id === 'parent')).toMatchObject({ onCanvas: false });
+    expect(placed.find((node) => node.id === 'other')).toMatchObject({ onCanvas: false });
+  });
+
+  it('places a Group and its descendants as one existing block on Canvas', () => {
+    const nodes = [
+      layer('group', undefined, { type: 'group', x: 10, y: 20, width: 120, height: 90, onCanvas: false }),
+      layer('child-a', 'group', { x: 30, y: 40, onCanvas: false }),
+      layer('child-b', 'group', { x: 50, y: 60, onCanvas: false }),
+      layer('other', undefined, { onCanvas: false }),
+    ];
+    const groupIds = expandSelectedLayerIds(nodes, ['group']);
+    const placed = placeLayersOnCanvas(nodes, groupIds, { x: 220, y: 160 });
+    expect(placed).toHaveLength(nodes.length);
+    expect(groupIds).toEqual(['group', 'child-a', 'child-b']);
+    expect(placed.filter((node) => groupIds.includes(node.id)).every((node) => node.onCanvas === true)).toBe(true);
+    expect(placed.find((node) => node.id === 'group')?.x).toBe(220);
+    expect(placed.find((node) => node.id === 'group')?.y).toBe(160);
+    expect(placed.find((node) => node.id === 'other')?.onCanvas).toBe(false);
   });
 
   it('promotes surviving children when a parent layer is deleted', () => {

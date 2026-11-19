@@ -13,7 +13,7 @@ export function createComponentInstance(
   return {
     id, type: 'component-instance', componentId: component.id, name: component.name,
     x, y, width: Math.max(1, component.document.width), height: Math.max(1, component.document.height),
-    rotation: 0, opacity: 1, visible: true, locked: false, overrides: {},
+    rotation: 0, opacity: 1, visible: true, locked: false, onCanvas: true, overrides: {},
   };
 }
 
@@ -89,6 +89,7 @@ export function detachComponentInstance(instance: ComponentInstanceNode, compone
       opacity: sourceNode.opacity * instance.opacity,
       visible: sourceNode.visible && instance.visible,
       locked: sourceNode.locked || instance.locked,
+      onCanvas: instance.onCanvas !== false && sourceNode.onCanvas !== false,
     } as DesignNode;
   });
 }

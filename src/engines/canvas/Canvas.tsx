@@ -23,6 +23,7 @@ interface CanvasProps {
   onZoomChange: (zoom: number) => void;
   onSelectionChange: (nodeIds: string[]) => void;
   onTransformCommit: (nodes: DesignNode[]) => void;
+  onLayerDrop: (nodeIds: string[], point: { x: number; y: number }) => void;
 }
 
 interface DragSession {
@@ -118,7 +119,7 @@ function NodeArtwork({ node, components = [], locked = node.locked }: { node: De
       <g data-node-id={node.id} transform={transform} opacity={node.opacity} class="canvas-node component-instance-artwork">
         {component ? (
           <g transform={'translate(' + node.x + ' ' + node.y + ') scale(' + scaleX + ' ' + scaleY + ')'}>
-            {getLayerRenderOrder(resolvedChildren).filter((child) => childStates.get(child.id)?.visible).map((effective) => {
+            {getLayerRenderOrder(resolvedChildren).filter((child) => child.onCanvas !== false && childStates.get(child.id)?.visible).map((effective) => {
               const childState = childStates.get(effective.id);
               return effective.type === 'component-instance'
                 ? null
@@ -190,6 +191,7 @@ export function Canvas({
   onZoomChange,
   onSelectionChange,
   onTransformCommit,
+  onLayerDrop,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<DragSession | null>(null);
@@ -242,12 +244,13 @@ export function Canvas({
   const displayedNodes = previewNodes
     ? document.nodes.map((node) => previewNodes.find((preview) => preview.id === node.id) ?? node)
     : document.nodes;
+  const canvasNodes = displayedNodes.filter((node) => node.onCanvas !== false);
 
-  // Locked layers may remain selected in the Layers panel, but they never
-  // participate in canvas group transforms or resize bounds.
-  const layerStates = getEffectiveLayerStates(displayedNodes);
+  // Locked layers may remain selected in the Layers panel, but only placed
+  // nodes participate in Canvas selection, transforms and resize bounds.
+  const layerStates = getEffectiveLayerStates(canvasNodes);
   const selectedSet = new Set(selectedNodeIds);
-  const selectedNodes = displayedNodes.filter((node) => selectedSet.has(node.id)).filter((node) => {
+  const selectedNodes = canvasNodes.filter((node) => selectedSet.has(node.id)).filter((node) => {
     const effective = layerStates.get(node.id);
     return effective?.visible && !effective.locked;
   });
@@ -351,6 +354,27 @@ export function Canvas({
     event.preventDefault();
   };
 
+  const handleLayerDragOver = (event: JSX.TargetedDragEvent<HTMLDivElement>) => {
+    const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : [];
+    if (!types.includes('application/x-folio-layer-ids')) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleLayerDrop = (event: JSX.TargetedDragEvent<HTMLDivElement>) => {
+    const payload = event.dataTransfer?.getData('application/x-folio-layer-ids');
+    if (!payload) return;
+    event.preventDefault();
+    try {
+      const parsed: unknown = JSON.parse(payload);
+      if (!Array.isArray(parsed) || !parsed.every((id) => typeof id === 'string')) return;
+      if (!svgRef.current) return;
+      onLayerDrop(parsed, toCanvasPoint(svgRef.current, event.clientX, event.clientY));
+    } catch {
+      // Ignore malformed drag payloads instead of creating or moving arbitrary nodes.
+    }
+  };
+
   const handlePointerDown = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
     if (event.button !== 0 || spaceHeld) return;
     const svg = event.currentTarget;
@@ -393,11 +417,11 @@ export function Canvas({
       return;
     }
 
-    const hitNode = displayedNodes.find((node) => node.id === nodeId);
+    const hitNode = canvasNodes.find((node) => node.id === nodeId);
     const hitState = hitNode ? layerStates.get(hitNode.id) : undefined;
     if (!hitNode || !hitState?.visible || hitState.locked) return;
 
-    const groupIds = getCanvasClickSelectionIds(displayedNodes, nodeId, event.shiftKey);
+    const groupIds = getCanvasClickSelectionIds(canvasNodes, nodeId, event.shiftKey);
     const groupAlreadySelected = groupIds.every((id) => selectedNodeIds.includes(id));
     const modifier = event.ctrlKey || event.metaKey;
     let nextIds: string[];
@@ -407,7 +431,7 @@ export function Canvas({
       nextIds = [nodeId];
     } else if (modifier && groupAlreadySelected) {
       // If a selected child is toggled off, clear its selected ancestors too.
-      const removed = new Set([...groupIds, ...getLayerAncestorIds(displayedNodes, nodeId)]);
+      const removed = new Set([...groupIds, ...getLayerAncestorIds(canvasNodes, nodeId)]);
       nextIds = selectedNodeIds.filter((id) => !removed.has(id));
     } else if (modifier) {
       nextIds = [...new Set([...selectedNodeIds, ...groupIds])];
@@ -421,7 +445,7 @@ export function Canvas({
     if (modifier && groupAlreadySelected) return;
 
     const movingSet = new Set(nextIds);
-    const movingNodes = displayedNodes.filter((node) => movingSet.has(node.id)).filter((node) => {
+    const movingNodes = canvasNodes.filter((node) => movingSet.has(node.id)).filter((node) => {
       const effective = layerStates.get(node.id);
       return effective?.visible && !effective.locked;
     });
@@ -462,7 +486,7 @@ export function Canvas({
     if (session.mode === 'move') {
       const scale = document.width / Math.max(1, event.currentTarget.clientWidth);
       const tolerance = 8 * scale;
-      const otherNodes = displayedNodes.filter(
+      const otherNodes = canvasNodes.filter(
         (node) => layerStates.get(node.id)?.visible && !session.ids.includes(node.id),
       );
       const snapped = snapTranslation(
@@ -497,7 +521,7 @@ export function Canvas({
         height: Math.abs(point.y - marquee.start.y),
       };
       const dragged = rect.width > 1 || rect.height > 1;
-      const hits = dragged ? displayedNodes.filter((node) => {
+      const hits = dragged ? canvasNodes.filter((node) => {
         const effective = layerStates.get(node.id);
         if (!effective?.visible || effective.locked) return false;
         const left = node.x;
@@ -507,11 +531,11 @@ export function Canvas({
         return left <= rect.x + rect.width && right >= rect.x &&
           top <= rect.y + rect.height && bottom >= rect.y;
       }).map((node) => node.id) : [];
-      const expandedHits = expandSelectedLayerIds(displayedNodes, hits);
+      const expandedHits = expandSelectedLayerIds(canvasNodes, hits);
       let nextIds: string[];
       if (marquee.subtractive) {
         const removed = new Set(expandedHits);
-        hits.forEach((id) => getLayerAncestorIds(displayedNodes, id).forEach((ancestorId) => removed.add(ancestorId)));
+        hits.forEach((id) => getLayerAncestorIds(canvasNodes, id).forEach((ancestorId) => removed.add(ancestorId)));
         nextIds = marquee.initialIds.filter((id) => !removed.has(id));
       } else if (marquee.additive) {
         nextIds = [...new Set([...marquee.initialIds, ...expandedHits])];
@@ -567,6 +591,8 @@ export function Canvas({
         (isPanning ? ' canvas-panning' : '')
       }
       onWheel={handleWheel}
+      onDragOver={handleLayerDragOver}
+      onDrop={handleLayerDrop}
       onPointerDown={handlePanPointerDown}
       onPointerMove={handlePanPointerMove}
       onPointerUp={finishPan}
@@ -597,7 +623,7 @@ export function Canvas({
           onPointerCancel={cancelPointer}
         >
           <rect x="0" y="0" width={document.width} height={document.height} fill={document.background} />
-          {getLayerRenderOrder(displayedNodes).filter((node) => layerStates.get(node.id)?.visible).map((node) => (
+          {getLayerRenderOrder(canvasNodes).filter((node) => layerStates.get(node.id)?.visible).map((node) => (
             <NodeArtwork key={node.id} node={node} components={components} locked={Boolean(layerStates.get(node.id)?.locked)} />
           ))}
           {marqueeRect && (

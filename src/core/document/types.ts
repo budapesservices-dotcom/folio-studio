@@ -22,6 +22,8 @@ export interface NodeBase {
   layerColor?: string;
   /** Optional parent layer ID. Missing/null means top-level for backward compatibility. */
   parentId?: string | null;
+  /** Whether this source layer is currently placed on the Canvas. Missing means true for older projects. */
+  onCanvas?: boolean;
 }
 
 export interface ShapeStyle {

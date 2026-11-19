@@ -2,7 +2,7 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage } from '../core/document/types';
-import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, type LayerDropPosition } from '../core/document/layers';
+import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, placeLayersOnCanvas, type LayerDropPosition } from '../core/document/layers';
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
@@ -135,6 +135,8 @@ export function App() {
   const [collapsedLayers, setCollapsedLayers] = useState<Record<EditorTarget, string[]>>({ main: [], component: [] });
   const [layerDropTarget, setLayerDropTarget] = useState<{ nodeId: string; position: LayerDropPosition } | null>(null);
   const layerDragSourceRef = useRef<string[] | null>(null);
+  const layerDragEditorRef = useRef<EditorTarget | null>(null);
+  const selectionSourceRef = useRef<'layers' | 'canvas'>('canvas');
   const layerSelectionAnchorRef = useRef<Record<EditorTarget, string | null>>({ main: null, component: null });
   const [layerRename, setLayerRename] = useState<LayerRenameSession | null>(null);
   const layerRenameRef = useRef<LayerRenameSession | null>(null);
@@ -593,6 +595,7 @@ export function App() {
   };
 
   const selectLayerFromPanel = (nodeId: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
+    selectionSourceRef.current = 'layers';
     const selected = focusedEditor.state.selectedNodeIds;
     const additive = Boolean(modifiers.ctrlKey || modifiers.metaKey);
     const subtreeIds = expandSelectedLayerIds(focusedDocument.nodes, [nodeId]);
@@ -658,6 +661,8 @@ export function App() {
   };
 
   const startLayerDrag = (nodeId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
+    selectionSourceRef.current = 'layers';
+    layerDragEditorRef.current = activeEditorId;
     const currentSelection = focusedEditor.state.selectedNodeIds;
     const draggedIds = currentSelection.includes(nodeId) ? currentSelection : expandSelectedLayerIds(focusedDocument.nodes, [nodeId]);
     layerDragSourceRef.current = draggedIds;
@@ -698,6 +703,33 @@ export function App() {
       }
     }
     layerDragSourceRef.current = null;
+    layerDragEditorRef.current = null;
+    setLayerDropTarget(null);
+  };
+
+  const dropLayersOnCanvas = (nodeIds: string[], point: { x: number; y: number }, target: EditorTarget) => {
+    const source = layerDragEditorRef.current;
+    if (source && source !== target) {
+      setNotice('Drag layers into the Canvas that belongs to the active Layers editor.');
+      layerDragSourceRef.current = null;
+      layerDragEditorRef.current = null;
+      return;
+    }
+    const targetDocument = target === 'main' ? activeDocument : componentDocument;
+    const targetDispatch = target === 'main' ? dispatch : componentDispatch;
+    const placed = placeLayersOnCanvas(targetDocument.nodes, nodeIds, point);
+    if (placed !== targetDocument.nodes) {
+      const placedIds = new Set(nodeIds);
+      const movedNodes = placed.filter((node) => placedIds.has(node.id));
+      targetDispatch({ type: 'transform-nodes', nodes: movedNodes });
+      targetDispatch({ type: 'select-nodes', nodeIds: movedNodes.map((node) => node.id) });
+      selectionSourceRef.current = 'canvas';
+      setActiveEditorId(target);
+      setInspectorVisible(true);
+      setNotice(`Placed ${movedNodes.length} existing layer${movedNodes.length === 1 ? '' : 's'} on Canvas — no duplicate created.`);
+    }
+    layerDragSourceRef.current = null;
+    layerDragEditorRef.current = null;
     setLayerDropTarget(null);
   };
 
@@ -1050,7 +1082,12 @@ export function App() {
         const copies = nodes.map((node, index) => ({ ...node, id: globalThis.crypto?.randomUUID?.() ?? 'duplicate-' + Date.now() + '-' + index, name: node.name + ' copy', x: node.x + 24, y: node.y + 24 }));
         emit({ type: 'add-nodes', nodes: copies }); return;
       }
-      if ((event.key === 'Delete' || event.key === 'Backspace') && ids.length > 0) { event.preventDefault(); emit({ type: 'delete-nodes', nodeIds: ids }); return; }
+      if ((event.key === 'Delete' || event.key === 'Backspace') && ids.length > 0) {
+        event.preventDefault();
+        if (selectionSourceRef.current === 'layers') emit({ type: 'delete-nodes', nodeIds: ids });
+        else emit({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: false });
+        return;
+      }
       if (event.altKey && !event.shiftKey) {
         const alignmentByKey: Record<string, Alignment> = { arrowleft: 'left', arrowright: 'right', arrowup: 'top', arrowdown: 'bottom' };
         const alignment = alignmentByKey[key];
@@ -1183,7 +1220,7 @@ export function App() {
         </div>
       </nav>
 
-      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Select layers, Ctrl/Cmd-click to toggle multiple, Shift-click for a range, and drag selected layers to reorder or nest.', ['CTRL/CMD + CLICK', 'SHIFT + CLICK', 'DRAG TO REORDER / NEST'])}>
+      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Select layers, drag them onto Canvas to place the same nodes without duplication, or drag within this list to reorder and nest.', ['CTRL/CMD + CLICK', 'SHIFT + CLICK', 'DRAG TO CANVAS'])}>
         <div class="panel-heading">
           <h2>Layers</h2>
         </div>
@@ -1218,9 +1255,9 @@ export function App() {
                 onDragStart={(event) => startLayerDrag(node.id, event)}
                 onDragOver={(event) => updateLayerDropTarget(node.id, event)}
                 onDrop={(event) => dropLayer(node.id, event)}
-                onDragEnd={() => { layerDragSourceRef.current = null; setLayerDropTarget(null); }}
+                onDragEnd={() => { layerDragSourceRef.current = null; layerDragEditorRef.current = null; setLayerDropTarget(null); }}
                 onDragLeave={() => setLayerDropTarget((current) => current?.nodeId === node.id ? null : current)}
-                title={'Select ' + node.name + '. Drag above or below to reorder, or onto the center to nest it.'}
+                title={'Select ' + node.name + '. Drag onto Canvas to place this same layer, or above/below here to reorder and into the center to nest it.'}
               >
                 {hasChildren ? (
                   <button
@@ -1380,7 +1417,7 @@ export function App() {
         zIndex={getWindowZIndex(windowOrder, 'main-canvas')}
         onPositionChange={setCanvasPosition}
         onSizeChange={setCanvasSize}
-        onFocus={() => { focusWindow('main-canvas'); setActiveEditorId('main'); }}
+        onFocus={() => { focusWindow('main-canvas'); setActiveEditorId('main'); selectionSourceRef.current = 'canvas'; }}
         onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
       >        <div
           class={`workspace-toolbar${canvasFloating ? " workspace-toolbar-draggable" : ""}`}
@@ -1426,10 +1463,12 @@ export function App() {
             onPanChange={setMainPan}
             onZoomChange={setZoom}
             onSelectionChange={(nodeIds) => {
+              selectionSourceRef.current = 'canvas';
               dispatch({ type: 'select-nodes', nodeIds });
               if (nodeIds.length > 0) setInspectorVisible(true);
             }}
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
+            onLayerDrop={(nodeIds, point) => dropLayersOnCanvas(nodeIds, point, 'main')}
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
@@ -1447,7 +1486,7 @@ export function App() {
         zIndex={getWindowZIndex(windowOrder, 'component-canvas')}
         onPositionChange={setComponentCanvasPosition}
         onSizeChange={setComponentCanvasSize}
-        onFocus={() => { focusWindow('component-canvas'); setActiveEditorId('component'); }}
+        onFocus={() => { focusWindow('component-canvas'); setActiveEditorId('component'); selectionSourceRef.current = 'canvas'; }}
         onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
       >        <div
           class={`workspace-toolbar${componentCanvasFloating ? " workspace-toolbar-draggable" : ""}`}
@@ -1500,8 +1539,12 @@ export function App() {
             pan={componentView.pan}
             onPanChange={setComponentCanvasPan}
             onZoomChange={setComponentCanvasZoom}
-            onSelectionChange={(nodeIds) => componentDispatch({ type: 'select-nodes', nodeIds })}
+            onSelectionChange={(nodeIds) => {
+              selectionSourceRef.current = 'canvas';
+              componentDispatch({ type: 'select-nodes', nodeIds });
+            }}
             onTransformCommit={(nodes) => componentDispatch({ type: 'transform-nodes', nodes })}
+            onLayerDrop={(nodeIds, point) => dropLayersOnCanvas(nodeIds, point, 'component')}
           />
           <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>

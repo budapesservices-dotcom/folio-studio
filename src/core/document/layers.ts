@@ -157,6 +157,36 @@ export function expandSelectedLayerIds(nodes: readonly DesignNode[], selectedIds
 }
 
 /**
+ * Places existing Layers nodes onto Canvas without creating IDs or copies.
+ * The supplied IDs define the payload: a Group moves with its subtree, while
+ * an individually dragged node remains independent.
+ */
+export function placeLayersOnCanvas(
+  nodes: DesignNode[],
+  nodeIds: readonly string[],
+  point: { x: number; y: number },
+): DesignNode[] {
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return nodes;
+  const selected = new Set(nodeIds.filter((id) => nodes.some((node) => node.id === id)));
+  if (selected.size === 0) return nodes;
+  const moving = nodes.filter((node) => selected.has(node.id));
+  const minX = Math.min(...moving.map((node) => node.x));
+  const minY = Math.min(...moving.map((node) => node.y));
+  const dx = point.x - minX;
+  const dy = point.y - minY;
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (!selected.has(node.id)) return node;
+    const x = node.x + dx;
+    const y = node.y + dy;
+    if (node.onCanvas !== false && Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return node;
+    changed = true;
+    return { ...node, x, y, onCanvas: true };
+  });
+  return changed ? next : nodes;
+}
+
+/**
  * Canvas treats every nested layer as part of its top-level component.
  * A normal click anywhere in that hierarchy selects the whole component;
  * Shift-click is the precision override for selecting the exact child.
@@ -308,7 +338,7 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
   const right = Math.max(...picked.map((node) => node.x + node.width));
   const bottom = Math.max(...picked.map((node) => node.y + node.height));
   const groupId = 'group-' + (globalThis.crypto?.randomUUID?.() ?? (Date.now() + '-' + Math.random().toString(16).slice(2)));
-  const group: DesignNode = { id: groupId, type: 'group', name: 'Group', x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y), rotation: 0, opacity: 1, visible: true, locked: false, ...(parentId ? { parentId } : {}) };
+  const group: DesignNode = { id: groupId, type: 'group', name: 'Group', x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y), rotation: 0, opacity: 1, visible: true, locked: false, onCanvas: picked.some((node) => node.onCanvas !== false), ...(parentId ? { parentId } : {}) };
   const rootSet = new Set(roots);
   const firstIndex = Math.min(...roots.map((id) => order.get(id) ?? nodes.length));
   const next = nodes.map((node) => rootSet.has(node.id) ? { ...node, parentId: groupId } : node);

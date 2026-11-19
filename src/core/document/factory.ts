@@ -26,6 +26,7 @@ function baseNode(name: string, x: number, y: number, width: number, height: num
     opacity: 1,
     visible: true,
     locked: false,
+    onCanvas: true,
   };
 }
 

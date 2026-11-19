@@ -26,6 +26,7 @@ export type EditorAction =
   | { type: 'edit-node'; node: DesignNode; coalesceKey: string }
   | { type: 'commit-edit' }
   | { type: 'delete-nodes'; nodeIds: string[] }
+  | { type: 'set-nodes-canvas-state'; nodeIds: string[]; onCanvas: boolean }
   | { type: 'transform-nodes'; nodes: DesignNode[] }
   | { type: 'delete-node'; nodeId: string }
   | { type: 'move-layer'; nodeId: string; targetId: string; position: LayerDropPosition }
@@ -193,6 +194,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           replacement.y === node.y &&
           replacement.width === node.width &&
           replacement.height === node.height &&
+          replacement.onCanvas === node.onCanvas &&
           (node.type !== 'text' || replacement.type !== 'text' || replacement.style.fontSize === node.style.fontSize)
         ) return node;
         changed = true;
@@ -238,6 +240,19 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         .map((node) => node.id);
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       return withSnapshot(state, next, promotedIds.length === 1 ? promotedIds[0] : null, promotedIds);
+    }
+
+    case 'set-nodes-canvas-state': {
+      const ids = new Set(action.nodeIds);
+      if (ids.size === 0) return state;
+      let changed = false;
+      const nodes = document.nodes.map((node) => {
+        if (!ids.has(node.id) || (node.onCanvas !== false) === action.onCanvas) return node;
+        changed = true;
+        return { ...node, onCanvas: action.onCanvas };
+      });
+      if (!changed) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
     }
 
     case 'delete-nodes': {
