@@ -10,7 +10,7 @@ import {
   getLayerRenderOrder,
   moveLayer,
   moveLayers,
-  removeLayersAndPromoteChildren,
+  removeLayersAndPromoteChildren,\n  groupLayers,\n  ungroupLayers,
 } from '../src/core/document/layers';
 import { getActiveDocument } from '../src/core/document/project';
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
@@ -196,6 +196,21 @@ describe('layer hierarchy and panel operations', () => {
     const moved = moveLayers(nodes, ['selected-parent', 'selected-child'], 'target', 'inside');
     expect(moved.find((node) => node.id === 'selected-parent')?.parentId).toBe('target');
     expect(moved.find((node) => node.id === 'selected-child')?.parentId).toBe('selected-parent');
+  });
+
+  it('groups selected sibling layers without changing geometry or order, then ungroups them', () => {
+    const nodes = [layer('a'), layer('b'), layer('c')];
+    const grouped = groupLayers(nodes, ['a', 'b']);
+    expect(grouped.map((node) => node.id)).toEqual(['a', 'b', 'c']);
+    expect(grouped.find((node) => node.id === 'b')?.parentId).toBe('a');
+    expect(grouped.map((node) => [node.x, node.y])).toEqual(nodes.map((node) => [node.x, node.y]));
+    expect(ungroupLayers(grouped, ['a'])).toEqual(nodes);
+  });
+
+  it('does not group layers from different parents or a single selected layer', () => {
+    const nodes = [layer('a'), layer('b'), layer('nested', 'a')];
+    expect(groupLayers(nodes, ['a', 'b'])).toBe(nodes);
+    expect(groupLayers(nodes, ['a'])).toBe(nodes);
   });
 
   it('records layer nesting in project history and restores it with undo/redo', () => {

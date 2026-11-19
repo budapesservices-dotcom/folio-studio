@@ -1,7 +1,7 @@
 import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { replaceComponentInstancesInDocument } from '../core/document/components';
-import { moveLayer, moveLayers, removeLayersAndPromoteChildren, type LayerDropPosition } from '../core/document/layers';
+import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, type LayerDropPosition } from '../core/document/layers';
 
 const HISTORY_LIMIT = 60;
 
@@ -29,7 +29,7 @@ export type EditorAction =
   | { type: 'transform-nodes'; nodes: DesignNode[] }
   | { type: 'delete-node'; nodeId: string }
   | { type: 'move-layer'; nodeId: string; targetId: string; position: LayerDropPosition }
-  | { type: 'move-layers'; nodeIds: string[]; targetId: string; position: LayerDropPosition }
+  | { type: 'move-layers'; nodeIds: string[]; targetId: string; position: LayerDropPosition }\n  | { type: 'group-layers'; nodeIds: string[] }\n  | { type: 'ungroup-layers'; nodeIds: string[] }
   | { type: 'rename-project'; name: string }
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }
@@ -213,6 +213,26 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const nodes = moveLayers(document.nodes, action.nodeIds, action.targetId, action.position);
       if (nodes === document.nodes) return state;
       return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
+    case 'group-layers': {
+      const nodes = groupLayers(document.nodes, action.nodeIds);
+      if (nodes === document.nodes) return state;
+      const roots = action.nodeIds.filter((id) => {
+        const node = document.nodes.find((item) => item.id === id);
+        return node && !document.nodes.some((item) => item.id === node.parentId && action.nodeIds.includes(item.id));
+      });
+      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
+      const rootId = roots[0] ?? null;
+      return withSnapshot(state, next, rootId, rootId ? [rootId] : []);
+    }
+
+    case 'ungroup-layers': {
+      const promotedIds = document.nodes.filter((node) => node.parentId && action.nodeIds.includes(node.parentId)).map((node) => node.id);
+      const nodes = ungroupLayers(document.nodes, action.nodeIds);
+      if (nodes === document.nodes) return state;
+      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
+      return withSnapshot(state, next, promotedIds.length === 1 ? promotedIds[0] : null, promotedIds);
     }
 
     case 'delete-nodes': {

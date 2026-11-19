@@ -251,3 +251,41 @@ export function removeLayersAndPromoteChildren(
       return parentId === node.parentId ? node : { ...node, parentId };
     });
 }
+
+
+/** Groups selected sibling layers under the first selected root without changing geometry or paint order. */
+export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[]): DesignNode[] {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const selected = new Set(selectedIds.filter((id) => nodeById.has(id)));
+  if (selected.size < 2) return nodes;
+  const roots = [...selected].filter((id) => {
+    let parentId = getParentId(nodeById.get(id)!, nodeById);
+    const visited = new Set<string>();
+    while (parentId && !visited.has(parentId)) {
+      if (selected.has(parentId)) return false;
+      visited.add(parentId);
+      const parent = nodeById.get(parentId);
+      parentId = parent ? getParentId(parent, nodeById) : null;
+    }
+    return true;
+  });
+  if (roots.length < 2) return nodes;
+  const rootParentId = nodeById.get(roots[0])?.parentId ?? null;
+  if (!roots.every((id) => (nodeById.get(id)?.parentId ?? null) === rootParentId)) return nodes;
+  const groupRootId = roots[0];
+  const groupedIds = new Set(roots.slice(1));
+  return nodes.map((node) => groupedIds.has(node.id) ? { ...node, parentId: groupRootId } : node);
+}
+
+/** Ungroups selected parents by promoting their direct children to the same parent level. */
+export function ungroupLayers(nodes: DesignNode[], selectedIds: readonly string[]): DesignNode[] {
+  const selected = new Set(selectedIds);
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const parents = new Set(nodes.filter((node) => selected.has(node.id) && nodes.some((child) => child.parentId === node.id)).map((node) => node.id));
+  if (parents.size === 0) return nodes;
+  return nodes.map((node) => {
+    if (!node.parentId || !parents.has(node.parentId)) return node;
+    const parentId = nodeById.get(node.parentId)?.parentId ?? undefined;
+    return { ...node, parentId };
+  });
+}
