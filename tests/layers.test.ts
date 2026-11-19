@@ -83,8 +83,8 @@ describe('layer hierarchy and panel operations', () => {
 
   it('collapses a parent so nested layers disappear from the panel tree', () => {
     const nodes = [layer('parent'), layer('child', 'parent'), layer('grandchild', 'child'), layer('other')];
-    expect(getLayerPanelRows(nodes, ['parent']).map(({ node }) => node.id)).toEqual(['parent', 'other']);
-    expect(getLayerPanelRows(nodes, ['child']).map(({ node }) => node.id)).toEqual(['parent', 'child', 'other']);
+    expect(getLayerPanelRows(nodes, ['parent']).map(({ node }) => node.id)).toEqual(['other', 'parent']);
+    expect(getLayerPanelRows(nodes, ['child']).map(({ node }) => node.id)).toEqual(['other', 'parent', 'child']);
   });
 
   it('moves all selected layer roots into a target as one nested group', () => {

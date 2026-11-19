@@ -50,7 +50,21 @@ export function getLayerPanelRows(
   };
 
   [...(children.get(null) ?? [])].reverse().forEach((node) => visit(node, 0));
-  nodes.forEach((node) => visit(node, 0));
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  nodes.forEach((node) => {
+    if (visited.has(node.id)) return;
+    // A collapsed ancestor has already been visited, but this descendant was
+    // intentionally not traversed. Do not re-add it as a fallback root.
+    let parentId = getParentId(node, nodeById);
+    const chain = new Set<string>();
+    while (parentId && !chain.has(parentId)) {
+      if (visited.has(parentId)) return;
+      chain.add(parentId);
+      const parent = nodeById.get(parentId);
+      parentId = parent ? getParentId(parent, nodeById) : null;
+    }
+    visit(node, 0);
+  });
   return rows;
 }
 
