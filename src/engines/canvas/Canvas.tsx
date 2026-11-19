@@ -56,7 +56,7 @@ function NodeShape({ node, locked = node.locked, mask = false }: { node: Primiti
     : undefined;
 
   return (
-    <g transform={transform} opacity={node.opacity} class="canvas-node" style={{ cursor: locked ? 'default' : 'move' }}>
+    <g transform={transform} opacity={node.opacity} class="canvas-node" >
       {node.type === 'group' && (
         <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="transparent" pointerEvents="all" />
       )}
@@ -469,11 +469,6 @@ export function Canvas({
     };
   };
 
-  const updatePreview = (nodes: DesignNode[] | null) => {
-    previewRef.current = nodes;
-    setPreviewNodes(nodes);
-  };
-
   const applyToolTransition = (
     transition: CanvasToolTransition,
     svg?: SVGSVGElement,
@@ -553,7 +548,7 @@ export function Canvas({
           style={{
             width: String(zoom * 100) + '%',
             transform: 'translate(' + pan.x + 'px, ' + pan.y + 'px)',
-            transition: isPanning ? 'none' : 'transform 110ms ease-out',
+            transition: (isPanning || toolSession?.kind === 'hand' || toolSession?.kind === 'scrubby-zoom') ? 'none' : 'transform 110ms ease-out',
             willChange: 'transform',
           }}
         >
