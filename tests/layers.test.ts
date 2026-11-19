@@ -1,0 +1,102 @@
+import { describe, expect, it } from 'vitest';
+import { createRectNode, createInitialProject } from '../src/core/document/factory';
+import {
+  expandSelectedLayers,
+  getEffectiveLayerStates,
+  getLayerPanelRows,
+  getLayerRenderOrder,
+  moveLayer,
+  removeLayersAndPromoteChildren,
+} from '../src/core/document/layers';
+import { getActiveDocument } from '../src/core/document/project';
+import { createEditorState, editorReducer } from '../src/app/editorReducer';
+
+function layer(id: string, parentId?: string, patch: Record<string, unknown> = {}) {
+  return {
+    ...createRectNode(),
+    id,
+    name: id.toUpperCase(),
+    ...(parentId ? { parentId } : {}),
+    ...patch,
+  };
+}
+
+describe('layer hierarchy and panel operations', () => {
+  it('lists top-level layers in reverse paint order and nests children under their parent', () => {
+    const nodes = [layer('back'), layer('parent'), layer('child-a', 'parent'), layer('child-b', 'parent')];
+    expect(getLayerPanelRows(nodes).map(({ node, depth }) => [node.id, depth])).toEqual([
+      ['parent', 0],
+      ['child-b', 1],
+      ['child-a', 1],
+      ['back', 0],
+    ]);
+  });
+
+  it('inherits parent visibility and lock state for nested layers', () => {
+    const nodes = [
+      layer('parent', undefined, { visible: false, locked: true }),
+      layer('child', 'parent', { visible: true, locked: false }),
+    ];
+    const states = getEffectiveLayerStates(nodes);
+    expect(states.get('parent')).toEqual({ visible: false, locked: true });
+    expect(states.get('child')).toEqual({ visible: false, locked: true });
+  });
+
+  it('moves a layer into another layer and keeps paint order and hierarchy', () => {
+    const nodes = [layer('back'), layer('front')];
+    const moved = moveLayer(nodes, 'back', 'front', 'inside');
+    expect(moved.find((node) => node.id === 'back')?.parentId).toBe('front');
+    expect(getLayerRenderOrder(moved).map((node) => node.id)).toEqual(['front', 'back']);
+    expect(getLayerPanelRows(moved).map(({ node, depth }) => [node.id, depth])).toEqual([
+      ['front', 0],
+      ['back', 1],
+    ]);
+  });
+
+  it('reorders a layer above or below another layer in the panel', () => {
+    const nodes = [layer('a'), layer('b'), layer('c')];
+    const moved = moveLayer(nodes, 'c', 'a', 'after');
+    expect(getLayerPanelRows(moved).map(({ node }) => node.id)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('prevents dropping a parent into its own descendant', () => {
+    const nodes = [layer('parent'), layer('child', 'parent')];
+    expect(moveLayer(nodes, 'parent', 'child', 'inside')).toBe(nodes);
+  });
+
+  it('expands a selected parent to its sub-layers for group transforms', () => {
+    const nodes = [layer('parent'), layer('child', 'parent'), layer('leaf', 'child'), layer('other')];
+    expect(expandSelectedLayers(nodes, ['parent']).map((node) => node.id)).toEqual(['parent', 'child', 'leaf']);
+  });
+
+  it('promotes surviving children when a parent layer is deleted', () => {
+    const nodes = [layer('grandparent'), layer('parent', 'grandparent'), layer('child', 'parent')];
+    const next = removeLayersAndPromoteChildren(nodes, ['parent']);
+    expect(next.find((node) => node.id === 'child')?.parentId).toBe('grandparent');
+    expect(getLayerPanelRows(next).map(({ node, depth }) => [node.id, depth])).toEqual([
+      ['grandparent', 0],
+      ['child', 1],
+    ]);
+  });
+
+  it('records layer nesting in project history and restores it with undo/redo', () => {
+    const project = createInitialProject();
+    const document = getActiveDocument(project);
+    const first = { ...document.nodes[0], id: 'history-first' };
+    const second = { ...document.nodes[1], id: 'history-second' };
+    const prepared = {
+      ...project,
+      pages: project.pages.map((page) => ({
+        ...page,
+        document: { ...page.document, nodes: [first, second] },
+      })),
+    };
+    const initial = createEditorState(prepared);
+    const moved = editorReducer(initial, { type: 'move-layer', nodeId: first.id, targetId: second.id, position: 'inside' });
+    expect(getActiveDocument(moved.project).nodes.find((node) => node.id === first.id)?.parentId).toBe(second.id);
+    const undone = editorReducer(moved, { type: 'undo' });
+    expect(getActiveDocument(undone.project).nodes.find((node) => node.id === first.id)?.parentId).toBeUndefined();
+    const redone = editorReducer(undone, { type: 'redo' });
+    expect(getActiveDocument(redone.project).nodes.find((node) => node.id === first.id)?.parentId).toBe(second.id);
+  });
+});
