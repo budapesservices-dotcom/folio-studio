@@ -1,7 +1,7 @@
 import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { replaceComponentInstancesInDocument } from '../core/document/components';
-import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, type LayerDropPosition } from '../core/document/layers';
+import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, type LayerDropPosition } from '../core/document/layers';
 
 const HISTORY_LIMIT = 60;
 
@@ -222,7 +222,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (nodes === document.nodes) return state;
       const group = nodes.find((node) => node.type === 'group' && !document.nodes.some((old) => old.id === node.id));
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
-      return withSnapshot(state, next, group?.id ?? null, group ? [group.id] : []);
+      const selectedIds = group ? expandSelectedLayerIds(nodes, [group.id]) : [];
+      return withSnapshot(state, next, group?.id ?? null, selectedIds);
     }
 
     case 'ungroup-layers': {
