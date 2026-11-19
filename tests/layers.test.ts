@@ -240,7 +240,11 @@ describe('layer hierarchy and panel operations', () => {
     const outer = outerNodes.find((node) => node.type === 'group' && node.id !== inner.id)!;
     expect(outer).toBeDefined();
     expect(outerNodes.find((node) => node.id === inner.id)?.parentId).toBe(outer.id);
-    expect(ungroupLayers(outerNodes, [outer.id])).toEqual(firstGroup);
+    // The canvas selection includes descendants; ungroup must unwrap only
+    // the outer container and leave the nested Group intact.
+    const oneLevel = ungroupLayers(outerNodes, [outer.id, inner.id]);
+    expect(oneLevel.find((node) => node.id === inner.id)?.parentId).toBeUndefined();
+    expect(oneLevel.some((node) => node.id === inner.id)).toBe(true);
     expect(ungroupLayers(firstGroup, [inner.id])).toEqual(nodes);
   });
 

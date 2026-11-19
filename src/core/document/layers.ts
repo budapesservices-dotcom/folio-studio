@@ -305,7 +305,24 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
 
 /** Removes selected Group containers and promotes their direct children. */
 export function ungroupLayers(nodes: DesignNode[], selectedIds: readonly string[]): DesignNode[] {
-  const groups = new Map(nodes.filter((node) => node.type === 'group' && selectedIds.includes(node.id)).map((node) => [node.id, node]));
+  const selected = new Set(selectedIds);
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  // Canvas parent selection includes descendants. Only remove the outermost
+  // selected Group so Ctrl+Shift+G unwraps exactly one hierarchy level.
+  const groups = new Map(nodes
+    .filter((node) => node.type === 'group' && selected.has(node.id))
+    .filter((node) => {
+      let parentId = getParentId(node, nodeById);
+      const visited = new Set<string>();
+      while (parentId && !visited.has(parentId)) {
+        if (selected.has(parentId) && nodeById.get(parentId)?.type === 'group') return false;
+        visited.add(parentId);
+        const parent = nodeById.get(parentId);
+        parentId = parent ? getParentId(parent, nodeById) : null;
+      }
+      return true;
+    })
+    .map((node) => [node.id, node]));
   if (groups.size === 0) return nodes;
   return nodes.filter((node) => !groups.has(node.id)).map((node) => {
     if (!node.parentId || !groups.has(node.parentId)) return node;
