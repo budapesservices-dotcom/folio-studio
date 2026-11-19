@@ -53,7 +53,7 @@ function Icon({ name }: { name: string }) {
 }
 
 function LayerIcon({ type }: { type: DesignNode['type'] }) {
-  const glyph = type === 'text' ? 'T' : type === 'ellipse' ? '○' : type === 'component-instance' ? '◇' : '□';
+  const glyph = type === 'group' ? '▣' : type === 'text' ? 'T' : type === 'ellipse' ? '○' : type === 'component-instance' ? '◇' : '□';
   return <span class={`layer-type layer-type-${type}`}>{glyph}</span>;
 }
 

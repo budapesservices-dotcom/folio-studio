@@ -253,7 +253,7 @@ export function removeLayersAndPromoteChildren(
 }
 
 
-/** Groups selected sibling layers under the first selected root without changing geometry or paint order. */
+/** Creates a dedicated non-visual container and reparents selected sibling roots. */
 export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[]): DesignNode[] {
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const selected = new Set(selectedIds.filter((id) => nodeById.has(id)));
@@ -271,23 +271,30 @@ export function groupLayers(nodes: DesignNode[], selectedIds: readonly string[])
   });
   if (roots.length < 2) return nodes;
   const order = new Map(nodes.map((node, index) => [node.id, index]));
-  roots.sort((left, right) => (order.get(left) ?? 0) - (order.get(right) ?? 0));
-  const rootParentId = nodeById.get(roots[0])?.parentId ?? null;
-  if (!roots.every((id) => (nodeById.get(id)?.parentId ?? null) === rootParentId)) return nodes;
-  const groupRootId = roots[0];
-  const groupedIds = new Set(roots.slice(1));
-  return nodes.map((node) => groupedIds.has(node.id) ? { ...node, parentId: groupRootId } : node);
+  roots.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+  const parentId = nodeById.get(roots[0])?.parentId ?? null;
+  if (!roots.every((id) => (nodeById.get(id)?.parentId ?? null) === parentId)) return nodes;
+  const picked = roots.map((id) => nodeById.get(id)!);
+  const x = Math.min(...picked.map((node) => node.x));
+  const y = Math.min(...picked.map((node) => node.y));
+  const right = Math.max(...picked.map((node) => node.x + node.width));
+  const bottom = Math.max(...picked.map((node) => node.y + node.height));
+  const groupId = 'group-' + (globalThis.crypto?.randomUUID?.() ?? (Date.now() + '-' + Math.random().toString(16).slice(2)));
+  const group: DesignNode = { id: groupId, type: 'group', name: 'Group', x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y), rotation: 0, opacity: 1, visible: true, locked: false, ...(parentId ? { parentId } : {}) };
+  const rootSet = new Set(roots);
+  const firstIndex = Math.min(...roots.map((id) => order.get(id) ?? nodes.length));
+  const next = nodes.map((node) => rootSet.has(node.id) ? { ...node, parentId: groupId } : node);
+  next.splice(firstIndex, 0, group);
+  return next;
 }
 
-/** Ungroups selected parents by promoting their direct children to the same parent level. */
+/** Removes selected Group containers and promotes their direct children. */
 export function ungroupLayers(nodes: DesignNode[], selectedIds: readonly string[]): DesignNode[] {
-  const selected = new Set(selectedIds);
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
-  const parents = new Set(nodes.filter((node) => selected.has(node.id) && nodes.some((child) => child.parentId === node.id)).map((node) => node.id));
-  if (parents.size === 0) return nodes;
-  return nodes.map((node) => {
-    if (!node.parentId || !parents.has(node.parentId)) return node;
-    const parentId = nodeById.get(node.parentId)?.parentId ?? undefined;
+  const groups = new Map(nodes.filter((node) => node.type === 'group' && selectedIds.includes(node.id)).map((node) => [node.id, node]));
+  if (groups.size === 0) return nodes;
+  return nodes.filter((node) => !groups.has(node.id)).map((node) => {
+    if (!node.parentId || !groups.has(node.parentId)) return node;
+    const parentId = groups.get(node.parentId)?.parentId ?? undefined;
     if (parentId) return { ...node, parentId };
     const { parentId: _parentId, ...promoted } = node;
     return promoted;

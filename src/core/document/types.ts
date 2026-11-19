@@ -31,6 +31,10 @@ export interface ShapeStyle {
   radius?: number;
 }
 
+export interface GroupNode extends NodeBase {
+  type: 'group';
+}
+
 export interface RectNode extends NodeBase {
   type: 'rect';
   style: ShapeStyle;
@@ -61,7 +65,7 @@ export interface ComponentInstanceNode extends NodeBase {
   componentId: string;
   overrides: ComponentInstanceOverrides;
 }
-export type DesignNode = RectNode | EllipseNode | TextNode | ComponentInstanceNode;
+export type DesignNode = GroupNode | RectNode | EllipseNode | TextNode | ComponentInstanceNode;
 
 export interface FolioDocument {
   id: string;

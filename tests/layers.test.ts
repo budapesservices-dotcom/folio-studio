@@ -200,13 +200,17 @@ describe('layer hierarchy and panel operations', () => {
     expect(moved.find((node) => node.id === 'selected-child')?.parentId).toBe('selected-parent');
   });
 
-  it('groups selected sibling layers without changing geometry or order, then ungroups them', () => {
+  it('creates a dedicated Group container and restores children on ungroup', () => {
     const nodes = [layer('a'), layer('b'), layer('c')];
     const grouped = groupLayers(nodes, ['a', 'b']);
-    expect(grouped.map((node) => node.id)).toEqual(['a', 'b', 'c']);
-    expect(grouped.find((node) => node.id === 'b')?.parentId).toBe('a');
-    expect(grouped.map((node) => [node.x, node.y])).toEqual(nodes.map((node) => [node.x, node.y]));
-    expect(ungroupLayers(grouped, ['a'])).toEqual(nodes);
+    const group = grouped.find((node) => node.type === 'group');
+    expect(group).toBeDefined();
+    expect(grouped).toHaveLength(4);
+    expect(grouped.find((node) => node.id === 'a')?.parentId).toBe(group?.id);
+    expect(grouped.find((node) => node.id === 'b')?.parentId).toBe(group?.id);
+    expect(grouped.find((node) => node.id === 'c')?.parentId).toBeUndefined();
+    expect(grouped.find((node) => node.id === 'a')?.x).toBe(nodes[0].x);
+    expect(ungroupLayers(grouped, group ? [group.id] : [])).toEqual(nodes);
   });
 
   it('does not group layers from different parents or a single selected layer', () => {

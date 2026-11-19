@@ -220,17 +220,14 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'group-layers': {
       const nodes = groupLayers(document.nodes, action.nodeIds);
       if (nodes === document.nodes) return state;
-      const roots = action.nodeIds.filter((id) => {
-        const node = document.nodes.find((item) => item.id === id);
-        return node && !document.nodes.some((item) => item.id === node.parentId && action.nodeIds.includes(item.id));
-      });
+      const group = nodes.find((node) => node.type === 'group' && !document.nodes.some((old) => old.id === node.id));
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
-      const rootId = roots[0] ?? null;
-      return withSnapshot(state, next, rootId, rootId ? [rootId] : []);
+      return withSnapshot(state, next, group?.id ?? null, group ? [group.id] : []);
     }
 
     case 'ungroup-layers': {
-      const promotedIds = document.nodes.filter((node) => node.parentId && action.nodeIds.includes(node.parentId)).map((node) => node.id);
+      const groupIds = new Set(document.nodes.filter((node) => node.type === 'group' && action.nodeIds.includes(node.id)).map((node) => node.id));
+      const promotedIds = document.nodes.filter((node) => node.parentId && groupIds.has(node.parentId)).map((node) => node.id);
       const nodes = ungroupLayers(document.nodes, action.nodeIds);
       if (nodes === document.nodes) return state;
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));

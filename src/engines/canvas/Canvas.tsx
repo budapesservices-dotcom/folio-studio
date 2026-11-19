@@ -78,6 +78,9 @@ function NodeShape({ node, locked = node.locked }: { node: PrimitiveNode; locked
 
   return (
     <g transform={transform} opacity={node.opacity} class="canvas-node" style={{ cursor: locked ? 'default' : 'grab' }}>
+      {node.type === 'group' && (
+        <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="transparent" pointerEvents="all" />
+      )}
       {node.type === 'rect' && (
         <rect x={node.x} y={node.y} width={node.width} height={node.height}
           rx={node.style.radius ?? 0} fill={node.style.fill} stroke={node.style.stroke} strokeWidth={node.style.strokeWidth} />
