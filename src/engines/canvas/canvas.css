@@ -113,3 +113,14 @@
 .canvas-resize-handle[data-resize-handle="w"] {
   cursor: ew-resize;
 }
+
+
+.canvas-lasso {
+  fill: rgba(169, 159, 255, .08);
+  stroke: #b2a7ff;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}

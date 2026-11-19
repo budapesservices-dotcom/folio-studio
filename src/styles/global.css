@@ -888,3 +888,96 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 
 .layer-row.layer-not-on-canvas { opacity: .58; }
 .layer-row.layer-not-on-canvas:hover { opacity: 1; }
+
+
+/* Modular Tool Rack: grouped tools open compact DAW-style flyouts. */
+.tool-rack-caption {
+  width: 100%;
+  padding: 0 0 4px;
+  color: #687386;
+  text-align: center;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+.tool-rack-group { position: relative; display: flex; width: 100%; justify-content: center; }
+.tool-rack-group-trigger {
+  display: flex;
+  flex: 0 0 auto;
+  width: 48px;
+  min-height: 45px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px 2px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #8993a4;
+  background: transparent;
+  cursor: pointer;
+}
+.tool-rack-group-trigger > .icon-svg:first-child { width: 18px; height: 18px; }
+.tool-rack-group-trigger > span { color: #9ca6b7; font-size: 7px; font-weight: 700; letter-spacing: .15px; }
+.tool-rack-group-trigger > .icon-svg:last-child:not(:first-child) { display: none; }
+.tool-rack-group-trigger:hover, .tool-rack-group-trigger.open {
+  border-color: #3a4052;
+  color: #e7e4ff;
+  background: #222837;
+}
+.tool-rack-group-trigger.active {
+  border-color: #48406d;
+  color: #c0b7ff;
+  background: #302b4b;
+}
+.tool-rack-group-trigger.active > span { color: #d0caff; }
+.tool-rack-menu {
+  position: absolute;
+  z-index: 220;
+  top: 0;
+  left: calc(100% + 5px);
+  display: flex;
+  width: 194px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid #3c4558;
+  border-radius: 8px;
+  background: #1b2230;
+  box-shadow: 0 14px 32px #000a;
+}
+.tool-rack-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: #c1c8d5;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.tool-rack-item:hover {
+  border-color: #41465c;
+  color: #f0edff;
+  background: #292d40;
+}
+.tool-rack-item.active {
+  border-color: #514878;
+  color: #e1dcff;
+  background: #302b49;
+}
+.tool-rack-item-icon { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 22px; color: #a99fff; }
+.tool-rack-item-icon .icon-svg { width: 16px; height: 16px; }
+.tool-rack-item-name { flex: 1 1 auto; min-width: 0; font-size: 10px; font-weight: 600; }
+.tool-rack-active-mark { color: #a99fff; font-size: 9px; }
+.artboard .canvas-node { cursor: move; }
+.artboard[data-tool="direct-selection"] .canvas-node,
+.artboard[data-tool="select"] .canvas-node { cursor: move; }
+.artboard[data-tool="hand"] .canvas-node { cursor: grab !important; }
+.artboard[data-tool="scrubby-zoom"] .canvas-node { cursor: ew-resize !important; }
+.artboard[data-tool="lasso-selection"] .canvas-node,
+.artboard[data-tool="magic-wand"] .canvas-node { cursor: crosshair !important; }
