@@ -494,6 +494,12 @@ export function App() {
   const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
   const layerSourceNodes = focusedDocument.nodes.filter((node) => node.isCanvasInstance !== true);
   const layerSourceIds = new Set(layerSourceNodes.map((node) => node.id));
+  const selectedLinkedSourceIds = new Set(focusedDocument.nodes
+    .filter((node) => focusedEditor.state.selectedNodeIds.includes(node.id) && node.isCanvasInstance === true && Boolean(node.sourceLayerId))
+    .map((node) => node.sourceLayerId!));
+  const selectedLinkedLayerSource = selectedNode?.isCanvasInstance === true && selectedNode.sourceLayerId
+    ? layerSourceNodes.find((node) => node.id === selectedNode.sourceLayerId) ?? null
+    : null;
   const layerRows = getLayerPanelRows(layerSourceNodes, collapsedLayers[activeEditorId]);
   const layerEffectiveStates = getEffectiveLayerStates(layerSourceNodes);
   const contextMenuEditor = layerContextMenu
@@ -807,11 +813,12 @@ export function App() {
     const targetDispatch = target === 'main' ? dispatch : componentDispatch;
     const instances = createLayerCanvasInstances(targetDocument.nodes, nodeIds, point);
     if (instances.length > 0) {
-      targetDispatch({ type: 'add-nodes', nodes: instances });
+      const sourceNodeIds = [...new Set(instances.map((node) => node.sourceLayerId).filter((id): id is string => Boolean(id)))];
+      targetDispatch({ type: 'place-layer-instances', sourceNodeIds, instanceNodes: instances });
       selectionSourceRef.current = 'canvas';
       setActiveEditorId(target);
       setInspectorVisible(true);
-      setNotice(`Created ${instances.length} independent Canvas instance${instances.length === 1 ? '' : 's'}; the Layers source was left unchanged.`);
+      setNotice(`Placed ${instances.length} linked Canvas instance${instances.length === 1 ? '' : 's'}; the reusable source stays in Layers.`);
     }
     layerDragSourceRef.current = null;
     layerDragEditorRef.current = null;
@@ -1341,7 +1348,7 @@ export function App() {
         </div>
       </nav>
 
-      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Layers are reusable sources. Drag a layer or Group onto Canvas to create another independent instance; the source stays in this list.', ['CTRL/CMD + M: MASK', 'CTRL/CMD + SHIFT + M: UNMASK'])}>
+      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Layers are reusable masters. Drag a layer or Group onto Canvas to place a linked instance; the source stays in this list.', ['CTRL/CMD + M: MASK', 'CTRL/CMD + SHIFT + M: UNMASK'])}>
         <div class="panel-heading">
           <h2>Layers</h2>
         </div>
@@ -1351,7 +1358,9 @@ export function App() {
         </div>
         <div class="layer-list" role="tree" aria-label="Document layers">
           {layerRows.map(({ node, depth, hasChildren }) => {
-            const selected = focusedEditor.state.selectedNodeIds.includes(node.id);
+            const selectedDirectly = focusedEditor.state.selectedNodeIds.includes(node.id);
+            const selectedLinked = selectedLinkedSourceIds.has(node.id);
+            const selected = selectedDirectly || selectedLinked;
             const effective = layerEffectiveStates.get(node.id);
             const clipBaseName = node.clipMaskBaseId
               ? layerSourceNodes.find((item) => item.id === node.clipMaskBaseId)?.name ?? 'another layer'
@@ -1368,7 +1377,7 @@ export function App() {
                 aria-expanded={hasChildren ? !collapsed : undefined}
                 tabIndex={0}
                 draggable={true}
-                class={'layer-row ' + (selected ? 'selected ' : '') + (!effective?.visible ? 'layer-hidden ' : '') + (effective?.locked ? 'layer-inherited-locked ' : '') + (node.clipMaskBaseId ? 'layer-row-clipped ' : '') + (isMaskBase ? 'layer-row-mask-base ' : '') + dropClass}
+                class={'layer-row ' + (selected ? 'selected ' : '') + (selectedLinked && !selectedDirectly ? 'linked-source-selected ' : '') + (!effective?.visible ? 'layer-hidden ' : '') + (effective?.locked ? 'layer-inherited-locked ' : '') + (node.clipMaskBaseId ? 'layer-row-clipped ' : '') + (isMaskBase ? 'layer-row-mask-base ' : '') + dropClass}
                 style={{ paddingLeft: (8 + depth * 15 + (node.clipMaskBaseId ? 14 : 0)) + 'px' }}
                 onClick={(event) => selectLayerFromPanel(node.id, event)}
                 onContextMenu={(event) => openLayerContextMenu(node.id, event)}
@@ -1383,7 +1392,7 @@ export function App() {
                 onDrop={(event) => dropLayer(node.id, event)}
                 onDragEnd={() => { layerDragSourceRef.current = null; layerDragEditorRef.current = null; setLayerDropTarget(null); }}
                 onDragLeave={() => setLayerDropTarget((current) => current?.nodeId === node.id ? null : current)}
-                title={'Select ' + node.name + '. Drag onto Canvas to create an independent instance, or above/below here to reorder and into the center to nest it.'}
+                title={'Select ' + node.name + '. Drag onto Canvas to place a linked instance, or above/below here to reorder and into the center to nest it.'}
               >
                 {hasChildren ? (
                   <button
@@ -1831,6 +1840,7 @@ export function App() {
           <div class="inspector-content">
             <section class="property-section">
               <div class="section-title">Layer</div>
+              {selectedLinkedLayerSource && <span class="field-help">LINKED INSTANCE · SOURCE {selectedLinkedLayerSource.name}</span>}
               <label class="field-label">Name</label>
               <input
                 class="text-field"

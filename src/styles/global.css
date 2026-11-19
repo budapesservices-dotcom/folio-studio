@@ -291,6 +291,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .layer-row:active { cursor: grabbing; }
 .layer-row:hover { background: #222936; }
 .layer-row.selected { color: #e6e1ff; background: #302b4b; border-color: #48406d; }
+.layer-row.linked-source-selected { border-left: 2px solid #a494ff; box-shadow: inset 0 0 0 1px #a494ff22; }
 .layer-row.dragging { opacity: .38; }
 .layer-row.drop-before::before, .layer-row.drop-after::after { content: ''; position: absolute; left: 4px; right: 4px; height: 2px; background: #a99fff; border-radius: 2px; box-shadow: 0 0 7px #a99fff88; pointer-events: none; }
 .layer-row.drop-before::before { top: -2px; }

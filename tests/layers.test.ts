@@ -273,6 +273,73 @@ describe('layer hierarchy and panel operations', () => {
     expect(getActiveDocument(deletedFromLayers.project).nodes).toHaveLength(0);
   });
 
+  it('places repeated layer drags as linked Canvas instances and hides the master artwork', () => {
+    const project = createInitialProject();
+    const source = { ...layer('linked-source'), onCanvas: true, width: 120, height: 80 };
+    const prepared = { ...project, pages: project.pages.map((page, index) => index === 0
+      ? { ...page, document: { ...page.document, nodes: [source] } } : page) };
+    let sequence = 0;
+    const makeId = () => 'linked-copy-' + (++sequence);
+    const first = createLayerCanvasInstances([source], [source.id], { x: 220, y: 140 }, makeId);
+    const placedOnce = editorReducer(createEditorState(prepared), {
+      type: 'place-layer-instances', sourceNodeIds: [source.id], instanceNodes: first,
+    });
+    const afterFirst = getActiveDocument(placedOnce.project).nodes;
+    expect(afterFirst.find((node) => node.id === source.id)?.onCanvas).toBe(false);
+    expect(afterFirst.find((node) => node.id === first[0].id)).toMatchObject({
+      isCanvasInstance: true, sourceLayerId: source.id, onCanvas: true,
+    });
+
+    const second = createLayerCanvasInstances(afterFirst, [source.id], { x: 460, y: 250 }, makeId);
+    const placedTwice = editorReducer(placedOnce, {
+      type: 'place-layer-instances', sourceNodeIds: [source.id], instanceNodes: second,
+    });
+    const finalNodes = getActiveDocument(placedTwice.project).nodes;
+    const instances = finalNodes.filter((node) => node.isCanvasInstance === true);
+    expect(instances).toHaveLength(2);
+    expect(instances.every((node) => node.sourceLayerId === source.id)).toBe(true);
+    expect(new Set(instances.map((node) => node.id)).size).toBe(2);
+    expect(instances.map((node) => [node.width, node.height])).toEqual([[120, 80], [120, 80]]);
+  });
+
+  it('synchronizes master appearance and dimensions to existing linked instances', () => {
+    const project = createInitialProject();
+    const source = { ...layer('linked-master'), onCanvas: false, width: 100, height: 60 };
+    const prepared = { ...project, pages: project.pages.map((page, index) => index === 0
+      ? { ...page, document: { ...page.document, nodes: [source] } } : page) };
+    const first = createLayerCanvasInstances([source], [source.id], { x: 200, y: 100 }, () => 'linked-a');
+    const second = createLayerCanvasInstances([source], [source.id], { x: 420, y: 280 }, () => 'linked-b');
+    const placed = editorReducer(createEditorState(prepared), {
+      type: 'place-layer-instances', sourceNodeIds: [source.id], instanceNodes: [...first, ...second],
+    });
+    const changedMaster = { ...source, width: 150, height: 90, style: { ...source.style, fill: '#ff3366' } };
+    const updated = editorReducer(placed, { type: 'edit-node', node: changedMaster, coalesceKey: 'master-edit' });
+    const nodes = getActiveDocument(updated.project).nodes;
+    expect(nodes.find((node) => node.id === source.id)).toMatchObject({ width: 150, height: 90 });
+    expect(nodes.filter((node) => node.isCanvasInstance === true).map((node) => ({
+      width: node.width, height: node.height, fill: node.type === 'rect' || node.type === 'ellipse' ? node.style.fill : null,
+    }))).toEqual([{ width: 150, height: 90, fill: '#ff3366' }, { width: 150, height: 90, fill: '#ff3366' }]);
+  });
+
+  it('propagates a linked instance appearance edit back to its master and sibling instances', () => {
+    const project = createInitialProject();
+    const source = { ...layer('linked-edit-master'), onCanvas: false };
+    const prepared = { ...project, pages: project.pages.map((page, index) => index === 0
+      ? { ...page, document: { ...page.document, nodes: [source] } } : page) };
+    const copies = createLayerCanvasInstances([source], [source.id], { x: 300, y: 100 }, (id, index) => 'linked-edit-' + index);
+    const placed = editorReducer(createEditorState(prepared), {
+      type: 'place-layer-instances', sourceNodeIds: [source.id], instanceNodes: copies,
+    });
+    const selectedInstance = copies[0];
+    const editedInstance = { ...selectedInstance, style: { ...selectedInstance.style, fill: '#22aa88' } };
+    const updated = editorReducer(placed, { type: 'edit-node', node: editedInstance, coalesceKey: 'linked-instance-fill' });
+    const nodes = getActiveDocument(updated.project).nodes;
+    expect(nodes.find((node) => node.id === source.id)?.style.fill).toBe('#22aa88');
+    expect(nodes.filter((node) => node.isCanvasInstance === true).every((node) =>
+      (node.type === 'rect' || node.type === 'ellipse') && node.style.fill === '#22aa88',
+    )).toBe(true);
+  });
+
   it('keeps the Layers source unchanged when placing a child and then its Group again', () => {
     const nodes = [
       layer('source-group', undefined, { type: 'group', x: 100, y: 100, width: 240, height: 180 }),
