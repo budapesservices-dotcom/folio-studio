@@ -225,6 +225,18 @@ describe('layer hierarchy and panel operations', () => {
     expect(createClippingMask(nodes, 'clipped-two').find((node) => node.id === 'clipped-two')?.clipMaskBaseId).toBe('base');
   });
 
+  it('remaps a clipping mask when its base and clipped layer are cloned together', () => {
+    const nodes = [
+      layer('source-base'),
+      layer('source-content', undefined, { clipMaskBaseId: 'source-base' }),
+    ];
+    let id = 0;
+    const copies = createLayerCanvasInstances(nodes, ['source-base', 'source-content'], { x: 300, y: 200 }, () => 'clone-' + (++id));
+    const baseCopy = copies.find((node) => node.sourceLayerId === 'source-base')!;
+    const contentCopy = copies.find((node) => node.sourceLayerId === 'source-content')!;
+    expect(contentCopy.clipMaskBaseId).toBe(baseCopy.id);
+  });
+
   it('removes a clipping relationship when its base layer is deleted', () => {
     const project = createInitialProject();
     const document = getActiveDocument(project);

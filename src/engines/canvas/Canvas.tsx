@@ -142,7 +142,11 @@ function NodeArtwork({ node, components = [], locked = node.locked }: { node: De
 }
 
 /** Paint a base layer's alpha silhouette into an SVG mask. Group bases use their descendants. */
-function ClipMaskArtwork({ node, nodes }: { node: DesignNode; nodes: DesignNode[] }) {
+function ClipMaskArtwork({ node, nodes, components }: {
+  node: DesignNode;
+  nodes: DesignNode[];
+  components: ComponentDefinition[];
+}) {
   if (node.type === 'group') {
     const states = getEffectiveLayerStates(nodes);
     const descendants = [...getLayerDescendantIds(nodes, node.id)]
@@ -153,18 +157,39 @@ function ClipMaskArtwork({ node, nodes }: { node: DesignNode; nodes: DesignNode[
     }
     return (
       <g>
-        {descendants.map((child) => child.type === 'component-instance'
-          ? <rect key={child.id} x={child.x} y={child.y} width={child.width} height={child.height} fill="#fff" opacity={child.opacity} />
-          : <NodeShape key={child.id} node={child as PrimitiveNode} mask />)}
+        {descendants.map((child) => (
+          <ClipMaskArtwork key={child.id} node={child} nodes={nodes} components={components} />
+        ))}
       </g>
     );
   }
 
   if (node.type === 'component-instance') {
+    const component = components.find((item) => item.id === node.componentId);
+    if (!component) {
+      const transform = node.rotation
+        ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
+        : undefined;
+      return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#fff" opacity={node.opacity} transform={transform} />;
+    }
+    const scaleX = node.width / Math.max(1, component.document.width);
+    const scaleY = node.height / Math.max(1, component.document.height);
     const transform = node.rotation
       ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
       : undefined;
-    return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#fff" opacity={node.opacity} transform={transform} />;
+    const resolved = resolveComponentInstanceNodes(node, component);
+    const states = getEffectiveLayerStates(resolved);
+    return (
+      <g transform={transform} opacity={node.opacity}>
+        <g transform={'translate(' + node.x + ' ' + node.y + ') scale(' + scaleX + ' ' + scaleY + ')'}>
+          {getLayerRenderOrder(resolved).filter((child) => child.type !== 'group' && states.get(child.id)?.visible).map((child) => (
+            child.type === 'component-instance'
+              ? <rect key={child.id} x={child.x} y={child.y} width={child.width} height={child.height} fill="#fff" opacity={child.opacity} />
+              : <NodeShape key={child.id} node={child as PrimitiveNode} mask />
+          ))}
+        </g>
+      </g>
+    );
   }
 
   return <NodeShape node={node as PrimitiveNode} mask />;
@@ -681,7 +706,7 @@ export function Canvas({
                   x="0" y="0" width={document.width} height={document.height}
                 >
                   <rect x="0" y="0" width={document.width} height={document.height} fill="#000" />
-                  <ClipMaskArtwork node={base} nodes={canvasNodes} />
+                  <ClipMaskArtwork node={base} nodes={canvasNodes} components={components} />
                 </mask>
               );
             })}
