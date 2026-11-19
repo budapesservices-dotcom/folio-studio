@@ -18,6 +18,8 @@ export interface NodeBase {
   opacity: number;
   visible: boolean;
   locked: boolean;
+  /** Optional label color used by the Layers panel, independent of canvas fill. */
+  layerColor?: string;
   /** Optional parent layer ID. Missing/null means top-level for backward compatibility. */
   parentId?: string | null;
 }

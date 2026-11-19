@@ -299,6 +299,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .layer-type { display: grid; place-items: center; flex: 0 0 17px; width: 17px; height: 17px; color: #a2aabb; font-size: 14px; line-height: 1; }
 .layer-type-text { font-size: 11px; font-weight: 800; }
 .layer-name { overflow: hidden; flex: 1 1 auto; min-width: 0; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.layer-name-editor { flex: 1 1 auto; min-width: 0; height: 22px; padding: 0 5px; border: 1px solid #887ce0; border-radius: 3px; outline: 0; color: #f0edff; background: #171522; font: inherit; font-size: 10px; }
+.layer-color-control { flex: 0 0 13px; width: 13px; height: 13px; margin: 0 3px 0 1px; padding: 1px; appearance: none; -webkit-appearance: none; overflow: hidden; border: 1px solid #566174; border-radius: 50%; background: transparent; cursor: pointer; }
+.layer-color-control::-webkit-color-swatch-wrapper { padding: 0; }
+.layer-color-control::-webkit-color-swatch { border: 0; border-radius: 50%; }
+.layer-color-control::-moz-color-swatch { border: 0; border-radius: 50%; }
 .layer-hidden .layer-name { opacity: .52; }
 .layer-inherited-locked .layer-name { color: #8d96a6; }
 .layer-disclosure, .layer-disclosure-spacer { display: grid; place-items: center; flex: 0 0 14px; width: 14px; height: 22px; padding: 0; border: 0; color: #7f8a9c; background: transparent; }
@@ -307,6 +312,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .layer-disclosure .icon-svg { width: 11px; height: 11px; }
 .layer-actions { display: flex; align-items: center; gap: 1px; flex: 0 0 auto; opacity: .58; }
 .layer-row:hover .layer-actions, .layer-row.selected .layer-actions, .layer-actions:focus-within { opacity: 1; }
+.layer-color-control { opacity: .78; }
+.layer-row:hover .layer-color-control, .layer-row.selected .layer-color-control, .layer-color-control:focus { opacity: 1; }
 .layer-control { display: grid; place-items: center; width: 23px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 4px; color: #8792a4; background: transparent; cursor: pointer; }
 .layer-control .icon-svg { width: 12px; height: 12px; }
 .layer-control:hover { color: #eeeaff; background: #ffffff12; }

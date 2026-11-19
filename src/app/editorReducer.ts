@@ -20,7 +20,8 @@ export type EditorAction =
   | { type: 'add-node'; node: DesignNode }
   | { type: 'add-nodes'; nodes: DesignNode[] }
   | { type: 'replace-node'; node: DesignNode }
-  | { type: 'set-nodes-properties'; nodeIds: string[]; properties: Partial<Pick<DesignNode, 'visible' | 'locked'>> }
+  | { type: 'set-nodes-properties'; nodeIds: string[]; properties: Partial<Pick<DesignNode, 'visible' | 'locked' | 'layerColor'>> }
+  | { type: 'rename-nodes'; updates: Array<{ nodeId: string; name: string }> }
   | { type: 'replace-node-with-nodes'; nodeId: string; nodes: DesignNode[] }
   | { type: 'edit-node'; node: DesignNode; coalesceKey: string }
   | { type: 'commit-edit' }
@@ -145,9 +146,27 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const nodes = document.nodes.map((node) => {
         if (!ids.has(node.id)) return node;
         const next = { ...node, ...action.properties };
-        return next.visible === node.visible && next.locked === node.locked ? node : next;
+        return next.visible === node.visible
+          && next.locked === node.locked
+          && next.layerColor === node.layerColor
+          ? node
+          : next;
       });
       if (nodes.every((node, index) => node === document.nodes[index])) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
+    case 'rename-nodes': {
+      const updates = new Map(action.updates.map((item) => [item.nodeId, item.name]));
+      if (updates.size === 0) return state;
+      let changed = false;
+      const nodes = document.nodes.map((node) => {
+        const name = updates.get(node.id);
+        if (name === undefined || name === node.name) return node;
+        changed = true;
+        return { ...node, name };
+      });
+      if (!changed) return state;
       return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
     }
 

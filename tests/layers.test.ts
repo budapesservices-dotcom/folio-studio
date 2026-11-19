@@ -23,6 +23,44 @@ function layer(id: string, parentId?: string, patch: Record<string, unknown> = {
 }
 
 describe('layer hierarchy and panel operations', () => {
+  it('renames multiple selected layers as one undoable numbered batch', () => {
+    const project = createInitialProject();
+    const document = getActiveDocument(project);
+    const one = { ...document.nodes[0], id: 'rename-one', name: 'Old A' };
+    const two = { ...document.nodes[1], id: 'rename-two', name: 'Old B' };
+    const prepared = {
+      ...project,
+      pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [one, two] } })),
+    };
+    const initial = createEditorState(prepared);
+    const renamed = editorReducer(initial, {
+      type: 'rename-nodes',
+      updates: [{ nodeId: one.id, name: 'Card 1' }, { nodeId: two.id, name: 'Card 2' }],
+    });
+    const renamedNodes = getActiveDocument(renamed.project).nodes;
+    expect(renamedNodes.map((node) => node.name)).toEqual(['Card 1', 'Card 2']);
+    expect(getActiveDocument(editorReducer(renamed, { type: 'undo' }).project).nodes.map((node) => node.name)).toEqual(['Old A', 'Old B']);
+  });
+
+  it('stores layer marker colors without changing the visual fill', () => {
+    const project = createInitialProject();
+    const document = getActiveDocument(project);
+    const node = { ...document.nodes[0], id: 'color-layer', layerColor: '#ff8800' };
+    const prepared = {
+      ...project,
+      pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [node] } })),
+    };
+    const initial = createEditorState(prepared);
+    const colored = editorReducer(initial, {
+      type: 'set-nodes-properties',
+      nodeIds: [node.id],
+      properties: { layerColor: '#22aa88' },
+    });
+    const result = getActiveDocument(colored.project).nodes[0];
+    expect(result.layerColor).toBe('#22aa88');
+    expect(result.type === 'rect' ? result.style.fill : '').toBe(node.type === 'rect' ? node.style.fill : '');
+  });
+
   it('lists top-level layers in reverse paint order and nests children under their parent', () => {
     const nodes = [layer('back'), layer('parent'), layer('child-a', 'parent'), layer('child-b', 'parent')];
     expect(getLayerPanelRows(nodes).map(({ node, depth }) => [node.id, depth])).toEqual([

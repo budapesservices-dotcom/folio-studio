@@ -123,6 +123,8 @@ export function App() {
   const [layerDropTarget, setLayerDropTarget] = useState<{ nodeId: string; position: LayerDropPosition } | null>(null);
   const layerDragSourceRef = useRef<string[] | null>(null);
   const layerSelectionAnchorRef = useRef<Record<EditorTarget, string | null>>({ main: null, component: null });
+  const [layerRename, setLayerRename] = useState<{ anchorId: string; nodeIds: string[]; value: string; batch: boolean } | null>(null);
+  const layerRenameCancelRef = useRef(false);
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
   const [windowOrder, setWindowOrder] = useState<WindowId[]>(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
   const [activeWindowId, setActiveWindowId] = useState<WindowId>('main-canvas');
@@ -397,6 +399,55 @@ export function App() {
   const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
   const layerRows = getLayerPanelRows(focusedDocument.nodes, collapsedLayers[activeEditorId]);
   const layerEffectiveStates = getEffectiveLayerStates(focusedDocument.nodes);
+  const beginLayerRename = (nodeId: string, batch: boolean) => {
+    const selectedIds = focusedEditor.state.selectedNodeIds;
+    const nodeIds = batch
+      ? layerRows.filter(({ node }) => selectedIds.includes(node.id)).map(({ node }) => node.id)
+      : [nodeId];
+    const clickedNode = focusedDocument.nodes.find((node) => node.id === nodeId);
+    if (!clickedNode || nodeIds.length === 0) return;
+    const initialValue = batch ? clickedNode.name.replace(/\s+\d+$/, '') : clickedNode.name;
+    layerRenameCancelRef.current = false;
+    setLayerRename({ anchorId: nodeId, nodeIds, value: initialValue, batch });
+  };
+
+  const commitLayerRename = () => {
+    if (layerRenameCancelRef.current) {
+      layerRenameCancelRef.current = false;
+      setLayerRename(null);
+      return;
+    }
+    if (!layerRename) return;
+    const baseName = layerRename.value.trim();
+    if (baseName) {
+      const updates = layerRename.batch
+        ? (() => {
+            const selected = new Set(layerRename.nodeIds);
+            const occupied = new Set(focusedDocument.nodes.filter((node) => !selected.has(node.id)).map((node) => node.name));
+            let suffix = 1;
+            return layerRename.nodeIds.map((nodeId) => {
+              let name = '';
+              do { name = `${baseName} ${suffix++}`; } while (occupied.has(name));
+              occupied.add(name);
+              return { nodeId, name };
+            });
+          })()
+        : [{ nodeId: layerRename.nodeIds[0], name: baseName }];
+      dispatchFocused({ type: 'rename-nodes', updates });
+    }
+    setLayerRename(null);
+  };
+
+  const setLayerColorFromRow = (nodeId: string, color: string) => {
+    const selectedIds = focusedEditor.state.selectedNodeIds;
+    const targetIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId];
+    dispatchFocused({
+      type: 'set-nodes-properties',
+      nodeIds: targetIds,
+      properties: { layerColor: color },
+    });
+  };
+
   const toggleLayerPropertyFromRow = (nodeId: string, property: 'visible' | 'locked') => {
     const selectedIds = focusedEditor.state.selectedNodeIds;
     const targetIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId];
@@ -413,6 +464,14 @@ export function App() {
   const selectLayerFromPanel = (nodeId: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
     const selected = focusedEditor.state.selectedNodeIds;
     const additive = Boolean(modifiers.ctrlKey || modifiers.metaKey);
+    if (modifiers.shiftKey && selected.length > 1 && selected.includes(nodeId)) {
+      beginLayerRename(nodeId, true);
+      return;
+    }
+    if (!modifiers.shiftKey && !additive && selected.length === 1 && selected[0] === nodeId) {
+      beginLayerRename(nodeId, false);
+      return;
+    }
     const orderedIds = layerRows.map((row) => row.node.id);
     if (modifiers.shiftKey) {
       const anchor = layerSelectionAnchorRef.current[activeEditorId];
@@ -1007,8 +1066,39 @@ export function App() {
                   </button>
                 ) : <span class="layer-disclosure-spacer" />}
                 <LayerIcon type={node.type} />
-                <span class="layer-name">{node.name}</span>
+                {layerRename?.anchorId === node.id ? (
+                  <input
+                    class="layer-name-editor"
+                    type="text"
+                    value={layerRename.value}
+                    autoFocus
+                    aria-label={layerRename.batch ? `Rename ${layerRename.nodeIds.length} selected layers` : `Rename ${node.name}`}
+                    title={layerRename.batch ? `Batch rename ${layerRename.nodeIds.length} layers (numbered)` : 'Rename layer'}
+                    onClick={(event) => event.stopPropagation()}
+                    onInput={(event) => setLayerRename((current) => current ? { ...current, value: event.currentTarget.value } : current)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); }
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        layerRenameCancelRef.current = true;
+                        event.currentTarget.blur();
+                      }
+                    }}
+                    onBlur={commitLayerRename}
+                  />
+                ) : (
+                  <span class="layer-name">{node.name}</span>
+                )}
                 <div class="layer-actions">
+                  <input
+                    class="layer-color-control"
+                    type="color"
+                    value={node.layerColor ?? '#7f8797'}
+                    title={node.layerColor ? `Layer color ${node.layerColor}` : 'Set layer color'}
+                    aria-label={`Set color for ${node.name}`}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) => setLayerColorFromRow(node.id, event.currentTarget.value)}
+                  />
                   <button
                     type="button"
                     class={'layer-control ' + (node.visible ? 'active' : '')}
