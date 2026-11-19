@@ -7,6 +7,7 @@ import { createComponentInstance, detachComponentInstance, getComponentOverrideT
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
 import { Canvas } from '../engines/canvas/Canvas';
+import { CANVAS_TOOL_GROUPS, getCanvasTool, type CanvasToolGroupId, type CanvasToolId } from '../engines/canvas/tools/registry';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
 import { createEditorState, editorReducer, normalizePositiveDimension } from './editorReducer';
 import { FloatingWindow } from './FloatingWindow';
@@ -16,6 +17,12 @@ import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWi
 function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
     cursor: 'M5 3l14 9-6 1.5L10 20 5 3z',
+    directSelection: 'M4 3l15 10-6 1 4 7-3 1-4-7-4 5z',
+    lasso: 'M12 3c5 0 9 3 9 7s-4 8-9 8-9-3-9-7 4-8 9-8zM5 19l-1 2m6-1-1 2m7-3 1 2',
+    magicWand: 'm4 20 12-12m-9 9 3 3m5-17v4m-2-2h4m5 7v4m-2-2h4m-9 5v3m-2-1h4',
+    hand: 'M8 11V5a2 2 0 0 1 4 0v5-6a2 2 0 0 1 4 0v7-4a2 2 0 0 1 4 0v7c0 4-2 7-6 7h-2c-2 0-3-1-4-3l-3-4a2 2 0 0 1 3-3z',
+    scrubbyZoom: 'M5 12h14m-5-5 5 5-5 5M9 7 4 12l5 5',
+    shapes: 'M4 5h8v8H4zM15 6a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 17h16',
     rect: 'M4 5h16v14H4z',
     ellipse: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z',
     text: 'M4 5h16M12 5v14M8 19h8',
@@ -57,6 +64,8 @@ function LayerIcon({ type }: { type: DesignNode['type'] }) {
   const glyph = type === 'group' ? '▣' : type === 'text' ? 'T' : type === 'ellipse' ? '○' : type === 'component-instance' ? '◇' : '□';
   return <span class={`layer-type layer-type-${type}`}>{glyph}</span>;
 }
+
+type ToolRackGroupId = CanvasToolGroupId | 'create';
 
 type ToolbarHint = {
   panel: string;
@@ -135,6 +144,8 @@ export function App() {
   const setMainPan = (pan: { x: number; y: number }) => setMainView((view) => ({ ...view, pan }));
   const setComponentCanvasPan = (pan: { x: number; y: number }) => setComponentView((view) => ({ ...view, pan }));
   const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
+  const [activeCanvasToolId, setActiveCanvasToolId] = useState<CanvasToolId>('select');
+  const [toolRackOpen, setToolRackOpen] = useState<ToolRackGroupId | null>(null);
   const [projectNameEditing, setProjectNameEditing] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState('');
   const projectNameCancelRef = useRef(false);
@@ -1085,6 +1096,13 @@ export function App() {
     setToolbarHint({ panel, description, shortcuts });
   };
 
+  const chooseCanvasTool = (toolId: CanvasToolId) => {
+    const tool = getCanvasTool(toolId);
+    setActiveCanvasToolId(toolId);
+    setToolRackOpen(null);
+    updateToolbarHint(tool.label.toUpperCase(), tool.description);
+  };
+
   const enterFullscreen = () => {
     const root = document.querySelector('.app-shell') as HTMLElement | null;
     if (!document.fullscreenElement) root?.requestFullscreen?.().catch(() => setNotice('Fullscreen is unavailable in this browser.'));
@@ -1336,20 +1354,88 @@ export function App() {
           </div>
         </div>
       </header>
-      <nav class="tool-rail" aria-label="Insert tools" onMouseEnter={() => updateToolbarHint('TOOLS', 'Choose Select, Rectangle, Ellipse or Text from the tool rail.')}>
-        <button class="tool-button active" title="Select layer" aria-label="Select layer" onClick={() => dispatchFocused({ type: 'select-node', nodeId: null })}>
-          <Icon name="cursor" />
-        </button>
+      <nav class="tool-rail" aria-label="Tool Rack" onMouseEnter={() => updateToolbarHint('TOOL RACK', 'Choose a cursor tool or create a design object. The active cursor tool works in both Canvas workspaces.')}>
+        <div class="tool-rack-caption">TOOLS</div>
+        {CANVAS_TOOL_GROUPS.map((group) => {
+          const activeInGroup = group.tools.includes(activeCanvasToolId);
+          const activeTool = activeInGroup ? getCanvasTool(activeCanvasToolId) : null;
+          return (
+            <div class="tool-rack-group" key={group.id}>
+              <button
+                type="button"
+                class={'tool-rack-group-trigger ' + (activeInGroup ? 'active' : '') + (toolRackOpen === group.id ? ' open' : '')}
+                title={group.label + ' tools'}
+                aria-label={group.label + ' tools'}
+                aria-expanded={toolRackOpen === group.id}
+                onClick={() => setToolRackOpen((current) => current === group.id ? null : group.id)}
+                onMouseEnter={() => updateToolbarHint(group.label.toUpperCase(), group.description)}
+              >
+                <Icon name={activeTool?.icon ?? group.icon} />
+                <span>{group.label}</span>
+                <Icon name="chevronRight" />
+              </button>
+              {toolRackOpen === group.id && (
+                <div class="tool-rack-menu" role="menu" aria-label={group.label + ' tools'}>
+                  {group.tools.map((id) => {
+                    const tool = getCanvasTool(id);
+                    return (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={activeCanvasToolId === id}
+                        class={'tool-rack-item ' + (activeCanvasToolId === id ? 'active' : '')}
+                        key={id}
+                        onClick={() => chooseCanvasTool(id)}
+                        onMouseEnter={() => updateToolbarHint(tool.label.toUpperCase(), tool.description)}
+                      >
+                        <span class="tool-rack-item-icon"><Icon name={tool.icon} /></span>
+                        <span class="tool-rack-item-name">{tool.label}</span>
+                        {activeCanvasToolId === id && <span class="tool-rack-active-mark">●</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
         <div class="rail-separator" />
-        <button class="tool-button" title="Add rectangle" aria-label="Add rectangle" onClick={() => addNode('rect')}>
-          <Icon name="rect" />
-        </button>
-        <button class="tool-button" title="Add ellipse" aria-label="Add ellipse" onClick={() => addNode('ellipse')}>
-          <Icon name="ellipse" />
-        </button>
-        <button class="tool-button" title="Add text" aria-label="Add text" onClick={() => addNode('text')}>
-          <Icon name="text" />
-        </button>
+        <div class="tool-rack-group">
+          <button
+            type="button"
+            class={'tool-rack-group-trigger ' + (toolRackOpen === 'create' ? 'active open' : '')}
+            title="Create tools"
+            aria-label="Create tools"
+            aria-expanded={toolRackOpen === 'create'}
+            onClick={() => setToolRackOpen((current) => current === 'create' ? null : 'create')}
+            onMouseEnter={() => updateToolbarHint('CREATE', 'Create new Rectangle, Ellipse or Text objects in the active Canvas workspace.')}
+          >
+            <Icon name="shapes" />
+            <span>Create</span>
+            <Icon name="chevronRight" />
+          </button>
+          {toolRackOpen === 'create' && (
+            <div class="tool-rack-menu" role="menu" aria-label="Create tools">
+              {([
+                { type: 'rect' as const, label: 'Rectangle', icon: 'rect', description: 'Add a new rectangle to the active Canvas.' },
+                { type: 'ellipse' as const, label: 'Ellipse', icon: 'ellipse', description: 'Add a new ellipse to the active Canvas.' },
+                { type: 'text' as const, label: 'Text', icon: 'text', description: 'Add a new text object to the active Canvas.' },
+              ]).map((item) => (
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="tool-rack-item"
+                  key={item.type}
+                  onClick={() => { setToolRackOpen(null); addNode(item.type); }}
+                  onMouseEnter={() => updateToolbarHint(item.label.toUpperCase(), item.description)}
+                >
+                  <span class="tool-rack-item-icon"><Icon name={item.icon} /></span>
+                  <span class="tool-rack-item-name">{item.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div class="rail-bottom">
           <button class="tool-button" title="Undo" aria-label="Undo" disabled={focusedEditor.state.past.length === 0} onClick={() => dispatchFocused({ type: 'undo' })}>
             <Icon name="undo" />
@@ -1656,6 +1742,7 @@ export function App() {
             document={activeDocument}
             components={state.project.components}
             selectedNodeIds={state.selectedNodeIds}
+            toolId={activeCanvasToolId}
             zoom={zoom}
             pan={mainView.pan}
             onPanChange={setMainPan}
@@ -1694,11 +1781,7 @@ export function App() {
             <strong>{editingComponent ? editingComponent.name + ' · Master' : 'Component Canvas'}</strong>
           </div>
           <div class="canvas-window-tools">
-            <div class="workspace-tools component-canvas-create-tools" aria-label="Create component elements">
-              <button type="button" title="Add rectangle" aria-label="Add rectangle" onClick={() => componentDispatch({ type: 'add-node', node: createNode('rect', getActiveDocument(componentState.project).nodes.length) })}><Icon name="rect" /></button>
-              <button type="button" title="Add ellipse" aria-label="Add ellipse" onClick={() => componentDispatch({ type: 'add-node', node: createNode('ellipse', getActiveDocument(componentState.project).nodes.length) })}><Icon name="ellipse" /></button>
-              <button type="button" title="Add text" aria-label="Add text" onClick={() => componentDispatch({ type: 'add-node', node: createNode('text', getActiveDocument(componentState.project).nodes.length) })}><Icon name="text" /></button>
-              <span class="workspace-divider" />
+            <div class="workspace-tools component-canvas-create-tools" aria-label="Component actions">
               <button type="button" title="Save selected as reusable component" aria-label="Save selected as reusable component" disabled={selectedComponentNodes.length === 0} onClick={() => saveNodesAsComponent(selectedComponentNodes)}><Icon name="save" /></button>
             </div>
             {componentState.selectedNodeIds.length > 1 && (
@@ -1733,6 +1816,7 @@ export function App() {
             document={componentDocument}
             components={state.project.components}
             selectedNodeIds={componentState.selectedNodeIds}
+            toolId={activeCanvasToolId}
             zoom={componentCanvasZoom}
             pan={componentView.pan}
             onPanChange={setComponentCanvasPan}
