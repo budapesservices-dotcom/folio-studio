@@ -215,7 +215,7 @@ describe('layer hierarchy and panel operations', () => {
 
   it('wraps a single parent hierarchy in a Group and ungroups it without losing children', () => {
     const nodes = [
-      layer('parent', undefined, { width: 100, height: 80 }),
+      layer('parent', undefined, { x: 100, y: 100, width: 100, height: 80 }),
       layer('child', 'parent', { x: 160, y: 140, width: 90, height: 70 }),
       layer('grandchild', 'child', { x: 280, y: 220, width: 60, height: 50 }),
     ];
