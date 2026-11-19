@@ -147,7 +147,7 @@ function ClipMaskArtwork({ node, nodes }: { node: DesignNode; nodes: DesignNode[
     const states = getEffectiveLayerStates(nodes);
     const descendants = [...getLayerDescendantIds(nodes, node.id)]
       .map((id) => nodes.find((item) => item.id === id))
-      .filter((item): item is DesignNode => item !== undefined && item.type !== 'group' && states.get(item.id)?.visible);
+      .filter((item): item is DesignNode => item !== undefined && item.type !== 'group' && Boolean(states.get(item.id)?.visible));
     if (descendants.length === 0) {
       return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#fff" opacity={node.opacity} />;
     }
