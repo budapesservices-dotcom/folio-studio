@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
+import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage } from '../core/document/types';
+import { expandSelectedLayers, getEffectiveLayerStates, getLayerPanelRows, type LayerDropPosition } from '../core/document/layers';
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
@@ -23,6 +25,12 @@ function Icon({ name }: { name: string }) {
     undo: 'M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-2',
     redo: 'm15 14 5-5-5-5m5 5H10a6 6 0 0 0 0 12h2',
     trash: 'M4 7h16M10 11v6m4-6v6M6 7l1 14h10l1-14M9 7V4h6v3',
+    eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+    eyeOff: 'M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A10 10 0 0 1 12 5c6.5 0 10 7 10 7a15 15 0 0 1-3.1 3.9M6.6 6.6C3.6 8.5 2 12 2 12s3.5 7 10 7a9 9 0 0 0 3.2-.6',
+    lock: 'M5 10h14v11H5zM8 10V7a4 4 0 1 1 8 0v3',
+    unlock: 'M5 10h14v11H5zM8 10V7a4 4 0 0 1 7.5-2',
+    chevronDown: 'm6 9 6 6 6-6',
+    chevronRight: 'm9 18 6-6-6-6',
     plus: 'M12 5v14M5 12h14',
     minus: 'M5 12h14',
     chevron: 'm9 18 6-6-6-6',
@@ -45,7 +53,8 @@ function Icon({ name }: { name: string }) {
 }
 
 function LayerIcon({ type }: { type: DesignNode['type'] }) {
-  return <span class={`layer-type layer-type-${type}`}>{type === 'text' ? 'T' : type === 'ellipse' ? '○' : '□'}</span>;
+  const glyph = type === 'text' ? 'T' : type === 'ellipse' ? '○' : type === 'component-instance' ? '◇' : '□';
+  return <span class={`layer-type layer-type-${type}`}>{glyph}</span>;
 }
 
 type ToolbarHint = {
@@ -110,6 +119,10 @@ export function App() {
   const projectNameCancelRef = useRef(false);
   const [layersVisible, setLayersVisible] = useState(true);
   const [inspectorVisible, setInspectorVisible] = useState(true);
+  const [collapsedLayers, setCollapsedLayers] = useState<Record<EditorTarget, string[]>>({ main: [], component: [] });
+  const [layerDropTarget, setLayerDropTarget] = useState<{ nodeId: string; position: LayerDropPosition } | null>(null);
+  const layerDragSourceRef = useRef<string | null>(null);
+  const layerSelectionAnchorRef = useRef<Record<EditorTarget, string | null>>({ main: null, component: null });
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
   const [windowOrder, setWindowOrder] = useState<WindowId[]>(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
   const [activeWindowId, setActiveWindowId] = useState<WindowId>('main-canvas');
@@ -376,6 +389,84 @@ export function App() {
     : null;
   const instanceOverrideTargets = selectedInstanceComponent ? getComponentOverrideTargets(selectedInstanceComponent) : null;
   const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
+  const layerRows = getLayerPanelRows(focusedDocument.nodes, collapsedLayers[activeEditorId]);
+  const layerEffectiveStates = getEffectiveLayerStates(focusedDocument.nodes);
+
+  const selectLayerFromPanel = (nodeId: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
+    const selected = focusedEditor.state.selectedNodeIds;
+    const additive = Boolean(modifiers.ctrlKey || modifiers.metaKey);
+    const orderedIds = layerRows.map((row) => row.node.id);
+    if (modifiers.shiftKey) {
+      const anchor = layerSelectionAnchorRef.current[activeEditorId];
+      const anchorId = anchor && selected.includes(anchor) ? anchor : (selected[0] ?? nodeId);
+      const start = orderedIds.indexOf(anchorId);
+      const end = orderedIds.indexOf(nodeId);
+      if (start >= 0 && end >= 0) {
+        const range = orderedIds.slice(Math.min(start, end), Math.max(start, end) + 1);
+        const next = additive ? [...new Set([...selected, ...range])] : range;
+        dispatchFocused({ type: 'select-nodes', nodeIds: next });
+        setInspectorVisible(true);
+        return;
+      }
+    }
+    if (additive) {
+      const next = selected.includes(nodeId)
+        ? selected.filter((id) => id !== nodeId)
+        : [...selected, nodeId];
+      const anchor = layerSelectionAnchorRef.current[activeEditorId];
+      if (!anchor || !selected.includes(anchor)) layerSelectionAnchorRef.current[activeEditorId] = nodeId;
+      dispatchFocused({ type: 'select-nodes', nodeIds: next });
+    } else {
+      layerSelectionAnchorRef.current[activeEditorId] = nodeId;
+      dispatchFocused({ type: 'select-node', nodeId });
+    }
+    setInspectorVisible(true);
+  };
+
+  const toggleLayerCollapsed = (nodeId: string) => {
+    setCollapsedLayers((current) => {
+      const ids = current[activeEditorId] ?? [];
+      return { ...current, [activeEditorId]: ids.includes(nodeId) ? ids.filter((id) => id !== nodeId) : [...ids, nodeId] };
+    });
+  };
+
+  const getLayerDropPosition = (event: { currentTarget: HTMLElement; clientY: number }): LayerDropPosition => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const relativeY = (event.clientY - rect.top) / Math.max(1, rect.height);
+    return relativeY < 0.25 ? 'before' : relativeY > 0.75 ? 'after' : 'inside';
+  };
+
+  const startLayerDrag = (nodeId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
+    layerDragSourceRef.current = nodeId;
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', nodeId);
+    }
+  };
+
+  const updateLayerDropTarget = (nodeId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
+    if (!layerDragSourceRef.current) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    setLayerDropTarget({ nodeId, position: getLayerDropPosition(event) });
+  };
+
+  const dropLayer = (targetId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const sourceId = event.dataTransfer?.getData('text/plain') || layerDragSourceRef.current;
+    const position = getLayerDropPosition(event);
+    if (sourceId && sourceId !== targetId) {
+      dispatchFocused({ type: 'move-layer', nodeId: sourceId, targetId, position });
+      if (position === 'inside') {
+        setCollapsedLayers((current) => ({
+          ...current,
+          [activeEditorId]: (current[activeEditorId] ?? []).filter((id) => id !== targetId),
+        }));
+      }
+    }
+    layerDragSourceRef.current = null;
+    setLayerDropTarget(null);
+  };
 
   const addNode = (type: 'rect' | 'ellipse' | 'text') => {
     if (isHydrating) return;
@@ -530,7 +621,7 @@ export function App() {
     setNotice(`Created ${name}.`);
   };
 
-  const saveSelectionAsComponent = () => saveNodesAsComponent(selectedNodes);
+  const saveSelectionAsComponent = () => saveNodesAsComponent(expandSelectedLayers(focusedDocument.nodes, focusedEditor.state.selectedNodeIds));
 
   const commitProjectName = (value: string) => {
     if (isHydrating) return;
@@ -540,9 +631,7 @@ export function App() {
     }
   };
 
-  const selectedComponentNodes = componentDocument.nodes.filter(
-    (node) => componentState.selectedNodeIds.includes(node.id),
-  );
+  const selectedComponentNodes = expandSelectedLayers(componentDocument.nodes, componentState.selectedNodeIds);
   const insertOwnedComponent = (component: ComponentDefinition) => {
     if (isHydrating) return;
     const offset = state.project.pages.find((page) => page.id === state.project.activePageId)?.document.nodes.length ?? 0;
@@ -601,7 +690,12 @@ export function App() {
   const alignSelection = (alignment: Alignment, target: EditorTarget = activeEditorId) => {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
-    const selected = getTransformableNodes(getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
+    const document = getActiveDocument(editor.project);
+    const layerStates = getEffectiveLayerStates(document.nodes);
+    const selected = getTransformableNodes(expandSelectedLayers(document.nodes, editor.selectedNodeIds).filter((node) => {
+      const effective = layerStates.get(node.id);
+      return effective?.visible && !effective.locked;
+    }));
     if (selected.length < 2) return;
     const nextNodes = alignNodes(selected, alignment);
     if (target === 'main') dispatch({ type: 'transform-nodes', nodes: nextNodes });
@@ -684,7 +778,11 @@ export function App() {
       if (target?.isContentEditable || target?.matches('input, textarea, select, [contenteditable="true"]')) return;
       const context = getActiveEditorContext(activeEditorId, state, componentState);
       const emit = activeEditorId === 'main' ? dispatch : componentDispatch;
-      const nodes = getTransformableNodes(context.selectedNodes);
+      const layerStates = getEffectiveLayerStates(context.document.nodes);
+      const nodes = getTransformableNodes(expandSelectedLayers(context.document.nodes, context.state.selectedNodeIds).filter((node) => {
+        const effective = layerStates.get(node.id);
+        return effective?.visible && !effective.locked;
+      }));
       const ids = context.state.selectedNodeIds;
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
@@ -828,7 +926,7 @@ export function App() {
         </div>
       </nav>
 
-      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Select layers or extend a selection with modifier-click.', ['SHIFT + CLICK', 'CTRL/CMD + CLICK'])}>
+      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Select layers, Ctrl/Cmd-click to toggle multiple, Ctrl/Cmd + Shift for a range, and drag to reorder or nest.', ['CTRL/CMD + CLICK', 'CTRL/CMD + SHIFT + CLICK', 'DRAG TO REORDER / NEST'])}>
         <div class="panel-heading">
           <div>
             <span class="panel-kicker">DOCUMENT</span>
@@ -845,30 +943,77 @@ export function App() {
           <span>LAYERS</span>
           <span>{focusedDocument.nodes.length}</span>
         </div>
-        <div class="layer-list">
-          {[...focusedDocument.nodes].reverse().map((node) => (
-            <button
-              key={node.id}
-              class={"layer-row " + (focusedEditor.state.selectedNodeIds.includes(node.id) ? "selected " : "") + (node.visible ? "" : "layer-hidden")}
-              onClick={(event) => {
-                const selected = focusedEditor.state.selectedNodeIds;
-                setInspectorVisible(true);
-                if (event.shiftKey || event.metaKey || event.ctrlKey) {
-                  const next = selected.includes(node.id)
-                    ? selected.filter((id) => id !== node.id)
-                    : [...selected, node.id];
-                  dispatchFocused({ type: 'select-nodes', nodeIds: next });
-                } else {
-                  dispatchFocused({ type: 'select-node', nodeId: node.id });
-                }
-              }}
-              title={`Select ${node.name}`}
-            >
-              <LayerIcon type={node.type} />
-              <span class="layer-name">{node.name}</span>
-              <span class="layer-eye">{node.visible ? '◉' : '○'}</span>
-            </button>
-          ))}
+        <div class="layer-list" role="tree" aria-label="Document layers">
+          {layerRows.map(({ node, depth, hasChildren }) => {
+            const selected = focusedEditor.state.selectedNodeIds.includes(node.id);
+            const effective = layerEffectiveStates.get(node.id);
+            const collapsed = (collapsedLayers[activeEditorId] ?? []).includes(node.id);
+            const dropClass = layerDropTarget?.nodeId === node.id ? ('drop-' + layerDropTarget.position) : '';
+            return (
+              <div
+                key={node.id}
+                role="treeitem"
+                aria-level={depth + 1}
+                aria-selected={selected}
+                aria-expanded={hasChildren ? !collapsed : undefined}
+                tabIndex={0}
+                draggable={true}
+                class={'layer-row ' + (selected ? 'selected ' : '') + (!effective?.visible ? 'layer-hidden ' : '') + (effective?.locked ? 'layer-inherited-locked ' : '') + dropClass}
+                style={{ paddingLeft: (8 + depth * 15) + 'px' }}
+                onClick={(event) => selectLayerFromPanel(node.id, event)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    selectLayerFromPanel(node.id, event);
+                  }
+                }}
+                onDragStart={(event) => startLayerDrag(node.id, event)}
+                onDragOver={(event) => updateLayerDropTarget(node.id, event)}
+                onDrop={(event) => dropLayer(node.id, event)}
+                onDragEnd={() => { layerDragSourceRef.current = null; setLayerDropTarget(null); }}
+                onDragLeave={() => setLayerDropTarget((current) => current?.nodeId === node.id ? null : current)}
+                title={'Select ' + node.name + '. Drag above or below to reorder, or onto the center to nest it.'}
+              >
+                {hasChildren ? (
+                  <button
+                    type="button"
+                    class="layer-disclosure"
+                    title={collapsed ? 'Expand sub-layers' : 'Collapse sub-layers'}
+                    aria-label={collapsed ? ('Expand ' + node.name) : ('Collapse ' + node.name)}
+                    onClick={(event) => { event.stopPropagation(); toggleLayerCollapsed(node.id); }}
+                  >
+                    <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} />
+                  </button>
+                ) : <span class="layer-disclosure-spacer" />}
+                <LayerIcon type={node.type} />
+                <span class="layer-name">{node.name}</span>
+                <div class="layer-actions">
+                  <button
+                    type="button"
+                    class={'layer-control ' + (node.visible ? 'active' : '')}
+                    title={node.visible ? 'Hide layer' : 'Show layer'}
+                    aria-label={node.visible ? ('Hide ' + node.name) : ('Show ' + node.name)}
+                    aria-pressed={node.visible}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      dispatchFocused({ type: 'replace-node', node: { ...node, visible: !node.visible } });
+                    }}
+                  ><Icon name={node.visible ? 'eye' : 'eyeOff'} /></button>
+                  <button
+                    type="button"
+                    class={'layer-control ' + (node.locked ? 'active' : '')}
+                    title={node.locked ? 'Unlock layer' : 'Lock layer'}
+                    aria-label={node.locked ? ('Unlock ' + node.name) : ('Lock ' + node.name)}
+                    aria-pressed={node.locked}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      dispatchFocused({ type: 'replace-node', node: { ...node, locked: !node.locked } });
+                    }}
+                  ><Icon name={node.locked ? 'lock' : 'unlock'} /></button>
+                </div>
+              </div>
+            );
+          })}
           {focusedDocument.nodes.length === 0 && (
             <div class="empty-layers">Your layers will appear here.</div>
           )}
