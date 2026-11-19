@@ -77,6 +77,19 @@ function parseNumericInput(value: string): number | null {
 }
 
 type CanvasViewState = { zoom: number; pan: { x: number; y: number } };
+type LayerRenameSession = {
+  anchorId: string;
+  nodeIds: string[];
+  value: string;
+  batch: boolean;
+  editorId: EditorTarget;
+  existingNames: string[];
+};
+const LAYER_COLOR_PRESETS = [
+  '#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e',
+  '#14b8a6', '#06b6d4', '#3b82f6', '#6366f1', '#a855f7',
+  '#ec4899', '#94a3b8',
+];
 function readCanvasViewState(key: string): CanvasViewState {
   try {
     const value = JSON.parse(window.localStorage.getItem(key) ?? 'null');
@@ -123,8 +136,9 @@ export function App() {
   const [layerDropTarget, setLayerDropTarget] = useState<{ nodeId: string; position: LayerDropPosition } | null>(null);
   const layerDragSourceRef = useRef<string[] | null>(null);
   const layerSelectionAnchorRef = useRef<Record<EditorTarget, string | null>>({ main: null, component: null });
-  const [layerRename, setLayerRename] = useState<{ anchorId: string; nodeIds: string[]; value: string; batch: boolean } | null>(null);
-  const layerRenameCancelRef = useRef(false);
+  const [layerRename, setLayerRename] = useState<LayerRenameSession | null>(null);
+  const layerRenameRef = useRef<LayerRenameSession | null>(null);
+  const [layerColorPickerKey, setLayerColorPickerKey] = useState<string | null>(null);
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
   const [windowOrder, setWindowOrder] = useState<WindowId[]>(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
   const [activeWindowId, setActiveWindowId] = useState<WindowId>('main-canvas');
@@ -406,46 +420,67 @@ export function App() {
       : [nodeId];
     const clickedNode = focusedDocument.nodes.find((node) => node.id === nodeId);
     if (!clickedNode || nodeIds.length === 0) return;
-    const initialValue = batch ? clickedNode.name.replace(/\s+\d+$/, '') : clickedNode.name;
-    layerRenameCancelRef.current = false;
-    setLayerRename({ anchorId: nodeId, nodeIds, value: initialValue, batch });
+    const selectedSet = new Set(nodeIds);
+    const session: LayerRenameSession = {
+      anchorId: nodeId,
+      nodeIds,
+      value: batch ? clickedNode.name.replace(/\s+\d+$/, '') : clickedNode.name,
+      batch,
+      editorId: activeEditorId,
+      existingNames: focusedDocument.nodes.filter((node) => !selectedSet.has(node.id)).map((node) => node.name),
+    };
+    layerRenameRef.current = session;
+    setLayerRename(session);
   };
 
-  const commitLayerRename = () => {
-    if (layerRenameCancelRef.current) {
-      layerRenameCancelRef.current = false;
+  const updateLayerRenameDraft = (value: string) => {
+    const current = layerRenameRef.current;
+    if (!current) return;
+    const next = { ...current, value };
+    layerRenameRef.current = next;
+    setLayerRename(next);
+  };
+
+  const finishLayerRename = (save: boolean) => {
+    const session = layerRenameRef.current;
+    if (!session) {
       setLayerRename(null);
       return;
     }
-    if (!layerRename) return;
-    const baseName = layerRename.value.trim();
-    if (baseName) {
-      const updates = layerRename.batch
-        ? (() => {
-            const selected = new Set(layerRename.nodeIds);
-            const occupied = new Set(focusedDocument.nodes.filter((node) => !selected.has(node.id)).map((node) => node.name));
-            let suffix = 1;
-            return layerRename.nodeIds.map((nodeId) => {
-              let name = '';
-              do { name = `${baseName} ${suffix++}`; } while (occupied.has(name));
-              occupied.add(name);
-              return { nodeId, name };
-            });
-          })()
-        : [{ nodeId: layerRename.nodeIds[0], name: baseName }];
-      dispatchFocused({ type: 'rename-nodes', updates });
-    }
+    // Clear the ref first: Enter followed by an ensuing blur must never commit twice.
+    layerRenameRef.current = null;
     setLayerRename(null);
+    const baseName = session.value.trim();
+    if (!save || !baseName) return;
+
+    const updates = session.batch
+      ? (() => {
+          const occupied = new Set(session.existingNames);
+          let suffix = 1;
+          return session.nodeIds.map((nodeId) => {
+            let name = '';
+            do { name = `${baseName} ${suffix++}`; } while (occupied.has(name));
+            occupied.add(name);
+            return { nodeId, name };
+          });
+        })()
+      : [{ nodeId: session.nodeIds[0], name: baseName }];
+
+    const targetDispatch = session.editorId === 'main' ? dispatch : componentDispatch;
+    targetDispatch({ type: 'rename-nodes', updates });
   };
 
   const setLayerColorFromRow = (nodeId: string, color: string) => {
     const selectedIds = focusedEditor.state.selectedNodeIds;
     const targetIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId];
+    const validIds = focusedDocument.nodes.filter((node) => targetIds.includes(node.id)).map((node) => node.id);
+    if (validIds.length === 0) return;
     dispatchFocused({
       type: 'set-nodes-properties',
-      nodeIds: targetIds,
+      nodeIds: validIds,
       properties: { layerColor: color },
     });
+    setLayerColorPickerKey(null);
   };
 
   const toggleLayerPropertyFromRow = (nodeId: string, property: 'visible' | 'locked') => {
@@ -1075,30 +1110,65 @@ export function App() {
                     aria-label={layerRename.batch ? `Rename ${layerRename.nodeIds.length} selected layers` : `Rename ${node.name}`}
                     title={layerRename.batch ? `Batch rename ${layerRename.nodeIds.length} layers (numbered)` : 'Rename layer'}
                     onClick={(event) => event.stopPropagation()}
-                    onInput={(event) => setLayerRename((current) => current ? { ...current, value: event.currentTarget.value } : current)}
+                    onInput={(event) => updateLayerRenameDraft(event.currentTarget.value)}
                     onKeyDown={(event) => {
-                      if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); }
+                      event.stopPropagation();
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        finishLayerRename(true);
+                      }
                       if (event.key === 'Escape') {
                         event.preventDefault();
-                        layerRenameCancelRef.current = true;
-                        event.currentTarget.blur();
+                        finishLayerRename(false);
                       }
                     }}
-                    onBlur={commitLayerRename}
+                    onBlur={() => finishLayerRename(true)}
                   />
                 ) : (
                   <span class="layer-name">{node.name}</span>
                 )}
                 <div class="layer-actions">
-                  <input
+                  <button
+                    type="button"
                     class="layer-color-control"
-                    type="color"
-                    value={node.layerColor ?? '#7f8797'}
+                    style={{ backgroundColor: node.layerColor ?? '#7f8797' }}
                     title={node.layerColor ? `Layer color ${node.layerColor}` : 'Set layer color'}
-                    aria-label={`Set color for ${node.name}`}
-                    onClick={(event) => event.stopPropagation()}
-                    onChange={(event) => setLayerColorFromRow(node.id, event.currentTarget.value)}
+                    aria-label={`Choose color for ${node.name}`}
+                    aria-expanded={layerColorPickerKey === `${activeEditorId}:${node.id}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      const key = `${activeEditorId}:${node.id}`;
+                      setLayerColorPickerKey((current) => current === key ? null : key);
+                    }}
                   />
+                  {layerColorPickerKey === `${activeEditorId}:${node.id}` && (
+                    <div class="layer-color-palette" role="group" aria-label={`Color tags for ${node.name}`} onClick={(event) => event.stopPropagation()}>
+                      <span>Layer color</span>
+                      <div class="layer-color-swatches">
+                        {LAYER_COLOR_PRESETS.map((color) => (
+                          <button
+                            type="button"
+                            key={color}
+                            class={'layer-color-swatch ' + (node.layerColor === color ? 'active' : '')}
+                            style={{ backgroundColor: color }}
+                            title={color}
+                            aria-label={`Apply ${color} to selected layers`}
+                            onClick={() => setLayerColorFromRow(node.id, color)}
+                          />
+                        ))}
+                      </div>
+                      <label class="layer-color-custom">
+                        <span>Custom</span>
+                        <input
+                          type="color"
+                          value={node.layerColor ?? '#7f8797'}
+                          aria-label="Custom layer color"
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => setLayerColorFromRow(node.id, event.currentTarget.value)}
+                        />
+                      </label>
+                    </div>
+                  )}
                   <button
                     type="button"
                     class={'layer-control ' + (node.visible ? 'active' : '')}
@@ -1122,6 +1192,7 @@ export function App() {
                     }}
                   ><Icon name={node.locked ? 'lock' : 'unlock'} /></button>
                 </div>
+                <span class="layer-color-rail" style={{ backgroundColor: node.layerColor ?? 'transparent' }} aria-hidden="true" />
               </div>
             );
           })}

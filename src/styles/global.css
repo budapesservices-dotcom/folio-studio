@@ -287,7 +287,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .layer-page-context { display: inline-flex; align-items: center; gap: 5px; max-width: 58%; min-width: 0; overflow: hidden; padding: 3px 6px; border: 1px solid #353d4d; border-radius: 4px; color: #aeb8c9; background: #1a202c; font-size: 7px; font-weight: 650; letter-spacing: .45px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .layer-page-context::before { content: ''; flex: 0 0 4px; width: 4px; height: 4px; border-radius: 50%; background: #9a8dff; box-shadow: 0 0 6px #9a8dff70; }
 .layer-list { display: flex; flex-direction: column; gap: 2px; overflow: auto; padding: 0 8px 10px; }
-.layer-row { position: relative; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 0 5px; border: 1px solid transparent; border-radius: 5px; text-align: left; color: #aeb5c2; background: transparent; cursor: grab; user-select: none; }
+.layer-row { position: relative; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 0 5px 3px; border: 1px solid transparent; border-radius: 5px; text-align: left; color: #aeb5c2; background: transparent; cursor: grab; user-select: none; }
 .layer-row:active { cursor: grabbing; }
 .layer-row:hover { background: #222936; }
 .layer-row.selected { color: #e6e1ff; background: #302b4b; border-color: #48406d; }
@@ -300,10 +300,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .layer-type-text { font-size: 11px; font-weight: 800; }
 .layer-name { overflow: hidden; flex: 1 1 auto; min-width: 0; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .layer-name-editor { flex: 1 1 auto; min-width: 0; height: 22px; padding: 0 5px; border: 1px solid #887ce0; border-radius: 3px; outline: 0; color: #f0edff; background: #171522; font: inherit; font-size: 10px; }
-.layer-color-control { flex: 0 0 13px; width: 13px; height: 13px; margin: 0 3px 0 1px; padding: 1px; appearance: none; -webkit-appearance: none; overflow: hidden; border: 1px solid #566174; border-radius: 50%; background: transparent; cursor: pointer; }
-.layer-color-control::-webkit-color-swatch-wrapper { padding: 0; }
-.layer-color-control::-webkit-color-swatch { border: 0; border-radius: 50%; }
-.layer-color-control::-moz-color-swatch { border: 0; border-radius: 50%; }
+.layer-color-control { flex: 0 0 22px; width: 22px; height: 11px; margin: 0 3px 0 1px; padding: 0; border: 1px solid #626c7d; border-radius: 2px; cursor: pointer; box-shadow: inset 0 0 0 1px #0002; }
+.layer-color-control:hover, .layer-color-control[aria-expanded='true'] { border-color: #e2dcff; transform: scaleY(1.12); }
+.layer-color-palette { position: absolute; z-index: 140; top: calc(100% - 1px); right: 48px; display: flex; flex-direction: column; gap: 8px; min-width: 150px; padding: 9px; border: 1px solid #475168; border-radius: 7px; color: #cbd2df; background: #1b2230; box-shadow: 0 10px 28px #000a; font-size: 9px; letter-spacing: .3px; }
+.layer-color-swatches { display: grid; grid-template-columns: repeat(6, 17px); gap: 5px; }
+.layer-color-swatch { width: 17px; height: 17px; padding: 0; border: 1px solid #ffffff35; border-radius: 3px; cursor: pointer; }
+.layer-color-swatch:hover, .layer-color-swatch.active { outline: 2px solid #e8e2ff; outline-offset: 1px; }
+.layer-color-custom { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 6px; border-top: 1px solid #30394a; color: #aeb8c9; }
+.layer-color-custom input { width: 30px; height: 18px; padding: 1px; border: 1px solid #566174; border-radius: 3px; background: transparent; cursor: pointer; }
+.layer-color-rail { position: absolute; right: 5px; bottom: 1px; left: 5px; height: 2px; border-radius: 2px; opacity: .95; pointer-events: none; }
 .layer-hidden .layer-name { opacity: .52; }
 .layer-inherited-locked .layer-name { color: #8d96a6; }
 .layer-disclosure, .layer-disclosure-spacer { display: grid; place-items: center; flex: 0 0 14px; width: 14px; height: 22px; padding: 0; border: 0; color: #7f8a9c; background: transparent; }

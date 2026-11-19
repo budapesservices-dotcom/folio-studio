@@ -42,6 +42,25 @@ describe('layer hierarchy and panel operations', () => {
     expect(getActiveDocument(editorReducer(renamed, { type: 'undo' }).project).nodes.map((node) => node.name)).toEqual(['Old A', 'Old B']);
   });
 
+  it('applies one layer color to every selected layer in a single history step', () => {
+    const project = createInitialProject();
+    const document = getActiveDocument(project);
+    const one = { ...document.nodes[0], id: 'batch-color-one', layerColor: '#ef4444' };
+    const two = { ...document.nodes[1], id: 'batch-color-two', layerColor: '#3b82f6' };
+    const prepared = {
+      ...project,
+      pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [one, two] } })),
+    };
+    const initial = createEditorState(prepared);
+    const colored = editorReducer(initial, {
+      type: 'set-nodes-properties',
+      nodeIds: [one.id, two.id],
+      properties: { layerColor: '#22c55e' },
+    });
+    expect(getActiveDocument(colored.project).nodes.map((node) => node.layerColor)).toEqual(['#22c55e', '#22c55e']);
+    expect(colored.past).toHaveLength(initial.past.length + 1);
+  });
+
   it('stores layer marker colors without changing the visual fill', () => {
     const project = createInitialProject();
     const document = getActiveDocument(project);
