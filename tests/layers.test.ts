@@ -300,6 +300,20 @@ describe('layer hierarchy and panel operations', () => {
     expect(instances.every((node) => node.sourceLayerId === source.id)).toBe(true);
     expect(new Set(instances.map((node) => node.id)).size).toBe(2);
     expect(instances.map((node) => [node.width, node.height])).toEqual([[120, 80], [120, 80]]);
+
+    const hiddenInstances = editorReducer(placedTwice, {
+      type: 'set-nodes-canvas-state', nodeIds: instances.map((node) => node.id), onCanvas: false,
+    });
+    const third = createLayerCanvasInstances(getActiveDocument(hiddenInstances.project).nodes, [source.id], { x: 700, y: 380 }, makeId);
+    const placedAgain = editorReducer(hiddenInstances, {
+      type: 'place-layer-instances', sourceNodeIds: [source.id], instanceNodes: third,
+    });
+    const afterRedrop = getActiveDocument(placedAgain.project).nodes;
+    const visibleInstances = afterRedrop.filter((node) => node.isCanvasInstance === true && node.onCanvas !== false);
+    expect(visibleInstances).toHaveLength(1);
+    expect(visibleInstances[0].sourceLayerId).toBe(source.id);
+    expect(visibleInstances[0].width).toBe(source.width);
+    expect(visibleInstances[0].height).toBe(source.height);
   });
 
   it('synchronizes master appearance and dimensions to existing linked instances', () => {
@@ -335,7 +349,9 @@ describe('layer hierarchy and panel operations', () => {
     const editedInstance = { ...selectedInstance, style: { ...selectedInstance.style, fill: '#22aa88' } };
     const updated = editorReducer(placed, { type: 'edit-node', node: editedInstance, coalesceKey: 'linked-instance-fill' });
     const nodes = getActiveDocument(updated.project).nodes;
-    expect(nodes.find((node) => node.id === source.id)?.style.fill).toBe('#22aa88');
+    const updatedSource = nodes.find((node) => node.id === source.id);
+    expect(updatedSource?.type).toBe('rect');
+    if (updatedSource?.type === 'rect') expect(updatedSource.style.fill).toBe('#22aa88');
     expect(nodes.filter((node) => node.isCanvasInstance === true).every((node) =>
       (node.type === 'rect' || node.type === 'ellipse') && node.style.fill === '#22aa88',
     )).toBe(true);
