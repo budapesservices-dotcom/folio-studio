@@ -137,7 +137,7 @@ describe('layer hierarchy and panel operations', () => {
     expect(expandSelectedLayerIds(nodes, ['child-a'])).toEqual(['child-a', 'leaf']);
   });
 
-  it('selects a parent hierarchy but selects a nested canvas layer as one object', () => {
+  it('selects the entire component when any nested layer is clicked on canvas', () => {
     const nodes = [
       layer('parent'),
       layer('child-a', 'parent'),
@@ -145,15 +145,18 @@ describe('layer hierarchy and panel operations', () => {
       layer('child-b', 'parent'),
       layer('other'),
     ];
+    const componentIds = ['parent', 'child-a', 'leaf', 'child-b'];
 
-    expect(getCanvasClickSelectionIds(nodes, 'parent')).toEqual(['parent', 'child-a', 'leaf', 'child-b']);
-    expect(getCanvasClickSelectionIds(nodes, 'child-a')).toEqual(['child-a']);
-    expect(getCanvasClickSelectionIds(nodes, 'leaf')).toEqual(['leaf']);
+    expect(getCanvasClickSelectionIds(nodes, 'parent')).toEqual(componentIds);
+    expect(getCanvasClickSelectionIds(nodes, 'child-a')).toEqual(componentIds);
+    expect(getCanvasClickSelectionIds(nodes, 'leaf')).toEqual(componentIds);
+    expect(getCanvasClickSelectionIds(nodes, 'child-b')).toEqual(componentIds);
   });
 
-  it('lets Shift-click select an exact top-level parent without its children', () => {
-    const nodes = [layer('parent'), layer('child', 'parent')];
-    expect(getCanvasClickSelectionIds(nodes, 'parent', true)).toEqual(['parent']);
+  it('lets Shift-click select the exact nested layer on canvas', () => {
+    const nodes = [layer('parent'), layer('child', 'parent'), layer('leaf', 'child')];
+    expect(getCanvasClickSelectionIds(nodes, 'child', true)).toEqual(['child']);
+    expect(getCanvasClickSelectionIds(nodes, 'leaf', true)).toEqual(['leaf']);
   });
 
   it('returns a cycle-safe ancestor chain for deselecting a nested layer', () => {

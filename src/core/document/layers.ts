@@ -157,9 +157,9 @@ export function expandSelectedLayerIds(nodes: readonly DesignNode[], selectedIds
 }
 
 /**
- * Canvas click behavior: top-level parents select their full hierarchy,
- * while clicking any nested layer selects only that exact layer.
- * Shift-click can force exact selection even for a top-level parent.
+ * Canvas treats every nested layer as part of its top-level component.
+ * A normal click anywhere in that hierarchy selects the whole component;
+ * Shift-click is the precision override for selecting the exact child.
  */
 export function getCanvasClickSelectionIds(
   nodes: readonly DesignNode[],
@@ -167,8 +167,11 @@ export function getCanvasClickSelectionIds(
   exactLayer = false,
 ): string[] {
   if (!nodes.some((node) => node.id === nodeId)) return [];
-  if (exactLayer || getLayerAncestorIds(nodes, nodeId).size > 0) return [nodeId];
-  return expandSelectedLayerIds(nodes, [nodeId]);
+  if (exactLayer) return [nodeId];
+
+  const ancestors = getLayerAncestorIds(nodes, nodeId);
+  const componentRootId = [...ancestors].at(-1) ?? nodeId;
+  return expandSelectedLayerIds(nodes, [componentRootId]);
 }
 
 /** Selecting a parent layer also transforms its descendants as one visual hierarchy. */
