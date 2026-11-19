@@ -214,7 +214,7 @@ describe('layer hierarchy and panel operations', () => {
   });
 
   it('does not group layers from different parents or a single selected layer', () => {
-    const nodes = [layer('a'), layer('b'), layer('nested', 'a')];
+    const nodes = [layer('parent'), layer('a', 'parent'), layer('b')];
     expect(groupLayers(nodes, ['a', 'b'])).toBe(nodes);
     expect(groupLayers(nodes, ['a'])).toBe(nodes);
   });
