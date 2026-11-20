@@ -218,6 +218,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           replacement.y === node.y &&
           replacement.width === node.width &&
           replacement.height === node.height &&
+          replacement.rotation === node.rotation &&
           replacement.onCanvas === node.onCanvas &&
           (node.type !== 'text' || replacement.type !== 'text' || replacement.style.fontSize === node.style.fontSize)
         ) return node;
