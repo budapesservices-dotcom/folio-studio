@@ -506,7 +506,7 @@ The following rules are **final v1 decisions**, not open questions:
 - projectRevision is an in-memory counter managed by the canonical editor store.
 - It is independent of FolioProject.metadata.updatedAt.
 - It is never serialized into the .flop format, IndexedDB records, or imported project data.
-- projectRevision is initialized when the canonical editor store is created. It remains monotonic for that store, including across project replacement; an imported or historical project cannot supply, reset, or restore its value.
+- projectRevision is initialized to 0 when the canonical editor store is created. It remains monotonic for that store, including across project replacement; an imported or historical project cannot supply, reset, or restore its value.
 - Every accepted project mutation passes through one shared editor-store commit boundary, whether the candidate came from a legacy EditorAction or a Native Command.
 - Each accepted project mutation increments projectRevision exactly once.
 - A committed Undo or Redo increments projectRevision once. It never restores the revision number that belonged to the historical snapshot.
