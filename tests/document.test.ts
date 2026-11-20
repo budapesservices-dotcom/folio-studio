@@ -327,11 +327,13 @@ describe('linked master components and instances', () => {
         secondPage,
       ],
     };
-    const synced = editorReducer(createEditorState(linkedProject), {
+    const linkedState = createEditorState(linkedProject);
+    const canonicalMaster = linkedState.project.components[0];
+    const synced = editorReducer(linkedState, {
       type: 'sync-component-document',
-      componentId: master.id,
-      expectedMasterDocument: master.document,
-      expectedUpdatedAt: master.updatedAt,
+      componentId: canonicalMaster.id,
+      expectedMasterDocument: canonicalMaster.document,
+      expectedUpdatedAt: canonicalMaster.updatedAt,
       document: updatedMaster.document,
       updatedAt: updatedMaster.updatedAt,
     });
@@ -403,15 +405,17 @@ describe('linked master components and instances', () => {
     expect(detached[0].type).toBe('rect');
     expect(detached[0].id).not.toBe(source.id);
 
-    const withMaster = editorReducer(createEditorState({
+    const stateWithMaster = createEditorState({
       ...project,
       components: [master],
       pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [...page.document.nodes, instance] } })),
-    }), {
+    });
+    const canonicalMaster = stateWithMaster.project.components[0];
+    const withMaster = editorReducer(stateWithMaster, {
       type: 'delete-component',
-      componentId: master.id,
-      expectedMasterDocument: master.document,
-      expectedUpdatedAt: master.updatedAt,
+      componentId: canonicalMaster.id,
+      expectedMasterDocument: canonicalMaster.document,
+      expectedUpdatedAt: canonicalMaster.updatedAt,
     });
     expect(withMaster.project.components).toHaveLength(0);
     expect(withMaster.project.pages[0].document.nodes.some((node) => node.type === 'component-instance')).toBe(false);
