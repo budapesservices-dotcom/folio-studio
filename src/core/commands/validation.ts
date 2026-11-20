@@ -79,10 +79,15 @@ function cloneRuntimeData(value: unknown, stack = new WeakSet<object>()): Runtim
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  if (typeof value !== 'object' || value === null) return false;
   try {
+    if (Array.isArray(value)) return false;
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== null && prototype !== Object.prototype) return false;
+    if (prototype === Object.prototype &&
+        Reflect.ownKeys(prototype).some((key) => !STANDARD_OBJECT_PROTOTYPE_KEYS.has(key))) {
+      return false;
+    }
     return Reflect.ownKeys(value).every((key) => {
       if (typeof key !== 'string') return false;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
