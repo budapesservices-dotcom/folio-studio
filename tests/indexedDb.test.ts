@@ -341,8 +341,8 @@ describe('persistent active-project selection', () => {
 });
 
 
-function createDurableComponentFixture() {
-  const mainProject = projectWithId('durable-main', 'Durable Main', '2026-11-20T12:00:00.000Z');
+function createDurableComponentFixture(mainProjectId = 'durable-main') {
+  const mainProject = projectWithId(mainProjectId, 'Durable Main', '2026-11-20T12:00:00.000Z');
   const masterDocument: FolioDocument = {
     ...mainProject.pages[0].document,
     id: 'durable-master-document',
@@ -470,7 +470,7 @@ describe('Component Canvas recovery with the real IndexedDB adapter', () => {
 
 describe('Main Canvas revision-fenced autosave', () => {
   it('rejects a queued deletion snapshot after failed persistence rolls canonical state back', async () => {
-    const fixture = createDurableComponentFixture();
+    const fixture = createDurableComponentFixture('main-autosave-rollback-fence');
     await saveProject(fixture.mainProject, 0);
     const database = fakeIndexedDB.database!;
     const writesBeforeDeletion = database.metrics.scheduledWrites;
