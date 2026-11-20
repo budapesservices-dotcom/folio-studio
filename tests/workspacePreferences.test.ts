@@ -14,7 +14,8 @@ const VIEWPORT = { width: 1280, height: 800 };
 const FIXED_DATE = "2026-11-20T12:00:00.000Z";
 
 class MemoryStorage implements WorkspacePreferencesStorage {
-  values = new Map<string, string>();
+  constructor(readonly values: Map<string, string> = new Map<string, string>()) {}
+
   throwOnGet = false;
   throwOnSet = false;
 
@@ -59,6 +60,70 @@ describe("Workspace Preferences V1 defaults and storage", () => {
     const loaded = loadWorkspacePreferences({ storage, viewport: VIEWPORT, now: FIXED_DATE });
     expect(loaded.status).toBe("valid");
     expect(loaded.layout).toEqual(layout);
+  });
+
+  it("uses last successful cross-tab write to replace the complete snapshot, independent of updatedAt", () => {
+    const sharedValues = new Map<string, string>();
+    const firstTabStorage = new MemoryStorage(sharedValues);
+    const secondTabStorage = new MemoryStorage(sharedValues);
+
+    const firstTabLayout = makeLayout();
+    firstTabLayout.updatedAt = "2026-11-20T12:05:00.000Z";
+    firstTabLayout.windows[1].visibility = "open";
+    firstTabLayout.windows[1].stackOrder = 1;
+    firstTabLayout.stackOrder = [
+      firstTabLayout.windows[0].windowInstanceId,
+      firstTabLayout.windows[1].windowInstanceId,
+    ];
+    firstTabLayout.activeWindowInstanceId = firstTabLayout.windows[1].windowInstanceId;
+    firstTabLayout.activeWorkspace = "component-canvas";
+    firstTabLayout.panelVisibility["pages-rack"] = true;
+
+    expect(saveWorkspacePreferences(firstTabLayout, {
+      storage: firstTabStorage,
+      viewport: VIEWPORT,
+      reconciliationComplete: true,
+    }).ok).toBe(true);
+
+    // This snapshot has an older updatedAt, but it is written successfully later.
+    const secondTabLayout = makeLayout();
+    secondTabLayout.panelVisibility["component-rack"] = true;
+    secondTabLayout.windows[2].visibility = "open";
+    secondTabLayout.windows[2].stackOrder = 1;
+    secondTabLayout.stackOrder = [
+      secondTabLayout.windows[0].windowInstanceId,
+      secondTabLayout.windows[2].windowInstanceId,
+    ];
+    secondTabLayout.activeWindowInstanceId = secondTabLayout.windows[2].windowInstanceId;
+    secondTabLayout.activeWorkspace = "node-logic";
+
+    expect(saveWorkspacePreferences(secondTabLayout, {
+      storage: secondTabStorage,
+      viewport: VIEWPORT,
+      reconciliationComplete: true,
+    }).ok).toBe(true);
+
+    const expectedSnapshot = normalizeWorkspaceLayout(secondTabLayout, VIEWPORT);
+    const storedSnapshot = JSON.parse(
+      sharedValues.get(WORKSPACE_PREFERENCES_STORAGE_KEY) ?? "null",
+    );
+    expect(storedSnapshot).toEqual(expectedSnapshot);
+    expect(storedSnapshot.updatedAt).toBe(FIXED_DATE);
+    expect(storedSnapshot.panelVisibility["pages-rack"]).toBe(false);
+    expect(storedSnapshot.panelVisibility["component-rack"]).toBe(true);
+    expect(storedSnapshot.windows).toHaveLength(WORKSPACE_KINDS.length);
+    expect(storedSnapshot.windows.find((record: { workspace: string }) =>
+      record.workspace === "component-canvas").visibility).toBe("closed");
+    expect(storedSnapshot.windows.find((record: { workspace: string }) =>
+      record.workspace === "node-logic").visibility).toBe("open");
+
+    const reloaded = loadWorkspacePreferences({
+      storage: firstTabStorage,
+      viewport: VIEWPORT,
+      now: FIXED_DATE,
+    });
+    expect(reloaded.status).toBe("valid");
+    expect(reloaded.layout).toEqual(expectedSnapshot);
   });
 
   it("returns safe defaults when the versioned record is missing", () => {
@@ -418,6 +483,8 @@ describe("Workspace legacy localStorage migration", () => {
 
     const loaded = loadWorkspacePreferences({ storage, viewport: VIEWPORT, now: FIXED_DATE });
     expect(loaded.status).toBe("migrated");
+    expect(loaded.requiresReconciliation).toBe(true);
+    expect(loaded.warnings).toEqual([]);
     for (const workspace of WORKSPACE_KINDS) {
       expect(storage.getItem(LEGACY_WORKSPACE_STORAGE_KEYS[workspace])).not.toBeNull();
       expect(loaded.layout.windows.find((record) => record.workspace === workspace)?.presentation)
@@ -428,6 +495,31 @@ describe("Workspace legacy localStorage migration", () => {
     expect(loaded.layout.windows.find((record) => record.workspace === "component-canvas")?.visibility)
       .toBe("closed");
     expect(storage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY)).toBeNull();
+  });
+
+  it("warns when valid legacy geometry is clamped but keeps the result classified as migrated", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(
+      LEGACY_WORKSPACE_STORAGE_KEYS["main-canvas"],
+      JSON.stringify({
+        mode: "floating",
+        position: { x: -100, y: -100 },
+        size: { width: 700, height: 500 },
+      }),
+    );
+
+    const loaded = loadWorkspacePreferences({ storage, viewport: VIEWPORT, now: FIXED_DATE });
+    const mainCanvas = loaded.layout.windows.find((record) => record.workspace === "main-canvas");
+
+    expect(loaded.status).toBe("migrated");
+    expect(loaded.requiresReconciliation).toBe(true);
+    expect(loaded.warnings).toEqual([
+      "Geometry for main-canvas was clamped to the current viewport",
+    ]);
+    expect(mainCanvas?.geometry.x).toBe(0);
+    expect(mainCanvas?.geometry.y).toBeGreaterThanOrEqual(56);
+    expect(mainCanvas?.geometry.width).toBe(700);
+    expect(mainCanvas?.geometry.height).toBe(500);
   });
 
   it("recovers with defaults when a legacy entry is malformed", () => {

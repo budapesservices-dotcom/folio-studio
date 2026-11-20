@@ -54,6 +54,7 @@ export interface WorkspaceLayoutV1 {
   activeWindowInstanceId: string | null;
   activeWorkspace: WorkspaceKind;
   panelVisibility: Record<WorkspacePanelKey, boolean>;
+  /** Informational save metadata; not a concurrency version or compare-and-swap token. */
   updatedAt: string;
 }
 
@@ -531,6 +532,7 @@ function parseLegacyWindow(
   workspace: WorkspaceKind,
   defaults: WorkspaceLayoutV1,
   viewport: WindowViewport,
+  warnings: string[],
 ): WorkspaceWindowRecord | null {
   if (raw.length > 8 * 1024) return null;
   let parsed: unknown;
@@ -554,7 +556,7 @@ function parseLegacyWindow(
     workspace,
     visibility: defaultVisibility(workspace),
     presentation: parsed.mode,
-    geometry: normalizeWindowGeometry(geometry, workspace, defaults, viewport, []),
+    geometry: normalizeWindowGeometry(geometry, workspace, defaults, viewport, warnings),
     maximized: false,
     stackOrder: workspace === "main-canvas" ? 0 : 0,
   };
@@ -643,7 +645,7 @@ export function loadWorkspacePreferences(
     }
     if (legacy === null) continue;
     foundLegacyRecord = true;
-    const record = parseLegacyWindow(legacy, workspace, defaults, viewport);
+    const record = parseLegacyWindow(legacy, workspace, defaults, viewport, warnings);
     if (!record) {
       warnings.push("Legacy record for " + workspace + " was malformed and its default was retained");
       continue;
@@ -732,8 +734,15 @@ function isStrictSaveLayout(
 }
 
 /**
- * Saves only a fully validated V1 layout after explicit reconciliation.
- * It also protects a newer stored schema from accidental downgrade.
+ * Saves one complete, validated V1 snapshot after explicit reconciliation.
+ * The whole versioned value is serialized and replaced with one setItem call;
+ * individual window records are never partially updated.
+ *
+ * Cross-tab V1 policy: the last successful localStorage setItem wins.
+ * updatedAt is informational metadata only; it is not a compare-and-swap
+ * token. V1 does not provide stale-write detection, conflict prompts, or
+ * automatic cross-tab reconciliation. A stronger conflict strategy requires
+ * a separate persistence design and ADR.
  */
 export function saveWorkspacePreferences(
   value: unknown,
@@ -791,6 +800,7 @@ export function saveWorkspacePreferences(
   }
 
   try {
+    // Replace the complete V1 snapshot in one write; no per-window merge occurs.
     storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, serialized);
     return { ok: true, key: WORKSPACE_PREFERENCES_STORAGE_KEY };
   } catch {
