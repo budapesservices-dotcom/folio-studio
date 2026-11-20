@@ -128,6 +128,13 @@ export function advanceComponentCanvasSyncSession(
   session: ComponentCanvasSyncSession,
   committedMaster: ComponentDefinition,
 ): ComponentCanvasSyncSession {
+  if (session.componentId !== committedMaster.id) {
+    return {
+      ...session,
+      observedCanonicalDocument: committedMaster.document,
+      conflicted: true,
+    };
+  }
   return {
     componentId: committedMaster.id,
     baseDocument: committedMaster.document,
