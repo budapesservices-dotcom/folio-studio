@@ -1939,6 +1939,14 @@ export function App() {
             <Icon name="componentCanvas" />
             <strong>{editingComponent ? editingComponent.name + ' · Master' : 'Component Canvas'}</strong>
           </div>
+          {componentRecoveryStatus === 'missing' && (
+            <span class="component-recovery-status" role="status">Master temporarily missing · local buffer preserved</span>
+          )}
+          {componentRecoveryStatus === 'returned' && (
+            <button type="button" class="component-recovery-action" onClick={reloadRecoveredComponentMaster}>
+              Discard local edits and reload master
+            </button>
+          )}
           <div class="canvas-window-tools">
             <div class="workspace-tools component-canvas-create-tools" aria-label="Component actions">
               <button type="button" title="Save selected as reusable component" aria-label="Save selected as reusable component" disabled={selectedComponentNodes.length === 0} onClick={() => saveNodesAsComponent(selectedComponentNodes)}><Icon name="save" /></button>
@@ -2284,16 +2292,7 @@ export function App() {
           <span>Loading your pages and component library from local storage</span>
         </div>
       )}
-      {notice && (
-        <div class="toast" role="status">
-          {notice}
-          {componentRecoveryStatus === 'returned' && (
-            <button type="button" class="component-recovery-action" onClick={reloadRecoveredComponentMaster}>
-              Discard local edits and reload master
-            </button>
-          )}
-        </div>
-      )}
+      {notice && <div class="toast" role="status">{notice}</div>}
     </div>
   );
 }
