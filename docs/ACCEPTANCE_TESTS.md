@@ -27,7 +27,7 @@ Then run `npm run dev` and open `http://127.0.0.1:5173`.
 
 Implementation status: the File menu workflow and the FL-01/FL-02 reliability revisions are implemented.
 
-Automated verification (2026-11-20): GitHub Actions run [#44689816111](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44689816111) completed successfully on Node.js 26.13.1 for the grouped-layer revision. `npm run check`, `npm run test` (10 test files, 120 tests) and `npm run build` all passed, including GroupNode validation and grouped page/component-master .flop export/import round-trip coverage.
+Automated verification (2026-11-20): GitHub Actions run [#44689944984](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44689944984) completed successfully on Node.js 26.13.1 for the grouped-layer revision. `npm run check`, `npm run test` (10 test files, 120 tests) and `npm run build` all passed, including GroupNode validation and grouped page/component-master .flop export/import round-trip coverage.
 
 Manual browser acceptance: pending. The browser workflows below have not been exercised in this revision.
 
