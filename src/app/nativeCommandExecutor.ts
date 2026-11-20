@@ -20,7 +20,6 @@ import type {
 } from '../core/commands/types';
 import { NATIVE_COMMAND_REGISTRY, type NativeCommandAdapterContext } from './nativeCommandRegistry';
 import { isSnapshotOwnedByStore, type CanonicalEditorStore, type CanonicalEditorStoreSnapshot } from './editorStore';
-import { registerNativeCommandCommitAuthorization } from './nativeCommandCommitAuth';
 import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
 
 const KNOWN_NATIVE_PERMISSIONS = new Set([
@@ -48,6 +47,18 @@ interface PreparedNativeCommandDetails {
 }
 
 const preparedNativeOperations = new WeakMap<object, PreparedNativeCommandDetails>();
+
+/** Only preparations already minted by this executor can authorize event publication. */
+export function getNativeCommandCommitAuthorization(preparation: object) {
+  const details = preparedNativeOperations.get(preparation);
+  if (!details) return undefined;
+  return {
+    baseSnapshot: details.baseSnapshot as object,
+    candidateState: details.candidateState as object,
+    changeDraft: details.changeDraft,
+    changeSource: details.command.source,
+  };
+}
 
 function cloneGraph<T>(value: T): T {
   if (Array.isArray(value)) return value.map((item) => cloneGraph(item)) as unknown as T;
@@ -378,12 +389,6 @@ export function prepareNativeCommand(
     changeDraft: immutableChangeDraft, warnings,
   };
   preparedNativeOperations.set(preparation, details);
-  registerNativeCommandCommitAuthorization(preparation, {
-    baseSnapshot: snapshot as object,
-    candidateState: immutableCandidateState as object,
-    changeDraft: immutableChangeDraft,
-    changeSource: command.source,
-  });
   return preparation;
 }
 
