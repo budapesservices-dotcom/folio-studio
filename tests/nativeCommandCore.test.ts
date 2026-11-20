@@ -1225,9 +1225,19 @@ describe('Native command runtime resource budgets', () => {
     expect(isRuntimeCommandDataWithinLimits(graph(97))).toBe(false);
   });
 
-  it('rejects shared-reference amplification, cycles, sparse arrays and Proxy reflection failures', () => {
+  it('memoizes shared references without amplification while rejecting cycles, sparse arrays and Proxy failures', () => {
     const shared = { expensive: { leaf: true } };
-    expect(isRuntimeCommandDataWithinLimits([shared, shared])).toBe(false);
+    expect(isRuntimeCommandDataWithinLimits([shared, shared])).toBe(true);
+    const fixture = createFixture();
+    const sharedAddressCommand = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 80 } }],
+    });
+    const normalized = validateNativeCommandEnvelope(sharedAddressCommand);
+    expect(normalized.ok).toBe(true);
+    if (normalized.ok && normalized.value.target.kind === 'document') {
+      const payload = normalized.value.payload as { nodes: Array<{ ref: { document: DocumentAddress } }> };
+      expect(normalized.value.target.address).toBe(payload.nodes[0].ref.document);
+    }
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     expect(isRuntimeCommandDataWithinLimits(circular)).toBe(false);
