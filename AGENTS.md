@@ -5,7 +5,7 @@ Before every task that inspects, plans, edits, reviews, or generates code for FO
 1. `docs/FOLIO_ARCHITECTURE_BLUEPRINT.md` — product vision, agreed principles, target architecture, and long-term rules.
 2. `docs/ARCHITECTURE.md` — current repository architecture and implementation reality.
 3. `docs/ACCEPTANCE_TESTS.md` — current verification expectations for the relevant stage.
-4. For AST, document, layer, component, or identity work, also read `docs/specs/NATIVE_AST_V1.md`.
+4. For AST, document, layer, component, or identity work, also read `docs/specs/NATIVE_AST_V1.md` and `docs/specs/NATIVE_AST_COMPATIBILITY_MIGRATION.md`.
 
 Also inspect the relevant source files, tests, current branch, and working-tree changes before editing.
 
