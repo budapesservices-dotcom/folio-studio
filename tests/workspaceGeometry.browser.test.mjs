@@ -212,8 +212,11 @@ async function runRackBrowserChecks() {
           panel.removeAttribute('inert');
           panel.setAttribute('aria-hidden', 'false');
         });
-        // Wait for the production 220ms slide transition before measuring final bounds.
-        await new Promise((resolveTransition) => setTimeout(resolveTransition, 260));
+        // Wait for the Rack's actual CSS transitions rather than sampling an intermediate transform.
+        await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+        await Promise.all(panels.flatMap(([panel]) =>
+          panel.getAnimations().map((animation) => animation.finished.catch(() => undefined)),
+        ));
         const metrics = panels.map(([panel, listSelector]) => {
           const rect = panel.getBoundingClientRect();
           const list = panel.querySelector(listSelector);
