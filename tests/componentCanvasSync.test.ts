@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialProject, createRectNode } from '../src/core/document/factory';
-import { getActiveDocument } from '../src/core/document/project';
 import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
 import {
