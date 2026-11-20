@@ -18,14 +18,16 @@ const STANDARD_OBJECT_PROTOTYPE_KEYS = new Set(Reflect.ownKeys(Object.prototype)
 const STANDARD_ARRAY_PROTOTYPE_KEYS = new Set(Reflect.ownKeys(Array.prototype));
 
 /** Limits apply to one input graph: depth 64, 4,096 object/array nodes, 16,384 own properties,
- * 4,096 aggregate dense array elements and 1,000 elements per array. Shared identities are rejected.
+ * 4,096 aggregate dense array elements and 1,000 elements per array. Shared objects are cloned once,
+ * but every traversal path is checked against the cached object's maximum remaining depth.
  */
 export const NATIVE_COMMAND_RUNTIME_LIMITS = Object.freeze({
   maxDepth: 64, maxObjects: 4096, maxProperties: 16384, maxArrayElements: 4096, maxArrayLength: 1000,
 });
-type RuntimeCloneResult = { ok: true; value: unknown } | { ok: false };
+type RuntimeCloneResult = { ok: true; value: unknown; height: number } | { ok: false };
 interface RuntimeCloneBudget {
   readonly memo: WeakMap<object, unknown>;
+  readonly heights: WeakMap<object, number>;
   readonly active: WeakSet<object>;
   objects: number;
   properties: number;
@@ -34,18 +36,24 @@ interface RuntimeCloneBudget {
 function cloneRuntimeData(
   value: unknown,
   budget: RuntimeCloneBudget = {
-    memo: new WeakMap<object, unknown>(), active: new WeakSet<object>(),
-    objects: 0, properties: 0, arrayElements: 0,
+    memo: new WeakMap<object, unknown>(), heights: new WeakMap<object, number>(),
+    active: new WeakSet<object>(), objects: 0, properties: 0, arrayElements: 0,
   },
   depth = 0,
 ): RuntimeCloneResult {
   if (depth > NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth) return { ok: false };
-  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') return { ok: true, value };
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+    return { ok: true, value, height: 0 };
+  }
   if (typeof value !== 'object') return { ok: false };
   try {
     if (budget.active.has(value)) return { ok: false };
     const memoized = budget.memo.get(value);
-    if (memoized !== undefined) return { ok: true, value: memoized };
+    if (memoized !== undefined) {
+      const height = budget.heights.get(value);
+      if (height === undefined || depth + height > NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth) return { ok: false };
+      return { ok: true, value: memoized, height };
+    }
     budget.active.add(value); budget.objects += 1;
     if (budget.objects > NATIVE_COMMAND_RUNTIME_LIMITS.maxObjects) return { ok: false };
     if (Array.isArray(value)) {
@@ -62,14 +70,17 @@ function cloneRuntimeData(
       if (budget.arrayElements > NATIVE_COMMAND_RUNTIME_LIMITS.maxArrayElements || budget.properties > NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties) return { ok: false };
       const output: unknown[] = new Array(lengthDescriptor.value);
       budget.memo.set(value, output);
+      let height = 0;
       for (let index = 0; index < lengthDescriptor.value; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
         if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return { ok: false };
         const child = cloneRuntimeData(descriptor.value, budget, depth + 1);
         if (!child.ok) return { ok: false };
+        height = Math.max(height, child.height + 1);
         output[index] = child.value;
       }
-      return { ok: true, value: output };
+      budget.heights.set(value, height);
+      return { ok: true, value: output, height };
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== null && prototype !== Object.prototype) return { ok: false };
@@ -79,15 +90,18 @@ function cloneRuntimeData(
     if (budget.properties > NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties) return { ok: false };
     const output: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     budget.memo.set(value, output);
+    let height = 0;
     for (const key of keys) {
       if (typeof key !== 'string') return { ok: false };
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return { ok: false };
       const child = cloneRuntimeData(descriptor.value, budget, depth + 1);
       if (!child.ok) return { ok: false };
+      height = Math.max(height, child.height + 1);
       output[key] = child.value;
     }
-    return { ok: true, value: output };
+    budget.heights.set(value, height);
+    return { ok: true, value: output, height };
   } catch {
     return { ok: false };
   } finally { budget.active.delete(value); }
