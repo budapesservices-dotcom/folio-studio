@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialProject, createRectNode } from '../src/core/document/factory';
+import { getActiveDocument } from '../src/core/document/project';
 import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
-import { createComponentCanvasSyncAction } from '../src/app/componentCanvasSync';
+import {
+  advanceComponentCanvasSyncSession,
+  createComponentCanvasSyncAction,
+  createComponentCanvasSyncSession,
+  reconcileComponentCanvasSyncSession,
+} from '../src/app/componentCanvasSync';
 import { areDocumentsStructurallyEqual } from '../src/core/document/equality';
+import type { FolioDocument } from '../src/core/document/types';
+import type { ComponentCanvasSyncSession } from '../src/app/componentCanvasSync';
 
 function createFixture() {
   const project = createInitialProject('Component synchronization');
@@ -24,18 +32,44 @@ function createFixture() {
   return { store, master };
 }
 
+function getMaster(store: ReturnType<typeof createCanonicalEditorStore>) {
+  const master = store.getSnapshot().editorState.project.components.find(
+    (component) => component.id === 'component-master',
+  );
+  if (!master) throw new Error('The canonical component master is missing.');
+  return master;
+}
+
+function copyDocument(document: FolioDocument): FolioDocument {
+  return {
+    ...document,
+    nodes: document.nodes.map((node) => ({ ...node })),
+  };
+}
+
+function commitBufferEdit(
+  store: ReturnType<typeof createCanonicalEditorStore>,
+  session: ComponentCanvasSyncSession,
+  editedDocument: FolioDocument,
+): ComponentCanvasSyncSession {
+  const master = getMaster(store);
+  const syncAction = createComponentCanvasSyncAction(master, editedDocument, session);
+  if (!syncAction) throw new Error('Expected a current, non-conflicted Component Canvas edit to synchronize.');
+  const result = store.dispatchLegacyAction(syncAction);
+  if (result.status !== 'committed') throw new Error('The canonical component update was not committed.');
+  return advanceComponentCanvasSyncSession(session, getMaster(store));
+}
+
 describe('Component Canvas master synchronization', () => {
   it('treats an opened copy of an unchanged master as a semantic no-op', () => {
     const { store, master } = createFixture();
-    const openedDocument = {
-      ...master.document,
-      nodes: master.document.nodes.map((node) => ({ ...node })),
-    };
+    const openedDocument = copyDocument(master.document);
+    const session = createComponentCanvasSyncSession(master);
     expect(openedDocument).not.toBe(master.document);
     expect(areDocumentsStructurallyEqual(master.document, openedDocument)).toBe(true);
 
     const before = store.getSnapshot();
-    const syncAction = createComponentCanvasSyncAction(master, openedDocument);
+    const syncAction = createComponentCanvasSyncAction(master, openedDocument, session);
     expect(syncAction).toBeNull();
 
     const reducerNoOp = editorReducer(before.editorState, {
@@ -51,31 +85,171 @@ describe('Component Canvas master synchronization', () => {
     expect(store.getSnapshot().editorState.project.components[0].updatedAt).toBe(master.updatedAt);
   });
 
-  it('synchronizes one genuine subsequent edit exactly once', () => {
+  it('synchronizes multiple sequential Component Canvas edits with one snapshot per genuine edit', () => {
     const { store, master } = createFixture();
-    const before = store.getSnapshot();
-    const editedDocument = {
-      ...master.document,
+    let session = createComponentCanvasSyncSession(master);
+    const firstEdit = {
+      ...copyDocument(master.document),
       nodes: master.document.nodes.map((node) => ({ ...node, x: node.x + 25 })),
     };
-    expect(areDocumentsStructurallyEqual(master.document, editedDocument)).toBe(false);
+    session = commitBufferEdit(store, session, firstEdit);
 
-    const syncAction = createComponentCanvasSyncAction(master, editedDocument);
-    expect(syncAction).not.toBeNull();
-    if (!syncAction) throw new Error('Expected a genuine Component Canvas edit to synchronize.');
-    const committed = store.dispatchLegacyAction(syncAction);
-    expect(committed.status).toBe('committed');
+    const secondEdit = {
+      ...copyDocument(firstEdit),
+      nodes: firstEdit.nodes.map((node) => ({ ...node, y: node.y + 30 })),
+    };
+    session = commitBufferEdit(store, session, secondEdit);
 
-    const afterFirstSync = store.getSnapshot();
-    const updatedMaster = afterFirstSync.editorState.project.components[0];
-    expect(updatedMaster.document).toEqual(editedDocument);
-    expect(afterFirstSync.editorState.project).not.toBe(before.editorState.project);
-    expect(afterFirstSync.projectRevision).toBe(1);
-    expect(afterFirstSync.editorState.past).toHaveLength(1);
-    expect(afterFirstSync.editorState.future).toHaveLength(0);
+    expect(getMaster(store).document).toEqual(secondEdit);
+    expect(store.getSnapshot().projectRevision).toBe(2);
+    expect(store.getSnapshot().editorState.past).toHaveLength(2);
+    expect(store.getSnapshot().editorState.future).toHaveLength(0);
+    expect(createComponentCanvasSyncAction(getMaster(store), secondEdit, session)).toBeNull();
+    expect(store.getSnapshot().projectRevision).toBe(2);
+    expect(store.getSnapshot().editorState.past).toHaveLength(2);
+  });
 
-    expect(createComponentCanvasSyncAction(updatedMaster, editedDocument)).toBeNull();
-    expect(store.getSnapshot()).toBe(afterFirstSync);
+  it('rebases a clean buffer after Main Canvas Undo and does not restore the undone document on the next edit', () => {
+    const { store, master } = createFixture();
+    let session = createComponentCanvasSyncSession(master);
+    const originalX = master.document.nodes[0].x;
+    const firstEdit = {
+      ...copyDocument(master.document),
+      nodes: master.document.nodes.map((node) => ({ ...node, x: 777 })),
+    };
+    session = commitBufferEdit(store, session, firstEdit);
+    expect(getMaster(store).document.nodes[0].x).toBe(777);
+
+    expect(store.dispatchLegacyAction({ type: 'undo' }).status).toBe('committed');
+    const undoneMaster = getMaster(store);
+    expect(undoneMaster.document.nodes[0].x).toBe(originalX);
+
+    const reconciliation = reconcileComponentCanvasSyncSession(session, undoneMaster, firstEdit);
+    expect(reconciliation.status).toBe('reload-buffer');
+    if (reconciliation.status !== 'reload-buffer') throw new Error('Expected a clean buffer to rebase after Undo.');
+    session = reconciliation.session;
+    const reloadedBuffer = copyDocument(reconciliation.canonicalDocument);
+    expect(reloadedBuffer.nodes[0].x).toBe(originalX);
+
+    const secondEdit = {
+      ...reloadedBuffer,
+      nodes: reloadedBuffer.nodes.map((node) => ({ ...node, y: node.y + 41 })),
+    };
+    session = commitBufferEdit(store, session, secondEdit);
+
+    expect(getMaster(store).document.nodes[0].x).toBe(originalX);
+    expect(getMaster(store).document.nodes[0].y).toBe(secondEdit.nodes[0].y);
+    expect(store.getSnapshot().projectRevision).toBe(3);
+    expect(store.getSnapshot().editorState.past).toHaveLength(1);
+    expect(store.getSnapshot().editorState.future).toHaveLength(0);
+    expect(session.conflicted).toBe(false);
+  });
+
+  it('rebases a clean buffer after Main Canvas Redo before accepting another local edit', () => {
+    const { store, master } = createFixture();
+    let session = createComponentCanvasSyncSession(master);
+    const firstEdit = {
+      ...copyDocument(master.document),
+      nodes: master.document.nodes.map((node) => ({ ...node, x: 888 })),
+    };
+    session = commitBufferEdit(store, session, firstEdit);
+
+    expect(store.dispatchLegacyAction({ type: 'undo' }).status).toBe('committed');
+    const afterUndo = getMaster(store);
+    const undoRebase = reconcileComponentCanvasSyncSession(session, afterUndo, firstEdit);
+    expect(undoRebase.status).toBe('reload-buffer');
+    if (undoRebase.status !== 'reload-buffer') throw new Error('Expected buffer rebase after Undo.');
+    session = undoRebase.session;
+    const undoBuffer = copyDocument(undoRebase.canonicalDocument);
+
+    expect(store.dispatchLegacyAction({ type: 'redo' }).status).toBe('committed');
+    const afterRedo = getMaster(store);
+    expect(afterRedo.document.nodes[0].x).toBe(888);
+    const redoRebase = reconcileComponentCanvasSyncSession(session, afterRedo, undoBuffer);
+    expect(redoRebase.status).toBe('reload-buffer');
+    if (redoRebase.status !== 'reload-buffer') throw new Error('Expected buffer rebase after Redo.');
+    session = redoRebase.session;
+
+    const reloadedBuffer = copyDocument(redoRebase.canonicalDocument);
+    const nextEdit = {
+      ...reloadedBuffer,
+      nodes: reloadedBuffer.nodes.map((node) => ({ ...node, y: node.y + 19 })),
+    };
+    session = commitBufferEdit(store, session, nextEdit);
+
+    expect(getMaster(store).document.nodes[0].x).toBe(888);
+    expect(getMaster(store).document.nodes[0].y).toBe(nextEdit.nodes[0].y);
+    expect(store.getSnapshot().projectRevision).toBe(4);
+    expect(store.getSnapshot().editorState.past).toHaveLength(2);
+    expect(store.getSnapshot().editorState.future).toHaveLength(0);
+    expect(session.conflicted).toBe(false);
+  });
+
+  it('reconciles an independent canonical master update while the local buffer is clean', () => {
+    const { store, master } = createFixture();
+    const session = createComponentCanvasSyncSession(master);
+    const buffer = copyDocument(master.document);
+    const externalDocument = {
+      ...copyDocument(master.document),
+      nodes: master.document.nodes.map((node) => ({ ...node, x: node.x + 63 })),
+    };
+    const externalUpdate = store.dispatchLegacyAction({
+      type: 'update-component',
+      component: { ...getMaster(store), document: externalDocument, updatedAt: '2026-11-20T01:00:00.000Z' },
+    });
+    expect(externalUpdate.status).toBe('committed');
+
+    const reconciliation = reconcileComponentCanvasSyncSession(session, getMaster(store), buffer);
+    expect(reconciliation.status).toBe('reload-buffer');
+    if (reconciliation.status !== 'reload-buffer') throw new Error('Expected independent canonical update to rebase a clean buffer.');
+    expect(reconciliation.canonicalDocument).toEqual(externalDocument);
+    expect(createComponentCanvasSyncAction(getMaster(store), reconciliation.canonicalDocument, reconciliation.session)).toBeNull();
+    expect(store.getSnapshot().projectRevision).toBe(1);
+    expect(store.getSnapshot().editorState.past).toHaveLength(1);
+  });
+
+  it('preserves unsynchronized local edits and pauses sync when canonical and local changes conflict', () => {
+    const { store, master } = createFixture();
+    const session = createComponentCanvasSyncSession(master);
+    const unsynchronizedLocalBuffer = {
+      ...copyDocument(master.document),
+      nodes: master.document.nodes.map((node) => ({ ...node, y: 321 })),
+    };
+    const independentCanonicalDocument = {
+      ...copyDocument(master.document),
+      nodes: master.document.nodes.map((node) => ({ ...node, x: 654 })),
+    };
+    store.dispatchLegacyAction({
+      type: 'update-component',
+      component: {
+        ...getMaster(store),
+        document: independentCanonicalDocument,
+        updatedAt: '2026-11-20T02:00:00.000Z',
+      },
+    });
+
+    const reconciliation = reconcileComponentCanvasSyncSession(
+      session,
+      getMaster(store),
+      unsynchronizedLocalBuffer,
+    );
+    expect(reconciliation.status).toBe('conflict');
+    if (reconciliation.status !== 'conflict') throw new Error('Expected local/canonical conflict.');
+    expect(reconciliation.session.conflicted).toBe(true);
+    expect(areDocumentsStructurallyEqual(unsynchronizedLocalBuffer, master.document)).toBe(false);
+    expect(createComponentCanvasSyncAction(
+      getMaster(store),
+      unsynchronizedLocalBuffer,
+      reconciliation.session,
+    )).toBeNull();
+
+    const laterLocalEdit = {
+      ...unsynchronizedLocalBuffer,
+      nodes: unsynchronizedLocalBuffer.nodes.map((node) => ({ ...node, y: 999 })),
+    };
+    expect(createComponentCanvasSyncAction(getMaster(store), laterLocalEdit, reconciliation.session)).toBeNull();
+    expect(getMaster(store).document.nodes[0].x).toBe(654);
+    expect(getMaster(store).document.nodes[0].y).toBe(master.document.nodes[0].y);
     expect(store.getSnapshot().projectRevision).toBe(1);
     expect(store.getSnapshot().editorState.past).toHaveLength(1);
   });
