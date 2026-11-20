@@ -22,6 +22,7 @@ import {
   createComponentCanvasSyncSession,
   reconcileComponentCanvasSyncSession,
   markComponentCanvasMasterMissing,
+  shouldProtectComponentCanvasBuffer,
   type ComponentCanvasSyncSession,
 } from './componentCanvasSync';
 import { FloatingWindow } from './FloatingWindow';
@@ -155,7 +156,8 @@ export function App() {
   const [componentState, componentDispatch] = useReducer(editorReducer, componentInitialState);
   const [componentReady, setComponentReady] = useState(false);
   const componentSyncSessionRef = useRef<ComponentCanvasSyncSession | null>(null);
-  const [componentRecoveryStatus, setComponentRecoveryStatus] = useState<'none' | 'missing' | 'returned'>('none');
+  const [componentRecoveryStatus, setComponentRecoveryStatus] = useState<'none' | 'missing' | 'returned' | 'conflict' | 'switch-pending'>('none');
+  const [pendingComponentOpenId, setPendingComponentOpenId] = useState<string | null>(null);
   const [isProjectLoaded, setIsProjectLoaded] = useState(false);
   const isHydrating = !isProjectLoaded || !componentReady;
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
@@ -905,8 +907,9 @@ export function App() {
     setNotice(`“${name}” saved to this project’s Component Rack.`);
   };
 
-  const openMasterComponent = (component: ComponentDefinition) => {
+  const loadMasterComponent = (component: ComponentDefinition) => {
     componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
+    setPendingComponentOpenId(null);
     setComponentRecoveryStatus('none');
     componentDispatch({
       type: 'replace-project',
@@ -920,6 +923,52 @@ export function App() {
     setInspectorVisible(true);
     setComponentRackOpen(false);
     setNotice(`Editing master: ${component.name}.`);
+  };
+
+  const openMasterComponent = (component: ComponentDefinition) => {
+    const session = componentSyncSessionRef.current;
+    const bufferDocument = getActiveDocument(componentState.project);
+    const hasActiveBuffer = editingComponentId !== null;
+    const mustProtectBuffer = hasActiveBuffer && (
+      !session || shouldProtectComponentCanvasBuffer(session, bufferDocument)
+    );
+    if (mustProtectBuffer) {
+      setPendingComponentOpenId(component.id);
+      setComponentRecoveryStatus('switch-pending');
+      setNotice(
+        'The current Component Canvas has local edits or a recovery conflict. Keep editing, or explicitly discard its buffer before opening another master.',
+      );
+      return;
+    }
+    loadMasterComponent(component);
+  };
+
+  const keepCurrentComponentBuffer = () => {
+    setPendingComponentOpenId(null);
+    const session = componentSyncSessionRef.current;
+    if (!session) {
+      setComponentRecoveryStatus('none');
+    } else if (session.masterStatus === 'missing') {
+      setComponentRecoveryStatus('missing');
+    } else if (session.masterStatus === 'returned') {
+      setComponentRecoveryStatus('returned');
+    } else if (session.conflicted) {
+      setComponentRecoveryStatus('conflict');
+    } else {
+      setComponentRecoveryStatus('none');
+    }
+  };
+
+  const discardBufferAndOpenPendingMaster = () => {
+    const pending = pendingComponentOpenId
+      ? state.project.components.find((item) => item.id === pendingComponentOpenId)
+      : undefined;
+    if (!pending) {
+      setPendingComponentOpenId(null);
+      setNotice('The requested master is no longer available. The current Component Canvas buffer was kept.');
+      return;
+    }
+    loadMasterComponent(pending);
   };
 
   const createNewMasterComponent = () => {
@@ -969,6 +1018,7 @@ export function App() {
     if (editingComponentId === component.id) {
       setEditingComponentId(null);
       componentSyncSessionRef.current = null;
+      setPendingComponentOpenId(null);
       setComponentRecoveryStatus('none');
       componentDispatch({ type: 'replace-project', project: componentInitialState.project });
       setComponentCanvasClosed(true);
@@ -1016,6 +1066,7 @@ export function App() {
     }
     if (reconciliation.status === 'reload-buffer') {
       componentSyncSessionRef.current = reconciliation.session;
+      setComponentRecoveryStatus('none');
       componentDispatch({
         type: 'replace-project',
         project: createComponentCanvasBufferProject(master),
@@ -1024,6 +1075,7 @@ export function App() {
     }
     if (reconciliation.status === 'conflict') {
       componentSyncSessionRef.current = reconciliation.session;
+      setComponentRecoveryStatus('conflict');
       if (!session.conflicted) {
         setNotice(
           'The master changed in Main Canvas while this buffer had unsynchronized edits. ' +
@@ -1047,6 +1099,7 @@ export function App() {
       }
     } else {
       componentSyncSessionRef.current = { ...session, conflicted: true };
+      setComponentRecoveryStatus('conflict');
       setNotice(
         'The component master changed before this edit could synchronize. ' +
         'Local edits were kept and synchronization is paused; reopen the master to reload the canonical version.',
@@ -1064,6 +1117,7 @@ export function App() {
     }
     componentSyncSessionRef.current = createComponentCanvasSyncSession(master);
     componentDispatch({ type: 'replace-project', project: createComponentCanvasBufferProject(master) });
+    setPendingComponentOpenId(null);
     setComponentRecoveryStatus('none');
     setNotice('The latest canonical master was reloaded. The previous local Component Canvas edits were discarded by explicit request.');
   };
@@ -1942,10 +1996,23 @@ export function App() {
           {componentRecoveryStatus === 'missing' && (
             <span class="component-recovery-status" role="status">Master temporarily missing · local buffer preserved</span>
           )}
-          {componentRecoveryStatus === 'returned' && (
+          {(componentRecoveryStatus === 'returned' || componentRecoveryStatus === 'conflict') && (
             <button type="button" class="component-recovery-action" onClick={reloadRecoveredComponentMaster}>
-              Discard local edits and reload master
+              Discard local edits and reload current master
             </button>
+          )}
+          {pendingComponentOpenId && (
+            <div class="component-recovery-panel" role="alert">
+              <span>
+                Opening {state.project.components.find((item) => item.id === pendingComponentOpenId)?.name ?? 'another master'} would replace the current local buffer.
+              </span>
+              <button type="button" class="component-recovery-action" onClick={keepCurrentComponentBuffer}>
+                Keep current buffer
+              </button>
+              <button type="button" class="component-recovery-action" onClick={discardBufferAndOpenPendingMaster}>
+                Discard local edits and open requested master
+              </button>
+            </div>
           )}
           <div class="canvas-window-tools">
             <div class="workspace-tools component-canvas-create-tools" aria-label="Component actions">
