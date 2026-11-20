@@ -112,7 +112,7 @@ export function validateNativeCommandEnvelope(
   if (input.protocolVersion !== 1) {
     return invalid('UNSUPPORTED_PROTOCOL', 'This command protocol version is not supported.');
   }
-  if (!isUuid(input.commandId) || !isNonEmptyString(input.type) || input.commandVersion !== 1 ||
+  if (!isUuid(input.commandId) || !isNonEmptyString(input.type) || !Number.isSafeInteger(input.commandVersion) || Number(input.commandVersion) < 1 ||
       !isIsoTimestamp(input.issuedAt) || !isNativeCommandSource(input.source) ||
       !isNativeCommandTarget(input.target) || !('payload' in input)) {
     return invalid('INVALID_ENVELOPE', 'The command envelope is incomplete or invalid.');
