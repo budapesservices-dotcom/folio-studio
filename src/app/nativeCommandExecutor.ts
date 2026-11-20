@@ -50,13 +50,13 @@ interface PreparedNativeCommandDetails {
 const preparedNativeOperations = new WeakMap<object, PreparedNativeCommandDetails>();
 
 function cloneGraph<T>(value: T): T {
-  if (Array.isArray(value)) return value.map((item) => cloneGraph(item)) as T;
+  if (Array.isArray(value)) return value.map((item) => cloneGraph(item)) as unknown as T;
   if (value !== null && typeof value === 'object') {
     const clone: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
       clone[key] = cloneGraph(child);
     }
-    return clone as T;
+    return clone as unknown as T;
   }
   return value;
 }
