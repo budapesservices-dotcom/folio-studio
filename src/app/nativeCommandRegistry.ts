@@ -35,7 +35,7 @@ export const NATIVE_COMMAND_REGISTRY = Object.freeze({
   'node.transform': Object.freeze({
     type: 'node.transform' as const,
     commandVersion: 1 as const,
-    allowedTargets: ['document'] as const,
+    allowedTargets: Object.freeze(['document'] as const),
     requiredPermission: 'node.transform',
     validatePayload: validateNodeTransformPayload,
     toEditorActions(command: NativeCommand, context: NativeCommandAdapterContext): readonly EditorAction[] {
