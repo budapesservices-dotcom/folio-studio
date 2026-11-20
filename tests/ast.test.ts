@@ -89,6 +89,15 @@ describe('Native AST compatibility view', () => {
     ]);
   });
 
+  it('rejects a document address that does not match the supplied document', () => {
+    const document = makeDocument();
+
+    expect(() => createDocumentAstView(document, {
+      ...pageAddress(document),
+      documentId: 'another-document',
+    })).toThrow('does not match document "document-ast"');
+  });
+
   it('rejects duplicate node IDs before exposing an ambiguous view', () => {
     const document = makeDocument();
     const duplicate = { ...document.nodes[0], name: 'Duplicate' };
