@@ -984,3 +984,110 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .artboard[data-tool="scrubby-zoom"] .canvas-node { cursor: ew-resize !important; }
 .artboard[data-tool="lasso-selection"] .canvas-node,
 .artboard[data-tool="magic-wand"] .canvas-node { cursor: crosshair !important; }
+
+
+/* Accessible Component Canvas recovery dialog and distinct buffer durability status. */
+.component-deletion-modal-host {
+  position: fixed;
+  z-index: 10000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  isolation: isolate;
+}
+.component-deletion-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(7, 9, 15, .78);
+  backdrop-filter: blur(3px);
+  pointer-events: auto;
+}
+.component-deletion-dialog {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  width: min(460px, 100%);
+  max-height: min(90vh, 620px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid #514d70;
+  border-radius: 12px;
+  color: #e7e8f0;
+  background: #202331;
+  box-shadow: 0 24px 80px #000b;
+}
+.component-deletion-dialog h2 {
+  margin: 0;
+  color: #f0efff;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.component-deletion-dialog p {
+  margin: 0;
+  color: #b3bac8;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.component-deletion-dialog .component-recovery-action {
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid #4b5060;
+  border-radius: 6px;
+  color: #e5e6f0;
+  background: #292e3d;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.component-deletion-dialog .component-recovery-action:hover:not(:disabled) {
+  border-color: #8f84d9;
+  background: #34324e;
+}
+.component-deletion-dialog button:focus-visible {
+  outline: 2px solid #c0b7ff;
+  outline-offset: 3px;
+}
+.component-deletion-dialog button:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+.component-deletion-progress {
+  color: #c9c3ff;
+  font-size: 11px;
+}
+.component-buffer-save {
+  display: flex !important;
+  align-items: center;
+  gap: 7px !important;
+  max-width: 42vw;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 8px;
+  letter-spacing: 0;
+}
+.component-buffer-save-error {
+  overflow: hidden;
+  max-width: 220px;
+  color: #ffaaa8;
+  text-overflow: ellipsis;
+}
+.component-buffer-save button {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border: 1px solid #57516f;
+  border-radius: 4px;
+  color: #ded8ff;
+  background: #29263b;
+  font-size: 8px;
+  cursor: pointer;
+}
+.component-buffer-save button:focus-visible {
+  outline: 2px solid #c0b7ff;
+  outline-offset: 2px;
+}
+.component-save-error > span:first-child { color: #ffaaa8; }

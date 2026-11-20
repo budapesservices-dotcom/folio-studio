@@ -1,7 +1,7 @@
 import type { ComponentDefinition, DesignNode, FolioDocument, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { areDocumentsStructurallyEqual } from '../core/document/equality';
-import { replaceComponentInstancesInDocument } from '../core/document/components';
+import { pruneComponentInstanceOverridesInDocument, replaceComponentInstancesInDocument } from '../core/document/components';
 import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, collapseLegacyCanvasInstances, type LayerDropPosition } from '../core/document/layers';
 
 const HISTORY_LIMIT = 60;
@@ -366,11 +366,19 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (!currentComponent || currentComponent.document !== action.expectedMasterDocument ||
           currentComponent.updatedAt !== action.expectedUpdatedAt ||
           areDocumentsStructurallyEqual(currentComponent.document, action.document)) return state;
+      const nextNodeIds = new Set(action.document.nodes.map((node) => node.id));
+      const removedNodeIds = new Set(currentComponent.document.nodes
+        .filter((node) => !nextNodeIds.has(node.id))
+        .map((node) => node.id));
+      const pages = removedNodeIds.size === 0 ? state.project.pages : state.project.pages.map((page) => {
+        const document = pruneComponentInstanceOverridesInDocument(page.document, action.componentId, removedNodeIds);
+        return document === page.document ? page : { ...page, document };
+      });
       const components = state.project.components.map((component) =>
         component.id === action.componentId
           ? { ...component, document: action.document, updatedAt: action.updatedAt }
           : component);
-      return withSnapshot(state, touch({ ...state.project, components }));
+      return withSnapshot(state, touch({ ...state.project, pages, components }));
     }
 
     case 'rename-component': {

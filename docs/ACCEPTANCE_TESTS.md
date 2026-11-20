@@ -76,7 +76,7 @@ Automated verification (2026-11-20): GitHub Actions run [#44697833843](https://g
 
 ### Native Command runtime validation resource limits
 
-Runtime input normalization applies these finite limits per input graph: depth **64** (root depth 0), **4,096** object/array nodes, **16,384** own properties, **4,096** aggregate dense array elements, and **1,000** elements per array. Repeated object identity (shared references) is rejected rather than recloned; circular references, sparse arrays, accessors, symbols, unexpected property descriptors, and reflection failures are structured validation rejections. These implementation resource limits do not change the authoritative Native Commands protocol specification.
+Runtime input normalization applies these finite limits per input graph: depth **64** (root depth 0), **4,096** object/array nodes, **16,384** own properties, **4,096** aggregate dense array elements, and **1,000** elements per array. Repeated object identity (shared references) is memoized and preserved rather than rejected or recloned; the validator tracks maximum subtree height and checks every traversal path against the depth budget. Circular references, sparse arrays, accessors, symbols, unexpected property descriptors, and reflection failures are structured validation rejections. These implementation resource limits do not change the authoritative Native Commands protocol specification.
 
 
 
@@ -90,7 +90,22 @@ Runtime input normalization applies these finite limits per input graph: depth *
 6. Undo the master deletion so it becomes orphaned, then Redo it. Confirm deletion while editing the returned master still requires an explicit recovery choice.
 7. While the recovery dialog is open, change the canonical master through another Main Canvas action or history transition. Choose a recovery action and confirm the stale operation is cancelled safely with a message to review the latest master.
 8. Edit one master, then delete a different component from Component Rack. Confirm the active Component Canvas buffer and its synchronization session are untouched.
-9. Delete an active master with a clean, current Component Canvas buffer. Confirm the normal immediate deletion behavior remains available.
+9. Delete an active master with a clean, current Component Canvas buffer. Confirm the clean-delete progress dialog appears, canonical deletion and Component Canvas cleanup both become durable, and only then the Component Canvas resets.
 10. Simulate a stale deletion after saving a recovery copy. Confirm the recovery component remains in Component Rack and retains the full buffer content even though the original master is not deleted.
 
 Manual browser acceptance for safe Component Canvas master deletion remains pending until these scenarios are exercised in the target browser.
+
+
+### PR #4 Revision Task 07 — deletion durability and accessibility
+
+Automated coverage added for modal focus entry/trapping/restoration and inert background, Component Canvas autosave ordering and retry, recovery-copy/deletion/cleanup persistence failure points, monotonic guarded rollback, retry after durable recovery without duplicate copies, canonical mutation locking, accurate node change sets, and component-instance override pruning. Automated tests do not replace the browser-level gate.
+
+Manual browser acceptance for Task 07 remains **pending**. Verify initial Cancel focus, Tab/Shift+Tab trapping, Escape cancellation, inert background, and focus restoration to the invoking control. Exercise recovery-copy write failure, final deletion write failure, cleanup failure/retry, concurrent user actions during barriers, autosave retry, and discard while a 450ms save is pending. Reload after each injected failure and verify the last durable project and Component Canvas buffer remain intact.
+
+
+### Durability and serialization notes — Revision Task 07
+
+- Canonical project commits are protected by a runtime mutation lease while the recovery/deletion sequence is pending. Ordinary canonical mutations are rejected during the lease; the lease is released after the operation returns.
+- IndexedDB project writes share one in-memory serialized queue. A recovery-copy save resolves only after its read/write transaction fires `oncomplete`; the master is re-read and CAS-checked after that barrier. Deletion is a separate canonical commit and its project transaction completes before the reserved Component Canvas buffer record is cleared.
+- Main Canvas autosaves include their captured monotonic `projectRevision`; an older queued autosave is skipped after a newer durable revision. Component Canvas uses an independent single-writer debounce controller; discard/recovery first flushes the current buffer, invalidates pending timers, and waits for any in-flight write before the cleanup barrier.
+- Persistence failures keep the local buffer. A failed canonical persistence rolls the in-memory project back to its last durable snapshot through a guarded new commit; the in-memory `projectRevision` therefore continues to increase. IndexedDB schema/database version remains v2; no session journal or new project store is introduced.

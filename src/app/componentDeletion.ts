@@ -1,4 +1,4 @@
-import type { ComponentDefinition, FolioDocument } from '../core/document/types';
+import type { ComponentDefinition, FolioDocument, FolioProject } from '../core/document/types';
 import { shouldProtectComponentCanvasBuffer, type ComponentCanvasSyncSession } from './componentCanvasSync';
 import type { CanonicalEditorStore, CanonicalEditorStoreSnapshot } from './editorStore';
 
@@ -24,7 +24,7 @@ export type ComponentDeletionResult =
 
 export type ComponentDeletionRequestResult =
   | ComponentDeletionResult
-  | { status: 'recovery-required'; snapshot: CanonicalEditorStoreSnapshot };
+  | { status: 'recovery-required' | 'ready'; snapshot: CanonicalEditorStoreSnapshot };
 
 export type ComponentRecoveryCopyResult =
   | { status: 'saved'; component: ComponentDefinition; snapshot: CanonicalEditorStoreSnapshot }
@@ -63,6 +63,7 @@ export function requestComponentDeletion(
   store: CanonicalEditorStore,
   target: ComponentDeletionTarget,
   protection: ComponentDeletionProtection,
+  deferActiveCommit = false,
 ): ComponentDeletionRequestResult {
   const snapshot = store.getSnapshot();
   const currentMaster = matchesCurrentMaster(snapshot, target);
@@ -71,12 +72,14 @@ export function requestComponentDeletion(
   if (protection.activeMaster && requiresRecoveryChoice(currentMaster, protection)) {
     return { status: 'recovery-required', snapshot };
   }
+  if (protection.activeMaster && deferActiveCommit) return { status: 'ready', snapshot };
   return deleteComponentIfCurrent(store, target);
 }
 
 export function deleteComponentIfCurrent(
   store: CanonicalEditorStore,
   target: ComponentDeletionTarget,
+  mutationLease?: object,
 ): ComponentDeletionResult {
   const before = store.getSnapshot();
   if (!matchesCurrentMaster(before, target)) return { status: 'stale-master', snapshot: before };
@@ -86,7 +89,7 @@ export function deleteComponentIfCurrent(
     componentId: target.componentId,
     expectedMasterDocument: target.expectedMasterDocument,
     expectedUpdatedAt: target.expectedUpdatedAt,
-  });
+  }, mutationLease);
   if (transition.status !== 'committed') return { status: 'failed', snapshot: transition.snapshot };
 
   const stillExists = transition.snapshot.editorState.project.components.some(
@@ -168,6 +171,7 @@ export function saveComponentCanvasRecoveryCopy(
   bufferDocument: FolioDocument,
   now = new Date().toISOString(),
   idFactory: ComponentRecoveryIdFactory = defaultRecoveryIdFactory,
+  mutationLease?: object,
 ): ComponentRecoveryCopyResult {
   const before = store.getSnapshot();
   const master = matchesCurrentMaster(before, target);
@@ -202,7 +206,7 @@ export function saveComponentCanvasRecoveryCopy(
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    const transition = store.dispatchLegacyAction({ type: 'add-component', component });
+    const transition = store.dispatchLegacyAction({ type: 'add-component', component }, mutationLease);
     if (transition.status !== 'committed' ||
         !transition.snapshot.editorState.project.components.some((item) => item.id === componentId)) {
       return { status: 'failed', snapshot: transition.snapshot };
@@ -214,6 +218,191 @@ export function saveComponentCanvasRecoveryCopy(
       )!,
       snapshot: transition.snapshot,
     };
+  } catch {
+    return { status: 'failed', snapshot: store.getSnapshot() };
+  }
+}
+
+
+export type ComponentDurableDeletionStatus =
+  | 'deleted'
+  | 'stale-master'
+  | 'recovery-persist-failed'
+  | 'deletion-persist-failed'
+  | 'cleanup-persist-failed'
+  | 'failed';
+
+export interface ComponentDurableDeletionResult {
+  readonly status: ComponentDurableDeletionStatus;
+  readonly snapshot: CanonicalEditorStoreSnapshot;
+  readonly recoveryComponent?: ComponentDefinition;
+}
+
+export type ComponentProjectWriteLock = <T>(
+  operation: (persist: (project: FolioProject, projectRevision?: number) => Promise<void>) => Promise<T>,
+) => Promise<T>;
+
+function rollbackCanonicalSnapshot(
+  store: CanonicalEditorStore,
+  candidateState: Parameters<CanonicalEditorStore['commitEditorTransition']>[0]['candidateState'],
+  mutationLease: object,
+): CanonicalEditorStoreSnapshot {
+  const current = store.getSnapshot();
+  const rollback = store.commitEditorTransition({
+    expectedProjectRevision: current.projectRevision,
+    expectedEditorState: current.editorState,
+    candidateState,
+  }, mutationLease);
+  return rollback.snapshot;
+}
+
+/**
+ * Recovery and deletion are separate canonical commits with an IndexedDB
+ * transaction-complete barrier between them. The canonical store lease and
+ * project write queue are held until the final buffer record is durable.
+ */
+export async function recoverAndDeleteComponentDurably(
+  store: CanonicalEditorStore,
+  target: ComponentDeletionTarget,
+  protection: ComponentDeletionProtection,
+  bufferDocument: FolioDocument,
+  emptyBufferProject: FolioProject,
+  withProjectWriteLock: ComponentProjectWriteLock,
+  now = new Date().toISOString(),
+  idFactory: ComponentRecoveryIdFactory = defaultRecoveryIdFactory,
+): Promise<ComponentDurableDeletionResult> {
+  try {
+    return await store.withMutationLock(async (mutationLease) => withProjectWriteLock(async (persist) => {
+      const before = store.getSnapshot();
+      const master = matchesCurrentMaster(before, target);
+      if (!master) return { status: 'stale-master', snapshot: before };
+      const session = protection.session;
+      if (!protection.activeMaster || !session || session.componentId !== target.componentId ||
+          !protection.bufferDocument || protection.bufferDocument !== bufferDocument ||
+          !session.baseDocument || typeof session.baseUpdatedAt !== 'string') {
+        return { status: 'failed', snapshot: before };
+      }
+
+      const recovery = saveComponentCanvasRecoveryCopy(
+        store, target, bufferDocument, now, idFactory, mutationLease,
+      );
+      if (recovery.status !== 'saved') return {
+        status: recovery.status === 'stale-master' ? 'stale-master' : 'failed',
+        snapshot: recovery.snapshot,
+      };
+
+      try {
+        await persist(recovery.snapshot.editorState.project, recovery.snapshot.projectRevision);
+      } catch {
+        const snapshot = rollbackCanonicalSnapshot(store, before.editorState, mutationLease);
+        return { status: 'recovery-persist-failed', snapshot };
+      }
+
+      // Re-read and revalidate the master CAS only after IDB transaction completion.
+      const afterRecovery = store.getSnapshot();
+      if (!matchesCurrentMaster(afterRecovery, target)) {
+        return { status: 'stale-master', snapshot: afterRecovery, recoveryComponent: recovery.component };
+      }
+
+      const deletion = deleteComponentIfCurrent(store, target, mutationLease);
+      if (deletion.status !== 'deleted') return {
+        status: deletion.status === 'stale-master' ? 'stale-master' : 'failed',
+        snapshot: deletion.snapshot,
+        recoveryComponent: recovery.component,
+      };
+
+      try {
+        await persist(deletion.snapshot.editorState.project, deletion.snapshot.projectRevision);
+      } catch {
+        // Recovery copy is durable. Reverting is a new guarded commit; revision
+        // remains monotonic and the durable recovery snapshot stays authoritative.
+        const snapshot = rollbackCanonicalSnapshot(store, recovery.snapshot.editorState, mutationLease);
+        return { status: 'deletion-persist-failed', snapshot, recoveryComponent: recovery.component };
+      }
+
+      try {
+        await persist(emptyBufferProject);
+      } catch {
+        // Do not reset the UI/session; keep the current buffer available for retry.
+        return { status: 'cleanup-persist-failed', snapshot: store.getSnapshot(),
+          recoveryComponent: recovery.component };
+      }
+      return { status: 'deleted', snapshot: store.getSnapshot(), recoveryComponent: recovery.component };
+    }));
+  } catch {
+    return { status: 'failed', snapshot: store.getSnapshot() };
+  }
+}
+
+/** Clean active-master deletion still requires both canonical and buffer durability. */
+export async function deleteComponentDurably(
+  store: CanonicalEditorStore,
+  target: ComponentDeletionTarget,
+  emptyBufferProject: FolioProject,
+  withProjectWriteLock: ComponentProjectWriteLock,
+): Promise<ComponentDurableDeletionResult> {
+  try {
+    return await store.withMutationLock(async (mutationLease) => withProjectWriteLock(async (persist) => {
+      const before = store.getSnapshot();
+      if (!matchesCurrentMaster(before, target)) return { status: 'stale-master', snapshot: before };
+      const deletion = deleteComponentIfCurrent(store, target, mutationLease);
+      if (deletion.status !== 'deleted') return {
+        status: deletion.status === 'stale-master' ? 'stale-master' : 'failed',
+        snapshot: deletion.snapshot,
+      };
+      try {
+        await persist(deletion.snapshot.editorState.project, deletion.snapshot.projectRevision);
+      } catch {
+        const snapshot = rollbackCanonicalSnapshot(store, before.editorState, mutationLease);
+        return { status: 'deletion-persist-failed', snapshot };
+      }
+      try {
+        await persist(emptyBufferProject);
+      } catch {
+        return { status: 'cleanup-persist-failed', snapshot: store.getSnapshot() };
+      }
+      return { status: 'deleted', snapshot: store.getSnapshot() };
+    }));
+  } catch {
+    return { status: 'failed', snapshot: store.getSnapshot() };
+  }
+}
+
+/** Retry deletion without creating a second recovery copy after its first barrier. */
+export async function deleteComponentAfterDurableRecovery(
+  store: CanonicalEditorStore,
+  target: ComponentDeletionTarget,
+  recoveryComponentId: string,
+  emptyBufferProject: FolioProject,
+  withProjectWriteLock: ComponentProjectWriteLock,
+): Promise<ComponentDurableDeletionResult> {
+  try {
+    return await store.withMutationLock(async (mutationLease) => withProjectWriteLock(async (persist) => {
+      const before = store.getSnapshot();
+      const recoveryComponent = before.editorState.project.components.find((item) => item.id === recoveryComponentId);
+      if (!recoveryComponent || !matchesCurrentMaster(before, target)) {
+        return { status: 'stale-master', snapshot: before,
+          ...(recoveryComponent ? { recoveryComponent } : {}) };
+      }
+      const deletion = deleteComponentIfCurrent(store, target, mutationLease);
+      if (deletion.status !== 'deleted') return {
+        status: deletion.status === 'stale-master' ? 'stale-master' : 'failed',
+        snapshot: deletion.snapshot,
+        recoveryComponent,
+      };
+      try {
+        await persist(deletion.snapshot.editorState.project, deletion.snapshot.projectRevision);
+      } catch {
+        const snapshot = rollbackCanonicalSnapshot(store, before.editorState, mutationLease);
+        return { status: 'deletion-persist-failed', snapshot, recoveryComponent };
+      }
+      try {
+        await persist(emptyBufferProject);
+      } catch {
+        return { status: 'cleanup-persist-failed', snapshot: store.getSnapshot(), recoveryComponent };
+      }
+      return { status: 'deleted', snapshot: store.getSnapshot(), recoveryComponent };
+    }));
   } catch {
     return { status: 'failed', snapshot: store.getSnapshot() };
   }

@@ -35,7 +35,16 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-async function persistProject(input: FolioProject, activate: boolean): Promise<void> {
+let projectWriteQueue: Promise<void> = Promise.resolve();
+const persistedProjectRevisions = new Map<string, number>();
+
+function enqueueProjectWrite<T>(operation: () => Promise<T>): Promise<T> {
+  const result = projectWriteQueue.then(operation);
+  projectWriteQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function persistProjectUnlocked(input: FolioProject, activate: boolean): Promise<void> {
   const project = requireValidProject(input);
   if (activate && project.metadata.id === RESERVED_COMPONENT_PROJECT_ID) {
     throw new Error('The Component Canvas workspace cannot be activated as a root project.');
@@ -63,16 +72,40 @@ async function persistProject(input: FolioProject, activate: boolean): Promise<v
   }
 }
 
-export async function saveProject(input: FolioProject): Promise<void> {
-  return persistProject(input, false);
+export function saveProject(input: FolioProject, projectRevision?: number): Promise<void> {
+  const project = requireValidProject(input);
+  return enqueueProjectWrite(async () => {
+    const persistedRevision = persistedProjectRevisions.get(project.metadata.id);
+    if (projectRevision !== undefined && persistedRevision !== undefined && projectRevision < persistedRevision) return;
+    await persistProjectUnlocked(project, false);
+    if (projectRevision !== undefined) {
+      persistedProjectRevisions.set(project.metadata.id, Math.max(projectRevision, persistedRevision ?? projectRevision));
+    }
+  });
+}
+
+/** Serializes a multi-transaction barrier against every ordinary project save. */
+export function withProjectWriteLock<T>(
+  operation: (persist: (project: FolioProject, projectRevision?: number) => Promise<void>) => Promise<T>,
+): Promise<T> {
+  return enqueueProjectWrite(() => operation(async (input, projectRevision) => {
+    const project = requireValidProject(input);
+    const persistedRevision = persistedProjectRevisions.get(project.metadata.id);
+    if (projectRevision !== undefined && persistedRevision !== undefined && projectRevision < persistedRevision) return;
+    await persistProjectUnlocked(project, false);
+    if (projectRevision !== undefined) {
+      persistedProjectRevisions.set(project.metadata.id, Math.max(projectRevision, persistedRevision ?? projectRevision));
+    }
+  }));
 }
 
 /**
  * Persist a project and mark it active in the same IndexedDB transaction.
  * The pointer cannot commit unless the validated project record commits too.
  */
-export async function saveProjectAndActivate(input: FolioProject): Promise<void> {
-  return persistProject(input, true);
+export function saveProjectAndActivate(input: FolioProject): Promise<void> {
+  const project = requireValidProject(input);
+  return enqueueProjectWrite(() => persistProjectUnlocked(project, true));
 }
 
 export async function loadProjectById(projectId: string): Promise<FolioProject | null> {

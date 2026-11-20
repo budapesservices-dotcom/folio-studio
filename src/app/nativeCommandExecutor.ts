@@ -357,13 +357,22 @@ export function prepareNativeCommand(
     return rejectedPreparation(snapshot, command, 'PROJECT_VALIDATION_FAILED', 'The prepared project violates the current Folio project schema.');
   }
 
+  const candidateDocument = candidateState.project.pages.find((page) => page.id === address.owner.id)?.document;
+  const candidateNodeById = new Map((candidateDocument?.nodes ?? []).map((node) => [node.id, node]));
+  const originalNodeById = new Map(document.nodes.map((node) => [node.id, node]));
+  const updatedNodeIds = refs.map((ref) => ref.nodeId).filter((nodeId) => {
+    const before = originalNodeById.get(nodeId);
+    const after = candidateNodeById.get(nodeId);
+    return before !== undefined && after !== undefined && JSON.stringify(before) !== JSON.stringify(after);
+  });
+
   const changeDraft: NativeChangeSetDraft = {
     projectId: snapshot.editorState.project.metadata.id,
     ...(command.transactionId ? { transactionId: command.transactionId } : {}),
     commandIds: [command.commandId],
     documents: [{
       address,
-      nodeIds: { added: [], updated: refs.map((ref) => ref.nodeId), removed: [] },
+      nodeIds: { added: [], updated: updatedNodeIds, removed: [] },
     }],
     components: [],
     projectMetadataChanged: false,

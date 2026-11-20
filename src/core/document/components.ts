@@ -105,3 +105,29 @@ export function replaceComponentInstancesInDocument(document: FolioDocument, com
   }
   return changed ? { ...document, nodes } : document;
 }
+
+
+/** Prunes only override keys whose master nodes were removed; surviving keys remain. */
+export function pruneComponentInstanceOverridesInDocument(
+  document: FolioDocument,
+  componentId: string,
+  removedNodeIds: ReadonlySet<string>,
+): FolioDocument {
+  if (removedNodeIds.size === 0) return document;
+  let changed = false;
+  const nodes = document.nodes.map((node) => {
+    if (node.type !== 'component-instance' || node.componentId !== componentId) return node;
+    const overrides = { ...node.overrides };
+    let instanceChanged = false;
+    for (const removedId of removedNodeIds) {
+      if (Object.prototype.hasOwnProperty.call(overrides, removedId)) {
+        delete overrides[removedId];
+        instanceChanged = true;
+      }
+    }
+    if (!instanceChanged) return node;
+    changed = true;
+    return { ...node, overrides };
+  });
+  return changed ? { ...document, nodes } : document;
+}

@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialProject, createRectNode } from '../src/core/document/factory';
-import type { ComponentDefinition, FolioDocument, GroupNode } from '../src/core/document/types';
-import { createCanonicalEditorStore } from '../src/app/editorStore';
+import type { ComponentDefinition, FolioDocument, FolioProject, GroupNode } from '../src/core/document/types';
+import { createCanonicalEditorStore, type CanonicalEditorStore } from '../src/app/editorStore';
 import { createEditorState } from '../src/app/editorReducer';
 import {
   deleteComponentIfCurrent,
   requestComponentDeletion,
   saveComponentCanvasRecoveryCopy,
+  deleteComponentAfterDurableRecovery,
+  deleteComponentDurably,
+  recoverAndDeleteComponentDurably,
   type ComponentDeletionTarget,
+  type ComponentProjectWriteLock,
   type ComponentRecoveryIdFactory,
 } from '../src/app/componentDeletion';
 import {
@@ -297,5 +301,210 @@ describe('Safe active Component Canvas master deletion', () => {
     expect(request.status).toBe('recovery-required');
     expect(store.getSnapshot().editorState.project.components).toHaveLength(1);
     expect(store.getSnapshot().projectRevision).toBe(0);
+  });
+});
+
+
+function emptyBufferProject(): FolioProject {
+  const project = createInitialProject('Component Canvas');
+  project.metadata.id = 'folio-component-canvas';
+  project.metadata.name = 'Component Canvas';
+  project.pages[0].name = 'Component Canvas';
+  project.pages[0].document = { ...project.pages[0].document, name: 'Component Canvas', nodes: [] };
+  return project;
+}
+
+function recoveryProtection(master: ComponentDefinition, buffer: FolioDocument) {
+  return {
+    activeMaster: true,
+    session: createComponentCanvasSyncSession(master),
+    bufferDocument: buffer,
+    recoveryPending: true,
+  };
+}
+
+function makeDurableWriter(
+  persisted: FolioProject[],
+  failAt = 0,
+  onPersist?: (call: number, project: FolioProject, revision?: number) => void,
+): ComponentProjectWriteLock {
+  return async <T>(operation: (persist: (project: FolioProject, revision?: number) => Promise<void>) => Promise<T>) => {
+    let calls = 0;
+    return operation(async (project, revision) => {
+      calls += 1;
+      onPersist?.(calls, project, revision);
+      if (calls === failAt) throw new Error('Injected IndexedDB transaction failure ' + calls);
+      persisted.push(structuredClone(project));
+    });
+  };
+}
+
+describe('durable active Component Canvas deletion barriers', () => {
+  it('persists recovery copy before deletion and clears the buffer only after both commits are durable', async () => {
+    const { store, master } = createFixture();
+    const buffer = dirtyBuffer(master.document);
+    const persisted: FolioProject[] = [];
+    const result = await recoverAndDeleteComponentDurably(
+      store, targetFor(master), recoveryProtection(master, buffer), buffer,
+      emptyBufferProject(), makeDurableWriter(persisted), '2026-11-20T14:00:00.000Z', ids('durable'),
+    );
+
+    expect(result.status).toBe('deleted');
+    expect(persisted).toHaveLength(3);
+    expect(persisted[0].components).toHaveLength(2);
+    expect(persisted[0].components.some((item) => item.id === master.id)).toBe(true);
+    expect(persisted[0].components.some((item) => item.id === result.recoveryComponent?.id)).toBe(true);
+    expect(persisted[1].components).toEqual([expect.objectContaining({ id: result.recoveryComponent?.id })]);
+    expect(persisted[2].metadata.id).toBe('folio-component-canvas');
+    expect(persisted[2].pages[0].document.nodes).toEqual([]);
+    expect(store.getSnapshot().projectRevision).toBe(2);
+    expect(store.getSnapshot().editorState.past).toHaveLength(2);
+    expect(buffer.nodes[1].x).toBe(master.document.nodes[1].x + 125);
+  });
+
+  it('keeps the master and buffer when recovery-copy persistence fails and rolls memory back monotonically', async () => {
+    const { store, master } = createFixture();
+    const buffer = dirtyBuffer(master.document);
+    const persisted: FolioProject[] = [];
+    const result = await recoverAndDeleteComponentDurably(
+      store, targetFor(master), recoveryProtection(master, buffer), buffer,
+      emptyBufferProject(), makeDurableWriter(persisted, 1), '2026-11-20T14:01:00.000Z', ids('recovery-fail'),
+    );
+
+    expect(result.status).toBe('recovery-persist-failed');
+    expect(persisted).toHaveLength(0);
+    expect(store.getSnapshot().editorState.project.components.map((item) => item.id)).toEqual([master.id]);
+    expect(store.getSnapshot().projectRevision).toBe(2);
+    expect(store.getSnapshot().editorState.past).toHaveLength(0);
+    expect(buffer.nodes[1].x).toBe(master.document.nodes[1].x + 125);
+  });
+
+  it('keeps the last durable recovery snapshot if final deletion persistence fails, and reload restores it', async () => {
+    const { store, master } = createFixture();
+    const buffer = dirtyBuffer(master.document);
+    const persisted: FolioProject[] = [];
+    const result = await recoverAndDeleteComponentDurably(
+      store, targetFor(master), recoveryProtection(master, buffer), buffer,
+      emptyBufferProject(), makeDurableWriter(persisted, 2), '2026-11-20T14:02:00.000Z', ids('delete-fail'),
+    );
+
+    expect(result.status).toBe('deletion-persist-failed');
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].components).toHaveLength(2);
+    expect(store.getSnapshot().editorState.project.components).toHaveLength(2);
+    expect(store.getSnapshot().projectRevision).toBe(3);
+    expect(store.getSnapshot().editorState.past).toHaveLength(1);
+    const reloaded = createCanonicalEditorStore(createEditorState(structuredClone(persisted[0])));
+    expect(reloaded.getSnapshot().editorState.project.components).toHaveLength(2);
+    expect(reloaded.getSnapshot().editorState.project.components.some((item) => item.id === master.id)).toBe(true);
+    expect(buffer.nodes[1].x).toBe(master.document.nodes[1].x + 125);
+  });
+
+  it('does not clear the buffer when cleanup persistence fails after deletion is durable', async () => {
+    const { store, master } = createFixture();
+    const buffer = dirtyBuffer(master.document);
+    const persisted: FolioProject[] = [];
+    const result = await recoverAndDeleteComponentDurably(
+      store, targetFor(master), recoveryProtection(master, buffer), buffer,
+      emptyBufferProject(), makeDurableWriter(persisted, 3), '2026-11-20T14:03:00.000Z', ids('cleanup-fail'),
+    );
+
+    expect(result.status).toBe('cleanup-persist-failed');
+    expect(persisted).toHaveLength(2);
+    expect(persisted[1].components).toHaveLength(1);
+    expect(store.getSnapshot().editorState.project.components).toHaveLength(1);
+    expect(store.getSnapshot().projectRevision).toBe(2);
+    expect(buffer.nodes[1].x).toBe(master.document.nodes[1].x + 125);
+  });
+
+  it('rejects a concurrent canonical mutation during the recovery durability barrier', async () => {
+    const { store, master } = createFixture();
+    const buffer = dirtyBuffer(master.document);
+    const persisted: FolioProject[] = [];
+    let attempted: ReturnType<CanonicalEditorStore['dispatchLegacyAction']> | undefined;
+    let tried = false;
+    const writer = makeDurableWriter(persisted, 0, (call) => {
+      if (call !== 1 || tried) return;
+      tried = true;
+      attempted = store.dispatchLegacyAction({
+        type: 'rename-component',
+        componentId: master.id,
+        expectedMasterDocument: master.document,
+        expectedUpdatedAt: master.updatedAt,
+        name: 'Concurrent rename',
+      });
+    });
+    const result = await recoverAndDeleteComponentDurably(
+      store, targetFor(master), recoveryProtection(master, buffer), buffer,
+      emptyBufferProject(), writer, '2026-11-20T14:04:00.000Z', ids('serialized'),
+    );
+
+    expect(attempted).toMatchObject({ status: 'failed', errorCode: 'MUTATION_LOCKED' });
+    expect(result.status).toBe('deleted');
+    expect(store.getSnapshot().projectRevision).toBe(2);
+  });
+
+  it('retains a durably saved recovery copy when the master CAS changes before retrying deletion', async () => {
+    const { store, master } = createFixture();
+    const buffer = dirtyBuffer(master.document);
+    const persisted: FolioProject[] = [];
+    const first = await recoverAndDeleteComponentDurably(
+      store, targetFor(master), recoveryProtection(master, buffer), buffer,
+      emptyBufferProject(), makeDurableWriter(persisted, 2), '2026-11-20T14:05:00.000Z', ids('cas-retry'),
+    );
+    expect(first.status).toBe('deletion-persist-failed');
+    const recoveryId = first.recoveryComponent!.id;
+
+    const currentMaster = store.getSnapshot().editorState.project.components.find((item) => item.id === master.id)!;
+    const renamed = store.dispatchLegacyAction({
+      type: 'rename-component',
+      componentId: currentMaster.id,
+      expectedMasterDocument: currentMaster.document,
+      expectedUpdatedAt: currentMaster.updatedAt,
+      name: 'Latest master after recovery barrier',
+    });
+    expect(renamed.status).toBe('committed');
+
+    const retry = await deleteComponentAfterDurableRecovery(
+      store, targetFor(master), recoveryId, emptyBufferProject(), makeDurableWriter(persisted),
+    );
+    expect(retry.status).toBe('stale-master');
+    expect(store.getSnapshot().editorState.project.components.some((item) => item.id === master.id)).toBe(true);
+    expect(store.getSnapshot().editorState.project.components.some((item) => item.id === recoveryId)).toBe(true);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].components).toHaveLength(2);
+    expect(buffer.nodes[1].x).toBe(master.document.nodes[1].x + 125);
+  });
+
+  it('rolls a non-recovery delete back to the previous in-memory snapshot when persistence fails', async () => {
+    const { store, master } = createFixture();
+    const persisted: FolioProject[] = [];
+    const result = await deleteComponentDurably(
+      store, targetFor(master), emptyBufferProject(), makeDurableWriter(persisted, 1),
+    );
+
+    expect(result.status).toBe('deletion-persist-failed');
+    expect(store.getSnapshot().editorState.project.components.map((item) => item.id)).toEqual([master.id]);
+    expect(store.getSnapshot().projectRevision).toBe(2);
+    expect(persisted).toHaveLength(0);
+  });
+
+  it('retries only the deletion barrier after a durable recovery copy exists', async () => {
+    const { store, master } = createFixture();
+    const buffer = dirtyBuffer(master.document);
+    const persisted: FolioProject[] = [];
+    const first = await recoverAndDeleteComponentDurably(
+      store, targetFor(master), recoveryProtection(master, buffer), buffer,
+      emptyBufferProject(), makeDurableWriter(persisted, 2), '2026-11-20T14:06:00.000Z', ids('retry-copy'),
+    );
+    expect(first.status).toBe('deletion-persist-failed');
+    const recoveryId = first.recoveryComponent!.id;
+
+    const retry = await deleteComponentAfterDurableRecovery(
+      store, targetFor(master), recoveryId, emptyBufferProject(), makeDurableWriter(persisted),
+    );
+    expect(retry.status).toBe('deleted');
+    expect(persisted.at(-2)?.components).toEqual([expect.objectContaining({ id: recoveryId })]);
+    expect(persisted.at(-1)?.metadata.id).toBe('folio-component-canvas');
   });
 });

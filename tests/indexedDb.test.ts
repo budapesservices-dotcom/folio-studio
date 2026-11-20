@@ -1,12 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openProjectFile } from '../src/app/projectFileActions';
-import { createInitialProject } from '../src/core/document/factory';
-import type { FolioProject } from '../src/core/document/types';
+import { createInitialProject, createRectNode } from '../src/core/document/factory';
+import type { ComponentDefinition, FolioDocument, FolioProject } from '../src/core/document/types';
+import { createCanonicalEditorStore } from '../src/app/editorStore';
+import { createEditorState } from '../src/app/editorReducer';
+import { createComponentCanvasSyncSession } from '../src/app/componentCanvasSync';
+import {
+  recoverAndDeleteComponentDurably,
+  type ComponentProjectWriteLock,
+} from '../src/app/componentDeletion';
 import {
   loadMostRecentProject,
   loadProjectById,
   saveProject,
   saveProjectAndActivate,
+  withProjectWriteLock,
 } from '../src/core/persistence/indexedDb';
 
 type FakeRequest<T> = {
@@ -327,5 +335,218 @@ describe('persistent active-project selection', () => {
     });
     expect((await loadMostRecentProject())?.metadata.id).toBe(active.metadata.id);
     expect(replacement).not.toHaveBeenCalled();
+  });
+});
+
+
+function createDurableComponentFixture() {
+  const mainProject = projectWithId('durable-main', 'Durable Main', '2026-11-20T12:00:00.000Z');
+  const masterDocument: FolioDocument = {
+    ...mainProject.pages[0].document,
+    id: 'durable-master-document',
+    name: 'Durable Master',
+    nodes: [{ ...createRectNode(), id: 'durable-master-node' }],
+  };
+  const master: ComponentDefinition = {
+    id: 'durable-master',
+    name: 'Durable Master',
+    document: masterDocument,
+    createdAt: '2026-11-20T12:00:00.000Z',
+    updatedAt: '2026-11-20T12:00:00.000Z',
+  };
+  mainProject.components = [master];
+  const store = createCanonicalEditorStore(createEditorState(mainProject));
+  const canonicalMaster = store.getSnapshot().editorState.project.components[0];
+  const bufferDocument: FolioDocument = {
+    ...masterDocument,
+    nodes: masterDocument.nodes.map((node) => ({ ...node, x: node.x + 73 })),
+  };
+  const bufferProject = projectWithId('folio-component-canvas', 'Component Canvas', '2026-11-20T12:00:01.000Z');
+  bufferProject.pages[0].document = { ...bufferDocument, id: 'durable-buffer-document' };
+  const emptyBuffer = projectWithId('folio-component-canvas', 'Component Canvas', '2026-11-20T12:00:02.000Z');
+  emptyBuffer.pages[0].document.nodes = [];
+  emptyBuffer.pages[0].document.id = 'empty-buffer-document';
+  const target = {
+    componentId: canonicalMaster.id,
+    expectedMasterDocument: canonicalMaster.document,
+    expectedUpdatedAt: canonicalMaster.updatedAt,
+  };
+  const protection = {
+    activeMaster: true,
+    session: createComponentCanvasSyncSession(canonicalMaster),
+    bufferDocument,
+    recoveryPending: true,
+  };
+  const idFactory = (prefix: string) => 'durable-recovered-' + prefix;
+  return { mainProject, store, master: canonicalMaster, bufferDocument, bufferProject, emptyBuffer, target, protection, idFactory };
+}
+
+describe('Component Canvas recovery with the real IndexedDB adapter', () => {
+  it('keeps the original project and durable local buffer when recovery-copy transaction aborts', async () => {
+    const fixture = createDurableComponentFixture();
+    await saveProject(fixture.mainProject);
+    await saveProject(fixture.bufferProject);
+    fakeIndexedDB.database!.failNextPutForStore('projects');
+
+    const result = await recoverAndDeleteComponentDurably(
+      fixture.store, fixture.target, fixture.protection, fixture.bufferDocument,
+      fixture.emptyBuffer, withProjectWriteLock, '2026-11-20T12:01:00.000Z', fixture.idFactory,
+    );
+
+    expect(result.status).toBe('recovery-persist-failed');
+    const durableMain = await loadProjectById(fixture.mainProject.metadata.id);
+    const durableBuffer = await loadProjectById('folio-component-canvas');
+    expect(durableMain?.components.map((component) => component.id)).toEqual([fixture.master.id]);
+    expect(durableBuffer?.pages[0].document.nodes[0].x).toBe(fixture.bufferDocument.nodes[0].x);
+    expect(fixture.store.getSnapshot().editorState.project.components.map((component) => component.id))
+      .toEqual([fixture.master.id]);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(2);
+  });
+
+  it('retains the durable recovery snapshot and dirty buffer when the final deletion transaction aborts', async () => {
+    const fixture = createDurableComponentFixture();
+    await saveProject(fixture.mainProject);
+    await saveProject(fixture.bufferProject);
+
+    const failSecondBarrier: ComponentProjectWriteLock = (operation) =>
+      withProjectWriteLock(async (persist) => {
+        let writes = 0;
+        return operation(async (project, revision) => {
+          writes += 1;
+          if (writes === 2) fakeIndexedDB.database!.failNextPutForStore('projects');
+          await persist(project, revision);
+        });
+      });
+
+    const result = await recoverAndDeleteComponentDurably(
+      fixture.store, fixture.target, fixture.protection, fixture.bufferDocument,
+      fixture.emptyBuffer, failSecondBarrier, '2026-11-20T12:02:00.000Z', fixture.idFactory,
+    );
+
+    expect(result.status).toBe('deletion-persist-failed');
+    const durableMain = await loadProjectById(fixture.mainProject.metadata.id);
+    const durableBuffer = await loadProjectById('folio-component-canvas');
+    expect(durableMain?.components).toHaveLength(2);
+    expect(durableMain?.components.some((component) => component.id === fixture.master.id)).toBe(true);
+    expect(durableMain?.components.some((component) => component.id === result.recoveryComponent?.id)).toBe(true);
+    expect(durableBuffer?.pages[0].document.nodes[0].x).toBe(fixture.bufferDocument.nodes[0].x);
+    expect(fixture.store.getSnapshot().editorState.project.components).toHaveLength(2);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(3);
+  });
+
+  it('keeps the local buffer durable when cleanup transaction fails after master deletion', async () => {
+    const fixture = createDurableComponentFixture();
+    await saveProject(fixture.mainProject);
+    await saveProject(fixture.bufferProject);
+
+    const failCleanup: ComponentProjectWriteLock = (operation) =>
+      withProjectWriteLock(async (persist) => {
+        let writes = 0;
+        return operation(async (project, revision) => {
+          writes += 1;
+          if (writes === 3) fakeIndexedDB.database!.failNextPutForStore('projects');
+          await persist(project, revision);
+        });
+      });
+
+    const result = await recoverAndDeleteComponentDurably(
+      fixture.store, fixture.target, fixture.protection, fixture.bufferDocument,
+      fixture.emptyBuffer, failCleanup, '2026-11-20T12:03:00.000Z', fixture.idFactory,
+    );
+
+    expect(result.status).toBe('cleanup-persist-failed');
+    const durableMain = await loadProjectById(fixture.mainProject.metadata.id);
+    const durableBuffer = await loadProjectById('folio-component-canvas');
+    expect(durableMain?.components).toHaveLength(1);
+    expect(durableMain?.components[0].id).toBe(result.recoveryComponent?.id);
+    expect(durableBuffer?.pages[0].document.nodes[0].x).toBe(fixture.bufferDocument.nodes[0].x);
+    expect(fixture.store.getSnapshot().editorState.project.components).toHaveLength(1);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(2);
+  });
+});
+
+
+describe('serialized IndexedDB write barriers', () => {
+  it('waits for each transaction to complete and blocks stale autosaves between barrier writes', async () => {
+    const initial = projectWithId('barrier-order-project', 'Before', '2026-11-20T12:00:00.000Z');
+    const recovery = { ...initial, metadata: { ...initial.metadata, name: 'Recovery durable' } };
+    const deletion = { ...initial, metadata: { ...initial.metadata, name: 'Deletion durable' } };
+    await saveProject(initial, 0);
+
+    let enterBarrier!: () => void;
+    let releaseBarrier!: () => void;
+    const entered = new Promise<void>((resolve) => { enterBarrier = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseBarrier = resolve; });
+    let recoveryVisibleAfterTransactionCompletion = false;
+
+    const barrier = withProjectWriteLock(async (persist) => {
+      await persist(recovery, 1);
+      recoveryVisibleAfterTransactionCompletion =
+        (await loadProjectById(initial.metadata.id))?.metadata.name === 'Recovery durable';
+      enterBarrier();
+      await gate;
+      await persist(deletion, 2);
+    });
+
+    await entered;
+    let staleSaveFinished = false;
+    const staleSave = saveProject(initial, 0).then(() => { staleSaveFinished = true; });
+    await Promise.resolve();
+    expect(staleSaveFinished).toBe(false);
+
+    releaseBarrier();
+    await barrier;
+    await staleSave;
+
+    expect(recoveryVisibleAfterTransactionCompletion).toBe(true);
+    expect((await loadProjectById(initial.metadata.id))?.metadata.name).toBe('Deletion durable');
+  });
+
+  it('rejects an aborted barrier transaction and leaves the previous durable snapshot intact', async () => {
+    const initial = projectWithId('barrier-failure-project', 'Durable before failure', '2026-11-20T12:10:00.000Z');
+    const candidate = { ...initial, metadata: { ...initial.metadata, name: 'Must not be durable' } };
+    await saveProject(initial);
+    fakeIndexedDB.database!.failNextPutForStore('projects');
+
+    await expect(withProjectWriteLock((persist) => persist(candidate, 1)))
+      .rejects.toThrow('Simulated IndexedDB write failure.');
+    expect((await loadProjectById(initial.metadata.id))?.metadata.name)
+      .toBe('Durable before failure');
+  });
+});
+
+describe('Component Canvas recovery with the real IndexedDB adapter', () => {
+  it('persists the recovery copy before delete and persists an empty buffer only after deletion is durable', async () => {
+    const fixture = createDurableComponentFixture();
+    await saveProject(fixture.mainProject);
+    await saveProject(fixture.bufferProject);
+
+    let recoveryBarrierCompleted = false;
+    const tracedWrite: ComponentProjectWriteLock = (operation) =>
+      withProjectWriteLock(async (persist) => operation(async (project, revision) => {
+        await persist(project, revision);
+        if (project.metadata.id === fixture.mainProject.metadata.id &&
+            project.components.some((item) => item.id === fixture.master.id) &&
+            project.components.length === 2) {
+          recoveryBarrierCompleted = true;
+        }
+        if (project.metadata.id === fixture.mainProject.metadata.id &&
+            !project.components.some((item) => item.id === fixture.master.id)) {
+          expect(recoveryBarrierCompleted).toBe(true);
+        }
+      }));
+
+    const result = await recoverAndDeleteComponentDurably(
+      fixture.store, fixture.target, fixture.protection, fixture.bufferDocument,
+      fixture.emptyBuffer, tracedWrite, '2026-11-20T12:00:30.000Z', fixture.idFactory,
+    );
+
+    expect(result.status).toBe('deleted');
+    expect(recoveryBarrierCompleted).toBe(true);
+    const durableMain = await loadProjectById(fixture.mainProject.metadata.id);
+    const durableBuffer = await loadProjectById('folio-component-canvas');
+    expect(durableMain?.components).toHaveLength(1);
+    expect(durableMain?.components[0].id).toBe(result.recoveryComponent?.id);
+    expect(durableBuffer?.pages[0].document.nodes).toEqual([]);
   });
 });

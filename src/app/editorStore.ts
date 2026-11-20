@@ -40,8 +40,9 @@ export interface CanonicalEditorStore {
   getSnapshot(): CanonicalEditorStoreSnapshot;
   subscribe(listener: () => void): () => void;
   subscribeChanges(listener: (event: NativeChangeEvent) => void): () => void;
-  commitEditorTransition(input: EditorStoreCommitInput): EditorStoreCommitResult;
-  dispatchLegacyAction(action: EditorAction): EditorStoreCommitResult;
+  commitEditorTransition(input: EditorStoreCommitInput, mutationLease?: object): EditorStoreCommitResult;
+  dispatchLegacyAction(action: EditorAction, mutationLease?: object): EditorStoreCommitResult;
+  withMutationLock<T>(operation: (mutationLease: object) => Promise<T>): Promise<T>;
 }
 
 function freezeGraph<T>(value: T, seen = new WeakSet<object>()): T {
@@ -141,6 +142,7 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
   private readonly changeListeners = new Set<(event: NativeChangeEvent) => void>();
   private committing = false;
   private notifying = false;
+  private mutationLease: object | null = null;
 
   constructor(initialState: EditorState) {
     if (!isEditorState(initialState)) {
@@ -166,8 +168,14 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     return () => { this.changeListeners.delete(listener); };
   }
 
-  commitEditorTransition(input: EditorStoreCommitInput): EditorStoreCommitResult {
+  commitEditorTransition(input: EditorStoreCommitInput, mutationLease?: object): EditorStoreCommitResult {
     const beforeSnapshot = this.snapshot;
+    if (this.mutationLease !== null && mutationLease !== this.mutationLease) {
+      return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'MUTATION_LOCKED' };
+    }
+    if (mutationLease !== undefined && mutationLease !== this.mutationLease) {
+      return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_MUTATION_LEASE' };
+    }
     if (this.committing || this.notifying) return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'REENTRANT_COMMIT' };
     if (!isCommitInput(input)) return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_COMMIT_INPUT' };
     if (!isEditorState(input.expectedEditorState) || !isEditorState(input.candidateState)) {
@@ -263,7 +271,7 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     }
   }
 
-  dispatchLegacyAction(action: EditorAction): EditorStoreCommitResult {
+  dispatchLegacyAction(action: EditorAction, mutationLease?: object): EditorStoreCommitResult {
     const before = this.snapshot;
     try {
       const candidateState = editorReducer(before.editorState, action);
@@ -278,9 +286,20 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
       return this.commitEditorTransition({
         expectedProjectRevision: before.projectRevision, expectedEditorState: before.editorState,
         candidateState, ...(componentSyncGuard ? { componentSyncGuard } : {}),
-      });
+      }, mutationLease);
     } catch {
       return { status: 'failed', snapshot: before, errorCode: 'LEGACY_TRANSITION_FAILED' };
+    }
+  }
+
+  async withMutationLock<T>(operation: (mutationLease: object) => Promise<T>): Promise<T> {
+    if (this.mutationLease !== null) throw new Error('The canonical project is already mutation-locked.');
+    const mutationLease = Object.freeze({});
+    this.mutationLease = mutationLease;
+    try {
+      return await operation(mutationLease);
+    } finally {
+      if (this.mutationLease === mutationLease) this.mutationLease = null;
     }
   }
 }

@@ -529,6 +529,29 @@ describe('Reducer parity, history and canonical revision', () => {
     expect(fixture.store.getSnapshot().projectRevision).toBe(1);
   });
 
+  it('reports only the nodes changed by a mixed multi-target command', () => {
+    const fixture = createFixture();
+    const initial = fixture.store.getSnapshot().editorState;
+    const unchanged = { ...createRectNode(), id: 'already-hidden', visible: false };
+    const project = {
+      ...initial.project,
+      pages: initial.project.pages.map((page) => ({
+        ...page,
+        document: { ...page.document, nodes: [...page.document.nodes, unchanged] },
+      })),
+    };
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const result = executeNativeCommand(store, makeCommand('node.set-properties', fixture.address, {
+      nodes: [nodeRef(fixture.address), nodeRef(fixture.address, 'already-hidden')],
+      properties: { visible: false },
+    }), fixture.context);
+
+    expect(result.status).toBe('applied');
+    if (result.status === 'applied') {
+      expect(result.change.documents[0].nodeIds.updated).toEqual(['shared-node']);
+    }
+  });
+
   it('matches the legacy set-properties reducer result', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-11-20T07:30:00.000Z'));

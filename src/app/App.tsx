@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
-import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument, FolioPage } from '../core/document/types';
+import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument, FolioPage, FolioProject } from '../core/document/types';
 import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, getSelectedLayerRootIds, getClippingMaskBaseId, type LayerDropPosition } from '../core/document/layers';
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
-import { loadMostRecentProject, loadProjectById, saveProject, saveProjectAndActivate } from '../core/persistence/indexedDb';
+import { loadMostRecentProject, loadProjectById, saveProject, saveProjectAndActivate, withProjectWriteLock } from '../core/persistence/indexedDb';
 import { downloadProject } from '../core/persistence/projectFile';
 import { createProjectExportSnapshot } from './projectExport';
 import { openProjectFile } from './projectFileActions';
@@ -26,11 +26,14 @@ import {
   type ComponentCanvasSyncSession,
 } from './componentCanvasSync';
 import {
-  deleteComponentIfCurrent,
+  deleteComponentAfterDurableRecovery,
+  deleteComponentDurably,
+  recoverAndDeleteComponentDurably,
   requestComponentDeletion,
-  saveComponentCanvasRecoveryCopy,
 } from './componentDeletion';
 import { FloatingWindow } from './FloatingWindow';
+import { createDebouncedAutosave } from './debouncedAutosave';
+import { activateModalDialog, trapModalDialogKeydown } from './modalFocus';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
 
@@ -164,8 +167,29 @@ export function App() {
   const [componentRecoveryStatus, setComponentRecoveryStatus] = useState<'none' | 'missing' | 'returned' | 'conflict' | 'switch-pending'>('none');
   const [pendingComponentOpenId, setPendingComponentOpenId] = useState<string | null>(null);
   const [pendingComponentDeletion, setPendingComponentDeletion] = useState<ComponentDefinition | null>(null);
+  const [componentDeletionDialogOpen, setComponentDeletionDialogOpen] = useState(false);
+  const [componentDeletionMode, setComponentDeletionMode] = useState<'recovery' | 'clean' | 'cleanup'>('recovery');
+  const [componentDeletionBusy, setComponentDeletionBusy] = useState(false);
+  const [componentCleanupPending, setComponentCleanupPending] = useState(false);
+  const [durableRecoveryComponentId, setDurableRecoveryComponentId] = useState<string | null>(null);
   const pendingComponentDeletionRef = useRef(false);
   const componentSyncPauseAfterCancelRef = useRef<FolioDocument | null>(null);
+  const appShellRef = useRef<HTMLDivElement | null>(null);
+  const deletionModalHostRef = useRef<HTMLDivElement | null>(null);
+  const deletionDialogRef = useRef<HTMLElement | null>(null);
+  const deletionFocusReturnRef = useRef<HTMLElement | null>(null);
+  const [componentSaveStatus, setComponentSaveStatus] = useState<'saving' | 'saved' | 'error'>('saving');
+  const [componentSaveError, setComponentSaveError] = useState<string | null>(null);
+  const componentAutosave = useMemo(() => createDebouncedAutosave<FolioProject>(
+    (project) => saveProject(project),
+    (status, error) => {
+      setComponentSaveStatus(status);
+      setComponentSaveError(status === 'error'
+        ? (error instanceof Error ? error.message : 'The Component Canvas buffer could not be saved.')
+        : null);
+    },
+    450,
+  ), []);
   const [isProjectLoaded, setIsProjectLoaded] = useState(false);
   const isHydrating = !isProjectLoaded || !componentReady;
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
@@ -494,19 +518,16 @@ export function App() {
 
   useEffect(() => {
     if (!componentReady) return;
-    const timer = window.setTimeout(() => {
-      saveProject(componentState.project).catch((error: unknown) => {
-        console.error('Folio Component Canvas autosave failed:', error);
-      });
-    }, 450);
-    return () => window.clearTimeout(timer);
-  }, [componentState.project, componentReady]);
+    componentAutosave.schedule(componentState.project);
+    return () => componentAutosave.cancel();
+  }, [componentState.project, componentReady, componentAutosave]);
 
   useEffect(() => {
     if (!isProjectLoaded) return;
     setSaveStatus('saving');
+    const projectRevision = canonicalStore.getSnapshot().projectRevision;
     const timer = window.setTimeout(() => {
-      saveProject(state.project)
+      saveProject(state.project, projectRevision)
         .then(() => setSaveStatus('saved'))
         .catch((error: unknown) => {
           console.error('Folio autosave failed:', error);
@@ -1058,6 +1079,10 @@ export function App() {
   const clearPendingComponentDeletion = () => {
     pendingComponentDeletionRef.current = false;
     setPendingComponentDeletion(null);
+    setComponentDeletionDialogOpen(false);
+    setComponentDeletionBusy(false);
+    setComponentCleanupPending(false);
+    setDurableRecoveryComponentId(null);
   };
 
   const keepComponentAfterStaleDeletion = (message: string) => {
@@ -1081,26 +1106,56 @@ export function App() {
     setActiveEditorId('main');
   };
 
-  const deleteComponent = (component: ComponentDefinition) => {
-    if (pendingComponentDeletionRef.current) return;
+  const openComponentDeletionDialog = (component: ComponentDefinition, mode: 'recovery' | 'clean' = 'recovery') => {
+    pendingComponentDeletionRef.current = true;
+    setPendingComponentDeletion(component);
+    setComponentDeletionMode(mode);
+    setComponentDeletionDialogOpen(true);
+    setComponentCanvasClosed(false);
+    setComponentCanvasMinimized(false);
+    setActiveEditorId('component');
+    focusWindow('component-canvas');
+    setInspectorVisible(true);
+  };
+
+  const showComponentCleanupPending = (component: ComponentDefinition) => {
+    pendingComponentDeletionRef.current = true;
+    setPendingComponentDeletion(component);
+    setComponentCleanupPending(true);
+    setComponentDeletionMode('cleanup');
+    setComponentDeletionDialogOpen(true);
+    setComponentCanvasClosed(false);
+    setComponentCanvasMinimized(false);
+    setActiveEditorId('component');
+    focusWindow('component-canvas');
+    setInspectorVisible(true);
+  };
+
+  const completeDurableComponentDeletion = (component: ComponentDefinition, message: string) => {
+    clearPendingComponentDeletion();
+    finishDeletedActiveComponent(component);
+    setNotice(message);
+  };
+
+  const deleteComponent = async (component: ComponentDefinition) => {
+    if (pendingComponentDeletionRef.current || componentCleanupPending) return;
     const isActiveMaster = editingComponentId === component.id;
-    const result = requestComponentDeletion(canonicalStore, componentDeletionTarget(component), {
+    const trigger = document.activeElement;
+    deletionFocusReturnRef.current = trigger instanceof HTMLElement ? trigger : null;
+    const protection = {
       activeMaster: isActiveMaster,
       bufferDocument: isActiveMaster ? getActiveDocument(componentState.project) : null,
       session: isActiveMaster ? componentSyncSessionRef.current : null,
       recoveryPending: isActiveMaster && (
         componentRecoveryStatus !== 'none' || pendingComponentOpenId !== null
       ),
-    });
+    };
+    const result = requestComponentDeletion(
+      canonicalStore, componentDeletionTarget(component), protection, isActiveMaster,
+    );
 
     if (result.status === 'recovery-required') {
-      pendingComponentDeletionRef.current = true;
-      setPendingComponentDeletion(component);
-      setComponentCanvasClosed(false);
-      setComponentCanvasMinimized(false);
-      setActiveEditorId('component');
-      focusWindow('component-canvas');
-      setInspectorVisible(true);
+      openComponentDeletionDialog(component);
       return;
     }
     if (result.status === 'stale-master') {
@@ -1112,66 +1167,151 @@ export function App() {
       setNotice('The master changed before deletion could be applied. Review the latest master and retry; the Component Canvas buffer was kept.');
       return;
     }
+
+    if (result.status === 'ready' && isActiveMaster) {
+      openComponentDeletionDialog(component, 'clean');
+      setComponentDeletionBusy(true);
+      const bufferSaved = await componentAutosave.flush(componentState.project);
+      if (!bufferSaved) {
+        setComponentDeletionBusy(false);
+        clearPendingComponentDeletion();
+        setNotice('Component Canvas buffer could not be saved durably. The master and buffer are unchanged; retry the buffer save before deleting.');
+        return;
+      }
+      const deletion = await deleteComponentDurably(
+        canonicalStore, componentDeletionTarget(component), componentInitialState.project, withProjectWriteLock,
+      );
+      setComponentDeletionBusy(false);
+      if (deletion.status === 'deleted') {
+        completeDurableComponentDeletion(component, `“${component.name}” deleted; linked instances were detached and Component Canvas cleanup is durable.`);
+      } else if (deletion.status === 'cleanup-persist-failed') {
+        showComponentCleanupPending(component);
+        componentAutosave.schedule(componentState.project);
+        setNotice('The master deletion is durable, but Component Canvas cleanup failed. Your local buffer is preserved; retry cleanup before discarding it.');
+      } else {
+        clearPendingComponentDeletion();
+        componentAutosave.schedule(componentState.project);
+        setNotice('The master deletion could not be made durable. The canonical master and Component Canvas buffer were preserved; retry is safe.');
+      }
+      return;
+    }
+
     if (result.status !== 'deleted') {
       setNotice('The master could not be deleted. The Component Canvas buffer was kept; review the latest master and retry.');
       return;
     }
-
-    finishDeletedActiveComponent(component);
     setNotice(`“${component.name}” deleted; any linked instances were detached.`);
   };
 
   const cancelComponentDeletion = () => {
-    if (!pendingComponentDeletion) return;
-    // Keep the exact local document and session; do not let a newly resumed
-    // effect turn this Cancel action into an implicit canonical commit.
+    if (!pendingComponentDeletion || componentDeletionBusy) return;
+    if (componentCleanupPending) {
+      setNotice('The master deletion is already durable. Keep this recovery dialog open and retry the buffer cleanup; the protected buffer has not been discarded.');
+      return;
+    }
     componentSyncPauseAfterCancelRef.current = getActiveDocument(componentState.project);
     clearPendingComponentDeletion();
     setNotice('Deletion cancelled. The master, local Component Canvas buffer, and recovery session were kept.');
   };
 
-  const saveBufferAsNewAndDelete = () => {
+  const saveBufferAsNewAndDelete = async () => {
     const pending = pendingComponentDeletion;
-    if (!pending) return;
+    if (!pending || componentDeletionBusy || componentCleanupPending) return;
+    setComponentDeletionBusy(true);
+    const bufferSaved = await componentAutosave.flush(componentState.project);
+    if (!bufferSaved) {
+      setComponentDeletionBusy(false);
+      setNotice('Component Canvas buffer could not be saved durably. No recovery or deletion commit was attempted; retry the buffer save.');
+      return;
+    }
     const target = componentDeletionTarget(pending);
     const bufferDocument = getActiveDocument(componentState.project);
-    const recovery = saveComponentCanvasRecoveryCopy(canonicalStore, target, bufferDocument);
-    if (recovery.status === 'stale-master') {
-      keepComponentAfterStaleDeletion('The master changed while the recovery choice was open. No deletion was applied; review the latest master. The local Component Canvas buffer was kept.');
-      return;
-    }
-    if (recovery.status !== 'saved') {
-      setNotice('The recovery copy could not be saved. The original master and local buffer are unchanged; choose an action again.');
-      return;
-    }
+    const protection = {
+      activeMaster: editingComponentId === pending.id,
+      bufferDocument,
+      session: componentSyncSessionRef.current,
+      recoveryPending: true,
+    };
+    const result = durableRecoveryComponentId
+      ? await deleteComponentAfterDurableRecovery(
+          canonicalStore, target, durableRecoveryComponentId, componentInitialState.project, withProjectWriteLock,
+        )
+      : await recoverAndDeleteComponentDurably(
+          canonicalStore, target, protection, bufferDocument, componentInitialState.project, withProjectWriteLock,
+        );
+    setComponentDeletionBusy(false);
 
-    const deletion = deleteComponentIfCurrent(canonicalStore, target);
-    if (deletion.status !== 'deleted') {
-      keepComponentAfterStaleDeletion(`“${recovery.component.name}” was saved to the Component Rack, but the original master changed before deletion. The recovery copy and local buffer were kept; review the latest master.`);
-      return;
+    if (result.status === 'deleted') {
+      const savedName = result.recoveryComponent?.name ?? 'Recovered component';
+      completeDurableComponentDeletion(pending, `“${savedName}” was saved durably and “${pending.name}” was deleted. Component Canvas cleanup is durable.`);
+    } else if (result.status === 'stale-master') {
+      const message = result.recoveryComponent
+        ? `“${result.recoveryComponent.name}” is durably saved; the original master changed, so it and the local buffer were kept.`
+        : 'The master changed before recovery could be applied. The master and local buffer were kept.';
+      keepComponentAfterStaleDeletion(message);
+      componentAutosave.schedule(componentState.project);
+    } else if (result.status === 'recovery-persist-failed') {
+      componentAutosave.schedule(componentState.project);
+      setNotice('Recovery-copy persistence failed. No deletion was attempted; the master and local buffer remain. Retry is safe.');
+    } else if (result.status === 'deletion-persist-failed') {
+      if (result.recoveryComponent) setDurableRecoveryComponentId(result.recoveryComponent.id);
+      componentAutosave.schedule(componentState.project);
+      setNotice('The recovery copy is durable, but deletion persistence failed. The master and buffer remain in memory; retry deletion without creating another recovery copy.');
+    } else if (result.status === 'cleanup-persist-failed') {
+      showComponentCleanupPending(pending);
+      if (result.recoveryComponent) setDurableRecoveryComponentId(result.recoveryComponent.id);
+      componentAutosave.schedule(componentState.project);
+      setNotice('The recovered component and master deletion are durable, but buffer cleanup failed. The local buffer remains preserved; retry cleanup.');
+    } else {
+      componentAutosave.schedule(componentState.project);
+      setNotice('The durable recovery operation failed. The local buffer remains protected; retry or cancel safely.');
     }
-
-    clearPendingComponentDeletion();
-    finishDeletedActiveComponent(pending);
-    setNotice(`“${recovery.component.name}” was saved as a new component, and “${pending.name}” was deleted.`);
   };
 
-  const discardBufferAndDelete = () => {
+  const discardBufferAndDelete = async () => {
     const pending = pendingComponentDeletion;
-    if (!pending) return;
-    const deletion = deleteComponentIfCurrent(canonicalStore, componentDeletionTarget(pending));
-    if (deletion.status === 'stale-master') {
+    if (!pending || componentDeletionBusy || componentCleanupPending) return;
+    setComponentDeletionBusy(true);
+    const bufferSaved = await componentAutosave.flush(componentState.project);
+    if (!bufferSaved) {
+      setComponentDeletionBusy(false);
+      setNotice('Component Canvas buffer could not be saved durably. No deletion was attempted; retry the buffer save.');
+      return;
+    }
+    const deletion = await deleteComponentDurably(
+      canonicalStore, componentDeletionTarget(pending), componentInitialState.project, withProjectWriteLock,
+    );
+    setComponentDeletionBusy(false);
+    if (deletion.status === 'deleted') {
+      completeDurableComponentDeletion(pending, `“${pending.name}” was deleted durably after discarding the protected local buffer; linked instances were detached.`);
+    } else if (deletion.status === 'cleanup-persist-failed') {
+      showComponentCleanupPending(pending);
+      setNotice('The master deletion is durable, but buffer cleanup failed. The local buffer remains preserved; retry cleanup.');
+    } else if (deletion.status === 'stale-master') {
       keepComponentAfterStaleDeletion('The master changed while the recovery choice was open. Deletion was cancelled; the local buffer was kept. Review the latest master.');
-      return;
+    } else {
+      componentAutosave.schedule(componentState.project);
+      setNotice('The master deletion could not be made durable. The original master and local buffer remain; retry or cancel safely.');
     }
-    if (deletion.status !== 'deleted') {
-      setNotice('The master could not be deleted. The local buffer is still intact; choose an action again.');
-      return;
-    }
+  };
 
-    clearPendingComponentDeletion();
-    finishDeletedActiveComponent(pending);
-    setNotice(`“${pending.name}” was deleted after discarding its protected local buffer; linked instances were detached.`);
+  const retryComponentBufferCleanup = async () => {
+    const pending = pendingComponentDeletion;
+    if (!pending || componentDeletionBusy || !componentCleanupPending) return;
+    setComponentDeletionBusy(true);
+    await componentAutosave.cancelAndWait();
+    try {
+      await withProjectWriteLock((persist) => persist(componentInitialState.project));
+      setComponentDeletionBusy(false);
+      completeDurableComponentDeletion(pending, 'Component Canvas cleanup is now durable. The recovered component and master deletion remain saved.');
+    } catch {
+      setComponentDeletionBusy(false);
+      setNotice('Component Canvas cleanup is still failing. The local buffer remains intact; retry is safe.');
+    }
+  };
+
+  const retryComponentCanvasSave = () => {
+    void componentAutosave.flush(componentState.project);
   };
 
   useEffect(() => {
@@ -1488,7 +1628,7 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (isHydrating) return;
+      if (isHydrating || componentDeletionDialogOpen) return;
       const target = event.target as HTMLElement | null;
       if (target?.isContentEditable || target?.matches('input, textarea, select, [contenteditable="true"]')) return;
       const context = getActiveEditorContext(activeEditorId, state, componentState);
@@ -1584,8 +1724,23 @@ export function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeEditorId, state, componentState, isHydrating]);
+  }, [activeEditorId, state, componentState, isHydrating, componentDeletionDialogOpen]);
 
+
+  useEffect(() => {
+    if (!componentDeletionDialogOpen) return;
+    const shell = appShellRef.current;
+    const host = deletionModalHostRef.current;
+    const dialog = deletionDialogRef.current;
+    if (!shell || !host || !dialog) return;
+    const restoreFocus = activateModalDialog(shell, host, dialog, deletionFocusReturnRef.current);
+    const onKeyDown = (event: KeyboardEvent) => trapModalDialogKeydown(dialog, event, cancelComponentDeletion);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      restoreFocus();
+    };
+  }, [componentDeletionDialogOpen, pendingComponentDeletion, componentCleanupPending, componentDeletionMode]);
 
   const statusLabel = saveStatus === 'loading'
     ? 'LOADING'
@@ -1597,6 +1752,7 @@ export function App() {
 
   return (
     <div
+      ref={appShellRef}
       class={`app-shell ${layersVisible ? "" : "layers-hidden"} ${inspectorVisible ? "" : "inspector-hidden"} ${isHydrating ? "is-hydrating" : ""}`}
       data-active-window={activeWindowId}
       aria-busy={isHydrating}
@@ -2166,22 +2322,10 @@ export function App() {
               </button>
             </div>
           )}
-          {pendingComponentDeletion && (
-            <div class="component-recovery-panel component-deletion-recovery" role="alertdialog" aria-modal="true" aria-labelledby="component-delete-recovery-title" aria-describedby="component-delete-recovery-description">
-              <strong id="component-delete-recovery-title">Delete “{pendingComponentDeletion.name}” master?</strong>
-              <span id="component-delete-recovery-description">
-                The active Component Canvas buffer is protected by local edits or recovery state. Choose how to continue. No deletion happens until you choose an action.
-              </span>
-              <button type="button" class="component-recovery-action" onClick={cancelComponentDeletion}>
-                Cancel
-              </button>
-              <button type="button" class="component-recovery-action" onClick={saveBufferAsNewAndDelete}>
-                Save buffer as a new component
-              </button>
-              <button type="button" class="component-recovery-action" onClick={discardBufferAndDelete}>
-                Discard buffer and delete
-              </button>
-            </div>
+          {pendingComponentDeletion && componentCleanupPending && !componentDeletionDialogOpen && (
+            <button type="button" class="component-recovery-action" onClick={() => setComponentDeletionDialogOpen(true)}>
+              Retry durable Component Canvas cleanup
+            </button>
           )}
           <div class="canvas-window-tools">
             <div class="workspace-tools component-canvas-create-tools" aria-label="Component actions">
@@ -2519,7 +2663,78 @@ export function App() {
         <div><span class="status-brand">F</span><span>Folio Studio <b>0.1.0</b></span></div>
         <div class="status-center">{activeDocument.nodes.length} LAYERS <span>·</span> {activeDocument.width} × {activeDocument.height} PX</div>
         <div class={`status-right save-${saveStatus}`} role="status" aria-live="polite"><span class="status-ready-dot" /> {isHydrating ? 'RESTORING PROJECT…' : statusLabel}</div>
+        <div class={`component-buffer-save component-save-${componentSaveStatus}`}>
+          <span role="status" aria-live="polite" aria-atomic="true">
+            Component Canvas: {componentSaveStatus === 'saving' ? 'Saving…' : componentSaveStatus === 'saved' ? 'Saved' : 'Save error'}
+            {componentSaveError && <span class="component-buffer-save-error"> — {componentSaveError}</span>}
+          </span>
+          {componentSaveStatus === 'error' && <button type="button" onClick={retryComponentCanvasSave}>Retry buffer save</button>}
+          {componentCleanupPending && <button type="button" onClick={retryComponentBufferCleanup}>Retry buffer cleanup</button>}
+        </div>
       </footer>
+
+      {componentDeletionDialogOpen && pendingComponentDeletion && (
+        <div class="component-deletion-modal-host" ref={deletionModalHostRef}>
+          <div class="component-deletion-backdrop" aria-hidden="true" />
+          <section
+            class="component-deletion-dialog"
+            key={componentDeletionMode}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="component-delete-recovery-title"
+            aria-describedby="component-delete-recovery-description"
+            tabIndex={-1}
+            ref={deletionDialogRef}
+          >
+            {componentDeletionMode === 'clean' ? (
+              <>
+                <h2 id="component-delete-recovery-title">Deleting “{pendingComponentDeletion.name}”</h2>
+                <p id="component-delete-recovery-description">The clean master deletion is being committed and saved to IndexedDB. The Component Canvas buffer will only be cleared after both the project and buffer cleanup transactions complete.</p>
+                <div class="component-deletion-progress" role="status" aria-live="polite">Saving canonical project and buffer cleanup…</div>
+              </>
+            ) : componentCleanupPending ? (
+              <>
+                <h2 id="component-delete-recovery-title">Deletion saved; buffer cleanup pending</h2>
+                <p id="component-delete-recovery-description">The master deletion and any recovery copy are durable. The local Component Canvas buffer has not been cleared because its cleanup transaction failed. Your buffer remains preserved.</p>
+                <button type="button" class="component-recovery-action" data-dialog-initial-focus onClick={retryComponentBufferCleanup} disabled={componentDeletionBusy}>
+                  {componentDeletionBusy ? 'Saving cleanup…' : 'Retry durable cleanup'}
+                </button>
+                <p>Keep this dialog open until cleanup succeeds. Your protected buffer remains durable and will not be removed on failure.</p>
+              </>
+            ) : componentDeletionMode === 'recovery' && durableRecoveryComponentId ? (
+              <>
+                <h2 id="component-delete-recovery-title">Recovery copy saved; deletion needs retry</h2>
+                <p id="component-delete-recovery-description">The recovery copy is already durable. The original master and local buffer were preserved after deletion persistence failed. Retry the second canonical commit without creating another recovery copy.</p>
+                <button type="button" class="component-recovery-action" data-dialog-initial-focus onClick={saveBufferAsNewAndDelete} disabled={componentDeletionBusy}>
+                  {componentDeletionBusy ? 'Retrying deletion…' : 'Retry deletion using saved recovery'}
+                </button>
+                <button type="button" class="component-recovery-action" onClick={cancelComponentDeletion} disabled={componentDeletionBusy}>
+                  Cancel and keep both
+                </button>
+              </>
+            ) : (
+              <>
+                <h2 id="component-delete-recovery-title">Delete “{pendingComponentDeletion.name}” master?</h2>
+                <p id="component-delete-recovery-description">The active Component Canvas buffer is protected by local edits or recovery state. Choose how to continue. No deletion happens until you choose an action.</p>
+                <button type="button" class="component-recovery-action" data-dialog-initial-focus onClick={cancelComponentDeletion} disabled={componentDeletionBusy}>
+                  Cancel
+                </button>
+                <button type="button" class="component-recovery-action" onClick={saveBufferAsNewAndDelete} disabled={componentDeletionBusy}>
+                  {componentDeletionBusy ? 'Saving recovery…' : 'Save buffer as a new component'}
+                </button>
+                <button type="button" class="component-recovery-action" onClick={discardBufferAndDelete} disabled={componentDeletionBusy}>
+                  {componentDeletionBusy ? 'Deleting…' : 'Discard buffer and delete'}
+                </button>
+              </>
+            )}
+            {componentSaveStatus === 'error' && !componentCleanupPending && componentDeletionMode !== 'clean' && (
+              <button type="button" class="component-recovery-action" onClick={retryComponentCanvasSave}>
+                Retry Component Canvas buffer save
+              </button>
+            )}
+          </section>
+        </div>
+      )}
 
       {isHydrating && (
         <div class="project-hydration-overlay" role="status" aria-live="polite">
