@@ -5,6 +5,7 @@ import type { DocumentAddress, NativeNodeRef } from '../src/core/document/ast';
 import type { NativeCommandContext } from '../src/core/commands/types';
 import { validateNativeCommandEnvelope } from '../src/core/commands/validation';
 import { createCanonicalEditorStore } from '../src/app/editorStore';
+import { NATIVE_COMMAND_REGISTRY } from '../src/app/nativeCommandRegistry';
 import { editorReducer, createEditorState } from '../src/app/editorReducer';
 import {
   commitPreparedCommand,
@@ -79,6 +80,14 @@ afterEach(() => {
 });
 
 describe('Native Command envelope and registry', () => {
+  it('keeps the static command registry and nested target allowlists immutable', () => {
+    expect(Object.isFrozen(NATIVE_COMMAND_REGISTRY)).toBe(true);
+    expect(Object.isFrozen(NATIVE_COMMAND_REGISTRY['node.transform'])).toBe(true);
+    expect(Object.isFrozen(NATIVE_COMMAND_REGISTRY['node.transform'].allowedTargets)).toBe(true);
+    expect(Object.isFrozen(NATIVE_COMMAND_REGISTRY['node.set-properties'])).toBe(true);
+    expect(Object.isFrozen(NATIVE_COMMAND_REGISTRY['node.set-properties'].allowedTargets)).toBe(true);
+  });
+
   it('accepts a valid v1 command envelope', () => {
     const fixture = createFixture();
     const command = makeCommand('node.transform', fixture.address, {
