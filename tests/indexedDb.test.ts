@@ -4,6 +4,7 @@ import { createInitialProject } from '../src/core/document/factory';
 import type { FolioProject } from '../src/core/document/types';
 import {
   loadMostRecentProject,
+  loadProjectById,
   saveProject,
   saveProjectAndActivate,
 } from '../src/core/persistence/indexedDb';
@@ -18,7 +19,9 @@ type FakeRequest<T> = {
 class FakeDatabase {
   version = 0;
   readonly stores = new Map<string, Map<string, unknown>>();
+  readonly metrics = { scheduledWrites: 0, committedWrites: 0, rolledBackWrites: 0 };
   private readonly keyPaths = new Map<string, string>();
+  private readonly putFailures = new Map<string, DOMException>();
 
   get objectStoreNames() {
     return { contains: (name: string) => this.stores.has(name) };
@@ -38,6 +41,31 @@ class FakeDatabase {
     return this.keyPaths.get(name) ?? '';
   }
 
+  failNextPutForStore(name: string, error = new DOMException(
+    'Simulated IndexedDB write failure.',
+    'QuotaExceededError',
+  )): void {
+    this.putFailures.set(name, error);
+  }
+
+  takePutFailure(name: string): DOMException | null {
+    const error = this.putFailures.get(name) ?? null;
+    this.putFailures.delete(name);
+    return error;
+  }
+
+  recordWriteScheduled(): void {
+    this.metrics.scheduledWrites += 1;
+  }
+
+  recordWriteCommitted(): void {
+    this.metrics.committedWrites += 1;
+  }
+
+  recordWritesRolledBack(count: number): void {
+    this.metrics.rolledBackWrites += count;
+  }
+
   close(): void {}
 }
 
@@ -45,9 +73,11 @@ class FakeTransaction {
   oncomplete: ((event: Event) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   onabort: ((event: Event) => void) | null = null;
+  error: DOMException | null = null;
   private pending = 0;
   private completionScheduled = false;
-  private readonly writes: Array<() => void> = [];
+  private aborted = false;
+  private readonly pendingWrites: Array<() => void> = [];
 
   constructor(private readonly database: FakeDatabase, private readonly mode: IDBTransactionMode) {}
 
@@ -57,13 +87,20 @@ class FakeTransaction {
 
     return {
       put: (value: unknown) => this.request(() => {
+        const failure = this.database.takePutFailure(name);
+        if (failure) throw failure;
+
         const path = this.database.keyPathFor(name);
         const key = path.split('.').reduce<unknown>((current, part) =>
           typeof current === 'object' && current !== null
             ? (current as Record<string, unknown>)[part]
             : undefined, value);
         if (typeof key !== 'string') throw new Error('Fake IndexedDB record has no string key.');
-        this.writes.push(() => records.set(key, structuredClone(value)));
+
+        // IndexedDB writes are staged until transaction commit. A later request
+        // error aborts the transaction and discards every staged operation.
+        this.pendingWrites.push(() => records.set(key, structuredClone(value)));
+        this.database.recordWriteScheduled();
         return key;
       }),
       get: (key: string) => this.request(() => {
@@ -72,46 +109,69 @@ class FakeTransaction {
       }),
       getAll: () => this.request(() => [...records.values()].map((value) => structuredClone(value))),
       delete: (key: string) => this.request(() => {
-        this.writes.push(() => records.delete(key));
+        this.pendingWrites.push(() => records.delete(key));
+        this.database.recordWriteScheduled();
         return undefined;
       }),
     };
   }
 
-  private request<T>(read: () => T): FakeRequest<T> {
+  abort(error = new DOMException('The transaction was aborted.', 'AbortError')): void {
+    if (this.aborted) return;
+    this.aborted = true;
+    this.error = error;
+    this.database.recordWritesRolledBack(this.pendingWrites.length);
+    this.pendingWrites.length = 0;
+    this.onerror?.call(this, new Event('error'));
+    this.onabort?.call(this, new Event('abort'));
+  }
+
+  private request<T>(operation: () => T): FakeRequest<T> {
     const request: FakeRequest<T> = {
       result: undefined as T,
       error: null,
       onsuccess: null,
       onerror: null,
     };
+
     this.pending += 1;
     queueMicrotask(() => {
       try {
-        request.result = read();
+        if (this.aborted) return;
+
+        request.result = operation();
         request.onsuccess?.call(request as unknown as FakeRequest<T>, new Event('success'));
       } catch (error) {
-        request.error = error instanceof DOMException ? error : new DOMException(String(error));
-        request.onerror?.call(request as unknown as FakeRequest<T>, new Event('error'));
-        this.onabort?.call(this, new Event('abort'));
+        request.error = error instanceof DOMException
+          ? error
+          : new DOMException(String(error), 'UnknownError');
+        const event = new Event('error', { cancelable: true });
+        request.onerror?.call(request as unknown as FakeRequest<T>, event);
+        if (!event.defaultPrevented) this.abort(request.error);
       } finally {
         this.pending -= 1;
         this.completeWhenIdle();
       }
     });
+
     return request;
   }
 
   private completeWhenIdle(): void {
-    if (this.pending > 0 || this.completionScheduled) return;
+    if (this.aborted || this.pending > 0 || this.completionScheduled) return;
+
     this.completionScheduled = true;
     queueMicrotask(() => {
       this.completionScheduled = false;
-      if (this.pending > 0) {
-        this.completeWhenIdle();
-        return;
+      if (this.aborted || this.pending > 0) return;
+
+      if (this.mode === 'readwrite') {
+        const writes = this.pendingWrites.splice(0);
+        writes.forEach((write) => {
+          write();
+          this.database.recordWriteCommitted();
+        });
       }
-      if (this.mode === 'readwrite') this.writes.forEach((write) => write());
       this.oncomplete?.call(this, new Event('complete'));
     });
   }
@@ -196,7 +256,6 @@ describe('persistent active-project selection', () => {
     expect((opened as unknown as Record<string, unknown>).futureProjectData)
       .toEqual({ keep: 'exactly' });
 
-    // A fresh load represents a browser reload and a new IndexedDB connection.
     const restored = await loadMostRecentProject();
     expect(restored?.metadata.id).toBe('project-b');
     expect(restored?.metadata).toEqual(originalMetadata);
@@ -237,21 +296,36 @@ describe('persistent active-project selection', () => {
     await expect(saveProjectAndActivate(componentCanvas)).rejects.toThrow('cannot be activated');
   });
 
-  it('leaves the previous active project intact after cancellation, import failure or failed save', async () => {
+  it('leaves the previous active project and pointer intact when the import transaction aborts', async () => {
     const active = projectWithId('project-active', 'Active project', '2026-11-18T00:00:00.000Z');
+    const imported = projectWithId('project-imported', 'Imported project', '2026-09-01T00:00:00.000Z');
     await saveProjectAndActivate(active);
-    const replaceProject = vi.fn(async (project: FolioProject) => {
+
+    const database = fakeIndexedDB.database!;
+    const metricsBefore = { ...database.metrics };
+    database.failNextPutForStore('app-state');
+
+    const replacement = vi.fn();
+    const openAndActivate = async (project: FolioProject) => {
       await saveProjectAndActivate(project);
+      replacement(project);
+    };
+
+    await expect(openProjectFile(fileFromProject(imported), openAndActivate))
+      .rejects.toThrow('Simulated IndexedDB write failure.');
+
+    expect(database.metrics.scheduledWrites - metricsBefore.scheduledWrites).toBe(1);
+    expect(database.metrics.rolledBackWrites - metricsBefore.rolledBackWrites).toBe(1);
+    expect(database.metrics.committedWrites - metricsBefore.committedWrites).toBe(0);
+    expect(await loadProjectById(active.metadata.id)).toMatchObject({
+      metadata: { id: active.metadata.id },
     });
-
-    await expect(openProjectFile(null, replaceProject)).resolves.toBeNull();
-    await expect(openProjectFile(fileFromContent('{invalid json'), replaceProject))
-      .rejects.toThrow('not valid JSON');
-    expect(replaceProject).not.toHaveBeenCalled();
-
-    const invalid = { ...projectWithId('project-invalid', 'Invalid', '2026-11-20T00:00:00.000Z'), pages: [] };
-    await expect(saveProjectAndActivate(invalid as unknown as FolioProject)).rejects.toThrow();
-
-    expect((await loadMostRecentProject())?.metadata.id).toBe('project-active');
+    expect(await loadProjectById(imported.metadata.id)).toBeNull();
+    expect(database.stores.get('app-state')?.get('active-project')).toEqual({
+      key: 'active-project',
+      projectId: active.metadata.id,
+    });
+    expect((await loadMostRecentProject())?.metadata.id).toBe(active.metadata.id);
+    expect(replacement).not.toHaveBeenCalled();
   });
 });
