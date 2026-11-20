@@ -50,7 +50,7 @@ export const NATIVE_COMMAND_REGISTRY = Object.freeze({
   'node.set-properties': Object.freeze({
     type: 'node.set-properties' as const,
     commandVersion: 1 as const,
-    allowedTargets: ['document'] as const,
+    allowedTargets: Object.freeze(['document'] as const),
     requiredPermission: 'node.update',
     validatePayload: validateNodeSetPropertiesPayload,
     toEditorActions(command: NativeCommand, _context: NativeCommandAdapterContext): readonly EditorAction[] {
