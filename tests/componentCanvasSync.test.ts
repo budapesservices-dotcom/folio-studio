@@ -419,6 +419,8 @@ describe('Atomic Component Canvas sync and orphan recovery', () => {
     const renamed = store.dispatchLegacyAction({
       type: 'rename-component',
       componentId: master.id,
+      expectedMasterDocument: master.document,
+      expectedUpdatedAt: master.updatedAt,
       name: 'Renamed canonical master',
     });
     expect(renamed.status).toBe('committed');
