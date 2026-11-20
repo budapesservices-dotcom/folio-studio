@@ -82,9 +82,11 @@ Version 2 is UTF-8 JSON. The project is the aggregate root; it contains the acti
 - Version 1 files and IndexedDB records are accepted at migration boundaries.
 - \`migrateProjectV1ToV2\` wraps the legacy single document in \`Main Page\` at route \`/\`, preserving document ID, dimensions, background and all nodes.
 - Version 2 validation checks page/route identity, active page, component documents, graph references and asset references.
-- IndexedDB keeps the existing object-store key path \`metadata.id\`; no destructive database rebuild is required.
+- IndexedDB keeps the existing project-store key path \`metadata.id\`; database version 2 adds a separate \`app-state\` store without rebuilding project records.
+- The active root project ID is persisted separately from project metadata and .flop files. Saving an imported project and updating this pointer happen in one read-write transaction, so the pointer cannot commit without the project record.
+- A missing or invalid active-project pointer falls back to the prior root-project selection by \`metadata.updatedAt\`. The reserved \`folio-component-canvas\` workspace is never considered a root project.
 - The active document is always resolved explicitly from \`pages\` using \`activePageId\`, falling back to \`pages[0]\` when recovering a stale v2 reference.
-- Autosave and native file export persist the complete project aggregate.
+- Autosave persists the canonical project aggregate. Native export validates and serializes an immutable snapshot, including the current Component Canvas buffer when a master component is open.
 
 ## Acceptance criteria for the unified project foundation
 
@@ -96,6 +98,14 @@ Version 2 is UTF-8 JSON. The project is the aggregate root; it contains the acti
 - Version 2 import validates before replacing editor state.
 - IndexedDB hydration completes before workspace controls can mutate project state.
 - Type checking, unit tests and production build pass.
+
+## Native .flop File Menu Workflow
+
+- File → Open Project uses src/app/projectFileActions.ts and the existing readProjectFile adapter. After validation, the imported project and its active-project pointer are persisted atomically before editor replacement. Cancellation, failed import and failed persistence leave the previous active project untouched.
+- The active-project pointer is held in IndexedDB app-state rather than project metadata or native files. Invalid pointers use the legacy updatedAt-based root-project fallback.
+- The existing migration and validation functions remain the source of truth for supported v1/v2 formats. The v1 wrapper carries unknown top-level extension fields forward; document and node extension fields are retained by the existing migration copies.
+- File → Export Project validates and serializes an immutable aggregate snapshot. While editing a master, the current Component Canvas document buffer is overlaid into the matching component definition before serialization; the canonical project is not mutated and the .flop v2 format is unchanged.
+- replace-project creates a fresh editor state, clearing undo/redo and selection while retaining imported project metadata and stable IDs.
 
 ## Planned stages
 

@@ -172,6 +172,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 
 .global-menu-item:first-child { padding-left: 0; }
+.global-toolbar-slot .global-menu-entry:first-child .menu-trigger { padding-left: 0; }
 .global-menu-item:hover {
   color: #f0edff;
   background: #ffffff08;
@@ -791,6 +792,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   cursor: pointer;
 }
 .global-menu-dropdown button:hover { background: #302b4b; color: #f0edff; }
+.global-menu-dropdown button:disabled { opacity: .5; cursor: not-allowed; }
+.global-menu-dropdown button:disabled:hover { background: transparent; color: #d8dce6; }
 .panel-context-indicator {
   display: inline-flex;
   align-items: center;
