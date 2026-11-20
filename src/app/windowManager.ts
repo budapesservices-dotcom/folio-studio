@@ -72,7 +72,7 @@ export function bringWindowToFront(order: readonly WindowId[], id: WindowId): Wi
 export function getWindowZIndex(
   order: readonly WindowId[],
   id: WindowId,
-  base = WINDOW_LAYERING.floatingWindowBase,
+  base: number = WINDOW_LAYERING.floatingWindowBase,
 ): number {
   const index = order.indexOf(id);
   const safeBase = finiteOr(base, WINDOW_LAYERING.floatingWindowBase);
