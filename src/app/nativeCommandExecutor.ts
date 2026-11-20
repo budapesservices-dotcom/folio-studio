@@ -336,9 +336,6 @@ export function commitPreparedCommand(
       : 'INTERNAL_ERROR';
     return createRejectedCommit(commit.snapshot, preparation.command, code, 'The command could not be committed.');
   }
-  if (commit.status === 'no-op') {
-    return createRejectedCommit(commit.snapshot, preparation.command, 'REVISION_CONFLICT', 'The prepared candidate was not committed.');
-  }
 
   const currentRevision = commit.snapshot.projectRevision;
   if (currentRevision !== preparation.baseProjectRevision + 1) {
