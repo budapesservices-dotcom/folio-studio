@@ -17,7 +17,6 @@ export interface EditorStoreCommitInput {
 
 export type EditorStoreCommitResult =
   | { status: 'committed'; snapshot: CanonicalEditorStoreSnapshot }
-  | { status: 'no-op'; snapshot: CanonicalEditorStoreSnapshot }
   | { status: 'revision-conflict'; snapshot: CanonicalEditorStoreSnapshot }
   | { status: 'failed'; snapshot: CanonicalEditorStoreSnapshot; errorCode: string };
 
@@ -118,7 +117,7 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
       return { status: 'revision-conflict', snapshot: beforeSnapshot };
     }
     if (input.candidateState === beforeSnapshot.editorState) {
-      return { status: 'no-op', snapshot: beforeSnapshot };
+      return { status: 'committed', snapshot: beforeSnapshot };
     }
 
     const projectMutation = input.candidateState.project !== beforeSnapshot.editorState.project;
