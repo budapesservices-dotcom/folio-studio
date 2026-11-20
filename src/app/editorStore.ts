@@ -267,8 +267,13 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     const before = this.snapshot;
     try {
       const candidateState = editorReducer(before.editorState, action);
-      const componentSyncGuard = action.type === 'sync-component-document'
-        ? { componentId: action.componentId, expectedMasterDocument: action.expectedMasterDocument, expectedUpdatedAt: action.expectedUpdatedAt }
+      const componentSyncGuard = action.type === 'sync-component-document' ||
+        action.type === 'rename-component' || action.type === 'delete-component'
+        ? {
+            componentId: action.componentId,
+            expectedMasterDocument: action.expectedMasterDocument,
+            expectedUpdatedAt: action.expectedUpdatedAt,
+          }
         : undefined;
       return this.commitEditorTransition({
         expectedProjectRevision: before.projectRevision, expectedEditorState: before.editorState,
