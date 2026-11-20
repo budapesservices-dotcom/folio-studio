@@ -118,6 +118,30 @@ describe('Folio unified project v2', () => {
     expect(getActiveDocument(state.project).nodes[0].x).toBe(firstNode.x);
   });
 
+  it('commits rotation-only canvas transforms and supports undo/redo', () => {
+    const project = createInitialProject();
+    const original = getActiveDocument(project).nodes[0];
+    const state = createEditorState(project);
+    const nextRotation = original.rotation + 23;
+
+    const transformed = editorReducer(state, {
+      type: 'transform-nodes',
+      nodes: [{ ...original, rotation: nextRotation }],
+    });
+
+    const committed = getActiveDocument(transformed.project).nodes.find((node) => node.id === original.id);
+    expect(committed?.rotation).toBe(nextRotation);
+    expect(transformed.past).toHaveLength(1);
+
+    const undone = editorReducer(transformed, { type: 'undo' });
+    const restored = getActiveDocument(undone.project).nodes.find((node) => node.id === original.id);
+    expect(restored?.rotation).toBe(original.rotation);
+
+    const redone = editorReducer(undone, { type: 'redo' });
+    const reapplied = getActiveDocument(redone.project).nodes.find((node) => node.id === original.id);
+    expect(reapplied?.rotation).toBe(nextRotation);
+  });
+
   it('switches active pages deterministically and keeps each page document isolated', () => {
     const project = createInitialProject();
     const secondPage = {
