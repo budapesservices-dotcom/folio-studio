@@ -118,6 +118,19 @@ describe('Native Command envelope and registry', () => {
     });
   });
 
+
+  it('rejects a stale expectedProjectRevision during preparation', () => {
+    const fixture = createFixture();
+    fixture.store.dispatchLegacyAction({ type: 'rename-project', name: 'New canonical revision' });
+    const result = executeNativeCommand(fixture.store, makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 999 } }],
+    }, { preconditions: { expectedProjectRevision: 0 } }), fixture.context);
+
+    expect(result).toMatchObject({ status: 'rejected', code: 'REVISION_CONFLICT' });
+    expect(currentNode(fixture.store)?.x).toBe(10);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(1);
+  });
+
   it('rejects duplicate command IDs within the active store session', () => {
     const fixture = createFixture();
     const command = makeCommand('node.transform', fixture.address, {
@@ -281,6 +294,17 @@ describe('Exact document and node addressing', () => {
     expect(wrongProject).toMatchObject({ status: 'rejected', code: 'PROJECT_NOT_FOUND' });
     expect(wrongDocument).toMatchObject({ status: 'rejected', code: 'TARGET_SCOPE_MISMATCH' });
     expect(fixture.store.getSnapshot().projectRevision).toBe(0);
+  });
+
+
+  it('does not allow the reserved Component Canvas workspace project to own the canonical store', () => {
+    const fixture = createFixture();
+    const temporaryProject = {
+      ...fixture.project,
+      metadata: { ...fixture.project.metadata, id: 'folio-component-canvas' },
+    };
+    expect(() => createCanonicalEditorStore(createEditorState(temporaryProject)))
+      .toThrow('The temporary Component Canvas buffer cannot become the canonical Main Canvas project.');
   });
 
   it('rejects component-definition and temporary Component Canvas targets in Phase 1', () => {
