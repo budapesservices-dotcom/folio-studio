@@ -122,8 +122,14 @@ describe('Native Command envelope and registry', () => {
     expect(executeNativeCommand(fixture.store, { ...valid, commandId: nextCommandId(), type: 'node.delete' }, fixture.context)).toMatchObject({
       status: 'rejected', code: 'UNKNOWN_COMMAND',
     });
-    expect(executeNativeCommand(fixture.store, { ...valid, commandId: nextCommandId(), type: 'toString' }, fixture.context)).toMatchObject({
-      status: 'rejected', code: 'UNKNOWN_COMMAND',
+    const inheritedRegistryKey = prepareNativeCommand(
+      fixture.store.getSnapshot(),
+      { ...valid, commandId: nextCommandId(), type: 'toString' },
+      fixture.context,
+    );
+    expect(inheritedRegistryKey).toMatchObject({
+      status: 'rejected',
+      result: { code: 'UNKNOWN_COMMAND' },
     });
   });
 
