@@ -186,11 +186,13 @@ In editorReducer.ts, transform-nodes compares position, size, onCanvas, and text
 
 **Action:** fix and test this as a separate correctness task before relying on transform-nodes as the native transform command. Do not hide the existing bug inside the AST schema migration.
 
-### 4.2 .flop acceptance documentation mismatch
+### 4.2 .flop acceptance documentation and UI mismatch
 
-docs/ARCHITECTURE.md describes the current native project format as v2, while docs/ACCEPTANCE_TESTS.md step 10 still expects formatVersion: 1.
+docs/ARCHITECTURE.md describes the current native project model as v2, while docs/ACCEPTANCE_TESTS.md steps 10–12 describe an Export/Open/invalid-import workflow and step 10 expects formatVersion: 1.
 
-**Action:** inspect the actual export implementation and current test fixtures, then correct the acceptance expectation to the verified format. Do not change the file format merely to satisfy stale documentation.
+In the inspected current App.tsx, the File menu item is placeholder text saying project file commands will be organized there. The app imports IndexedDB save/load functions and autosaves project state, but no native file import/export handler is wired in that inspected application file. Therefore the acceptance checklist currently describes behavior that is not demonstrated by the inspected UI path, and its expected version also conflicts with the documented v2 model.
+
+**Action:** treat native .flop import/export acceptance as blocked until the actual file adapter and UI actions are confirmed. Correct the checklist only after the export/import implementation and fixtures establish the real contract. For current persistence verification, test IndexedDB save/load separately. Do not change the file format merely to satisfy stale documentation.
 
 ### 4.3 Container capability mismatch
 
