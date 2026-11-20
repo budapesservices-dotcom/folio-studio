@@ -1142,6 +1142,18 @@ describe('Authorized immutable Native change publication', () => {
     expect(attempted).toMatchObject({ status: 'failed', errorCode: 'INVALID_COMMIT_INPUT' });
     expect(fixture.store.getSnapshot()).toBe(before);
     expect(fixture.store.getSnapshot().projectRevision).toBe(0);
+
+    const forgedPreparation = fixture.store.commitEditorTransition({
+      expectedProjectRevision: before.projectRevision,
+      expectedEditorState: before.editorState,
+      candidateState: candidate,
+      nativeCommandPreparation: {},
+    });
+    expect(forgedPreparation).toMatchObject({
+      status: 'failed',
+      errorCode: 'UNAUTHORIZED_EVENT_PUBLICATION',
+    });
+    expect(fixture.store.getSnapshot()).toBe(before);
   });
 
   it('freezes the complete event graph and isolates subscriber mutation and exceptions', () => {
