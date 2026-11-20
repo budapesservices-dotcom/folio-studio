@@ -130,7 +130,7 @@ export function validateNativeCommandEnvelope(
   }
   if (input.metadata !== undefined) {
     if (!isRecord(input.metadata) || !hasOnlyKeys(input.metadata, ['description', 'userGestureId']) ||
-        (input.metadata.description !== undefined && typeof input.metadata.description !== 'string') ||
+        (input.metadata.description !== undefined && (typeof input.metadata.description !== 'string' || input.metadata.description.length > 1024)) ||
         (input.metadata.userGestureId !== undefined && !isNonEmptyString(input.metadata.userGestureId))) {
       return invalid('INVALID_ENVELOPE', 'The command metadata is invalid.');
     }
