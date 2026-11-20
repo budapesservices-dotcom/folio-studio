@@ -4,7 +4,6 @@ import type { DocumentAddress, NativeNodeRef } from '../core/document/ast';
 import type { DesignNode, FolioDocument } from '../core/document/types';
 import {
   validateNativeCommandEnvelope,
-  isRecord,
   type ValidationOutcome,
 } from '../core/commands/validation';
 import type {
@@ -106,11 +105,22 @@ function addressEquals(left: DocumentAddress, right: DocumentAddress): boolean {
     left.owner.id === right.owner.id;
 }
 
+function readOwnDataProperty(input: unknown, key: string): unknown {
+  if (typeof input !== 'object' || input === null) return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function commandHeader(input: unknown): { commandId: string; transactionId?: string } {
-  if (!isRecord(input)) return { commandId: '' };
+  const commandId = readOwnDataProperty(input, 'commandId');
+  const transactionId = readOwnDataProperty(input, 'transactionId');
   return {
-    commandId: typeof input.commandId === 'string' ? input.commandId : '',
-    ...(typeof input.transactionId === 'string' ? { transactionId: input.transactionId } : {}),
+    commandId: typeof commandId === 'string' ? commandId : '',
+    ...(typeof transactionId === 'string' ? { transactionId } : {}),
   };
 }
 
@@ -273,6 +283,18 @@ export function prepareNativeCommand(
   }
   if (!context.capabilities.includes(definition.requiredPermission)) {
     return rejectedPreparation(snapshot, command, 'PERMISSION_DENIED', 'The current session does not have permission to perform this command.');
+  }
+
+  // A user may omit actorId in the protocol. Accepted attribution is normalized
+  // from the trusted host principal, never from caller-controlled metadata.
+  if (command.source.actor.kind === 'user' && command.source.actor.actorId === undefined) {
+    command = freezeGraph({
+      ...command,
+      source: {
+        ...command.source,
+        actor: { ...command.source.actor, actorId: context.principal.id },
+      },
+    }) as NativeCommand;
   }
 
   if (command.preconditions?.expectedProjectRevision !== undefined &&
@@ -491,12 +513,24 @@ export function executeNativeCommand(
     );
   }
 
-  const preparation = prepareNativeCommand(snapshot, input, context);
   let result: NativeCommandResult;
-  if (preparation.status === 'prepared') {
-    result = commitPreparedCommand(store, preparation).result;
-  } else {
-    result = preparation.result;
+  try {
+    const preparation = prepareNativeCommand(snapshot, input, context);
+    if (preparation.status === 'prepared') {
+      result = commitPreparedCommand(store, preparation).result;
+    } else {
+      result = preparation.result;
+    }
+  } catch {
+    // Hostile Proxy traps or unexpected validation/adapter errors are converted to
+    // a structured rejection. Preparation is read-only, so no partial state is published.
+    result = createResult(
+      store.getSnapshot(),
+      header,
+      'rejected',
+      'INVALID_RUNTIME_OBJECT',
+      'The command could not be safely inspected or prepared.',
+    );
   }
 
   if (UUID_PATTERN.test(header.commandId)) {
