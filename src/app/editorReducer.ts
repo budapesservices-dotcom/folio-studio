@@ -1,5 +1,6 @@
 import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
+import { areDocumentsStructurallyEqual } from '../core/document/equality';
 import { replaceComponentInstancesInDocument } from '../core/document/components';
 import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, collapseLegacyCanvasInstances, type LayerDropPosition } from '../core/document/layers';
 
@@ -361,7 +362,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'update-component': {
-      if (!state.project.components.some((component) => component.id === action.component.id)) return state;
+      const currentComponent = state.project.components.find((component) => component.id === action.component.id);
+      if (!currentComponent || areDocumentsStructurallyEqual(currentComponent.document, action.component.document)) return state;
       const components = state.project.components.map((component) =>
         component.id === action.component.id ? action.component : component);
       return withSnapshot(state, touch({ ...state.project, components }));
