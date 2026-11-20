@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -68,43 +69,57 @@ function createFixture(css) {
 
 async function launchChromium(path) {
   const profile = mkdtempSync(join(tmpdir(), 'folio-rack-chromium-profile-'));
+  const portServer = createServer();
+  await new Promise((resolvePort, reject) => {
+    portServer.once('error', reject);
+    portServer.listen(0, '127.0.0.1', resolvePort);
+  });
+  const port = portServer.address().port;
+  await new Promise((resolveClose, reject) => portServer.close((error) => error ? reject(error) : resolveClose()));
   const child = spawn(chromium, [
     '--headless=new', '--no-sandbox', '--disable-setuid-sandbox',
     '--disable-dev-shm-usage', '--disable-gpu', '--disable-background-networking',
-    '--disable-extensions', '--no-first-run', '--no-default-browser-check',
-    '--remote-allow-origins=*', '--remote-debugging-port=0',
+    '--disable-extensions', '--disable-breakpad', '--disable-crash-reporter',
+    '--no-first-run', '--no-default-browser-check',
+    '--remote-allow-origins=*', '--remote-debugging-address=127.0.0.1',
+    '--remote-debugging-port=' + port,
     '--user-data-dir=' + profile, 'file://' + path,
-  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+  ], { detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe'] });
   let socket;
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const cleanup = async () => {
+    try { socket?.close(); } catch { /* Ignore an already closed socket. */ }
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
+      try {
+        if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGTERM');
+        else child.kill('SIGTERM');
+      } catch { child.kill('SIGTERM'); }
+      const stopped = await Promise.race([exited.then(() => true), delay(4000).then(() => false)]);
+      if (!stopped && child.exitCode === null && child.signalCode === null) {
+        try {
+          if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL');
+          else child.kill('SIGKILL');
+        } catch { child.kill('SIGKILL'); }
+        await Promise.race([exited, delay(2000)]);
+      }
+    }
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  };
   try {
-    let stderr = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    const activePortFile = join(profile, 'DevToolsActivePort');
-    let port = 0;
+    let targets;
+    const endpoint = 'http://127.0.0.1:' + port + '/json/list';
     const startupDeadline = Date.now() + 20000;
     while (Date.now() < startupDeadline && child.exitCode === null) {
-      if (existsSync(activePortFile)) {
-        const candidate = Number(readFileSync(activePortFile, 'utf8').split(/\\r?\\n/)[0]);
-        if (Number.isInteger(candidate) && candidate > 0) {
-          port = candidate;
-          break;
-        }
-      }
-      await delay(100);
-    }
-    if (!port) {
-      throw new Error('Chromium DevTools startup timeout: ' + stderr.slice(-1000));
-    }
-
-    let targets;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
       try {
-        const response = await fetch('http://127.0.0.1:' + port + '/json/list');
+        const response = await fetch(endpoint);
         if (response.ok) { targets = await response.json(); break; }
-      } catch { /* Chromium is still exposing its DevTools endpoint. */ }
+      } catch { /* Chromium is still starting its local DevTools endpoint. */ }
       await delay(100);
     }
+    if (!targets) throw new Error('Chromium DevTools startup timeout: ' + stderr.slice(-1000));
     const page = targets?.find((target) => target.type === 'page' && target.url.startsWith('file://'));
     if (!page?.webSocketDebuggerUrl) throw new Error('Chromium did not expose the fixture page');
     socket = new WebSocket(page.webSocketDebuggerUrl);
@@ -158,25 +173,10 @@ async function launchChromium(path) {
       await delay(100);
     }
     return {
-      evaluate, viewport, pressTab,
-      close: async () => {
-        try { socket?.close(); } catch { /* Ignore an already closed socket. */ }
-        if (child.exitCode === null && child.signalCode === null) {
-          const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
-          child.kill('SIGTERM');
-          await Promise.race([exited, delay(5000)]);
-        }
-        rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-      },
+      evaluate, viewport, pressTab, close: cleanup,
     };
   } catch (error) {
-    try { socket?.close(); } catch { /* Ignore an already closed socket. */ }
-    if (child.exitCode === null && child.signalCode === null) {
-      const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
-      child.kill('SIGTERM');
-      await Promise.race([exited, delay(5000)]);
-    }
-    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await cleanup();
     throw error;
   }
 }
