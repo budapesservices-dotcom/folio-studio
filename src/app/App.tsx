@@ -1118,7 +1118,7 @@ export function App() {
     }
 
     finishDeletedActiveComponent(component);
-    setNotice(\`“\${component.name}” deleted; any linked instances were detached.\`);
+    setNotice(`“${component.name}” deleted; any linked instances were detached.`);
   };
 
   const cancelComponentDeletion = () => {
@@ -1147,13 +1147,13 @@ export function App() {
 
     const deletion = deleteComponentIfCurrent(canonicalStore, target);
     if (deletion.status !== 'deleted') {
-      keepComponentAfterStaleDeletion(\`“\${recovery.component.name}” was saved to the Component Rack, but the original master changed before deletion. The recovery copy and local buffer were kept; review the latest master.\`);
+      keepComponentAfterStaleDeletion(`“${recovery.component.name}” was saved to the Component Rack, but the original master changed before deletion. The recovery copy and local buffer were kept; review the latest master.`);
       return;
     }
 
     clearPendingComponentDeletion();
     finishDeletedActiveComponent(pending);
-    setNotice(\`“\${recovery.component.name}” was saved as a new component, and “\${pending.name}” was deleted.\`);
+    setNotice(`“${recovery.component.name}” was saved as a new component, and “${pending.name}” was deleted.`);
   };
 
   const discardBufferAndDelete = () => {
@@ -1171,7 +1171,7 @@ export function App() {
 
     clearPendingComponentDeletion();
     finishDeletedActiveComponent(pending);
-    setNotice(\`“\${pending.name}” was deleted after discarding its protected local buffer; linked instances were detached.\`);
+    setNotice(`“${pending.name}” was deleted after discarding its protected local buffer; linked instances were detached.`);
   };
 
   useEffect(() => {

@@ -112,8 +112,8 @@ function cloneGraph<T>(value: T): T {
 
 function defaultRecoveryIdFactory(prefix: string): string {
   const randomId = globalThis.crypto?.randomUUID?.() ??
-    \`\${Date.now().toString(36)}-\${Math.random().toString(36).slice(2)}\`;
-  return \`\${prefix}-\${randomId}\`;
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${randomId}`;
 }
 
 function collectReservedIds(snapshot: CanonicalEditorStoreSnapshot): Set<string> {
@@ -177,14 +177,14 @@ export function saveComponentCanvasRecoveryCopy(
     const reservedIds = collectReservedIds(before);
     const componentId = createUniqueId('component-recovered', reservedIds, idFactory);
     const documentId = createUniqueId('document-recovered', reservedIds, idFactory);
-    const baseName = \`\${master.name} (Recovered)\`;
+    const baseName = `${master.name} (Recovered)`;
     const existingNames = new Set(before.editorState.project.components.map(
       (component) => component.name.trim().toLocaleLowerCase(),
     ));
     let name = baseName;
     let suffix = 2;
     while (existingNames.has(name.toLocaleLowerCase())) {
-      name = \`\${baseName} \${suffix}\`;
+      name = `${baseName} ${suffix}`;
       suffix += 1;
     }
     const parsedTimestamp = new Date(now);

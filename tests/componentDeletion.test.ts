@@ -92,7 +92,7 @@ function dirtyBuffer(document: FolioDocument): FolioDocument {
 
 function ids(prefix: string): ComponentRecoveryIdFactory {
   let index = 0;
-  return (requestedPrefix) => \`\${prefix}-\${requestedPrefix}-\${++index}\`;
+  return (requestedPrefix) => `${prefix}-${requestedPrefix}-${++index}`;
 }
 
 function requestActiveDeletion(
