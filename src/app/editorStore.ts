@@ -11,6 +11,7 @@ export interface CanonicalEditorStoreSnapshot {
 
 export interface EditorStoreCommitInput {
   expectedProjectRevision: number;
+  expectedEditorState: EditorState;
   candidateState: EditorState;
   changeDraft?: NativeChangeSetDraft;
 }
@@ -18,6 +19,7 @@ export interface EditorStoreCommitInput {
 export type EditorStoreCommitResult =
   | { status: 'committed'; snapshot: CanonicalEditorStoreSnapshot }
   | { status: 'revision-conflict'; snapshot: CanonicalEditorStoreSnapshot }
+  | { status: 'editor-conflict'; snapshot: CanonicalEditorStoreSnapshot }
   | { status: 'failed'; snapshot: CanonicalEditorStoreSnapshot; errorCode: string };
 
 export interface CanonicalEditorStore {
@@ -57,11 +59,12 @@ function isCommitInput(value: unknown): value is EditorStoreCommitInput {
   const candidate = value as Record<string, unknown>;
   const keys = Object.keys(candidate);
   return (
-    keys.every((key) => key === 'expectedProjectRevision' || key === 'candidateState' || key === 'changeDraft') &&
-    keys.includes('expectedProjectRevision') && keys.includes('candidateState') &&
+    keys.every((key) => key === 'expectedProjectRevision' || key === 'expectedEditorState' || key === 'candidateState' || key === 'changeDraft') &&
+    keys.includes('expectedProjectRevision') && keys.includes('expectedEditorState') && keys.includes('candidateState') &&
     (candidate.changeDraft === undefined || (typeof candidate.changeDraft === 'object' && candidate.changeDraft !== null)) &&
     Number.isSafeInteger(candidate.expectedProjectRevision) &&
     Number(candidate.expectedProjectRevision) >= 0 &&
+    isEditorState(candidate.expectedEditorState) &&
     isEditorState(candidate.candidateState)
   );
 }
@@ -116,6 +119,9 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     if (input.expectedProjectRevision !== beforeSnapshot.projectRevision) {
       return { status: 'revision-conflict', snapshot: beforeSnapshot };
     }
+    if (input.expectedEditorState !== beforeSnapshot.editorState) {
+      return { status: 'editor-conflict', snapshot: beforeSnapshot };
+    }
     if (input.candidateState === beforeSnapshot.editorState) {
       return { status: 'committed', snapshot: beforeSnapshot };
     }
@@ -155,6 +161,7 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
       const candidateState = editorReducer(before.editorState, action);
       return this.commitEditorTransition({
         expectedProjectRevision: before.projectRevision,
+        expectedEditorState: before.editorState,
         candidateState,
       });
     } catch {
