@@ -31,6 +31,15 @@ export function markComponentCanvasMasterMissing(session: ComponentCanvasSyncSes
   return { ...session, masterStatus: 'missing' };
 }
 
+/** Prevent replacing a Component Canvas buffer while it contains unsynchronized or conflicted local work. */
+export function shouldProtectComponentCanvasBuffer(
+  session: ComponentCanvasSyncSession,
+  bufferDocument: FolioDocument,
+): boolean {
+  return session.masterStatus !== 'present' || session.conflicted ||
+    !areDocumentsStructurallyEqual(session.baseDocument, bufferDocument);
+}
+
 /** A master disappearing from history never clears the local buffer; a returning ID needs explicit recovery. */
 export function reconcileComponentCanvasSyncSession(
   session: ComponentCanvasSyncSession,
