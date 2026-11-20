@@ -190,7 +190,7 @@ export function prepareNativeCommand(
   if (envelope.commandVersion !== definition.commandVersion) {
     return rejectedPreparation(snapshot, header, 'UNSUPPORTED_COMMAND_VERSION', 'This command version is not supported.');
   }
-  if (!definition.allowedTargets.includes(envelope.target.kind)) {
+  if (!definition.allowedTargets.some((target) => target === envelope.target.kind)) {
     return rejectedPreparation(snapshot, header, 'TARGET_SCOPE_MISMATCH', 'This command does not support the supplied target type.');
   }
 
@@ -310,6 +310,7 @@ export function commitPreparedCommand(
   const commit = store.commitEditorTransition({
     expectedProjectRevision: preparation.baseProjectRevision,
     candidateState: preparation.candidateState,
+    changeDraft: preparation.changeDraft,
   });
 
   if (commit.status === 'revision-conflict') {
