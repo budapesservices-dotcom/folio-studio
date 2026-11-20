@@ -15,7 +15,14 @@ import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } fr
 import { createEditorState, editorReducer, normalizePositiveDimension } from './editorReducer';
 import type { EditorAction } from './editorReducer';
 import { createCanonicalEditorStore } from './editorStore';
-import { createComponentCanvasSyncAction } from './componentCanvasSync';
+import {
+  advanceComponentCanvasSyncSession,
+  createComponentCanvasBufferProject,
+  createComponentCanvasSyncAction,
+  createComponentCanvasSyncSession,
+  reconcileComponentCanvasSyncSession,
+  type ComponentCanvasSyncSession,
+} from './componentCanvasSync';
 import { FloatingWindow } from './FloatingWindow';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
@@ -146,6 +153,7 @@ export function App() {
   }, []);
   const [componentState, componentDispatch] = useReducer(editorReducer, componentInitialState);
   const [componentReady, setComponentReady] = useState(false);
+  const componentSyncSessionRef = useRef<ComponentCanvasSyncSession | null>(null);
   const [isProjectLoaded, setIsProjectLoaded] = useState(false);
   const isHydrating = !isProjectLoaded || !componentReady;
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
@@ -896,17 +904,11 @@ export function App() {
   };
 
   const openMasterComponent = (component: ComponentDefinition) => {
-    const editorProject = createInitialProject(component.name);
-    editorProject.metadata.id = 'folio-component-canvas';
-    editorProject.metadata.name = component.name;
-    editorProject.pages[0].name = component.name;
-    editorProject.pages[0].route = '/';
-    editorProject.pages[0].document = {
-      ...component.document,
-      name: component.name,
-      nodes: component.document.nodes.map((node) => ({ ...node })),
-    };
-    componentDispatch({ type: 'replace-project', project: editorProject });
+    componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
+    componentDispatch({
+      type: 'replace-project',
+      project: createComponentCanvasBufferProject(component),
+    });
     setEditingComponentId(component.id);
     setComponentCanvasClosed(false);
     setComponentCanvasMinimized(false);
@@ -963,6 +965,7 @@ export function App() {
     dispatch({ type: 'delete-component', componentId: component.id });
     if (editingComponentId === component.id) {
       setEditingComponentId(null);
+      componentSyncSessionRef.current = null;
       componentDispatch({ type: 'replace-project', project: componentInitialState.project });
       setComponentCanvasClosed(true);
       setComponentCanvasMinimized(false);
@@ -974,12 +977,63 @@ export function App() {
   useEffect(() => {
     if (!componentReady || !editingComponentId) return;
     const master = state.project.components.find((component) => component.id === editingComponentId);
-    if (!master) return;
+    if (!master) {
+      componentSyncSessionRef.current = null;
+      return;
+    }
+
+    let session = componentSyncSessionRef.current;
+    if (!session || session.componentId !== master.id) {
+      session = createComponentCanvasSyncSession(master);
+      componentSyncSessionRef.current = session;
+      componentDispatch({
+        type: 'replace-project',
+        project: createComponentCanvasBufferProject(master),
+      });
+      return;
+    }
+
     const editedDocument = getActiveDocument(componentState.project);
-    const syncAction = createComponentCanvasSyncAction(master, editedDocument);
+    const reconciliation = reconcileComponentCanvasSyncSession(session, master, editedDocument);
+    if (reconciliation.status === 'reload-buffer') {
+      componentSyncSessionRef.current = reconciliation.session;
+      componentDispatch({
+        type: 'replace-project',
+        project: createComponentCanvasBufferProject(master),
+      });
+      return;
+    }
+    if (reconciliation.status === 'conflict') {
+      componentSyncSessionRef.current = reconciliation.session;
+      if (!session.conflicted) {
+        setNotice(
+          'The master changed in Main Canvas while this buffer had unsynchronized edits. ' +
+          'Local edits were kept and synchronization is paused. Reopen the master to discard this buffer and load the canonical version.',
+        );
+      }
+      return;
+    }
+    if (reconciliation.status === 'master-mismatch') return;
+
+    componentSyncSessionRef.current = reconciliation.session;
+    const syncAction = createComponentCanvasSyncAction(master, editedDocument, session);
     if (!syncAction) return;
-    dispatch(syncAction);
-  }, [componentState.project.pages, editingComponentId, componentReady]);
+
+    const transition = dispatch(syncAction);
+    if (transition.status === 'committed') {
+      const committedMaster = transition.snapshot.editorState.project.components
+        .find((component) => component.id === master.id);
+      if (committedMaster) {
+        componentSyncSessionRef.current = advanceComponentCanvasSyncSession(session, committedMaster);
+      }
+    } else {
+      componentSyncSessionRef.current = { ...session, conflicted: true };
+      setNotice(
+        'The component master changed before this edit could synchronize. ' +
+        'Local edits were kept and synchronization is paused; reopen the master to reload the canonical version.',
+      );
+    }
+  }, [componentState.project.pages, editingComponentId, componentReady, state.project.components]);
 
   const switchPage = (page: FolioPage) => {
     if (isHydrating || page.id === activePageId) return;
