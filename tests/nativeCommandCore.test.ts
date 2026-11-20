@@ -755,7 +755,9 @@ describe('Canonical commit conflict, failure and immutability', () => {
     expect(Object.isFrozen(candidateNode)).toBe(true);
     expect(() => { candidateNode.x = 999; }).toThrow();
     expect(() => { preparation.baseProjectRevision = 999; }).toThrow();
-    expect(() => { preparation.command.target.address.documentId = 'forged-document'; }).toThrow();
+    const preparedTarget = preparation.command.target;
+    if (preparedTarget.kind !== 'document') throw new Error('Expected an exact document target.');
+    expect(() => { preparedTarget.address.documentId = 'forged-document'; }).toThrow();
     expect(() => { preparation.changeDraft.documents[0].address.documentId = 'forged-document'; }).toThrow();
 
     const mutableInput = input as any;
