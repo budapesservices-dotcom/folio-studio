@@ -118,7 +118,7 @@ describe('native .flop project file workflow', () => {
     expect(imported.components[0].id).toBe('component-stable');
     expect(imported.logicGraphs[0].id).toBe('logic-graph-stable');
     expect(imported.assets[0].id).toBe('asset-stable');
-    expect((imported as Record<string, unknown>).futureProjectData).toEqual({
+    expect((imported as unknown as Record<string, unknown>).futureProjectData).toEqual({
       opaque: 'preserve-me',
     });
   });
@@ -164,7 +164,7 @@ describe('native .flop project file workflow', () => {
         nodes: [{ id: 'legacy-node-stable' }],
       },
     });
-    expect((imported as Record<string, unknown>).futureProjectData).toEqual({ keep: true });
+    expect((imported as unknown as Record<string, unknown>).futureProjectData).toEqual({ keep: true });
     expect((imported.pages[0].document as unknown as Record<string, unknown>).futureDocumentData)
       .toEqual({ keep: true });
     expect((imported.pages[0].document.nodes[0] as unknown as Record<string, unknown>).futureNodeData)
