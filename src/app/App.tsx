@@ -15,6 +15,7 @@ import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } fr
 import { createEditorState, editorReducer, normalizePositiveDimension } from './editorReducer';
 import type { EditorAction } from './editorReducer';
 import { createCanonicalEditorStore } from './editorStore';
+import { createComponentCanvasSyncAction } from './componentCanvasSync';
 import { FloatingWindow } from './FloatingWindow';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
@@ -975,15 +976,9 @@ export function App() {
     const master = state.project.components.find((component) => component.id === editingComponentId);
     if (!master) return;
     const editedDocument = getActiveDocument(componentState.project);
-    if (master.document === editedDocument) return;
-    dispatch({
-      type: 'update-component',
-      component: {
-        ...master,
-        document: editedDocument,
-        updatedAt: new Date().toISOString(),
-      },
-    });
+    const syncAction = createComponentCanvasSyncAction(master, editedDocument);
+    if (!syncAction) return;
+    dispatch(syncAction);
   }, [componentState.project.pages, editingComponentId, componentReady]);
 
   const switchPage = (page: FolioPage) => {
