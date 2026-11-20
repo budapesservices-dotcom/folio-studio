@@ -5,7 +5,7 @@
 **Command protocol:** Native Commands v1  
 **Status:** Proposed; not implemented or verified  
 **Integration target:** feat/canvas-pan-distribute  
-**Audited baseline commit:** 1d53162154f317396087501493e9f07d9558e4c9
+**Audited baseline commit:** 8d8133f90d0a647f79637e03e0d8c10848e7675c
 
 **Related documents**
 - [FOLIO Architecture Blueprint](../FOLIO_ARCHITECTURE_BLUEPRINT.md)
@@ -59,7 +59,7 @@ Designer / Developer / Node Logic / System / Authorized Agent
 
 The command layer is an API and a small execution boundary. It is **not** a reason to introduce a message broker, distributed command bus, event sourcing, a plugin runtime, or a replacement state store in v1.
 
-The project model remains the only shared project truth. Commands do not create workspace-specific project copies or a second AST representation. The canonical editor store is the single authority for accepting project transitions and advancing projectRevision.
+The project model remains the intended shared project truth. Commands do not create workspace-specific canonical project copies or a second AST representation. Once implemented, the proposed canonical editor store will be the single authority for accepting project transitions and advancing projectRevision; that store does not exist in the audited source yet.
 
 ### 1.3 Non-goals
 
@@ -67,7 +67,7 @@ Native Commands v1 does not:
 
 - Replace or rewrite editorReducer.
 - Replace snapshot-based Undo/Redo with inverse-command history.
-- Change the existing JSON .flop format or IndexedDB schema.
+- Change the existing JSON .flop v2 contract or the audited IndexedDB v2 database schema (including its separate app-state store).
 - Turn the read-only AST facade into a mutable AST.
 - Add a second persistent project model or a separate source of truth per workspace.
 - Implement Node Logic, Motion, compiler, collaboration, or remote synchronization.
@@ -110,21 +110,25 @@ The following principles constrain this specification:
 - Shared project data must not become disconnected workspace-specific sources of truth.
 - User-facing interface text, validation messages, and notifications are in English.
 
+These are approved architectural constraints and future integration goals, not a claim that all workspace integrations or the Native Commands engine are implemented. The audited source currently provides the v2 project aggregate and read-only AST facade, while Main and Component Canvas still have separate reducer states. Developer/Node Logic interoperability through Native Commands remains future work.
+
 ### 2.2 Existing implementation at the audited baseline
 
-The audited repository baseline is feat/canvas-pan-distribute at commit 1d53162154f317396087501493e9f07d9558e4c9.
+The audited repository baseline is feat/canvas-pan-distribute at commit 8d8133f90d0a647f79637e03e0d8c10848e7675c, after merge of PR #3 (`feat: wire native .flop open and export workflow`).
 
-| Area | Existing implementation |
+| Area | Existing implementation at the audited base |
 |---|---|
-| Project types | src/core/document/types.ts defines FolioProjectV2, pages, component definitions, documents, and the DesignNode union. |
+| Project types | src/core/document/types.ts defines FolioProjectV2 as the v2 aggregate: metadata, active page, pages, component definitions, logic graphs, and assets. The union of DesignNode types includes GroupNode. |
 | Project access | src/core/document/project.ts resolves the active page/document and updates the active document. |
-| Validation | src/core/document/validation.ts validates the v2 project envelope, node types, document-local duplicate IDs, parent references/cycles, page routes, component references/overrides, logic graph records, and asset records. |
+| Validation | src/core/document/validation.ts validates the v2 project envelope, node types (including group nodes), document-local duplicate IDs, parent references/cycles, page routes, component references/overrides, logic graph records, and asset records. |
 | AST facade | src/core/document/ast.ts exposes a read-only NativeAstDocumentView, DocumentAddress, and NativeNodeRef. It derives views over current nodes[] and parentId; it does not mutate or serialize a second AST. |
-| Reducer | src/app/editorReducer.ts owns EditorState and the EditorAction union. Document/component mutations are implemented in its switch statement. |
+| Reducer and current wiring | src/app/editorReducer.ts owns EditorState and EditorAction. Main Canvas and Component Canvas are separate useReducer instances in src/app/App.tsx, and application code dispatches directly; there is no canonical store, commitEditorTransition, or projectRevision in the audited source. |
 | Layer operations | src/core/document/layers.ts contains existing move, group, ungroup, hierarchy, clipping, and selection helpers. |
 | Component operations | src/core/document/components.ts contains component-instance resolution, overrides, and detach helpers. |
-| History | editorReducer stores complete FolioProject snapshots in past and future, bounded to 60 snapshots. |
-| Persistence | src/core/persistence currently uses IndexedDB and the existing JSON .flop v2 adapter. |
+| History and replacement | editorReducer stores complete FolioProject snapshots in past/future, bounded to 60. Normal project edits and Undo/Redo update metadata.updatedAt through touch(); replace-project creates a fresh EditorState, clears history/selection, and preserves imported project metadata. |
+| IndexedDB | src/core/persistence/indexedDb.ts uses database version 2. The projects store retains key path metadata.id; a separate app-state store (key path key) holds the active-project pointer. saveProjectAndActivate writes a validated project and its active pointer in one read-write transaction. |
+| Component Canvas persistence | The reserved folio-component-canvas workspace buffer is autosaved as a project record for workspace restoration. loadMostRecentProject excludes that reserved ID from root-project candidates; it is not the canonical project aggregate. |
+| .flop file I/O | src/core/persistence/projectFile.ts validates and serializes v2 JSON on export and migrates supported v1 JSON to v2 on import. src/app/projectExport.ts builds the export snapshot and can immutably overlay the current Component Canvas master buffer before serialization. |
 
 The reducer's current action vocabulary includes node insertion/replacement/editing/transforms, layer property changes, rename, move, group/ungroup, clipping, delete, project rename, page add/switch, component add/update/rename/delete, project replacement, Undo, and Redo.
 
@@ -132,17 +136,24 @@ The reducer currently handles many invalid or absent targets by returning the or
 
 ### 2.3 Important current workspace boundary
 
-The current application keeps separate EditorState instances for Main Canvas and Component Canvas. The Component Canvas is initialized from a temporary project with the synthetic ID folio-component-canvas. Opening a master component copies its document into that editor buffer. An application effect synchronizes the edited buffer document back to the matching component definition through the main project's update-component action.
+The audited application keeps separate EditorState instances for Main Canvas and Component Canvas, each wired directly to editorReducer. The Component Canvas editor is initialized from a workspace buffer project with the reserved synthetic ID folio-component-canvas. Opening a master component copies its document into that buffer.
 
-This is existing implementation behavior, not the target Unified Project Model.
+The buffer has two distinct behaviors which must not be conflated:
 
-**Compatibility rule:** do not treat the temporary Component Canvas project's synthetic project ID or its buffer document as the canonical project/component identity. A command targeting a component definition must identify the component in the owning project and must not silently report success merely because the temporary canvas buffer changed.
+- **Workspace recovery:** Component Canvas state is autosaved with saveProject under the reserved folio-component-canvas ID in the IndexedDB projects store. It is loaded separately with loadProjectById. loadMostRecentProject filters this reserved record out when choosing the root project. This is persistence of an editing buffer, not a second canonical project aggregate and not a second owner of canonical projectRevision.
+- **Canonical component synchronization:** while a master is open, an application effect dispatches update-component into the Main Canvas reducer with the edited buffer document. Thus the canonical component definition is synchronized through the existing legacy reducer path; this is not yet a Native Command or a shared store commit.
 
-The first Main Canvas command pilot can use the current project reducer path. Component Canvas adoption requires a deliberate adapter that preserves the current buffer-to-definition synchronization until that workflow is migrated to canonical, project-scoped commands. This specification does not authorize a workspace rewrite.
+Export has an additional safeguard for the buffer/effect timing boundary. App.tsx passes the current Component Canvas state to createProjectExportSnapshot. If the open master buffer differs from its canonical component document, projectExport.ts overlays the buffer document into a new export snapshot and gives the component and project metadata a shared updatedAt timestamp. This snapshot is validated and serialized by the .flop adapter; constructing it does not directly mutate the canonical project object.
+
+This is existing transitional implementation behavior, not proof that every workspace already operates on one canonical in-memory EditorState. It is compatible with the agreed Unified Project Model only when the reserved buffer remains a workspace editing/recovery surface and the owning project component definition remains the canonical shared project data.
+
+**Compatibility rule:** do not treat the temporary Component Canvas project's synthetic project ID or its buffer document as the canonical project/component identity. A command targeting a component definition must identify the component in the owning project and must not silently report success merely because the temporary canvas buffer changed. Buffer-only edits and the reserved workspace autosave are not canonical project mutations; only an accepted update to the owning project definition is.
+
+The first Main Canvas command pilot can use the current project reducer path. Component Canvas adoption requires a deliberate adapter that preserves or explicitly replaces the current buffer-to-definition synchronization and export-snapshot behavior. It must not create another canonical project or revision owner. This specification does not authorize a workspace rewrite.
 
 ### 2.4 Proposed contract, not implementation
 
-The command envelope, command registry, command executor, permission checks, result contracts, change notifications, revision checks, batch transaction behavior, and plugin/AI boundaries below are proposals. They must not be represented as existing features until implemented and tested.
+The command envelope, command registry, command executor, permission checks, result contracts, change notifications, revision checks, batch transaction behavior, and plugin/AI boundaries below are proposals. They must not be represented as existing features until implemented and tested. In particular, the audited source contains no Native Commands engine/registry/executor, no CanonicalEditorStore or commitEditorTransition, and no projectRevision counter; current UI mutations still dispatch directly to separate reducer instances. The revision, commit-classification, notification, and batch rules below are normative future requirements, not descriptions of current runtime behavior.
 
 ## 3. Protocol, identity, and versioning
 
@@ -1029,7 +1040,7 @@ During coexistence:
 
 This is a target integration contract for v1. The audited application currently wires reducers directly; the source migration to route both legacy and command transitions through one canonical store boundary remains implementation work.
 
-The current Main Canvas and Component Canvas use separate EditorState instances. projectRevision belongs to the canonical project/editor store, not to a temporary Component Canvas buffer. Component-buffer-only edits do not increment the canonical projectRevision. When the existing synchronization path accepts a component definition update in the canonical project through the legacy update-component action, that canonical commit increments projectRevision once. Phase 3 introduces the canonical component command bridge; it must not create a second canonical project or a second revision owner.
+At the audited base, Main Canvas and Component Canvas still use separate EditorState instances, and no projectRevision counter exists. Component-buffer-only edits are autosaved under the reserved workspace ID but do not change the Main Canvas project. The current synchronization effect dispatches update-component into the Main Canvas reducer; no commitEditorTransition boundary currently wraps that action. Under the proposed v1 contract, this legacy synchronization must be routed through the same canonical store boundary as Native Commands, and an accepted change to the owning component definition must increment projectRevision exactly once. Phase 3 formalizes the component command bridge without creating a second canonical project or revision owner.
 
 ## 12. Compatibility with snapshot-based Undo/Redo
 
@@ -1438,7 +1449,7 @@ These are no longer open questions:
 6. The commit boundary rechecks the candidate's captured baseProjectRevision before accepting it.
 7. A successful batch increments projectRevision once for the entire transaction; a failed batch changes neither project state, history, nor revision.
 8. Component metadata changes and component document-content changes are distinct mutation categories. Metadata changes do not masquerade as AST node changes.
-9. The current Component Canvas working buffer remains a transient editing surface. Phase 3 adds the canonical component command bridge; it does not add a second canonical project or revision owner.
+9. The Component Canvas buffer remains a non-canonical workspace editing/recovery surface. It is currently autosaved under the reserved folio-component-canvas ID and may be overlaid into an immutable .flop export snapshot; neither behavior makes it a second canonical project or revision owner. Phase 3 adds the canonical component command bridge.
 10. Batch atomicity and one-commit/one-revision behavior are fixed for the batch contract. The detailed public shape of per-command failure diagnostics is deferred and is not a Phase 1 blocker.
 11. Project-mutation classification belongs to the canonical store. `commitEditorTransition` accepts no caller-owned `projectMutation` flag; it derives project changes from the immutable before/after project transition, and it rejects any transition it cannot classify and revision atomically.
 
