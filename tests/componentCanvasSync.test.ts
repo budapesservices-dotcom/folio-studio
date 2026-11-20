@@ -9,6 +9,7 @@ import {
   createComponentCanvasSyncSession,
   markComponentCanvasMasterMissing,
   reconcileComponentCanvasSyncSession,
+  shouldProtectComponentCanvasBuffer,
 } from '../src/app/componentCanvasSync';
 import { areDocumentsStructurallyEqual } from '../src/core/document/equality';
 import type { FolioDocument } from '../src/core/document/types';
@@ -31,6 +32,12 @@ function createFixture() {
   const store = createCanonicalEditorStore(createEditorState(project));
   const master = store.getSnapshot().editorState.project.components[0];
   return { store, master };
+}
+
+function getMasterById(store: ReturnType<typeof createCanonicalEditorStore>, id: string) {
+  const master = store.getSnapshot().editorState.project.components.find((component) => component.id === id);
+  if (!master) throw new Error('The requested canonical component master is missing.');
+  return master;
 }
 
 function getMaster(store: ReturnType<typeof createCanonicalEditorStore>) {
@@ -74,8 +81,12 @@ describe('Component Canvas master synchronization', () => {
     expect(syncAction).toBeNull();
 
     const reducerNoOp = editorReducer(before.editorState, {
-      type: 'update-component',
-      component: { ...master, document: openedDocument, updatedAt: '2099-01-01T00:00:00.000Z' },
+      type: 'sync-component-document',
+      componentId: master.id,
+      expectedMasterDocument: master.document,
+      expectedUpdatedAt: master.updatedAt,
+      document: openedDocument,
+      updatedAt: '2099-01-01T00:00:00.000Z',
     });
     expect(reducerNoOp).toBe(before.editorState);
     expect(store.getSnapshot()).toBe(before);
@@ -194,10 +205,9 @@ describe('Component Canvas master synchronization', () => {
       ...copyDocument(master.document),
       nodes: master.document.nodes.map((node) => ({ ...node, x: node.x + 63 })),
     };
-    const externalUpdate = store.dispatchLegacyAction({
-      type: 'update-component',
-      component: { ...getMaster(store), document: externalDocument, updatedAt: '2026-11-20T01:00:00.000Z' },
-    });
+    const externalAction = createComponentCanvasSyncAction(getMaster(store), externalDocument);
+    if (!externalAction) throw new Error('Expected an independent canonical document update.');
+    const externalUpdate = store.dispatchLegacyAction(externalAction);
     expect(externalUpdate.status).toBe('committed');
 
     const reconciliation = reconcileComponentCanvasSyncSession(session, getMaster(store), buffer);
@@ -220,14 +230,9 @@ describe('Component Canvas master synchronization', () => {
       ...copyDocument(master.document),
       nodes: master.document.nodes.map((node) => ({ ...node, x: 654 })),
     };
-    store.dispatchLegacyAction({
-      type: 'update-component',
-      component: {
-        ...getMaster(store),
-        document: independentCanonicalDocument,
-        updatedAt: '2026-11-20T02:00:00.000Z',
-      },
-    });
+    const externalAction = createComponentCanvasSyncAction(getMaster(store), independentCanonicalDocument);
+    if (!externalAction) throw new Error('Expected an independent canonical document update.');
+    store.dispatchLegacyAction(externalAction);
 
     const reconciliation = reconcileComponentCanvasSyncSession(
       session,
@@ -258,6 +263,117 @@ describe('Component Canvas master synchronization', () => {
 
 
 describe('Atomic Component Canvas sync and orphan recovery', () => {
+  it('rejects stale component document identity and stale updatedAt independently', () => {
+    const { store, master } = createFixture();
+    const replacementDocument = {
+      ...copyDocument(master.document),
+      nodes: master.document.nodes.map((node) => ({ ...node, x: node.x + 31 })),
+    };
+    const before = store.getSnapshot();
+
+    const staleVersion = store.dispatchLegacyAction({
+      type: 'sync-component-document',
+      componentId: master.id,
+      expectedMasterDocument: master.document,
+      expectedUpdatedAt: 'stale-version',
+      document: replacementDocument,
+      updatedAt: '2026-11-20T04:00:00.000Z',
+    });
+    expect(staleVersion.status).toBe('component-conflict');
+    expect(store.getSnapshot()).toBe(before);
+
+    const staleIdentity = store.dispatchLegacyAction({
+      type: 'sync-component-document',
+      componentId: master.id,
+      expectedMasterDocument: copyDocument(master.document),
+      expectedUpdatedAt: master.updatedAt,
+      document: replacementDocument,
+      updatedAt: '2026-11-20T04:01:00.000Z',
+    });
+    expect(staleIdentity.status).toBe('component-conflict');
+    expect(store.getSnapshot()).toBe(before);
+    expect(store.getSnapshot().projectRevision).toBe(0);
+    expect(store.getSnapshot().editorState.past).toBe(before.editorState.past);
+    expect(getMaster(store).document).toBe(master.document);
+    expect(getMaster(store).updatedAt).toBe(master.updatedAt);
+  });
+
+  it('does not expose the stale full-object update-component reducer path', () => {
+    const { store, master } = createFixture();
+    const before = store.getSnapshot();
+    const attempted = {
+      type: 'update-component',
+      component: {
+        ...master,
+        document: {
+          ...copyDocument(master.document),
+          nodes: master.document.nodes.map((node) => ({ ...node, x: 9999 })),
+        },
+        updatedAt: '2099-01-01T00:00:00.000Z',
+      },
+    } as never;
+
+    expect(editorReducer(before.editorState, attempted)).toBe(before.editorState);
+    expect(store.dispatchLegacyAction(attempted).snapshot).toBe(before);
+    expect(store.getSnapshot()).toBe(before);
+    expect(store.getSnapshot().projectRevision).toBe(0);
+    expect(getMaster(store).document).toBe(master.document);
+    expect(getMaster(store).updatedAt).toBe(master.updatedAt);
+  });
+
+  it('preserves canonical create, rename, delete, Undo and Redo through the store boundary', () => {
+    const project = createInitialProject('Component lifecycle');
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const component = {
+      id: 'lifecycle-component',
+      name: 'First',
+      document: {
+        ...project.pages[0].document,
+        id: 'lifecycle-document',
+        name: 'First',
+        nodes: [{ ...createRectNode(), id: 'lifecycle-node' }],
+      },
+      createdAt: '2026-11-20T00:00:00.000Z',
+      updatedAt: '2026-11-20T00:00:00.000Z',
+    };
+
+    expect(store.dispatchLegacyAction({ type: 'add-component', component }).status).toBe('committed');
+    expect(getMasterById(store, component.id).name).toBe('First');
+    const renamed = store.dispatchLegacyAction({
+      type: 'rename-component',
+      componentId: component.id,
+      name: 'Renamed',
+    });
+    expect(renamed.status).toBe('committed');
+    expect(getMasterById(store, component.id).name).toBe('Renamed');
+    expect(getMasterById(store, component.id).updatedAt).not.toBe(component.updatedAt);
+
+    expect(store.dispatchLegacyAction({ type: 'delete-component', componentId: component.id }).status).toBe('committed');
+    expect(store.getSnapshot().editorState.project.components).toHaveLength(0);
+    expect(store.dispatchLegacyAction({ type: 'undo' }).status).toBe('committed');
+    expect(getMasterById(store, component.id).name).toBe('Renamed');
+    expect(store.dispatchLegacyAction({ type: 'redo' }).status).toBe('committed');
+    expect(store.getSnapshot().editorState.project.components).toHaveLength(0);
+    expect(store.getSnapshot().projectRevision).toBe(5);
+    expect(store.getSnapshot().editorState.past).toHaveLength(3);
+  });
+
+  it('protects a dirty, conflicted or orphaned Component Canvas buffer from master replacement', () => {
+    const { master } = createFixture();
+    const clean = copyDocument(master.document);
+    const dirty = {
+      ...copyDocument(clean),
+      nodes: clean.nodes.map((node) => ({ ...node, y: node.y + 12 })),
+    };
+    const session = createComponentCanvasSyncSession(master);
+
+    expect(shouldProtectComponentCanvasBuffer(session, clean)).toBe(false);
+    expect(shouldProtectComponentCanvasBuffer(session, dirty)).toBe(true);
+    expect(shouldProtectComponentCanvasBuffer({ ...session, conflicted: true }, clean)).toBe(true);
+    expect(shouldProtectComponentCanvasBuffer({ ...session, masterStatus: 'missing' }, clean)).toBe(true);
+    expect(shouldProtectComponentCanvasBuffer({ ...session, masterStatus: 'returned' }, clean)).toBe(true);
+  });
+
   it('rejects a stale M0 sync action after canonical master advances to M2 without changing M2 metadata or history', () => {
     const { store, master } = createFixture();
     const session = createComponentCanvasSyncSession(master);
@@ -272,16 +388,15 @@ describe('Atomic Component Canvas sync and orphan recovery', () => {
       ...copyDocument(master.document),
       nodes: master.document.nodes.map((node) => ({ ...node, x: node.x + 654 })),
     };
-    const updated = store.dispatchLegacyAction({
-      type: 'update-component',
-      component: {
-        ...getMaster(store),
-        name: 'Renamed canonical master',
-        createdAt: '2025-01-01T00:00:00.000Z',
-        updatedAt: '2026-11-20T03:00:00.000Z',
-        document: canonicalM2Document,
-      },
+    const renamed = store.dispatchLegacyAction({
+      type: 'rename-component',
+      componentId: master.id,
+      name: 'Renamed canonical master',
     });
+    expect(renamed.status).toBe('committed');
+    const canonicalM2Action = createComponentCanvasSyncAction(getMaster(store), canonicalM2Document);
+    if (!canonicalM2Action) throw new Error('Expected the canonical M2 document update.');
+    const updated = store.dispatchLegacyAction(canonicalM2Action);
     expect(updated.status).toBe('committed');
     const beforeStaleDispatch = store.getSnapshot();
     const beforePast = beforeStaleDispatch.editorState.past;
@@ -296,8 +411,7 @@ describe('Atomic Component Canvas sync and orphan recovery', () => {
     expect(store.getSnapshot().editorState.future).toBe(beforeFuture);
     expect(getMaster(store)).toMatchObject({
       name: 'Renamed canonical master',
-      createdAt: '2025-01-01T00:00:00.000Z',
-      updatedAt: '2026-11-20T03:00:00.000Z',
+      createdAt: master.createdAt,
     });
     expect(getMaster(store).document).toEqual(canonicalM2Document);
     expect(getMaster(store).document.nodes[0].x).toBe(master.document.nodes[0].x + 654);
