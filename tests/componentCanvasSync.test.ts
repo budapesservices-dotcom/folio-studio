@@ -296,6 +296,25 @@ describe('Atomic Component Canvas sync and orphan recovery', () => {
     expect(store.getSnapshot().editorState.past).toBe(before.editorState.past);
     expect(getMaster(store).document).toBe(master.document);
     expect(getMaster(store).updatedAt).toBe(master.updatedAt);
+
+    const staleRename = store.dispatchLegacyAction({
+      type: 'rename-component',
+      componentId: master.id,
+      expectedMasterDocument: copyDocument(master.document),
+      expectedUpdatedAt: master.updatedAt,
+      name: 'Stale rename',
+    });
+    expect(staleRename.status).toBe('component-conflict');
+    const staleDelete = store.dispatchLegacyAction({
+      type: 'delete-component',
+      componentId: master.id,
+      expectedMasterDocument: master.document,
+      expectedUpdatedAt: 'stale-version',
+    });
+    expect(staleDelete.status).toBe('component-conflict');
+    expect(store.getSnapshot()).toBe(before);
+    expect(getMaster(store).document).toBe(master.document);
+    expect(getMaster(store).updatedAt).toBe(master.updatedAt);
   });
 
   it('does not expose the stale full-object update-component reducer path', () => {
@@ -339,16 +358,25 @@ describe('Atomic Component Canvas sync and orphan recovery', () => {
 
     expect(store.dispatchLegacyAction({ type: 'add-component', component }).status).toBe('committed');
     expect(getMasterById(store, component.id).name).toBe('First');
+    const beforeRename = getMasterById(store, component.id);
     const renamed = store.dispatchLegacyAction({
       type: 'rename-component',
       componentId: component.id,
+      expectedMasterDocument: beforeRename.document,
+      expectedUpdatedAt: beforeRename.updatedAt,
       name: 'Renamed',
     });
     expect(renamed.status).toBe('committed');
     expect(getMasterById(store, component.id).name).toBe('Renamed');
     expect(getMasterById(store, component.id).updatedAt).not.toBe(component.updatedAt);
 
-    expect(store.dispatchLegacyAction({ type: 'delete-component', componentId: component.id }).status).toBe('committed');
+    const beforeDelete = getMasterById(store, component.id);
+    expect(store.dispatchLegacyAction({
+      type: 'delete-component',
+      componentId: component.id,
+      expectedMasterDocument: beforeDelete.document,
+      expectedUpdatedAt: beforeDelete.updatedAt,
+    }).status).toBe('committed');
     expect(store.getSnapshot().editorState.project.components).toHaveLength(0);
     expect(store.dispatchLegacyAction({ type: 'undo' }).status).toBe('committed');
     expect(getMasterById(store, component.id).name).toBe('Renamed');
