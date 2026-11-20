@@ -2,7 +2,7 @@
 
 **Document ID:** FOLIO-AST-API-001  
 **Version:** 0.1 — Draft  
-**Status:** Proposed; implementation not started  
+**Status:** Implemented in the current branch; latest CI verification pending  
 **Related specifications:**
 - [Native AST v1](NATIVE_AST_V1.md)
 - [Native AST Compatibility & Migration Plan](NATIVE_AST_COMPATIBILITY_MIGRATION.md)
@@ -210,10 +210,10 @@ Before implementation is considered complete, tests must prove:
 
 ## 11. Status
 
-**Proposed:** scoped DocumentAddress / NativeNodeRef and the read-only NativeAstDocumentView contract.
+**Implemented in this branch:** src/core/document/ast.ts provides the scoped DocumentAddress / NativeNodeRef and read-only NativeAstDocumentView contract. It derives indexes without mutating or serializing project data and delegates ordering semantics to the existing layer helpers.
 
-**Current implementation:** FolioDocument, DesignNode, parentId, flat node arrays, and layer helpers already exist.
+**Tests added:** tests/ast.test.ts covers scoped lookup, hierarchy queries, paint/render/panel order, duplicate IDs, document-address mismatch, source immutability, and rebuilding against immutable document updates.
 
-**Not implemented:** this facade, scoped reference types, and its dedicated tests.
+**Verification:** latest CI run for the address-validation follow-up is pending. The previous facade implementation passed type-check, all tests, and production build in [run #239](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44666889848); the address-validation follow-up will be verified separately.
 
 **Next milestone after this API:** Native Commands v1 — introduce validated write operations without changing persistence or history semantics.
