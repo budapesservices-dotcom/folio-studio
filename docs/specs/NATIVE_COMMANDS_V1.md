@@ -402,27 +402,28 @@ The adapter must preserve existing layer semantics rather than implement a paral
 
 The current groupLayers helper generates a group ID internally. The v1 adapter must return the actual created group reference by comparing the before/after document and must not infer its ID from display name or array position. Injecting a caller-assigned group ID is a possible small follow-up improvement, not a reason to redesign layer operations now.
 
-### 5.4 Component commands
+### 5.4 Component metadata and document-content commands
 
-| Command | Target | Payload | Legacy compatibility route |
+Component definition metadata and component document content are different mutation categories. They must not be collapsed into one generic component update payload.
+
+| Command / route | Target | Payload | V1 treatment |
 |---|---|---|---|
-| component.create | Project | Complete validated ComponentDefinition | add-component |
-| component.update | Project | Complete validated updated definition | update-component |
-| component.rename | Project | componentId and name | rename-component |
-| component.delete | Project | componentId plus explicit destructive-action authorization | delete-component |
+| component.create | Project | Complete validated ComponentDefinition | Project-level create; maps to add-component |
+| component.metadata.rename | Project | componentId and name | Metadata-only mutation; maps to rename-component |
+| node.* / layer.* commands for a component document | Document or Node | Existing typed node/layer payloads with DocumentAddress.owner.kind = component | Document-content mutation; canonical Component Canvas command bridge is Phase 3 |
+| component.delete | Project | componentId plus explicit destructive-action authorization | Project-level delete; maps to delete-component |
 
-Component definition document edits must carry a component document address and resolve against the owning project's component ID. A command may not update the component with the same name or an ID from another project.
+V1 rules:
 
-V1 must retain existing component behavior:
+- **Component metadata** includes the definition's project-level identity and currently supported metadata such as its name and timestamps. The current rename-component reducer action also mirrors the renamed value into document.name for compatibility. This mirror is document metadata; it is not an AST node-content change.
+- **Component document content** means changes to the definition's FolioDocument content, including its nodes, hierarchy, transforms, layer order, and other document-owned data. Such a mutation uses the ordinary typed document/node/layer command contracts with a full component DocumentAddress. It is not a metadata rename.
+- Do not expose a catch-all public component.update command that accepts an arbitrary complete ComponentDefinition and ambiguously mixes metadata edits with document-content replacement.
+- The existing update-component EditorAction remains a compatibility route for the current Component Canvas buffer synchronization. It is not a new generic public Native Command.
+- Metadata-only changes and document-content changes each represent one canonical project mutation when accepted, and each increments the canonical projectRevision exactly once through the shared commit boundary. Their change sets must distinguish metadataChanged from documentContentChanged.
+- Deleting a definition continues to detach referencing page instances through the existing helper/reducer behavior. Detach is a deliberate operation and is not silently substituted for every definition update.
+- Current component restrictions remain: page instances reference definitions by componentId, existing overrides are keyed by internal node ID and limited to fill/text, and nested component instances in master definitions remain rejected by current validation.
 
-- A component definition owns its document.
-- A page instance references the definition by componentId.
-- Existing overrides remain keyed by internal node ID and remain limited to fill/text in the current model.
-- Nested component instances in master definitions remain rejected by current validation.
-- Deleting a definition continues to detach referencing page instances through the existing helper/reducer behavior.
-- Detach is a deliberate operation and is not silently substituted for every definition update.
-
-**Component Canvas integration gate:** because the current Component Canvas edits a temporary project buffer and later synchronizes it into the main project, component-document command routing must not be enabled until the adapter can correlate the buffer with the canonical { projectId, componentId, documentId } target and report completion only after the canonical definition update succeeds. Keep the existing workflow intact until that bridge is implemented and tested.
+**Component Canvas bridge remains Phase 3:** the current Component Canvas editor buffer is a transient working surface, not a second canonical project or a second revision owner. Buffer-only editor transitions do not increment the canonical projectRevision. The existing synchronization path writes accepted definition changes back to the owning canonical project through the legacy update-component route; each accepted canonical project update passes through the shared commit boundary and increments projectRevision once. Phase 3 replaces the UI-to-buffer synchronization route with canonical component-scoped Native Command targeting. It must preserve one canonical project source of truth throughout.
 
 ### 5.5 Not in the v1 executable catalog
 
@@ -699,6 +700,21 @@ interface CanonicalEditorStoreSnapshot {
   projectRevision: number;
 }
 
+type EditorStoreCommitResult =
+  | {
+      status: 'committed';
+      snapshot: CanonicalEditorStoreSnapshot;
+    }
+  | {
+      status: 'revision-conflict';
+      snapshot: CanonicalEditorStoreSnapshot;
+    }
+  | {
+      status: 'failed';
+      snapshot: CanonicalEditorStoreSnapshot;
+      errorCode: string;
+    };
+
 interface CanonicalEditorStore {
   getSnapshot(): CanonicalEditorStoreSnapshot;
 
@@ -719,6 +735,8 @@ Both mutation paths use that same boundary:
 - **Native Command path:** prepare the candidate with the compatibility adapter and submit it through commitPreparedCommand, which delegates acceptance to the same commitEditorTransition boundary.
 
 The store atomically verifies expectedProjectRevision against its latest value. For a project mutation it accepts the candidate and increments projectRevision once. For selection/editor-only transitions it may accept the EditorState change without incrementing projectRevision. A no-op does not replace state. A conflict or commit failure accepts neither candidate project data nor candidate history.
+
+The store returns committed only after the state and revision transition is accepted. It returns revision-conflict or failed with the current live snapshot when it cannot commit. The Native Command host maps committed to status applied; it maps either failure outcome to status rejected. The host never manufactures a committed/applied result from a prepared candidate.
 
 The store must not expose a second path that allows a legacy reducer dispatch or Native Command to publish project changes outside this boundary. This is the intended v1 integration contract; it is not a claim that the current application's direct reducer wiring has already been migrated.
 
