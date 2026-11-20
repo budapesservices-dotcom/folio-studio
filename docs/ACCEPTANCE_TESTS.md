@@ -25,7 +25,11 @@ Then run `npm run dev` and open `http://127.0.0.1:5173`.
 
 ## Native .flop file workflow
 
-Implementation status: the File menu workflow is implemented. Verification remains pending until the automated checks and manual browser steps below have actually passed.
+Implementation status: the File menu workflow and the FL-01/FL-02 reliability revisions are implemented.
+
+Automated verification (2026-11-20): GitHub Actions run [#44682687469](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44682687469) completed successfully on Node.js 26. `npm run check`, `npm run test` and `npm run build` all passed.
+
+Manual browser acceptance: pending. The browser workflows below have not been exercised in this revision.
 
 - File → Open Project parses, migrates and validates the selected .flop through the existing adapter, then saves the imported project and active-project pointer in one IndexedDB transaction before replacing editor state. A failed save cannot activate an unsaved project.
 - The active-project pointer lives in the IndexedDB app-state store, outside project metadata and the .flop payload. Missing, stale, malformed or reserved-workspace pointers fall back to the existing updatedAt selection. Project metadata and updatedAt are not rewritten to influence selection.
