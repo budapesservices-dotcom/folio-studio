@@ -5,7 +5,7 @@ Before each task, read:
 - `docs/FOLIO_ARCHITECTURE_BLUEPRINT.md` for product vision and target architecture.
 - `docs/ARCHITECTURE.md` for the current implementation.
 - `docs/ACCEPTANCE_TESTS.md` for the current acceptance expectations.
-- `docs/specs/NATIVE_AST_V1.md` for the AST contract and `docs/specs/NATIVE_AST_COMPATIBILITY_MIGRATION.md` for legacy compatibility and migration tasks.
+- `docs/specs/NATIVE_AST_V1.md` for the AST contract, `docs/specs/NATIVE_AST_COMPATIBILITY_MIGRATION.md` for legacy compatibility, and `docs/specs/NATIVE_AST_COMPATIBILITY_API.md` for AST facade implementation tasks.
 
 Treat these as mandatory project context, not optional background reading.
 
