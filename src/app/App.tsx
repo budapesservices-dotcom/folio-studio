@@ -993,7 +993,22 @@ export function App() {
   const renameComponent = (componentId: string) => {
     const name = componentNameDraft.trim();
     if (!name) return;
-    dispatch({ type: 'rename-component', componentId, name });
+    const current = state.project.components.find((item) => item.id === componentId);
+    if (!current) {
+      setNotice('This component is no longer available in the current project.');
+      return;
+    }
+    const transition = dispatch({
+      type: 'rename-component',
+      componentId,
+      expectedMasterDocument: current.document,
+      expectedUpdatedAt: current.updatedAt,
+      name,
+    });
+    if (transition.status !== 'committed') {
+      setNotice('The component changed before the rename could be applied. Review the latest master and retry.');
+      return;
+    }
     setRenamingComponentId(null);
     setNotice(`Component renamed to “${name}”.`);
   };
@@ -1018,7 +1033,16 @@ export function App() {
   };
 
   const deleteComponent = (component: ComponentDefinition) => {
-    dispatch({ type: 'delete-component', componentId: component.id });
+    const transition = dispatch({
+      type: 'delete-component',
+      componentId: component.id,
+      expectedMasterDocument: component.document,
+      expectedUpdatedAt: component.updatedAt,
+    });
+    if (transition.status !== 'committed') {
+      setNotice('The component changed before deletion could be applied. Review the latest master and retry.');
+      return;
+    }
     if (editingComponentId === component.id) {
       setEditingComponentId(null);
       componentSyncSessionRef.current = null;
