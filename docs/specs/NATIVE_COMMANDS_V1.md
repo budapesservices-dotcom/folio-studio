@@ -288,10 +288,11 @@ interface NativeCommandEnvelope<TType extends string, TPayload> {
 
 interface NativeCommandPreconditions {
   /**
-   * Optional in-memory revision token supplied by the host store.
+   * Optional caller precondition. The host also captures its current
+   * projectRevision during preparation and rechecks it at commit.
    * It is not FolioProject.metadata.updatedAt.
    */
-  expectedRevision?: number;
+  expectedProjectRevision?: number;
 }
 ~~~
 
@@ -460,10 +461,12 @@ The executor follows this order:
 8. Validate every ID and reference against that exact scope.
 9. Validate the typed payload, required fields, value ranges, and operation-specific constraints.
 10. Check lock/capability rules applicable to that operation.
-11. Check preconditions, including expectedRevision when supplied.
-12. Build a candidate immutable state using the compatibility adapter.
-13. Validate the candidate project using the existing project validator.
-14. Publish the candidate state only if every previous step succeeds.
+11. Check caller preconditions, including expectedProjectRevision when supplied.
+12. Capture the canonical store's current projectRevision as the candidate's base revision.
+13. Build a candidate immutable state using the compatibility adapter.
+14. Validate the candidate project using the existing project validator.
+15. Submit the candidate to the canonical store commit boundary, which must recheck the captured base revision against the latest projectRevision before accepting it.
+16. Publish and notify only after the store accepts the candidate.
 
 A rejected command must not call a reducer action that can mutate state and then attempt to repair it afterward.
 
@@ -493,20 +496,31 @@ The current AST view can provide scoped lookup and derived hierarchy/order queri
 - A command that would violate the existing strict project validator must be rejected. Do not weaken validation for convenience.
 - Do not introduce stricter future AST constraints (for example, Group-only parent capability) until a compatibility migration is agreed and tested.
 
-### 6.4 Preconditions and revisions
+### 6.4 Project revision and preconditions — fixed v1 decision
 
-The current FolioProject does not contain a monotonic revision number. metadata.updatedAt is a timestamp used by the existing project model and is not a reliable concurrency token.
+V1 uses one monotonically increasing, in-memory project revision named projectRevision. It is owned by the canonical EditorState/editor store alongside the canonical project state. It is not owned by a workspace buffer, command caller, imported project, or persistence adapter.
 
-V1 therefore defines an **optional host-owned in-memory expectedRevision**:
+The following rules are **final v1 decisions**, not open questions:
 
-- The editor store increments its revision after every committed project mutation.
-- A command with expectedRevision must match the current store revision.
-- A mismatch returns REVISION_CONFLICT without applying anything.
-- A command without expectedRevision is allowed only in the current single-editor, synchronous local execution path.
-- The revision must not be serialized into .flop v2 or confused with AST schema version.
-- If the host cannot verify a supplied revision, it must reject rather than ignore it.
+- projectRevision is an in-memory counter managed by the canonical editor store.
+- It is independent of FolioProject.metadata.updatedAt.
+- It is never serialized into the .flop format, IndexedDB records, or imported project data.
+- Initializing/replacing a project establishes the store's in-memory counter; an imported or historical project cannot supply or restore its value.
+- Every accepted project mutation passes through one shared editor-store commit boundary, whether the candidate came from a legacy EditorAction or a Native Command.
+- Each accepted project mutation increments projectRevision exactly once.
+- A committed Undo or Redo increments projectRevision once. It never restores the revision number that belonged to the historical snapshot.
+- An accepted project replacement/import increments projectRevision once. The imported project's metadata or any hypothetical stored revision is not copied into the counter.
+- A valid no-op, rejected operation, selection-only update, commit-edit-only transition, and viewport-only change do not increment projectRevision.
+- A successful batch increments projectRevision once for the whole transaction, not once per internal command.
+- A failed or stale commit leaves the current EditorState (including past/future history) and projectRevision unchanged.
 
-This is a local stale-command guard, not a distributed concurrency protocol. Persistent revisions, remote actor clocks, conflict merging, and collaboration leases remain future work.
+The following project changes therefore count as revisioned commits: document/node/layer mutations, component definition metadata changes, component document-content changes, page creation, active-page changes, component changes, Undo, Redo, and project replacement. Selection, hover, tool choice, canvas pan/zoom, window position, and other presentation-only state do not count.
+
+The envelope may carry optional expectedProjectRevision. If present, preparation rejects the request when it does not match the current canonical projectRevision. Regardless of whether the caller supplied that field, preparation captures the current projectRevision as baseProjectRevision. The store must compare that captured value with its latest projectRevision again at the commit boundary. This second comparison is mandatory: an initial precondition check alone cannot protect a candidate prepared against stale state.
+
+A mismatch at either check returns REVISION_CONFLICT. A commit-boundary mismatch must not publish the candidate, alter history, increment the revision, or emit a change notification.
+
+This is a local in-memory stale-candidate guard. Durable revision storage, cross-tab coordination, distributed clocks, remote merging, and collaboration leases remain future work.
 
 ### 6.5 Lock and capability checks
 
@@ -521,18 +535,29 @@ The adapter must not rely on UI controls being hidden or disabled as authorizati
 
 ## 7. Atomic project mutation and failure handling
 
-### 7.1 Immutable candidate state
+### 7.1 Preparation is not a commit
 
-The project mutation flow is copy-on-write:
+The project mutation flow is copy-on-write and has two distinct authorities:
 
-1. Keep the current EditorState and FolioProject as the unchanged input.
-2. Resolve and validate the command against that input.
-3. Build the result in a local candidate state using existing immutable helpers and reducer actions.
-4. Validate the complete candidate project.
-5. Publish exactly one resulting EditorState to the host store.
-6. Emit a success result and change notification only after the store accepts the candidate.
+1. The command executor validates the request and prepares an immutable candidate against a captured canonical EditorState and projectRevision.
+2. The canonical editor store alone decides whether that candidate is committed.
 
-Do not mutate an existing project, document, node array, or AST view in place.
+Preparation must not publish state, mutate the store, increment projectRevision, emit a change notification, or return status applied. A prepared candidate is only a proposal awaiting store acceptance.
+
+The candidate contains the reducer-compatible next EditorState, including the intended project and snapshot-history transition. The existing project/document helpers and editorReducer may be used to calculate it, but the live store remains unchanged during preparation.
+
+### 7.2 Atomicity guarantee
+
+For one project mutation, the canonical store commit boundary provides the guarantee:
+
+- **Committed:** the store atomically accepts the complete candidate EditorState and increments projectRevision exactly once. Only then may the host produce status applied and publish the corresponding change notification.
+- **No-op:** a valid request produces no project change. The current project/history remain unchanged and projectRevision does not advance.
+- **Rejected/preparation failure:** validation, authorization, target resolution, or precondition failure produces no candidate commit.
+- **Commit failure/conflict:** if the store rejects a prepared candidate, the current EditorState, project, past, future, selection, and projectRevision remain exactly as they were immediately before the attempted commit.
+
+A command must never partially apply to some selected nodes while silently skipping missing or invalid targets. When a command addresses multiple nodes, all requested targets must validate before the mutation is prepared.
+
+The store must check the candidate's captured baseProjectRevision at the instant it accepts the state. It must update the EditorState and projectRevision as one logical commit. If that comparison fails, it returns the current store snapshot rather than the stale candidate.
 
 ### 7.2 Atomicity guarantee
 
@@ -556,16 +581,19 @@ Known current validation gaps remain known gaps. In particular, the current audi
 
 The reducer and document helpers are expected to be used as immutable transformations. If an intermediate candidate fails validation, discard it and retain the original state object.
 
+If a prepared candidate fails at the commit boundary—for example, because projectRevision changed after preparation—the host rejects it and preserves the latest committed EditorState and its history. It does not restore the older base snapshot, because that would itself overwrite newer work.
+
 The command layer must not:
 
 - Undo a failed command by dispatching an inverse mutation.
 - Restore an old persisted project after a partial write.
 - Save a failed candidate to IndexedDB.
-- Emit a success notification before the state store accepts the new state.
+- Emit status applied or a success notification before the store accepts the candidate.
+- Increment projectRevision during preparation or after a failed commit.
 - Silently convert a rejection into a no-op.
-- Hide a validation failure behind a generic toast.
+- Hide a validation or commit failure behind a generic toast.
 
-Persistence remains downstream of the accepted project state and keeps its existing validation boundary. File import/replacement must validate the entire incoming project before replacing the current state.
+Persistence remains downstream of the accepted project state and keeps its existing validation boundary. File import/replacement must validate the entire incoming project before the canonical store replaces its current state. A successful replacement is a new committed project transition and increments the in-memory projectRevision once.
 
 ## 8. Command execution lifecycle
 
@@ -605,57 +633,108 @@ Validate candidate FolioProject
      existing autosave
 ~~~
 
-### 8.2 Proposed minimal API surface
+### 8.2 Distinct preparation and commit contracts
 
 The first implementation can be a small framework-independent module under src/core/commands/ or another location chosen to match repository conventions. It must not import Preact, DOM/SVG types, workspace components, browser APIs, or persistence adapters.
 
-A minimal shape is:
+Preparation and commit are separate result types:
 
 ~~~typescript
-type NativeCommandExecution =
+type NativeCommandPreparation =
   | {
-      status: 'applied';
-      nextState: EditorState;
-      result: NativeCommandResult;
-      change: NativeChangeSet;
+      status: 'prepared';
+      commandId: string;
+      projectId: string;
+      baseProjectRevision: number;
+      candidateState: EditorState;
+      changeDraft: NativeChangeSetDraft;
+      warnings: NativeCommandWarning[];
     }
   | {
       status: 'no-op';
-      nextState: EditorState;
       result: NativeCommandResult;
     }
   | {
       status: 'rejected';
-      nextState: EditorState;
       result: NativeCommandResult;
     };
 
-function executeNativeCommand(
+type NativeCommandCommitResult =
+  | {
+      status: 'applied';
+      result: NativeCommandResult;
+      committedState: EditorState;
+      change: NativeChangeSet;
+      event: NativeChangeEvent;
+    }
+  | {
+      status: 'rejected';
+      result: NativeCommandResult;
+      currentState: EditorState;
+      currentProjectRevision: number;
+    };
+
+function prepareNativeCommand(
   state: EditorState,
+  projectRevision: number,
   command: NativeCommand,
   context: NativeCommandContext
-): NativeCommandExecution;
+): NativeCommandPreparation;
+
+function commitPreparedCommand(
+  store: CanonicalEditorStore,
+  preparation: Extract<NativeCommandPreparation, { status: 'prepared' }>
+): NativeCommandCommitResult;
 ~~~
 
-This is a proposed contract, not an existing exported function. NativeCommandContext contains the trusted actor/capabilities, the resolved editor/project scope, and the current in-memory revision. It is supplied by the application host and is not accepted from command payload data.
+A prepared result contains a candidate and the exact projectRevision it was based on. It does **not** contain status applied, a committed state claim, or an emitted event. A no-op or rejected preparation contains no candidate state and does not enter the commit path.
 
-The compatibility adapter may translate a command to one or more existing EditorAction values and call the existing editorReducer in memory to build a candidate. It must not dispatch to a reducer and then mutate project state through a second path.
+NativeCommandCommitResult is produced only by the host/store integration. Status applied is legal only after the canonical store has accepted the candidate. If commit fails or the captured base revision is stale, the result is rejected and currentState/currentProjectRevision are the unchanged live store values.
 
-The application integration must install the returned state through one thin reducer/store integration. The integration must preserve the existing reducer's behavior for legacy EditorAction values. A rejected command must leave the reducer state unchanged and return the structured error through a non-persistent result channel.
+The store owns one shared commit boundary for project transitions:
 
-The command execution module must be deterministic with respect to its explicit inputs, except for existing helper behavior that generates IDs or timestamps. A future refinement may inject IDs/timestamps into helpers to improve replayability; it is not a prerequisite for changing the entire editor architecture.
+~~~typescript
+interface CanonicalEditorStoreSnapshot {
+  editorState: EditorState;
+  projectRevision: number;
+}
 
-### 8.3 Preparation and completion
+interface CanonicalEditorStore {
+  getSnapshot(): CanonicalEditorStoreSnapshot;
 
-The following are separate moments:
+  commitEditorTransition(input: {
+    expectedProjectRevision: number;
+    candidateState: EditorState;
+    projectMutation: boolean;
+    changeDraft?: NativeChangeSetDraft;
+  }): EditorStoreCommitResult;
+}
+~~~
 
-- **Prepared:** envelope, permission, target, payload, and preconditions passed; the candidate is ready.
-- **Committed:** the store accepted the candidate state.
-- **Notified:** dependent UI observers received the committed change notification.
+This is a proposed boundary contract, not an additional project model or a second state store. The canonical store owns the existing EditorState and the in-memory projectRevision together.
 
-The executor must not report applied during preparation. If the host cannot install the candidate, the command is not committed.
+Both mutation paths use that same boundary:
 
-A UI notice, preview refresh, or autosave status is not proof that the project mutation committed.
+- **Legacy path:** calculate the candidate with the existing editorReducer and submit the candidate through commitEditorTransition.
+- **Native Command path:** prepare the candidate with the compatibility adapter and submit it through commitPreparedCommand, which delegates acceptance to the same commitEditorTransition boundary.
+
+The store atomically verifies expectedProjectRevision against its latest value. For a project mutation it accepts the candidate and increments projectRevision once. For selection/editor-only transitions it may accept the EditorState change without incrementing projectRevision. A no-op does not replace state. A conflict or commit failure accepts neither candidate project data nor candidate history.
+
+The store must not expose a second path that allows a legacy reducer dispatch or Native Command to publish project changes outside this boundary. This is the intended v1 integration contract; it is not a claim that the current application's direct reducer wiring has already been migrated.
+
+The compatibility adapter may translate commands to existing EditorAction values and call editorReducer in memory to construct a candidate. It must not dispatch an action into the live store and then mutate project state through another path.
+
+### 8.3 Preparation, commit, and notification
+
+These are separate moments:
+
+- **Prepared:** envelope, permission, target, payload, and preconditions passed; the executor has returned a candidate tied to baseProjectRevision. No live state has changed.
+- **Committed:** the canonical store rechecks the base revision and accepts the candidate. The store increments projectRevision exactly once for a project mutation and is the only authority that can confirm this stage.
+- **Notified:** only after commit, the host may publish status applied, the finalized command result, and one scoped change notification.
+
+The executor must never label a candidate applied. A UI notice, preview refresh, or autosave status is not proof that the project mutation committed.
+
+A failed commit preserves the store's latest EditorState and history. It produces no applied result and no change notification.
 
 ## 9. Command result and change notification contracts
 
@@ -675,8 +754,8 @@ interface NativeCommandResult {
   message: string;
 
   projectId: string;
-  revisionBefore: number;
-  revisionAfter: number;
+  projectRevisionBefore: number;
+  projectRevisionAfter: number;
 
   changed: boolean;
   affectedDocuments: DocumentAddress[];
@@ -693,7 +772,10 @@ Result rules:
 - status: no-op means the command was valid but produced no semantic project change.
 - status: rejected means the command was invalid, unauthorized, stale, unsupported, or conflicted.
 - changed is true only for applied.
-- revisionAfter advances only after a committed project mutation.
+- projectRevisionBefore and projectRevisionAfter are taken from the canonical store, not from metadata.updatedAt or a project snapshot.
+- For applied project mutations, projectRevisionAfter equals projectRevisionBefore + 1.
+- For no-op or rejected commands, the before/after values are equal to the current store revision.
+- An applied result can be created only after the store has accepted the candidate.
 - affectedDocuments and affectedNodes use complete scoped references.
 - warnings are non-fatal observations and must not conceal errors.
 - A result must not expose raw internal exceptions, stack traces, file paths, secrets, or plugin-private data to a user-facing message.
@@ -729,7 +811,7 @@ The change set describes semantic project areas affected by a committed command.
 ~~~typescript
 interface NativeChangeSet {
   projectId: string;
-  revision: number;
+  projectRevision: number;
   transactionId?: string;
   commandIds: string[];
 
@@ -742,19 +824,25 @@ interface NativeChangeSet {
     };
   }>;
 
-  componentIds: string[];
+  components: Array<{
+    componentId: string;
+    metadataChanged: boolean;
+    documentContentChanged: boolean;
+  }>;
   projectMetadataChanged: boolean;
 }
 ~~~
 
 Rules:
 
-- Emit a change set only after commit.
-- A rejected command and a no-op command do not emit a mutation event.
+- Emit a change set only after commit, with the committed projectRevision.
+- A rejected command and a no-op command do not emit a mutation event or advance projectRevision.
 - A batch emits one transaction-level change set, not one externally visible partial event per internal action.
 - Node IDs in a change set are interpreted within their accompanying document address.
 - Selection, hover, canvas pan/zoom, active tool, floating-window layout, and other transient UI state are not project change events.
-- A command that changes component definition data identifies the component ID and owning project.
+- A command that changes component definition data identifies the component ID and owning project, and distinguishes metadataChanged from documentContentChanged.
+- A metadata-only component rename is reported as a component metadata change, not as an AST node-content change. The current rename-component reducer action also mirrors the name into document.name; that compatibility mirror does not make it a node-content mutation.
+- A component document edit is reported as documentContentChanged and carries the component DocumentAddress plus its node-level changes where known.
 - The initial implementation may produce a conservative affected set from the command payload and actual before/after state. It must not claim a precise semantic diff when it only knows that a document changed.
 
 ### 9.3 Change notification
@@ -763,7 +851,7 @@ Rules:
 interface NativeChangeEvent {
   eventId: string;
   projectId: string;
-  revision: number;
+  projectRevision: number;
   commandId: string;
   transactionId?: string;
   source: NativeCommandSource;
@@ -771,7 +859,7 @@ interface NativeChangeEvent {
 }
 ~~~
 
-The first implementation may expose a synchronous in-process callback or store subscription. It is not a durable event log, collaboration message, network event, or persistence record.
+The first implementation may expose a synchronous in-process callback or store subscription. It is not a durable event log, collaboration message, network event, or persistence record. The notification's projectRevision is the revision already committed by the canonical store; subscribers must not increment it themselves.
 
 Subscribers treat the event as notification that the already-committed project state changed. They query the project model/AST facade for current values rather than treating event payloads as a competing source of truth.
 
@@ -801,11 +889,12 @@ interface NativeCommandBatch {
 - Commands execute in declared order against the evolving candidate state.
 - Every command is validated against the candidate produced by preceding commands, not only against the original state.
 - If any command is rejected or candidate validation fails, discard the complete candidate and leave the original project/history unchanged.
-- A successful batch publishes one final state, one history boundary, one revision increment, one result, and one transaction-level change notification.
+- A successful batch publishes one final state, one history boundary, exactly one projectRevision increment, one result, and one transaction-level change notification.
+- The batch's captured baseProjectRevision is rechecked at the same canonical store commit boundary used by single commands and legacy reducer mutations.
 - No nested batches in v1.
 - Empty batches are invalid.
 - A batch containing only valid no-op commands returns no-op and creates no history entry.
-- A batch with an invalid member returns rejected with TRANSACTION_ABORTED and identifies the failing command result in trusted diagnostic detail.
+- A batch with an invalid member returns rejected with TRANSACTION_ABORTED. V1 requires enough safe information to identify that the transaction failed; the exact public per-command failure detail is deferred as described in section 10.5.
 - The batch size should have a conservative implementation limit (initial proposal: 100 commands). The limit is a safety guard, not a product promise; it may be tuned using tests and payload cost.
 
 ### 10.3 Commands excluded from v1 batches
@@ -834,7 +923,21 @@ Proposed adapter behavior:
 6. Preserve the final valid selection state only after filtering it against the final active document.
 7. If nothing changed, return the original state and do not add history.
 
-The adapter must not publish intermediate candidate states or emit intermediate change notifications. The 60-snapshot history limit remains in force.
+The adapter must not publish intermediate candidate states or emit intermediate change notifications. The 60-snapshot history limit remains in force. The canonical store performs one successful commit and increments projectRevision once for the complete batch, regardless of the number of internal commands.
+
+### 10.5 V1 batch decisions and deferred failure detail
+
+**Fixed v1 transaction decisions:**
+
+- Batch execution is all-or-nothing.
+- Commands execute in declared order against the evolving candidate.
+- A successful batch creates one canonical store commit, one snapshot-history boundary, one projectRevision increment, and one change notification.
+- A failed or stale batch preserves the live EditorState, past/future history, and projectRevision.
+- Batch execution is a later adoption phase; it is not required to complete the Phase 1 single-command pilot.
+
+**Deferred implementation detail:**
+
+The exact public shape of per-command failure reporting (for example, a full array of every command outcome versus one failing command ID/index plus a transaction-level error) is intentionally deferred. It must not weaken atomicity or revision rules, and it must not block Phase 1. Before batch support ships in Phase 2, the minimum response must expose TRANSACTION_ABORTED and enough safe information to identify the failed member for diagnostics. A richer public diagnostic schema can be decided and tested with that phase.
 
 ## 11. Compatibility with editorReducer
 
@@ -884,19 +987,25 @@ Therefore:
 
 Component-definition document writes have a related constraint and must pass the Component Canvas integration gate in section 5.4.
 
-### 11.4 Legacy actions remain supported
+### 11.4 Legacy actions remain supported through the same commit boundary
 
-Existing workspace code may continue dispatching legacy EditorAction values while commands are introduced incrementally.
+Existing workspace code may continue producing legacy EditorAction values while Native Commands are introduced incrementally.
 
 During coexistence:
 
-- Legacy actions retain their current behavior.
+- Legacy actions retain their reducer semantics.
+- The existing editorReducer calculates a candidate EditorState; the canonical editor store decides whether to accept it through the same commitEditorTransition boundary used by Native Commands.
+- A legacy action that changes canonical project data increments projectRevision exactly once after acceptance.
+- A legacy action that only changes selection/editor state does not increment projectRevision.
+- Undo, Redo, and accepted replace-project operations pass through this same boundary and each increment projectRevision once.
+- Rejected/no-op legacy transitions do not increment projectRevision or emit project change notifications.
 - New command-aware paths perform strict validation before translating to legacy actions.
-- Both paths ultimately update the same EditorState/project aggregate used by that editor context.
 - Do not create a second mutation implementation for a command just because a matching legacy action exists.
 - Migrate one operation family at a time and compare resulting project semantics.
 
-The first adopter should be a bounded Main Canvas operation family, not every workspace and every reducer action in one change.
+This is a target integration contract for v1. The audited application currently wires reducers directly; the source migration to route both legacy and command transitions through one canonical store boundary remains implementation work.
+
+The current Main Canvas and Component Canvas use separate EditorState instances. projectRevision belongs to the canonical project/editor store, not to a temporary Component Canvas buffer. Component-buffer-only edits do not increment the canonical projectRevision. When the existing synchronization path accepts a component definition update in the canonical project through the legacy update-component action, that canonical commit increments projectRevision once. Phase 3 introduces the canonical component command bridge; it must not create a second canonical project or a second revision owner.
 
 ## 12. Compatibility with snapshot-based Undo/Redo
 
@@ -915,6 +1024,8 @@ The existing reducer currently:
 
 This is snapshot history. It is not command history or event sourcing.
 
+The snapshot stored in past/future contains project data, not a historical projectRevision. A committed Undo or Redo restores the selected project snapshot through the canonical commit boundary and advances the current projectRevision by exactly one. Revision values are monotonic for the live store and are never rewound with project content.
+
 ### 12.2 Required command behavior
 
 For v1:
@@ -928,6 +1039,9 @@ For v1:
 - Undo and Redo remain reducer operations. They do not become inverse Native Commands in v1.
 - Selection and canvas-only transient state remain outside project snapshots.
 - Page creation/switch history reset behavior is preserved until a separate approved change.
+- A successful Undo or Redo increments projectRevision once even though the project content may match an older snapshot.
+- An accepted project replacement increments projectRevision once and never imports or restores a revision number from the replacement data.
+- All legacy and Native Command project mutations share the same canonical commit boundary; there is no command-only revision counter.
 
 ### 12.3 No command log yet
 
@@ -1014,7 +1128,7 @@ The first implementation is local and synchronous. It can prevent common stale-t
 - Carrying the complete document address.
 - Resolving every node inside the addressed document.
 - Verifying the target is still present immediately before mutation.
-- Using optional host-owned expectedRevision.
+- Using expectedProjectRevision supplied by the caller when present and the mandatory captured baseProjectRevision recheck at commit.
 - Rejecting stale or cross-document references.
 - Validating the final project before publishing.
 - Applying a whole multi-node operation or none of it.
@@ -1050,7 +1164,7 @@ The host supplies a trusted execution context:
 ~~~typescript
 interface NativeCommandContext {
   projectId: string;
-  revision: number;
+  projectRevision: number;
   principal: {
     kind: 'user' | 'system' | 'plugin' | 'ai-agent';
     id: string;
@@ -1140,6 +1254,9 @@ Native Commands v1 is not implementation-complete merely because this document e
 - Generic property mutation cannot change identity, type, parent, component reference, or unrelated style data.
 - Component references and override targets remain valid.
 - Candidate validateProject failure leaves original state unchanged.
+- A stale expectedProjectRevision is rejected during preparation.
+- A candidate whose baseProjectRevision becomes stale after preparation is rejected again at the commit boundary.
+- Commit rejection preserves the latest current EditorState and past/future history and does not emit a change event.
 - Current compatibility behavior for ordinary visual-node parents, group nesting, clipping, component overrides, and detach is preserved.
 - No new project-wide uniqueness or future AST capability rule is assumed.
 
@@ -1156,15 +1273,20 @@ For every supported command, compare the command adapter result with the equival
 - Rejected command does not change project, past, future, selection, or historyGroup.
 - A successful new edit clears redo history.
 - History remains capped at 60 snapshots.
+- An accepted legacy reducer project mutation and an accepted Native Command mutation both increment the same canonical projectRevision exactly once.
+- Undo, Redo, and accepted project replacement each increment projectRevision once; the number is never restored from snapshot/import data.
+- No-op, rejected, selection-only, and viewport-only changes do not increment projectRevision.
+- A commit conflict does not change projectRevision or history.
 - Existing page-add/page-switch history reset behavior remains unchanged.
-- Batch success creates exactly one history entry.
-- Batch failure publishes no intermediate state and creates no history entry.
+- Batch success creates exactly one history entry and increments projectRevision exactly once for the entire batch.
+- Batch failure publishes no intermediate state, creates no history entry, and does not increment projectRevision.
 
 ### 16.5 Result and notification tests
 
 - Every command produces one result with the matching commandId.
 - Applied, no-op, and rejected statuses are distinguishable.
-- Revision advances only after commit.
+- projectRevision advances exactly once only after a successful canonical project commit.
+- Legacy reducer and Native Command mutations use the same commit boundary and the same revision owner.
 - Rejected/no-op commands do not emit change events.
 - An applied command emits one scoped change event after commit.
 - A batch emits one transaction-level event only after the entire transaction commits.
@@ -1224,19 +1346,22 @@ V1 can be marked **Verified** only against the implementation and test evidence 
 
 - Add the smallest framework-independent command types, validators, and static registry.
 - Implement one bounded Main Canvas command family first (recommended: node transform and common node properties).
-- Translate validated commands into the existing reducer actions.
-- Return explicit applied/no-op/rejected results.
-- Preserve the existing snapshot history.
-- Add scoped address and reducer parity tests.
+- Establish the canonical editor store's in-memory projectRevision and the single commitEditorTransition boundary.
+- Route both legacy reducer transitions and the pilot Native Command family through that same boundary.
+- Translate validated commands into existing reducer actions.
+- Return preparation outcomes separately from host-confirmed commit outcomes; only the store may return applied.
+- Recheck baseProjectRevision at commit, and preserve the current snapshot history.
+- Add scoped address, legacy/command revision parity, stale-commit, and reducer parity tests.
 
-**Exit:** the pilot command family behaves identically to its legacy reducer equivalent for supported fixtures; failures leave state/history unchanged.
+**Exit:** the pilot command family behaves identically to its legacy reducer equivalent for supported fixtures; both paths use the same canonical commit boundary; successful project changes increment projectRevision once; stale/failed commits leave the live state and history unchanged.
 
 ### Phase 2 — Document and layer command coverage
 
 - Add node create/replace/rename/delete, move, group/ungroup, clipping, and Canvas-placement commands.
 - Reuse layers.ts, project.ts, ast.ts, and reducer behavior rather than creating parallel mutation algorithms.
-- Add candidate project validation and revision preconditions.
-- Add batch support only after the single-command path is proven.
+- Add candidate project validation and expectedProjectRevision preconditions.
+- Add batch support only after the single-command path is proven. A successful batch commits and increments projectRevision once.
+- Detailed public per-command batch failure reporting remains deferred and does not block Phase 1; settle the minimum diagnostics contract before Phase 2 batch release.
 
 **Exit:** supported layer operations pass parity, identity, atomicity, and history tests.
 
@@ -1261,7 +1386,7 @@ V1 can be marked **Verified** only against the implementation and test evidence 
 
 ### Phase 5 — External actors and collaboration
 
-- Define persistent command identity/deduplication, durable revisions, and remote conflict policy.
+- Define persistent command identity/deduplication, durable remote revision/conflict policy, and coordination beyond the local in-memory projectRevision.
 - Define narrower plugin and AI capability grants and host confirmation UX.
 - Design durable audit/history integration and collaboration event transport separately.
 - Introduce remote execution only after local command semantics and conflict tests are stable.
@@ -1270,24 +1395,40 @@ V1 can be marked **Verified** only against the implementation and test evidence 
 
 Do not skip phases or combine command rollout with a breaking AST schema, .flop container, component contract, or history rewrite.
 
-## 18. Open questions requiring a deliberate decision
+## 18. Decisions fixed for v1 and deferred questions
 
-These questions do not block the documentation draft, but must be resolved before the relevant implementation phase:
+### 18.1 Fixed v1 decisions
+
+These are no longer open questions:
+
+1. projectRevision is an in-memory monotonic counter owned by the canonical EditorState/editor store.
+2. projectRevision is never derived from metadata.updatedAt or serialized to .flop/IndexedDB.
+3. Legacy reducer mutations and Native Commands use one canonical commit boundary.
+4. Each accepted project mutation increments projectRevision exactly once; Undo, Redo, and accepted project replacement also increment once.
+5. No-op, rejection, selection-only, and viewport-only changes do not increment projectRevision.
+6. The commit boundary rechecks the candidate's captured baseProjectRevision before accepting it.
+7. A successful batch increments projectRevision once for the entire transaction; a failed batch changes neither project state, history, nor revision.
+8. Component metadata changes and component document-content changes are distinct mutation categories. Metadata changes do not masquerade as AST node changes.
+9. The current Component Canvas working buffer remains a transient editing surface. Phase 3 adds the canonical component command bridge; it does not add a second canonical project or revision owner.
+10. Batch atomicity and one-commit/one-revision behavior are fixed for the batch contract. The detailed public shape of per-command failure diagnostics is deferred and is not a Phase 1 blocker.
+
+### 18.2 Deferred questions
+
+These questions may be resolved during the relevant implementation phase without changing the fixed v1 decisions above:
 
 1. **Command ID policy:** should UUID generation and in-session duplicate detection live in the app store, the command module, or a shared identity service?
 2. **Durable idempotency:** when remote collaboration exists, where should processed command IDs and replay outcomes be stored?
-3. **Revision ownership:** should the in-memory revision live beside EditorState, in a future project store, or in a unified engine coordinator? It must not be confused with metadata.updatedAt.
-4. **Inactive document editing:** should v1 initially reject inactive page targets, or add explicit page-scoped reducer actions that update any addressed page without switching the active page?
-5. **Component Canvas model:** when should the temporary component editor buffer be replaced by a canonical component-document editor context? What is the approved synchronization and conflict policy while a master is being edited?
-6. **Group ID injection:** should the existing groupLayers helper accept an optional caller-provided group ID so a command can allocate identity before execution and improve replay determinism?
-7. **Command naming:** should command type strings remain flat (node.transform) or use another stable namespace convention? The registry must enforce one convention before implementation.
-8. **Batch failure reporting:** should public batch results expose a structured list of per-command outcomes, or only the failed command plus one transaction-level result? Internal diagnostics must identify the failure either way.
-9. **Lock override:** should privileged system/AI/plugin actors ever be allowed to mutate locked nodes, or must they first submit a separate explicit unlock command?
-10. **History and page lifecycle:** should page creation/switch continue to reset history, or should a later history milestone preserve a single project-wide timeline?
-11. **Change-set precision:** which consumer first requires property-level diffs instead of the conservative document/node affected set proposed here?
-12. **Command compatibility:** what support window is required for older saved command payloads if commands eventually become persisted or exchanged between application versions?
+3. **Inactive document editing:** should v1 initially reject inactive page targets, or add explicit page-scoped reducer actions that update any addressed page without switching the active page?
+4. **Component Canvas model:** what is the detailed synchronization and conflict UX while a master is being edited in the temporary buffer before/while Phase 3 adopts canonical component-document commands? The canonical project remains the sole source of truth throughout.
+5. **Group ID injection:** should the existing groupLayers helper accept an optional caller-provided group ID so a command can allocate identity before execution and improve replay determinism?
+6. **Command naming:** should command type strings remain flat (node.transform) or use another stable namespace convention? The registry must enforce one convention before implementation.
+7. **Batch failure detail:** should the public batch result expose a full array of per-command outcomes, or only the failed command ID/index plus a transaction-level result? This is deferred until Phase 2 batch implementation and does not block the Phase 1 single-command core.
+8. **Lock override:** should privileged system/AI/plugin actors ever be allowed to mutate locked nodes, or must they first submit a separate explicit unlock command?
+9. **History and page lifecycle:** should page creation/switch continue to reset history, or should a later history milestone preserve a single project-wide timeline?
+10. **Change-set precision:** which consumer first requires property-level diffs instead of the conservative document/node affected set proposed here?
+11. **Command compatibility:** what support window is required for older saved command payloads if commands eventually become persisted or exchanged between application versions?
 
-Any decision that changes the current project model, .flop compatibility, AST identity, or workspace ownership must be documented and tested before implementation.
+Any decision that changes the current project model, .flop compatibility, AST identity, workspace ownership, or the fixed revision/commit rules must be documented and tested before implementation.
 
 ## 19. Final status summary
 
@@ -1295,9 +1436,11 @@ Any decision that changes the current project model, .flop compatibility, AST id
 
 **Existing / Implemented at the audited baseline:** editorReducer, immutable project/document helpers, snapshot Undo/Redo, project validation, the flat nodes[] plus parentId model, current component actions, and the read-only AST compatibility facade.
 
-**Proposed by this specification:** Native Command envelope and registry, typed command catalog, trusted execution context, command validation, candidate-state execution, result/change contracts, batch transactions, local revision checks, and future plugin/AI permission boundaries.
+**Proposed by this specification:** Native Command envelope and registry, typed command catalog, trusted execution context, preparation/commit result contracts, shared canonical commit boundary, monotonic in-memory projectRevision, candidate validation, result/change contracts, atomic batch transactions, and future plugin/AI permission boundaries.
 
-**Open:** component buffer-to-canonical command integration, inactive document routing, durable idempotency/revisions, global identity policy, group ID injection, distributed conflict handling, and eventual command-based history.
+**Fixed v1 decisions:** projectRevision ownership and increment rules; mandatory expected base revision recheck at commit; one shared commit boundary for legacy and Native Command mutations; one revision increment per accepted project mutation and per successful batch; no revision increment for no-op/rejection/selection/viewport-only changes; and separation of component metadata from component document content.
+
+**Deferred:** detailed public batch failure diagnostics, durable idempotency/revisions for remote collaboration, inactive document routing, Component Canvas canonical command adoption in Phase 3, group ID injection, distributed conflict handling, and eventual command-based history.
 
 **Not implemented by this documentation:** no source code, reducer, AST, project file, persistence layer, workspace behavior, plugin API, or Node Logic implementation is changed by this specification.
 
