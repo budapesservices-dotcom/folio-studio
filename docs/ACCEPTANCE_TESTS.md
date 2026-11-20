@@ -27,7 +27,7 @@ Then run `npm run dev` and open `http://127.0.0.1:5173`.
 
 Implementation status: the File menu workflow and the FL-01/FL-02 reliability revisions are implemented.
 
-Automated verification (2026-11-20): GitHub Actions run [#44683406395](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44683406395) completed successfully on Node.js 26 for this revision. `npm run check`, `npm run test` and `npm run build` all passed, including the IndexedDB transaction-abort rollback and export timestamp consistency tests.
+Automated verification (2026-11-20): GitHub Actions run [#44683500588](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44683500588) completed successfully on Node.js 26 for this revision. `npm run check`, `npm run test` and `npm run build` all passed, including the IndexedDB transaction-abort rollback and export timestamp consistency tests.
 
 Manual browser acceptance: pending. The browser workflows below have not been exercised in this revision.
 
