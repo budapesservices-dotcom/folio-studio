@@ -220,7 +220,7 @@ Before AST code changes:
 
 ### Phase 1 — Introduce an AST compatibility API without changing stored data
 
-Add a typed internal facade over existing project/document/node structures. The facade should expose stable entity references, node lookup, parent/child traversal, order queries, and typed property access while reading/writing the same existing v2 shape.
+Implement the proposed [Native AST Compatibility API](NATIVE_AST_COMPATIBILITY_API.md) as a typed internal facade over existing project/document/node structures. The facade should expose scoped entity references, node lookup, parent/child traversal, order queries, and typed access while reading/writing the same existing v2 shape.
 
 - Keep nodes[] and parentId as the persisted representation.
 - Preserve current array order.
