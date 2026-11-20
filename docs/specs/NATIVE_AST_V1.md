@@ -10,7 +10,7 @@
 
 ## Related migration plan
 
-Read [Native AST Compatibility & Migration Plan](NATIVE_AST_COMPATIBILITY_MIGRATION.md) before changing persisted project data, node identity, layer ordering, component references, or the existing .flop schema.
+Read [Native AST Compatibility & Migration Plan](NATIVE_AST_COMPATIBILITY_MIGRATION.md) before changing persisted project data, node identity, layer ordering, component references, or the existing .flop schema. The proposed [Native AST Compatibility API](NATIVE_AST_COMPATIBILITY_API.md) defines the first read-only facade over the current model.
 
 ## 1. Purpose
 
