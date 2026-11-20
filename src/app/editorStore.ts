@@ -1,5 +1,5 @@
 import { validateProject } from '../core/document/validation';
-import type { NativeChangeEvent } from '../core/commands/types';
+import type { NativeChangeEvent, NativeChangeSetDraft } from '../core/commands/types';
 import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
 
 export interface CanonicalEditorStoreSnapshot {
@@ -10,6 +10,7 @@ export interface CanonicalEditorStoreSnapshot {
 export interface EditorStoreCommitInput {
   expectedProjectRevision: number;
   candidateState: EditorState;
+  changeDraft?: NativeChangeSetDraft;
 }
 
 export type EditorStoreCommitResult =
@@ -55,8 +56,9 @@ function isCommitInput(value: unknown): value is EditorStoreCommitInput {
   const candidate = value as Record<string, unknown>;
   const keys = Object.keys(candidate);
   return (
-    keys.every((key) => key === 'expectedProjectRevision' || key === 'candidateState') &&
-    keys.length === 2 &&
+    keys.every((key) => key === 'expectedProjectRevision' || key === 'candidateState' || key === 'changeDraft') &&
+    keys.includes('expectedProjectRevision') && keys.includes('candidateState') &&
+    (candidate.changeDraft === undefined || (typeof candidate.changeDraft === 'object' && candidate.changeDraft !== null)) &&
     Number.isSafeInteger(candidate.expectedProjectRevision) &&
     Number(candidate.expectedProjectRevision) >= 0 &&
     isEditorState(candidate.candidateState)
