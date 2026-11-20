@@ -984,3 +984,30 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .artboard[data-tool="scrubby-zoom"] .canvas-node { cursor: ew-resize !important; }
 .artboard[data-tool="lasso-selection"] .canvas-node,
 .artboard[data-tool="magic-wand"] .canvas-node { cursor: crosshair !important; }
+
+
+/* FOLIO workspace layering contract — keep in sync with WINDOW_LAYERING. */
+:root {
+  --z-workspace-window-base: 120;
+  --z-component-rack: 300;
+  --z-application-toolbar: 1200;
+  --z-menu-overlay: 1400;
+}
+
+/* The horizontal application toolbar and vertical tool rail stay above every
+   workspace window. The rack remains above floating workspaces but below chrome. */
+.global-toolbar-slot { z-index: var(--z-application-toolbar); }
+.tool-rail { z-index: var(--z-application-toolbar); }
+.global-toolbar-slot .global-menu-dropdown { z-index: var(--z-menu-overlay); }
+
+.component-rack-panel {
+  z-index: var(--z-component-rack);
+  pointer-events: none;
+}
+.component-rack-panel.is-open { pointer-events: auto; }
+
+/* Closed racks are visually translated away and must never intercept input. */
+.component-rack-panel:not(.is-open),
+.pages-rack-panel:not(.is-open) {
+  pointer-events: none;
+}
