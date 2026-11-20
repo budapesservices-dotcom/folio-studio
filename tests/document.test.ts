@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialProject, createRectNode } from '../src/core/document/factory';
-import type { FolioProjectV1 } from '../src/core/document/types';
+import type { DesignNode, FolioProject, FolioProjectV1, GroupNode } from '../src/core/document/types';
 import { migrateProjectToV2, migrateProjectV1ToV2 } from '../src/core/document/migrations';
 import { validateProject } from '../src/core/document/validation';
 import { getActiveDocument } from '../src/core/document/project';
@@ -398,5 +398,119 @@ describe('linked master components and instances', () => {
     expect(withMaster.project.components).toHaveLength(0);
     expect(withMaster.project.pages[0].document.nodes.some((node) => node.type === 'component-instance')).toBe(false);
     expect(validateProject(withMaster.project).ok).toBe(true);
+  });
+});
+
+
+describe('Group node project validation', () => {
+  const createGroup = (id: string, parentId?: string): GroupNode => ({
+    id,
+    type: 'group',
+    name: id,
+    x: 24,
+    y: 36,
+    width: 320,
+    height: 180,
+    rotation: 0,
+    opacity: 1,
+    visible: true,
+    locked: false,
+    ...(parentId ? { parentId } : {}),
+  });
+
+  const withPageNodes = (nodes: DesignNode[]): FolioProject => {
+    const project = createInitialProject('Grouped project');
+    return {
+      ...project,
+      pages: project.pages.map((page) => ({
+        ...page,
+        document: { ...page.document, nodes },
+      })),
+    };
+  };
+
+  it('accepts a valid GroupNode in a page document', () => {
+    const group = createGroup('page-group');
+    const project = withPageNodes([group]);
+
+    expect(validateProject(project).ok).toBe(true);
+  });
+
+  it('accepts grouped children in page and component master documents', () => {
+    const project = withPageNodes([
+      createGroup('page-group'),
+      { ...createRectNode(), id: 'page-child', parentId: 'page-group' },
+      createGroup('page-nested-group', 'page-group'),
+      { ...createRectNode(), id: 'page-nested-child', parentId: 'page-nested-group' },
+    ]);
+    const timestamp = project.metadata.createdAt;
+    const componentGroup = createGroup('component-group');
+    project.components = [{
+      id: 'component-with-group',
+      name: 'Grouped component',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      document: {
+        ...project.pages[0].document,
+        id: 'component-document-with-group',
+        name: 'Grouped component',
+        nodes: [
+          componentGroup,
+          { ...createRectNode(), id: 'component-child', parentId: componentGroup.id },
+        ],
+      },
+    }];
+
+    expect(validateProject(project).ok).toBe(true);
+  });
+
+  it.each([
+    { property: 'id', value: '' },
+    { property: 'name', value: 42 },
+    { property: 'x', value: Number.NaN },
+    { property: 'y', value: Number.POSITIVE_INFINITY },
+    { property: 'width', value: -1 },
+    { property: 'height', value: -1 },
+    { property: 'rotation', value: Number.NaN },
+    { property: 'opacity', value: 1.01 },
+    { property: 'visible', value: 'true' },
+    { property: 'locked', value: 0 },
+    { property: 'parentId', value: '' },
+  ])('rejects a GroupNode with an invalid common $property property', ({ property, value }) => {
+    const invalidGroup = { ...createGroup('invalid-group'), [property]: value } as unknown as DesignNode;
+
+    expect(validateProject(withPageNodes([invalidGroup])).ok).toBe(false);
+  });
+
+  it('rejects missing parents and cyclic group hierarchies', () => {
+    const missingParent = withPageNodes([createGroup('orphan-group', 'missing-parent')]);
+    const cyclic = withPageNodes([
+      createGroup('cycle-a', 'cycle-b'),
+      createGroup('cycle-b', 'cycle-a'),
+    ]);
+
+    expect(validateProject(missingParent).ok).toBe(false);
+    expect(validateProject(cyclic).ok).toBe(false);
+  });
+
+  it('continues rejecting duplicate node IDs and duplicate page routes', () => {
+    const duplicateNodeIds = withPageNodes([
+      createGroup('duplicate-group'),
+      createGroup('duplicate-group'),
+    ]);
+    const duplicateRoutes = createInitialProject('Duplicate route project');
+    duplicateRoutes.pages.push({
+      ...duplicateRoutes.pages[0],
+      id: 'second-page',
+      name: 'Second page',
+      document: {
+        ...duplicateRoutes.pages[0].document,
+        id: 'second-page-document',
+        nodes: [createGroup('second-page-group')],
+      },
+    });
+
+    expect(validateProject(duplicateNodeIds).ok).toBe(false);
+    expect(validateProject(duplicateRoutes).ok).toBe(false);
   });
 });

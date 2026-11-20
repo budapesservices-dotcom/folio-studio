@@ -61,6 +61,8 @@ function isShapeStyle(value: unknown): boolean {
 function isDesignNode(value: unknown): value is DesignNode {
   if (!isRecord(value) || !isCommonNode(value)) return false;
 
+  if (value.type === 'group') return true;
+
   if (value.type === 'rect' || value.type === 'ellipse') {
     return isShapeStyle(value.style);
   }
