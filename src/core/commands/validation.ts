@@ -25,7 +25,7 @@ export const NATIVE_COMMAND_RUNTIME_LIMITS = Object.freeze({
 });
 type RuntimeCloneResult = { ok: true; value: unknown } | { ok: false };
 interface RuntimeCloneBudget {
-  readonly visited: WeakSet<object>;
+  readonly memo: WeakMap<object, unknown>;
   readonly active: WeakSet<object>;
   objects: number;
   properties: number;
@@ -34,7 +34,7 @@ interface RuntimeCloneBudget {
 function cloneRuntimeData(
   value: unknown,
   budget: RuntimeCloneBudget = {
-    visited: new WeakSet<object>(), active: new WeakSet<object>(),
+    memo: new WeakMap<object, unknown>(), active: new WeakSet<object>(),
     objects: 0, properties: 0, arrayElements: 0,
   },
   depth = 0,
@@ -43,8 +43,10 @@ function cloneRuntimeData(
   if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') return { ok: true, value };
   if (typeof value !== 'object') return { ok: false };
   try {
-    if (budget.active.has(value) || budget.visited.has(value)) return { ok: false };
-    budget.visited.add(value); budget.active.add(value); budget.objects += 1;
+    if (budget.active.has(value)) return { ok: false };
+    const memoized = budget.memo.get(value);
+    if (memoized !== undefined) return { ok: true, value: memoized };
+    budget.active.add(value); budget.objects += 1;
     if (budget.objects > NATIVE_COMMAND_RUNTIME_LIMITS.maxObjects) return { ok: false };
     if (Array.isArray(value)) {
       const prototype = Object.getPrototypeOf(value);
@@ -59,6 +61,7 @@ function cloneRuntimeData(
       budget.properties += lengthDescriptor.value;
       if (budget.arrayElements > NATIVE_COMMAND_RUNTIME_LIMITS.maxArrayElements || budget.properties > NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties) return { ok: false };
       const output: unknown[] = new Array(lengthDescriptor.value);
+      budget.memo.set(value, output);
       for (let index = 0; index < lengthDescriptor.value; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
         if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return { ok: false };
@@ -75,6 +78,7 @@ function cloneRuntimeData(
     budget.properties += keys.length;
     if (budget.properties > NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties) return { ok: false };
     const output: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    budget.memo.set(value, output);
     for (const key of keys) {
       if (typeof key !== 'string') return { ok: false };
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
