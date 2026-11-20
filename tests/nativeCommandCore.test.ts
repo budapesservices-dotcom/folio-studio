@@ -694,6 +694,11 @@ describe('Canonical commit conflict, failure and immutability', () => {
       { ...before.editorState, selectedNodeId: 'shared-node', selectedNodeIds: [] },
       { ...before.editorState, selectedNodeId: null, selectedNodeIds: ['shared-node', 'shared-node'] },
       { ...before.editorState, past: new Array(61).fill(before.editorState.project) },
+      {
+        ...before.editorState,
+        past: new Array(30).fill(before.editorState.project),
+        future: new Array(31).fill(before.editorState.project),
+      },
       { ...before.editorState, past: [invalidHistoryProject] },
       { ...before.editorState, future: [invalidHistoryProject] },
     ];
