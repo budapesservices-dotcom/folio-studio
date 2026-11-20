@@ -541,15 +541,17 @@ describe('Reducer parity, history and canonical revision', () => {
       })),
     };
     const store = createCanonicalEditorStore(createEditorState(project));
+    let emittedUpdatedIds: string[] | undefined;
+    store.subscribeChanges((event) => {
+      emittedUpdatedIds = event.change.documents[0].nodeIds.updated;
+    });
     const result = executeNativeCommand(store, makeCommand('node.set-properties', fixture.address, {
       nodes: [nodeRef(fixture.address), nodeRef(fixture.address, 'already-hidden')],
       properties: { visible: false },
     }), fixture.context);
 
     expect(result.status).toBe('applied');
-    if (result.status === 'applied') {
-      expect(result.change.documents[0].nodeIds.updated).toEqual(['shared-node']);
-    }
+    expect(emittedUpdatedIds).toEqual(['shared-node']);
   });
 
   it('matches the legacy set-properties reducer result', () => {

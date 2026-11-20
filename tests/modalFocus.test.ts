@@ -22,11 +22,17 @@ function fakeElement(options: { disabled?: boolean; ariaHidden?: string | null }
 }
 
 function keyboardEvent(key: string, shiftKey = false) {
-  return {
-    key, shiftKey, defaultPrevented: false, propagationStopped: false,
-    preventDefault() { this.defaultPrevented = true; },
-    stopPropagation() { this.propagationStopped = true; },
-  } as unknown as KeyboardEvent & { defaultPrevented: boolean; propagationStopped: boolean };
+  let defaultPrevented = false;
+  let propagationStopped = false;
+  const event = {
+    key,
+    shiftKey,
+    get defaultPrevented() { return defaultPrevented; },
+    get propagationStopped() { return propagationStopped; },
+    preventDefault() { defaultPrevented = true; },
+    stopPropagation() { propagationStopped = true; },
+  };
+  return event as unknown as KeyboardEvent & { defaultPrevented: boolean; propagationStopped: boolean };
 }
 
 describe('accessible component deletion modal', () => {
