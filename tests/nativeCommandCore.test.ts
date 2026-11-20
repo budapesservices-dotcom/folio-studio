@@ -984,7 +984,7 @@ describe('Strict runtime object validation', () => {
     const targetAccessor = makeCommand('node.transform', fixture.address, {
       nodes: [{ ref: nodeRef(fixture.address), transform: { x: 712 } }],
     });
-    Object.defineProperty(targetAccessor.target, 'address', {
+    Object.defineProperty(targetAccessor.target as object, 'address', {
       enumerable: true,
       configurable: true,
       get() { getterCalls += 1; return fixture.address; },
@@ -994,7 +994,7 @@ describe('Strict runtime object validation', () => {
       nodes: [nodeRef(fixture.address)],
       properties: { locked: true },
     });
-    Object.defineProperty(payloadAccessor.payload, 'properties', {
+    Object.defineProperty(payloadAccessor.payload as object, 'properties', {
       enumerable: true,
       configurable: true,
       get() { getterCalls += 1; return { locked: true }; },
