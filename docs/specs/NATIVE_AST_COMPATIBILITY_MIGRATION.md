@@ -337,7 +337,7 @@ Minimum coverage:
 - Snapshot history behavior.
 - v1 → v2 project migration and IndexedDB save/load path.
 - Rotation-only transform reducer gap fixed and CI verified with regression test; acceptance checklist updated to reflect the actual adapter/UI state.
-- Read-only Native AST compatibility facade implemented in src/core/document/ast.ts with scoped references and matching layer-order helpers; follow-up CI verification pending.
+- Read-only Native AST compatibility facade implemented in src/core/document/ast.ts with scoped references and matching layer-order helpers; CI verified in [run #241](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44667068650). Wider workspace adoption and real-project fixture parity remain open.
 
 **Proposed, not implemented:**
 - Typed native command boundary.
@@ -351,4 +351,4 @@ Minimum coverage:
 - Existing layer helper behavior and editor reducer/history path.
 - Existing project data shape and persistence semantics.
 
-**Next work item:** complete the AST facade's CI verification, then design Native Commands v1 so future writes can be routed through validated FOLIO operations without replacing the current reducer/history contract.
+**Next work item:** design Native Commands v1 so future writes can be routed through validated FOLIO operations without replacing the current reducer/history contract. Keep workspace adoption and broader real-project fixture parity as the AST facade's remaining Phase 1 exit work.
