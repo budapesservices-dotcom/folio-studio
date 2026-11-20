@@ -242,8 +242,8 @@ export function App() {
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [componentRackOpen, setComponentRackOpen] = useState(false);
   const [pagesRackOpen, setPagesRackOpen] = useState(false);
-  const pagesRackRef = useRef<HTMLSectionElement | null>(null);
-  const componentRackRef = useRef<HTMLSectionElement | null>(null);
+  const pagesRackRef = useRef<HTMLElement | null>(null);
+  const componentRackRef = useRef<HTMLElement | null>(null);
   const pagesRackToggleRef = useRef<HTMLButtonElement | null>(null);
   const componentRackToggleRef = useRef<HTMLButtonElement | null>(null);
   const closePagesRack = () => {
