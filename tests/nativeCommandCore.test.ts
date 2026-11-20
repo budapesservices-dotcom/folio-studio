@@ -633,6 +633,7 @@ describe('Component Canvas isolation at the canonical boundary', () => {
 
     const result = fixture.store.commitEditorTransition({
       expectedProjectRevision: before.projectRevision,
+      expectedEditorState: before.editorState,
       candidateState: candidate,
     });
 
@@ -680,6 +681,133 @@ describe('Native change event publication', () => {
 });
 
 describe('Canonical commit conflict, failure and immutability', () => {
+  it('rejects a prepared candidate after a selection-only editor transition without overwriting the latest snapshot', () => {
+    const fixture = createFixture();
+    const preparation = prepareNativeCommand(fixture.store.getSnapshot(), makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 700 } }],
+    }), fixture.context);
+    if (preparation.status !== 'prepared') throw new Error('Expected command preparation to succeed.');
+
+    const beforeSelection = fixture.store.getSnapshot();
+    fixture.store.dispatchLegacyAction({ type: 'select-node', nodeId: 'shared-node' });
+    const selectedSnapshot = fixture.store.getSnapshot();
+    expect(selectedSnapshot.projectRevision).toBe(beforeSelection.projectRevision);
+    expect(selectedSnapshot.editorState.selectedNodeId).toBe('shared-node');
+
+    const rejected = commitPreparedCommand(fixture.store, preparation);
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      result: { code: 'EDITOR_STATE_CONFLICT', projectRevisionBefore: 0, projectRevisionAfter: 0 },
+      currentProjectRevision: 0,
+    });
+    expect(rejected.status === 'rejected' ? rejected.currentState : null).toBe(selectedSnapshot.editorState);
+    expect(fixture.store.getSnapshot()).toBe(selectedSnapshot);
+    expect(selectedSnapshot.editorState.project).toBe(beforeSelection.editorState.project);
+    expect(selectedSnapshot.editorState.past).toBe(beforeSelection.editorState.past);
+    expect(selectedSnapshot.editorState.future).toBe(beforeSelection.editorState.future);
+    expect(selectedSnapshot.editorState.historyGroup).toBe(beforeSelection.editorState.historyGroup);
+  });
+
+  it('rejects a prepared candidate after commit-edit changes only editor history state', () => {
+    const fixture = createFixture();
+    fixture.store.dispatchLegacyAction({
+      type: 'edit-node',
+      node: { ...currentNode(fixture.store)!, x: 44 },
+      coalesceKey: 'component-inspector-edit',
+    });
+    const preparation = prepareNativeCommand(fixture.store.getSnapshot(), makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 701 } }],
+    }), fixture.context);
+    if (preparation.status !== 'prepared') throw new Error('Expected command preparation to succeed.');
+
+    const beforeCommitEdit = fixture.store.getSnapshot();
+    expect(beforeCommitEdit.editorState.historyGroup).toBe('component-inspector-edit');
+    fixture.store.dispatchLegacyAction({ type: 'commit-edit' });
+    const committedEditSnapshot = fixture.store.getSnapshot();
+    expect(committedEditSnapshot.projectRevision).toBe(beforeCommitEdit.projectRevision);
+    expect(committedEditSnapshot.editorState.historyGroup).toBeNull();
+    expect(committedEditSnapshot.editorState.project).toBe(beforeCommitEdit.editorState.project);
+    expect(committedEditSnapshot.editorState.past).toBe(beforeCommitEdit.editorState.past);
+    expect(committedEditSnapshot.editorState.future).toBe(beforeCommitEdit.editorState.future);
+
+    const rejected = commitPreparedCommand(fixture.store, preparation);
+    expect(rejected).toMatchObject({ status: 'rejected', result: { code: 'EDITOR_STATE_CONFLICT' } });
+    expect(rejected.status === 'rejected' ? rejected.currentState : null).toBe(committedEditSnapshot.editorState);
+    expect(fixture.store.getSnapshot()).toBe(committedEditSnapshot);
+    expect(currentNode(fixture.store)?.x).toBe(44);
+  });
+
+  it('freezes the prepared candidate and detaches command/event metadata from mutable input aliases', () => {
+    const fixture = createFixture();
+    const input = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 144, y: 233 } }],
+    });
+    const preparation = prepareNativeCommand(fixture.store.getSnapshot(), input, fixture.context);
+    if (preparation.status !== 'prepared') throw new Error('Expected command preparation to succeed.');
+    const originalCommandId = preparation.commandId;
+    const candidateNode = getActiveDocument(preparation.candidateState.project).nodes[0];
+    const events: unknown[] = [];
+    fixture.store.subscribeChanges((event) => events.push(event));
+
+    expect(Object.isFrozen(preparation)).toBe(true);
+    expect(Object.isFrozen(preparation.candidateState)).toBe(true);
+    expect(Object.isFrozen(preparation.candidateState.project)).toBe(true);
+    expect(Object.isFrozen(candidateNode)).toBe(true);
+    expect(() => { candidateNode.x = 999; }).toThrow();
+    expect(() => { preparation.baseProjectRevision = 999; }).toThrow();
+    expect(() => { preparation.command.target.address.documentId = 'forged-document'; }).toThrow();
+    expect(() => { preparation.changeDraft.documents[0].address.documentId = 'forged-document'; }).toThrow();
+
+    const mutableInput = input as any;
+    mutableInput.commandId = nextCommandId();
+    mutableInput.source.actor.actorId = 'attacker';
+    mutableInput.target.address.documentId = 'forged-document';
+    mutableInput.payload.nodes[0].transform.x = 999;
+
+    const committed = commitPreparedCommand(fixture.store, preparation);
+    expect(committed.status).toBe('applied');
+    expect(currentNode(fixture.store)).toMatchObject({ x: 144, y: 233 });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      commandId: originalCommandId,
+      source: { actor: { actorId: 'tester' } },
+      change: { documents: [{ address: fixture.address }] },
+    });
+  });
+
+  it('rejects a forged preparation and never commits its structurally valid unauthorized candidate', () => {
+    const fixture = createFixture();
+    const preparation = prepareNativeCommand(fixture.store.getSnapshot(), makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 600 } }],
+    }), fixture.context);
+    if (preparation.status !== 'prepared') throw new Error('Expected command preparation to succeed.');
+    const before = fixture.store.getSnapshot();
+    const forgedCandidate = {
+      ...preparation.candidateState,
+      project: {
+        ...preparation.candidateState.project,
+        pages: preparation.candidateState.project.pages.map((page) => ({
+          ...page,
+          document: {
+            ...page.document,
+            nodes: page.document.nodes.map((node) => node.id === 'shared-node' ? { ...node, x: 987 } : node),
+          },
+        })),
+      },
+    };
+    const forgedPreparation = { ...preparation, candidateState: forgedCandidate } as typeof preparation;
+
+    const rejected = commitPreparedCommand(fixture.store, forgedPreparation);
+    expect(rejected).toMatchObject({ status: 'rejected', result: { code: 'INVALID_PREPARATION' } });
+    expect(fixture.store.getSnapshot()).toBe(before);
+    expect(currentNode(fixture.store)?.x).toBe(10);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(0);
+
+    const authenticCommit = commitPreparedCommand(fixture.store, preparation);
+    expect(authenticCommit.status).toBe('applied');
+    expect(currentNode(fixture.store)?.x).toBe(600);
+  });
+
   it('rejects a prepared command when the project revision changes before commit', () => {
     const fixture = createFixture();
     const command = makeCommand('node.transform', fixture.address, {
@@ -714,6 +842,7 @@ describe('Canonical commit conflict, failure and immutability', () => {
 
     const failed = fixture.store.commitEditorTransition({
       expectedProjectRevision: before.projectRevision,
+      expectedEditorState: before.editorState,
       candidateState: invalidCandidate,
     });
 
@@ -731,6 +860,7 @@ describe('Canonical commit conflict, failure and immutability', () => {
     const changedState = editorReducer(before.editorState, { type: 'rename-project', name: 'New name' });
     const failed = fixture.store.commitEditorTransition({
       expectedProjectRevision: before.projectRevision,
+      expectedEditorState: before.editorState,
       candidateState: changedState,
       projectMutation: false,
     } as never);
