@@ -21,8 +21,27 @@ Then run `npm run dev` and open `http://127.0.0.1:5173`.
 7. **Visibility and lock:** toggle Visible and Locked. Hidden nodes should disappear; locked nodes should not be selected by clicking them on the artboard, but remain selectable in the Layers panel.
 8. **Delete and history:** delete a selected layer, Undo it, then Redo it.
 9. **Autosave:** wait for “ALL CHANGES SAVED”, refresh the browser, and confirm the latest project reopens.
-10. **Native export:** choose Export. A `.flop` file should download and contain a JSON object with `format: "folio-project"` and `formatVersion: 1`.
-11. **Native import:** choose Open, select the exported `.flop`, and confirm the document returns.
-12. **Invalid import:** select a random text/JSON file or a `.flop` with a different version. Folio should show an error and keep the current project intact.
 
-Do not start Stage 2 until the checks above pass on the target Windows 10 laptop and the intended browser.
+## Current native project file status
+
+The repository currently contains a native JSON project-file adapter in `src/core/persistence/projectFile.ts`:
+
+- `downloadProject` serializes the current project model and downloads a `.flop` file.
+- `readProjectFile` parses the file and passes it through `migrateProjectToV2`, which supports legacy v1 input and the current v2 model.
+
+These adapter functions are not yet wired into the application's File menu. In the current `src/app/App.tsx`, the File menu entry is still a placeholder. Therefore, browser-level Open/Export checks cannot be completed through the current UI and must not be reported as passed.
+
+## Deferred acceptance — native .flop file workflow
+
+Activate these checks once File menu integration is implemented:
+
+1. **Export:** choose Export and confirm a `.flop` file downloads.
+2. **Format:** inspect the exported file and confirm `format: "folio-project"` and `formatVersion: 2`.
+3. **Import:** open the exported file and confirm the project returns with its page and node IDs intact.
+4. **Legacy import:** open a supported v1 single-document file and confirm migration to v2 preserves its document content and node IDs.
+5. **Invalid import:** select an invalid JSON file or unsupported format version. Folio must show an error and keep the currently open project unchanged.
+6. **Round trip:** export → import → export and compare project semantics, node IDs, component references, and layer order.
+
+Do not mark native file workflow acceptance as verified until the File menu is connected and all deferred checks pass.
+
+Do not start Stage 2 until the Stage 1 automated checks and manual browser checks above pass on the target Windows 10 laptop and intended browser.
