@@ -44,7 +44,11 @@ function enqueueProjectWrite<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
-async function persistProjectUnlocked(input: FolioProject, activate: boolean): Promise<void> {
+async function persistProjectUnlocked(
+  input: FolioProject,
+  activate: boolean,
+  shouldPersist?: () => boolean,
+): Promise<boolean> {
   const project = requireValidProject(input);
   if (activate && project.metadata.id === RESERVED_COMPONENT_PROJECT_ID) {
     throw new Error('The Component Canvas workspace cannot be activated as a root project.');
@@ -53,6 +57,10 @@ async function persistProjectUnlocked(input: FolioProject, activate: boolean): P
   const database = await openDatabase();
 
   try {
+    // A revision fence is checked after opening IndexedDB and immediately
+    // before creating the readwrite transaction. The caller holds the shared
+    // project-write queue for this entire operation.
+    if (shouldPersist && !shouldPersist()) return false;
     await new Promise<void>((resolve, reject) => {
       const stores = activate ? [PROJECT_STORE, APP_STATE_STORE] : PROJECT_STORE;
       const transaction = database.transaction(stores, 'readwrite');
@@ -67,6 +75,7 @@ async function persistProjectUnlocked(input: FolioProject, activate: boolean): P
       transaction.onerror = () => reject(transaction.error ?? new Error('Could not save the project.'));
       transaction.onabort = () => reject(transaction.error ?? new Error('Project save was cancelled.'));
     });
+    return true;
   } finally {
     database.close();
   }
@@ -81,6 +90,47 @@ export function saveProject(input: FolioProject, projectRevision?: number): Prom
     if (projectRevision !== undefined) {
       persistedProjectRevisions.set(project.metadata.id, Math.max(projectRevision, persistedRevision ?? projectRevision));
     }
+  });
+}
+
+/**
+ * Main Canvas autosaves must prove that their captured revision is still the
+ * canonical revision when their queued write reaches the front of the shared
+ * project-write queue. The second check, after openDatabase(), closes the
+ * asynchronous gap immediately before the IndexedDB readwrite transaction.
+ *
+ * Component Canvas deliberately continues to use its independent saveProject
+ * path and does not participate in the canonical Main Canvas revision fence.
+ */
+export interface RevisionFencedProjectSaveResult {
+  readonly status: 'saved' | 'stale';
+}
+
+export function saveProjectIfRevisionCurrent(
+  input: FolioProject,
+  projectRevision: number,
+  getCanonicalRevision: () => number,
+): Promise<RevisionFencedProjectSaveResult> {
+  const project = requireValidProject(input);
+  return enqueueProjectWrite(async () => {
+    const persistedRevision = persistedProjectRevisions.get(project.metadata.id);
+    if (getCanonicalRevision() !== projectRevision ||
+        (persistedRevision !== undefined && projectRevision < persistedRevision)) {
+      return { status: 'stale' };
+    }
+
+    const persisted = await persistProjectUnlocked(
+      project,
+      false,
+      () => getCanonicalRevision() === projectRevision,
+    );
+    if (!persisted) return { status: 'stale' };
+
+    persistedProjectRevisions.set(
+      project.metadata.id,
+      Math.max(projectRevision, persistedRevision ?? projectRevision),
+    );
+    return { status: 'saved' };
   });
 }
 
@@ -105,7 +155,9 @@ export function withProjectWriteLock<T>(
  */
 export function saveProjectAndActivate(input: FolioProject): Promise<void> {
   const project = requireValidProject(input);
-  return enqueueProjectWrite(() => persistProjectUnlocked(project, true));
+  return enqueueProjectWrite(async () => {
+    await persistProjectUnlocked(project, true);
+  });
 }
 
 export async function loadProjectById(projectId: string): Promise<FolioProject | null> {

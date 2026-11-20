@@ -5,7 +5,7 @@ import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocum
 import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, getSelectedLayerRootIds, getClippingMaskBaseId, type LayerDropPosition } from '../core/document/layers';
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
-import { loadMostRecentProject, loadProjectById, saveProject, saveProjectAndActivate, withProjectWriteLock } from '../core/persistence/indexedDb';
+import { loadMostRecentProject, loadProjectById, saveProject, saveProjectIfRevisionCurrent, saveProjectAndActivate, withProjectWriteLock } from '../core/persistence/indexedDb';
 import { downloadProject } from '../core/persistence/projectFile';
 import { createProjectExportSnapshot } from './projectExport';
 import { openProjectFile } from './projectFileActions';
@@ -527,8 +527,17 @@ export function App() {
     setSaveStatus('saving');
     const projectRevision = canonicalStore.getSnapshot().projectRevision;
     const timer = window.setTimeout(() => {
-      saveProject(state.project, projectRevision)
-        .then(() => setSaveStatus('saved'))
+      saveProjectIfRevisionCurrent(
+        state.project,
+        projectRevision,
+        () => canonicalStore.getSnapshot().projectRevision,
+      )
+        .then((result) => {
+          // A queued candidate can become stale after a guarded deletion rollback.
+          // Keep the saving state; the canonical snapshot's own effect schedules
+          // the next autosave. Never announce a skipped candidate as saved.
+          if (result.status === 'saved') setSaveStatus('saved');
+        })
         .catch((error: unknown) => {
           console.error('Folio autosave failed:', error);
           setSaveStatus('error');

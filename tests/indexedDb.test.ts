@@ -6,6 +6,7 @@ import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createEditorState } from '../src/app/editorReducer';
 import { createComponentCanvasSyncSession } from '../src/app/componentCanvasSync';
 import {
+  deleteComponentDurably,
   recoverAndDeleteComponentDurably,
   type ComponentProjectWriteLock,
 } from '../src/app/componentDeletion';
@@ -13,6 +14,7 @@ import {
   loadMostRecentProject,
   loadProjectById,
   saveProject,
+  saveProjectIfRevisionCurrent,
   saveProjectAndActivate,
   withProjectWriteLock,
 } from '../src/core/persistence/indexedDb';
@@ -465,6 +467,101 @@ describe('Component Canvas recovery with the real IndexedDB adapter', () => {
   });
 });
 
+
+describe('Main Canvas revision-fenced autosave', () => {
+  it('rejects a queued deletion snapshot after failed persistence rolls canonical state back', async () => {
+    const fixture = createDurableComponentFixture();
+    await saveProject(fixture.mainProject, 0);
+    const database = fakeIndexedDB.database!;
+    const writesBeforeDeletion = database.metrics.scheduledWrites;
+
+    let enterControlledBarrier!: () => void;
+    let releaseControlledBarrier!: () => void;
+    const barrierEntered = new Promise<void>((resolve) => { enterControlledBarrier = resolve; });
+    const barrierGate = new Promise<void>((resolve) => { releaseControlledBarrier = resolve; });
+    let staleAutosave: Promise<Awaited<ReturnType<typeof saveProjectIfRevisionCurrent>>> | undefined;
+    let staleAutosaveSettled = false;
+
+    // The deletion operation owns the shared queue. Its failing transaction
+    // queues the already-fired Main Canvas autosave behind the barrier, then
+    // completes the monotonic in-memory rollback before the barrier is released.
+    const controlledWriteBarrier: ComponentProjectWriteLock = (operation) =>
+      withProjectWriteLock(async (persist) => {
+        const result = await operation(async (project, revision) => {
+          if (!staleAutosave) {
+            expect(revision).toBe(1);
+            staleAutosave = saveProjectIfRevisionCurrent(
+              project,
+              revision!,
+              () => fixture.store.getSnapshot().projectRevision,
+            );
+            void staleAutosave.then(() => { staleAutosaveSettled = true; });
+            database.failNextPutForStore('projects');
+          }
+          await persist(project, revision);
+        });
+
+        enterControlledBarrier();
+        await barrierGate;
+        return result;
+      });
+
+    const deletionPromise = deleteComponentDurably(
+      fixture.store,
+      fixture.target,
+      fixture.emptyBuffer,
+      controlledWriteBarrier,
+    );
+
+    await barrierEntered;
+    expect(fixture.store.getSnapshot().projectRevision).toBe(2);
+    expect(fixture.store.getSnapshot().editorState.project.components.map((item) => item.id))
+      .toEqual([fixture.master.id]);
+    expect(staleAutosave).toBeDefined();
+    expect(staleAutosaveSettled).toBe(false);
+
+    releaseControlledBarrier();
+    const deletion = await deletionPromise;
+    expect(deletion.status).toBe('deletion-persist-failed');
+
+    const staleResult = await staleAutosave!;
+    expect(staleResult).toEqual({ status: 'stale' });
+    expect(staleAutosaveSettled).toBe(true);
+
+    // Neither the failed delete nor the stale queued snapshot reached durable storage.
+    expect(database.metrics.scheduledWrites).toBe(writesBeforeDeletion);
+    expect((await loadProjectById(fixture.mainProject.metadata.id))?.components.map((item) => item.id))
+      .toEqual([fixture.master.id]);
+
+    // The post-rollback canonical snapshot has a newer monotonic revision and
+    // remains eligible for persistence.
+    const latest = fixture.store.getSnapshot();
+    const latestResult = await saveProjectIfRevisionCurrent(
+      latest.editorState.project,
+      latest.projectRevision,
+      () => fixture.store.getSnapshot().projectRevision,
+    );
+    expect(latestResult).toEqual({ status: 'saved' });
+    expect(database.metrics.scheduledWrites).toBe(writesBeforeDeletion + 1);
+    expect((await loadProjectById(fixture.mainProject.metadata.id))?.components.map((item) => item.id))
+      .toEqual([fixture.master.id]);
+  });
+
+  it('persists a Main Canvas candidate when its revision is still canonical', async () => {
+    const project = projectWithId('main-autosave-current', 'Canonical snapshot', '2026-11-20T12:20:00.000Z');
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const revision = store.getSnapshot().projectRevision;
+
+    const result = await saveProjectIfRevisionCurrent(
+      project,
+      revision,
+      () => store.getSnapshot().projectRevision,
+    );
+
+    expect(result).toEqual({ status: 'saved' });
+    expect((await loadProjectById(project.metadata.id))?.metadata.name).toBe('Canonical snapshot');
+  });
+});
 
 describe('serialized IndexedDB write barriers', () => {
   it('waits for each transaction to complete and blocks stale autosaves between barrier writes', async () => {
