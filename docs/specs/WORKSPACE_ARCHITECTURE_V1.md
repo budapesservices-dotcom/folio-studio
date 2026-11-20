@@ -187,7 +187,7 @@ No behavior described as existing at base is inferred from PR #4.
 | Maximize / restore | **Partially implemented / proposed** | Browser fullscreen exists. Explicit per-window maximize with remembered restore geometry is not established at the audited base. |
 | Node Logic UI | **Partially implemented** | A Node Logic window and placeholder surface exist. The window is not a graph editor or runtime at the audited base. |
 | Node Logic project schema | **Partially implemented** | LogicGraph, LogicNode, and LogicConnection types exist in FolioProjectV2. LogicNode remains generic; these types are not a typed node registry or execution model. |
-| Native Command Core | **Planned at base; partially implemented on PR #4 reference** | NATIVE_COMMANDS_V1.md defines the architecture. At reference SHA 52b, CanonicalEditorStore, commitEditorTransition, projectRevision, a closed registry, executor, validators, and node.transform / node.set-properties exist on the unmerged reference branch. |
+| Native Command Core | **Planned at base; partially implemented on PR #4 reference** | NATIVE_COMMANDS_V1.md defines the architecture. The historical implementation checkpoint was 52b59ca; PR #4 has since advanced 17 commits to d9688c9 through Revision Task 04. The latest reference includes guarded component sync/CAS, orphan-buffer protection, shared-DAG depth checks, and full EditorState candidate validation, but not the complete Component Command Bridge. |
 | Canonical store at base | **Planned at base** | Main and Component Canvas are separate reducer states in App.tsx. Base does not provide CanonicalEditorStore, commitEditorTransition, or projectRevision. |
 | .flop serialization | **Existing and verified** | src/core/persistence/projectFile.ts validates and serializes the FolioProject JSON as UTF-8 JSON. Native project format version is 2. |
 | IndexedDB | **Existing and verified** | src/core/persistence/indexedDb.ts uses database version 2, a projects store keyed by metadata.id, and app-state for the active-project pointer. saveProjectAndActivate writes the project and pointer in one transaction. |
@@ -213,19 +213,25 @@ The audited source has a real but application-local window foundation:
 
 These are useful foundations; they are not evidence that the complete target window manager already exists.
 
-### 3.4 Native Command reference assessment
+### 3.4 Native Command Core progress — Revision Task 04 reference
 
-At reference SHA 52b59ca5a08e255db9faab4960abaff90be2c7ff, PR #4 contains:
+The historical implementation checkpoint remains [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff). The current inspected PR #4 head is [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f).
 
-- CanonicalEditorStoreSnapshot with editorState and projectRevision.
-- A store commit interface checking expectedProjectRevision and expectedEditorState identity.
-- A shared commitEditorTransition entry point and legacy-action dispatch adapter.
-- A ComponentSyncCommitGuard type carrying component identity and expected master baseline information.
-- Native command types, trusted host context, static closed registry, executor, and runtime validation.
-- node.transform and node.set-properties command families.
-- Bounded runtime-input validation.
+GitHub confirms PR #4 remains open and unmerged, targets `feat/canvas-pan-distribute` at `d8a773bfa12a38915c88ed416b79fda580450a4e`, and has advanced **17 commits** after the historical checkpoint through Revision Task 04. This implementation remains a separate reference branch and is not part of the audited base SHA for this document.
 
-These are reference-branch capabilities only. They are not part of the audited base SHA and are not by themselves an approval to merge PR #4.
+The following changes are verified in source at `d9688c901973dec9b95829b39bd4fa401890509f`:
+
+1. **Unsafe full-object component update removed.** The old `update-component` action is no longer an accepted reducer mutation path. A regression test attempts the former action and confirms it is a no-op with no revision/history change.
+2. **Guarded component synchronization added.** Component document writes use the specific `sync-component-document` action with `componentId`, `expectedMasterDocument`, and `expectedUpdatedAt`. The canonical store compares both the current document identity and timestamp at commit time. Stale writes return a component conflict without changing the canonical snapshot, projectRevision, or history.
+3. **Buffer protection and orphan recovery added.** The Component Canvas session tracks present/missing/returned master states and conflict state. Dirty, conflicted, missing, or returned buffers are protected from replacement. If Undo removes a master and Redo restores it, the old buffer remains orphaned and automatic synchronization stays paused until an explicit recovery choice. Conflict handling retains local work and does not auto-merge.
+4. **Shared-DAG depth validation added.** Runtime input cloning memoizes shared object references, tracks the maximum subtree height, checks every traversal path against the depth budget, and rejects cycles. Tests cover shallow-first memoization followed by a deeper path, object/property/array budgets, cycles, sparse arrays, and Proxy reflection failures.
+5. **Full EditorState candidate validation added.** The store validates the current project, every historical project, history count, selection IDs, selectedNodeId consistency, and selection membership in the active Main Canvas document before accepting a candidate. Invalid editor-only candidates are rejected without changing the live snapshot or revision.
+
+**Transition boundary — not the complete Component Command Bridge:** the current guarded Component Canvas sync is still an app/reducer compatibility action sent through the canonical store. The static Native Command registry at this reference still exposes the Main Canvas node-transform and node-set-properties families; it does not yet provide the complete typed component command family or the fully specified Component Command Bridge. The guarded automatic sync is the transitional safety mechanism. Completing the component command surface and refining the transaction boundary remains the later Component Bridge phase.
+
+**Verified implementation gap:** the current Component Rack Delete handler dispatches `delete-component` directly and resets/closes the Component Canvas buffer when deleting the master being edited. The inspected UI path does not show a dirty-buffer-specific confirmation/recovery step before that reset. The coordinator decision in Section 14 therefore remains a follow-up UX acceptance requirement; this document does not claim Task 04 has implemented it.
+
+These PR #4 capabilities are reference-branch progress only. They do not change what was present at the audited base SHA and do not imply that PR #4 is merged.
 
 ## 4. Target system architecture and module responsibilities
 
@@ -309,7 +315,7 @@ interface WorkspaceWindowRecord {
 
 windowInstanceId identifies a visible window instance. workspace identifies the tool. targetDocumentAddress binds a document-aware workspace to an explicit project document. None of these values is project entity identity.
 
-One window instance per workspace kind is acceptable for the current milestone. The type must not assume that remains true after Multi-Document support.
+**Coordinator decision for Workspace V1:** exactly one window instance per workspace kind. Multi-instance windows are deferred. The `windowInstanceId` field remains a stable manager identity for the single V1 instance; it is not authorization to implement multiple simultaneous instances in the foundation milestone. Revisit multi-instance support only in a separate Multi-Document workspace milestone.
 
 ### 5.3 Lifecycle transitions
 
@@ -319,8 +325,8 @@ One window instance per workspace kind is acceptable for the current milestone. 
 | Close | Window exists | open/minimized → closed | Remove from active stack; preserve project data; apply explicit unsaved-buffer policy |
 | Focus | Window exists and is not closed | open/minimized → open and front | Restore when user activates a minimized window; move to top; update active workspace context |
 | Minimize | Window open | open → minimized | Keep geometry/restore target; hide content but retain recoverable task entry |
-| Maximize | Window open | open → maximized | Save previous geometry; fit app work area; preserve window identity |
-| Restore | Minimized or maximized | → open, maximized=false | Restore previous geometry or last valid geometry; clamp to viewport |
+| Maximize | Window open | **Deferred from V1 window foundation** | Per-window maximize is not an acceptance requirement for the active GPT3 foundation milestone |
+| Restore | Window minimized | minimized → open | Restore the minimized window using its last valid geometry; clamp to viewport. Restore from per-window maximize is deferred with maximize |
 | Float / Dock | Window open | presentation toggles | Change presentation only; do not recreate or replace project/editor state |
 
 Closing a window is a workspace-visibility action, not project deletion. Deleting a document or component is a separate explicit project command.
@@ -397,7 +403,7 @@ Recovery sequence:
 7. Use defaults if the record is missing, invalid, or incompatible.
 8. Persist normalized state only after reconciliation completes.
 
-At the base, per-window geometry/mode and Canvas view state are already stored in localStorage. A complete versioned layout record and stack/focus persistence are proposed. Moving preferences to another IndexedDB store is a later persistence decision and must not be bundled into the active GPT3 task without GPT0 approval.
+At the base, per-window geometry/mode and Canvas view state are stored in localStorage. **Coordinator decision for Workspace V1:** continue using localStorage through a versioned workspace-preference adapter/schema. The V1 layout applies per browser profile/origin, not per project. It must never be written into the project aggregate, .flop, or IndexedDB project records. Validate and normalize the preference record; an unavailable, malformed, or newer unsupported preference record falls back to defaults without blocking project hydration. Moving to another storage adapter requires a separate decision and migration, not an implicit change to IndexedDB v2.
 
 ### 5.7 Maximize versus browser fullscreen
 
@@ -408,7 +414,7 @@ Per-window maximize and browser fullscreen are different:
 - A per-window maximize action must not call browser fullscreen as a substitute.
 - Browser fullscreen exists at base; per-window maximize/restore geometry does not.
 
-**Recommendation — GPT0 review:** preserve the scope of the active GPT3 Window Management task. Treat a complete versioned layout record, multi-instance identity, explicit maximize/restore, and broader breakpoint behavior as architecture recommendations for a later task unless GPT0 explicitly re-scopes the current one.
+**Coordinator closure:** V1 uses one window instance per workspace kind and versioned localStorage preferences per browser profile/origin. Per-window maximize/restore is deferred beyond the GPT3 foundation milestone. Browser fullscreen remains a separate existing application-level capability.
 
 ## 6. Native Engine and UI integration contract
 
@@ -521,7 +527,8 @@ Rules:
 - Preparation is not proof of commit. Only the store confirms an applied transition.
 - Rejection is structured and user-actionable, with stable machine-readable codes and human-readable messages.
 - Validation rejection, permission rejection, missing target, stale revision, component conflict, and persistence failure are distinct error classes.
-- Persistence failure is visible as unsaved/error state. It must not retroactively report an already committed in-memory transition as rejected.
+- Canonical in-memory commit and durable persistence are separate outcomes. The store may accept a valid transition in memory before asynchronous autosave completes.
+- Persistence failure is visible as unsaved/error state, retains the last successful durable copy, and exposes retry/recovery. It must not retroactively report an already committed in-memory transition as rejected.
 - Change events publish only after successful commit. They are immutable/detached from mutable caller data and carry project ID, committed revision, source, and scoped affected-entity information.
 - Subscribers may update UI projections and schedule persistence. They may not mutate the event or commit from inside notification delivery.
 - No-op and rejection do not emit canonical project-change events.
@@ -539,7 +546,7 @@ Target flow:
 5. Store accepts or rejects and advances revision/history once as required.
 6. Native Command-prepared candidates use the same store path.
 
-This avoids maintaining different mutation algorithms in every workspace. The base source dispatches directly to two reducer instances; unification is implementation work, not an existing base behavior.
+This avoids maintaining different mutation algorithms in every workspace. At the audited base, App.tsx dispatches directly to Main Canvas and Component Canvas reducer instances. At the separate PR #4 Revision Task 04 reference head, Main Canvas legacy transitions and command commits use the canonical store boundary, while Component Canvas remains an isolated local buffer whose guarded sync is submitted through that store. This is partial transitional integration, not proof that all component operations have a complete Component Command Bridge.
 
 ### 6.7 Undo/Redo and history
 
@@ -654,14 +661,14 @@ Synchronization requirements:
 2. A component write addresses the owning project and component definition. The reserved buffer ID is never a canonical command target.
 3. A successful document change increments projectRevision once and creates one history transition.
 4. A semantic no-op does not change updatedAt, history, or projectRevision.
-5. On conflict, keep the local buffer intact and pause automatic overwrite.
-6. Offer explicit recovery: compare/reload canonical, keep local as recoverable draft, or apply a user-approved merge.
+5. On conflict, keep the local buffer intact and pause automatic synchronization.
+6. Resolve only through explicit user intent, such as retaining the local draft or explicitly discarding it and reloading the canonical definition. V1 does not auto-merge. A future manual merge requires its own validated merge contract and explicit confirmation.
 7. Deleting a master while its buffer is dirty creates an orphan/recovery state. Redo/restoration must not silently replace the buffer.
 8. Switching components must commit, retain a named draft, or explicitly discard after user intent; it must not silently retarget a dirty buffer.
 9. Export must identify which version is exported. A dirty buffer may be overlaid into an immutable export snapshot only under an explicit policy; export overlay is not canonical commit.
 10. Tests cover stale writes, clean/no-op sync, dirty conflicts, master deletion/recovery, rapid edits, Undo/Redo, reload, and export while dirty/conflicted.
 
-The existing effect synchronization and export overlay are transitional base behavior. The explicit guarded sync contract is the target for the later Component Canvas bridge.
+At the audited base, synchronization is an effect that dispatches the old full-object update action. At PR #4 head `d9688c901973dec9b95829b39bd4fa401890509f`, the unsafe action has been removed and guarded automatic sync uses expected master document identity plus updatedAt through the canonical store. That guarded action is a transition mechanism, not completion of the Component Command Bridge. The later bridge must define the typed component command surface, transaction/result contract, session lifecycle, and conflict/recovery integration end to end.
 
 ### 7.5 Component Rack integration contract
 
@@ -776,7 +783,8 @@ Runtime rules:
 - No eval, Function constructor, arbitrary script string, or untrusted code execution is implicit in a node.
 - API requests use a controlled host service with origin/method/capability allowlists, cancellation, timeout, response-size budgets, and secret redaction.
 - Secrets/tokens live in a secure environment/configuration service and are referenced by opaque IDs. They are never embedded in project data or .flop.
-- Execution limits cover graph size, depth, step count, loop iterations, retained memory, concurrency, and wall-clock duration.
+- Execution budgets must cover graph size and depth, execution steps, loop iterations, elapsed time, retained memory, concurrency, API request timeout, response size, and cancellation responsiveness. Numeric Node Logic runtime budgets remain unset until representative benchmarks and a dedicated security review establish safe limits.
+- These future Node Logic runtime budgets are distinct from the existing Native Command input-object limits. At PR #4 HEAD, Native Command input validation has specific limits for depth, object count, own properties, aggregate array elements, and per-array length; those values are not approved Node Logic execution budgets.
 - Errors carry graph ID, node ID, execution ID, stable code, and safe message. Secrets/sensitive response bodies are not placed in diagnostics.
 - Stopping a workspace or preview cancels associated execution and pending request work.
 - Deterministic scheduling and replayable fixtures are preferred for preview; nondeterministic external effects are explicitly marked.
@@ -787,7 +795,7 @@ Node Logic is an independent workspace window over the same project. It may own 
 
 Graph creation and mutation are canonical project data and use Native Commands. The UI may stage a connection gesture locally, but only a validated graph command commits it.
 
-**Recommendation — GPT0 review:** graph schema, command families, runtime capabilities, and API-secret storage should be separate approval milestones. The active GPT3 window task may implement the Node Logic window shell without implying graph authoring or runtime is included.
+**Coordinator boundary:** the Node Logic runtime constraints in ADR-C07 and ADR-C08 are approved target requirements, but graph schema, command families, runtime implementation, and API-secret storage remain separate milestones. The active GPT3 window task may implement the Node Logic window shell without implying graph authoring or runtime is included.
 
 ## 9. Persistence and project serialization contract
 
@@ -823,7 +831,7 @@ flowchart LR
     Manager["Workspace Manager"]
     Layout["Window layout / focus / panels"]
     View["Canvas zoom / pan"]
-    LocalPrefs["localStorage or future preference adapter"]
+    LocalPrefs["Versioned localStorage WorkspaceLayoutV1"]
     Manager --> Layout
     Manager --> View
     Layout --> LocalPrefs
@@ -864,11 +872,11 @@ The current export path may overlay a changed Component Canvas buffer into a new
 
 A future Multi-Application schema, component scope, or richer Node Logic model must not silently change v2 semantics. It requires:
 
-1. A separately approved format version or compatible extension policy.
-2. Deterministic migration from v2.
-3. Round-trip tests for existing v2 files and extension fields.
-4. Recovery behavior for interrupted migration.
-5. Clear backward/forward compatibility policy.
+1. A new .flop format version after v2; this decision does not change formatVersion 2 or the IndexedDB database version 2.
+2. Deterministic migration from v2: all existing v2 pages are mapped into one default Application.
+3. Existing component definitions are retained with compatible, unchanged component identities; migration must not duplicate or arbitrarily remap their IDs.
+4. Round-trip tests for existing v2 files and extension fields.
+5. Recovery behavior for interrupted migration and a clear backward/forward compatibility policy.
 6. Tests proving IDs, routes, component links, overrides, logic graphs, and assets survive migration.
 
 ### 9.3 IndexedDB responsibilities
@@ -895,7 +903,7 @@ Target responsibilities:
 - Reserved buffer recovery remains clearly namespaced and excluded from root project identity.
 - Workspace preferences remain separate from project records.
 
-A dedicated workspace-preferences IndexedDB store may be considered later for larger or synced layouts, but requires a separate database schema/migration decision. The current localStorage behavior remains until such a decision is approved.
+Workspace V1 remains on the versioned localStorage adapter per the coordinator decision. A dedicated workspace-preferences IndexedDB store is not part of V1 and would require a separate decision and migration. IndexedDB database version 2 and its existing stores remain unchanged by this architecture revision.
 
 ### 9.4 Project recovery and import/export
 
@@ -1096,9 +1104,9 @@ This section defines interfaces and ownership. It does not rewrite active task p
 | Field | Contract |
 |---|---|
 | Owning module | GPT3 / Workspace and Interface |
-| Input | Open/close/focus/minimize/maximize/restore/dock/float/drag/resize intents; viewport dimensions |
+| Input | Open/close/focus/minimize/restore/dock/float/drag/resize intents; viewport dimensions. Per-window maximize is deferred from V1 foundation |
 | Output | New immutable workspace-layout state and render props |
-| State ownership | Workspace Manager owns window geometry, order, visibility, panel state, and view-only preferences |
+| State ownership | Workspace Manager owns one instance per workspace kind, window geometry/order/visibility, panel state, and versioned localStorage preferences per browser profile/origin |
 | Mutation permissions | Workspace preferences only; cannot mutate FolioProject or projectRevision |
 | Validation | Known window IDs, finite geometry, min/max dimensions, valid stack refs, viewport clamp |
 | Error behavior | Invalid preferences rejected/normalized to defaults; project remains available |
@@ -1108,7 +1116,7 @@ This section defines interfaces and ownership. It does not rewrite active task p
 
 | Field | Contract |
 |---|---|
-| Owning module | Native Engine owns canonical definition/guarded commit; GPT3 owns UI/session presentation; GPT2 implements engine-side store/command support |
+| Owning module | Native Engine owns canonical definition/guarded commit; GPT3 owns UI/session presentation; GPT2 implements engine-side store/command support. PR #4 guarded legacy sync is transitional; the complete typed Component Command Bridge remains a later phase |
 | Input | Project/component IDs, buffer revision, candidate document, base project revision, expected canonical baseline |
 | Output | Committed/clean, no-op, conflict, missing-definition, or validation failure |
 | State ownership | Canonical definition belongs to project; local buffer belongs to Component Canvas session |
@@ -1200,12 +1208,105 @@ This document does not expand, replace, or silently amend:
 
 Recommendations affecting those tasks are **for GPT0 review**:
 
-- Full versioned layout record, maximize/restore behavior, multi-instance identity, and broader breakpoint behavior are architecture target recommendations, not retroactive acceptance criteria for the active GPT3 task.
-- Component Canvas guarded compare-and-set is the target Native Commands Phase 3 direction; it is not silently added to GPT2 Revision Task 04.
+- Workspace V1 is now decided: versioned localStorage preferences per browser profile/origin and one instance per workspace kind. These decisions guide future integration but do not silently expand GPT3's current task.
+- Per-window maximize/restore remains deferred from the GPT3 foundation milestone; it is not a new acceptance requirement for that task.
+- PR #4 guarded automatic Component Canvas sync is transitional. The complete Component Command Bridge is a later phase and is not silently added to GPT2 Revision Task 04.
+- Dirty-master deletion requires explicit UX confirmation/recovery. The current PR #4 UI path does not yet satisfy this requirement; GPT0 must schedule it without retroactively changing active Revision Task 04.
 - Native Command UI adoption remains incremental and follows the phase boundaries in NATIVE_COMMANDS_V1.md. The active command-core task does not become a requirement to migrate every Canvas gesture.
-- Multi-Application schema and application-scoped component collections require GPT0 approval and a separate migration/task plan.
+- Multi-Application uses a new .flop format version after v2 and a versioned application-scoped DocumentAddress. It requires its own migration/task plan; it does not amend either active task.
 
-## 14. Architecture Decision Records
+## 14. Architecture Decision Closure — Coordinator Decisions (ARCH-ADR-002)
+
+**Status:** Coordinator decisions recorded  
+**Scope:** These decisions close the architecture questions listed in the coordinator review. They do not implement future capabilities or silently expand active GPT2/GPT3 tasks. Each decision records the target rule, rationale, and implementation consequence.
+
+### ADR-C01 — Workspace Preferences V1 use versioned localStorage
+
+**Decision:** V1 workspace preferences remain in browser localStorage through a versioned adapter/schema. They are separate from canonical project data, IndexedDB project records, and \`.flop\`.  
+**Rationale:** Window geometry, focus, panels, zoom, and pan are device/profile presentation preferences, not portable project semantics.  
+**Consequences:** Validate schema versions and values on load; normalize/clamp geometry; fall back safely when missing, malformed, unavailable, or unsupported. Preference failure must not block project hydration or mutate projectRevision. Moving to another storage adapter requires a separate migration decision.
+
+### ADR-C02 — Workspace layout scope is per browser profile and origin
+
+**Decision:** One V1 workspace layout applies per browser profile/origin, not per project.  
+**Rationale:** Users should not carry separate or conflicting window arrangements inside each project file. Origin scoping follows the browser's localStorage boundary.  
+**Consequences:** The layout record has no project ownership and is not embedded in \`.flop\`. Opening another project on the same origin reuses the same V1 workspace layout, subject to reconciliation against registered workspace kinds.
+
+### ADR-C03 — Multi-instance windows are deferred
+
+**Decision:** V1 supports one window instance per workspace kind.  
+**Rationale:** This keeps window lifecycle, focus, stacking, and preference recovery bounded while Multi-Document semantics are still evolving.  
+**Consequences:** GPT3's V1 foundation must not implement multiple simultaneous Main Canvas, Component Canvas, or Node Logic instances. Multi-instance support requires a later Multi-Document workspace milestone and its own addressing/focus tests.
+
+### ADR-C04 — Component Canvas conflicts preserve local work and never auto-merge
+
+**Decision:** On canonical/local divergence, preserve the local Component Canvas buffer, stop automatic synchronization, and require explicit resolution. No automatic merge is allowed in V1.  
+**Rationale:** Silent merge or overwrite can destroy intent when both the canonical definition and local buffer changed.  
+**Consequences:** V1 resolution may keep the local draft or explicitly discard/reload from the canonical definition. Any future manual merge must be a separately validated, user-confirmed operation. Conflict resolution must not silently replace the dirty buffer.
+
+### ADR-C05 — PR #4 guarded automatic sync is transitional, not the complete Component Command Bridge
+
+**Decision:** The guarded \`sync-component-document\` automatic sync in PR #4 is an interim safety mechanism. The complete Component Command Bridge and refinement of the component transaction boundary remain a later phase.  
+**Rationale:** The current implementation removes stale full-object replacement and introduces a commit-time compare-and-set guard, but it still routes component synchronization through a compatibility EditorAction rather than a complete typed component command surface.  
+**Consequences:** Do not mark Phase 3 complete solely because guarded CAS exists. The complete bridge must define typed component commands, target/session ownership, commit/result semantics, revision/history behavior, conflict/recovery, and dependent-view notifications. Preserve the existing guard during transition.
+
+### ADR-C06 — Deleting a dirty master requires confirmation and recovery UX
+
+**Decision:** Deleting a Component Definition while its Component Canvas buffer is dirty requires an explicit confirmation/recovery flow. The buffer must not be silently discarded.  
+**Rationale:** Delete is destructive canonical intent, while local edits may not yet be safely represented in the canonical definition or durable recovery state.  
+**Consequences:** Before deletion, the UI must detect a dirty/conflicted/orphaned session and present an explicit choice to preserve/recover the draft or explicitly discard it before proceeding. The canonical delete remains guarded against stale master identity/version. **Implementation status:** the inspected PR #4 HEAD has orphan recovery and protects buffer replacement when switching masters, but the Component Rack Delete path still deletes the currently edited master and resets the local buffer without a dirty-buffer-specific confirmation. This is a known follow-up requirement, not a claim that Task 04 completed it.
+
+### ADR-C07 — Node Logic runtime uses a closed, typed, capability-gated execution model
+
+**Decision:** Future Node Logic runtime must use a closed static node registry, typed input/output ports, bounded execution, cancellation, and capability-gated host services. It must not use \`eval\`, \`Function\`, dynamic code strings, or arbitrary code execution.  
+**Rationale:** Graph data is untrusted project content. Execution must be deterministic to validate, permission-aware, and unable to acquire implicit browser or project mutation capabilities.  
+**Consequences:** Unknown node types fail closed; graph configuration/ports are validated before execution; API requests and effects run only through explicit host services; runtime outputs cannot mutate authoring graphs directly. Runtime remains unimplemented and separately tasked.
+
+### ADR-C08 — Node Logic runtime budgets require benchmark and security review
+
+**Decision:** Runtime budgets must cover graph size/depth, execution steps, loop iterations, elapsed time, memory, concurrency, API timeout, response size, and cancellation.  
+**Rationale:** A graph may be structurally valid but still exhaust CPU, memory, network, or host resources.  
+**Consequences:** Do not guess final numeric Node Logic limits in this architecture document. Establish values through representative workload benchmarks and a dedicated security review before runtime implementation. Existing Native Command input-object limits are separate validation limits and are not Node Logic runtime budgets.
+
+### ADR-C09 — Multi-Application requires a new \`.flop\` format version after v2
+
+**Decision:** Multi-Application must not change \`.flop\` v2. Plan a new format version with deterministic migration from v2. All existing v2 pages map into one default Application; existing components are retained with compatible, unchanged identities.  
+**Rationale:** A new application hierarchy changes project semantics and cannot be silently injected into the existing v2 contract.  
+**Consequences:** Keep formatVersion 2 and IndexedDB database version 2 unchanged in this milestone. A future migration must deterministically create the default Application, preserve page/document IDs and routes, preserve component IDs and references, and round-trip all project data. Component global/local placement beyond identity preservation remains a schema decision for that migration.
+
+### ADR-C10 — Application-scoped DocumentAddress is a new contract version
+
+**Decision:** Application scope must be introduced through a new versioned DocumentAddress contract. Existing DocumentAddress semantics must not be reinterpreted or changed.  
+**Rationale:** Existing v2 page/component references must continue resolving without ambiguity after applications are introduced.  
+**Consequences:** Preserve the current projectId + owner kind/id + documentId meaning for existing references. Define and migrate to an application-aware address only with the new Multi-Application schema and compatibility tests.
+
+### ADR-C11 — Preserve current snapshot history and page-switch behavior
+
+**Decision:** Keep snapshot history capped at 60 entries and preserve the current page-add/page-switch history behavior until a separate ADR changes it.  
+**Rationale:** History semantics should not be redesigned in parallel with canonical-store integration and component synchronization.  
+**Consequences:** Native Command and workspace tasks must preserve current snapshot, coalescing, Undo/Redo, and page-switch behavior. Any change to history scope, cap, or page-switch reset semantics requires its own ADR and parity/acceptance tests.
+
+### ADR-C12 — Per-window maximize/restore is deferred from the GPT3 foundation milestone
+
+**Decision:** Per-window maximize/restore is outside the active GPT3 Window Management foundation milestone. Browser fullscreen remains a separate capability.  
+**Rationale:** This keeps the current window task bounded and avoids coupling browser fullscreen to window-local geometry.  
+**Consequences:** Do not make per-window maximize a blocker or acceptance criterion for the active GPT3 task. Keep the conceptual lifecycle extensible; implement maximize/restore in a later task with saved restore geometry and viewport tests.
+
+### ADR-C13 — Canonical in-memory commit is separate from durable persistence
+
+**Decision:** Accepting a canonical in-memory transition and completing durable persistence are separate outcomes.  
+**Rationale:** The canonical store must provide a synchronous, authoritative state/revision decision, while IndexedDB/autosave is asynchronous and can fail independently.  
+**Consequences:** A successful commit updates the live snapshot/history/revision once. Autosave failure must be visible, retain the last successful durable copy, and provide retry/recovery. It must not retroactively report the committed transition as rejected or roll back its revision. Project export/backup remains a recovery path, not a substitute for accurately reporting save status.
+
+### 14.1 Decision implementation boundaries
+
+- **Agreed and implemented at the audited base:** \`.flop\` v2 and IndexedDB v2 data boundaries; localStorage already holds per-window/view preferences, but the complete versioned V1 adapter/schema and per-origin policy are coordinator-approved target requirements.
+- **Partially implemented on PR #4:** guarded automatic Component Canvas sync, CAS checks, local-buffer conflict/orphan preservation, and recovery choices. These remain transition mechanisms until the complete Component Command Bridge is delivered.
+- **Coordinator-approved but not implemented:** dirty-master delete confirmation/recovery, full V1 versioned WorkspaceLayout adapter, Node Logic runtime, new Multi-Application format/migration, and application-scoped DocumentAddress version.
+- **Explicitly deferred:** multiple simultaneous instances per workspace kind and per-window maximize/restore during the GPT3 foundation milestone.
+- **No implicit schema migration:** \`.flop\` v2 and IndexedDB database v2 remain unchanged by this document revision.
+
+## 15. Architecture Decision Records
 
 ### ADR-001 — One Unified Project Model
 
@@ -1244,10 +1345,10 @@ Recommendations affecting those tasks are **for GPT0 review**:
 
 ### ADR-006 — Workspace Manager Owns Window Lifecycle
 
-**Status:** Proposed  
-**Decision:** One Workspace Manager owns window instances, geometry, presentation, visibility, stacking, focus, and layout recovery.  
-**Rationale:** Avoids independent per-window state logic and inconsistent z-index/resize behavior.  
-**Consequence:** Workspace UI renders manager state and does not create independent layout persistence mechanisms.
+**Status:** Coordinator-approved V1 ownership; see ADR-C01 through ADR-C03 and ADR-C12  
+**Decision:** One Workspace Manager owns the single V1 instance per workspace kind, geometry, presentation, visibility, stacking, focus, and layout recovery. V1 preferences use versioned localStorage per browser profile/origin.  
+**Rationale:** Avoids independent per-window state logic and inconsistent z-index/resize behavior while keeping window preferences outside project data.  
+**Consequence:** Workspace UI renders manager state; multiple instances and per-window maximize/restore are deferred from the V1 foundation.
 
 ### ADR-007 — Native Commands Are the Project Write Boundary
 
@@ -1265,19 +1366,19 @@ Recommendations affecting those tasks are **for GPT0 review**:
 
 ### ADR-009 — Node Logic Authoring Data and Runtime State Are Separate
 
-**Status:** Proposed  
-**Decision:** Graphs and typed configuration are project data; execution state and queues are ephemeral runtime state.  
+**Status:** Coordinator-approved target constraints; runtime not implemented  
+**Decision:** Graphs and typed configuration are project data; execution state and queues are ephemeral runtime state. Runtime uses a closed static registry, typed ports, bounded execution, cancellation, and capability-gated host services; eval/Function are prohibited.  
 **Rationale:** Keeps .flop portable and allows validation independent of execution.  
-**Consequence:** Runtime effects require capability-gated host APIs and cannot mutate graph authoring data directly.
+**Consequence:** Runtime effects require explicit host capabilities and cannot mutate graph authoring data directly. Numeric execution budgets require benchmark and security review.
 
 ### ADR-010 — Multi-Application Is a Versioned Project Evolution
 
-**Status:** Planned direction / proposed schema  
-**Decision:** Applications eventually live inside the project aggregate, but are not added to v2 by this document.  
+**Status:** Coordinator-approved target direction; implementation/migration pending  
+**Decision:** Applications eventually live inside the project aggregate through a new .flop format version after v2. Migration maps all v2 pages into one default Application and preserves existing component identities.  
 **Rationale:** Supports the product blueprint without breaking current page/component addressing or .flop compatibility.  
-**Consequence:** GPT0 approves the application schema and address migration before implementation.
+**Consequence:** Existing DocumentAddress meaning remains unchanged; application scope is added only through a new versioned address contract and deterministic migration.
 
-## 15. Phased implementation roadmap
+## 16. Phased implementation roadmap
 
 This roadmap aligns with Native Commands v1 and the existing team split. It does not change current task scope.
 
@@ -1285,32 +1386,35 @@ This roadmap aligns with Native Commands v1 and the existing team split. It does
 |---|---|---|---|
 | 0 — Architecture review | Review this document; resolve decisions affecting active work | GPT0 | Architecture baseline accepted; task scopes remain explicit |
 | 1 — Native Command Core | Minimal command core and one Main Canvas family; canonical store/revision/commit boundary | GPT2 | Legacy/command parity; stale commit rejection; one revision per accepted project mutation; no-op/rejection invariants |
-| 2 — Workspace window foundation | Consolidate lifecycle, geometry, stacking, responsive recovery, and preference interface using current helpers | GPT3, coordinated by GPT0 | Window lifecycle tests; no project ownership in window manager; layout-corruption recovery |
-| 3 — Component bridge | Canonical component target, guarded buffer sync, conflict and recovery states | GPT2 engine + GPT3 UI | CAS guard; clean/no-op/dirty-conflict tests; no silent stale overwrite; buffer recovery |
+| 2 — Workspace window foundation | Consolidate V1 lifecycle, geometry, stacking, responsive recovery, single-instance policy, and versioned localStorage preference adapter | GPT3, coordinated by GPT0 | One instance per workspace kind; per-browser-profile/origin layout; preference-schema validation; no project ownership in window manager; layout-corruption recovery. Per-window maximize is excluded |
+| 3 — Complete Component Command Bridge | Evolve PR #4 guarded legacy sync into typed component commands and a complete transaction/result/session boundary | GPT2 engine + GPT3 UI | CAS remains; typed component command contract; clean/no-op/dirty-conflict tests; no auto-merge; explicit recovery; dirty-master deletion confirmation; no silent stale overwrite |
 | 4 — Incremental workspace command adoption | Migrate supported Main/Component Canvas UI interactions at approved time | GPT2 + GPT3 | UI command parity and no bypasses for migrated operation families |
 | 5 — Node Logic authoring model | Versioned graph schema, node registry, ports, validation, graph commands, editor UI | GPT2 engine + GPT3 UI | Validated graph persistence; atomic graph editing; no runtime side effects in authoring |
-| 6 — Node Logic runtime | Capability-gated scheduler, events, variables/state, bindings, API requests, effects, animation | Separate GPT0-approved task | Execution limits, cancellation, deterministic tests, secrets outside project |
-| 7 — Multi-Document / Multi-Application | App hierarchy, scoped addresses, local/global components, build targets, format migration | GPT0 architecture + GPT2 engine + GPT3 UI | Approved schema; .flop migration/round-trip tests; one canonical store across windows/apps |
+| 6 — Node Logic runtime | Closed static node registry, typed ports, bounded scheduler, events, variables/state, bindings, capability-gated API/effects/animation | Separate GPT0-approved task | Budgets cover graph/depth/steps/loops/time/memory/concurrency/API timeout/response size/cancellation; numeric values benchmarked and security-reviewed; deterministic tests; secrets outside project |
+| 7 — Multi-Document / Multi-Application | New .flop format version after v2, deterministic default-Application migration, versioned application-scoped addresses, local/global components, build targets | GPT0 architecture + GPT2 engine + GPT3 UI | v2 round-trip/migration tests; legacy page/component identity preservation; one canonical store across windows/apps |
 
-### 15.1 Sequencing guardrails
+### 16.1 Sequencing guardrails
 
 - Do not combine Native Commands Phase 1 with full Designer UI adoption.
 - Do not bundle Component Canvas Phase 3 into Native Command Phase 1 unless GPT0 re-scopes the task.
 - Do not make a window-management UI milestone depend on Node Logic runtime.
+- V1 has one window instance per workspace kind; do not add multiple instances during the foundation milestone.
+- Do not make per-window maximize/restore an acceptance criterion for the active GPT3 foundation task.
 - Do not add a second project store for multiple windows or applications.
-- Do not change .flop v2, IndexedDB schema, AST identity, or projectRevision rules without a separate decision and migration plan.
+- Do not change .flop v2, IndexedDB database v2, AST identity, or projectRevision rules implicitly. Multi-Application uses a new format version and explicit migration.
 - Opening a window or changing its size is not a project mutation.
 
-## 16. Acceptance criteria and architecture risks
+## 17. Acceptance criteria and architecture risks
 
-### 16.1 Acceptance criteria
+### 17.1 Acceptance criteria
 
 **Workspace/window**
 - All managed windows have stable instance identity and manager-owned geometry/state.
-- Open/close/focus/minimize/maximize/restore/dock/float transitions have explicit tests.
+- V1 open/close/focus/minimize/restore/dock/float transitions have explicit tests; multiple simultaneous instances and per-window maximize/restore are deferred.
 - Focus and stack order are deterministic.
 - Drag/resize respects minimums, app-shell bounds, and pointer-session cleanup.
-- Invalid/stale layout preferences recover to defaults without blocking project load.
+- V1 layout preferences use a versioned localStorage adapter per browser profile/origin; invalid/stale preferences recover to defaults without blocking project load.
+- One window instance exists per workspace kind in V1.
 - Window lifecycle does not change project data, history, or projectRevision.
 
 **Native Engine/UI**
@@ -1328,7 +1432,8 @@ This roadmap aligns with Native Commands v1 and the existing team split. It does
 - Override targets and values are validated.
 - Component Canvas buffer never becomes canonical project state.
 - Stale sync cannot overwrite a newer canonical definition.
-- Dirty/orphaned buffers survive conflicts and require explicit recovery/discard.
+- Dirty/orphaned buffers survive conflicts and require explicit recovery/discard; conflicts never auto-merge.
+- Deleting a dirty master requires explicit confirmation/recovery before the buffer can be discarded.
 - Export snapshot behavior is explicit, validated, and non-mutating.
 
 **Node Logic**
@@ -1336,6 +1441,8 @@ This roadmap aligns with Native Commands v1 and the existing team split. It does
 - Nodes and ports are static-registry typed and validated.
 - Connections and scoped targets resolve correctly.
 - Runtime state is separate from authoring graph/project state.
+- Runtime uses a closed static registry, typed ports, bounded execution, cancellation, and capability-gated host services; eval/Function are prohibited.
+- Runtime budgets cover graph size/depth, steps, loops, time, memory, concurrency, API timeout, response size, and cancellation; numeric values require benchmark/security review.
 - API/effect capabilities are explicit, bounded, cancellable, and secret-safe.
 - Invalid graphs cannot partially mutate project data or execute unsafe effects.
 
@@ -1344,10 +1451,12 @@ This roadmap aligns with Native Commands v1 and the existing team split. It does
 - IndexedDB project persistence contains validated snapshots, plus clearly reserved recovery records where required.
 - Failed import never replaces the active project.
 - Failed persistence is visible and recoverable.
-- Multi-Application requires explicit schema migration and versioned document-address decision.
+- Multi-Application uses a new .flop format version after v2, with deterministic migration from v2 pages into one default Application and compatible preservation of existing component IDs.
+- Application-scoped DocumentAddress is introduced through a new contract version; legacy address meaning is unchanged.
+- Canonical in-memory commit and durable autosave remain distinct; autosave failure is visible and recoverable.
 - Multiple windows/documents/apps share the same canonical project owner.
 
-### 16.2 Key architecture risks
+### 17.2 Key architecture risks
 
 | Risk | Impact | Mitigation / gate |
 |---|---|---|
@@ -1362,24 +1471,21 @@ This roadmap aligns with Native Commands v1 and the existing team split. It does
 | Runtime state is saved into authoring graph | Non-portable/corrupted authoring state | Keep runtime context ephemeral and separate |
 | Active GPT2/GPT3 work is re-scoped implicitly | Rework and integration conflict | GPT0 approves task changes; recommendations remain labeled |
 
-### 16.3 Important unresolved questions for GPT0
+### 17.3 Remaining open questions for GPT0
 
-1. Should workspace preferences remain in localStorage for the first window-manager milestone, or move to a dedicated IndexedDB workspace-state store later?
-2. Should layouts be global per browser profile, per project, per application, or named user-selectable presets?
-3. Is one instance per workspace sufficient in the near term, or should multi-instance support be introduced early for Multi-Document?
-4. What is the conflict UX for a dirty Component Canvas buffer when its definition is deleted or changed by another workspace?
-5. Should successful Component Canvas sync be automatic per edit, explicit on save/close, or a configurable hybrid? The commit-time guard is required regardless.
-6. Which component properties are overridable, and how should future Global versus Application-local definitions be represented?
-7. What versioned DocumentAddress extension will Multi-Application require?
-8. Which graph node categories/value types belong in the first Node Logic authoring schema?
-9. Which host service stores API credentials and grants request capabilities to Node Logic?
-10. Should project-wide history eventually span page changes, or should current page/history reset behavior remain until a separate history design?
-11. Is per-window maximize required in the current GPT3 window milestone or deferred? This document recommends deferral unless GPT0 decides otherwise.
-12. Which persistence events trigger autosave, and what UI affordance is needed when canonical in-memory state is newer than IndexedDB's durable copy?
+1. Should V1 support named/selectable layout presets in addition to the single per-browser-profile/origin layout, and if so, in which later milestone?
+2. What exact comparison/recovery presentation should be used for a dirty Component Canvas conflict? The fixed rule remains retain local buffer, pause sync, explicit resolution, and no auto-merge.
+3. What exact typed command/result/session shape completes the Component Command Bridge and its transaction boundary?
+4. Which component properties are overridable, and how should future Global versus Application-local definitions be represented while preserving existing component IDs?
+5. Which exact fields and migration defaults belong in the versioned application-scoped DocumentAddress contract?
+6. Which graph node categories/value types belong in the first Node Logic authoring schema?
+7. Which host service stores API credentials and grants request capabilities to Node Logic?
+8. What benchmark workloads and threat model should determine final numeric Node Logic runtime budgets?
+9. Which persistence events trigger autosave, and what retry/backoff/recovery UX should be used when canonical in-memory state is newer than IndexedDB's durable copy?
 
-## 17. Source evidence and inspected references
+## 18. Source evidence and inspected references
 
-### 17.1 Base-branch source
+### 18.1 Base-branch source
 
 All entries below were inspected at commit d8a773bfa12a38915c88ed416b79fda580450a4e.
 
@@ -1397,18 +1503,22 @@ All entries below were inspected at commit d8a773bfa12a38915c88ed416b79fda580450
 - [windowManager.test.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/d8a773bfa12a38915c88ed416b79fda580450a4e/tests/windowManager.test.ts) — Geometry/recovery constraint tests.
 - [Repository Architecture](https://github.com/budapesservices-dotcom/folio-studio/blob/d8a773bfa12a38915c88ed416b79fda580450a4e/docs/ARCHITECTURE.md) and [Architecture Blueprint](https://github.com/budapesservices-dotcom/folio-studio/blob/d8a773bfa12a38915c88ed416b79fda580450a4e/docs/FOLIO_ARCHITECTURE_BLUEPRINT.md) — Existing architectural direction.
 
-### 17.2 Native Command implementation reference (unmerged)
+### 18.2 Native Command implementation reference and Revision Task 04 (unmerged)
 
-The following files were inspected at 52b59ca5a08e255db9faab4960abaff90be2c7ff, the open PR #4 head at inspection:
+The historical checkpoint [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff) remains recorded. The latest inspected PR #4 / Revision Task 04 head is [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f), exactly 17 commits after the historical checkpoint. PR #4 remained open and unmerged during this audit.
 
-- [editorStore.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/52b59ca5a08e255db9faab4960abaff90be2c7ff/src/app/editorStore.ts)
-- [nativeCommandExecutor.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/52b59ca5a08e255db9faab4960abaff90be2c7ff/src/app/nativeCommandExecutor.ts)
-- [nativeCommandRegistry.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/52b59ca5a08e255db9faab4960abaff90be2c7ff/src/app/nativeCommandRegistry.ts)
-- [commands/types.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/52b59ca5a08e255db9faab4960abaff90be2c7ff/src/core/commands/types.ts)
-- [commands/validation.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/52b59ca5a08e255db9faab4960abaff90be2c7ff/src/core/commands/validation.ts)
+Latest implementation references inspected at `d9688c901973dec9b95829b39bd4fa401890509f`:
+
+- [App.tsx](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/src/app/App.tsx) — guarded Component Canvas session lifecycle, conflict/orphan recovery, explicit buffer replacement recovery; Component Rack Delete path still lacks dirty-buffer confirmation.
+- [componentCanvasSync.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/src/app/componentCanvasSync.ts) — expected document/timestamp guard, protected buffer state, missing/returned master reconciliation, explicit CAS action construction.
+- [editorReducer.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/src/app/editorReducer.ts) — sync-component-document, guarded rename/delete actions, and absence of the unsafe update-component mutation path.
+- [editorStore.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/src/app/editorStore.ts) — commit-time component compare-and-set guard and full EditorState validation.
+- [commands/validation.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/src/core/commands/validation.ts) — bounded shared-reference cloning and per-path shared-DAG depth validation for Native Command input objects.
+- [componentCanvasSync.test.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/tests/componentCanvasSync.test.ts) — stale CAS rejection, unsafe-action rejection, dirty buffer protection, Undo/Redo orphan recovery.
+- [nativeCommandCore.test.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/tests/nativeCommandCore.test.ts) — malformed EditorState rejection, shared-DAG depth boundary, object/property/array budgets, cycle/sparse-array/Proxy rejection.
 - [PR #4](https://github.com/budapesservices-dotcom/folio-studio/pull/4)
 
-These references inform the integration contract but do not change the audited base assessment.
+The historical SHA is retained for lineage. The current PR #4 head is a separate unmerged implementation reference; neither reference changes the source-status assessment at the audited base SHA.
 
 ---
 
