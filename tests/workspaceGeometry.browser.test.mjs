@@ -11,9 +11,9 @@ const CHROMIUM_CANDIDATES = [
   '/usr/bin/chromium-browser',
   '/usr/bin/google-chrome',
   '/usr/bin/google-chrome-stable',
-].filter((candidate): candidate is string => Boolean(candidate));
+].filter(Boolean);
 
-function findChromium(): string | null {
+function findChromium() {
   for (const candidate of CHROMIUM_CANDIDATES) {
     if (existsSync(candidate)) return candidate;
     const lookup = spawnSync('which', [candidate], { encoding: 'utf8' });
@@ -30,7 +30,7 @@ const VIEWPORTS = [
   { width: 240, height: 180 },
 ];
 
-function readRenderedGeometry(viewport: { width: number; height: number }) {
+function readRenderedGeometry(viewport) {
   if (!chromium) throw new Error('Chromium is not available for rendered geometry verification');
   const css = readFileSync(resolve(process.cwd(), 'src/styles/global.css'), 'utf8');
   const geometry = getDefaultWindowLayouts(viewport)['main-canvas'];
@@ -74,12 +74,7 @@ function readRenderedGeometry(viewport: { width: number; height: number }) {
     ], { encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'] });
     const encoded = output.match(/<pre id="result">([A-Za-z0-9+/=]+)<\/pre>/)?.[1];
     if (!encoded) throw new Error('Chromium did not return rendered geometry: ' + output.slice(-500));
-    return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) as {
-      viewport: { width: number; height: number };
-      shell: { width: number; height: number };
-      window: { left: number; top: number; width: number; height: number; right: number; bottom: number };
-      computed: { minWidth: string; minHeight: string };
-    };
+    return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -100,6 +95,6 @@ describe('Floating workspace rendered geometry (Chromium)', () => {
       expect(rendered.window.height).toBeCloseTo(expected.size.height, 1);
       expect(rendered.computed.minWidth).toBeTruthy();
       expect(rendered.computed.minHeight).toBeTruthy();
-    });
+    }, 20000);
   }
 });
