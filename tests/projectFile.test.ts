@@ -4,6 +4,7 @@ import { createEditorState, editorReducer } from '../src/app/editorReducer';
 import { createInitialProject, createRectNode } from '../src/core/document/factory';
 import type { ComponentInstanceNode, FolioProject, GroupNode } from '../src/core/document/types';
 import { downloadProject, readProjectFile } from '../src/core/persistence/projectFile';
+import { validateProject } from '../src/core/document/validation';
 
 function fileFromContent(content: string, name = 'project.flop'): File {
   return { name, text: async () => content } as File;
