@@ -1,4 +1,6 @@
 import { validateProject } from '../core/document/validation';
+
+const RESERVED_COMPONENT_CANVAS_ID = 'folio-component-canvas';
 import type { NativeChangeEvent, NativeChangeSetDraft } from '../core/commands/types';
 import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
 
@@ -81,6 +83,9 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     if (!isEditorState(initialState) || !validateProject(initialState.project).ok) {
       throw new Error('Cannot create the Main Canvas store from an invalid editor state.');
     }
+    if (initialState.project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) {
+      throw new Error('The temporary Component Canvas buffer cannot become the canonical Main Canvas project.');
+    }
     this.snapshot = Object.freeze({
       editorState: freezeGraph(initialState),
       projectRevision: 0,
@@ -117,8 +122,13 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     }
 
     const projectMutation = input.candidateState.project !== beforeSnapshot.editorState.project;
-    if (projectMutation && !validateProject(input.candidateState.project).ok) {
-      return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'PROJECT_VALIDATION_FAILED' };
+    if (projectMutation) {
+      if (input.candidateState.project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) {
+        return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_CANONICAL_PROJECT' };
+      }
+      if (!validateProject(input.candidateState.project).ok) {
+        return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'PROJECT_VALIDATION_FAILED' };
+      }
     }
 
     this.committing = true;
