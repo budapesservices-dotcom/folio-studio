@@ -193,7 +193,7 @@ async function runRackBrowserChecks() {
     for (const viewport of VIEWPORTS) {
       await browser.viewport(viewport);
       const expected = getDefaultWindowLayouts(viewport)['main-canvas'];
-      const actual = await browser.evaluate(`(() => {
+      const actual = await browser.evaluate(`(async () => {
         const shell = document.getElementById('shell');
         const bounds = shell.getBoundingClientRect();
         const floating = document.getElementById('floating-window');
@@ -206,11 +206,15 @@ async function runRackBrowserChecks() {
           [document.getElementById('pages-rack'), '.pages-rack-list'],
           [document.getElementById('component-rack'), '.component-rack-list'],
         ];
-        const metrics = panels.map(([panel, listSelector]) => {
+        panels.forEach(([panel]) => {
           panel.classList.add('is-open');
           panel.inert = false;
           panel.removeAttribute('inert');
           panel.setAttribute('aria-hidden', 'false');
+        });
+        // Wait for the production 220ms slide transition before measuring final bounds.
+        await new Promise((resolveTransition) => setTimeout(resolveTransition, 260));
+        const metrics = panels.map(([panel, listSelector]) => {
           const rect = panel.getBoundingClientRect();
           const list = panel.querySelector(listSelector);
           return {
