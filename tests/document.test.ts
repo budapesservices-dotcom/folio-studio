@@ -181,7 +181,13 @@ describe('Folio unified project v2', () => {
     const added = editorReducer(createEditorState(project), { type: 'add-component', component });
     expect(added.project.components).toHaveLength(1);
     expect(added.project.components[0].id).toBe('component-button');
-    const deleted = editorReducer(added, { type: 'delete-component', componentId: 'component-button' });
+    const addedMaster = added.project.components[0];
+    const deleted = editorReducer(added, {
+      type: 'delete-component',
+      componentId: 'component-button',
+      expectedMasterDocument: addedMaster.document,
+      expectedUpdatedAt: addedMaster.updatedAt,
+    });
     expect(deleted.project.components).toHaveLength(0);
   });
   it('inserts a multi-node component as one undoable batch', () => {
@@ -321,7 +327,14 @@ describe('linked master components and instances', () => {
         secondPage,
       ],
     };
-    const synced = editorReducer(createEditorState(linkedProject), { type: 'update-component', component: updatedMaster });
+    const synced = editorReducer(createEditorState(linkedProject), {
+      type: 'sync-component-document',
+      componentId: master.id,
+      expectedMasterDocument: master.document,
+      expectedUpdatedAt: master.updatedAt,
+      document: updatedMaster.document,
+      updatedAt: updatedMaster.updatedAt,
+    });
     for (const page of synced.project.pages) {
       const pageInstance = page.document.nodes.find((node) => node.type === 'component-instance');
       if (!pageInstance || pageInstance.type !== 'component-instance') throw new Error('Missing linked page instance.');
@@ -394,7 +407,12 @@ describe('linked master components and instances', () => {
       ...project,
       components: [master],
       pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [...page.document.nodes, instance] } })),
-    }), { type: 'delete-component', componentId: master.id });
+    }), {
+      type: 'delete-component',
+      componentId: master.id,
+      expectedMasterDocument: master.document,
+      expectedUpdatedAt: master.updatedAt,
+    });
     expect(withMaster.project.components).toHaveLength(0);
     expect(withMaster.project.pages[0].document.nodes.some((node) => node.type === 'component-instance')).toBe(false);
     expect(validateProject(withMaster.project).ok).toBe(true);
