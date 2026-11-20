@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
-import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage } from '../core/document/types';
+import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument, FolioPage } from '../core/document/types';
 import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, getSelectedLayerRootIds, getClippingMaskBaseId, type LayerDropPosition } from '../core/document/layers';
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
@@ -25,6 +25,11 @@ import {
   shouldProtectComponentCanvasBuffer,
   type ComponentCanvasSyncSession,
 } from './componentCanvasSync';
+import {
+  deleteComponentIfCurrent,
+  requestComponentDeletion,
+  saveComponentCanvasRecoveryCopy,
+} from './componentDeletion';
 import { FloatingWindow } from './FloatingWindow';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
@@ -158,6 +163,9 @@ export function App() {
   const componentSyncSessionRef = useRef<ComponentCanvasSyncSession | null>(null);
   const [componentRecoveryStatus, setComponentRecoveryStatus] = useState<'none' | 'missing' | 'returned' | 'conflict' | 'switch-pending'>('none');
   const [pendingComponentOpenId, setPendingComponentOpenId] = useState<string | null>(null);
+  const [pendingComponentDeletion, setPendingComponentDeletion] = useState<ComponentDefinition | null>(null);
+  const pendingComponentDeletionRef = useRef(false);
+  const componentSyncPauseAfterCancelRef = useRef<FolioDocument | null>(null);
   const [isProjectLoaded, setIsProjectLoaded] = useState(false);
   const isHydrating = !isProjectLoaded || !componentReady;
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
@@ -908,6 +916,7 @@ export function App() {
   };
 
   const loadMasterComponent = (component: ComponentDefinition) => {
+    componentSyncPauseAfterCancelRef.current = null;
     componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
     setPendingComponentOpenId(null);
     setComponentRecoveryStatus('none');
@@ -926,6 +935,10 @@ export function App() {
   };
 
   const openMasterComponent = (component: ComponentDefinition) => {
+    if (pendingComponentDeletionRef.current) {
+      setNotice('Resolve the active component deletion recovery decision before opening another master.');
+      return;
+    }
     const session = componentSyncSessionRef.current;
     const bufferDocument = getActiveDocument(componentState.project);
     const hasActiveBuffer = editingComponentId !== null;
@@ -1032,32 +1045,139 @@ export function App() {
     setNotice(`“${component.name}” duplicated.`);
   };
 
+  const componentDeletionTarget = (component: ComponentDefinition) => ({
+    componentId: component.id,
+    expectedMasterDocument: component.document,
+    expectedUpdatedAt: component.updatedAt,
+  });
+
+  const clearPendingComponentDeletion = () => {
+    pendingComponentDeletionRef.current = false;
+    setPendingComponentDeletion(null);
+  };
+
+  const keepComponentAfterStaleDeletion = (message: string) => {
+    clearPendingComponentDeletion();
+    const session = componentSyncSessionRef.current;
+    if (session) componentSyncSessionRef.current = { ...session, conflicted: true };
+    setComponentRecoveryStatus('conflict');
+    setNotice(message);
+  };
+
+  const finishDeletedActiveComponent = (component: ComponentDefinition) => {
+    if (editingComponentId !== component.id) return;
+    setEditingComponentId(null);
+    componentSyncSessionRef.current = null;
+    componentSyncPauseAfterCancelRef.current = null;
+    setPendingComponentOpenId(null);
+    setComponentRecoveryStatus('none');
+    componentDispatch({ type: 'replace-project', project: componentInitialState.project });
+    setComponentCanvasClosed(true);
+    setComponentCanvasMinimized(false);
+    setActiveEditorId('main');
+  };
+
   const deleteComponent = (component: ComponentDefinition) => {
-    const transition = dispatch({
-      type: 'delete-component',
-      componentId: component.id,
-      expectedMasterDocument: component.document,
-      expectedUpdatedAt: component.updatedAt,
+    if (pendingComponentDeletionRef.current) return;
+    const isActiveMaster = editingComponentId === component.id;
+    const result = requestComponentDeletion(canonicalStore, componentDeletionTarget(component), {
+      activeMaster: isActiveMaster,
+      bufferDocument: isActiveMaster ? getActiveDocument(componentState.project) : null,
+      session: isActiveMaster ? componentSyncSessionRef.current : null,
+      recoveryPending: isActiveMaster && (
+        componentRecoveryStatus !== 'none' || pendingComponentOpenId !== null
+      ),
     });
-    if (transition.status !== 'committed') {
-      setNotice('The component changed before deletion could be applied. Review the latest master and retry.');
+
+    if (result.status === 'recovery-required') {
+      pendingComponentDeletionRef.current = true;
+      setPendingComponentDeletion(component);
+      setComponentCanvasClosed(false);
+      setComponentCanvasMinimized(false);
+      setActiveEditorId('component');
+      focusWindow('component-canvas');
+      setInspectorVisible(true);
       return;
     }
-    if (editingComponentId === component.id) {
-      setEditingComponentId(null);
-      componentSyncSessionRef.current = null;
-      setPendingComponentOpenId(null);
-      setComponentRecoveryStatus('none');
-      componentDispatch({ type: 'replace-project', project: componentInitialState.project });
-      setComponentCanvasClosed(true);
-      setComponentCanvasMinimized(false);
-      setActiveEditorId('main');
+    if (result.status === 'stale-master') {
+      if (isActiveMaster) {
+        const session = componentSyncSessionRef.current;
+        if (session) componentSyncSessionRef.current = { ...session, conflicted: true };
+        setComponentRecoveryStatus('conflict');
+      }
+      setNotice('The master changed before deletion could be applied. Review the latest master and retry; the Component Canvas buffer was kept.');
+      return;
     }
-    setNotice(`“${component.name}” deleted; any linked instances were detached.`);
+    if (result.status !== 'deleted') {
+      setNotice('The master could not be deleted. The Component Canvas buffer was kept; review the latest master and retry.');
+      return;
+    }
+
+    finishDeletedActiveComponent(component);
+    setNotice(\`“\${component.name}” deleted; any linked instances were detached.\`);
+  };
+
+  const cancelComponentDeletion = () => {
+    if (!pendingComponentDeletion) return;
+    // Keep the exact local document and session; do not let a newly resumed
+    // effect turn this Cancel action into an implicit canonical commit.
+    componentSyncPauseAfterCancelRef.current = getActiveDocument(componentState.project);
+    clearPendingComponentDeletion();
+    setNotice('Deletion cancelled. The master, local Component Canvas buffer, and recovery session were kept.');
+  };
+
+  const saveBufferAsNewAndDelete = () => {
+    const pending = pendingComponentDeletion;
+    if (!pending) return;
+    const target = componentDeletionTarget(pending);
+    const bufferDocument = getActiveDocument(componentState.project);
+    const recovery = saveComponentCanvasRecoveryCopy(canonicalStore, target, bufferDocument);
+    if (recovery.status === 'stale-master') {
+      keepComponentAfterStaleDeletion('The master changed while the recovery choice was open. No deletion was applied; review the latest master. The local Component Canvas buffer was kept.');
+      return;
+    }
+    if (recovery.status !== 'saved') {
+      setNotice('The recovery copy could not be saved. The original master and local buffer are unchanged; choose an action again.');
+      return;
+    }
+
+    const deletion = deleteComponentIfCurrent(canonicalStore, target);
+    if (deletion.status !== 'deleted') {
+      keepComponentAfterStaleDeletion(\`“\${recovery.component.name}” was saved to the Component Rack, but the original master changed before deletion. The recovery copy and local buffer were kept; review the latest master.\`);
+      return;
+    }
+
+    clearPendingComponentDeletion();
+    finishDeletedActiveComponent(pending);
+    setNotice(\`“\${recovery.component.name}” was saved as a new component, and “\${pending.name}” was deleted.\`);
+  };
+
+  const discardBufferAndDelete = () => {
+    const pending = pendingComponentDeletion;
+    if (!pending) return;
+    const deletion = deleteComponentIfCurrent(canonicalStore, componentDeletionTarget(pending));
+    if (deletion.status === 'stale-master') {
+      keepComponentAfterStaleDeletion('The master changed while the recovery choice was open. Deletion was cancelled; the local buffer was kept. Review the latest master.');
+      return;
+    }
+    if (deletion.status !== 'deleted') {
+      setNotice('The master could not be deleted. The local buffer is still intact; choose an action again.');
+      return;
+    }
+
+    clearPendingComponentDeletion();
+    finishDeletedActiveComponent(pending);
+    setNotice(\`“\${pending.name}” was deleted after discarding its protected local buffer; linked instances were detached.\`);
   };
 
   useEffect(() => {
-    if (!componentReady || !editingComponentId) return;
+    if (!componentReady || !editingComponentId || pendingComponentDeletionRef.current) return;
+    const editedDocument = getActiveDocument(componentState.project);
+    const pausedAfterCancel = componentSyncPauseAfterCancelRef.current;
+    if (pausedAfterCancel) {
+      if (pausedAfterCancel === editedDocument) return;
+      componentSyncPauseAfterCancelRef.current = null;
+    }
     const master = state.project.components.find((component) => component.id === editingComponentId);
     if (!master) {
       const session = componentSyncSessionRef.current;
@@ -1080,7 +1200,6 @@ export function App() {
       return;
     }
 
-    const editedDocument = getActiveDocument(componentState.project);
     const reconciliation = reconcileComponentCanvasSyncSession(session, master, editedDocument);
     if (reconciliation.status === 'orphaned-master-returned') {
       componentSyncSessionRef.current = reconciliation.session;
@@ -1133,10 +1252,11 @@ export function App() {
         'Local edits were kept and synchronization is paused; reopen the master to reload the canonical version.',
       );
     }
-  }, [componentState.project.pages, editingComponentId, componentReady, state.project.components]);
+  }, [componentState.project.pages, editingComponentId, componentReady, state.project.components, pendingComponentDeletion]);
 
   const reloadRecoveredComponentMaster = () => {
     if (!editingComponentId) return;
+    componentSyncPauseAfterCancelRef.current = null;
     const master = state.project.components.find((component) => component.id === editingComponentId);
     if (!master) {
       setComponentRecoveryStatus('missing');
@@ -2039,6 +2159,23 @@ export function App() {
               </button>
               <button type="button" class="component-recovery-action" onClick={discardBufferAndOpenPendingMaster}>
                 Discard local edits and open requested master
+              </button>
+            </div>
+          )}
+          {pendingComponentDeletion && (
+            <div class="component-recovery-panel component-deletion-recovery" role="alertdialog" aria-modal="true" aria-labelledby="component-delete-recovery-title" aria-describedby="component-delete-recovery-description">
+              <strong id="component-delete-recovery-title">Delete “{pendingComponentDeletion.name}” master?</strong>
+              <span id="component-delete-recovery-description">
+                The active Component Canvas buffer is protected by local edits or recovery state. Choose how to continue. No deletion happens until you choose an action.
+              </span>
+              <button type="button" class="component-recovery-action" onClick={cancelComponentDeletion}>
+                Cancel
+              </button>
+              <button type="button" class="component-recovery-action" onClick={saveBufferAsNewAndDelete}>
+                Save buffer as a new component
+              </button>
+              <button type="button" class="component-recovery-action" onClick={discardBufferAndDelete}>
+                Discard buffer and delete
               </button>
             </div>
           )}

@@ -78,3 +78,19 @@ Automated verification (2026-11-20): GitHub Actions run [#44697833843](https://g
 
 Runtime input normalization applies these finite limits per input graph: depth **64** (root depth 0), **4,096** object/array nodes, **16,384** own properties, **4,096** aggregate dense array elements, and **1,000** elements per array. Repeated object identity (shared references) is rejected rather than recloned; circular references, sparse arrays, accessors, symbols, unexpected property descriptors, and reflection failures are structured validation rejections. These implementation resource limits do not change the authoritative Native Commands protocol specification.
 
+
+
+### Safe active Component Canvas master deletion
+
+1. Open a component master in Component Canvas, make local edits, then choose Delete for that same master in Component Rack. Confirm the recovery dialog appears and the canonical master remains present.
+2. Choose **Cancel**. Confirm the master, local buffer, undo/redo history and project revision remain unchanged. Continue editing to verify the local buffer remains usable.
+3. Repeat with a protected buffer and choose **Save buffer as a new component**. Confirm the complete document (all layers, groups, parent relationships, canvas dimensions and background) is saved under a fresh component/document identity before the original master is deleted.
+4. Repeat and choose **Discard buffer and delete**. Confirm the original is deleted and the Component Canvas closes/resets only after the canonical deletion commits.
+5. Create a synchronization conflict, then attempt to delete the active master. Confirm the recovery choices still appear and no automatic sync replaces the local buffer while the decision is pending.
+6. Undo the master deletion so it becomes orphaned, then Redo it. Confirm deletion while editing the returned master still requires an explicit recovery choice.
+7. While the recovery dialog is open, change the canonical master through another Main Canvas action or history transition. Choose a recovery action and confirm the stale operation is cancelled safely with a message to review the latest master.
+8. Edit one master, then delete a different component from Component Rack. Confirm the active Component Canvas buffer and its synchronization session are untouched.
+9. Delete an active master with a clean, current Component Canvas buffer. Confirm the normal immediate deletion behavior remains available.
+10. Simulate a stale deletion after saving a recovery copy. Confirm the recovery component remains in Component Rack and retains the full buffer content even though the original master is not deleted.
+
+Manual browser acceptance for safe Component Canvas master deletion remains pending until these scenarios are exercised in the target browser.
