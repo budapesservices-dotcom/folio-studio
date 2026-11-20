@@ -93,12 +93,12 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => { this.listeners.delete(listener); };
   }
 
   subscribeChanges(listener: (event: NativeChangeEvent) => void): () => void {
     this.changeListeners.add(listener);
-    return () => this.changeListeners.delete(listener);
+    return () => { this.changeListeners.delete(listener); };
   }
 
   commitEditorTransition(input: EditorStoreCommitInput): EditorStoreCommitResult {
