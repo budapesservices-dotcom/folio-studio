@@ -67,6 +67,11 @@ export function createDocumentAstView(
   if (!address.projectId.trim() || !address.documentId.trim() || !owner.id.trim()) {
     throw new Error('A native AST document address requires project, owner and document IDs.');
   }
+  if (document.id !== address.documentId) {
+    throw new Error(
+      `Cannot create a native AST view: address document ID "${address.documentId}" does not match document "${document.id}".`,
+    );
+  }
   if (owner.kind !== 'page' && owner.kind !== 'component') {
     throw new Error('A native AST document address has an unsupported owner kind.');
   }
