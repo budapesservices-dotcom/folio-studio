@@ -6,7 +6,9 @@
 **Repository:** budapesservices-dotcom/folio-studio  
 **Base branch:** feat/canvas-pan-distribute  
 **Audited base SHA:** d8a773bfa12a38915c88ed416b79fda580450a4e  
-**Native Command Core reference:** 52b59ca5a08e255db9faab4960abaff90be2c7ff (PR #4; open and unmerged at inspection)  
+**Native Command Core references (PR #4 branch; open and unmerged, neither part of the audited base):**  
+- Historical checkpoint: [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff)  
+- Latest PR #4 Revision Task 04 reference: [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f)  
 **Document path:** docs/specs/WORKSPACE_ARCHITECTURE_V1.md
 
 > This is a documentation-only architecture specification. It distinguishes code present at the audited base from the separate, unmerged Native Command Core reference and from future target contracts. It does not implement or authorize a source-code migration.
@@ -158,11 +160,12 @@ The source baseline is exactly:
 - Base branch: feat/canvas-pan-distribute
 - This base is the merge commit for PR #2, which introduced the Native Commands v1 architecture document.
 
-The Native Command Core code reference is separately:
+The Native Command Core code references are separate from the audited base and belong to PR #4's unmerged branch:
 
-- Reference commit: [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff)
+- Historical checkpoint before Revision Task 04: [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff)
+- Latest PR #4 Revision Task 04 reference captured for this audit: [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f)
 - PR: [#4 — feat: implement Native Command Core Phase 1](https://github.com/budapesservices-dotcom/folio-studio/pull/4)
-- At inspection, PR #4 was open, not merged, with this exact head SHA and the specified base SHA. Therefore, its source is **partially implemented on an unmerged reference branch**, not part of the audited base.
+- The SHA `52b59ca5a08e255db9faab4960abaff90be2c7ff` is a **historical checkpoint**, not the PR #4 head at this inspection. Before Revision Task 04, it was the recorded checkpoint; the PR #4 branch subsequently advanced 17 commits to `d9688c901973dec9b95829b39bd4fa401890509f`. Both SHAs are references on PR #4's separate open, unmerged branch and neither is included in the audited base. Therefore, this code remains **partially implemented on an unmerged reference branch**, not part of the audited base.
 
 No behavior described as existing at base is inferred from PR #4.
 
