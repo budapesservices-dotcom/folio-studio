@@ -8,6 +8,10 @@
 
 > Native AST v1 is a semantic contract version. It is **not** the same thing as the existing .flop formatVersion 1 or formatVersion 2.
 
+## Related migration plan
+
+Read [Native AST Compatibility & Migration Plan](NATIVE_AST_COMPATIBILITY_MIGRATION.md) before changing persisted project data, node identity, layer ordering, component references, or the existing .flop schema.
+
 ## 1. Purpose
 
 The Native AST is the canonical semantic structure for content that FOLIO expects to understand and edit across workspaces.
