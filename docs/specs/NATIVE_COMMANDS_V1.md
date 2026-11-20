@@ -31,8 +31,8 @@ The first version establishes a small boundary that can be introduced without re
 2. Resolve its explicit project and document target.
 3. Validate its envelope, authorization, payload, references, and preconditions.
 4. Translate its intent into existing project/document helpers and supported editor reducer actions.
-5. Publish one immutable state result or reject the operation without changing state.
-6. Return a structured result and, after a successful commit, a scoped change notification.
+5. Submit the prepared candidate to the canonical editor store commit boundary; publish it only if the store accepts it.
+6. Return status applied and publish a scoped change notification only after the store confirms the successful commit.
 
 ### 1.2 Architectural position
 
@@ -59,7 +59,7 @@ Designer / Developer / Node Logic / System / Authorized Agent
 
 The command layer is an API and a small execution boundary. It is **not** a reason to introduce a message broker, distributed command bus, event sourcing, a plugin runtime, or a replacement state store in v1.
 
-The project model remains the only shared project truth. Commands do not create workspace-specific project copies or a second AST representation.
+The project model remains the only shared project truth. Commands do not create workspace-specific project copies or a second AST representation. The canonical editor store is the single authority for accepting project transitions and advancing projectRevision.
 
 ### 1.3 Non-goals
 
@@ -506,7 +506,7 @@ The following rules are **final v1 decisions**, not open questions:
 - projectRevision is an in-memory counter managed by the canonical editor store.
 - It is independent of FolioProject.metadata.updatedAt.
 - It is never serialized into the .flop format, IndexedDB records, or imported project data.
-- Initializing/replacing a project establishes the store's in-memory counter; an imported or historical project cannot supply or restore its value.
+- projectRevision is initialized when the canonical editor store is created. It remains monotonic for that store, including across project replacement; an imported or historical project cannot supply, reset, or restore its value.
 - Every accepted project mutation passes through one shared editor-store commit boundary, whether the candidate came from a legacy EditorAction or a Native Command.
 - Each accepted project mutation increments projectRevision exactly once.
 - A committed Undo or Redo increments projectRevision once. It never restores the revision number that belonged to the historical snapshot.
@@ -613,25 +613,32 @@ Resolve registry + trusted actor permissions
 Resolve exact project/document/node targets
        |
        v
-Check payload + preconditions
+Check payload + expectedProjectRevision
        |
        v
-Prepare candidate through compatibility adapter
+Prepare immutable candidate + capture baseProjectRevision
        |
        v
 Validate candidate FolioProject
        |
+       v
+Submit candidate to canonical store
+       |
+       v
+Recheck baseProjectRevision at commit boundary
+       |
    +---+---+
    |       |
- invalid  valid
+ conflict  accepted
    |       |
- reject   publish once
-           |
-           v
-       result + change event
-           |
-           v
-     existing autosave
+ reject    commit EditorState + increment
+ no state  projectRevision exactly once
+ change      |
+             v
+      applied result + change event
+             |
+             v
+       existing autosave
 ~~~
 
 ### 8.2 Distinct preparation and commit contracts
@@ -676,8 +683,7 @@ type NativeCommandCommitResult =
     };
 
 function prepareNativeCommand(
-  state: EditorState,
-  projectRevision: number,
+  snapshot: CanonicalEditorStoreSnapshot,
   command: NativeCommand,
   context: NativeCommandContext
 ): NativeCommandPreparation;
@@ -1182,7 +1188,6 @@ The host supplies a trusted execution context:
 ~~~typescript
 interface NativeCommandContext {
   projectId: string;
-  projectRevision: number;
   principal: {
     kind: 'user' | 'system' | 'plugin' | 'ai-agent';
     id: string;
