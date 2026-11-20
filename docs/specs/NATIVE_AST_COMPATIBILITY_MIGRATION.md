@@ -180,13 +180,13 @@ The editor also calls collapseLegacyCanvasInstances while creating editor state.
 
 These issues are identified from the current source/docs audit. They are not introduced by the migration plan.
 
-### 4.1 Transform reducer equality check — fix applied; verification pending
+### 4.1 Transform reducer equality check — fixed and CI verified
 
 The original transform-nodes no-op comparison checked position, size, onCanvas, and text font size, but omitted rotation. A rotation-only transform could therefore be ignored.
 
-**Change applied on this branch:** the comparison now includes rotation, and tests/document.test.ts includes a regression case that checks commit, Undo, and Redo for a rotation-only transform.
+**Change applied:** src/app/editorReducer.ts now compares rotation as part of the transform no-op check. tests/document.test.ts adds a regression case that checks commit, Undo, and Redo for a rotation-only transform.
 
-**Verification status:** source and test changes are committed to this branch, but automated checks have not yet been run in the local development environment. Await the GitHub Actions result before marking this fix verified.
+**Verification:** GitHub Actions run [#229](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44665923559) on branch feat/canvas-pan-distribute completed successfully. Type-check, test suite, and production build all passed. The rotation-only fix is marked **Verified** against those automated checks; browser-level interaction testing is still part of manual acceptance.
 
 ### 4.2 .flop acceptance and UI integration gap — documentation corrected
 
@@ -212,7 +212,7 @@ Before AST code changes:
 - Capture representative v1 and v2 .flop fixtures.
 - Capture fixtures with nested groups, nested visual parents, clipping, hidden/locked descendants, component instances, and overrides.
 - Document current paint order and Layers panel order.
-- Fix and regression-test the transform reducer equality gap as a separate correctness change. (Change committed; CI verification pending.)
+- Fix and regression-test the transform reducer equality gap as a separate correctness change. (Implemented and CI verified.)
 - Reconcile the v1/v2 acceptance expectation and distinguish the existing file adapter from the not-yet-wired File menu. (Documentation corrected.)
 - Run and record existing check/test/build results.
 
@@ -336,7 +336,7 @@ Minimum coverage:
 - Component instance override/detach behavior.
 - Snapshot history behavior.
 - v1 → v2 project migration and IndexedDB save/load path.
-- Known reducer comparison gap and acceptance-document version mismatch.
+- Rotation-only transform reducer gap fixed with regression test; acceptance checklist updated to reflect the actual adapter/UI state.
 
 **Proposed, not implemented:**
 - AST compatibility facade.
