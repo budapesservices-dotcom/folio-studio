@@ -30,7 +30,7 @@ class FakeDatabase {
     return {};
   }
 
-  transaction(names: string | string[], mode: IDBTransactionMode): IDBTransaction {
+  transaction(_names: string | string[], mode: IDBTransactionMode): IDBTransaction {
     return new FakeTransaction(this, mode) as unknown as IDBTransaction;
   }
 

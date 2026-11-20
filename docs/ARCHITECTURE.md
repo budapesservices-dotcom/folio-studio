@@ -1,4 +1,3 @@
-- A missing or invalid active-project pointer falls back to the prior root-project selection by \`metadata.updatedAt\`. The reserved \`folio-component-canvas\` workspace is never considered a root project.
 # Folio Studio — Architecture
 
 > **Document scope:** This document records the current repository architecture and implementation reality. For FOLIO product vision and long-term agreed architecture, read [FOLIO Architecture Blueprint](FOLIO_ARCHITECTURE_BLUEPRINT.md). Keep both documents aligned, but do not describe planned capabilities as implemented.
@@ -85,6 +84,8 @@ Version 2 is UTF-8 JSON. The project is the aggregate root; it contains the acti
 - Version 2 validation checks page/route identity, active page, component documents, graph references and asset references.
 - IndexedDB keeps the existing project-store key path \`metadata.id\`; database version 2 adds a separate \`app-state\` store without rebuilding project records.
 - The active root project ID is persisted separately from project metadata and .flop files. Saving an imported project and updating this pointer happen in one read-write transaction, so the pointer cannot commit without the project record.
+- A missing or invalid active-project pointer falls back to the prior root-project selection by \`metadata.updatedAt\`. The reserved \`folio-component-canvas\` workspace is never considered a root project.
+- The active document is always resolved explicitly from \`pages\` using \`activePageId\`, falling back to \`pages[0]\` when recovering a stale v2 reference.
 - Autosave persists the canonical project aggregate. Native export validates and serializes an immutable snapshot, including the current Component Canvas buffer when a master component is open.
 
 ## Acceptance criteria for the unified project foundation
