@@ -248,10 +248,34 @@ async function runRackBrowserChecks() {
     const keyboardStart = await browser.evaluate(`(() => {
       const pages = document.getElementById('pages-rack');
       const components = document.getElementById('component-rack');
-      pages.inert = true; pages.setAttribute('inert', ''); pages.setAttribute('aria-hidden', 'true');
-      components.inert = true; components.setAttribute('inert', ''); components.setAttribute('aria-hidden', 'true');
-      pages.classList.remove('is-open'); components.classList.remove('is-open');
-      document.getElementById('pages-toggle').focus();
+      const pagesToggle = document.getElementById('pages-toggle');
+      const componentToggle = document.getElementById('component-toggle');
+      const open = (panel) => {
+        panel.inert = false;
+        panel.removeAttribute('inert');
+        panel.setAttribute('aria-hidden', 'false');
+        panel.classList.add('is-open');
+      };
+      const close = (panel, toggle) => {
+        if (panel.contains(document.activeElement)) toggle.focus({ preventScroll: true });
+        panel.inert = true;
+        panel.setAttribute('inert', '');
+        panel.setAttribute('aria-hidden', 'true');
+        panel.classList.remove('is-open');
+      };
+      pagesToggle.addEventListener('click', () => {
+        if (!pages.inert) close(pages, pagesToggle);
+        else { open(pages); close(components, componentToggle); }
+      });
+      componentToggle.addEventListener('click', () => {
+        if (!components.inert) close(components, componentToggle);
+        else { open(components); close(pages, pagesToggle); }
+      });
+      document.getElementById('pages-close').addEventListener('click', () => close(pages, pagesToggle));
+      document.getElementById('component-close').addEventListener('click', () => close(components, componentToggle));
+      close(pages, pagesToggle);
+      close(components, componentToggle);
+      pagesToggle.focus();
       return {
         inertSupported: 'inert' in pages && 'inert' in components,
         pagesInitiallyInert: pages.inert && pages.getAttribute('aria-hidden') === 'true',
@@ -265,57 +289,51 @@ async function runRackBrowserChecks() {
     const componentClosedTab = await browser.evaluate('document.activeElement.id');
 
     await browser.evaluate(`(() => {
-      const panel = document.getElementById('pages-rack');
-      panel.inert = false; panel.removeAttribute('inert'); panel.setAttribute('aria-hidden', 'false');
-      panel.classList.add('is-open'); document.getElementById('toolbar-end').focus();
+      const toggle = document.getElementById('pages-toggle');
+      toggle.focus();
+      toggle.click();
+      document.getElementById('toolbar-end').focus();
     })()`);
     await browser.pressTab();
     const pagesOpenTab = await browser.evaluate('document.activeElement.id');
 
     const pagesCloseFocus = await browser.evaluate(`(() => {
+      const close = document.getElementById('pages-close');
       const panel = document.getElementById('pages-rack');
-      const toggle = document.getElementById('pages-toggle');
-      document.getElementById('pages-close').focus();
-      if (panel.contains(document.activeElement)) toggle.focus({ preventScroll: true });
-      panel.inert = true; panel.setAttribute('inert', ''); panel.setAttribute('aria-hidden', 'true');
-      panel.classList.remove('is-open');
+      close.focus();
+      close.click();
       return { active: document.activeElement.id, inert: panel.inert, ariaHidden: panel.getAttribute('aria-hidden') };
     })()`);
     const pagesToolbarClose = await browser.evaluate(`(() => {
       const panel = document.getElementById('pages-rack');
       const toggle = document.getElementById('pages-toggle');
-      panel.inert = false; panel.removeAttribute('inert'); panel.setAttribute('aria-hidden', 'false');
-      panel.classList.add('is-open'); toggle.focus();
-      if (panel.contains(document.activeElement)) toggle.focus({ preventScroll: true });
-      panel.inert = true; panel.setAttribute('inert', ''); panel.setAttribute('aria-hidden', 'true');
-      panel.classList.remove('is-open');
+      toggle.focus();
+      toggle.click();
+      toggle.click();
       return { active: document.activeElement.id, inert: panel.inert };
     })()`);
 
     await browser.evaluate(`(() => {
-      const panel = document.getElementById('component-rack');
-      panel.inert = false; panel.removeAttribute('inert'); panel.setAttribute('aria-hidden', 'false');
-      panel.classList.add('is-open'); document.getElementById('toolbar-end').focus();
+      const toggle = document.getElementById('component-toggle');
+      toggle.focus();
+      toggle.click();
+      document.getElementById('toolbar-end').focus();
     })()`);
     await browser.pressTab();
     const componentOpenTab = await browser.evaluate('document.activeElement.id');
     const componentCloseFocus = await browser.evaluate(`(() => {
+      const close = document.getElementById('component-close');
       const panel = document.getElementById('component-rack');
-      const toggle = document.getElementById('component-toggle');
-      document.getElementById('component-close').focus();
-      if (panel.contains(document.activeElement)) toggle.focus({ preventScroll: true });
-      panel.inert = true; panel.setAttribute('inert', ''); panel.setAttribute('aria-hidden', 'true');
-      panel.classList.remove('is-open');
+      close.focus();
+      close.click();
       return { active: document.activeElement.id, inert: panel.inert, ariaHidden: panel.getAttribute('aria-hidden') };
     })()`);
     const componentToolbarClose = await browser.evaluate(`(() => {
       const panel = document.getElementById('component-rack');
       const toggle = document.getElementById('component-toggle');
-      panel.inert = false; panel.removeAttribute('inert'); panel.setAttribute('aria-hidden', 'false');
-      panel.classList.add('is-open'); toggle.focus();
-      if (panel.contains(document.activeElement)) toggle.focus({ preventScroll: true });
-      panel.inert = true; panel.setAttribute('inert', ''); panel.setAttribute('aria-hidden', 'true');
-      panel.classList.remove('is-open');
+      toggle.focus();
+      toggle.click();
+      toggle.click();
       return { active: document.activeElement.id, inert: panel.inert };
     })()`);
 
@@ -324,14 +342,11 @@ async function runRackBrowserChecks() {
       const components = document.getElementById('component-rack');
       const pagesToggle = document.getElementById('pages-toggle');
       const componentToggle = document.getElementById('component-toggle');
-      pages.inert = false; pages.removeAttribute('inert'); pages.setAttribute('aria-hidden', 'false');
-      pages.classList.add('is-open'); document.getElementById('pages-input').focus();
+      pagesToggle.focus();
+      pagesToggle.click();
+      document.getElementById('pages-input').focus();
       componentToggle.focus();
-      if (pages.contains(document.activeElement)) pagesToggle.focus({ preventScroll: true });
-      pages.inert = true; pages.setAttribute('inert', ''); pages.setAttribute('aria-hidden', 'true');
-      pages.classList.remove('is-open');
-      components.inert = false; components.removeAttribute('inert'); components.setAttribute('aria-hidden', 'false');
-      components.classList.add('is-open');
+      componentToggle.click();
       return {
         active: document.activeElement.id, oldInert: pages.inert,
         oldAriaHidden: pages.getAttribute('aria-hidden'), newInert: components.inert,
