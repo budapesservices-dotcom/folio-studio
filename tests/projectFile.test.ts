@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openProjectFile } from '../src/app/projectFileActions';
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
 import { createInitialProject, createRectNode } from '../src/core/document/factory';
-import type { ComponentInstanceNode, FolioProject } from '../src/core/document/types';
+import type { ComponentInstanceNode, FolioProject, GroupNode } from '../src/core/document/types';
 import { downloadProject, readProjectFile } from '../src/core/persistence/projectFile';
 
 function fileFromContent(content: string, name = 'project.flop'): File {
@@ -304,5 +304,152 @@ describe('native .flop project file workflow', () => {
     expect(exported.pages[0].document.nodes[1].componentId).toBe('component-stable');
     expect(exported.logicGraphs[0].nodes[0].id).toBe('logic-node-stable');
     expect(exported.assets[0].id).toBe('asset-stable');
+  });
+});
+
+
+describe('Group node .flop export and import', () => {
+  it('exports and re-imports grouped page and component layers without changing IDs, hierarchy, order or properties', async () => {
+    const source = createCompleteProject();
+    const pageGroup: GroupNode = {
+      id: 'page-group-stable',
+      type: 'group',
+      name: 'Page Group',
+      x: 20,
+      y: 30,
+      width: 360,
+      height: 240,
+      rotation: 0,
+      opacity: 0.85,
+      visible: true,
+      locked: false,
+      layerColor: '#6f9f88',
+      onCanvas: true,
+    };
+    const nestedGroup: GroupNode = {
+      id: 'page-nested-group-stable',
+      type: 'group',
+      name: 'Nested Group',
+      x: 52,
+      y: 64,
+      width: 180,
+      height: 120,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      parentId: pageGroup.id,
+      onCanvas: false,
+    };
+    const pageChild = {
+      ...createRectNode(),
+      id: 'page-group-child-stable',
+      name: 'Grouped page child',
+      x: 36,
+      y: 48,
+      width: 96,
+      height: 72,
+      parentId: pageGroup.id,
+      layerColor: '#c58c52',
+    };
+    const nestedChild = {
+      ...createRectNode(),
+      id: 'page-nested-child-stable',
+      name: 'Nested page child',
+      x: 72,
+      y: 88,
+      width: 64,
+      height: 48,
+      parentId: nestedGroup.id,
+      onCanvas: false,
+    };
+    const instance = source.pages[0].document.nodes.find((node) => node.type === 'component-instance');
+    if (!instance) throw new Error('Expected the fixture component instance.');
+
+    source.pages[0].document = {
+      ...source.pages[0].document,
+      nodes: [pageGroup, pageChild, nestedGroup, nestedChild, instance],
+    };
+
+    const componentGroup: GroupNode = {
+      id: 'component-group-stable',
+      type: 'group',
+      name: 'Master Group',
+      x: 12,
+      y: 16,
+      width: 240,
+      height: 160,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      parentId: null,
+      layerColor: '#8b79aa',
+      onCanvas: true,
+    };
+    const masterChild = {
+      ...createRectNode(),
+      id: 'master-node',
+      name: 'Grouped master child',
+      parentId: componentGroup.id,
+      style: { fill: '#123456', stroke: '#000000', strokeWidth: 2, radius: 8 },
+    };
+    source.components[0].document = {
+      ...source.components[0].document,
+      nodes: [componentGroup, masterChild],
+    };
+
+    expect(validateProject(source).ok).toBe(true);
+
+    const anchor = {
+      href: '',
+      download: '',
+      click: vi.fn(),
+      remove: vi.fn(),
+    };
+    let exportedBlob: Blob | undefined;
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => anchor),
+      body: { append: vi.fn() },
+    });
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn((blob: Blob) => {
+        exportedBlob = blob;
+        return 'blob:folio-group-export';
+      }),
+      revokeObjectURL: vi.fn(),
+    });
+    vi.stubGlobal('window', { setTimeout: vi.fn() });
+
+    expect(() => downloadProject(source)).not.toThrow();
+    expect(anchor.click).toHaveBeenCalledOnce();
+    expect(exportedBlob).toBeDefined();
+
+    const exportedPayload = JSON.parse(await exportedBlob!.text());
+    expect(exportedPayload.formatVersion).toBe(2);
+    const imported = await readProjectFile(fileFromProject(exportedPayload));
+
+    expect(imported.pages[0].document.nodes.map((node) => node.id)).toEqual([
+      'page-group-stable',
+      'page-group-child-stable',
+      'page-nested-group-stable',
+      'page-nested-child-stable',
+      'instance-stable',
+    ]);
+    expect(imported.pages[0].document.nodes).toEqual(source.pages[0].document.nodes);
+    expect(imported.pages[0].document.nodes.find((node) => node.id === 'page-group-child-stable')?.parentId)
+      .toBe('page-group-stable');
+    expect(imported.pages[0].document.nodes.find((node) => node.id === 'page-nested-group-stable')?.parentId)
+      .toBe('page-group-stable');
+    expect(imported.pages[0].document.nodes.find((node) => node.id === 'page-nested-child-stable')?.parentId)
+      .toBe('page-nested-group-stable');
+
+    expect(imported.components[0].document.nodes.map((node) => node.id)).toEqual([
+      'component-group-stable',
+      'master-node',
+    ]);
+    expect(imported.components[0].document.nodes).toEqual(source.components[0].document.nodes);
+    expect(imported.components[0].document.nodes[1].parentId).toBe('component-group-stable');
+    expect(imported).toEqual(source);
   });
 });
