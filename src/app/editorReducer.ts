@@ -41,8 +41,8 @@ export type EditorAction =
   | { type: 'set-active-page'; pageId: string }
   | { type: 'add-component'; component: ComponentDefinition }
   | { type: 'sync-component-document'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; document: FolioDocument; updatedAt: string }
-  | { type: 'rename-component'; componentId: string; name: string }
-  | { type: 'delete-component'; componentId: string }
+  | { type: 'rename-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; name: string }
+  | { type: 'delete-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string }
   | { type: 'replace-project'; project: FolioProject }
   | { type: 'undo' }
   | { type: 'redo' };
@@ -376,7 +376,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'rename-component': {
       const name = action.name.trim();
       const target = state.project.components.find((component) => component.id === action.componentId);
-      if (!target || !name || target.name === name) return state;
+      if (!target || target.document !== action.expectedMasterDocument ||
+          target.updatedAt !== action.expectedUpdatedAt || !name || target.name === name) return state;
       const now = new Date().toISOString();
       const components = state.project.components.map((component) =>
         component.id === action.componentId ? { ...component, name, updatedAt: now, document: { ...component.document, name } } : component);
@@ -385,7 +386,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'delete-component': {
       const target = state.project.components.find((component) => component.id === action.componentId);
-      if (!target) return state;
+      if (!target || target.document !== action.expectedMasterDocument ||
+          target.updatedAt !== action.expectedUpdatedAt) return state;
       // Detach all page instances so deleting a master never leaves broken references.
       const pages = state.project.pages.map((page) => ({
         ...page, document: replaceComponentInstancesInDocument(page.document, target),
