@@ -183,6 +183,9 @@ export function prepareNativeCommand(
   }
 
   const envelope = envelopeOutcome.value;
+  if (!Object.prototype.hasOwnProperty.call(NATIVE_COMMAND_REGISTRY, envelope.type)) {
+    return rejectedPreparation(snapshot, header, 'UNKNOWN_COMMAND', 'This command type is not supported.');
+  }
   const definition = NATIVE_COMMAND_REGISTRY[envelope.type as keyof typeof NATIVE_COMMAND_REGISTRY];
   if (!definition) {
     return rejectedPreparation(snapshot, header, 'UNKNOWN_COMMAND', 'This command type is not supported.');
@@ -207,6 +210,12 @@ export function prepareNativeCommand(
     return rejectedPreparation(snapshot, header, 'UNKNOWN_COMMAND', 'This command type is not supported.');
   }
 
+  if (!context || typeof context.projectId !== 'string' || context.projectId.trim().length === 0 ||
+      !context.principal || typeof context.principal.id !== 'string' || context.principal.id.trim().length === 0 ||
+      !Array.isArray(context.capabilities) ||
+      context.capabilities.some((capability) => typeof capability !== 'string')) {
+    return rejectedPreparation(snapshot, command, 'PERMISSION_DENIED', 'The trusted Main Canvas context is invalid.');
+  }
   if (context.workspace !== 'main' || command.source.workspace !== 'main' ||
       context.principal.kind !== command.source.actor.kind ||
       (command.source.actor.actorId !== undefined && command.source.actor.actorId !== context.principal.id)) {
