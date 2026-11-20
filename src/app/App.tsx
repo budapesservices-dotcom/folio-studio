@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage } from '../core/document/types';
@@ -13,6 +13,8 @@ import { Canvas } from '../engines/canvas/Canvas';
 import { CANVAS_TOOL_GROUPS, getCanvasTool, type CanvasToolGroupId, type CanvasToolId } from '../engines/canvas/tools/registry';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
 import { createEditorState, editorReducer, normalizePositiveDimension } from './editorReducer';
+import type { EditorAction } from './editorReducer';
+import { createCanonicalEditorStore } from './editorStore';
 import { FloatingWindow } from './FloatingWindow';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
@@ -122,7 +124,16 @@ function readCanvasViewState(key: string): CanvasViewState {
 
 export function App() {
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
-  const [state, dispatch] = useReducer(editorReducer, initialEditorState);
+  const canonicalStore = useMemo(() => createCanonicalEditorStore(initialEditorState), []);
+  const [state, setState] = useState(() => canonicalStore.getSnapshot().editorState);
+  const dispatch = useCallback((action: EditorAction) => {
+    const transition = canonicalStore.dispatchLegacyAction(action);
+    setState(transition.snapshot.editorState);
+    return transition;
+  }, [canonicalStore]);
+  useEffect(() => canonicalStore.subscribe(() => {
+    setState(canonicalStore.getSnapshot().editorState);
+  }), [canonicalStore]);
   const componentInitialState = useMemo(() => {
     const project = createInitialProject('Component Canvas');
     project.metadata.id = 'folio-component-canvas';
