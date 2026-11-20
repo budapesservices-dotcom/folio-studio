@@ -934,6 +934,10 @@ export function App() {
     );
     if (mustProtectBuffer) {
       setPendingComponentOpenId(component.id);
+      setComponentCanvasClosed(false);
+      setComponentCanvasMinimized(false);
+      setActiveEditorId('component');
+      focusWindow('component-canvas');
       setComponentRecoveryStatus('switch-pending');
       setNotice(
         'The current Component Canvas has local edits or a recovery conflict. Keep editing, or explicitly discard its buffer before opening another master.',
