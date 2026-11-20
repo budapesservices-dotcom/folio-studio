@@ -916,6 +916,10 @@ export function App() {
   };
 
   const loadMasterComponent = (component: ComponentDefinition) => {
+    if (pendingComponentDeletionRef.current) {
+      setNotice('Resolve the active component deletion recovery decision before replacing the Component Canvas buffer.');
+      return;
+    }
     componentSyncPauseAfterCancelRef.current = null;
     componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
     setPendingComponentOpenId(null);
@@ -1255,7 +1259,7 @@ export function App() {
   }, [componentState.project.pages, editingComponentId, componentReady, state.project.components, pendingComponentDeletion]);
 
   const reloadRecoveredComponentMaster = () => {
-    if (!editingComponentId) return;
+    if (!editingComponentId || pendingComponentDeletionRef.current) return;
     componentSyncPauseAfterCancelRef.current = null;
     const master = state.project.components.find((component) => component.id === editingComponentId);
     if (!master) {
@@ -2145,7 +2149,7 @@ export function App() {
             <span class="component-recovery-status" role="status">Master temporarily missing · local buffer preserved</span>
           )}
           {(componentRecoveryStatus === 'returned' || componentRecoveryStatus === 'conflict') && (
-            <button type="button" class="component-recovery-action" onClick={reloadRecoveredComponentMaster}>
+            <button type="button" class="component-recovery-action" disabled={Boolean(pendingComponentDeletion)} onClick={reloadRecoveredComponentMaster}>
               Discard local edits and reload current master
             </button>
           )}
@@ -2204,9 +2208,9 @@ export function App() {
               <button class="zoom-button" title="Zoom in" onClick={() => setComponentCanvasZoom((value) => Math.min(2, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
             </div>
             <div class="workspace-window-controls" aria-label="Component Canvas window controls">
-              <button type="button" class="window-control window-control-minimize" title="Minimize Component Canvas" aria-label="Minimize Component Canvas" onClick={() => setComponentCanvasMinimized(true)}></button>
+              <button type="button" class="window-control window-control-minimize" title="Minimize Component Canvas" aria-label="Minimize Component Canvas" disabled={Boolean(pendingComponentDeletion)} onClick={() => setComponentCanvasMinimized(true)}></button>
               <button type="button" class="window-control" title={componentCanvasFloating ? "Dock Component Canvas" : "Float Component Canvas"} aria-label={componentCanvasFloating ? "Dock Component Canvas" : "Float Component Canvas"} aria-pressed={componentCanvasFloating} onClick={() => setComponentCanvasWindowMode(componentCanvasFloating ? 'docked' : 'floating')}>{componentCanvasFloating ? "▣" : "□"}</button>
-              <button type="button" class="window-control window-control-close" title="Close Component Canvas window" aria-label="Close Component Canvas window" onClick={() => { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); setComponentCanvasWindowMode('docked'); }}>×</button>
+              <button type="button" class="window-control window-control-close" title="Close Component Canvas window" aria-label="Close Component Canvas window" disabled={Boolean(pendingComponentDeletion)} onClick={() => { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); setComponentCanvasWindowMode('docked'); }}>×</button>
             </div>
           </div>
         </div>

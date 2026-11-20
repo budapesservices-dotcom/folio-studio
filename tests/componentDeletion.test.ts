@@ -54,7 +54,16 @@ function createFixture(includeSecond = false) {
       ...master,
       id: 'component-other',
       name: 'Other',
-      document: { ...document, id: 'other-document', name: 'Other' },
+      document: {
+        ...document,
+        id: 'other-document',
+        name: 'Other',
+        nodes: document.nodes.map((node) => ({
+          ...node,
+          id: `other-${node.id}`,
+          ...(node.parentId ? { parentId: `other-${node.parentId}` } : {}),
+        })),
+      },
     });
   }
   const store = createCanonicalEditorStore(createEditorState(project));
@@ -276,7 +285,7 @@ describe('Safe active Component Canvas master deletion', () => {
     expect(retained).toBeDefined();
     expect(retained?.document.nodes).toEqual(buffer.nodes);
     expect(retained?.document.id).toBe(saved.component.document.id);
-    expect(store.getSnapshot().projectRevision).toBe(3);
+    expect(store.getSnapshot().projectRevision).toBe(2);
   });
 
   it('does not auto-delete when another recovery state is pending', () => {
