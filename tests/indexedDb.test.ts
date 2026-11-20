@@ -29,7 +29,12 @@ type FakeRequest<T> = {
 class FakeDatabase {
   version = 0;
   readonly stores = new Map<string, Map<string, unknown>>();
-  readonly metrics = { scheduledWrites: 0, committedWrites: 0, rolledBackWrites: 0 };
+  readonly metrics = {
+    scheduledWrites: 0,
+    committedWrites: 0,
+    rolledBackWrites: 0,
+    readwriteTransactions: 0,
+  };
   private readonly keyPaths = new Map<string, string>();
   private readonly putFailures = new Map<string, DOMException>();
 
@@ -44,6 +49,7 @@ class FakeDatabase {
   }
 
   transaction(_names: string | string[], mode: IDBTransactionMode): IDBTransaction {
+    if (mode === 'readwrite') this.metrics.readwriteTransactions += 1;
     return new FakeTransaction(this, mode) as unknown as IDBTransaction;
   }
 
@@ -189,6 +195,19 @@ class FakeTransaction {
 
 class FakeIndexedDB {
   database: FakeDatabase | null = null;
+  private nextOpenGate: { notifyStarted: () => void; wait: Promise<void> } | null = null;
+
+  /** Hold the next open() completion until release() is called by the test. */
+  holdNextOpen(): { entered: Promise<void>; release: () => void } {
+    if (this.nextOpenGate) throw new Error('An IndexedDB open gate is already installed.');
+
+    let notifyEntered!: () => void;
+    let releaseGate!: () => void;
+    const entered = new Promise<void>((resolve) => { notifyEntered = resolve; });
+    const wait = new Promise<void>((resolve) => { releaseGate = resolve; });
+    this.nextOpenGate = { notifyStarted: notifyEntered, wait };
+    return { entered, release: releaseGate };
+  }
 
   open(_name: string, version = 1): IDBOpenDBRequest {
     const request: {
@@ -199,7 +218,14 @@ class FakeIndexedDB {
       onerror?: ((event: Event) => void) | null;
       onblocked?: ((event: Event) => void) | null;
     } = {};
-    queueMicrotask(() => {
+    queueMicrotask(async () => {
+      const heldOpen = this.nextOpenGate;
+      if (heldOpen) {
+        this.nextOpenGate = null;
+        heldOpen.notifyStarted();
+        await heldOpen.wait;
+      }
+
       const database = this.database ?? (this.database = new FakeDatabase());
       if (version > database.version) {
         const oldVersion = database.version;
@@ -545,6 +571,77 @@ describe('Main Canvas revision-fenced autosave', () => {
     expect(database.metrics.scheduledWrites).toBe(writesBeforeDeletion + 1);
     expect((await loadProjectById(fixture.mainProject.metadata.id))?.components.map((item) => item.id))
       .toEqual([fixture.master.id]);
+  });
+
+  it('rechecks canonical revision after indexedDB.open and before creating a readwrite transaction', async () => {
+    const project = projectWithId(
+      'main-autosave-pre-transaction-fence',
+      'Durable revision R',
+      '2026-11-20T12:30:00.000Z',
+    );
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const revisionR = store.getSnapshot().projectRevision;
+    await saveProject(project, revisionR);
+
+    const database = fakeIndexedDB.database!;
+    const durableBefore = await loadProjectById(project.metadata.id);
+    expect(durableBefore?.metadata.name).toBe('Durable revision R');
+    const readwriteTransactionsBefore = database.metrics.readwriteTransactions;
+    const scheduledPutsBefore = database.metrics.scheduledWrites;
+
+    const openGate = fakeIndexedDB.holdNextOpen();
+    const revisionReads: number[] = [];
+    const getCanonicalRevision = () => {
+      const revision = store.getSnapshot().projectRevision;
+      revisionReads.push(revision);
+      return revision;
+    };
+    const candidateAtR = store.getSnapshot().editorState.project;
+    const pendingSave = saveProjectIfRevisionCurrent(candidateAtR, revisionR, getCanonicalRevision);
+
+    try {
+      // open() is invoked only after the queued operation's first revision
+      // comparison has passed. Holding its completion puts the candidate
+      // between the first check and the pre-transaction check.
+      await openGate.entered;
+      expect(revisionReads).toEqual([revisionR]);
+      expect(store.getSnapshot().projectRevision).toBe(revisionR);
+
+      const mutation = store.dispatchLegacyAction({
+        type: 'rename-project',
+        name: 'Canonical revision R+1',
+      });
+      expect(mutation.status).toBe('committed');
+      expect(mutation.snapshot.projectRevision).toBe(revisionR + 1);
+
+      openGate.release();
+      const result = await pendingSave;
+
+      // The second getter call occurs in persistProjectUnlocked after open()
+      // resolves and rejects the now-stale candidate before transaction().
+      expect(revisionReads).toEqual([revisionR, revisionR + 1]);
+      expect(result).toEqual({ status: 'stale' });
+      expect(database.metrics.readwriteTransactions).toBe(readwriteTransactionsBefore);
+      expect(database.metrics.scheduledWrites).toBe(scheduledPutsBefore);
+      expect((await loadProjectById(project.metadata.id))?.metadata.name).toBe('Durable revision R');
+
+      const latest = store.getSnapshot();
+      const latestSave = await saveProjectIfRevisionCurrent(
+        latest.editorState.project,
+        latest.projectRevision,
+        () => store.getSnapshot().projectRevision,
+      );
+      expect(latestSave).toEqual({ status: 'saved' });
+      expect(database.metrics.readwriteTransactions).toBe(readwriteTransactionsBefore + 1);
+      expect(database.metrics.scheduledWrites).toBe(scheduledPutsBefore + 1);
+      expect((await loadProjectById(project.metadata.id))?.metadata.name)
+        .toBe('Canonical revision R+1');
+    } finally {
+      // Idempotently release even if an earlier assertion fails so the fake
+      // open() promise and shared write queue cannot leak into another test.
+      openGate.release();
+      await pendingSave.catch(() => undefined);
+    }
   });
 
   it('persists a Main Canvas candidate when its revision is still canonical', async () => {
