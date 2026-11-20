@@ -3,142 +3,101 @@ import { areDocumentsStructurallyEqual } from '../core/document/equality';
 import type { ComponentDefinition, FolioDocument, FolioProject } from '../core/document/types';
 import type { EditorAction } from './editorReducer';
 
+export type ComponentCanvasMasterStatus = 'present' | 'missing' | 'returned';
 export interface ComponentCanvasSyncSession {
   readonly componentId: string;
-  /** Canonical document version from which the local buffer was last based/synchronized. */
   readonly baseDocument: FolioDocument;
-  /** Most recent canonical master version observed by this open session. */
+  readonly baseUpdatedAt: string;
   readonly observedCanonicalDocument: FolioDocument;
-  /** True when both canonical and local edits diverged; local buffer is retained but cannot write. */
   readonly conflicted: boolean;
+  readonly masterStatus: ComponentCanvasMasterStatus;
 }
-
 export type ComponentCanvasReconciliation =
   | { status: 'current'; session: ComponentCanvasSyncSession }
   | { status: 'reload-buffer'; session: ComponentCanvasSyncSession; canonicalDocument: FolioDocument }
   | { status: 'conflict'; session: ComponentCanvasSyncSession }
-  | { status: 'master-mismatch'; session: ComponentCanvasSyncSession };
+  | { status: 'master-mismatch'; session: ComponentCanvasSyncSession }
+  | { status: 'orphaned-master-returned'; session: ComponentCanvasSyncSession }
+  | { status: 'orphaned'; session: ComponentCanvasSyncSession };
 
-export function createComponentCanvasSyncSession(
-  master: ComponentDefinition,
-): ComponentCanvasSyncSession {
+export function createComponentCanvasSyncSession(master: ComponentDefinition): ComponentCanvasSyncSession {
   return {
-    componentId: master.id,
-    baseDocument: master.document,
-    observedCanonicalDocument: master.document,
-    conflicted: false,
+    componentId: master.id, baseDocument: master.document, baseUpdatedAt: master.updatedAt,
+    observedCanonicalDocument: master.document, conflicted: false, masterStatus: 'present',
   };
 }
 
-/**
- * Reconciles the local Component Canvas buffer against the latest Main Canvas master.
- *
- * A clean buffer is rebased to an independently changed canonical document (including
- * Undo/Redo). If both sides changed since the last synchronized baseline, the canonical
- * version wins as the shared truth, while the unsynchronized local buffer is preserved
- * and write synchronization is paused until the user explicitly reopens the master.
- */
+export function markComponentCanvasMasterMissing(session: ComponentCanvasSyncSession): ComponentCanvasSyncSession {
+  return { ...session, masterStatus: 'missing' };
+}
+
+/** A master disappearing from history never clears the local buffer; a returning ID needs explicit recovery. */
 export function reconcileComponentCanvasSyncSession(
   session: ComponentCanvasSyncSession,
   master: ComponentDefinition,
   bufferDocument: FolioDocument,
 ): ComponentCanvasReconciliation {
+  if (session.masterStatus === 'missing') {
+    return { status: 'orphaned-master-returned', session: { ...session, masterStatus: 'returned', observedCanonicalDocument: master.document } };
+  }
+  if (session.masterStatus === 'returned') return { status: 'orphaned', session };
   if (session.componentId !== master.id) return { status: 'master-mismatch', session };
-
   if (session.conflicted) {
-    const nextSession = areDocumentsStructurallyEqual(
-      session.observedCanonicalDocument,
-      master.document,
-    )
-      ? session
-      : { ...session, observedCanonicalDocument: master.document };
-    return { status: 'conflict', session: nextSession };
+    const next = areDocumentsStructurallyEqual(session.observedCanonicalDocument, master.document)
+      ? session : { ...session, observedCanonicalDocument: master.document };
+    return { status: 'conflict', session: next };
   }
-
-  if (areDocumentsStructurallyEqual(session.observedCanonicalDocument, master.document)) {
-    return { status: 'current', session };
+  const changed = session.baseUpdatedAt !== master.updatedAt ||
+    !areDocumentsStructurallyEqual(session.observedCanonicalDocument, master.document);
+  if (!changed) return { status: 'current', session };
+  if (!areDocumentsStructurallyEqual(session.baseDocument, bufferDocument)) {
+    return { status: 'conflict', session: { ...session, observedCanonicalDocument: master.document, conflicted: true } };
   }
-
-  const localBufferIsDirty = !areDocumentsStructurallyEqual(
-    session.baseDocument,
-    bufferDocument,
-  );
-  if (localBufferIsDirty) {
-    return {
-      status: 'conflict',
-      session: {
-        ...session,
-        observedCanonicalDocument: master.document,
-        conflicted: true,
-      },
-    };
-  }
-
-  return {
-    status: 'reload-buffer',
-    session: createComponentCanvasSyncSession(master),
-    canonicalDocument: master.document,
-  };
+  return { status: 'reload-buffer', session: createComponentCanvasSyncSession(master), canonicalDocument: master.document };
 }
 
-/** Builds the reserved, local-only Component Canvas project used when opening/rebasing a master. */
 export function createComponentCanvasBufferProject(master: ComponentDefinition): FolioProject {
-  const editorProject = createInitialProject(master.name);
-  editorProject.metadata.id = 'folio-component-canvas';
-  editorProject.metadata.name = master.name;
-  editorProject.pages[0].name = master.name;
-  editorProject.pages[0].route = '/';
-  editorProject.pages[0].document = {
-    ...master.document,
-    name: master.name,
-    nodes: master.document.nodes.map((node) => ({ ...node })),
-  };
-  return editorProject;
+  const project = createInitialProject(master.name);
+  project.metadata.id = 'folio-component-canvas';
+  project.metadata.name = master.name;
+  project.pages[0].name = master.name;
+  project.pages[0].route = '/';
+  project.pages[0].document = { ...master.document, name: master.name, nodes: master.document.nodes.map((node) => ({ ...node })) };
+  return project;
 }
 
-/**
- * Builds a canonical legacy update only for local edits based on the current master.
- * A conflicted or stale session can never write its old buffer over a newer canonical version.
- */
+/** Creates an atomic compare-and-swap action rather than a stale full ComponentDefinition replacement. */
 export function createComponentCanvasSyncAction(
   master: ComponentDefinition | undefined,
   editedDocument: FolioDocument,
   session?: ComponentCanvasSyncSession,
-): Extract<EditorAction, { type: 'update-component' }> | null {
+): Extract<EditorAction, { type: 'sync-component-document' }> | null {
   if (!master || areDocumentsStructurallyEqual(master.document, editedDocument)) return null;
   if (session && (
-    session.componentId !== master.id ||
-    session.conflicted ||
-    !areDocumentsStructurallyEqual(session.baseDocument, master.document) ||
-    !areDocumentsStructurallyEqual(session.observedCanonicalDocument, master.document)
+    session.componentId !== master.id || session.conflicted || session.masterStatus !== 'present' ||
+    session.baseDocument !== master.document || session.baseUpdatedAt !== master.updatedAt
   )) return null;
-
   return {
-    type: 'update-component',
-    component: {
-      ...master,
-      document: editedDocument,
-      updatedAt: new Date().toISOString(),
-    },
+    type: 'sync-component-document', componentId: master.id,
+    expectedMasterDocument: session?.baseDocument ?? master.document,
+    expectedUpdatedAt: session?.baseUpdatedAt ?? master.updatedAt,
+    document: editedDocument, updatedAt: new Date().toISOString(),
   };
 }
 
-/** Advances the buffer baseline only after the canonical reducer transition was accepted. */
 export function advanceComponentCanvasSyncSession(
   session: ComponentCanvasSyncSession,
   committedMaster: ComponentDefinition,
 ): ComponentCanvasSyncSession {
   if (session.componentId !== committedMaster.id) {
-    return {
-      ...session,
-      observedCanonicalDocument: committedMaster.document,
-      conflicted: true,
-    };
+    return { ...session, observedCanonicalDocument: committedMaster.document, conflicted: true };
   }
   return {
     componentId: committedMaster.id,
     baseDocument: committedMaster.document,
+    baseUpdatedAt: committedMaster.updatedAt,
     observedCanonicalDocument: committedMaster.document,
     conflicted: false,
+    masterStatus: 'present',
   };
 }

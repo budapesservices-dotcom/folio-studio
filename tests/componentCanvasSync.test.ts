@@ -4,8 +4,10 @@ import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
 import {
   advanceComponentCanvasSyncSession,
+  createComponentCanvasBufferProject,
   createComponentCanvasSyncAction,
   createComponentCanvasSyncSession,
+  markComponentCanvasMasterMissing,
   reconcileComponentCanvasSyncSession,
 } from '../src/app/componentCanvasSync';
 import { areDocumentsStructurallyEqual } from '../src/core/document/equality';
@@ -253,3 +255,119 @@ describe('Component Canvas master synchronization', () => {
     expect(store.getSnapshot().editorState.past).toHaveLength(1);
   });
 });
+
+
+describe('Atomic Component Canvas sync and orphan recovery', () => {
+  it('rejects a stale M0 sync action after canonical master advances to M2 without changing M2 metadata or history', () => {
+    const { store, master } = createFixture();
+    const session = createComponentCanvasSyncSession(master);
+    const localM1 = {
+      ...copyDocument(master.document),
+      nodes: master.document.nodes.map((node) => ({ ...node, y: node.y + 100 })),
+    };
+    const staleM0Action = createComponentCanvasSyncAction(master, localM1, session);
+    if (!staleM0Action) throw new Error('Expected an M0 sync action.');
+
+    const canonicalM2Document = {
+      ...copyDocument(master.document),
+      nodes: master.document.nodes.map((node) => ({ ...node, x: node.x + 654 })),
+    };
+    const updated = store.dispatchLegacyAction({
+      type: 'update-component',
+      component: {
+        ...getMaster(store),
+        name: 'Renamed canonical master',
+        createdAt: '2025-01-01T00:00:00.000Z',
+        updatedAt: '2026-11-20T03:00:00.000Z',
+        document: canonicalM2Document,
+      },
+    });
+    expect(updated.status).toBe('committed');
+    const beforeStaleDispatch = store.getSnapshot();
+    const beforePast = beforeStaleDispatch.editorState.past;
+    const beforeFuture = beforeStaleDispatch.editorState.future;
+
+    const staleResult = store.dispatchLegacyAction(staleM0Action);
+
+    expect(staleResult.status).toBe('component-conflict');
+    expect(store.getSnapshot()).toBe(beforeStaleDispatch);
+    expect(store.getSnapshot().projectRevision).toBe(beforeStaleDispatch.projectRevision);
+    expect(store.getSnapshot().editorState.past).toBe(beforePast);
+    expect(store.getSnapshot().editorState.future).toBe(beforeFuture);
+    expect(getMaster(store)).toMatchObject({
+      name: 'Renamed canonical master',
+      createdAt: '2025-01-01T00:00:00.000Z',
+      updatedAt: '2026-11-20T03:00:00.000Z',
+    });
+    expect(getMaster(store).document).toEqual(canonicalM2Document);
+    expect(getMaster(store).document.nodes[0].x).toBe(master.document.nodes[0].x + 654);
+  });
+
+  it('keeps local buffer edits orphaned when Undo removes and Redo restores the canonical master', () => {
+    const project = createInitialProject('Orphaned component history');
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const component = {
+      id: 'component-master',
+      name: 'Button',
+      document: {
+        ...project.pages[0].document,
+        id: 'component-document',
+        name: 'Button',
+        nodes: [{ ...createRectNode(), id: 'master-node' }],
+      },
+      createdAt: '2026-11-20T00:00:00.000Z',
+      updatedAt: '2026-11-20T00:00:00.000Z',
+    };
+    expect(store.dispatchLegacyAction({ type: 'add-component', component }).status).toBe('committed');
+    const master = getMaster(store);
+    let session = createComponentCanvasSyncSession(master);
+    const localBuffer = {
+      ...copyDocument(master.document),
+      nodes: master.document.nodes.map((node) => ({ ...node, y: node.y + 777 })),
+    };
+
+    expect(store.dispatchLegacyAction({ type: 'undo' }).status).toBe('committed');
+    expect(store.getSnapshot().editorState.project.components).toHaveLength(0);
+    session = markComponentCanvasMasterMissing(session);
+    expect(session.masterStatus).toBe('missing');
+
+    expect(store.dispatchLegacyAction({ type: 'redo' }).status).toBe('committed');
+    const returnedMaster = getMaster(store);
+    const returned = reconcileComponentCanvasSyncSession(session, returnedMaster, localBuffer);
+    expect(returned.status).toBe('orphaned-master-returned');
+    if (returned.status !== 'orphaned-master-returned') throw new Error('Expected explicit orphan recovery state.');
+    session = returned.session;
+    expect(session.masterStatus).toBe('returned');
+    expect(localBuffer.nodes[0].y).toBe(master.document.nodes[0].y + 777);
+    expect(createComponentCanvasSyncAction(returnedMaster, localBuffer, session)).toBeNull();
+
+    const laterLocalEdit = {
+      ...localBuffer,
+      nodes: localBuffer.nodes.map((node) => ({ ...node, x: node.x + 55 })),
+    };
+    expect(reconcileComponentCanvasSyncSession(session, returnedMaster, laterLocalEdit).status).toBe('orphaned');
+    expect(getMaster(store).document).toEqual(master.document);
+  });
+
+  it('allows a separate explicit discard/reload operation after an orphaned master returns', () => {
+    const { store, master } = createFixture();
+    const session = markComponentCanvasMasterMissing(createComponentCanvasSyncSession(master));
+    const localBuffer = {
+      ...copyDocument(master.document),
+      nodes: master.document.nodes.map((node) => ({ ...node, x: node.x + 400 })),
+    };
+    const returned = reconcileComponentCanvasSyncSession(session, getMaster(store), localBuffer);
+    expect(returned.status).toBe('orphaned-master-returned');
+    if (returned.status !== 'orphaned-master-returned') throw new Error('Expected an orphaned return.');
+
+    // Models the explicit recovery action in App: only an affirmative user action
+    // replaces the local workspace buffer and establishes a fresh baseline.
+    const reloadedBuffer = createComponentCanvasBufferProject(getMaster(store)).pages[0].document;
+    const reloadedSession = createComponentCanvasSyncSession(getMaster(store));
+    expect(reloadedBuffer.nodes).toEqual(getMaster(store).document.nodes);
+    expect(reloadedSession.masterStatus).toBe('present');
+    expect(createComponentCanvasSyncAction(getMaster(store), reloadedBuffer, reloadedSession)).toBeNull();
+    expect(localBuffer.nodes[0].x).toBe(master.document.nodes[0].x + 400);
+  });
+});
+

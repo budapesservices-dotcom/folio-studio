@@ -1,4 +1,4 @@
-import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
+import type { ComponentDefinition, DesignNode, FolioDocument, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { areDocumentsStructurallyEqual } from '../core/document/equality';
 import { replaceComponentInstancesInDocument } from '../core/document/components';
@@ -41,6 +41,7 @@ export type EditorAction =
   | { type: 'set-active-page'; pageId: string }
   | { type: 'add-component'; component: ComponentDefinition }
   | { type: 'update-component'; component: ComponentDefinition }
+  | { type: 'sync-component-document'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; document: FolioDocument; updatedAt: string }
   | { type: 'rename-component'; componentId: string; name: string }
   | { type: 'delete-component'; componentId: string }
   | { type: 'replace-project'; project: FolioProject }
@@ -366,6 +367,18 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (!currentComponent || areDocumentsStructurallyEqual(currentComponent.document, action.component.document)) return state;
       const components = state.project.components.map((component) =>
         component.id === action.component.id ? action.component : component);
+      return withSnapshot(state, touch({ ...state.project, components }));
+    }
+
+    case 'sync-component-document': {
+      const currentComponent = state.project.components.find((component) => component.id === action.componentId);
+      if (!currentComponent || currentComponent.document !== action.expectedMasterDocument ||
+          currentComponent.updatedAt !== action.expectedUpdatedAt ||
+          areDocumentsStructurallyEqual(currentComponent.document, action.document)) return state;
+      const components = state.project.components.map((component) =>
+        component.id === action.componentId
+          ? { ...component, document: action.document, updatedAt: action.updatedAt }
+          : component);
       return withSnapshot(state, touch({ ...state.project, components }));
     }
 

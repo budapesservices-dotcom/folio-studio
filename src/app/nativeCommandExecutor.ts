@@ -19,7 +19,8 @@ import type {
   NodeTransformCommand,
 } from '../core/commands/types';
 import { NATIVE_COMMAND_REGISTRY, type NativeCommandAdapterContext } from './nativeCommandRegistry';
-import type { CanonicalEditorStore, CanonicalEditorStoreSnapshot } from './editorStore';
+import { isSnapshotOwnedByStore, type CanonicalEditorStore, type CanonicalEditorStoreSnapshot } from './editorStore';
+import { registerNativeCommandCommitAuthorization } from './nativeCommandCommitAuth';
 import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
 
 const KNOWN_NATIVE_PERMISSIONS = new Set([
@@ -371,14 +372,17 @@ export function prepareNativeCommand(
     warnings,
   }) as Extract<NativeCommandPreparation, { status: 'prepared' }>;
 
-  preparedNativeOperations.set(preparation, {
-    baseSnapshot: snapshot,
-    command,
-    projectId: changeDraft.projectId,
-    baseProjectRevision: snapshot.projectRevision,
-    candidateState: immutableCandidateState,
+  const details = {
+    baseSnapshot: snapshot, command, projectId: changeDraft.projectId,
+    baseProjectRevision: snapshot.projectRevision, candidateState: immutableCandidateState,
+    changeDraft: immutableChangeDraft, warnings,
+  };
+  preparedNativeOperations.set(preparation, details);
+  registerNativeCommandCommitAuthorization(preparation, {
+    baseSnapshot: snapshot as object,
+    candidateState: immutableCandidateState as object,
     changeDraft: immutableChangeDraft,
-    warnings,
+    changeSource: command.source,
   });
   return preparation;
 }
@@ -414,82 +418,57 @@ export function commitPreparedCommand(
     );
   }
 
+  if (!isSnapshotOwnedByStore(store, details.baseSnapshot)) {
+    return createRejectedCommit(store.getSnapshot(), details.command, 'STORE_OWNERSHIP_MISMATCH',
+      'The preparation belongs to a different canonical editor store.');
+  }
+  const preparedChange: NativeChangeSet = freezeGraph({ ...details.changeDraft, projectRevision: details.baseProjectRevision + 1 });
+  const preparedResult: NativeCommandResult = freezeGraph({
+    protocolVersion: 1, commandId: details.command.commandId,
+    ...(details.command.transactionId ? { transactionId: details.command.transactionId } : {}),
+    status: 'applied', code: 'APPLIED', message: 'The command was committed successfully.',
+    projectId: details.projectId, projectRevisionBefore: details.baseProjectRevision,
+    projectRevisionAfter: details.baseProjectRevision + 1, changed: true,
+    affectedDocuments: preparedChange.documents.map((item) => item.address),
+    affectedNodes: details.command.type === 'node.transform'
+      ? details.command.payload.nodes.map((item) => item.ref) : details.command.payload.nodes,
+    warnings: details.warnings,
+  });
   const commit = store.commitEditorTransition({
     expectedProjectRevision: details.baseProjectRevision,
     expectedEditorState: details.baseSnapshot.editorState,
     candidateState: details.candidateState,
-    changeDraft: details.changeDraft,
+    nativeCommandPreparation: preparation,
   });
 
   if (commit.status === 'revision-conflict') {
-    return createRejectedCommit(
-      commit.snapshot,
-      details.command,
-      'REVISION_CONFLICT',
-      'The project changed after command preparation; no command changes were committed.',
-    );
+    return createRejectedCommit(commit.snapshot, details.command, 'REVISION_CONFLICT',
+      'The project changed after command preparation; no command changes were committed.');
   }
   if (commit.status === 'editor-conflict') {
-    return createRejectedCommit(
-      commit.snapshot,
-      details.command,
-      'EDITOR_STATE_CONFLICT',
-      'The editor state changed after command preparation; no command changes were committed.',
-    );
+    return createRejectedCommit(commit.snapshot, details.command, 'EDITOR_STATE_CONFLICT',
+      'The editor state changed after command preparation; no command changes were committed.');
+  }
+  if (commit.status === 'component-conflict') {
+    return createRejectedCommit(commit.snapshot, details.command, 'COMPONENT_CONFLICT',
+      'The canonical component changed before this command could commit.');
   }
   if (commit.status === 'failed') {
     const code = commit.errorCode === 'PROJECT_VALIDATION_FAILED'
       ? 'PROJECT_VALIDATION_FAILED'
-      : 'INTERNAL_ERROR';
+      : commit.errorCode === 'UNAUTHORIZED_EVENT_PUBLICATION' ? 'INVALID_PREPARATION' : 'INTERNAL_ERROR';
     return createRejectedCommit(commit.snapshot, details.command, code, 'The command could not be committed.');
   }
 
-  const currentRevision = commit.snapshot.projectRevision;
-  if (currentRevision !== details.baseProjectRevision + 1) {
-    return createRejectedCommit(commit.snapshot, details.command, 'INTERNAL_ERROR', 'The project revision did not advance as part of the command commit.');
-  }
-
-  const change: NativeChangeSet = {
-    ...details.changeDraft,
-    projectRevision: currentRevision,
-  };
-  const event: NativeChangeEvent = {
-    eventId: details.command.commandId + ':change',
-    projectId: details.projectId,
-    projectRevision: currentRevision,
-    commandId: details.command.commandId,
-    ...(details.command.transactionId ? { transactionId: details.command.transactionId } : {}),
-    source: details.command.source,
-    change,
-  };
-  store.publishChange(event);
-
-  const result: NativeCommandResult = {
-    protocolVersion: 1,
-    commandId: details.command.commandId,
-    ...(details.command.transactionId ? { transactionId: details.command.transactionId } : {}),
-    status: 'applied',
-    code: 'APPLIED',
-    message: 'The command was committed successfully.',
-    projectId: details.projectId,
-    projectRevisionBefore: details.baseProjectRevision,
-    projectRevisionAfter: currentRevision,
-    changed: true,
-    affectedDocuments: change.documents.map((item) => item.address),
-    affectedNodes: details.command.type === 'node.transform'
-      ? details.command.payload.nodes.map((item) => item.ref)
-      : details.command.payload.nodes,
-    warnings: details.warnings,
-  };
-
+  const event = commit.event as NativeChangeEvent;
   return {
     status: 'applied',
-    result,
+    result: preparedResult,
     committedState: commit.snapshot.editorState,
-    change,
+    change: event.change,
     event,
   };
-}
+
 
 const completedCommandIds = new WeakMap<object, Set<string>>();
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

@@ -17,65 +17,79 @@ export type ValidationOutcome<T> =
 const STANDARD_OBJECT_PROTOTYPE_KEYS = new Set(Reflect.ownKeys(Object.prototype));
 const STANDARD_ARRAY_PROTOTYPE_KEYS = new Set(Reflect.ownKeys(Array.prototype));
 
+/** Limits apply to one input graph: depth 64, 4,096 object/array nodes, 16,384 own properties,
+ * 4,096 aggregate dense array elements and 1,000 elements per array. Shared identities are rejected.
+ */
+export const NATIVE_COMMAND_RUNTIME_LIMITS = Object.freeze({
+  maxDepth: 64, maxObjects: 4096, maxProperties: 16384, maxArrayElements: 4096, maxArrayLength: 1000,
+});
 type RuntimeCloneResult = { ok: true; value: unknown } | { ok: false };
-
-function cloneRuntimeData(value: unknown, stack = new WeakSet<object>()): RuntimeCloneResult {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
-    return { ok: true, value };
-  }
+interface RuntimeCloneBudget {
+  readonly visited: WeakSet<object>;
+  readonly active: WeakSet<object>;
+  objects: number;
+  properties: number;
+  arrayElements: number;
+}
+function cloneRuntimeData(
+  value: unknown,
+  budget: RuntimeCloneBudget = {
+    visited: new WeakSet<object>(), active: new WeakSet<object>(),
+    objects: 0, properties: 0, arrayElements: 0,
+  },
+  depth = 0,
+): RuntimeCloneResult {
+  if (depth > NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth) return { ok: false };
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') return { ok: true, value };
   if (typeof value !== 'object') return { ok: false };
-
   try {
-    if (stack.has(value)) return { ok: false };
-    stack.add(value);
-
+    if (budget.active.has(value) || budget.visited.has(value)) return { ok: false };
+    budget.visited.add(value); budget.active.add(value); budget.objects += 1;
+    if (budget.objects > NATIVE_COMMAND_RUNTIME_LIMITS.maxObjects) return { ok: false };
     if (Array.isArray(value)) {
       const prototype = Object.getPrototypeOf(value);
-      if (prototype !== Array.prototype ||
-          Reflect.ownKeys(prototype).some((key) => !STANDARD_ARRAY_PROTOTYPE_KEYS.has(key))) {
-        return { ok: false };
-      }
+      if (prototype !== Array.prototype || Reflect.ownKeys(prototype).some((key) => !STANDARD_ARRAY_PROTOTYPE_KEYS.has(key))) return { ok: false };
       const keys = Reflect.ownKeys(value);
       const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
-      if (!lengthDescriptor || !('value' in lengthDescriptor) ||
-          lengthDescriptor.enumerable || !Number.isSafeInteger(lengthDescriptor.value) ||
-          lengthDescriptor.value < 0 || lengthDescriptor.value > 1000 ||
-          keys.length !== lengthDescriptor.value + 1) {
-        return { ok: false };
-      }
+      if (!lengthDescriptor || !('value' in lengthDescriptor) || lengthDescriptor.enumerable ||
+          !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+          lengthDescriptor.value > NATIVE_COMMAND_RUNTIME_LIMITS.maxArrayLength ||
+          keys.length !== lengthDescriptor.value + 1) return { ok: false };
+      budget.arrayElements += lengthDescriptor.value;
+      budget.properties += lengthDescriptor.value;
+      if (budget.arrayElements > NATIVE_COMMAND_RUNTIME_LIMITS.maxArrayElements || budget.properties > NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties) return { ok: false };
       const output: unknown[] = new Array(lengthDescriptor.value);
       for (let index = 0; index < lengthDescriptor.value; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
         if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return { ok: false };
-        const child = cloneRuntimeData(descriptor.value, stack);
+        const child = cloneRuntimeData(descriptor.value, budget, depth + 1);
         if (!child.ok) return { ok: false };
         output[index] = child.value;
       }
       return { ok: true, value: output };
     }
-
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== null && prototype !== Object.prototype) return { ok: false };
-    if (prototype === Object.prototype &&
-        Reflect.ownKeys(prototype).some((key) => !STANDARD_OBJECT_PROTOTYPE_KEYS.has(key))) {
-      return { ok: false };
-    }
-
+    if (prototype === Object.prototype && Reflect.ownKeys(prototype).some((key) => !STANDARD_OBJECT_PROTOTYPE_KEYS.has(key))) return { ok: false };
+    const keys = Reflect.ownKeys(value);
+    budget.properties += keys.length;
+    if (budget.properties > NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties) return { ok: false };
     const output: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    for (const key of Reflect.ownKeys(value)) {
+    for (const key of keys) {
       if (typeof key !== 'string') return { ok: false };
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return { ok: false };
-      const child = cloneRuntimeData(descriptor.value, stack);
+      const child = cloneRuntimeData(descriptor.value, budget, depth + 1);
       if (!child.ok) return { ok: false };
       output[key] = child.value;
     }
     return { ok: true, value: output };
   } catch {
     return { ok: false };
-  } finally {
-    stack.delete(value);
-  }
+  } finally { budget.active.delete(value); }
+}
+export function isRuntimeCommandDataWithinLimits(value: unknown): boolean {
+  return cloneRuntimeData(value).ok;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

@@ -21,6 +21,7 @@ import {
   createComponentCanvasSyncAction,
   createComponentCanvasSyncSession,
   reconcileComponentCanvasSyncSession,
+  markComponentCanvasMasterMissing,
   type ComponentCanvasSyncSession,
 } from './componentCanvasSync';
 import { FloatingWindow } from './FloatingWindow';
@@ -154,6 +155,7 @@ export function App() {
   const [componentState, componentDispatch] = useReducer(editorReducer, componentInitialState);
   const [componentReady, setComponentReady] = useState(false);
   const componentSyncSessionRef = useRef<ComponentCanvasSyncSession | null>(null);
+  const [componentRecoveryStatus, setComponentRecoveryStatus] = useState<'none' | 'missing' | 'returned'>('none');
   const [isProjectLoaded, setIsProjectLoaded] = useState(false);
   const isHydrating = !isProjectLoaded || !componentReady;
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
@@ -905,6 +907,7 @@ export function App() {
 
   const openMasterComponent = (component: ComponentDefinition) => {
     componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
+    setComponentRecoveryStatus('none');
     componentDispatch({
       type: 'replace-project',
       project: createComponentCanvasBufferProject(component),
@@ -966,6 +969,7 @@ export function App() {
     if (editingComponentId === component.id) {
       setEditingComponentId(null);
       componentSyncSessionRef.current = null;
+      setComponentRecoveryStatus('none');
       componentDispatch({ type: 'replace-project', project: componentInitialState.project });
       setComponentCanvasClosed(true);
       setComponentCanvasMinimized(false);
@@ -978,7 +982,12 @@ export function App() {
     if (!componentReady || !editingComponentId) return;
     const master = state.project.components.find((component) => component.id === editingComponentId);
     if (!master) {
-      componentSyncSessionRef.current = null;
+      const session = componentSyncSessionRef.current;
+      if (session && session.masterStatus !== 'missing') {
+        componentSyncSessionRef.current = markComponentCanvasMasterMissing(session);
+        setComponentRecoveryStatus('missing');
+        setNotice('The master is temporarily missing from Main Canvas history. The Component Canvas buffer and local edits are preserved; synchronization is paused.');
+      }
       return;
     }
 
@@ -995,6 +1004,16 @@ export function App() {
 
     const editedDocument = getActiveDocument(componentState.project);
     const reconciliation = reconcileComponentCanvasSyncSession(session, master, editedDocument);
+    if (reconciliation.status === 'orphaned-master-returned') {
+      componentSyncSessionRef.current = reconciliation.session;
+      setComponentRecoveryStatus('returned');
+      setNotice('The master has returned, but the previous Component Canvas buffer remains untouched. Reloading it would discard local edits; use the explicit recovery action only when ready.');
+      return;
+    }
+    if (reconciliation.status === 'orphaned') {
+      componentSyncSessionRef.current = reconciliation.session;
+      return;
+    }
     if (reconciliation.status === 'reload-buffer') {
       componentSyncSessionRef.current = reconciliation.session;
       componentDispatch({
@@ -1034,6 +1053,20 @@ export function App() {
       );
     }
   }, [componentState.project.pages, editingComponentId, componentReady, state.project.components]);
+
+  const reloadRecoveredComponentMaster = () => {
+    if (!editingComponentId) return;
+    const master = state.project.components.find((component) => component.id === editingComponentId);
+    if (!master) {
+      setComponentRecoveryStatus('missing');
+      setNotice('The canonical master is still missing. The local Component Canvas buffer remains preserved.');
+      return;
+    }
+    componentSyncSessionRef.current = createComponentCanvasSyncSession(master);
+    componentDispatch({ type: 'replace-project', project: createComponentCanvasBufferProject(master) });
+    setComponentRecoveryStatus('none');
+    setNotice('The latest canonical master was reloaded. The previous local Component Canvas edits were discarded by explicit request.');
+  };
 
   const switchPage = (page: FolioPage) => {
     if (isHydrating || page.id === activePageId) return;
@@ -2251,7 +2284,16 @@ export function App() {
           <span>Loading your pages and component library from local storage</span>
         </div>
       )}
-      {notice && <div class="toast" role="status">{notice}</div>}
+      {notice && (
+        <div class="toast" role="status">
+          {notice}
+          {componentRecoveryStatus === 'returned' && (
+            <button type="button" class="component-recovery-action" onClick={reloadRecoveredComponentMaster}>
+              Discard local edits and reload master
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

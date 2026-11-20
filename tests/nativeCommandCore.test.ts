@@ -3,7 +3,11 @@ import { createInitialProject, createRectNode } from '../src/core/document/facto
 import { getActiveDocument } from '../src/core/document/project';
 import type { DocumentAddress, NativeNodeRef } from '../src/core/document/ast';
 import type { NativeCommandContext } from '../src/core/commands/types';
-import { validateNativeCommandEnvelope } from '../src/core/commands/validation';
+import {
+  isRuntimeCommandDataWithinLimits,
+  NATIVE_COMMAND_RUNTIME_LIMITS,
+  validateNativeCommandEnvelope,
+} from '../src/core/commands/validation';
 import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { NATIVE_COMMAND_REGISTRY } from '../src/app/nativeCommandRegistry';
 import { editorReducer, createEditorState } from '../src/app/editorReducer';
@@ -1086,3 +1090,163 @@ describe('Strict runtime object validation', () => {
     expect(events[0].source.actor.actorId).toBe('tester');
   });
 });
+
+
+describe('Prepared command originating-store ownership', () => {
+  it('rejects Store A preparation in Store B even when both start from the same EditorState object', () => {
+    const fixture = createFixture();
+    const sharedInitialState = fixture.store.getSnapshot().editorState;
+    const storeB = createCanonicalEditorStore(sharedInitialState);
+    const beforeB = storeB.getSnapshot();
+    const preparation = prepareNativeCommand(fixture.store.getSnapshot(), makeCommand(
+      'node.transform',
+      fixture.address,
+      { nodes: [{ ref: nodeRef(fixture.address), transform: { x: 955 } }] },
+    ), fixture.context);
+    if (preparation.status !== 'prepared') throw new Error('Expected Store A preparation.');
+
+    const crossStore = commitPreparedCommand(storeB, preparation);
+    expect(crossStore).toMatchObject({ status: 'rejected', result: { code: 'STORE_OWNERSHIP_MISMATCH' } });
+    expect(storeB.getSnapshot()).toBe(beforeB);
+    expect(storeB.getSnapshot().projectRevision).toBe(0);
+    expect(currentNode(storeB)?.x).toBe(10);
+
+    const legitimate = commitPreparedCommand(fixture.store, preparation);
+    expect(legitimate.status).toBe('applied');
+    expect(currentNode(fixture.store)?.x).toBe(955);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(1);
+  });
+});
+
+describe('Authorized immutable Native change publication', () => {
+  it('rejects caller-authored event publication data without changing state', () => {
+    const fixture = createFixture();
+    const before = fixture.store.getSnapshot();
+    expect((fixture.store as unknown as { publishChange?: unknown }).publishChange).toBeUndefined();
+
+    const candidate = editorReducer(before.editorState, { type: 'rename-project', name: 'Unauthorized change' });
+    const attempted = fixture.store.commitEditorTransition({
+      expectedProjectRevision: before.projectRevision,
+      expectedEditorState: before.editorState,
+      candidateState: candidate,
+      changeDraft: {
+        projectId: fixture.project.metadata.id,
+        commandIds: [nextCommandId()],
+        documents: [],
+        components: [],
+        projectMetadataChanged: true,
+      },
+      changeSource: { workspace: 'main', actor: { kind: 'user', actorId: 'tester' } },
+    } as never);
+
+    expect(attempted).toMatchObject({ status: 'failed', errorCode: 'INVALID_COMMIT_INPUT' });
+    expect(fixture.store.getSnapshot()).toBe(before);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(0);
+  });
+
+  it('freezes the complete event graph and isolates subscriber mutation and exceptions', () => {
+    const fixture = createFixture();
+    let blockedMutations = 0;
+    let deliveredEvent: any;
+    fixture.store.subscribeChanges((event) => {
+      try { (event.change.documents[0].address as any).documentId = 'attacker-document'; }
+      catch { blockedMutations += 1; }
+      try { (event.change.documents[0].nodeIds.updated as any).push('attacker-node'); }
+      catch { blockedMutations += 1; }
+      try { (event.source.actor as any).actorId = 'attacker'; }
+      catch { blockedMutations += 1; }
+    });
+    fixture.store.subscribeChanges(() => { throw new Error('subscriber failure'); });
+    fixture.store.subscribeChanges((event) => { deliveredEvent = event; });
+
+    const result = executeNativeCommand(fixture.store, makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 966 } }],
+    }), fixture.context);
+
+    expect(result.status).toBe('applied');
+    expect(result.code).toBe('APPLIED');
+    expect(fixture.store.getSnapshot().projectRevision).toBe(1);
+    expect(currentNode(fixture.store)?.x).toBe(966);
+    expect(blockedMutations).toBe(3);
+    expect(deliveredEvent).toBe(result.event);
+    expect(Object.isFrozen(deliveredEvent)).toBe(true);
+    expect(Object.isFrozen(deliveredEvent.change)).toBe(true);
+    expect(Object.isFrozen(deliveredEvent.change.documents[0])).toBe(true);
+    expect(Object.isFrozen(deliveredEvent.change.documents[0].address)).toBe(true);
+    expect(Object.isFrozen(deliveredEvent.change.documents[0].nodeIds.updated)).toBe(true);
+    expect(deliveredEvent.change.documents[0].address.documentId).toBe('document-main');
+    expect(deliveredEvent.change.documents[0].nodeIds.updated).toEqual(['shared-node']);
+    expect(deliveredEvent.source.actor.actorId).toBe('tester');
+    expect(result.result.affectedDocuments[0].documentId).toBe('document-main');
+    expect(result.result.affectedNodes[0].nodeId).toBe('shared-node');
+  });
+});
+
+describe('Native command runtime resource budgets', () => {
+  it('accepts nesting at the depth boundary and rejects one level beyond it', () => {
+    const nested = (depth: number): unknown => {
+      let value: unknown = null;
+      for (let index = 0; index < depth; index += 1) value = { child: value };
+      return value;
+    };
+    expect(isRuntimeCommandDataWithinLimits(nested(NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth))).toBe(true);
+    expect(isRuntimeCommandDataWithinLimits(nested(NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth + 1))).toBe(false);
+  });
+
+  it('accepts the object-node budget boundary and rejects the first object beyond it', () => {
+    const graph = (children: number) => {
+      const root = Object.create(null) as Record<string, unknown>;
+      for (let index = 0; index < children; index += 1) root['node-' + index] = {};
+      return root;
+    };
+    expect(isRuntimeCommandDataWithinLimits(graph(NATIVE_COMMAND_RUNTIME_LIMITS.maxObjects - 1))).toBe(true);
+    expect(isRuntimeCommandDataWithinLimits(graph(NATIVE_COMMAND_RUNTIME_LIMITS.maxObjects))).toBe(false);
+  });
+
+  it('accepts the aggregate property budget boundary and rejects one additional property', () => {
+    const graph = (count: number) => {
+      const value = Object.create(null) as Record<string, unknown>;
+      for (let index = 0; index < count; index += 1) value['property-' + index] = null;
+      return value;
+    };
+    expect(isRuntimeCommandDataWithinLimits(graph(NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties))).toBe(true);
+    expect(isRuntimeCommandDataWithinLimits(graph(NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties + 1))).toBe(false);
+  });
+
+  it('bounds aggregate array elements even when each individual array is valid', () => {
+    const graph = (lastArrayLength: number) => {
+      const value = Object.create(null) as Record<string, unknown>;
+      [1000, 1000, 1000, 1000, lastArrayLength].forEach((length, index) => {
+        value['array-' + index] = new Array(length).fill(null);
+      });
+      return value;
+    };
+    expect(isRuntimeCommandDataWithinLimits(graph(96))).toBe(true);
+    expect(isRuntimeCommandDataWithinLimits(graph(97))).toBe(false);
+  });
+
+  it('rejects shared-reference amplification, cycles, sparse arrays and Proxy reflection failures', () => {
+    const shared = { expensive: { leaf: true } };
+    expect(isRuntimeCommandDataWithinLimits([shared, shared])).toBe(false);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(isRuntimeCommandDataWithinLimits(circular)).toBe(false);
+    expect(isRuntimeCommandDataWithinLimits(new Array(2))).toBe(false);
+    const hostileProxy = new Proxy({ value: true }, {
+      ownKeys() { throw new Error('blocked reflection'); },
+    });
+    expect(isRuntimeCommandDataWithinLimits(hostileProxy)).toBe(false);
+  });
+
+  it('accepts null-prototype records and rejects arrays over the per-array bound', () => {
+    const valid = makeCommand('node.transform', {
+      projectId: 'project-id',
+      owner: { kind: 'page', id: 'page-id' },
+      documentId: 'document-id',
+    }, { nodes: [] });
+    const nullPrototypeEnvelope = Object.assign(Object.create(null), valid);
+    expect(validateNativeCommandEnvelope(nullPrototypeEnvelope).ok).toBe(true);
+    expect(isRuntimeCommandDataWithinLimits(new Array(NATIVE_COMMAND_RUNTIME_LIMITS.maxArrayLength + 1).fill(null))).toBe(false);
+  });
+});
+
