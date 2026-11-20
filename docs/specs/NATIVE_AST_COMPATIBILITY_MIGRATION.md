@@ -180,19 +180,23 @@ The editor also calls collapseLegacyCanvasInstances while creating editor state.
 
 These issues are identified from the current source/docs audit. They are not introduced by the migration plan.
 
-### 4.1 Transform reducer equality check
+### 4.1 Transform reducer equality check — fix applied; verification pending
 
-In editorReducer.ts, transform-nodes compares position, size, onCanvas, and text font size, but does not compare rotation or other transform/presentation fields. A rotation-only change can therefore be treated as unchanged and not committed by this action.
+The original transform-nodes no-op comparison checked position, size, onCanvas, and text font size, but omitted rotation. A rotation-only transform could therefore be ignored.
 
-**Action:** fix and test this as a separate correctness task before relying on transform-nodes as the native transform command. Do not hide the existing bug inside the AST schema migration.
+**Change applied on this branch:** the comparison now includes rotation, and tests/document.test.ts includes a regression case that checks commit, Undo, and Redo for a rotation-only transform.
 
-### 4.2 .flop acceptance documentation and UI mismatch
+**Verification status:** source and test changes are committed to this branch, but automated checks have not yet been run in the local development environment. Await the GitHub Actions result before marking this fix verified.
 
-docs/ARCHITECTURE.md describes the current native project model as v2, while docs/ACCEPTANCE_TESTS.md steps 10–12 describe an Export/Open/invalid-import workflow and step 10 expects formatVersion: 1.
+### 4.2 .flop acceptance and UI integration gap — documentation corrected
 
-In the inspected current App.tsx, the File menu item is placeholder text saying project file commands will be organized there. The app imports IndexedDB save/load functions and autosaves project state, but no native file import/export handler is wired in that inspected application file. Therefore the acceptance checklist currently describes behavior that is not demonstrated by the inspected UI path, and its expected version also conflicts with the documented v2 model.
+The current adapter in src/core/persistence/projectFile.ts implements downloadProject and readProjectFile. It serializes the current v2 project as JSON with a .flop extension, and the reader routes supported input through migrateProjectToV2 (including legacy v1 input).
 
-**Action:** treat native .flop import/export acceptance as blocked until the actual file adapter and UI actions are confirmed. Correct the checklist only after the export/import implementation and fixtures establish the real contract. For current persistence verification, test IndexedDB save/load separately. Do not change the file format merely to satisfy stale documentation.
+However, src/app/App.tsx still presents the File menu as a placeholder and does not wire these adapter functions into user-facing Open/Export actions.
+
+**Change applied:** docs/ACCEPTANCE_TESTS.md now separates the Stage 1 checks that can be run in the current UI from the deferred native file workflow checks. The deferred export expectation is formatVersion: 2; legacy v1 import is explicitly tested as a migration path.
+
+**Remaining work:** connect the adapter to File menu actions and implement the deferred browser-level acceptance checks in a separate authorized milestone. Do not describe file workflow UI as complete.
 
 ### 4.3 Container capability mismatch
 
@@ -208,8 +212,8 @@ Before AST code changes:
 - Capture representative v1 and v2 .flop fixtures.
 - Capture fixtures with nested groups, nested visual parents, clipping, hidden/locked descendants, component instances, and overrides.
 - Document current paint order and Layers panel order.
-- Fix the transform reducer equality gap as a separate bug fix.
-- Reconcile the acceptance test's v1/v2 file-version expectation.
+- Fix and regression-test the transform reducer equality gap as a separate correctness change. (Change committed; CI verification pending.)
+- Reconcile the v1/v2 acceptance expectation and distinguish the existing file adapter from the not-yet-wired File menu. (Documentation corrected.)
 - Run and record existing check/test/build results.
 
 **Exit gate:** representative current projects open, save, reopen, and render without semantic changes.
