@@ -113,6 +113,9 @@ describe('Native Command envelope and registry', () => {
     expect(executeNativeCommand(fixture.store, { ...valid, type: 'node.delete' }, fixture.context)).toMatchObject({
       status: 'rejected', code: 'UNKNOWN_COMMAND',
     });
+    expect(executeNativeCommand(fixture.store, { ...valid, type: 'toString' }, fixture.context)).toMatchObject({
+      status: 'rejected', code: 'UNKNOWN_COMMAND',
+    });
   });
 
   it('rejects duplicate command IDs within the active store session', () => {
@@ -558,6 +561,37 @@ describe('Reducer parity, history and canonical revision', () => {
     }
     expect(fixture.store.getSnapshot().editorState.past).toHaveLength(60);
     expect(fixture.store.getSnapshot().projectRevision).toBe(65);
+  });
+});
+
+describe('Component Canvas isolation at the canonical boundary', () => {
+  it('does not allow the temporary Component Canvas project to own a canonical store', () => {
+    const project = createInitialProject('Temporary buffer');
+    project.metadata.id = 'folio-component-canvas';
+
+    expect(() => createCanonicalEditorStore(createEditorState(project))).toThrow(
+      'The temporary Component Canvas buffer cannot become the canonical Main Canvas project.',
+    );
+  });
+
+  it('rejects replacement with the reserved buffer identity without changing state or revision', () => {
+    const fixture = createFixture();
+    const before = fixture.store.getSnapshot();
+    const reservedProject = createInitialProject('Reserved buffer');
+    reservedProject.metadata.id = 'folio-component-canvas';
+    const candidate = editorReducer(before.editorState, {
+      type: 'replace-project',
+      project: reservedProject,
+    });
+
+    const result = fixture.store.commitEditorTransition({
+      expectedProjectRevision: before.projectRevision,
+      candidateState: candidate,
+    });
+
+    expect(result).toMatchObject({ status: 'failed', errorCode: 'INVALID_CANONICAL_PROJECT' });
+    expect(fixture.store.getSnapshot()).toBe(before);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(0);
   });
 });
 
