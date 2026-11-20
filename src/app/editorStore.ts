@@ -1,8 +1,8 @@
+import type { NativeChangeEvent, NativeChangeSetDraft } from '../core/commands/types';
 import { validateProject } from '../core/document/validation';
+import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
 
 const RESERVED_COMPONENT_CANVAS_ID = 'folio-component-canvas';
-import type { NativeChangeEvent, NativeChangeSetDraft } from '../core/commands/types';
-import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
 
 export interface CanonicalEditorStoreSnapshot {
   readonly editorState: EditorState;
