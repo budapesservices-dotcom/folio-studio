@@ -173,12 +173,13 @@ describe('native .flop project file workflow', () => {
 
   it('treats a cancelled file selection as a no-op', async () => {
     const currentProject = createCompleteProject();
-    const state = createEditorState(currentProject);
+    const originalState = createEditorState(currentProject);
+    const state = originalState;
     const replaceProject = vi.fn();
 
     await expect(openProjectFile(null, replaceProject)).resolves.toBeNull();
     expect(replaceProject).not.toHaveBeenCalled();
-    expect(state.project).toBe(currentProject);
+    expect(state).toBe(originalState);
   });
 
   it('rejects invalid JSON without invoking project replacement', async () => {
