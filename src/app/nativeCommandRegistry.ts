@@ -33,9 +33,9 @@ interface NativeCommandDefinition {
  */
 export const NATIVE_COMMAND_REGISTRY = Object.freeze({
   'node.transform': Object.freeze({
-    type: 'node.transform',
-    commandVersion: 1,
-    allowedTargets: ['document'],
+    type: 'node.transform' as const,
+    commandVersion: 1 as const,
+    allowedTargets: ['document'] as const,
     requiredPermission: 'node.transform',
     validatePayload: validateNodeTransformPayload,
     toEditorActions(command: NativeCommand, context: NativeCommandAdapterContext): readonly EditorAction[] {
@@ -48,9 +48,9 @@ export const NATIVE_COMMAND_REGISTRY = Object.freeze({
     },
   }),
   'node.set-properties': Object.freeze({
-    type: 'node.set-properties',
-    commandVersion: 1,
-    allowedTargets: ['document'],
+    type: 'node.set-properties' as const,
+    commandVersion: 1 as const,
+    allowedTargets: ['document'] as const,
     requiredPermission: 'node.update',
     validatePayload: validateNodeSetPropertiesPayload,
     toEditorActions(command: NativeCommand, _context: NativeCommandAdapterContext): readonly EditorAction[] {
