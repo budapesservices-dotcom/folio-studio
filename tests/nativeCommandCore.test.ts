@@ -1201,6 +1201,7 @@ describe('Native command runtime resource budgets', () => {
       for (let index = 0; index < depth; index += 1) value = { child: value };
       return value;
     };
+    expect(isRuntimeCommandDataWithinLimits(nested(NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth - 1))).toBe(true);
     expect(isRuntimeCommandDataWithinLimits(nested(NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth))).toBe(true);
     expect(isRuntimeCommandDataWithinLimits(nested(NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth + 1))).toBe(false);
   });
@@ -1211,6 +1212,7 @@ describe('Native command runtime resource budgets', () => {
       for (let index = 0; index < children; index += 1) root['node-' + index] = {};
       return root;
     };
+    expect(isRuntimeCommandDataWithinLimits(graph(NATIVE_COMMAND_RUNTIME_LIMITS.maxObjects - 2))).toBe(true);
     expect(isRuntimeCommandDataWithinLimits(graph(NATIVE_COMMAND_RUNTIME_LIMITS.maxObjects - 1))).toBe(true);
     expect(isRuntimeCommandDataWithinLimits(graph(NATIVE_COMMAND_RUNTIME_LIMITS.maxObjects))).toBe(false);
   });
@@ -1221,6 +1223,7 @@ describe('Native command runtime resource budgets', () => {
       for (let index = 0; index < count; index += 1) value['property-' + index] = null;
       return value;
     };
+    expect(isRuntimeCommandDataWithinLimits(graph(NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties - 1))).toBe(true);
     expect(isRuntimeCommandDataWithinLimits(graph(NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties))).toBe(true);
     expect(isRuntimeCommandDataWithinLimits(graph(NATIVE_COMMAND_RUNTIME_LIMITS.maxProperties + 1))).toBe(false);
   });
@@ -1233,6 +1236,7 @@ describe('Native command runtime resource budgets', () => {
       });
       return value;
     };
+    expect(isRuntimeCommandDataWithinLimits(graph(95))).toBe(true);
     expect(isRuntimeCommandDataWithinLimits(graph(96))).toBe(true);
     expect(isRuntimeCommandDataWithinLimits(graph(97))).toBe(false);
   });
