@@ -14,12 +14,91 @@ export type ValidationOutcome<T> =
   | { ok: true; value: T }
   | { ok: false; code: string; message: string };
 
+const STANDARD_OBJECT_PROTOTYPE_KEYS = new Set(Reflect.ownKeys(Object.prototype));
+const STANDARD_ARRAY_PROTOTYPE_KEYS = new Set(Reflect.ownKeys(Array.prototype));
+
+type RuntimeCloneResult = { ok: true; value: unknown } | { ok: false };
+
+function cloneRuntimeData(value: unknown, stack = new WeakSet<object>()): RuntimeCloneResult {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+    return { ok: true, value };
+  }
+  if (typeof value !== 'object') return { ok: false };
+
+  try {
+    if (stack.has(value)) return { ok: false };
+    stack.add(value);
+
+    if (Array.isArray(value)) {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Array.prototype ||
+          Reflect.ownKeys(prototype).some((key) => !STANDARD_ARRAY_PROTOTYPE_KEYS.has(key))) {
+        return { ok: false };
+      }
+      const keys = Reflect.ownKeys(value);
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+      if (!lengthDescriptor || !('value' in lengthDescriptor) ||
+          lengthDescriptor.enumerable || !Number.isSafeInteger(lengthDescriptor.value) ||
+          lengthDescriptor.value < 0 || lengthDescriptor.value > 1000 ||
+          keys.length !== lengthDescriptor.value + 1) {
+        return { ok: false };
+      }
+      const output: unknown[] = new Array(lengthDescriptor.value);
+      for (let index = 0; index < lengthDescriptor.value; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return { ok: false };
+        const child = cloneRuntimeData(descriptor.value, stack);
+        if (!child.ok) return { ok: false };
+        output[index] = child.value;
+      }
+      return { ok: true, value: output };
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== null && prototype !== Object.prototype) return { ok: false };
+    if (prototype === Object.prototype &&
+        Reflect.ownKeys(prototype).some((key) => !STANDARD_OBJECT_PROTOTYPE_KEYS.has(key))) {
+      return { ok: false };
+    }
+
+    const output: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') return { ok: false };
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return { ok: false };
+      const child = cloneRuntimeData(descriptor.value, stack);
+      if (!child.ok) return { ok: false };
+      output[key] = child.value;
+    }
+    return { ok: true, value: output };
+  } catch {
+    return { ok: false };
+  } finally {
+    stack.delete(value);
+  }
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== null && prototype !== Object.prototype) return false;
+    return Reflect.ownKeys(value).every((key) => {
+      if (typeof key !== 'string') return false;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return Boolean(descriptor && descriptor.enumerable && 'value' in descriptor);
+    });
+  } catch {
+    return false;
+  }
 }
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
+  try {
+    return Reflect.ownKeys(value).every((key) => typeof key === 'string' && allowed.includes(key));
+  } catch {
+    return false;
+  }
 }
 
 function isNonEmptyString(value: unknown, maxLength = 256): value is string {
@@ -46,18 +125,28 @@ function isIsoTimestamp(value: unknown): value is string {
   return true;
 }
 
-export function isDocumentAddress(value: unknown): value is DocumentAddress {
+function isDocumentAddressData(value: unknown): value is DocumentAddress {
   if (!isRecord(value) || !hasOnlyKeys(value, ['projectId', 'owner', 'documentId'])) return false;
   if (!isNonEmptyString(value.projectId) || !isNonEmptyString(value.documentId) || !isRecord(value.owner)) return false;
   if (!hasOnlyKeys(value.owner, ['kind', 'id']) || !isNonEmptyString(value.owner.id)) return false;
   return value.owner.kind === 'page' || value.owner.kind === 'component';
 }
 
-export function isNativeNodeRef(value: unknown): value is NativeNodeRef {
+function isNativeNodeRefData(value: unknown): value is NativeNodeRef {
   return isRecord(value) &&
     hasOnlyKeys(value, ['document', 'nodeId']) &&
-    isDocumentAddress(value.document) &&
+    isDocumentAddressData(value.document) &&
     isNonEmptyString(value.nodeId);
+}
+
+export function isDocumentAddress(value: unknown): value is DocumentAddress {
+  const normalized = cloneRuntimeData(value);
+  return normalized.ok && isDocumentAddressData(normalized.value);
+}
+
+export function isNativeNodeRef(value: unknown): value is NativeNodeRef {
+  const normalized = cloneRuntimeData(value);
+  return normalized.ok && isNativeNodeRefData(normalized.value);
 }
 
 function isNativeCommandSource(value: unknown): value is NativeCommandSource {
@@ -85,10 +174,10 @@ function isNativeCommandTarget(value: unknown): value is NativeCommandTarget {
     return hasOnlyKeys(value, ['kind', 'projectId']) && isNonEmptyString(value.projectId);
   }
   if (value.kind === 'document') {
-    return hasOnlyKeys(value, ['kind', 'address']) && isDocumentAddress(value.address);
+    return hasOnlyKeys(value, ['kind', 'address']) && isDocumentAddressData(value.address);
   }
   if (value.kind === 'node') {
-    return hasOnlyKeys(value, ['kind', 'ref']) && isNativeNodeRef(value.ref);
+    return hasOnlyKeys(value, ['kind', 'ref']) && isNativeNodeRefData(value.ref);
   }
   return false;
 }
@@ -98,6 +187,16 @@ function invalid<T>(code: string, message: string): ValidationOutcome<T> {
 }
 
 export function validateNativeCommandEnvelope(
+  input: unknown,
+): ValidationOutcome<NativeCommandEnvelope<string, unknown>> {
+  const normalized = cloneRuntimeData(input);
+  if (!normalized.ok) {
+    return invalid('INVALID_ENVELOPE', 'The command must contain only plain own data properties.');
+  }
+  return validateNativeCommandEnvelopeData(normalized.value);
+}
+
+function validateNativeCommandEnvelopeData(
   input: unknown,
 ): ValidationOutcome<NativeCommandEnvelope<string, unknown>> {
   if (!isRecord(input) || !hasOnlyKeys(input, [
@@ -150,7 +249,15 @@ function hasUniqueNodeRefs(refs: readonly NativeNodeRef[]): boolean {
   return new Set(keys).size === keys.length;
 }
 
-export function validateNodeTransformPayload(value: unknown): ValidationOutcome<NodeTransformPayload> {
+export function validateNodeTransformPayload(
+  value: unknown,
+): ValidationOutcome<NodeTransformPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  return validateNodeTransformPayloadData(normalized.value);
+}
+
+function validateNodeTransformPayloadData(value: unknown): ValidationOutcome<NodeTransformPayload> {
   if (!isRecord(value) || !hasOnlyKeys(value, ['nodes']) ||
       !Array.isArray(value.nodes) || value.nodes.length === 0 || value.nodes.length > 100) {
     return invalid('INVALID_PAYLOAD', 'A transform command requires between 1 and 100 node transforms.');
@@ -187,7 +294,15 @@ export function validateNodeTransformPayload(value: unknown): ValidationOutcome<
   return { ok: true, value: { nodes } };
 }
 
-export function validateNodeSetPropertiesPayload(value: unknown): ValidationOutcome<NodeSetPropertiesPayload> {
+export function validateNodeSetPropertiesPayload(
+  value: unknown,
+): ValidationOutcome<NodeSetPropertiesPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  return validateNodeSetPropertiesPayloadData(normalized.value);
+}
+
+function validateNodeSetPropertiesPayloadData(value: unknown): ValidationOutcome<NodeSetPropertiesPayload> {
   if (!isRecord(value) || !hasOnlyKeys(value, ['nodes', 'properties']) ||
       !Array.isArray(value.nodes) || value.nodes.length === 0 || value.nodes.length > 100 ||
       !isRecord(value.properties)) {
