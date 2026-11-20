@@ -7,11 +7,11 @@ import { readProjectFile } from '../core/persistence/projectFile';
  */
 export async function openProjectFile(
   file: File | null | undefined,
-  replaceProject: (project: FolioProject) => void,
+  replaceProject: (project: FolioProject) => void | Promise<void>,
 ): Promise<FolioProject | null> {
   if (!file) return null;
 
   const project = await readProjectFile(file);
-  replaceProject(project);
+  await replaceProject(project);
   return project;
 }

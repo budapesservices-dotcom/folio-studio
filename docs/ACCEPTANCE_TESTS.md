@@ -27,22 +27,26 @@ Then run `npm run dev` and open `http://127.0.0.1:5173`.
 
 Implementation status: the File menu workflow is implemented. Verification remains pending until the automated checks and manual browser steps below have actually passed.
 
-- File → Open Project selects a .flop file and delegates parsing, v1 migration and v2 validation to the existing persistence adapter. The active main project is replaced only after successful validation.
-- Cancelled selection and failed parsing/migration/validation do not dispatch project replacement. The picker value is cleared after every selected file so the same file can be selected again.
-- File → Export Project passes the complete active project aggregate to downloadProject, retaining project metadata, pages, documents, nodes, component definitions, logic graph reservations and asset references.
-- tests/projectFile.test.ts covers v2 import, v1 migration, invalid JSON, unsupported versions, failed imports, extension-field preservation and full-aggregate export. tests/document.test.ts covers reducer replacement history reset and imported metadata preservation.
+- File → Open Project parses, migrates and validates the selected .flop through the existing adapter, then saves the imported project and active-project pointer in one IndexedDB transaction before replacing editor state. A failed save cannot activate an unsaved project.
+- The active-project pointer lives in the IndexedDB app-state store, outside project metadata and the .flop payload. Missing, stale, malformed or reserved-workspace pointers fall back to the existing updatedAt selection. Project metadata and updatedAt are not rewritten to influence selection.
+- Cancelled selection and failed parsing, migration, validation or persistence do not dispatch project replacement or change the previous active-project pointer. The picker value is cleared after every selected file so the same file can be selected again.
+- File → Export Project validates the export snapshot through the existing v2 validation adapter. While a master component is being edited, the snapshot overlays the latest Component Canvas buffer document into that component definition immutably; no effect synchronization or canonical state mutation is required first.
+- tests/projectFile.test.ts covers .flop import/migration/failure and aggregate export. tests/indexedDb.test.ts covers active pointer persistence, reload selection, fallback, reserved Component Canvas handling and failed/cancelled imports. tests/projectExport.test.ts covers immediate buffer export, round-trip import and canonical-state immutability.
 
 ### Manual browser acceptance
 
 1. **Export:** choose File → Export Project and confirm a named .flop file downloads.
 2. **Format:** inspect the exported file and confirm format is folio-project and formatVersion is 2.
-3. **Import:** open the exported file and confirm the project, active page, page/document/node IDs, components, logic graph reservations and asset references are restored.
-4. **Legacy import:** open a supported v1 single-document file and confirm migration to v2 preserves its document ID, node IDs and extension data.
-5. **Invalid import:** select invalid JSON, an invalid project or an unsupported format version. Folio must show an English error and keep the active project unchanged.
-6. **Retry:** after a failed import, select the same file again. The file picker must accept the repeated selection.
-7. **Cancellation:** open the picker and cancel. The active project and its undo/redo state must remain unchanged.
-8. **History reset:** after a successful import, confirm Undo and Redo do not restore history from the previously open project.
-9. **Round trip:** export → import → export and compare project semantics, IDs, component references, logic graph reservations, asset references and layer order.
+3. **Component buffer export:** edit a master component, immediately export before waiting for the UI effect/autosave cycle, re-import the file and confirm the latest master document is present.
+4. **Import:** open the exported file and confirm the project, active page, page/document/node IDs, components, logic graph reservations and asset references are restored.
+5. **Older imported project:** keep Project A with a newer updatedAt, import Project B with an older updatedAt, confirm B activates, refresh the browser and confirm B is restored without changing its imported metadata.
+6. **Pointer fallback:** remove the active-project pointer or replace its ID with a missing ID, reload and confirm the existing updatedAt-based fallback selects a valid root project.
+7. **Legacy import:** open a supported v1 single-document file and confirm migration to v2 preserves its document ID, node IDs and extension data.
+8. **Invalid import:** select invalid JSON, an invalid project or an unsupported format version. Folio must show an English error and keep the active project unchanged.
+9. **Retry:** after a failed import, select the same file again. The file picker must accept the repeated selection.
+10. **Cancellation:** open the picker and cancel. The active project and its undo/redo state must remain unchanged.
+11. **History reset:** after a successful import, confirm Undo and Redo do not restore history from the previously open project.
+12. **Round trip:** export → import → export and compare project semantics, IDs, component references, logic graph reservations, asset references and layer order.
 
 Do not mark native file workflow acceptance as verified until the automated checks and manual browser checks above pass.
 Do not start Stage 2 until the Stage 1 automated checks and manual browser checks above pass on the target Windows 10 laptop and intended browser.

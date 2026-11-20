@@ -5,8 +5,9 @@ import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage 
 import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, getSelectedLayerRootIds, getClippingMaskBaseId, type LayerDropPosition } from '../core/document/layers';
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
-import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
+import { loadMostRecentProject, loadProjectById, saveProject, saveProjectAndActivate } from '../core/persistence/indexedDb';
 import { downloadProject } from '../core/persistence/projectFile';
+import { createProjectExportSnapshot } from './projectExport';
 import { openProjectFile } from './projectFileActions';
 import { Canvas } from '../engines/canvas/Canvas';
 import { CANVAS_TOOL_GROUPS, getCanvasTool, type CanvasToolGroupId, type CanvasToolId } from '../engines/canvas/tools/registry';
@@ -1025,7 +1026,12 @@ export function App() {
     setFileMenuOpen(false);
     if (isHydrating) return;
     try {
-      downloadProject(state.project);
+      const exportSnapshot = createProjectExportSnapshot(
+        state.project,
+        editingComponentId,
+        componentState.project,
+      );
+      downloadProject(exportSnapshot);
       setNotice('Project exported successfully as a .flop file.');
     } catch (error) {
       console.error('Folio could not export the current project:', error);
@@ -1327,7 +1333,8 @@ export function App() {
                   if (!file) return;
 
                   try {
-                    const project = await openProjectFile(file, (loadedProject) => {
+                    const project = await openProjectFile(file, async (loadedProject) => {
+                      await saveProjectAndActivate(loadedProject);
                       dispatch({ type: 'replace-project', project: loadedProject });
                     });
                     if (!project) return;

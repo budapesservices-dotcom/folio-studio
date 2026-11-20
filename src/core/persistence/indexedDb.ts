@@ -5,8 +5,11 @@ import { migrateProjectToV2 } from '../document/migrations';
 import { requireValidProject, validateProject } from '../document/validation';
 
 const DATABASE_NAME = 'folio-studio';
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const PROJECT_STORE = 'projects';
+const APP_STATE_STORE = 'app-state';
+const ACTIVE_PROJECT_RECORD_KEY = 'active-project';
+const RESERVED_COMPONENT_PROJECT_ID = 'folio-component-canvas';
 
 function openDatabase(): Promise<IDBDatabase> {
   if (!('indexedDB' in globalThis)) {
@@ -21,6 +24,9 @@ function openDatabase(): Promise<IDBDatabase> {
       if (!database.objectStoreNames.contains(PROJECT_STORE)) {
         database.createObjectStore(PROJECT_STORE, { keyPath: 'metadata.id' });
       }
+      if (!database.objectStoreNames.contains(APP_STATE_STORE)) {
+        database.createObjectStore(APP_STATE_STORE, { keyPath: 'key' });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -29,14 +35,25 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-export async function saveProject(input: FolioProject): Promise<void> {
+async function persistProject(input: FolioProject, activate: boolean): Promise<void> {
   const project = requireValidProject(input);
+  if (activate && project.metadata.id === RESERVED_COMPONENT_PROJECT_ID) {
+    throw new Error('The Component Canvas workspace cannot be activated as a root project.');
+  }
+
   const database = await openDatabase();
 
   try {
     await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(PROJECT_STORE, 'readwrite');
+      const stores = activate ? [PROJECT_STORE, APP_STATE_STORE] : PROJECT_STORE;
+      const transaction = database.transaction(stores, 'readwrite');
       transaction.objectStore(PROJECT_STORE).put(project);
+      if (activate) {
+        transaction.objectStore(APP_STATE_STORE).put({
+          key: ACTIVE_PROJECT_RECORD_KEY,
+          projectId: project.metadata.id,
+        });
+      }
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error ?? new Error('Could not save the project.'));
       transaction.onabort = () => reject(transaction.error ?? new Error('Project save was cancelled.'));
@@ -44,6 +61,18 @@ export async function saveProject(input: FolioProject): Promise<void> {
   } finally {
     database.close();
   }
+}
+
+export async function saveProject(input: FolioProject): Promise<void> {
+  return persistProject(input, false);
+}
+
+/**
+ * Persist a project and mark it active in the same IndexedDB transaction.
+ * The pointer cannot commit unless the validated project record commits too.
+ */
+export async function saveProjectAndActivate(input: FolioProject): Promise<void> {
+  return persistProject(input, true);
 }
 
 export async function loadProjectById(projectId: string): Promise<FolioProject | null> {
@@ -254,14 +283,24 @@ function clearLegacyWorkspaceStorage(pageIds: string[]): void {
 export async function loadMostRecentProject(): Promise<FolioProject | null> {
   const database = await openDatabase();
   let storedProjects: unknown[];
+  let activePointer: unknown;
 
   try {
-    storedProjects = await new Promise<unknown[]>((resolve, reject) => {
-      const transaction = database.transaction(PROJECT_STORE, 'readonly');
-      const request = transaction.objectStore(PROJECT_STORE).getAll();
-      request.onsuccess = () => resolve(request.result as unknown[]);
-      request.onerror = () => reject(request.error ?? new Error('Could not load saved projects.'));
+    const storedState = await new Promise<{ projects: unknown[]; activePointer: unknown }>((resolve, reject) => {
+      const transaction = database.transaction([PROJECT_STORE, APP_STATE_STORE], 'readonly');
+      const projectsRequest = transaction.objectStore(PROJECT_STORE).getAll();
+      const activeRequest = transaction.objectStore(APP_STATE_STORE).get(ACTIVE_PROJECT_RECORD_KEY);
+      let projects: unknown[] = [];
+      let pointer: unknown;
+
+      projectsRequest.onsuccess = () => { projects = projectsRequest.result as unknown[]; };
+      activeRequest.onsuccess = () => { pointer = activeRequest.result; };
+      transaction.oncomplete = () => resolve({ projects, activePointer: pointer });
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not load saved projects.'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Project loading was cancelled.'));
     });
+    storedProjects = storedState.projects;
+    activePointer = storedState.activePointer;
   } finally {
     database.close();
   }
@@ -269,7 +308,7 @@ export async function loadMostRecentProject(): Promise<FolioProject | null> {
   const records = storedProjects.filter((stored) => {
     if (typeof stored !== 'object' || stored === null) return false;
     const id = (stored as { metadata?: { id?: unknown } }).metadata?.id;
-    return typeof id === 'string' && id !== 'folio-component-canvas';
+    return typeof id === 'string' && id !== RESERVED_COMPONENT_PROJECT_ID;
   });
   if (records.length === 0) return null;
 
@@ -284,7 +323,28 @@ export async function loadMostRecentProject(): Promise<FolioProject | null> {
     return bDate - aDate;
   });
 
-  const baseStored = candidates[0];
+  const activeProjectId = typeof activePointer === 'object' && activePointer !== null
+    && typeof (activePointer as { projectId?: unknown }).projectId === 'string'
+    ? (activePointer as { projectId: string }).projectId
+    : null;
+  const pointedProject = activeProjectId
+    ? rootRecords.find((stored) => (stored as { metadata: { id: string } }).metadata.id === activeProjectId)
+    : undefined;
+
+  // Ignore dangling, malformed and reserved-workspace pointers. The legacy
+  // updatedAt ordering remains the fallback when no valid root record matches.
+  let baseStored: unknown | undefined;
+  if (pointedProject) {
+    try {
+      migrateProjectToV2(pointedProject);
+      baseStored = pointedProject;
+    } catch {
+      baseStored = undefined;
+    }
+  }
+  baseStored ??= candidates[0];
+  if (!baseStored) return null;
+
   let project = migrateProjectToV2(baseStored);
   const legacyPageRecords = records
     .filter((stored) => {
