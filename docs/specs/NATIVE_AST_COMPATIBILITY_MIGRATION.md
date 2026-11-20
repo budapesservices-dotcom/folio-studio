@@ -336,20 +336,19 @@ Minimum coverage:
 - Component instance override/detach behavior.
 - Snapshot history behavior.
 - v1 → v2 project migration and IndexedDB save/load path.
-- Rotation-only transform reducer gap fixed with regression test; acceptance checklist updated to reflect the actual adapter/UI state.
+- Rotation-only transform reducer gap fixed and CI verified with regression test; acceptance checklist updated to reflect the actual adapter/UI state.
+- Read-only Native AST compatibility facade implemented in src/core/document/ast.ts with scoped references and matching layer-order helpers; follow-up CI verification pending.
 
 **Proposed, not implemented:**
-- AST compatibility facade.
 - Typed native command boundary.
 - Expanded typed properties and capabilities.
 - New component contract and override migration.
 - A future AST schema-version envelope.
 
-**Not changed by this task:**
-- Source code.
-- Existing .flop format.
+**Preserved by this task:**
+- Existing .flop v2 JSON format.
 - IndexedDB schema.
-- Runtime behavior.
-- Current reducer/history implementation.
+- Existing layer helper behavior and editor reducer/history path.
+- Existing project data shape and persistence semantics.
 
-**Next work item:** resolve the two known correctness/documentation issues in Phase 0, then draft the AST compatibility facade API before implementation.
+**Next work item:** complete the AST facade's CI verification, then design Native Commands v1 so future writes can be routed through validated FOLIO operations without replacing the current reducer/history contract.
