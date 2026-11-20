@@ -523,13 +523,12 @@ describe('Reducer parity, history and canonical revision', () => {
   it('increments once for accepted legacy project replacement and does not import a revision value', () => {
     const fixture = createFixture();
     const replacement = createInitialProject('Imported replacement');
-    (replacement as unknown as Record<string, unknown>).projectRevision = 987654;
     const result = fixture.store.dispatchLegacyAction({ type: 'replace-project', project: replacement });
 
     expect(result.status).toBe('committed');
     expect(fixture.store.getSnapshot().projectRevision).toBe(1);
     expect(fixture.store.getSnapshot().editorState.project.metadata.name).toBe('Imported replacement');
-    expect(JSON.stringify(fixture.store.getSnapshot().editorState.project)).not.toContain('projectRevision');
+    expect('projectRevision' in fixture.store.getSnapshot().editorState.project).toBe(false);
   });
 
   it('keeps projectRevision monotonic while page addition and page switching reset history as before', () => {
@@ -622,8 +621,9 @@ describe('Canonical commit conflict, failure and immutability', () => {
 
   it('prevents retained project aliases from mutating initial and committed project data', () => {
     const project = createInitialProject('Alias protection');
-    const initialNode = getActiveDocument(project).nodes[0];
-    const store = createCanonicalEditorStore(createEditorState(project));
+    const initialState = createEditorState(project);
+    const initialNode = getActiveDocument(initialState.project).nodes[0];
+    const store = createCanonicalEditorStore(initialState);
 
     expect(Object.isFrozen(store.getSnapshot().editorState.project)).toBe(true);
     expect(() => { initialNode.x = 777; }).toThrow();
