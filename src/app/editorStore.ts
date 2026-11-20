@@ -1,7 +1,7 @@
 import type { NativeChangeEvent } from '../core/commands/types';
 import type { FolioDocument } from '../core/document/types';
 import { validateProject } from '../core/document/validation';
-import { getNativeCommandCommitAuthorization } from './nativeCommandCommitAuth';
+import { getNativeCommandCommitAuthorization } from './nativeCommandExecutor';
 import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
 
 const RESERVED_COMPONENT_CANVAS_ID = 'folio-component-canvas';
