@@ -1,10 +1,12 @@
 import type { NativeChangeEvent } from '../core/commands/types';
 import type { FolioDocument } from '../core/document/types';
+import { getActiveDocument } from '../core/document/project';
 import { validateProject } from '../core/document/validation';
 import { getNativeCommandCommitAuthorization } from './nativeCommandExecutor';
 import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
 
 const RESERVED_COMPONENT_CANVAS_ID = 'folio-component-canvas';
+const EDITOR_HISTORY_LIMIT = 60;
 const storeIdentities = new WeakMap<object, object>();
 const snapshotOwners = new WeakMap<object, object>();
 
@@ -71,14 +73,41 @@ function cloneEventGraph<T>(value: T, seen = new WeakMap<object, unknown>()): T 
   return output as T;
 }
 
+function isHistoricalProject(value: unknown): boolean {
+  try {
+    if (typeof value !== 'object' || value === null) return false;
+    const project = value as EditorState['project'];
+    return project.metadata.id !== RESERVED_COMPONENT_CANVAS_ID && validateProject(project).ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Validate the current project, every historical project, and selection against the active Main Canvas document. */
 function isEditorState(value: unknown): value is EditorState {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  return typeof candidate.project === 'object' && candidate.project !== null &&
-    Array.isArray(candidate.past) && Array.isArray(candidate.future) &&
-    (candidate.selectedNodeId === null || typeof candidate.selectedNodeId === 'string') &&
-    Array.isArray(candidate.selectedNodeIds) && candidate.selectedNodeIds.every((id) => typeof id === 'string') &&
-    (candidate.historyGroup === null || typeof candidate.historyGroup === 'string');
+  try {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+    const candidate = value as Record<string, unknown>;
+    if (typeof candidate.project !== 'object' || candidate.project === null ||
+        !validateProject(candidate.project as EditorState['project']).ok ||
+        !Array.isArray(candidate.past) || !Array.isArray(candidate.future) ||
+        candidate.past.length > EDITOR_HISTORY_LIMIT || candidate.future.length > EDITOR_HISTORY_LIMIT ||
+        !candidate.past.every(isHistoricalProject) || !candidate.future.every(isHistoricalProject) ||
+        (candidate.selectedNodeId !== null && typeof candidate.selectedNodeId !== 'string') ||
+        !Array.isArray(candidate.selectedNodeIds) ||
+        !candidate.selectedNodeIds.every((id) => typeof id === 'string' && id.length > 0) ||
+        (candidate.historyGroup !== null && typeof candidate.historyGroup !== 'string')) return false;
+
+    const selectedIds = candidate.selectedNodeIds as string[];
+    if (new Set(selectedIds).size !== selectedIds.length) return false;
+    const expectedSelectedNodeId = selectedIds.length === 1 ? selectedIds[0] : null;
+    if (candidate.selectedNodeId !== expectedSelectedNodeId) return false;
+
+    const activeNodeIds = new Set(getActiveDocument(candidate.project as EditorState['project']).nodes.map((node) => node.id));
+    return selectedIds.every((id) => activeNodeIds.has(id));
+  } catch {
+    return false;
+  }
 }
 
 function isComponentSyncGuard(value: unknown): value is ComponentSyncCommitGuard {
@@ -101,7 +130,8 @@ function isCommitInput(value: unknown): value is EditorStoreCommitInput {
     (candidate.nativeCommandPreparation === undefined ||
       (typeof candidate.nativeCommandPreparation === 'object' && candidate.nativeCommandPreparation !== null)) &&
     Number.isSafeInteger(candidate.expectedProjectRevision) && Number(candidate.expectedProjectRevision) >= 0 &&
-    isEditorState(candidate.expectedEditorState) && isEditorState(candidate.candidateState);
+    typeof candidate.expectedEditorState === 'object' && candidate.expectedEditorState !== null &&
+    typeof candidate.candidateState === 'object' && candidate.candidateState !== null;
 }
 
 class MainCanvasEditorStore implements CanonicalEditorStore {
@@ -113,7 +143,7 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
   private notifying = false;
 
   constructor(initialState: EditorState) {
-    if (!isEditorState(initialState) || !validateProject(initialState.project).ok) {
+    if (!isEditorState(initialState)) {
       throw new Error('Cannot create the Main Canvas store from an invalid editor state.');
     }
     if (initialState.project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) {
@@ -140,6 +170,9 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     const beforeSnapshot = this.snapshot;
     if (this.committing || this.notifying) return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'REENTRANT_COMMIT' };
     if (!isCommitInput(input)) return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_COMMIT_INPUT' };
+    if (!isEditorState(input.expectedEditorState) || !isEditorState(input.candidateState)) {
+      return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_EDITOR_STATE' };
+    }
     if (input.expectedProjectRevision !== beforeSnapshot.projectRevision) return { status: 'revision-conflict', snapshot: beforeSnapshot };
     if (input.expectedEditorState !== beforeSnapshot.editorState) return { status: 'editor-conflict', snapshot: beforeSnapshot };
 
