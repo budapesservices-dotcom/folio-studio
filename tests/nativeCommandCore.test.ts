@@ -908,3 +908,181 @@ describe('Canonical commit conflict, failure and immutability', () => {
     expect(fixture.store.getSnapshot().editorState.project.metadata.name).toBe('Native command project');
   });
 });
+
+
+describe('Strict runtime object validation', () => {
+  function expectRejectedWithoutMutation(
+    fixture: ReturnType<typeof createFixture>,
+    input: unknown,
+  ) {
+    const before = fixture.store.getSnapshot();
+    const events: unknown[] = [];
+    const unsubscribe = fixture.store.subscribeChanges((event) => events.push(event));
+    const result = executeNativeCommand(fixture.store, input, fixture.context);
+    unsubscribe();
+
+    expect(result.status).toBe('rejected');
+    expect(fixture.store.getSnapshot()).toBe(before);
+    expect(fixture.store.getSnapshot().editorState).toBe(before.editorState);
+    expect(fixture.store.getSnapshot().editorState.project).toBe(before.editorState.project);
+    expect(fixture.store.getSnapshot().editorState.past).toBe(before.editorState.past);
+    expect(fixture.store.getSnapshot().editorState.future).toBe(before.editorState.future);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(before.projectRevision);
+    expect(events).toEqual([]);
+    return result;
+  }
+
+  it('rejects an envelope inheriting all command fields from another object', () => {
+    const fixture = createFixture();
+    const valid = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 700 } }],
+    });
+    const inheritedEnvelope = Object.create(valid) as unknown;
+
+    expect(expectRejectedWithoutMutation(fixture, inheritedEnvelope)).toMatchObject({
+      status: 'rejected',
+      code: 'INVALID_ENVELOPE',
+    });
+    expect(currentNode(fixture.store)?.x).toBe(10);
+  });
+
+  it('rejects inherited locked and layerColor properties instead of applying them', () => {
+    const fixture = createFixture();
+    const inheritedLocked = Object.create({ locked: true }) as Record<string, unknown>;
+    const inheritedLayerColor = Object.create({ layerColor: '#ff00ff' }) as Record<string, unknown>;
+
+    const lockedResult = expectRejectedWithoutMutation(fixture, makeCommand(
+      'node.set-properties',
+      fixture.address,
+      { nodes: [nodeRef(fixture.address)], properties: inheritedLocked },
+    ));
+    const layerColorResult = expectRejectedWithoutMutation(fixture, makeCommand(
+      'node.set-properties',
+      fixture.address,
+      { nodes: [nodeRef(fixture.address)], properties: inheritedLayerColor },
+    ));
+
+    expect(lockedResult.code).toBe('INVALID_ENVELOPE');
+    expect(layerColorResult.code).toBe('INVALID_ENVELOPE');
+    expect(currentNode(fixture.store)).toMatchObject({ locked: false });
+    expect(currentNode(fixture.store)?.layerColor).toBeUndefined();
+  });
+
+  it('rejects accessors in source, target and payload without invoking getters', () => {
+    const fixture = createFixture();
+    let getterCalls = 0;
+
+    const sourceAccessor = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 711 } }],
+    });
+    Object.defineProperty(sourceAccessor, 'source', {
+      enumerable: true,
+      configurable: true,
+      get() { getterCalls += 1; return { workspace: 'main', actor: { kind: 'user', actorId: 'tester' } }; },
+    });
+
+    const targetAccessor = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 712 } }],
+    });
+    Object.defineProperty(targetAccessor.target, 'address', {
+      enumerable: true,
+      configurable: true,
+      get() { getterCalls += 1; return fixture.address; },
+    });
+
+    const payloadAccessor = makeCommand('node.set-properties', fixture.address, {
+      nodes: [nodeRef(fixture.address)],
+      properties: { locked: true },
+    });
+    Object.defineProperty(payloadAccessor.payload, 'properties', {
+      enumerable: true,
+      configurable: true,
+      get() { getterCalls += 1; return { locked: true }; },
+    });
+
+    for (const command of [sourceAccessor, targetAccessor, payloadAccessor]) {
+      expect(expectRejectedWithoutMutation(fixture, command)).toMatchObject({
+        status: 'rejected',
+        code: 'INVALID_ENVELOPE',
+      });
+    }
+    expect(getterCalls).toBe(0);
+    expect(currentNode(fixture.store)).toMatchObject({ x: 10, locked: false });
+  });
+
+  it('rejects symbol keys and unexpected non-enumerable own properties', () => {
+    const fixture = createFixture();
+    const symbolKeyed = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 713 } }],
+    });
+    Object.defineProperty(symbolKeyed, Symbol('hidden-command-field'), {
+      enumerable: true,
+      value: true,
+    });
+
+    const nonEnumerable = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 714 } }],
+    });
+    Object.defineProperty(nonEnumerable, 'unapprovedHiddenField', {
+      configurable: true,
+      enumerable: false,
+      value: true,
+    });
+
+    expect(expectRejectedWithoutMutation(fixture, symbolKeyed)).toMatchObject({
+      status: 'rejected',
+      code: 'INVALID_ENVELOPE',
+    });
+    expect(expectRejectedWithoutMutation(fixture, nonEnumerable)).toMatchObject({
+      status: 'rejected',
+      code: 'INVALID_ENVELOPE',
+    });
+    expect(currentNode(fixture.store)?.x).toBe(10);
+  });
+
+  it('rejects explicit undefined values even on otherwise optional fields', () => {
+    const fixture = createFixture();
+    const command = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 715 } }],
+    }, {
+      metadata: { description: undefined },
+    });
+
+    expect(expectRejectedWithoutMutation(fixture, command)).toMatchObject({
+      status: 'rejected',
+      code: 'INVALID_ENVELOPE',
+    });
+  });
+
+  it('converts Proxy reflection failures into structured rejection without changing editor state', () => {
+    const fixture = createFixture();
+    const valid = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 716 } }],
+    });
+    const hostileProxy = new Proxy(valid, {
+      ownKeys() { throw new Error('blocked reflection'); },
+    });
+
+    expect(expectRejectedWithoutMutation(fixture, hostileProxy)).toMatchObject({
+      status: 'rejected',
+      code: 'INVALID_ENVELOPE',
+    });
+    expect(currentNode(fixture.store)?.x).toBe(10);
+  });
+
+  it('normalizes omitted user actorId from the trusted principal in change attribution', () => {
+    const fixture = createFixture();
+    const command = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 717 } }],
+    });
+    delete (command.source as { actor: { actorId?: string } }).actor.actorId;
+    const events: Array<{ source: { actor: { actorId?: string } } }> = [];
+    fixture.store.subscribeChanges((event) => events.push(event as typeof events[number]));
+
+    const result = executeNativeCommand(fixture.store, command, fixture.context);
+
+    expect(result.status).toBe('applied');
+    expect(events).toHaveLength(1);
+    expect(events[0].source.actor.actorId).toBe('tester');
+  });
+});
