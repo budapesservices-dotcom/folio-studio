@@ -1,4 +1,13 @@
-export type WindowId = 'main-canvas' | 'component-canvas' | 'node-logic' | 'pages';
+export type WorkspaceWindowId = 'main-canvas' | 'component-canvas' | 'node-logic';
+export type WorkspacePanelId = 'pages-rack' | 'component-rack' | 'layers';
+/** Legacy App consumer identifier retained while Pages Rack moves to panel identity. */
+export type LegacyWorkspaceStackId = 'pages';
+export type WorkspaceStackTarget =
+  | WorkspaceWindowId
+  | WorkspacePanelId
+  | LegacyWorkspaceStackId;
+/** @deprecated Use WorkspaceWindowId, WorkspacePanelId, or WorkspaceStackTarget. */
+export type WindowId = WorkspaceStackTarget;
 export interface WindowPosition { x: number; y: number }
 export interface WindowSize { width: number; height: number }
 export interface WindowLayout { position: WindowPosition; size: WindowSize }
@@ -24,15 +33,24 @@ export const WINDOW_LAYERING = {
   applicationToolbar: 1200,
   toolRail: 1200,
   menuOverlay: 1400,
+  contextMenu: 1600,
   blockingOverlay: 2000,
 } as const;
 
-const WINDOW_IDS: readonly WindowId[] = [
+const WORKSPACE_WINDOW_IDS: readonly WorkspaceWindowId[] = [
   'main-canvas',
   'component-canvas',
   'node-logic',
-  'pages',
 ];
+
+const WORKSPACE_PANEL_IDS: readonly WorkspacePanelId[] = [
+  'pages-rack',
+  'component-rack',
+  'layers',
+];
+
+const MAX_STACK_TARGET_COUNT =
+  WORKSPACE_WINDOW_IDS.length + WORKSPACE_PANEL_IDS.length;
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
@@ -64,18 +82,48 @@ function normalizeMinimum(value: number, fallback: number, maximum: number): num
   return Math.min(requested, Math.max(1, maximum));
 }
 
-export function bringWindowToFront(order: readonly WindowId[], id: WindowId): WindowId[] {
-  const uniqueOrder = order.filter((item, index) => order.indexOf(item) === index);
-  return [...uniqueOrder.filter((item) => item !== id), id];
+function normalizeStackTarget(id: WorkspaceStackTarget): WorkspaceWindowId | WorkspacePanelId {
+  return id === 'pages' ? 'pages-rack' : id;
 }
 
+function normalizeStackOrder(
+  order: readonly WorkspaceStackTarget[],
+): Array<WorkspaceWindowId | WorkspacePanelId> {
+  const normalized: Array<WorkspaceWindowId | WorkspacePanelId> = [];
+  for (const id of order) {
+    const target = normalizeStackTarget(id);
+    if (!normalized.includes(target)) normalized.push(target);
+  }
+  return normalized;
+}
+
+export function bringWindowToFront(
+  order: readonly WorkspaceStackTarget[],
+  id: WorkspaceStackTarget,
+): WorkspaceStackTarget[] {
+  const target = normalizeStackTarget(id);
+  return [...normalizeStackOrder(order).filter((item) => item !== target), target];
+}
+
+/**
+ * Derives stacking from the shared focus order. Custom bases are restricted
+ * to the reserved side-panel/workspace band so no target can cover Component
+ * Rack, application chrome, context menus, or blocking overlays.
+ */
 export function getWindowZIndex(
-  order: readonly WindowId[],
-  id: WindowId,
+  order: readonly WorkspaceStackTarget[],
+  id: WorkspaceStackTarget,
   base: number = WINDOW_LAYERING.floatingWindowBase,
 ): number {
-  const index = order.indexOf(id);
-  const safeBase = finiteOr(base, WINDOW_LAYERING.floatingWindowBase);
+  const normalizedOrder = normalizeStackOrder(order);
+  const index = normalizedOrder.indexOf(normalizeStackTarget(id));
+  const minimumBase = WINDOW_LAYERING.sidePanel;
+  const maximumBase = WINDOW_LAYERING.componentRack - MAX_STACK_TARGET_COUNT;
+  const safeBase = clamp(
+    Math.floor(finiteOr(base, WINDOW_LAYERING.floatingWindowBase)),
+    minimumBase,
+    maximumBase,
+  );
   return safeBase + (index < 0 ? 0 : index);
 }
 
@@ -203,7 +251,7 @@ export function resizeWindowFromPointer(
 
 export function getDefaultWindowLayouts(
   viewport: WindowViewport,
-): Record<'main-canvas' | 'component-canvas' | 'node-logic', WindowLayout> {
+): Record<WorkspaceWindowId, WindowLayout> {
   const safeViewport = normalizeViewport(viewport);
   const vertical = getUsableVerticalBounds(safeViewport);
   const minWidth = normalizeMinimum(280, 280, safeViewport.width);
@@ -251,6 +299,11 @@ export function getDefaultWindowLayouts(
 }
 
 /** Return the known window IDs in their stable declaration order. */
-export function getWorkspaceWindowIds(): readonly WindowId[] {
-  return WINDOW_IDS;
+export function getWorkspaceWindowIds(): readonly WorkspaceWindowId[] {
+  return WORKSPACE_WINDOW_IDS;
+}
+
+/** Returns panel identities separately from workspace window layouts. */
+export function getWorkspacePanelIds(): readonly WorkspacePanelId[] {
+  return WORKSPACE_PANEL_IDS;
 }

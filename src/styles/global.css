@@ -495,8 +495,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   right: auto;
   bottom: auto;
   grid-area: auto;
-  min-width: 280px;
-  min-height: 220px;
+  /* Respect recovered inline sizes while preserving desktop minimums. */
+  min-width: min(280px, 100%);
+  min-height: min(220px, max(1px, calc(100% - 83px)));
   max-width: 100%;
   max-height: calc(100% - 83px);
   overflow: hidden;
@@ -729,7 +730,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 /* Block all workspace interaction until the project aggregate is hydrated. */
 .project-hydration-overlay {
   position: absolute;
-  z-index: 2000;
+  z-index: var(--z-blocking-overlay);
   inset: 0;
   display: flex;
   flex-direction: column;
@@ -881,7 +882,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .instance-actions button:hover:not(:disabled) { border-color: #8b7cf6; color: #fff; }
 
 /* Layer context menu: destructive actions require an intentional right-click. */
-.layer-context-menu{z-index:9999;min-width:196px;padding:5px;border:1px solid #465064;border-radius:8px;background:#202633;box-shadow:0 12px 32px #0009;color:#dfe5ef;font-size:11px}
+.layer-context-menu{z-index:var(--z-context-menu);min-width:196px;padding:5px;border:1px solid #465064;border-radius:8px;background:#202633;box-shadow:0 12px 32px #0009;color:#dfe5ef;font-size:11px}
 .layer-context-menu button{display:flex;width:100%;min-height:30px;align-items:center;gap:9px;padding:7px 10px;border:0;border-radius:5px;background:transparent;color:inherit;text-align:left;cursor:pointer}
 .layer-context-menu button:hover{background:#ffffff12;color:#fff}
 .layer-context-menu .layer-context-menu-danger{color:#ff8585}
@@ -992,6 +993,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   --z-component-rack: 300;
   --z-application-toolbar: 1200;
   --z-menu-overlay: 1400;
+  --z-context-menu: 1600;
+  --z-blocking-overlay: 2000;
 }
 
 /* The horizontal application toolbar and vertical tool rail stay above every
@@ -1010,4 +1013,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .component-rack-panel:not(.is-open),
 .pages-rack-panel:not(.is-open) {
   pointer-events: none;
+}
+
+
+/* Let the shell match the real viewport on very small screens so geometry
+   recovery and the rendered containing block use the same dimensions. */
+@media (max-width: 700px) {
+  body { min-width: 0; }
+  .app-shell { min-height: 0; }
 }

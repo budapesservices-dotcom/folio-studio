@@ -6,16 +6,17 @@ import {
   clampWindowPosition,
   getDefaultWindowLayouts,
   getWindowZIndex,
+  getWorkspacePanelIds,
   getWorkspaceWindowIds,
   recoverWindowLayout,
   resizeWindowFromPointer,
-  type WindowId,
+  type WorkspaceStackTarget,
   type WindowLayout,
   type WindowViewport,
 } from '../src/app/windowManager';
 
 const DESKTOP: WindowViewport = { width: 1280, height: 800 };
-const WINDOW_ORDER: readonly WindowId[] = [
+const WINDOW_ORDER: readonly WorkspaceStackTarget[] = [
   'node-logic',
   'component-canvas',
   'pages',
@@ -45,6 +46,8 @@ describe('Window layering policy', () => {
     expect(WINDOW_LAYERING.componentRack).toBeLessThan(WINDOW_LAYERING.applicationToolbar);
     expect(WINDOW_LAYERING.toolRail).toBe(WINDOW_LAYERING.applicationToolbar);
     expect(WINDOW_LAYERING.menuOverlay).toBeGreaterThan(WINDOW_LAYERING.applicationToolbar);
+    expect(WINDOW_LAYERING.contextMenu).toBeGreaterThan(WINDOW_LAYERING.menuOverlay);
+    expect(WINDOW_LAYERING.blockingOverlay).toBeGreaterThan(WINDOW_LAYERING.contextMenu);
   });
 
   it('keeps the reserved workspace window band below the rack even with every window focused', () => {
@@ -52,7 +55,6 @@ describe('Window layering policy', () => {
       'main-canvas',
       'component-canvas',
       'node-logic',
-      'pages',
     ]);
     const focused = WINDOW_ORDER.reduce(
       (order, id) => bringWindowToFront(order, id),
@@ -60,6 +62,54 @@ describe('Window layering policy', () => {
     );
     expect(Math.max(...focused.map((id) => getWindowZIndex(focused, id))))
       .toBeLessThan(WINDOW_LAYERING.componentRack);
+  });
+});
+
+describe('Workspace window and panel identity', () => {
+  it('registers exactly three workspace windows and a separate panel registry', () => {
+    expect(getWorkspaceWindowIds()).toEqual([
+      'main-canvas',
+      'component-canvas',
+      'node-logic',
+    ]);
+    expect(getWorkspacePanelIds()).toEqual([
+      'pages-rack',
+      'component-rack',
+      'layers',
+    ]);
+    expect(Object.keys(getDefaultWindowLayouts(DESKTOP)).sort()).toEqual([
+      'component-canvas',
+      'main-canvas',
+      'node-logic',
+    ]);
+    expect(Object.keys(getDefaultWindowLayouts(DESKTOP))).not.toContain('pages-rack');
+  });
+
+  it('normalizes the legacy pages focus identifier to the Pages Rack panel identity', () => {
+    const focused = bringWindowToFront(
+      ['main-canvas', 'pages', 'pages-rack', 'node-logic'],
+      'pages',
+    );
+    expect(focused).toEqual(['main-canvas', 'node-logic', 'pages-rack']);
+    expect(focused.filter((id) => id === 'pages-rack')).toHaveLength(1);
+    expect(getWindowZIndex(focused, 'pages')).toBe(getWindowZIndex(focused, 'pages-rack'));
+  });
+
+  it('keeps the combined panel/window stack below Component Rack and application chrome', () => {
+    const targets = [
+      ...getWorkspaceWindowIds(),
+      ...getWorkspacePanelIds(),
+    ];
+    const focused = targets.reduce(
+      (order, id) => bringWindowToFront(order, id),
+      [] as WorkspaceStackTarget[],
+    );
+    const highest = Math.max(...focused.map((id) => getWindowZIndex(focused, id)));
+    expect(highest).toBeLessThan(WINDOW_LAYERING.componentRack);
+    expect(WINDOW_LAYERING.componentRack).toBeLessThan(WINDOW_LAYERING.applicationToolbar);
+    expect(WINDOW_LAYERING.applicationToolbar).toBeLessThan(WINDOW_LAYERING.menuOverlay);
+    expect(WINDOW_LAYERING.menuOverlay).toBeLessThan(WINDOW_LAYERING.contextMenu);
+    expect(WINDOW_LAYERING.contextMenu).toBeLessThan(WINDOW_LAYERING.blockingOverlay);
   });
 });
 
@@ -79,8 +129,27 @@ describe('Window focus and stacking order', () => {
     expect(next).toHaveLength(3);
   });
 
-  it('uses the configured base for a window not yet present in the focus order', () => {
+  it('uses the configured base for a target not yet present in the focus order', () => {
     expect(getWindowZIndex(['main-canvas'], 'component-canvas', 240)).toBe(240);
+  });
+
+  it('clamps extreme custom bases below reserved rack and chrome layers', () => {
+    expect(getWindowZIndex(['main-canvas'], 'component-canvas', 1_000_000))
+      .toBeLessThan(WINDOW_LAYERING.componentRack);
+    expect(getWindowZIndex(['main-canvas'], 'component-canvas', Number.POSITIVE_INFINITY))
+      .toBe(WINDOW_LAYERING.floatingWindowBase);
+    expect(getWindowZIndex(['main-canvas'], 'component-canvas', -1_000_000))
+      .toBeGreaterThanOrEqual(WINDOW_LAYERING.sidePanel);
+    const allTargets = [
+      ...getWorkspaceWindowIds(),
+      ...getWorkspacePanelIds(),
+    ];
+    const focused = allTargets.reduce(
+      (order, id) => bringWindowToFront(order, id),
+      [] as WorkspaceStackTarget[],
+    );
+    expect(Math.max(...focused.map((id) => getWindowZIndex(focused, id, 1_000_000))))
+      .toBeLessThan(WINDOW_LAYERING.componentRack);
   });
 });
 

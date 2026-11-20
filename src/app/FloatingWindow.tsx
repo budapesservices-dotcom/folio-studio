@@ -185,6 +185,11 @@ export function FloatingWindow({
       class={className}
       style={rootStyle}
       onPointerDown={handlePointerDown}
+      onFocusCapture={(event) => {
+        // Focus entering a child control (including keyboard navigation) raises
+        // the owning window without moving focus or causing a focus loop.
+        if (event.target !== event.currentTarget) onFocus?.();
+      }}
       onMouseEnter={onMouseEnter}
       data-window-id={id}
       data-window-floating={floating ? 'true' : 'false'}
