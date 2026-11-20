@@ -804,6 +804,41 @@ Graph creation and mutation are canonical project data and use Native Commands. 
 | Project revision | Absent at audited base; Native Commands v1 defines store-owned in-memory revision | Never serialized to .flop or IndexedDB project records |
 | Node Logic runtime state | Not implemented | Ephemeral by default; durable user data requires an explicit service contract |
 
+### 9.1.1 Project and workspace persistence boundary
+
+The project adapter and workspace-preferences adapter are deliberately separate. Project persistence accepts only validated project snapshots. Workspace persistence accepts only layout/view preferences. Neither adapter can write into the other's data class.
+
+~~~mermaid
+flowchart LR
+  subgraph ProjectData["Canonical project data"]
+    Store["Canonical Editor Store"]
+    Validate["Project validation"]
+    Flop[".flop v2 JSON"]
+    IDBProjects["IndexedDB projects store"]
+    Store --> Validate
+    Validate --> Flop
+    Validate --> IDBProjects
+  end
+  subgraph WorkspaceData["Workspace-only preferences"]
+    Manager["Workspace Manager"]
+    Layout["Window layout / focus / panels"]
+    View["Canvas zoom / pan"]
+    LocalPrefs["localStorage or future preference adapter"]
+    Manager --> Layout
+    Manager --> View
+    Layout --> LocalPrefs
+    View --> LocalPrefs
+  end
+  subgraph Recovery["Separate recovery surface"]
+    Buffer["Component Canvas local buffer"]
+    BufferStore["Reserved buffer record"]
+    Buffer --> BufferStore
+  end
+  IDBProjects --> Recovery
+  Manager -. "never writes project data" .-> Store
+  LocalPrefs -. "never changes projectRevision" .-> Store
+~~~
+
 ### 9.2 .flop v2 compatibility
 
 At the audited base, .flop is UTF-8 JSON with format folio-project and formatVersion 2. The v2 aggregate includes:
