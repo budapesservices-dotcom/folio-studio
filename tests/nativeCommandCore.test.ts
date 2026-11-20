@@ -483,8 +483,16 @@ describe('Payload, lock and no-op behavior', () => {
       source: { workspace: 'plugin', actor: { kind: 'user', actorId: 'tester' } },
     }, fixture.context);
 
+    const unknownCapability = executeNativeCommand(fixture.store, makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 250 } }],
+    }), {
+      ...fixture.context,
+      capabilities: ['node.transform', 'project.admin'] as unknown as NativeCommandContext['capabilities'],
+    });
+
     expect(denied).toMatchObject({ status: 'rejected', code: 'PERMISSION_DENIED' });
     expect(wrongWorkspace).toMatchObject({ status: 'rejected', code: 'PERMISSION_DENIED' });
+    expect(unknownCapability).toMatchObject({ status: 'rejected', code: 'PERMISSION_DENIED' });
     expect(fixture.store.getSnapshot().projectRevision).toBe(0);
   });
 });
@@ -628,6 +636,43 @@ describe('Component Canvas isolation at the canonical boundary', () => {
   });
 });
 
+describe('Native change event publication', () => {
+  it('emits one scoped notification only after the command project is committed', () => {
+    const fixture = createFixture();
+    const events: Array<{ projectRevision: number; nodeX: number; event: unknown }> = [];
+    fixture.store.subscribeChanges((event) => {
+      events.push({
+        projectRevision: fixture.store.getSnapshot().projectRevision,
+        nodeX: currentNode(fixture.store)?.x ?? -1,
+        event,
+      });
+    });
+    const command = makeCommand('node.transform', fixture.address, {
+      nodes: [{ ref: nodeRef(fixture.address), transform: { x: 640 } }],
+    });
+    const result = executeNativeCommand(fixture.store, command, fixture.context);
+
+    expect(result).toMatchObject({ status: 'applied', changed: true, projectRevisionBefore: 0, projectRevisionAfter: 1 });
+    expect(events).toHaveLength(1);
+    expect(events[0].projectRevision).toBe(1);
+    expect(events[0].nodeX).toBe(640);
+    expect(events[0].event).toMatchObject({
+      projectId: fixture.project.metadata.id,
+      projectRevision: 1,
+      commandId: command.commandId,
+      change: {
+        projectId: fixture.project.metadata.id,
+        projectRevision: 1,
+        commandIds: [command.commandId],
+        documents: [{
+          address: fixture.address,
+          nodeIds: { added: [], updated: ['shared-node'], removed: [] },
+        }],
+      },
+    });
+  });
+});
+
 describe('Canonical commit conflict, failure and immutability', () => {
   it('rejects a prepared command when the project revision changes before commit', () => {
     const fixture = createFixture();
@@ -656,6 +701,8 @@ describe('Canonical commit conflict, failure and immutability', () => {
     fixture.store.dispatchLegacyAction({ type: 'rename-project', name: 'History item' });
     fixture.store.dispatchLegacyAction({ type: 'undo' });
     const before = fixture.store.getSnapshot();
+    const emittedEvents: unknown[] = [];
+    fixture.store.subscribeChanges((event) => emittedEvents.push(event));
     const invalidProject = { ...before.editorState.project, pages: [] };
     const invalidCandidate = { ...before.editorState, project: invalidProject };
 
@@ -669,6 +716,7 @@ describe('Canonical commit conflict, failure and immutability', () => {
     expect(fixture.store.getSnapshot().editorState.past).toEqual(before.editorState.past);
     expect(fixture.store.getSnapshot().editorState.future).toEqual(before.editorState.future);
     expect(fixture.store.getSnapshot().projectRevision).toBe(before.projectRevision);
+    expect(emittedEvents).toEqual([]);
   });
 
   it('rejects caller-supplied projectMutation classification instead of trusting it', () => {
