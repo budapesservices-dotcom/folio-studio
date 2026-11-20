@@ -391,7 +391,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'replace-project':
-      return createEditorState(touch(action.project));
+      return createEditorState(action.project);
 
     case 'undo': {
       if (state.past.length === 0) return state;

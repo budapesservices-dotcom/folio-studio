@@ -12,9 +12,13 @@ import { requireValidProject, requireValidProjectV1 } from './validation';
  */
 export function migrateProjectV1ToV2(input: FolioProjectV1): FolioProject {
   const legacy = requireValidProjectV1(input);
+  const legacyProjectFields = { ...(input as unknown as Record<string, unknown>) };
+  delete legacyProjectFields.document;
   const pageId = 'page-main';
 
   return {
+    // Preserve v1 extension fields that this version does not interpret.
+    ...legacyProjectFields,
     format: FOLIO_FORMAT,
     formatVersion: FOLIO_FORMAT_VERSION,
     appVersion: legacy.appVersion,

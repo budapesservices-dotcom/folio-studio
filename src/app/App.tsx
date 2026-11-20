@@ -6,6 +6,8 @@ import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, g
 import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject } from '../core/persistence/indexedDb';
+import { downloadProject } from '../core/persistence/projectFile';
+import { openProjectFile } from './projectFileActions';
 import { Canvas } from '../engines/canvas/Canvas';
 import { CANVAS_TOOL_GROUPS, getCanvasTool, type CanvasToolGroupId, type CanvasToolId } from '../engines/canvas/tools/registry';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
@@ -135,6 +137,7 @@ export function App() {
   const isHydrating = !isProjectLoaded || !componentReady;
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [notice, setNotice] = useState('');
+  const projectFileInputRef = useRef<HTMLInputElement>(null);
   const [mainView, setMainView] = useState<CanvasViewState>(() => readCanvasViewState('folio.main-canvas-view'));
   const [componentView, setComponentView] = useState<CanvasViewState>(() => readCanvasViewState('folio.component-canvas-view'));
   const zoom = mainView.zoom;
@@ -235,6 +238,7 @@ export function App() {
   const [windowOrder, setWindowOrder] = useState<WindowId[]>(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
   const [activeWindowId, setActiveWindowId] = useState<WindowId>('main-canvas');
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [componentRackOpen, setComponentRackOpen] = useState(false);
   const [pagesRackOpen, setPagesRackOpen] = useState(false);
   const [pageNameDraft, setPageNameDraft] = useState('');
@@ -1011,6 +1015,25 @@ export function App() {
     }
   };
 
+  const openProjectPicker = () => {
+    if (isHydrating) return;
+    setFileMenuOpen(false);
+    projectFileInputRef.current?.click();
+  };
+
+  const exportCurrentProject = () => {
+    setFileMenuOpen(false);
+    if (isHydrating) return;
+    try {
+      downloadProject(state.project);
+      setNotice('Project exported successfully as a .flop file.');
+    } catch (error) {
+      console.error('Folio could not export the current project:', error);
+      const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
+      setNotice('Unable to export project: ' + detail);
+    }
+  };
+
   const selectedComponentNodes = componentDocument.nodes.filter((node) => componentState.selectedNodeIds.includes(node.id));
   const insertOwnedComponent = (component: ComponentDefinition) => {
     if (isHydrating) return;
@@ -1284,12 +1307,48 @@ export function App() {
         <nav class="global-menu-bar" aria-label="Application menus">
           <div class="global-toolbar-left">
           <div class="global-menu-items">
-            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('FILE', 'Project actions and .flop file commands will be organized here.')}>File</span>
+            <div class="global-menu-entry">
+              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={fileMenuOpen} onClick={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); }} onMouseEnter={() => updateToolbarHint('FILE', 'Open or export the current native .flop project.')}>File</button>
+              {fileMenuOpen && <div class="global-menu-dropdown" role="menu" aria-label="File menu">
+                <button type="button" role="menuitem" onClick={openProjectPicker} disabled={isHydrating}>Open Project…</button>
+                <button type="button" role="menuitem" onClick={exportCurrentProject} disabled={isHydrating}>Export Project</button>
+              </div>}
+              <input
+                ref={projectFileInputRef}
+                type="file"
+                accept=".flop,application/vnd.folio.project+json"
+                aria-label="Choose a FOLIO project file"
+                hidden
+                onChange={async (event) => {
+                  const input = event.currentTarget;
+                  const file = input.files?.[0];
+                  // Clear the native input so the same file can be selected again after failure.
+                  input.value = '';
+                  if (!file) return;
+
+                  try {
+                    const project = await openProjectFile(file, (loadedProject) => {
+                      dispatch({ type: 'replace-project', project: loadedProject });
+                    });
+                    if (!project) return;
+                    setActiveEditorId('main');
+                    setEditingComponentId(null);
+                    setComponentCanvasClosed(true);
+                    setComponentCanvasMinimized(false);
+                    setNotice('Opened "' + project.metadata.name + '".');
+                  } catch (error) {
+                    console.error('Folio could not open the selected project file:', error);
+                    const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
+                    setNotice('Unable to open project: ' + detail);
+                  }
+                }}
+              />
+            </div>
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}>Edit</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <div class="global-menu-entry">
-              <button type="button" class="global-menu-item menu-trigger" aria-expanded={viewMenuOpen} onClick={() => setViewMenuOpen((open) => !open)} onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}>View</button>
+              <button type="button" class="global-menu-item menu-trigger" aria-expanded={viewMenuOpen} onClick={() => { setViewMenuOpen((open) => !open); setFileMenuOpen(false); }} onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}>View</button>
               {viewMenuOpen && <div class="global-menu-dropdown" role="menu"><button type="button" role="menuitem" onClick={resetWindowLayout}>Reset Window Layout</button></div>}
             </div>
             <span class="global-menu-separator" aria-hidden="true">|</span>

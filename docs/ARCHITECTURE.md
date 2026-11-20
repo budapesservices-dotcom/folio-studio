@@ -97,6 +97,13 @@ Version 2 is UTF-8 JSON. The project is the aggregate root; it contains the acti
 - IndexedDB hydration completes before workspace controls can mutate project state.
 - Type checking, unit tests and production build pass.
 
+## Native .flop File Menu Workflow
+
+- File → Open Project uses src/app/projectFileActions.ts to call the existing readProjectFile adapter. Project replacement is invoked only after parsing, migration and validation succeed. Cancellation is a no-op, and the file input is cleared after each selection so the same file can be retried.
+- The existing migration and validation functions remain the source of truth for supported v1/v2 formats. The v1 wrapper carries unknown top-level extension fields forward; document and node extension fields are retained by the existing migration copies.
+- File → Export Project passes the complete active FolioProject aggregate to downloadProject; it does not export only the active page or document.
+- replace-project creates a fresh editor state, clearing undo/redo and selection while retaining imported project metadata and stable IDs.
+
 ## Planned stages
 
 1. **Foundation:** application shell, AST, SVG canvas, local persistence and native file I/O.

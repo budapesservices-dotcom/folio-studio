@@ -21,27 +21,28 @@ Then run `npm run dev` and open `http://127.0.0.1:5173`.
 7. **Visibility and lock:** toggle Visible and Locked. Hidden nodes should disappear; locked nodes should not be selected by clicking them on the artboard, but remain selectable in the Layers panel.
 8. **Delete and history:** delete a selected layer, Undo it, then Redo it.
 9. **Autosave:** wait for “ALL CHANGES SAVED”, refresh the browser, and confirm the latest project reopens.
+10. **Native project files:** export from File → Export Project and confirm a .flop download; open it again through File → Open Project and confirm the imported project is active. Cancel the picker and confirm the current project remains unchanged. After a failed import, select the same file again to confirm the picker permits a retry.
 
-## Current native project file status
+## Native .flop file workflow
 
-The repository currently contains a native JSON project-file adapter in `src/core/persistence/projectFile.ts`:
+Implementation status: the File menu workflow is implemented. Verification remains pending until the automated checks and manual browser steps below have actually passed.
 
-- `downloadProject` serializes the current project model and downloads a `.flop` file.
-- `readProjectFile` parses the file and passes it through `migrateProjectToV2`, which supports legacy v1 input and the current v2 model.
+- File → Open Project selects a .flop file and delegates parsing, v1 migration and v2 validation to the existing persistence adapter. The active main project is replaced only after successful validation.
+- Cancelled selection and failed parsing/migration/validation do not dispatch project replacement. The picker value is cleared after every selected file so the same file can be selected again.
+- File → Export Project passes the complete active project aggregate to downloadProject, retaining project metadata, pages, documents, nodes, component definitions, logic graph reservations and asset references.
+- tests/projectFile.test.ts covers v2 import, v1 migration, invalid JSON, unsupported versions, failed imports, extension-field preservation and full-aggregate export. tests/document.test.ts covers reducer replacement history reset and imported metadata preservation.
 
-These adapter functions are not yet wired into the application's File menu. In the current `src/app/App.tsx`, the File menu entry is still a placeholder. Therefore, browser-level Open/Export checks cannot be completed through the current UI and must not be reported as passed.
+### Manual browser acceptance
 
-## Deferred acceptance — native .flop file workflow
+1. **Export:** choose File → Export Project and confirm a named .flop file downloads.
+2. **Format:** inspect the exported file and confirm format is folio-project and formatVersion is 2.
+3. **Import:** open the exported file and confirm the project, active page, page/document/node IDs, components, logic graph reservations and asset references are restored.
+4. **Legacy import:** open a supported v1 single-document file and confirm migration to v2 preserves its document ID, node IDs and extension data.
+5. **Invalid import:** select invalid JSON, an invalid project or an unsupported format version. Folio must show an English error and keep the active project unchanged.
+6. **Retry:** after a failed import, select the same file again. The file picker must accept the repeated selection.
+7. **Cancellation:** open the picker and cancel. The active project and its undo/redo state must remain unchanged.
+8. **History reset:** after a successful import, confirm Undo and Redo do not restore history from the previously open project.
+9. **Round trip:** export → import → export and compare project semantics, IDs, component references, logic graph reservations, asset references and layer order.
 
-Activate these checks once File menu integration is implemented:
-
-1. **Export:** choose Export and confirm a `.flop` file downloads.
-2. **Format:** inspect the exported file and confirm `format: "folio-project"` and `formatVersion: 2`.
-3. **Import:** open the exported file and confirm the project returns with its page and node IDs intact.
-4. **Legacy import:** open a supported v1 single-document file and confirm migration to v2 preserves its document content and node IDs.
-5. **Invalid import:** select an invalid JSON file or unsupported format version. Folio must show an error and keep the currently open project unchanged.
-6. **Round trip:** export → import → export and compare project semantics, node IDs, component references, and layer order.
-
-Do not mark native file workflow acceptance as verified until the File menu is connected and all deferred checks pass.
-
+Do not mark native file workflow acceptance as verified until the automated checks and manual browser checks above pass.
 Do not start Stage 2 until the Stage 1 automated checks and manual browser checks above pass on the target Windows 10 laptop and intended browser.
