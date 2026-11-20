@@ -155,16 +155,24 @@ async function launchChromium(path) {
     }
     return {
       evaluate, viewport, pressTab,
-      close: () => {
+      close: async () => {
         try { socket?.close(); } catch { /* Ignore an already closed socket. */ }
-        child.kill('SIGTERM');
-        rmSync(profile, { recursive: true, force: true });
+        if (child.exitCode === null && child.signalCode === null) {
+          const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
+          child.kill('SIGTERM');
+          await Promise.race([exited, delay(5000)]);
+        }
+        rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       },
     };
   } catch (error) {
     try { socket?.close(); } catch { /* Ignore an already closed socket. */ }
-    child.kill('SIGTERM');
-    rmSync(profile, { recursive: true, force: true });
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
+      child.kill('SIGTERM');
+      await Promise.race([exited, delay(5000)]);
+    }
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     throw error;
   }
 }
@@ -333,8 +341,8 @@ async function runRackBrowserChecks() {
       },
     };
   } finally {
-    browser?.close();
-    rmSync(directory, { recursive: true, force: true });
+    await browser?.close();
+    rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 
