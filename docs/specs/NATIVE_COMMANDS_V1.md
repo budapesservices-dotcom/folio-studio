@@ -560,15 +560,6 @@ A command must never partially apply to some selected nodes while silently skipp
 
 The store must check the candidate's captured baseProjectRevision at the instant it accepts the state. It must update the EditorState and projectRevision as one logical commit. If that comparison fails, it returns the current store snapshot rather than the stale candidate.
 
-### 7.2 Atomicity guarantee
-
-For one command, the guarantee is:
-
-- **Success:** the complete candidate project mutation is published.
-- **No-op:** no project mutation is published and no history snapshot is added.
-- **Rejected/failed:** the previous project and history remain unchanged.
-
-A command must never partially apply to some selected nodes while silently skipping missing or invalid targets. When a command addresses multiple nodes, all requested targets must validate before the mutation is prepared.
 
 ### 7.3 Candidate validation
 
@@ -727,11 +718,20 @@ interface CanonicalEditorStore {
   commitEditorTransition(input: {
     expectedProjectRevision: number;
     candidateState: EditorState;
-    projectMutation: boolean;
     changeDraft?: NativeChangeSetDraft;
   }): EditorStoreCommitResult;
 }
 ~~~
+
+**Project-change classification is owned by the canonical store, never by the caller.** The `commitEditorTransition` input intentionally has no `projectMutation` flag or caller-supplied classification. At the commit boundary, the store compares the project reference in its current committed `beforeState` with the project reference in `candidateState`:
+
+- If `beforeState.project` and `candidateState.project` are the same reference, the candidate is an editor-only transition. The store may accept it without advancing `projectRevision` (for example, a selection update).
+- If the references differ, the candidate contains a project transition. The store may accept it only as one atomic commit that installs the candidate and increments `projectRevision` exactly once.
+- The candidate builder must preserve the current project reference for a semantic no-op and use copy-on-write to produce a new root project object for every project-content change.
+
+This reference-based classification depends on an enforced immutable-project contract: the canonical store retains ownership of the committed project graph and does not expose a mutable alias that can change it before commit. The committed graph must be frozen or protected by an equivalent ownership mechanism; candidate builders must not mutate the committed `beforeState.project` in place. A newly allocated but semantically unchanged project root is treated as a project transition, so no-op builders must preserve the original reference.
+
+The store must ignore or reject any unexpected runtime `projectMutation` field; it must never use that caller-controlled value to decide whether the revision advances. If the store cannot establish the immutable before/after classification, or cannot apply the corresponding revision increment atomically, it must reject the entire transition and preserve the current state and history. It must never accept changed project data while leaving `projectRevision` unchanged.
 
 This is a proposed boundary contract, not an additional project model or a second state store. The canonical store owns the existing EditorState and the in-memory projectRevision together.
 
@@ -1297,6 +1297,11 @@ For every supported command, compare the command adapter result with the equival
 - A successful new edit clears redo history.
 - History remains capped at 60 snapshots.
 - An accepted legacy reducer project mutation and an accepted Native Command mutation both increment the same canonical projectRevision exactly once.
+- The canonical store derives project-change classification from its immutable before/after project references; the commit input exposes no caller-controlled `projectMutation` boolean.
+- A candidate with a new project root is classified as a project mutation and is accepted only when the same atomic commit increments projectRevision exactly once.
+- A runtime-supplied `projectMutation: false` cannot suppress that increment: the unexpected field is ignored or the malformed input is rejected, and changed project data is never committed with an unchanged revision.
+- A candidate retaining the exact current project reference may commit an editor-only transition without incrementing projectRevision; a caller-supplied `projectMutation: true` cannot force a project revision for that unchanged project.
+- The committed project graph cannot be mutated through a retained mutable alias. In-place mutation is prevented or rejected before commit; a failed classification/revision commit leaves project state and history unchanged.
 - Undo, Redo, and accepted project replacement each increment projectRevision once; the number is never restored from snapshot/import data.
 - No-op, rejected, selection-only, and viewport-only changes do not increment projectRevision.
 - A commit conflict does not change projectRevision or history.
@@ -1370,6 +1375,7 @@ V1 can be marked **Verified** only against the implementation and test evidence 
 - Add the smallest framework-independent command types, validators, and static registry.
 - Implement one bounded Main Canvas command family first (recommended: node transform and common node properties).
 - Establish the canonical editor store's in-memory projectRevision and the single commitEditorTransition boundary.
+- Make the canonical store derive project-change classification from its immutable before/after project transition; do not accept a caller-owned mutation boolean.
 - Route both legacy reducer transitions and the pilot Native Command family through that same boundary.
 - Translate validated commands into existing reducer actions.
 - Return preparation outcomes separately from host-confirmed commit outcomes; only the store may return applied.
@@ -1434,6 +1440,7 @@ These are no longer open questions:
 8. Component metadata changes and component document-content changes are distinct mutation categories. Metadata changes do not masquerade as AST node changes.
 9. The current Component Canvas working buffer remains a transient editing surface. Phase 3 adds the canonical component command bridge; it does not add a second canonical project or revision owner.
 10. Batch atomicity and one-commit/one-revision behavior are fixed for the batch contract. The detailed public shape of per-command failure diagnostics is deferred and is not a Phase 1 blocker.
+11. Project-mutation classification belongs to the canonical store. `commitEditorTransition` accepts no caller-owned `projectMutation` flag; it derives project changes from the immutable before/after project transition, and it rejects any transition it cannot classify and revision atomically.
 
 ### 18.2 Deferred questions
 
