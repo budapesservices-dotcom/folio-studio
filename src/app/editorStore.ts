@@ -91,7 +91,7 @@ function isEditorState(value: unknown): value is EditorState {
     if (typeof candidate.project !== 'object' || candidate.project === null ||
         !validateProject(candidate.project as EditorState['project']).ok ||
         !Array.isArray(candidate.past) || !Array.isArray(candidate.future) ||
-        candidate.past.length > EDITOR_HISTORY_LIMIT || candidate.future.length > EDITOR_HISTORY_LIMIT ||
+        candidate.past.length + candidate.future.length > EDITOR_HISTORY_LIMIT ||
         !candidate.past.every(isHistoricalProject) || !candidate.future.every(isHistoricalProject) ||
         (candidate.selectedNodeId !== null && typeof candidate.selectedNodeId !== 'string') ||
         !Array.isArray(candidate.selectedNodeIds) ||
