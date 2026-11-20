@@ -37,10 +37,6 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function storedLayout(storage: MemoryStorage) {
-  storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, JSON.stringify(makeLayout()));
-}
-
 describe("Workspace Preferences V1 defaults and storage", () => {
   it("round-trips a valid V1 layout through the versioned storage key", () => {
     const storage = new MemoryStorage();
@@ -132,7 +128,7 @@ describe("Workspace Preferences V1 validation and recovery", () => {
   });
 
   it("drops unknown future workspace kinds without breaking the current layout", () => {
-    const layout = makeLayout() as ReturnType<typeof makeLayout> & { windows: Array<Record<string, unknown>> };
+    const layout = makeLayout() as unknown as { windows: Array<Record<string, unknown>>; stackOrder: string[] };
     layout.windows.push({
       ...layout.windows[0],
       workspace: "future-workspace",
@@ -163,7 +159,7 @@ describe("Workspace Preferences V1 validation and recovery", () => {
   });
 
   it("rejects invalid visibility, presentation, and maximize values", () => {
-    const layout = makeLayout() as ReturnType<typeof makeLayout> & { windows: Array<Record<string, unknown>> };
+    const layout = makeLayout() as unknown as { windows: Array<Record<string, unknown>>; stackOrder: string[] };
     layout.windows[0].visibility = "hidden";
     layout.windows[1].presentation = "fullscreen";
     layout.windows[2].maximized = true;
@@ -354,7 +350,7 @@ describe("Workspace adapter isolation boundaries", () => {
 
   it("accepts only the three currently implemented workspace kinds", () => {
     expect(WORKSPACE_KINDS).toEqual(["main-canvas", "component-canvas", "node-logic"]);
-    const layout = makeLayout() as ReturnType<typeof makeLayout> & { activeWorkspace: string };
+    const layout = makeLayout() as unknown as { activeWorkspace: string };
     layout.activeWorkspace = "future-workspace";
     const normalized = normalizeWorkspaceLayout(layout, VIEWPORT);
     expect(normalized?.activeWorkspace).toBe("main-canvas");

@@ -326,7 +326,7 @@ export function normalizeWorkspaceLayout(
   if (value.activeWindowInstanceId !== null &&
       !isBoundedString(value.activeWindowInstanceId, MAX_ID_LENGTH)) return null;
   if (typeof value.activeWorkspace !== "string") return null;
-  if (!isObject(value.panelVisibility)) return null;
+  if (!isObject(value.panelVisibility) || Object.keys(value.panelVisibility).length > 16) return null;
   if (!isValidTimestamp(value.updatedAt)) return null;
 
   const safeArea = safeViewport(viewport);
@@ -380,7 +380,7 @@ export function normalizeWorkspaceLayout(
   const normalizedStack: string[] = [];
   const stackCandidates = value.stackOrder as unknown[];
   for (const candidate of stackCandidates) {
-    if (typeof candidate !== "string" || !openIds.has(candidate) || normalizedStack.includes(candidate)) {
+    if (typeof candidate !== "string" || candidate.length > MAX_ID_LENGTH || !openIds.has(candidate) || normalizedStack.includes(candidate)) {
       continue;
     }
     normalizedStack.push(candidate);
@@ -617,10 +617,11 @@ function isStrictSaveLayout(
   const openIds = value.windows
     .filter((record) => record.visibility === "open")
     .map((record) => record.windowInstanceId);
-  if (value.stackOrder.some((id) => typeof id !== "string" || !ids.has(id))) return false;
-  if (new Set(value.stackOrder).size !== value.stackOrder.length) return false;
-  if (value.stackOrder.length !== openIds.length ||
-      openIds.some((id) => !value.stackOrder.includes(id))) return false;
+  const requestedStackOrder = value.stackOrder as unknown[];
+  if (requestedStackOrder.some((id) => typeof id !== "string" || !ids.has(id))) return false;
+  if (new Set(requestedStackOrder).size !== requestedStackOrder.length) return false;
+  if (requestedStackOrder.length !== openIds.length ||
+      openIds.some((id) => !requestedStackOrder.includes(id))) return false;
   if (value.activeWindowInstanceId !== null && !openIds.includes(value.activeWindowInstanceId)) {
     return false;
   }
