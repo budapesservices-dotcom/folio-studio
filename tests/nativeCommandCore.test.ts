@@ -745,6 +745,7 @@ describe('Canonical commit conflict, failure and immutability', () => {
     const preparation = prepareNativeCommand(fixture.store.getSnapshot(), input, fixture.context);
     if (preparation.status !== 'prepared') throw new Error('Expected command preparation to succeed.');
     const originalCommandId = preparation.commandId;
+    const expectedAddress = { ...fixture.address, owner: { ...fixture.address.owner } };
     const candidateNode = getActiveDocument(preparation.candidateState.project).nodes[0];
     const events: unknown[] = [];
     fixture.store.subscribeChanges((event) => events.push(event));
@@ -775,7 +776,7 @@ describe('Canonical commit conflict, failure and immutability', () => {
     expect(events[0]).toMatchObject({
       commandId: originalCommandId,
       source: { actor: { actorId: 'tester' } },
-      change: { documents: [{ address: fixture.address }] },
+      change: { documents: [{ address: expectedAddress }] },
     });
   });
 
