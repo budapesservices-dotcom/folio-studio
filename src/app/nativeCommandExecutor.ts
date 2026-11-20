@@ -23,6 +23,20 @@ import { NATIVE_COMMAND_REGISTRY, type NativeCommandAdapterContext } from './nat
 import type { CanonicalEditorStore, CanonicalEditorStoreSnapshot } from './editorStore';
 import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
 
+const KNOWN_NATIVE_PERMISSIONS = new Set([
+  'project.read',
+  'project.rename',
+  'document.read',
+  'node.create',
+  'node.update',
+  'node.transform',
+  'node.reorder',
+  'node.delete',
+  'component.read',
+  'component.update',
+  'component.delete',
+]);
+
 export type NativeCommandPreparation =
   | {
       status: 'prepared';
@@ -213,7 +227,8 @@ export function prepareNativeCommand(
   if (!context || typeof context.projectId !== 'string' || context.projectId.trim().length === 0 ||
       !context.principal || typeof context.principal.id !== 'string' || context.principal.id.trim().length === 0 ||
       !Array.isArray(context.capabilities) ||
-      context.capabilities.some((capability) => typeof capability !== 'string')) {
+      context.capabilities.some((capability) =>
+        typeof capability !== 'string' || !KNOWN_NATIVE_PERMISSIONS.has(capability))) {
     return rejectedPreparation(snapshot, command, 'PERMISSION_DENIED', 'The trusted Main Canvas context is invalid.');
   }
   if (context.workspace !== 'main' || command.source.workspace !== 'main' ||
