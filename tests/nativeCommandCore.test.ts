@@ -685,6 +685,64 @@ describe('Native change event publication', () => {
 });
 
 describe('Canonical commit conflict, failure and immutability', () => {
+  it('rejects malformed full EditorState candidates on editor-only commits without mutating any live snapshot', () => {
+    const fixture = createFixture();
+    const before = fixture.store.getSnapshot();
+    const invalidHistoryProject = { ...before.editorState.project, pages: [] };
+    const invalidCandidates: unknown[] = [
+      { ...before.editorState, selectedNodeId: 'missing-node', selectedNodeIds: ['missing-node'] },
+      { ...before.editorState, selectedNodeId: 'shared-node', selectedNodeIds: [] },
+      { ...before.editorState, selectedNodeId: null, selectedNodeIds: ['shared-node', 'shared-node'] },
+      { ...before.editorState, past: new Array(61).fill(before.editorState.project) },
+      { ...before.editorState, past: [invalidHistoryProject] },
+      { ...before.editorState, future: [invalidHistoryProject] },
+    ];
+
+    for (const candidateState of invalidCandidates) {
+      const rejected = fixture.store.commitEditorTransition({
+        expectedProjectRevision: before.projectRevision,
+        expectedEditorState: before.editorState,
+        candidateState: candidateState as never,
+      });
+      expect(rejected).toMatchObject({ status: 'failed', errorCode: 'INVALID_EDITOR_STATE' });
+      expect(fixture.store.getSnapshot()).toBe(before);
+      expect(fixture.store.getSnapshot().editorState).toBe(before.editorState);
+      expect(fixture.store.getSnapshot().editorState.project).toBe(before.editorState.project);
+      expect(fixture.store.getSnapshot().editorState.past).toBe(before.editorState.past);
+      expect(fixture.store.getSnapshot().editorState.future).toBe(before.editorState.future);
+      expect(fixture.store.getSnapshot().projectRevision).toBe(before.projectRevision);
+    }
+  });
+
+  it('accepts valid selection-only and history transitions under full EditorState validation', () => {
+    const fixture = createFixture();
+    expect(fixture.store.dispatchLegacyAction({ type: 'select-node', nodeId: 'shared-node' }).status).toBe('committed');
+    expect(fixture.store.getSnapshot().projectRevision).toBe(0);
+    expect(fixture.store.getSnapshot().editorState.selectedNodeId).toBe('shared-node');
+    expect(fixture.store.getSnapshot().editorState.selectedNodeIds).toEqual(['shared-node']);
+
+    expect(fixture.store.dispatchLegacyAction({ type: 'rename-project', name: 'Valid history snapshot' }).status).toBe('committed');
+    expect(fixture.store.getSnapshot().editorState.past).toHaveLength(1);
+    expect(fixture.store.dispatchLegacyAction({ type: 'undo' }).status).toBe('committed');
+    expect(fixture.store.getSnapshot().editorState.future).toHaveLength(1);
+    expect(fixture.store.dispatchLegacyAction({ type: 'redo' }).status).toBe('committed');
+    expect(fixture.store.getSnapshot().editorState.past).toHaveLength(1);
+    expect(fixture.store.getSnapshot().editorState.future).toHaveLength(0);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(3);
+  });
+
+  it('rejects construction from an EditorState containing a malformed historical project', () => {
+    const project = createInitialProject('Malformed history');
+    const initial = createEditorState(project);
+    const malformed = {
+      ...initial,
+      past: [{ ...initial.project, pages: [] }],
+    };
+    expect(() => createCanonicalEditorStore(malformed as never)).toThrow(
+      'Cannot create the Main Canvas store from an invalid editor state.',
+    );
+  });
+
   it('rejects a prepared candidate after a selection-only editor transition without overwriting the latest snapshot', () => {
     const fixture = createFixture();
     const preparation = prepareNativeCommand(fixture.store.getSnapshot(), makeCommand('node.transform', fixture.address, {
@@ -1204,6 +1262,29 @@ describe('Native command runtime resource budgets', () => {
     expect(isRuntimeCommandDataWithinLimits(nested(NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth - 1))).toBe(true);
     expect(isRuntimeCommandDataWithinLimits(nested(NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth))).toBe(true);
     expect(isRuntimeCommandDataWithinLimits(nested(NATIVE_COMMAND_RUNTIME_LIMITS.maxDepth + 1))).toBe(false);
+  });
+
+
+  it('checks every shared DAG path depth even when the shared subtree was memoized shallow-first', () => {
+    const chain = (length: number, tail: unknown): unknown => {
+      let value = tail;
+      for (let index = 0; index < length; index += 1) value = { next: value };
+      return value;
+    };
+    const sharedSubtree = chain(10, true);
+
+    // Property insertion order makes the shallow path populate memoization first.
+    const withinBoundary = {
+      shallow: sharedSubtree,
+      deep: chain(53, sharedSubtree),
+    };
+    const overBoundary = {
+      shallow: sharedSubtree,
+      deep: chain(54, sharedSubtree),
+    };
+
+    expect(isRuntimeCommandDataWithinLimits(withinBoundary)).toBe(true);
+    expect(isRuntimeCommandDataWithinLimits(overBoundary)).toBe(false);
   });
 
   it('accepts the object-node budget boundary and rejects the first object beyond it', () => {
