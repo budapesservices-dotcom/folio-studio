@@ -2,7 +2,7 @@
 
 **Document ID:** FOLIO-AST-API-001  
 **Version:** 0.1 — Draft  
-**Status:** Implemented in the current branch; latest CI verification pending  
+**Status:** Implemented and CI verified in this branch  
 **Related specifications:**
 - [Native AST v1](NATIVE_AST_V1.md)
 - [Native AST Compatibility & Migration Plan](NATIVE_AST_COMPATIBILITY_MIGRATION.md)
@@ -214,6 +214,6 @@ Before implementation is considered complete, tests must prove:
 
 **Tests added:** tests/ast.test.ts covers scoped lookup, hierarchy queries, paint/render/panel order, duplicate IDs, document-address mismatch, source immutability, and rebuilding against immutable document updates.
 
-**Verification:** latest CI run for the address-validation follow-up is pending. The previous facade implementation passed type-check, all tests, and production build in [run #239](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44666889848); the address-validation follow-up will be verified separately.
+**Verification:** GitHub Actions [run #241](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44667068650) passed for the complete facade and its document-address validation. Type-check, the full test suite, and production build all succeeded.
 
 **Next milestone after this API:** Native Commands v1 — introduce validated write operations without changing persistence or history semantics.
