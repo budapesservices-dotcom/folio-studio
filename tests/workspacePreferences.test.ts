@@ -112,6 +112,51 @@ describe("Workspace Preferences V1 validation and recovery", () => {
       .toBe("malformed");
   });
 
+  it("refuses to overwrite an existing record larger than 64 KiB by default", () => {
+    const storage = new MemoryStorage();
+    const largeExisting = JSON.stringify(makeLayout()) + " ".repeat(70 * 1024);
+    storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, largeExisting);
+
+    const saved = saveWorkspacePreferences(makeLayout(), {
+      storage,
+      reconciliationComplete: true,
+    });
+
+    expect(saved).toEqual({ ok: false, reason: "existing-record-too-large" });
+    expect(storage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY)).toBe(largeExisting);
+  });
+
+  it("allows an oversized existing record to be replaced only with explicit override", () => {
+    const storage = new MemoryStorage();
+    const largeExisting = JSON.stringify(makeLayout()) + " ".repeat(70 * 1024);
+    storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, largeExisting);
+
+    const saved = saveWorkspacePreferences(makeLayout(), {
+      storage,
+      reconciliationComplete: true,
+      replaceUnsupportedVersion: true,
+    });
+
+    expect(saved.ok).toBe(true);
+    expect(storage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY)).not.toBe(largeExisting);
+    expect(JSON.parse(storage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY) ?? "{}").schemaVersion)
+      .toBe(1);
+  });
+
+  it("refuses to overwrite existing JSON that cannot be safely inspected", () => {
+    const storage = new MemoryStorage();
+    const unreadable = "{broken-existing-json";
+    storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, unreadable);
+
+    const saved = saveWorkspacePreferences(makeLayout(), {
+      storage,
+      reconciliationComplete: true,
+    });
+
+    expect(saved).toEqual({ ok: false, reason: "existing-record-unreadable" });
+    expect(storage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY)).toBe(unreadable);
+  });
+
   it("does not overwrite or downgrade an unsupported newer schema", () => {
     const storage = new MemoryStorage();
     const newer = JSON.stringify({ schemaVersion: 2, futureField: true });
@@ -232,6 +277,127 @@ describe("Workspace Preferences V1 validation and recovery", () => {
     const normalized = normalizeWorkspaceLayout(layout, VIEWPORT);
     expect(normalized?.windows[0].geometry.x).toBe(0);
     expect(normalized?.windows[0].geometry.y).toBeGreaterThanOrEqual(56);
+  });
+});
+
+describe("Workspace V1 recovery reporting", () => {
+  it("marks an empty windows array as recovered and requiring reconciliation", () => {
+    const storage = new MemoryStorage();
+    const damaged = {
+      ...makeLayout(),
+      windows: [],
+      stackOrder: [],
+      activeWindowInstanceId: null,
+    };
+    const original = JSON.stringify(damaged);
+    storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, original);
+
+    const loaded = loadWorkspacePreferences({ storage, viewport: VIEWPORT, now: FIXED_DATE });
+
+    expect(loaded.status).toBe("recovered");
+    expect(loaded.requiresReconciliation).toBe(true);
+    expect(loaded.warnings.some((warning) => warning.includes("Missing workspace window record")))
+      .toBe(true);
+    expect(loaded.layout.windows).toHaveLength(WORKSPACE_KINDS.length);
+    expect(storage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY)).toBe(original);
+  });
+
+  it("reports an invalid window record that was dropped and replaced", () => {
+    const storage = new MemoryStorage();
+    const damaged = JSON.parse(JSON.stringify(makeLayout())) as {
+      windows: Array<Record<string, unknown>>;
+    };
+    damaged.windows[0].visibility = "unknown-visibility";
+    const original = JSON.stringify(damaged);
+    storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, original);
+
+    const loaded = loadWorkspacePreferences({ storage, viewport: VIEWPORT, now: FIXED_DATE });
+
+    expect(loaded.status).toBe("recovered");
+    expect(loaded.requiresReconciliation).toBe(true);
+    expect(loaded.warnings.some((warning) => warning.includes("Dropped window record")))
+      .toBe(true);
+    expect(storage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY)).toBe(original);
+  });
+
+  it("reports a missing known workspace kind and restores its default record", () => {
+    const storage = new MemoryStorage();
+    const layout = makeLayout();
+    const damaged = {
+      ...layout,
+      windows: layout.windows.filter((record) => record.workspace !== "component-canvas"),
+    };
+    storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, JSON.stringify(damaged));
+
+    const loaded = loadWorkspacePreferences({ storage, viewport: VIEWPORT, now: FIXED_DATE });
+
+    expect(loaded.status).toBe("recovered");
+    expect(loaded.requiresReconciliation).toBe(true);
+    expect(loaded.warnings).toContain(
+      "Missing workspace window record for component-canvas; safe defaults were restored",
+    );
+    expect(loaded.layout.windows.find((record) => record.workspace === "component-canvas"))
+      .toBeDefined();
+  });
+
+  it("reports invalid geometry replaced by the workspace safe default", () => {
+    const storage = new MemoryStorage();
+    const damaged = JSON.parse(JSON.stringify(makeLayout())) as {
+      windows: Array<{ geometry: Record<string, unknown> }>;
+    };
+    damaged.windows[0].geometry.width = -10;
+    storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, JSON.stringify(damaged));
+
+    const loaded = loadWorkspacePreferences({ storage, viewport: VIEWPORT, now: FIXED_DATE });
+
+    expect(loaded.status).toBe("recovered");
+    expect(loaded.requiresReconciliation).toBe(true);
+    expect(loaded.warnings).toContain(
+      "Invalid geometry for main-canvas was replaced with safe defaults",
+    );
+    expect(loaded.layout.windows[0].geometry).toEqual(makeLayout().windows[0].geometry);
+  });
+
+  it("reports viewport geometry clamping while preserving the recoverable rectangle", () => {
+    const storage = new MemoryStorage();
+    const damaged = JSON.parse(JSON.stringify(makeLayout())) as {
+      windows: Array<{ geometry: Record<string, unknown> }>;
+    };
+    damaged.windows[0].geometry.x = -100;
+    damaged.windows[0].geometry.y = -100;
+    storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, JSON.stringify(damaged));
+
+    const loaded = loadWorkspacePreferences({ storage, viewport: VIEWPORT, now: FIXED_DATE });
+
+    expect(loaded.status).toBe("recovered");
+    expect(loaded.warnings).toContain(
+      "Geometry for main-canvas was clamped to the current viewport",
+    );
+    expect(loaded.layout.windows[0].geometry.x).toBe(0);
+    expect(loaded.layout.windows[0].geometry.y).toBeGreaterThanOrEqual(56);
+  });
+
+  it("keeps an intact V1 record valid with no recovery warnings", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, JSON.stringify(makeLayout()));
+
+    const loaded = loadWorkspacePreferences({ storage, viewport: VIEWPORT, now: FIXED_DATE });
+
+    expect(loaded.status).toBe("valid");
+    expect(loaded.requiresReconciliation).toBe(false);
+    expect(loaded.warnings).toEqual([]);
+  });
+
+  it("does not persist a recovered layout during load", () => {
+    const storage = new MemoryStorage();
+    const damaged = { ...makeLayout(), windows: [] };
+    const original = JSON.stringify(damaged);
+    storage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY, original);
+
+    loadWorkspacePreferences({ storage, viewport: VIEWPORT, now: FIXED_DATE });
+
+    expect(storage.values.size).toBe(1);
+    expect(storage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY)).toBe(original);
   });
 });
 

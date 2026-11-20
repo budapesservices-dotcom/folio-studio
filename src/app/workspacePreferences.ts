@@ -64,6 +64,7 @@ export interface WorkspacePreferencesStorage {
 
 export type WorkspacePreferencesLoadStatus =
   | "valid"
+  | "recovered"
   | "missing"
   | "migrated"
   | "malformed"
@@ -88,7 +89,7 @@ export interface WorkspacePreferencesSaveOptions {
   viewport?: WindowViewport;
   /** Saving is intentionally disabled until the caller completes reconciliation. */
   reconciliationComplete?: boolean;
-  /** Explicit opt-in required before replacing a record from a newer schema. */
+  /** Explicit opt-in required before replacing an existing record that cannot be safely inspected. */
   replaceUnsupportedVersion?: boolean;
 }
 
@@ -97,6 +98,8 @@ export type WorkspacePreferencesSaveFailure =
   | "invalid-layout"
   | "storage-unavailable"
   | "unsupported-newer-schema"
+  | "existing-record-too-large"
+  | "existing-record-unreadable"
   | "write-failed";
 
 export type WorkspacePreferencesSaveResult =
@@ -272,21 +275,43 @@ function defaultGeometryFor(
   return record ? { ...record.geometry } : { x: 0, y: 56, width: 280, height: 220 };
 }
 
+function addRecoveryWarning(warnings: string[], warning: string): void {
+  if (!warnings.includes(warning)) warnings.push(warning);
+}
+
 function normalizeWindowGeometry(
   geometry: unknown,
   workspace: WorkspaceKind,
   defaults: WorkspaceLayoutV1,
   viewport: WindowViewport,
+  warnings: string[],
 ): WorkspaceGeometry {
-  if (!hasValidGeometryNumbers(geometry)) return defaultGeometryFor(workspace, defaults);
-  const recovered = recoverWindowLayout(
+  if (!hasValidGeometryNumbers(geometry)) {
+    addRecoveryWarning(
+      warnings,
+      "Invalid geometry for " + workspace + " was replaced with safe defaults",
+    );
+    return defaultGeometryFor(workspace, defaults);
+  }
+  const recovered = geometryFromWindowManager(recoverWindowLayout(
     {
       position: { x: geometry.x, y: geometry.y },
       size: { width: geometry.width, height: geometry.height },
     },
     viewport,
-  );
-  return geometryFromWindowManager(recovered);
+  ));
+  if (
+    recovered.x !== geometry.x ||
+    recovered.y !== geometry.y ||
+    recovered.width !== geometry.width ||
+    recovered.height !== geometry.height
+  ) {
+    addRecoveryWarning(
+      warnings,
+      "Geometry for " + workspace + " was clamped to the current viewport",
+    );
+  }
+  return recovered;
 }
 
 function normalizePanelVisibility(
@@ -296,15 +321,26 @@ function normalizePanelVisibility(
 ): Record<WorkspacePanelKey, boolean> {
   const result = { ...defaults };
   if (!isObject(value)) {
-    warnings.push("panelVisibility was not an object; defaults were used");
+    addRecoveryWarning(warnings, "panelVisibility was not an object; defaults were used");
     return result;
   }
   for (const key of WORKSPACE_PANEL_KEYS) {
     if (typeof value[key] === "boolean") {
       result[key] = value[key] as boolean;
-    } else if (value[key] !== undefined) {
-      warnings.push("Invalid panel visibility for " + key + "; default was used");
+    } else {
+      addRecoveryWarning(
+        warnings,
+        value[key] === undefined
+          ? "Missing panel visibility for " + key + "; default was restored"
+          : "Invalid panel visibility for " + key + "; default was restored",
+      );
     }
+  }
+  const unknownKeys = Object.keys(value).filter(
+    (key) => !(WORKSPACE_PANEL_KEYS as readonly string[]).includes(key),
+  );
+  if (unknownKeys.length > 0) {
+    addRecoveryWarning(warnings, "Unknown panel visibility entries were discarded");
   }
   return result;
 }
@@ -318,6 +354,7 @@ function normalizePanelVisibility(
 export function normalizeWorkspaceLayout(
   value: unknown,
   viewport: WindowViewport = DEFAULT_VIEWPORT,
+  recoveryWarnings: string[] = [],
 ): WorkspaceLayoutV1 | null {
   if (!isObject(value) || value.schemaVersion !== 1) return null;
   if (!isBoundedString(value.layoutId, MAX_LAYOUT_ID_LENGTH)) return null;
@@ -334,25 +371,50 @@ export function normalizeWorkspaceLayout(
   const recordsByWorkspace = new Map<WorkspaceKind, WorkspaceWindowRecord>();
   const seenIds = new Set<string>();
 
-  for (const candidate of value.windows) {
-    if (!isObject(candidate)) continue;
-    if (typeof candidate.workspace !== "string" || !isWorkspaceKind(candidate.workspace)) continue;
+  for (let index = 0; index < value.windows.length; index += 1) {
+    const candidate = value.windows[index];
+    if (!isObject(candidate)) {
+      addRecoveryWarning(recoveryWarnings, "Dropped invalid window record at index " + index);
+      continue;
+    }
+    if (typeof candidate.workspace !== "string" || !isWorkspaceKind(candidate.workspace)) {
+      addRecoveryWarning(recoveryWarnings, "Dropped window record with an unknown workspace kind at index " + index);
+      continue;
+    }
     const workspace = candidate.workspace;
-    if (!isBoundedString(candidate.windowInstanceId, MAX_ID_LENGTH)) continue;
-    if (seenIds.has(candidate.windowInstanceId) || recordsByWorkspace.has(workspace)) continue;
-    if (!isVisibility(candidate.visibility) || !isPresentation(candidate.presentation)) continue;
-    if (candidate.maximized !== false) continue;
+    if (!isBoundedString(candidate.windowInstanceId, MAX_ID_LENGTH)) {
+      addRecoveryWarning(recoveryWarnings, "Dropped window record with an invalid instance ID for " + workspace);
+      continue;
+    }
+    if (seenIds.has(candidate.windowInstanceId) || recordsByWorkspace.has(workspace)) {
+      addRecoveryWarning(recoveryWarnings, "Dropped duplicate window record for " + workspace);
+      continue;
+    }
+    if (!isVisibility(candidate.visibility) || !isPresentation(candidate.presentation) ||
+        candidate.maximized !== false) {
+      addRecoveryWarning(recoveryWarnings, "Dropped window record with invalid lifecycle or presentation fields for " + workspace);
+      continue;
+    }
     if (typeof candidate.stackOrder !== "number" ||
         !Number.isInteger(candidate.stackOrder) ||
         candidate.stackOrder < 0 ||
-        candidate.stackOrder > MAX_STACK_ENTRIES) continue;
+        candidate.stackOrder > MAX_STACK_ENTRIES) {
+      addRecoveryWarning(recoveryWarnings, "Dropped window record with invalid stack metadata for " + workspace);
+      continue;
+    }
 
     const record: WorkspaceWindowRecord = {
       windowInstanceId: candidate.windowInstanceId,
       workspace,
       visibility: candidate.visibility,
       presentation: candidate.presentation,
-      geometry: normalizeWindowGeometry(candidate.geometry, workspace, defaults, safeArea),
+      geometry: normalizeWindowGeometry(
+        candidate.geometry,
+        workspace,
+        defaults,
+        safeArea,
+        recoveryWarnings,
+      ),
       maximized: false,
       stackOrder: candidate.stackOrder,
     };
@@ -368,6 +430,10 @@ export function normalizeWorkspaceLayout(
         geometry: { ...existing.geometry },
       };
     }
+    addRecoveryWarning(
+      recoveryWarnings,
+      "Missing workspace window record for " + workspace + "; safe defaults were restored",
+    );
     const fallback = defaults.windows.find((record) => record.workspace === workspace);
     return fallback ? { ...fallback, geometry: { ...fallback.geometry } } :
       createDefaultWindow(workspace, { x: 0, y: 56, width: 280, height: 220 }, 0);
@@ -380,13 +446,23 @@ export function normalizeWorkspaceLayout(
   const normalizedStack: string[] = [];
   const stackCandidates = value.stackOrder as unknown[];
   for (const candidate of stackCandidates) {
-    if (typeof candidate !== "string" || candidate.length > MAX_ID_LENGTH || !openIds.has(candidate) || normalizedStack.includes(candidate)) {
+    if (typeof candidate !== "string" || candidate.length > MAX_ID_LENGTH) {
+      addRecoveryWarning(recoveryWarnings, "Dropped invalid stack-order entry");
+      continue;
+    }
+    if (!openIds.has(candidate)) {
+      addRecoveryWarning(recoveryWarnings, "Removed stack reference to a missing or non-open window");
+      continue;
+    }
+    if (normalizedStack.includes(candidate)) {
+      addRecoveryWarning(recoveryWarnings, "Removed duplicate stack-order reference");
       continue;
     }
     normalizedStack.push(candidate);
   }
   for (const record of windows) {
     if (record.visibility === "open" && !normalizedStack.includes(record.windowInstanceId)) {
+      addRecoveryWarning(recoveryWarnings, "Added open window missing from stack order: " + record.workspace);
       normalizedStack.push(record.windowInstanceId);
     }
   }
@@ -396,24 +472,46 @@ export function normalizeWorkspaceLayout(
     typeof requestedActive === "string" && openIds.has(requestedActive)
       ? requestedActive
       : normalizedStack.at(-1) ?? null;
+  if (requestedActive !== activeWindowInstanceId) {
+    addRecoveryWarning(recoveryWarnings, "Repaired active window reference");
+  }
+
   const activeRecord = activeWindowInstanceId
     ? recordsById.get(activeWindowInstanceId)
     : undefined;
-  const activeWorkspace = activeRecord?.workspace ??
-    (isWorkspaceKind(value.activeWorkspace) ? value.activeWorkspace : "main-canvas");
+  let activeWorkspace: WorkspaceKind;
+  if (activeRecord) {
+    activeWorkspace = activeRecord.workspace;
+    if (value.activeWorkspace !== activeWorkspace) {
+      addRecoveryWarning(recoveryWarnings, "Aligned active workspace with the active window");
+    }
+  } else if (isWorkspaceKind(value.activeWorkspace)) {
+    activeWorkspace = value.activeWorkspace;
+  } else {
+    activeWorkspace = "main-canvas";
+    addRecoveryWarning(recoveryWarnings, "Invalid active workspace was replaced with main-canvas");
+  }
 
   const stackIndices = new Map(normalizedStack.map((id, index) => [id, index]));
-  const normalizedWindows = windows.map((record) => ({
-    ...record,
-    geometry: { ...record.geometry },
-    stackOrder: stackIndices.get(record.windowInstanceId) ?? 0,
-  }));
+  const normalizedWindows = windows.map((record) => {
+    const stackOrder = stackIndices.get(record.windowInstanceId) ?? 0;
+    if (record.stackOrder !== stackOrder) {
+      addRecoveryWarning(
+        recoveryWarnings,
+        "Normalized per-window stack metadata for " + record.workspace,
+      );
+    }
+    return {
+      ...record,
+      geometry: { ...record.geometry },
+      stackOrder,
+    };
+  });
 
-  const warnings: string[] = [];
   const panelVisibility = normalizePanelVisibility(
     value.panelVisibility,
     defaults.panelVisibility,
-    warnings,
+    recoveryWarnings,
   );
 
   return {
@@ -456,7 +554,7 @@ function parseLegacyWindow(
     workspace,
     visibility: defaultVisibility(workspace),
     presentation: parsed.mode,
-    geometry: normalizeWindowGeometry(geometry, workspace, defaults, viewport),
+    geometry: normalizeWindowGeometry(geometry, workspace, defaults, viewport, []),
     maximized: false,
     stackOrder: workspace === "main-canvas" ? 0 : 0,
   };
@@ -516,9 +614,13 @@ export function loadWorkspacePreferences(
         ["Stored preference schema is newer than this adapter supports"],
       );
     }
-    const normalized = normalizeWorkspaceLayout(parsed, viewport);
+    const recoveryWarnings: string[] = [];
+    const normalized = normalizeWorkspaceLayout(parsed, viewport, recoveryWarnings);
     if (!normalized) {
       return makeLoadResult("malformed", defaults, ["Stored preference record did not match WorkspaceLayoutV1"]);
+    }
+    if (recoveryWarnings.length > 0) {
+      return makeLoadResult("recovered", normalized, recoveryWarnings);
     }
     return makeLoadResult("valid", normalized);
   }
@@ -651,19 +753,27 @@ export function saveWorkspacePreferences(
   } catch {
     return { ok: false, reason: "storage-unavailable" };
   }
-  if (existing !== null && !options.replaceUnsupportedVersion) {
-    if (existing.length <= MAX_RECORD_LENGTH) {
-      try {
-        const previous = JSON.parse(existing) as unknown;
-        if (isObject(previous) &&
-            typeof previous.schemaVersion === "number" &&
-            Number.isInteger(previous.schemaVersion) &&
-            previous.schemaVersion > 1) {
-          return { ok: false, reason: "unsupported-newer-schema" };
-        }
-      } catch {
-        // A malformed old record may be replaced only after explicit reconciliation.
-      }
+  if (existing !== null && options.replaceUnsupportedVersion !== true) {
+    if (existing.length > MAX_RECORD_LENGTH) {
+      return { ok: false, reason: "existing-record-too-large" };
+    }
+    let previous: unknown;
+    try {
+      previous = JSON.parse(existing) as unknown;
+    } catch {
+      return { ok: false, reason: "existing-record-unreadable" };
+    }
+    if (!isObject(previous) ||
+        typeof previous.schemaVersion !== "number" ||
+        !Number.isInteger(previous.schemaVersion) ||
+        previous.schemaVersion < 1) {
+      return { ok: false, reason: "existing-record-unreadable" };
+    }
+    if (previous.schemaVersion > 1) {
+      return { ok: false, reason: "unsupported-newer-schema" };
+    }
+    if (previous.schemaVersion !== 1) {
+      return { ok: false, reason: "existing-record-unreadable" };
     }
   }
 
