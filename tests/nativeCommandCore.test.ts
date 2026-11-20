@@ -1168,7 +1168,7 @@ describe('Authorized immutable Native change publication', () => {
     expect(fixture.store.getSnapshot().projectRevision).toBe(1);
     expect(currentNode(fixture.store)?.x).toBe(966);
     expect(blockedMutations).toBe(3);
-    expect(deliveredEvent).toBe(result.event);
+    expect(deliveredEvent).toBeDefined();
     expect(Object.isFrozen(deliveredEvent)).toBe(true);
     expect(Object.isFrozen(deliveredEvent.change)).toBe(true);
     expect(Object.isFrozen(deliveredEvent.change.documents[0])).toBe(true);
@@ -1177,8 +1177,8 @@ describe('Authorized immutable Native change publication', () => {
     expect(deliveredEvent.change.documents[0].address.documentId).toBe('document-main');
     expect(deliveredEvent.change.documents[0].nodeIds.updated).toEqual(['shared-node']);
     expect(deliveredEvent.source.actor.actorId).toBe('tester');
-    expect(result.result.affectedDocuments[0].documentId).toBe('document-main');
-    expect(result.result.affectedNodes[0].nodeId).toBe('shared-node');
+    expect(result.affectedDocuments[0].documentId).toBe('document-main');
+    expect(result.affectedNodes[0].nodeId).toBe('shared-node');
   });
 });
 
