@@ -55,8 +55,11 @@ export const NATIVE_COMMAND_REGISTRY = Object.freeze({
     validatePayload: validateNodeSetPropertiesPayload,
     toEditorActions(command: NativeCommand, _context: NativeCommandAdapterContext): readonly EditorAction[] {
       if (command.type !== 'node.set-properties') return [];
-      const properties: NodeSetPropertiesPayload['properties'] = { ...command.payload.properties };
-      if (properties.layerColor === null) properties.layerColor = undefined;
+      const requested = command.payload.properties;
+      const properties: Extract<EditorAction, { type: 'set-nodes-properties' }>['properties'] = {};
+      if (requested.visible !== undefined) properties.visible = requested.visible;
+      if (requested.locked !== undefined) properties.locked = requested.locked;
+      if ('layerColor' in requested) properties.layerColor = requested.layerColor ?? undefined;
       return [{
         type: 'set-nodes-properties',
         nodeIds: command.payload.nodes.map((ref) => ref.nodeId),
