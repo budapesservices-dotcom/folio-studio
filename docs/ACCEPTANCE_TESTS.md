@@ -69,4 +69,4 @@ Implementation scope: Main Canvas only. The initial static registry supports `no
 
 Not included in Phase 1: Component Canvas command bridge, inactive-page mutation, batches, plugin/AI execution, remote execution, Node Logic commands, command-based history, durable revisions or multi-application support.
 
-Manual browser acceptance for Native Command Core: pending. Automated test results are recorded in the linked Phase 1 pull-request CI run; no browser acceptance is implied by those automated checks.
+Automated verification (2026-11-20): GitHub Actions run [#44697833843](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44697833843) passed on Node.js 26.13.1. `npm run check`, `npm run test` (11 test files, 155 tests) and `npm run build` all passed. Manual browser acceptance for Native Command Core: pending; this CI result does not claim a browser-level run.
