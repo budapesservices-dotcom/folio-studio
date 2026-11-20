@@ -77,21 +77,25 @@ async function launchChromium(path) {
   ], { stdio: ['ignore', 'ignore', 'pipe'] });
   let socket;
   try {
-    const port = await new Promise((resolvePort, reject) => {
-      let stderr = '';
-      const timeout = setTimeout(() => reject(new Error('Chromium DevTools startup timeout: ' + stderr.slice(-1000))), 15000);
-      child.stderr.setEncoding('utf8');
-      child.stderr.on('data', (chunk) => {
-        stderr += chunk;
-        const match = stderr.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//);
-        if (match) { clearTimeout(timeout); resolvePort(Number(match[1])); }
-      });
-      child.once('error', (error) => { clearTimeout(timeout); reject(error); });
-      child.once('exit', (code) => {
-        clearTimeout(timeout);
-        reject(new Error('Chromium exited early (' + code + '): ' + stderr.slice(-1000)));
-      });
-    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const activePortFile = join(profile, 'DevToolsActivePort');
+    let port = 0;
+    const startupDeadline = Date.now() + 20000;
+    while (Date.now() < startupDeadline && child.exitCode === null) {
+      if (existsSync(activePortFile)) {
+        const candidate = Number(readFileSync(activePortFile, 'utf8').split(/\\r?\\n/)[0]);
+        if (Number.isInteger(candidate) && candidate > 0) {
+          port = candidate;
+          break;
+        }
+      }
+      await delay(100);
+    }
+    if (!port) {
+      throw new Error('Chromium DevTools startup timeout: ' + stderr.slice(-1000));
+    }
 
     let targets;
     for (let attempt = 0; attempt < 50; attempt += 1) {
