@@ -40,7 +40,6 @@ export type EditorAction =
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }
   | { type: 'add-component'; component: ComponentDefinition }
-  | { type: 'update-component'; component: ComponentDefinition }
   | { type: 'sync-component-document'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; document: FolioDocument; updatedAt: string }
   | { type: 'rename-component'; componentId: string; name: string }
   | { type: 'delete-component'; componentId: string }
@@ -360,14 +359,6 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ...state.project,
         components: [...state.project.components, action.component],
       }));
-    }
-
-    case 'update-component': {
-      const currentComponent = state.project.components.find((component) => component.id === action.component.id);
-      if (!currentComponent || areDocumentsStructurallyEqual(currentComponent.document, action.component.document)) return state;
-      const components = state.project.components.map((component) =>
-        component.id === action.component.id ? action.component : component);
-      return withSnapshot(state, touch({ ...state.project, components }));
     }
 
     case 'sync-component-document': {
