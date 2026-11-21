@@ -30,7 +30,7 @@ All four PRs remain open and unmerged. PR #1 is draft and non-mergeable. None of
 | #5 | `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | Same | PR #1 @ `89780034...` | Match; open, unmerged; CI #360 pass on exact head |
 | #7 | `76eb40426059ed21ce93156c5065835ea3717467` | Same | old PR #5 base `b2d7e9045a150a49852b1f266f95b7424986b64d` | Match; open, unmerged; diverged from latest PR #5 |
 
-The pinned PR #1 comparison remains 310 ahead / 41 behind. A fresh compare of PR #1 against current main is 310 ahead / 57 behind because main has advanced 16 commits since the pinned snapshot; a direct compare of 8d8571c... → main confirms every one of those 16 commits changes only docs/coordination/**, so GPT3's product-code audit baseline remains valid.
+The pinned PR #1 comparison remains 310 ahead / 41 behind. A fresh compare of PR #1 against current main is 310 ahead / 60 behind because main has advanced 19 commits since the pinned snapshot; a direct compare of 8d8571c... → main confirms every one of those 19 commits change only docs/coordination/**, so GPT3's product-code audit baseline remains valid.
 
 Additional live compare confirms PR #7 → latest PR #5 is DIVERGED: merge-base `b2d7e904...`, 23 commits on the PR #5 side and 4 commits on the PR #7 side. The report and task's no-synchronization condition agree.
 
@@ -108,11 +108,15 @@ This decision authorizes GPT0 to prepare the controlled sequence and scoped task
 6. **Only after PR #4/#5 combined acceptance, reopen PR #7 integration planning.** First settle panel/window stack serialization, focused target vs editor context, minimized-window shells, Inspector visibility, real viewport and legacy-key retirement. Then authorize a normal merge of the approved PR #5 line into PR #7 (GPT1 recommends merge commit rather than rebase/force-push), followed by adapter/App integration tests.
 7. **GPT2 remains WAITING.** GPT0 must publish a finding-specific revised task packet naming the exact finding, target branch/PR, allowed paths, start SHA, regression tests and acceptance checks before changing GPT2 to DISPATCHED. Phase 2 stays prohibited.
 
+## Next preflight task
+
+GPT1's read-only task packet [FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001.md) is published as READY. It pins PR #1 HEAD 89780034... and the current main comparison snapshot returned by GitHub, and asks for an exact merge-conflict/content-preservation plan. It is not DISPATCHED; GPT1 must not start until GPT0 changes the status and the CEO sends MULAI.
+
 ## Specialist next instructions
 
 | Agent | Instruction now |
 |---|---|
-| GPT1 | Audit submitted; await GPT0/CEO direction. Do not synchronize PR #7 or start App integration. |
+| GPT1 | New PR #1 reconciliation preflight packet is READY; await GPT0 dispatch and CEO MULAI. Read-only only; do not update branches or synchronize PR #7. |
 | GPT2 | Remain WAITING. No code/tests, no Phase 2, and do not self-select a finding. |
 | GPT3 | Audit submitted; hold. Re-audit only when GPT0 supplies a new exact candidate SHA and packet. |
 | GPT4 | Audit submitted; hold. Perform follow-up QA only against an explicitly pinned integrated PR #4/#5 candidate. |
