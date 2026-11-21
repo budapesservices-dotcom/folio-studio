@@ -71,7 +71,7 @@ function createFixture(css) {
     '</div></div></body></html>';
 }
 
-async function launchChromium(path) {
+async function launchChromiumAttempt(path) {
   const profile = mkdtempSync(join(tmpdir(), 'folio-rack-chromium-profile-'));
   const portServer = createServer();
   await new Promise((resolvePort, reject) => {
@@ -83,8 +83,13 @@ async function launchChromium(path) {
   // CI may expose an invalid desktop D-Bus session address. Chromium is
   // intentionally headless and does not need that session bus.
   const chromiumEnv = { ...process.env };
-  delete chromiumEnv.DBUS_SESSION_BUS_ADDRESS;
-  delete chromiumEnv.DBUS_SESSION_BUS_PID;
+  for (const key of [
+    'DBUS_SESSION_BUS_ADDRESS',
+    'DBUS_SESSION_BUS_PID',
+    'DBUS_SYSTEM_BUS_ADDRESS',
+    'DBUS_STARTER_ADDRESS',
+    'DBUS_STARTER_BUS_TYPE',
+  ]) delete chromiumEnv[key];
   const child = spawn(chromium, [
     '--headless=new', '--no-sandbox', '--disable-setuid-sandbox',
     '--disable-dev-shm-usage', '--disable-gpu', '--disable-background-networking',
@@ -247,6 +252,19 @@ async function launchChromium(path) {
     await cleanup();
     throw error;
   }
+}
+
+async function launchChromium(path) {
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await launchChromiumAttempt(path);
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) await delay(500);
+    }
+  }
+  throw new Error('Chromium startup failed after two isolated attempts: ' + String(lastError));
 }
 
 async function runRackBrowserChecks() {
