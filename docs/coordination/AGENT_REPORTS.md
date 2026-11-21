@@ -4,7 +4,7 @@
 **Coordinator / editor:** GPT0  
 **Product-code baseline:** main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f  
 **PR #1 pinned main comparison snapshot:** 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1  
-**Overall status:** PR #10 is CLOSED/MERGED; foundation now at `edb0cc155d87c7580e6d5713935b873402a5182f` after the CEO-authorized deploy repair. CI #518 and GitHub Pages Deploy run #63 succeeded. PR #1 remains open/draft/unmerged to `main`; GPT0 fresh preflight approved PR #4 base sync with conditions; GPT2 task 002 is DISPATCHED.  
+**Overall status:** PR #10 is CLOSED/MERGED; foundation is `edb0cc155d87c7580e6d5713935b873402a5182f`; CI #518 and Pages run #63 succeeded. PR #1 remains open/draft/unmerged to `main`. PR #4 is open/unmerged at `4555a46160fe7c57342e976e06b26a8f8859ed77`; GPT2 task 002 is approved, GPT4 manual QA is BLOCKED by preview access, and GPT2 component-recovery browser-test task 001 is DISPATCHED.  
 **Last verified:** 2026-11-21, live GitHub inspection of merge result, PR refs, compare results and workflow configuration
 **CEO-selected route:** PR #10 main reconciliation merged into the PR #1 feature foundation; refresh PR #4 → PR #5 → PR #7 in order
 
