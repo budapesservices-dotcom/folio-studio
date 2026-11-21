@@ -23,7 +23,7 @@
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
 | Last full PR #1 vs main comparison checkpoint | main @ `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a`: 310 ahead / 93 behind; merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`; shared changed paths only `AGENTS.md` and `.github/workflows/deploy.yml` |
 | CEO-selected integration route | PR #10 merged as a two-parent commit into PR #1 foundation; keep PR #1 open/draft on main; refresh PR #4 first, then PR #5, then PR #7 |
-| Last reconciled | 2026-11-21 — GPT0 adopted standing delegation, refreshed main snapshot, dispatched GPT2; subsequent GPT0 tracking commits on main touch only docs/coordination/** |
+| Last reconciled | 2026-11-21 — PR #10 merged into the feature foundation at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; GPT1 PR #4 preflight dispatched; GPT2 remediation packet published WAITING |
 
 ## Dispatched — awaiting specialist chat wake signal
 
