@@ -4,11 +4,19 @@
 **Coordinator / editor:** GPT0  
 **Product-code baseline:** main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f  
 **PR #1 pinned main comparison snapshot:** 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1  
-**Overall status:** PR #10 is CLOSED/MERGED into the PR #1 feature foundation at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; PR #1 remains open/draft/unmerged to `main`. CI #503 passed. GitHub Pages Deploy run #62 was triggered by the merge push but failed at setup-node: `cache: npm` found no npm lockfile, so install/build/upload were skipped and deploy job was skipped.  
+**Overall status:** PR #10 is CLOSED/MERGED; foundation now at `edb0cc155d87c7580e6d5713935b873402a5182f` after the CEO-authorized deploy repair. CI #518 and GitHub Pages Deploy run #63 succeeded. PR #1 remains open/draft/unmerged to `main`; GPT0 fresh preflight approved PR #4 base sync with conditions; GPT2 task 002 is DISPATCHED.  
 **Last verified:** 2026-11-21, live GitHub inspection of merge result, PR refs, compare results and workflow configuration
 **CEO-selected route:** PR #10 main reconciliation merged into the PR #1 feature foundation; refresh PR #4 → PR #5 → PR #7 in order
 
-## Current checkpoint — 2026-11-21, after PR #10 merge
+## Latest checkpoint — 2026-11-21, PR #4 base-refresh and GPT2 dispatch
+
+- Live foundation `feat/canvas-pan-distribute`: `edb0cc155d87c7580e6d5713935b873402a5182f`; PR #1 remains open/draft/unmerged to main.
+- PR #4 exact head `9730fdc02f5ee331c17de61c443a0f0d35782c56`; exact comparison to foundation is DIVERGED 98/96 with merge-base `89780034f32b1809cc49640e83bac5c817d88a91`; GitHub reports clean mergeability.
+- Foundation delta 21 paths and PR #4 26 paths have an empty intersection. GPT0 preflight report: https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061699937.
+- PR #4 / PR #5 shared paths are exactly `src/app/App.tsx` and `src/styles/global.css`; PR #5 and PR #7 remain untouched and queued after PR #4.
+- GPT2 task 002 is DISPATCHED with refreshed foundation ref `edb0cc1...`; prior GPT1 preflight packet 002 and GPT2 packet 001 are marked superseded because they pin `d585bc3...`.
+
+## Historical checkpoint — before refreshed PR #4 release
 
 **Deployment repair verified:** CEO authorized the minimal fix, and GPT0 removed only `cache: npm` from `.github/workflows/deploy.yml` in commit `edb0cc155d87c7580e6d5713935b873402a5182f`. Exact-commit CI [run #518](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298951) passed. GitHub Pages [Deploy run #63](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298913) completed successfully: build, artifact upload, and deploy jobs all succeeded; deploy log reports Pages deployment success and environment URL https://budapesservices-dotcom.github.io/folio-studio/.
 
@@ -239,3 +247,15 @@ Task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001` is now **DISPATCHED*
 
 
 GPT1's refreshed read-only preflight `FOLIO-20261121-PR1-RECONCILIATION-REFRESH-001` is also **DISPATCHED** against the same exact PR #1 and main source refs. It independently rechecks the conflict set, preservation requirements, and interaction between the refreshed GPT0 mandate and Folio-specific engineering rules. It runs in parallel with GPT2 and does not write implementation files. GPT3 and GPT4 will receive exact-candidate packets immediately after GPT2 opens its draft PR.
+
+
+## Latest checkpoint — 2026-11-21, PR #4 preflight and GPT2 release
+
+- Current foundation `feat/canvas-pan-distribute`: `edb0cc155d87c7580e6d5713935b873402a5182f`. PR #1 remains OPEN / DRAFT / unmerged to `main`.
+- PR #4 `feat/native-command-core-phase1`: `9730fdc02f5ee331c17de61c443a0f0d35782c56`, OPEN / unmerged.
+- Exact compare foundation `edb0cc1...` → PR #4 `9730fdc...`: DIVERGED 98 / 96, merge-base `89780034f32b1809cc49640e83bac5c817d88a91`; GitHub reports `mergeable=true`, `mergeable_state=clean`.
+- Foundation delta 21 paths vs PR #4 26 paths; intersection empty. GPT0's read-only preflight report: https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061699937.
+- PR #4 / PR #5 intersection remains exactly `src/app/App.tsx` and `src/styles/global.css`; PR #5 remains at `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`, unsynchronized. PR #7 remains at `76eb40426059ed21ce93156c5065835ea3717467`, stacked on the older PR #5 base.
+- GPT1's previous preflight packet 002 was superseded because it pinned the old foundation `d585bc3...`. GPT0 performed and posted a fresh exact-ref read-only preflight instead.
+- GPT2 packet `FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002` is DISPATCHED against the exact new foundation and PR #4 refs. Its scope is limited to the two-parent base refresh and approved App autosave/native IndexedDB work. No PR merge, deployment, PR #5/#7 sync, or Native Commands Phase 2/3 is authorized.
+
