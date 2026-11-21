@@ -12,7 +12,7 @@
 **Task file:** `docs/coordination/tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md`  
 **Evidence destination:** New draft PR targeting `feat/canvas-pan-distribute` (the head branch of PR #1); include this Task ID and packet link in its title/body.  
 **Target branch:** `feat/canvas-pan-distribute`  
-**Exact target/base SHA:** `89780034f32b1809cc49640f6e7f3e0ac5c817d88a91`  
+**Exact target/base SHA:** `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`  
 **Pinned main snapshot to merge:** `df08c279f9ddc77b3fed180bcd9913e641ddfe2d`  
 **Integration branch:** `agent/GPT2/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001`
 
@@ -23,7 +23,7 @@ Create a reviewable two-parent merge candidate that brings the pinned main snaps
 
 ### Context and authoritative references
 - GPT0-approved read-only preflight: [PR #1 report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863).
-- PR #1 foundation HEAD at task preparation: `89780034f32b1809cc49640f6e7f3e0ac5c817d88a91`.
+- PR #1 foundation HEAD at task preparation: `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`.
 - Pinned main source snapshot: `df08c279f9ddc77b3fed180bcd9913e641ddfe2d`.
 - Verified merge-base: `cce72029e35b902c2ccd1644ec762d269c7ff97e`.
 - Main changes since the pinned product comparison snapshot touch only `docs/coordination/**`; retain those changes from the pinned main snapshot.
@@ -48,7 +48,7 @@ Create a reviewable two-parent merge candidate that brings the pinned main snaps
 **Out of scope:** application source, tests, product docs, package manifests/lockfiles, any other manually edited path, PR #4/#5/#7, rebase, squash, force-push, cherry-pick, direct push to the foundation branch, PR merge, deployment, repository settings, secrets, Phase 2, and GPT2's remediation-reserve work.
 
 ### Required work
-1. Verify live PR #1 is open, draft, unmerged and still at exact head `89780034f32b1809cc49640f6e7f3e0ac5c817d88a91`. Verify pinned main commit `df08c279f9ddc77b3fed180bcd9913e641ddfe2d` is available and ancestry matches the approved preflight. If either ref differs, stop BLOCKED; GPT0 must refresh the packet.
+1. Verify live PR #1 is open, draft, unmerged and still at exact head `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`. Verify pinned main commit `df08c279f9ddc77b3fed180bcd9913e641ddfe2d` is available and ancestry matches the approved preflight. If either ref differs, stop BLOCKED; GPT0 must refresh the packet.
 2. Verify the separate CEO authorization before creating/pushing any branch or merge commit.
 3. Create the named integration branch from the exact PR #1 base SHA, not from main.
 4. Merge the pinned main SHA into the integration branch using a normal non-fast-forward merge commit. No rebase or cherry-pick.
