@@ -712,6 +712,17 @@ describe('Component Canvas deletion and recovery — actual App / Chromium / Ind
         expect(dialogState.dialog).toBe(true);
         expect(dialogState.initialFocused).toBe(true);
         expect(dialogState.backgroundInert).toBe(true);
+        const rackToggleBefore = await browser.evaluate(
+          'document.querySelector("button.component-rack-header-toggle")?.getAttribute("aria-pressed")',
+        );
+        expect(rackToggleBefore).toBe("true");
+        await browser.click("button.component-rack-header-toggle");
+        const backgroundClick = await browser.evaluate(
+          '({dialogOpen:!!document.querySelector(".component-deletion-dialog"),' +
+          'rackOpen:document.querySelector(".component-rack-panel")?.classList.contains("is-open"),' +
+          'rackPressed:document.querySelector("button.component-rack-header-toggle")?.getAttribute("aria-pressed")})',
+        );
+        expect(backgroundClick).toEqual({ dialogOpen: true, rackOpen: true, rackPressed: "true" });
         expect(dialogState.buttonTexts).toEqual([
           'Cancel',
           'Save buffer as a new component',
