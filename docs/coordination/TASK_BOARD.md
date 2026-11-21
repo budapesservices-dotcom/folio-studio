@@ -23,23 +23,23 @@
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
 | Last full PR #1 vs main comparison checkpoint | main @ `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a`: 310 ahead / 93 behind; merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`; shared changed paths only `AGENTS.md` and `.github/workflows/deploy.yml` |
 | CEO-selected integration route | PR #10 merged as a two-parent commit into PR #1 foundation; keep PR #1 open/draft on main; refresh PR #4 first, then PR #5, then PR #7 |
-| Last reconciled | 2026-11-21 — PR #4 sync and scoped autosave/native IndexedDB test delivered at `4555a46160fe7c57342e976e06b26a8f8859ed77`; CI #539 and Chromium test passed; GPT2 task approved by GPT0; GPT4 independent manual QA dispatched |
+| Last reconciled | 2026-11-21 — GPT4 exact-head audit completed but manual UI gate is BLOCKED because preview hosts are inaccessible; new GPT2 actual-App/native-IndexedDB component recovery browser test DISPATCHED on PR #4 HEAD `4555a46` |
 
 ## Dispatched — awaiting specialist chat wake signal
 
 | Agent | Task ID | Task packet | Pinned refs | Status |
 |---|---|---|---|---|
-| GPT4 | FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001 | [FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001](tasks/FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001.md) | PR #4 `4555a46160fe7c57342e976e06b26a8f8859ed77`; foundation `edb0cc155d87c7580e6d5713935b873402a5182f` | DISPATCHED — independently verify native-browser autosave test and manual Component Canvas recovery/modal QA |
+| GPT2 | FOLIO-20261121-PR4-COMPONENT-RECOVERY-BROWSER-ACCEPTANCE-001 | [FOLIO-20261121-PR4-COMPONENT-RECOVERY-BROWSER-ACCEPTANCE-001](tasks/FOLIO-20261121-PR4-COMPONENT-RECOVERY-BROWSER-ACCEPTANCE-001.md) | PR #4 `4555a46160fe7c57342e976e06b26a8f8859ed77`; foundation `edb0cc155d87c7580e6d5713935b873402a5182f` | DISPATCHED — add actual-App / native Chromium Component Canvas recovery and modal acceptance tests; no production changes |
 
-## Latest checkpoint — PR #4 GPT2 implementation accepted; GPT4 QA dispatched
+## Latest checkpoint — GPT4 manual QA blocked; GPT2 browser-test fallback dispatched
 
-- PR #4 HEAD `4555a46160fe7c57342e976e06b26a8f8859ed77`; base foundation `edb0cc155d87c7580e6d5713935b873402a5182f`; PR #4 remains OPEN / unmerged.
-- Sync commit `94bd1aeeeacde491c4ae0ce40e67138e3595e5ff` verified parent order: original PR #4 HEAD `9730fdc...` first, foundation `edb0cc1...` second.
-- Post-sync diff: exactly `tests/nativePersistence.browser.test.mjs` and `docs/ACCEPTANCE_TESTS.md`.
-- Exact-head CI #539 passed (17 test files / 239 tests); GitHub log explicitly shows 1 Chromium test executed in ~21.1 seconds, not skipped.
-- GPT0 implementation review: APPROVED for GPT2 task only — https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061990741. PR #4 is not merge-approved.
-- GPT4 task `FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001` is DISPATCHED against exact head `4555a46...`; manual component deletion/recovery/modal acceptance remains the release gate.
-- Current preview: https://4fddb5cf.folio-studio-preview.pages.dev. PR #5/#7 unchanged; no child merge, main merge, or Native Commands Phase 2/3.
+- PR #4 remains OPEN / UNMERGED at `4555a46160fe7c57342e976e06b26a8f8859ed77`; base foundation `edb0cc155d87c7580e6d5713935b873402a5182f`.
+- GPT2 implementation task 002 is approved by GPT0. Its exact-head CI #539 passed (17 files / 239 tests), including one native Chromium autosave / IndexedDB browser test actually executed.
+- GPT4 report completed against the exact SHA: **NOT READY — BLOCKED**. Both Cloudflare preview URLs failed DNS/navigation in GPT4's isolated environment; GPT0 also could not open either URL using available web inspection.
+- All nine manual Component Canvas deletion/recovery/modal scenarios and viewport smoke checks remain **NOT RUN**. No product QA pass is claimed.
+- GPT4 assignment is approved as a completed report only; GPT4 is now IDLE. Report: https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7062150965.
+- GPT2 is DISPATCHED on `FOLIO-20261121-PR4-COMPONENT-RECOVERY-BROWSER-ACCEPTANCE-001` to add a real-App / real-Chromium / native-IndexedDB end-to-end test under the current Vite/CI environment. Allowed paths: new test file and acceptance documentation only; no production code/dependencies/scripts/workflows.
+- After GPT2 submits the test, GPT4 must independently inspect its exact-head run and browser evidence. PR #4 stays unmerged; PR #5/#7 remain untouched; Phase 2/3 remain prohibited.
 
 ## Ready — awaiting GPT0 dispatch
 
@@ -49,8 +49,8 @@ No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4
 
 | Agent | Task ID | Current note |
 |---|---|---|
-| GPT0 | FOLIO-CYCLE-20261121-001 | GPT2 PR #4 implementation reviewed and approved; GPT4 independent QA task dispatched for exact PR #4 HEAD |
-| GPT4 | FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001 | Read-only independent QA; preview `4fddb5cf.folio-studio-preview.pages.dev`; manual recovery/modal cases pending |
+| GPT0 | FOLIO-CYCLE-20261121-001 | GPT4 audit report reviewed; manual QA blocked by preview access; fallback browser-test implementation dispatched to GPT2 |
+| GPT2 | FOLIO-20261121-PR4-COMPONENT-RECOVERY-BROWSER-ACCEPTANCE-001 | New actual-App/native-IndexedDB browser acceptance test; exact PR #4 HEAD pinned |
 
 
 ## Waiting / blocked
@@ -78,6 +78,8 @@ No active specialist task is waiting on a technical dependency. GPT3 QA and GPT4
 | FOLIO-20261121-PR10-CANDIDATE-AUDIT-001 | GPT4 | [Independent audit](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be` | APPROVED — report verified; 22 paths and ancestry pass; whitespace exception and limitations documented |
 
 | FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002 | GPT2 | [Implementation report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061964698) · [GPT0 review](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061990741) | PR #4 `4555a46160fe7c57342e976e06b26a8f8859ed77`; sync `94bd1a...`; foundation `edb0cc1...`; CI #539 | APPROVED — required merge ancestry, two-path scope, exact CI, and native Chromium test execution independently verified; manual Component recovery/modal QA stays open for GPT4 |
+
+| FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001 | GPT4 | [Independent QA report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7062150965) | PR #4 `4555a46160fe7c57342e976e06b26a8f8859ed77`; CI #539 | APPROVED as an accurate completed report only — verdict NOT READY / BLOCKED; preview inaccessible; all nine manual scenarios and viewport smoke NOT RUN |
 
 ## CEO route decision
 
