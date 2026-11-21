@@ -4,13 +4,13 @@
 **Coordinator / editor:** GPT0  
 **Product-code baseline:** main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f  
 **PR #1 pinned main comparison snapshot:** 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1  
-**Overall status:** GPT1 refreshed preflight APPROVED; GPT2 produced draft PR #10 candidate `601bedfe...` with exact-head CI #480 passing; GPT3 QA and GPT4 independent audit DISPATCHED in parallel. PR #10 remains unmerged pending whitespace disposition and independent review.  
+**Overall status:** GPT1 preflight APPROVED; GPT2 candidate delivered; GPT3 PASS WITH CONDITIONS; GPT4 APPROVE WITH CONDITIONS. PR #10 structurally passes review and exact-head CI, with a recorded Markdown source-fidelity exception; browser smoke remains unverified and merge is not authorized.  
 **Last verified:** 2026-11-21, live GitHub inspection of task packets, PR metadata, comments and compare results
 **CEO-selected route:** retain PR #1 as common parent; reconcile main into it deliberately, then PR #4 → PR #5 → PR #7
 
 ## CEO summary
 
-Earlier specialist audits of PR #1/#4/#5/#7 remain historical evidence for their exact pinned SHAs. The latest active foundation candidate is draft PR #10 at `601bedfeccae8ddaeda772139182d3c4a3a139be`; GPT1's refreshed preflight is approved, GPT2's candidate is in GPT0 review, and GPT3/GPT4 are now testing/auditing that exact SHA.
+Earlier specialist audits of PR #1/#4/#5/#7 remain historical evidence for their exact pinned SHAs. The current foundation candidate is draft PR #10 at `601bedfeccae8ddaeda772139182d3c4a3a139be`; GPT1's refreshed preflight is approved, GPT2's delivery is verified, and GPT3/GPT4 have submitted reports against the exact same SHA.
 
 | Workstream | Specialist verdict | Evidence | GPT0 disposition |
 |---|---|---|---|
@@ -18,7 +18,7 @@ Earlier specialist audits of PR #1/#4/#5/#7 remain historical evidence for their
 | PR #4 Native Command Core Phase 1 | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) | Preserve implementation; close QA gaps and combined integration |
 | PR #5 Workspace Window Management | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | Preserve implementation; close live drag/resize and harness gaps |
 | PR #7 Workspace Preferences V1 | **COMPATIBLE WITH CONDITIONS** — GPT1 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | Helper API compatible, but model/persistence adoption blocked; no sync |
-| PR #10 foundation reconciliation | **CANDIDATE — REVIEW PENDING** — GPT2 | [Draft PR and checkpoint](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) | Exact-head CI #480 passed; GPT3/GPT4 reviews dispatched; 82 trailing-space lines await audit disposition |
+| PR #10 foundation reconciliation | **PASS WITH CONDITIONS** — GPT2/GPT3/GPT4 | [GPT2](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) · [GPT3](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) · [GPT4](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | Ancestry/scope/workflows/CI pass; 82 intentional Markdown hard-breaks preserved under source-fidelity exception; browser smoke NOT RUN due preview inaccessibility; CEO merge decision remains reserved |
 
 Product PRs #1, #4, #5 and #7 remain open and unmerged; PR #10 is an additional draft integration candidate, also open and unmerged. PR #1 is draft and non-mergeable. None of the specialist verdicts is merge approval. GPT2's separate PR #4/#5 remediation reserve remains WAITING, and Native Commands Phase 2 is not authorized. The current-checkpoint section above supersedes older task-status and comparison statements in the historical notes below.
 
@@ -42,8 +42,11 @@ Additional live compare confirms PR #7 → latest PR #5 is DIVERGED: merge-base 
 - GPT2 task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001`: **READY_FOR_REVIEW**. Draft [PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10) is open against `feat/canvas-pan-distribute`, exact HEAD `601bedfeccae8ddaeda772139182d3c4a3a139be`. Commit has exactly two parents in order: PR #1 foundation `89780034...`, pinned main source `c936bbfa...`.
 - Exact-head GitHub Actions [run #480](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44892246093) succeeded: install, type-check, test, and production build. GPT2 did not run local npm commands or `git diff --check`; GitHub clone DNS was unavailable to its environment.
 - GPT2's patch inspection identified 82 added trailing-space lines in imported coordination Markdown files. The imported files are blob-identical to pinned main, but the required whitespace check was not executed. This remains unresolved and must be independently dispositioned before candidate approval.
-- GPT3 task `FOLIO-20261121-PR10-CANDIDATE-QA-001` and GPT4 task `FOLIO-20261121-PR10-CANDIDATE-AUDIT-001` are **DISPATCHED** in parallel against the same exact candidate SHA. GPT3 checks the existing preview and browser smoke; GPT4 audits ancestry, scope, rules, workflows and whitespace.
-- PR #10 is a review artifact, not a merge. PR #1/#4/#5/#7 remain untouched, open, and unmerged; no product integration or deployment was performed by GPT0.
+- GPT3 task `FOLIO-20261121-PR10-CANDIDATE-QA-001`: **READY_FOR_REVIEW**, verdict PASS WITH CONDITIONS. Exact candidate/CI/scope checks pass; preview provider deployment succeeded, but browser QA is NOT RUN because DNS/page retrieval failed in the test environment. No browser success is claimed.
+- GPT4 task `FOLIO-20261121-PR10-CANDIDATE-AUDIT-001`: **READY_FOR_REVIEW**, verdict APPROVE WITH CONDITIONS. All 22 paths and 20/20 source blobs verified; authority composition/workflows/CI pass. Exactly 82 intentional Markdown hard-break lines across 10 imported Markdown files would be flagged by standard `git diff --check`.
+- GPT0's explicit disposition is to preserve all 20 imported main blobs byte-identically and retain those 82 intentional Markdown hard breaks as a narrow source-fidelity exception. `git diff --check` was not run and must not be reported as passing. If a future policy demands an unconditional clean diff-check, create a separate formatting task and deliberately relax the blob-identity requirement.
+- GPT0 attempted to open the existing branch preview independently; it also returned inaccessible. Browser-level smoke remains the only current QA limitation.
+- PR #10 remains a review artifact, not a merge. It is structurally acceptable with the documented source-fidelity exception, but browser smoke is still unverified and the CEO retains the decision to merge PR #10 into the PR #1 foundation branch. PR #1/#4/#5/#7 remain open and unmerged; no product integration or deployment was performed by GPT0.
 
 ## Audit findings and remaining gates
 
