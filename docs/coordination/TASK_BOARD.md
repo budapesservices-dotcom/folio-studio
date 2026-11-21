@@ -20,9 +20,9 @@
 | Product-code baseline | 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
 | PR #1 pinned main comparison snapshot | 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
-| Current live PR #1 vs main comparison | 310 ahead / 60 behind; 19 commits since pinned snapshot are docs/coordination/** only |
+| Current live PR #1 vs main comparison | 310 ahead / 72 behind; 31 commits since pinned snapshot touch only docs/coordination/**; current main `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4` |
 | CEO-selected integration route | Retain PR #1 as common parent; reconcile main into it after a specific preflight packet; then PR #4, PR #5, and PR #7 in order |
-| Last reconciled | 2026-11-21 — GPT0 live GitHub verification and CEO route selection |
+| Last reconciled | 2026-11-21 — GPT0 review of GPT1 preflight and current main freshness check |
 
 ## Dispatched — awaiting CEO start signal
 
@@ -36,7 +36,7 @@ No specialist tasks currently READY.
 
 | Agent | Task ID | Current note |
 |---|---|---|
-| GPT0 | FOLIO-CYCLE-20261121-001 | CEO chose retain-PR1-parent route; preparing read-only preflight and staged child-PR packets; no product branch changes |
+| GPT0 | FOLIO-CYCLE-20261121-001 | GPT1 preflight APPROVED after live verification; PR #1 HEAD unchanged; preparing the next controlled authorization packet; no product branch changes |
 
 ## Waiting / blocked
 
@@ -47,18 +47,24 @@ No specialist tasks currently READY.
 ## Ready for GPT0 review
 
 | Task ID | Agent | Evidence | Audited HEAD(s) | Review status |
-| FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | GPT1 | [PR #1 preflight report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main `9edc8d7de99baaf155c47f112acf009add1d51e7` | READY_FOR_REVIEW — exact PR #1 HEAD matches; verdict PREFLIGHT PASS WITH TWO MANUAL ADD/ADD RESOLUTIONS REQUIRED |
-
 |---|---|---|---|---|
-| FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | GPT3 | [PR #1 audit report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main comparison snapshot `8d8571cb13da23fb2f39c57cc3d34f556dbf10c1` | READY_FOR_REVIEW — report and packet match; verdict NOT READY |
-| FOLIO-20261121-PR4-PR5-QA-001 | GPT4 | [PR #4 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) · [PR #5 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; both base PR #1 `89780034f32b1809cc49640e83bac5c817d88a91` | READY_FOR_REVIEW — both reports and exact heads match; both verdicts READY WITH CONDITIONS |
+| FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | GPT3 | [PR #1 audit report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #1 `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`; main comparison snapshot `8d8571cb13da23fb2f39c57cc3d34f556dbf10c1` | READY_FOR_REVIEW — report and packet match; verdict NOT READY |
+| FOLIO-20261121-PR4-PR5-QA-001 | GPT4 | [PR #4 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) · [PR #5 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; both base PR #1 `89780034f32b1809cc49640f6e7f3e0ac5e2d8900` | READY_FOR_REVIEW — both reports and exact heads match; both verdicts READY WITH CONDITIONS |
 | FOLIO-20261121-PR7-DEPENDENCY-001 | GPT1 | [PR #7 dependency audit](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | PR #7 `76eb40426059ed21ce93156c5065835ea3717467`; PR #5 dependency HEAD `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | READY_FOR_REVIEW — report and exact heads match; verdict COMPATIBLE WITH CONDITIONS |
+
+## Approved by GPT0
+
+| Task ID | Agent | Evidence | Verified refs | Disposition |
+|---|---|---|---|---|
+| FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | GPT1 | [PR #1 preflight report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863) | PR #1 `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`; main `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4` | APPROVED — two expected conflicts; 31 post-snapshot main commits are coordination-only; live compare 310 ahead / 72 behind. No branch sync or merge performed. |
 
 ## CEO route decision
 
 **DECIDED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. Do not recreate/split the foundation at this stage. First prepare a controlled main→PR #1 reconciliation that preserves main's GPT coordination protocol and carefully combines the product-specific AGENTS guidance plus deploy workflow. No source branch has been changed yet. Next, refresh child PR bases and close PR #4 QA gaps before PR #5; PR #7 remains last. See `AGENT_REPORTS.md` for the ordered gate sequence.
 
 ## Reconciliation facts
+
+- Current main HEAD is `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`. The live PR #1 comparison is 310 ahead / 72 behind; all 31 commits after the pinned snapshot touch only `docs/coordination/**`.
 
 - PR #1 is open, draft, unmerged and `mergeable=false`; retain it as a candidate parent only, not a merge-ready branch.
 - PR #2, PR #3 and PR #6 merged into `feat/canvas-pan-distribute`, not `main`. Their merge chain culminates at PR #1 HEAD `89780034...`; their contents are present on the feature branch. PR #8 and PR #9 are the coordination/recovery PRs merged into `main`.
