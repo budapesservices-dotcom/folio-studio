@@ -32,7 +32,7 @@ No specialist tasks currently DISPATCHED.
 
 | Agent | Task ID | Task packet | Pinned refs | Status |
 |---|---|---|---|---|
-| GPT2 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | [Execution packet](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md) | PR #1 `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`; main source `df08c279f9ddc77b3fed180bcd9913e641ddfe2d` | READY — requires separate explicit CEO authorization for branch synchronization before dispatch/start |
+| GPT2 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | [Execution packet](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main source `df08c279f9ddc77b3fed180bcd9913e641ddfe2d` | READY — requires separate explicit CEO authorization for branch synchronization before dispatch/start |
 
 ## In progress
 
@@ -50,15 +50,17 @@ No specialist tasks currently DISPATCHED.
 
 | Task ID | Agent | Evidence | Audited HEAD(s) | Review status |
 |---|---|---|---|---|
-| FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | GPT3 | [PR #1 audit report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #1 `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`; main comparison snapshot `8d8571cb13da23fb2f39c57cc3d34f556dbf10c1` | READY_FOR_REVIEW — report and packet match; verdict NOT READY |
-| FOLIO-20261121-PR4-PR5-QA-001 | GPT4 | [PR #4 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) · [PR #5 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; both base PR #1 `89780034f32b1809cc49640f6e7f3e0ac5e2d8900` | READY_FOR_REVIEW — both reports and exact heads match; both verdicts READY WITH CONDITIONS |
+| FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | GPT3 | [PR #1 audit report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main comparison snapshot `8d8571cb13da23fb2f39c57cc3d34f556dbf10c1` | READY_FOR_REVIEW — report and packet match; verdict NOT READY |
+| FOLIO-20261121-PR4-PR5-QA-001 | GPT4 | [PR #4 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) · [PR #5 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; both base PR #1 `89780034f32b1809cc49640e83bac5c817d88a91` | READY_FOR_REVIEW — both reports and exact heads match; both verdicts READY WITH CONDITIONS |
 | FOLIO-20261121-PR7-DEPENDENCY-001 | GPT1 | [PR #7 dependency audit](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | PR #7 `76eb40426059ed21ce93156c5065835ea3717467`; PR #5 dependency HEAD `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | READY_FOR_REVIEW — report and exact heads match; verdict COMPATIBLE WITH CONDITIONS |
 
 ## Approved by GPT0
 
+- Correction: GPT1's PR #1 preflight comment transcribed the feature HEAD incorrectly. Live PR API confirms `89780034f32b1809cc49640e83bac5c817d88a91`; GPT0 repeated the exact-head comparison and confirmed the two-path conflict set. The execution packet uses the corrected SHA.
+
 | Task ID | Agent | Evidence | Verified refs | Disposition |
 |---|---|---|---|---|
-| FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | GPT1 | [PR #1 preflight report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863) | PR #1 `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`; main `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4` | APPROVED — two expected conflicts; 31 post-snapshot main commits are coordination-only; live compare 310 ahead / 72 behind. No branch sync or merge performed. |
+| FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | GPT1 | [PR #1 preflight report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4` | APPROVED — two expected conflicts; 31 post-snapshot main commits are coordination-only; live compare 310 ahead / 72 behind. No branch sync or merge performed. |
 
 ## CEO route decision
 
