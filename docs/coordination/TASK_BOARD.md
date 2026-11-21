@@ -19,7 +19,7 @@
 | Default branch | main |
 | Baseline SHA at cycle start | 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
 | Main comparison snapshot pinned for PR #1 audit | 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
-| Latest coordination-only packet publication | 1a77debc5baa8bc413f8e798c0230fd8aa93ebc5 |
+| Post-snapshot GPT0 updates | docs/coordination/** only; pinned comparison remains 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
 | Last updated | 2026-11-21 |
 
 ## Dispatched — awaiting CEO start signal
