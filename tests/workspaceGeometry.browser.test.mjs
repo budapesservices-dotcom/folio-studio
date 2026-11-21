@@ -80,6 +80,11 @@ async function launchChromium(path) {
   });
   const port = portServer.address().port;
   await new Promise((resolveClose, reject) => portServer.close((error) => error ? reject(error) : resolveClose()));
+  // CI may expose an invalid desktop D-Bus session address. Chromium is
+  // intentionally headless and does not need that session bus.
+  const chromiumEnv = { ...process.env };
+  delete chromiumEnv.DBUS_SESSION_BUS_ADDRESS;
+  delete chromiumEnv.DBUS_SESSION_BUS_PID;
   const child = spawn(chromium, [
     '--headless=new', '--no-sandbox', '--disable-setuid-sandbox',
     '--disable-dev-shm-usage', '--disable-gpu', '--disable-background-networking',
@@ -88,7 +93,11 @@ async function launchChromium(path) {
     '--remote-allow-origins=*', '--remote-debugging-address=127.0.0.1',
     '--remote-debugging-port=' + port,
     '--user-data-dir=' + profile, 'file://' + path,
-  ], { detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe'] });
+  ], {
+    detached: process.platform !== 'win32',
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: chromiumEnv,
+  });
   let socket;
   let stderr = '';
   child.stderr.setEncoding('utf8');
