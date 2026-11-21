@@ -298,6 +298,22 @@ export function App() {
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [componentRackOpen, setComponentRackOpen] = useState(false);
   const [pagesRackOpen, setPagesRackOpen] = useState(false);
+  const pagesRackRef = useRef<HTMLElement | null>(null);
+  const componentRackRef = useRef<HTMLElement | null>(null);
+  const pagesRackToggleRef = useRef<HTMLButtonElement | null>(null);
+  const componentRackToggleRef = useRef<HTMLButtonElement | null>(null);
+  const closePagesRack = () => {
+    if (pagesRackRef.current?.contains(document.activeElement)) {
+      pagesRackToggleRef.current?.focus({ preventScroll: true });
+    }
+    setPagesRackOpen(false);
+  };
+  const closeComponentRack = () => {
+    if (componentRackRef.current?.contains(document.activeElement)) {
+      componentRackToggleRef.current?.focus({ preventScroll: true });
+    }
+    setComponentRackOpen(false);
+  };
   const [pageNameDraft, setPageNameDraft] = useState('');
   const pages = state.project.pages;
   const activePageId = state.project.activePageId;
@@ -950,6 +966,7 @@ export function App() {
       updatedAt: now,
     };
     dispatch({ type: 'add-component', component });
+    closePagesRack();
     setComponentRackOpen(true);
     setNotice(`“${name}” saved to this project’s Component Rack.`);
   };
@@ -973,7 +990,7 @@ export function App() {
     setActiveEditorId('component');
     focusWindow('component-canvas');
     setInspectorVisible(true);
-    setComponentRackOpen(false);
+    closeComponentRack();
     setNotice(`Editing master: ${component.name}.`);
   };
 
@@ -1436,7 +1453,7 @@ export function App() {
     if (isHydrating || page.id === activePageId) return;
     setActiveEditorId('main');
     dispatch({ type: 'set-active-page', pageId: page.id });
-    setPagesRackOpen(false);
+    closePagesRack();
     setInspectorVisible(true);
     setNotice(`Switched to ${page.name}.`);
   };
@@ -1458,7 +1475,7 @@ export function App() {
     };
     dispatch({ type: 'add-page', page: { id, name, route, document } });
     setPageNameDraft('');
-    setPagesRackOpen(false);
+    closePagesRack();
     setInspectorVisible(true);
     setNotice(`Created ${name}.`);
   };
@@ -1872,8 +1889,21 @@ export function App() {
           )}
         </div>
           <div class="global-panel-toggles" aria-label="Workspace panels">
-            <button class={`global-panel-toggle pages-rack-header-toggle ${pagesRackOpen ? 'active' : ''}`} type="button" title={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-label={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-pressed={pagesRackOpen} onClick={() => { focusWindow('pages'); setPagesRackOpen((value) => !value); setComponentRackOpen(false); }} onMouseEnter={() => updateToolbarHint('PAGES RACK', 'Manage the pages in this project.')}><Icon name="pages" /></button>
-            <button class={`global-panel-toggle component-rack-header-toggle ${componentRackOpen ? 'active' : ''}`} type="button" title={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-label={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-pressed={componentRackOpen} onClick={() => { setComponentRackOpen((value) => !value); setPagesRackOpen(false); }} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse and reuse components saved to your personal library.')}><Icon name="rack" /></button>
+            <button ref={pagesRackToggleRef} class={`global-panel-toggle pages-rack-header-toggle ${pagesRackOpen ? 'active' : ''}`} type="button" title={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-label={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-pressed={pagesRackOpen} onClick={() => {
+              if (pagesRackOpen) closePagesRack();
+              else {
+                focusWindow('pages');
+                setPagesRackOpen(true);
+                closeComponentRack();
+              }
+            }} onMouseEnter={() => updateToolbarHint('PAGES RACK', 'Manage the pages in this project.')}><Icon name="pages" /></button>
+            <button ref={componentRackToggleRef} class={`global-panel-toggle component-rack-header-toggle ${componentRackOpen ? 'active' : ''}`} type="button" title={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-label={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-pressed={componentRackOpen} onClick={() => {
+              if (componentRackOpen) closeComponentRack();
+              else {
+                setComponentRackOpen(true);
+                closePagesRack();
+              }
+            }} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse and reuse components saved to your personal library.')}><Icon name="rack" /></button>
             <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
             <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) openMainCanvas(); else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
             <button class={`global-panel-toggle component-canvas-header-toggle ${componentCanvasOpen ? 'active' : ''}`} type="button" title={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-label={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-pressed={componentCanvasOpen} onClick={() => { if (componentCanvasClosed || componentCanvasMinimized) openComponentCanvas(); else { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', componentCanvasClosed || componentCanvasMinimized ? 'Open the Component Canvas window.' : 'Close the Component Canvas window.')}><Icon name="componentCanvas" /></button>
@@ -2614,13 +2644,13 @@ export function App() {
       </aside>
 
 
-      <section class={`pages-rack-panel ${pagesRackOpen ? 'is-open' : ''}`} style={{ zIndex: getWindowZIndex(windowOrder, 'pages') }} onPointerDown={() => focusWindow('pages')} aria-label="Pages Rack" aria-hidden={!pagesRackOpen}>
+      <section ref={pagesRackRef} class={`pages-rack-panel ${pagesRackOpen ? 'is-open' : ''}`} style={{ zIndex: getWindowZIndex(windowOrder, 'pages') }} onPointerDown={() => focusWindow('pages')} aria-label="Pages Rack" aria-hidden={!pagesRackOpen} inert={!pagesRackOpen}>
         <div class="pages-rack-heading">
           <div class="pages-rack-title"><span class="panel-kicker">PROJECT STRUCTURE</span><strong>Pages</strong><span class="pages-rack-count">{pages.length}</span></div>
           <div class="pages-rack-actions">
             <input class="pages-rack-name-input" type="text" placeholder="New page name..." value={pageNameDraft} onInput={(event) => setPageNameDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') addPage(); }} aria-label="New page name" />
             <button type="button" class="pages-rack-add" onClick={addPage} disabled={!pageNameDraft.trim()}>＋ Add page</button>
-            <button type="button" class="component-rack-close" title="Close Pages Rack" aria-label="Close Pages Rack" onClick={() => setPagesRackOpen(false)}>×</button>
+            <button type="button" class="component-rack-close" title="Close Pages Rack" aria-label="Close Pages Rack" onClick={closePagesRack}>×</button>
           </div>
         </div>
         <div class="pages-rack-list">
@@ -2634,7 +2664,7 @@ export function App() {
         </div>
       </section>
 
-      <section class={`component-rack-panel ${componentRackOpen ? 'is-open' : ''}`} aria-label="Component Rack" aria-hidden={!componentRackOpen}>
+      <section ref={componentRackRef} class={`component-rack-panel ${componentRackOpen ? 'is-open' : ''}`} aria-label="Component Rack" aria-hidden={!componentRackOpen} inert={!componentRackOpen}>
         <div class="component-rack-heading">
           <div class="component-rack-title">
             <span class="panel-kicker">YOUR LIBRARY</span>
@@ -2645,7 +2675,7 @@ export function App() {
             <input class="component-rack-search" type="search" placeholder="Search components..." value={componentRackSearch} onInput={(event) => setComponentRackSearch(event.currentTarget.value)} />
             <button type="button" class="component-rack-save" onClick={createNewMasterComponent} title="Create a new master component">＋ New component</button>
             <button type="button" class="component-rack-save" disabled={selectedNodes.length === 0} onClick={saveSelectionAsComponent} title="Save selected layers as a reusable component">Save selection</button>
-            <button type="button" class="component-rack-close" title="Close Component Rack" aria-label="Close Component Rack" onClick={() => setComponentRackOpen(false)}>×</button>
+            <button type="button" class="component-rack-close" title="Close Component Rack" aria-label="Close Component Rack" onClick={closeComponentRack}>×</button>
           </div>
         </div>
         <div class="component-rack-list">
