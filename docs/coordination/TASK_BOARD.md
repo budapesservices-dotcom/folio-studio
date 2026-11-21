@@ -20,7 +20,7 @@
 | Product-code baseline | 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
 | PR #1 pinned main comparison snapshot | 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
-| Current live PR #1 vs main comparison | 310 ahead / 57 behind; 16 commits since pinned snapshot are docs/coordination/** only |
+| Current live PR #1 vs main comparison | 310 ahead / 60 behind; 19 commits since pinned snapshot are docs/coordination/** only |
 | CEO-selected integration route | Retain PR #1 as common parent; reconcile main into it after a specific preflight packet; then PR #4, PR #5, and PR #7 in order |
 | Last reconciled | 2026-11-21 — GPT0 live GitHub verification and CEO route selection |
 
@@ -30,11 +30,17 @@
 |---|---|---|---|---|---|
 | — | — | — | — | — | No specialist task remains dispatched in this cycle |
 
+## Ready — awaiting GPT0 dispatch and CEO start signal
+
+| Agent | Task ID | Task file | Priority | Status | Scope |
+|---|---|---|---|---|---|
+| GPT1 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | [PR #1 main reconciliation preflight](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001.md) | P0 | READY | Read-only exact conflict/content merge plan; no branch changes |
+
 ## In progress
 
 | Agent | Task ID | Current note |
 |---|---|---|
-| GPT0 | FOLIO-CYCLE-20261121-001 | Reconciling submitted reports and defining integration decision; no implementation |
+| GPT0 | FOLIO-CYCLE-20261121-001 | CEO chose retain-PR1-parent route; preparing read-only preflight and staged child-PR packets; no product branch changes |
 
 ## Waiting / blocked
 
