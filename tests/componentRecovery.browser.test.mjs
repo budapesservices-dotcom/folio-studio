@@ -549,7 +549,7 @@ async function createComponentMaster(browser) {
     'document.querySelectorAll(".component-rack-card").length===' + (before + 1),
     'new master appears in Component Rack',
   );
-  await waitForApp(browser, 'document.querySelector("#component-canvas")!==null', 'new master opens Component Canvas');
+  await waitForApp(browser, 'document.querySelector('[data-window-id="component-canvas"]')!==null', 'new master opens Component Canvas');
   const name = await browser.evaluate(
     'Array.from(document.querySelectorAll(".component-rack-card-name")).at(-1)?.textContent.trim()||null',
   );
@@ -717,7 +717,7 @@ describe('Component Canvas deletion and recovery — actual App / Chromium / Ind
           JSON.stringify('Delete ' + master.name) + ')+"]")',
         );
         expect(focusReturned).toBe(true);
-        expect(await browser.evaluate('document.querySelector("#component-canvas")!==null')).toBe(true);
+        expect(await browser.evaluate('document.querySelector('[data-window-id="component-canvas"]')!==null')).toBe(true);
 
         await clickDeleteMaster(browser, master.name);
         await armNativeDeletionProbe(browser, master.masterId, master.name);
