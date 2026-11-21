@@ -228,7 +228,6 @@ async function launchChromium() {
 
     await send('Page.enable');
     await send('Runtime.enable');
-    await send('Storage.enable');
     return {
       send, evaluate, click,
       navigate: (url) => send('Page.navigate', { url }),
