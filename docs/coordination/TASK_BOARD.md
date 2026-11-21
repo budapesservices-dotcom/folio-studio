@@ -28,13 +28,11 @@
 
 | Agent | Task ID | Task file | Priority | Status | Depends on |
 |---|---|---|---|---|---|
-| — | — | — | — | — | No specialist task remains dispatched in this cycle |
+| GPT1 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | [PR #1 main reconciliation preflight](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001.md) | P0 | DISPATCHED | CEO MULAI/LAKSANAKAN signal |
 
 ## Ready — awaiting GPT0 dispatch and CEO start signal
 
-| Agent | Task ID | Task file | Priority | Status | Scope |
-|---|---|---|---|---|---|
-| GPT1 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | [PR #1 main reconciliation preflight](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001.md) | P0 | READY | Read-only exact conflict/content merge plan; no branch changes |
+No specialist tasks currently READY.
 
 ## In progress
 
