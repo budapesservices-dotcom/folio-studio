@@ -193,10 +193,15 @@ async function launchChromium(path) {
       const point = await evaluate(
         '(() => { const element = document.querySelector(' + JSON.stringify(selector) + '); ' +
         'if (!element) throw new Error("Click target missing: " + ' + JSON.stringify(selector) + '); ' +
-        'element.scrollIntoView({ block: "center", inline: "nearest" }); ' +
+        'element.scrollIntoView({ block: "center", inline: "center" }); ' +
         'const rect = element.getBoundingClientRect(); ' +
-        'if (rect.width <= 0 || rect.height <= 0) throw new Error("Click target has no rendered area."); ' +
-        'return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }; })()',
+        'const left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right); ' +
+        'const top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom); ' +
+        'if (right <= left || bottom <= top) throw new Error("Click target outside viewport: " + JSON.stringify({left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom,innerWidth,innerHeight})); ' +
+        'const point = { x: left + (right-left)/2, y: top + (bottom-top)/2 }; ' +
+        'const hit = document.elementFromPoint(point.x, point.y); ' +
+        'if (!hit || !(hit === element || element.contains(hit))) throw new Error("Click target occluded by: " + (hit?.outerHTML?.slice(0,160) || "nothing")); ' +
+        'return point; })()',
       );
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
       await send('Input.dispatchMouseEvent', {
