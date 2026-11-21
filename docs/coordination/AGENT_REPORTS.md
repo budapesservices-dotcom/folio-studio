@@ -52,17 +52,19 @@ Do not call deployment successful until run #63 completes successfully and, idea
 
 ## CEO summary
 
-Earlier specialist audits of PR #1/#4/#5/#7 and the PR #10 candidate reviews remain historical evidence for their exact pinned SHAs. The PR #10 reconciliation has now been merged into the PR #1 foundation; the current foundation SHA and PR #1 head are `d585bc3581aadd335cc4d6292a3d13cb2a650253`. GPT1 preflight and GPT2 remediation are now focused on safely refreshing PR #4.
+Current authoritative checkpoint: PR #10 is merged into PR #1's feature foundation; deploy repair commit `edb0cc155d87c7580e6d5713935b873402a5182f` is live on `feat/canvas-pan-distribute`. CI #518 and GitHub Pages Deploy #63 succeeded. PR #1 remains open/draft/unmerged to main.
+
+GPT0 completed a fresh read-only PR #4 base-refresh preflight after the foundation moved to `edb0cc1...`. The report is posted here: https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061699937. Verdict: APPROVE SYNC WITH CONDITIONS. GPT2 packet `FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002` is DISPATCHED with exact refs and scoped implementation instructions. The old GPT1 preflight 002 and GPT2 acceptance 001 packets are superseded because they pinned `d585bc3...`.
 
 | Workstream | Specialist verdict | Evidence | GPT0 disposition |
 |---|---|---|---|
-| PR #1 foundation (audit of old base) | **NOT READY at audited SHA** — GPT3 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #10 is now merged into the feature base; PR #1 remains open/draft against main and still needs later integration/acceptance gates |
-| PR #4 Native Command Core Phase 1 | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) | Preserve implementation; close QA gaps and combined integration |
-| PR #5 Workspace Window Management | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | Preserve implementation; close live drag/resize and harness gaps |
-| PR #7 Workspace Preferences V1 | **COMPATIBLE WITH CONDITIONS** — GPT1 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | Helper API compatible, but model/persistence adoption blocked; no sync |
-| PR #10 foundation reconciliation | **PASS WITH CONDITIONS** — GPT2/GPT3/GPT4 | [GPT2](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) · [GPT3](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) · [GPT4](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | Accepted with source-fidelity and browser-smoke limitations, then merged to PR #1 feature base as `d585bc3...`; CI #503 passed; automatic Pages run #62 failed before artifact upload/deploy |
+| PR #1 foundation (old audit base) | **NOT READY at audited SHA** — GPT3 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #10 and deploy repair are now on feature base; PR #1 remains open/draft against main |
+| PR #4 Native Command Core Phase 1 | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) | GPT0 approved base refresh with conditions; GPT2 task 002 is DISPATCHED to sync + close mounted autosave/native IndexedDB gaps |
+| PR #5 Workspace Window Management | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | Preserve implementation; do not synchronize until PR #4 is accepted; shared App/CSS integration remains |
+| PR #7 Workspace Preferences V1 | **COMPATIBLE WITH CONDITIONS** — GPT1 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | Keep stacked on PR #5; do not sync until PR #5 is accepted |
+| PR #10 foundation reconciliation | **PASS WITH CONDITIONS** — GPT2/GPT3/GPT4 | [GPT2](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) · [GPT3](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) · [GPT4](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | Merged into PR #1 feature foundation as `d585bc3...`; deploy repair `edb0cc1...` now verified live |
 
-PR #1, #4, #5 and #7 remain open and unmerged. PR #10 is closed/merged into the feature foundation only; this does not merge PR #1 to main. None of the earlier specialist verdicts independently constitutes merge approval for the child PRs. The new GPT2 PR #4 implementation packet is WAITING, and Native Commands Phase 2/3 are not authorized. The current-checkpoint section above supersedes older task-status and comparison statements in the historical notes below.
+PR #1, #4, #5 and #7 remain open and unmerged. PR #10 is closed/merged into the feature foundation only; this does not merge PR #1 to main. Older specialist verdicts remain scoped to their pinned SHAs. PR #4's prior manual Component deletion/recovery and modal browser acceptance remains a separate GPT4 gate after GPT2 completes. Native Commands Phase 2/3 remain prohibited.
 
 ## Exact-ref reconciliation
 
@@ -168,22 +170,20 @@ This decision authorizes GPT0 to prepare the controlled sequence and scoped task
 
 ## Next preflight task
 
-GPT1's read-only task packet [FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001.md) is published as READY. It pins PR #1 HEAD 89780034... and the current main comparison snapshot returned by GitHub, and asks for an exact merge-conflict/content-preservation plan. It is not DISPATCHED; GPT1 must not start until GPT0 changes the status and the CEO sends MULAI.
+The PR #4 foundation preflight has been completed by GPT0 against live refs after the foundation repair. Its exact report is https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061699937. The earlier GPT1 preflight packet 002 is superseded; it pinned `d585bc3...`. The next specialist action is GPT2 task 002 (DISPATCHED), which pins PR #4 at `9730fdc...` and foundation at `edb0cc1...`.
 
 ## Specialist next instructions
 
 | Agent | Instruction now |
 |---|---|
-| GPT1 | New PR #1 reconciliation preflight packet is READY; await GPT0 dispatch and CEO MULAI. Read-only only; do not update branches or synchronize PR #7. |
-| GPT2 | Remain WAITING. No code/tests, no Phase 2, and do not self-select a finding. |
-| GPT3 | Audit submitted; hold. Re-audit only when GPT0 supplies a new exact candidate SHA and packet. |
-| GPT4 | Audit submitted; hold. Perform follow-up QA only against an explicitly pinned integrated PR #4/#5 candidate. |
+| GPT1 | IDLE; previous PR #4 preflight packet 002 was superseded due to a foundation ref movement. GPT0 performed and recorded the fresh preflight. |
+| GPT2 | Task 002 is DISPATCHED; refresh PR #4 using first parent `9730fdc...` and second parent `edb0cc1...`, then implement only scoped App autosave/native IndexedDB acceptance changes. |
+| GPT3 | Hold; receive a new exact-head QA packet after GPT2 submits the implementation report. |
+| GPT4 | Hold; perform independent exact-head QA and manual Component deletion/recovery/browser acceptance after GPT2 completes. |
 
 ## CEO decisions required
 
-1. **Foundation route:** retain PR #1 as the common parent and reconcile it, or supersede/split it into a smaller promotion candidate.
-2. **Preferences scope:** confirm whether Inspector visibility belongs in Workspace Preferences V1 and define persisted focus semantics for panels vs active editor, alongside minimized-window behavior.
-3. **Engineering authorization:** after selecting the route, authorize GPT0 to issue narrow GPT2 remediation packets for the PR #4 and #5 QA gaps. This does not authorize Phase 2 or merge.
+No new CEO decision is required to start the dispatched PR #4 task; the CEO has already said LANJUT in the coordinator conversation. Reserved CEO decisions remain: merging child PRs, merging PR #1 to main, deployments, PR #5/#7 integration beyond their later scoped packets, and any material scope expansion or Native Commands Phase 2/3.
 
 ## Repository actions and authority
 
