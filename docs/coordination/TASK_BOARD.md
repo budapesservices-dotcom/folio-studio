@@ -18,6 +18,7 @@
 | CEO objective | Repository and PR reconciliation; independent audit before any implementation |
 | Default branch | main |
 | Baseline SHA at cycle start | 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
+| Main comparison tip at dispatch | fe77c47be8f15ffdd45ed5d37a4603a6e824c94f |
 | Coordination packet publication | main, after baseline capture |
 | Last updated | 2026-11-21 |
 
