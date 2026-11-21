@@ -869,15 +869,28 @@ async function runAppAcceptance() {
       await waitForApp(browser, 'document.querySelector(".pages-rack-panel").inert', 'App Add Page handler');
     }
 
-    // Create real Component definitions via the Rack New Component control and Preact handler.
-    for (let index=0; index<12; index+=1) {
-      await browser.click('.component-rack-header-toggle');
-      await waitForAppRackAnimation(browser, '.component-rack-panel');
-      await browser.click('.component-rack-panel .component-rack-save');
+    // Create one real Component through the App's New Component handler.
+    // Duplicate that real record through the Rack's own Preact handler to populate
+    // the rendered list without repeatedly opening and rebuilding Component Canvas.
+    await browser.click('.component-rack-header-toggle');
+    await waitForAppRackAnimation(browser, '.component-rack-panel');
+    await browser.click('.component-rack-panel .component-rack-save');
+    await waitForApp(
+      browser,
+      'document.querySelector(".component-rack-panel").inert && !!document.querySelector("#component-canvas")',
+      'App New Component handler',
+      30000,
+    );
+
+    await browser.click('.component-rack-header-toggle');
+    await waitForAppRackAnimation(browser, '.component-rack-panel');
+    for (let index=0; index<11; index+=1) {
+      await browser.click('.component-rack-card-actions button[title^="Duplicate"]');
       await waitForApp(
         browser,
-        'document.querySelector(".component-rack-panel").inert && !!document.querySelector("#component-canvas")',
-        'App New Component handler',
+        'document.querySelectorAll(".component-rack-card").length >= ' + (index + 2),
+        'App Duplicate Component handler ' + (index + 1),
+        30000,
       );
     }
     await delay(800);
