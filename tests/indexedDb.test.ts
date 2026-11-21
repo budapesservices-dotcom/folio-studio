@@ -40,6 +40,26 @@ class FakeDatabase {
   private readonly putFailures = new Map<string, DOMException>();
   private nextReadwriteCompletionGate: { notifyStarted: () => void; wait: Promise<void> } | null = null;
   private nextReadwriteCompletionEventGate: { notifyStarted: () => void; wait: Promise<void> } | null = null;
+  private nextQuotaErrorEventGate: { notifyStarted: () => void; wait: Promise<void> } | null = null;
+
+  holdNextQuotaErrorEvents(): { entered: Promise<void>; release: () => void } {
+    if (this.nextQuotaErrorEventGate) {
+      throw new Error('A QuotaExceededError event gate is already installed.');
+    }
+
+    let notifyEntered!: () => void;
+    let releaseGate!: () => void;
+    const entered = new Promise<void>((resolve) => { notifyEntered = resolve; });
+    const wait = new Promise<void>((resolve) => { releaseGate = resolve; });
+    this.nextQuotaErrorEventGate = { notifyStarted: notifyEntered, wait };
+    return { entered, release: releaseGate };
+  }
+
+  private takeQuotaErrorEventGate() {
+    const gate = this.nextQuotaErrorEventGate;
+    this.nextQuotaErrorEventGate = null;
+    return gate;
+  }
 
   holdNextReadwriteCompletionEvent(): { entered: Promise<void>; release: () => void } {
     if (this.nextReadwriteCompletionEventGate) {
@@ -93,7 +113,10 @@ class FakeDatabase {
     if (mode === 'readwrite') this.metrics.readwriteTransactions += 1;
     const completionGate = mode === 'readwrite' ? this.takeReadwriteCompletionGate() : null;
     const completionEventGate = mode === 'readwrite' ? this.takeReadwriteCompletionEventGate() : null;
-    return new FakeTransaction(this, mode, completionGate, completionEventGate) as unknown as IDBTransaction;
+    const quotaErrorEventGate = mode === 'readwrite' ? this.takeQuotaErrorEventGate() : null;
+    return new FakeTransaction(
+      this, mode, completionGate, completionEventGate, quotaErrorEventGate,
+    ) as unknown as IDBTransaction;
   }
 
   keyPathFor(name: string): string {
@@ -144,6 +167,7 @@ class FakeTransaction {
     private readonly mode: IDBTransactionMode,
     private completionGate: { notifyStarted: () => void; wait: Promise<void> } | null = null,
     private completionEventGate: { notifyStarted: () => void; wait: Promise<void> } | null = null,
+    private quotaErrorEventGate: { notifyStarted: () => void; wait: Promise<void> } | null = null,
   ) {}
 
   objectStore(name: string) {
@@ -190,8 +214,21 @@ class FakeTransaction {
     this.error = error;
     this.database.recordWritesRolledBack(this.pendingWrites.length);
     this.pendingWrites.length = 0;
-    this.onerror?.call(this, new Event('error'));
-    this.onabort?.call(this, new Event('abort'));
+
+    const dispatchAbortEvents = () => {
+      this.onerror?.call(this, new Event('error'));
+      this.onabort?.call(this, new Event('abort'));
+    };
+    const errorGate = error.name === 'QuotaExceededError' ? this.quotaErrorEventGate : null;
+    if (errorGate) {
+      this.quotaErrorEventGate = null;
+      // Abort and rollback have already happened. Only transaction event
+      // delivery is held so the canonical revision can change first.
+      errorGate.notifyStarted();
+      void errorGate.wait.then(dispatchAbortEvents);
+    } else {
+      dispatchAbortEvents();
+    }
   }
 
   private request<T>(operation: () => T): FakeRequest<T> {
@@ -874,6 +911,132 @@ describe('Main Canvas revision-fenced autosave', () => {
     expect((await loadProjectById(project.metadata.id))?.metadata.name).toBe('Durable before failure');
   });
 
+  it('preserves QuotaExceededError when canonical revision invalidates the already-aborted transaction', async () => {
+    const project = projectWithId(
+      'main-autosave-quota-revision-race',
+      'Durable snapshot before quota failure',
+      '2026-11-21T04:10:00.000Z',
+    );
+    const store = createCanonicalEditorStore(createEditorState(project));
+    await saveProject(project, 0);
+
+    const candidateMutation = store.dispatchLegacyAction({
+      type: 'rename-project',
+      name: 'Candidate revision R',
+    });
+    expect(candidateMutation.status).toBe('committed');
+    const revisionR = candidateMutation.snapshot.projectRevision;
+    const candidateR = candidateMutation.snapshot.editorState.project;
+
+    const database = fakeIndexedDB.database!;
+    const durableBefore = await loadProjectById(project.metadata.id);
+    expect(durableBefore?.metadata.name).toBe('Durable snapshot before quota failure');
+    const scheduledBefore = database.metrics.scheduledWrites;
+    const committedBefore = database.metrics.committedWrites;
+    const rolledBackBefore = database.metrics.rolledBackWrites;
+    const readwriteBefore = database.metrics.readwriteTransactions;
+
+    const quotaError = new DOMException(
+      'Simulated quota exhaustion during Main Canvas autosave.',
+      'QuotaExceededError',
+    );
+    database.failNextPutForStore('projects', quotaError);
+    const quotaEventGate = database.holdNextQuotaErrorEvents();
+
+    let saveStatus: 'saving' | 'saved' | 'error' = 'saving';
+    const statusHistory: string[] = ['saving'];
+    let pendingSave: Promise<Awaited<ReturnType<typeof saveProjectIfRevisionCurrent>>> | undefined;
+    let errorCallbackOutcome: Promise<{ error: unknown; statusApplied: boolean }> | undefined;
+
+    try {
+      pendingSave = saveProjectIfRevisionCurrent(
+        candidateR,
+        revisionR,
+        () => store.getSnapshot().projectRevision,
+        (listener) => store.subscribe(listener),
+      );
+
+      // The put request has thrown QuotaExceededError; the fake transaction is
+      // already aborted and its staged writes rolled back, but event delivery
+      // is held. This is not a successful/staged-only transaction.
+      await quotaEventGate.entered;
+      expect(database.metrics.readwriteTransactions).toBe(readwriteBefore + 1);
+      expect(database.metrics.scheduledWrites).toBe(scheduledBefore);
+      expect(database.metrics.committedWrites).toBe(committedBefore);
+      expect(database.metrics.rolledBackWrites).toBe(rolledBackBefore);
+
+      const currentDurableAfterQuota = await loadProjectById(project.metadata.id);
+      expect(currentDurableAfterQuota?.metadata.name).toBe('Durable snapshot before quota failure');
+
+      const nextMutation = store.dispatchLegacyAction({
+        type: 'rename-project',
+        name: 'Canonical revision R+1',
+      });
+      expect(nextMutation.status).toBe('committed');
+      expect(nextMutation.snapshot.projectRevision).toBe(revisionR + 1);
+
+      // Newer revision status is already active before the old transaction's
+      // error callback is allowed to run.
+      saveStatus = 'saving';
+      statusHistory.push('saving');
+
+      errorCallbackOutcome = pendingSave.then(
+        () => ({ error: new Error('Expected autosave to reject with QuotaExceededError.'), statusApplied: false }),
+        (error: unknown) => {
+          const statusApplied = setRevisionFencedAutosaveStatus(
+            revisionR,
+            () => store.getSnapshot().projectRevision,
+            'error',
+            (status) => { saveStatus = status; statusHistory.push(status); },
+          );
+          return { error, statusApplied };
+        },
+      );
+
+      quotaEventGate.release();
+      const outcome = await errorCallbackOutcome;
+      expect(outcome.error).toBe(quotaError);
+      expect(outcome.error).toMatchObject({
+        name: 'QuotaExceededError',
+        message: 'Simulated quota exhaustion during Main Canvas autosave.',
+      });
+      expect(outcome.statusApplied).toBe(false);
+      expect(saveStatus).toBe('saving');
+      expect(statusHistory).toEqual(['saving', 'saving']);
+
+      // A quota failure is a real persistence error, not a stale success. No
+      // put was staged or committed and the previous durable project survived.
+      expect(database.metrics.scheduledWrites).toBe(scheduledBefore);
+      expect(database.metrics.committedWrites).toBe(committedBefore);
+      expect(database.metrics.rolledBackWrites).toBe(rolledBackBefore);
+      expect((await loadProjectById(project.metadata.id))?.metadata.name)
+        .toBe('Durable snapshot before quota failure');
+
+      const latest = store.getSnapshot();
+      const latestSave = await saveProjectIfRevisionCurrent(
+        latest.editorState.project,
+        latest.projectRevision,
+        () => store.getSnapshot().projectRevision,
+        (listener) => store.subscribe(listener),
+      );
+      expect(latestSave).toEqual({ status: 'saved' });
+      setRevisionFencedAutosaveStatus(
+        latest.projectRevision,
+        () => store.getSnapshot().projectRevision,
+        'saved',
+        (status) => { saveStatus = status; statusHistory.push(status); },
+      );
+      expect(saveStatus).toBe('saved');
+      expect(statusHistory).toEqual(['saving', 'saving', 'saved']);
+      expect((await loadProjectById(project.metadata.id))?.metadata.name)
+        .toBe('Canonical revision R+1');
+    } finally {
+      quotaEventGate.release();
+      await pendingSave?.catch(() => undefined);
+      await errorCallbackOutcome?.catch(() => undefined);
+    }
+  });
+
   it('returns stale when canonical revision changes after durable commit but before completion notification', async () => {
     const project = projectWithId(
       'main-autosave-post-commit-event-race',
@@ -1022,10 +1185,22 @@ describe('serialized IndexedDB write barriers', () => {
     await saveProject(initial, 0);
 
     let enterBarrier!: () => void;
-    let releaseBarrier!: () => void;
+    let releaseBarrierGate!: () => void;
     const entered = new Promise<void>((resolve) => { enterBarrier = resolve; });
-    const gate = new Promise<void>((resolve) => { releaseBarrier = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseBarrierGate = resolve; });
+    let gateReleased = false;
+    const releaseBarrier = () => {
+      if (gateReleased) return;
+      gateReleased = true;
+      releaseBarrierGate();
+    };
+
     let recoveryVisibleAfterTransactionCompletion = false;
+    let staleSaveFinished = false;
+    let staleSaveOutcome: Promise<
+      | { status: 'fulfilled' }
+      | { status: 'rejected'; error: unknown }
+    > | undefined;
 
     const barrier = withProjectWriteLock(async (persist) => {
       await persist(recovery, 1);
@@ -1035,19 +1210,51 @@ describe('serialized IndexedDB write barriers', () => {
       await gate;
       await persist(deletion, 2);
     });
+    // Attach a rejection handler immediately so every exit path owns the
+    // module-global queue operation until it has settled.
+    const barrierOutcome = barrier.then(
+      (value) => ({ status: 'fulfilled' as const, value }),
+      (error: unknown) => ({ status: 'rejected' as const, error }),
+    );
 
-    await entered;
-    let staleSaveFinished = false;
-    const staleSave = saveProject(initial, 0).then(() => { staleSaveFinished = true; });
-    await Promise.resolve();
-    expect(staleSaveFinished).toBe(false);
+    try {
+      // If the first persist fails before enterBarrier(), observe that barrier
+      // rejection instead of hanging forever on the unsignalled entered gate.
+      const barrierStart = await Promise.race([
+        entered.then(() => ({ kind: 'entered' as const })),
+        barrierOutcome.then((outcome) => ({ kind: 'settled' as const, outcome })),
+      ]);
+      if (barrierStart.kind === 'settled') {
+        if (barrierStart.outcome.status === 'rejected') throw barrierStart.outcome.error;
+        throw new Error('Write barrier completed without emitting its entered signal.');
+      }
 
-    releaseBarrier();
-    await barrier;
-    await staleSave;
+      const staleSave = saveProject(initial, 0).then(() => { staleSaveFinished = true; });
+      staleSaveOutcome = staleSave.then(
+        () => ({ status: 'fulfilled' as const }),
+        (error: unknown) => ({ status: 'rejected' as const, error }),
+      );
 
-    expect(recoveryVisibleAfterTransactionCompletion).toBe(true);
-    expect((await loadProjectById(initial.metadata.id))?.metadata.name).toBe('Deletion durable');
+      await Promise.resolve();
+      expect(staleSaveFinished).toBe(false);
+      expect(recoveryVisibleAfterTransactionCompletion).toBe(true);
+
+      releaseBarrier();
+      const completedBarrier = await barrierOutcome;
+      expect(completedBarrier.status).toBe('fulfilled');
+      const completedStaleSave = await staleSaveOutcome;
+      expect(completedStaleSave.status).toBe('fulfilled');
+      expect(staleSaveFinished).toBe(true);
+
+      expect(recoveryVisibleAfterTransactionCompletion).toBe(true);
+      expect((await loadProjectById(initial.metadata.id))?.metadata.name).toBe('Deletion durable');
+    } finally {
+      // Idempotent release and draining of every started queue operation keep
+      // a failed assertion from leaking a pending promise into later tests.
+      releaseBarrier();
+      await barrierOutcome;
+      if (staleSaveOutcome) await staleSaveOutcome;
+    }
   });
 
   it('rejects an aborted barrier transaction and leaves the previous durable snapshot intact', async () => {
