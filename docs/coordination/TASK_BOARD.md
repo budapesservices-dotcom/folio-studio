@@ -9,7 +9,7 @@
 **Task template:** [Task File Template](TASK_PACKET_TEMPLATE.md)  
 **CEO report:** [Agent Reports](AGENT_REPORTS.md)
 
- > GPT0 creates task files under tasks/ and manages this board. Specialists only read it. DISPATCHED means GPT0 has authorized the packet; the CEO's MULAI/LAKSANAKAN is only a short chat wake signal. A specialist's SELESAI becomes READY_FOR_REVIEW, not APPROVED.
+> GPT0 creates task files under tasks/ and manages this board. Specialists only read it. DISPATCHED means GPT0 has authorized the packet; the CEO's MULAI/LAKSANAKAN is only a short chat wake signal. A specialist's SELESAI becomes READY_FOR_REVIEW, not APPROVED.
 
 ## Current work cycle
 
@@ -23,7 +23,7 @@
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
 | Last full PR #1 vs main comparison checkpoint | main @ `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a`: 310 ahead / 93 behind; merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`; shared changed paths only `AGENTS.md` and `.github/workflows/deploy.yml` |
 | CEO-selected integration route | Retain PR #1 as common parent; reconcile main into it after a specific preflight packet; then PR #4, PR #5, and PR #7 in order |
-| Last reconciled | 2026-11-21 — GPT0 adopted standing delegation, refreshed main snapshot, dispatched GPT2; four later main commits are coordination-only tracking updates |
+| Last reconciled | 2026-11-21 — GPT0 adopted standing delegation, refreshed main snapshot, dispatched GPT2; subsequent GPT0 tracking commits on main touch only docs/coordination/** |
 
 ## Dispatched — awaiting specialist chat wake signal
 
