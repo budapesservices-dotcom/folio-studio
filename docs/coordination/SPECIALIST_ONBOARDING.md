@@ -8,7 +8,7 @@
 
 Send the matching first line to the existing GPT chat, replacing the role number:
 
-**AKTIFKAN GPT1 DARI REPOSITORY FOLIO**
+**AKTIFKAN GPT1 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
 
 Use GPT2, GPT3, or GPT4 in the corresponding specialist chat.
 
@@ -31,10 +31,10 @@ Replace GPT1 with the correct role. If the repository cannot be accessed, it mus
 
 Do not paste the original activation instructions again. Open a new chat for the same specialist and send only:
 
-- **PULIHKAN GPT1**
-- **PULIHKAN GPT2**
-- **PULIHKAN GPT3**
-- **PULIHKAN GPT4**
+- **PULIHKAN GPT1 — https://github.com/budapesservices-dotcom/folio-studio**
+- **PULIHKAN GPT2 — https://github.com/budapesservices-dotcom/folio-studio**
+- **PULIHKAN GPT3 — https://github.com/budapesservices-dotcom/folio-studio**
+- **PULIHKAN GPT4 — https://github.com/budapesservices-dotcom/folio-studio**
 
 The new conversation must follow [RECOVERY_PROTOCOL.md](RECOVERY_PROTOCOL.md), read the current repository state, inspect the active task packet and its latest GitHub evidence, then report PULIH or BLOCKED.
 
