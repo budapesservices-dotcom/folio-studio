@@ -27,6 +27,9 @@ function findChromium() {
 
 const chromium = findChromium();
 const browserIt = chromium && typeof WebSocket !== 'undefined' ? it : it.skip;
+const browserTestTitle = chromium && typeof WebSocket !== 'undefined'
+  ? 'checks Rack focus and geometry in a single real Chromium session'
+  : 'Rack browser acceptance (SKIPPED: Chromium or Node WebSocket unavailable; set CHROMIUM_BIN)';
 const VIEWPORTS = [
   { width: 1280, height: 800 },
   { width: 360, height: 280 },
@@ -50,14 +53,14 @@ function createFixture(css) {
     '</header><nav class="tool-rail"></nav><aside class="layers-panel"></aside>' +
     '<main style="grid-area:workspace"></main><aside class="inspector-panel"></aside>' +
     '<footer class="statusbar"></footer><div class="workspace canvas-floating" id="floating-window"></div>' +
-    '<section id="pages-rack" class="pages-rack-panel" aria-label="Pages Rack" aria-hidden="true" inert>' +
+    '<section id="pages-rack" class="pages-rack-panel" aria-label="Pages Rack">' +
     '<div class="pages-rack-heading"><div class="pages-rack-title"><span class="panel-kicker">PROJECT STRUCTURE</span>' +
     '<strong>Pages</strong><span class="pages-rack-count">18</span></div><div class="pages-rack-actions">' +
     '<input id="pages-input" class="pages-rack-name-input" aria-label="New page name">' +
     button('pages-add', 'Add page', 'pages-rack-add') +
     button('pages-close', 'Close Pages Rack', 'component-rack-close') +
     '</div></div><div class="pages-rack-list">' + pages + '</div></section>' +
-    '<section id="component-rack" class="component-rack-panel" aria-label="Component Rack" aria-hidden="true" inert>' +
+    '<section id="component-rack" class="component-rack-panel" aria-label="Component Rack">' +
     '<div class="component-rack-heading"><div class="component-rack-title"><span class="panel-kicker">YOUR LIBRARY</span>' +
     '<strong>Component Rack</strong><span class="component-rack-count">24</span></div><div class="component-rack-actions">' +
     '<input id="component-input" class="component-rack-search" aria-label="Search components">' +
@@ -166,6 +169,45 @@ async function launchChromium(path) {
       await send('Input.dispatchKeyEvent', { type: 'keyDown', ...key });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', ...key });
     };
+    const pressTabs = async (count) => {
+      for (let index = 0; index < count; index += 1) await pressTab();
+    };
+    const focus = async (selector) => {
+      const focused = await evaluate(
+        '(() => { const element = document.querySelector(' + JSON.stringify(selector) + '); ' +
+        'if (!element) throw new Error("Focus target missing: " + ' + JSON.stringify(selector) + '); ' +
+        'element.focus({ preventScroll: true }); return document.activeElement === element; })()',
+      );
+      if (!focused) throw new Error('Browser refused focus for ' + selector);
+    };
+    const click = async (selector) => {
+      const point = await evaluate(
+        '(() => { const element = document.querySelector(' + JSON.stringify(selector) + '); ' +
+        'if (!element) throw new Error("Click target missing: " + ' + JSON.stringify(selector) + '); ' +
+        'element.scrollIntoView({ block: "center", inline: "nearest" }); ' +
+        'const rect = element.getBoundingClientRect(); ' +
+        'if (rect.width <= 0 || rect.height <= 0) throw new Error("Click target has no rendered area."); ' +
+        'return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }; })()',
+      );
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
+      await send('Input.dispatchMouseEvent', {
+        type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1,
+      });
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1,
+      });
+    };
+    const wheel = async (selector, deltaY = 180) => {
+      const point = await evaluate(
+        '(() => { const element = document.querySelector(' + JSON.stringify(selector) + '); ' +
+        'if (!element) throw new Error("Scroll target missing: " + ' + JSON.stringify(selector) + '); ' +
+        'const rect = element.getBoundingClientRect(); ' +
+        'return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }; })()',
+      );
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel', x: point.x, y: point.y, deltaX: 0, deltaY,
+      });
+    };
 
     await send('Page.enable');
     await send('Runtime.enable');
@@ -174,7 +216,18 @@ async function launchChromium(path) {
       await delay(100);
     }
     return {
-      evaluate, viewport, pressTab, close: cleanup,
+      send,
+      evaluate,
+      viewport,
+      setViewport: viewport,
+      pressTab,
+      pressTabs,
+      focus,
+      click,
+      wheel,
+      insertText: (text) => send('Input.insertText', { text }),
+      navigate: (url) => send('Page.navigate', { url }),
+      close: cleanup,
     };
   } catch (error) {
     await cleanup();
@@ -207,12 +260,8 @@ async function runRackBrowserChecks() {
           [document.getElementById('pages-rack'), '.pages-rack-list'],
           [document.getElementById('component-rack'), '.component-rack-list'],
         ];
-        panels.forEach(([panel]) => {
-          panel.classList.add('is-open');
-          panel.inert = false;
-          panel.removeAttribute('inert');
-          panel.setAttribute('aria-hidden', 'false');
-        });
+        // Fixture verifies production CSS only; Preact focus/inert is tested in the App below.
+        panels.forEach(([panel]) => panel.classList.add('is-open'));
         // Wait for the Rack's actual CSS transitions rather than sampling an intermediate transform.
         await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
         await Promise.all(panels.flatMap(([panel]) =>
@@ -245,128 +294,8 @@ async function runRackBrowserChecks() {
       geometry.push({ viewport, expected, actual });
     }
 
-    await browser.viewport({ width: 1280, height: 800 });
-    const keyboardStart = await browser.evaluate(`(() => {
-      const pages = document.getElementById('pages-rack');
-      const components = document.getElementById('component-rack');
-      const pagesToggle = document.getElementById('pages-toggle');
-      const componentToggle = document.getElementById('component-toggle');
-      const open = (panel) => {
-        panel.inert = false;
-        panel.removeAttribute('inert');
-        panel.setAttribute('aria-hidden', 'false');
-        panel.classList.add('is-open');
-      };
-      const close = (panel, toggle) => {
-        if (panel.contains(document.activeElement)) toggle.focus({ preventScroll: true });
-        panel.inert = true;
-        panel.setAttribute('inert', '');
-        panel.setAttribute('aria-hidden', 'true');
-        panel.classList.remove('is-open');
-      };
-      pagesToggle.addEventListener('click', () => {
-        if (!pages.inert) close(pages, pagesToggle);
-        else { open(pages); close(components, componentToggle); }
-      });
-      componentToggle.addEventListener('click', () => {
-        if (!components.inert) close(components, componentToggle);
-        else { open(components); close(pages, pagesToggle); }
-      });
-      document.getElementById('pages-close').addEventListener('click', () => close(pages, pagesToggle));
-      document.getElementById('component-close').addEventListener('click', () => close(components, componentToggle));
-      close(pages, pagesToggle);
-      close(components, componentToggle);
-      pagesToggle.focus();
-      return {
-        inertSupported: 'inert' in pages && 'inert' in components,
-        pagesInitiallyInert: pages.inert && pages.getAttribute('aria-hidden') === 'true',
-        componentsInitiallyInert: components.inert && components.getAttribute('aria-hidden') === 'true',
-      };
-    })()`);
-
-    await browser.pressTab();
-    const pagesClosedTab = await browser.evaluate('document.activeElement.id');
-    await browser.pressTab();
-    const componentClosedTab = await browser.evaluate('document.activeElement.id');
-
-    await browser.evaluate(`(() => {
-      const toggle = document.getElementById('pages-toggle');
-      toggle.focus();
-      toggle.click();
-      document.getElementById('toolbar-end').focus();
-    })()`);
-    await browser.pressTab();
-    const pagesOpenTab = await browser.evaluate('document.activeElement.id');
-
-    const pagesCloseFocus = await browser.evaluate(`(() => {
-      const close = document.getElementById('pages-close');
-      const panel = document.getElementById('pages-rack');
-      close.focus();
-      close.click();
-      return { active: document.activeElement.id, inert: panel.inert, ariaHidden: panel.getAttribute('aria-hidden') };
-    })()`);
-    const pagesToolbarClose = await browser.evaluate(`(() => {
-      const panel = document.getElementById('pages-rack');
-      const toggle = document.getElementById('pages-toggle');
-      toggle.focus();
-      toggle.click();
-      toggle.click();
-      return { active: document.activeElement.id, inert: panel.inert };
-    })()`);
-
-    await browser.evaluate(`(() => {
-      const toggle = document.getElementById('component-toggle');
-      toggle.focus();
-      toggle.click();
-      document.getElementById('toolbar-end').focus();
-    })()`);
-    await browser.pressTab();
-    const componentOpenTab = await browser.evaluate('document.activeElement.id');
-    const componentCloseFocus = await browser.evaluate(`(() => {
-      const close = document.getElementById('component-close');
-      const panel = document.getElementById('component-rack');
-      close.focus();
-      close.click();
-      return { active: document.activeElement.id, inert: panel.inert, ariaHidden: panel.getAttribute('aria-hidden') };
-    })()`);
-    const componentToolbarClose = await browser.evaluate(`(() => {
-      const panel = document.getElementById('component-rack');
-      const toggle = document.getElementById('component-toggle');
-      toggle.focus();
-      toggle.click();
-      toggle.click();
-      return { active: document.activeElement.id, inert: panel.inert };
-    })()`);
-
-    const rackSwitch = await browser.evaluate(`(() => {
-      const pages = document.getElementById('pages-rack');
-      const components = document.getElementById('component-rack');
-      const pagesToggle = document.getElementById('pages-toggle');
-      const componentToggle = document.getElementById('component-toggle');
-      pagesToggle.focus();
-      pagesToggle.click();
-      document.getElementById('pages-input').focus();
-      componentToggle.focus();
-      componentToggle.click();
-      return {
-        active: document.activeElement.id, oldInert: pages.inert,
-        oldAriaHidden: pages.getAttribute('aria-hidden'), newInert: components.inert,
-        newAriaHidden: components.getAttribute('aria-hidden'),
-      };
-    })()`);
-    await browser.pressTab();
-    const switchToToolbarEnd = await browser.evaluate('document.activeElement.id');
-    await browser.pressTab();
-    const switchIntoComponent = await browser.evaluate('document.activeElement.id');
-
-    return {
-      geometry,
-      keyboard: {
-        ...keyboardStart, pagesClosedTab, componentClosedTab, pagesOpenTab,
-        pagesCloseFocus, pagesToolbarClose, componentOpenTab, componentCloseFocus,
-        componentToolbarClose, rackSwitch, switchToToolbarEnd, switchIntoComponent,
-      },
-    };
+    const appAcceptance = await runAppAcceptance(browser);
+    return { geometry, appAcceptance };
   } finally {
     await browser?.close();
     rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -374,7 +303,7 @@ async function runRackBrowserChecks() {
 }
 
 describe('Workspace Rack keyboard focus and compact geometry (Chromium)', () => {
-  browserIt('uses native inert, restores focus, and fits both Racks inside the actual CSS shell', async () => {
+  browserIt(browserTestTitle, async () => {
     const result = await runRackBrowserChecks();
     expect(result.geometry).toHaveLength(VIEWPORTS.length);
     for (const { viewport, expected, actual } of result.geometry) {
@@ -410,25 +339,29 @@ describe('Workspace Rack keyboard focus and compact geometry (Chromium)', () => 
     expect(medium.actual.pages.height).toBe(197);
     expect(medium.actual.components.height).toBe(197);
 
-    const keyboard = result.keyboard;
-    expect(keyboard.inertSupported).toBe(true);
-    expect(keyboard.pagesInitiallyInert).toBe(true);
-    expect(keyboard.componentsInitiallyInert).toBe(true);
-    expect(keyboard.pagesClosedTab).toBe('component-toggle');
-    expect(keyboard.componentClosedTab).toBe('toolbar-end');
-    expect(keyboard.pagesOpenTab).toBe('pages-input');
-    expect(keyboard.pagesCloseFocus).toEqual({ active: 'pages-toggle', inert: true, ariaHidden: 'true' });
-    expect(keyboard.pagesToolbarClose).toEqual({ active: 'pages-toggle', inert: true });
-    expect(keyboard.componentOpenTab).toBe('component-input');
-    expect(keyboard.componentCloseFocus).toEqual({ active: 'component-toggle', inert: true, ariaHidden: 'true' });
-    expect(keyboard.componentToolbarClose).toEqual({ active: 'component-toggle', inert: true });
-    expect(keyboard.rackSwitch).toEqual({
-      active: 'component-toggle', oldInert: true, oldAriaHidden: 'true',
-      newInert: false, newAriaHidden: 'false',
-    });
-    expect(keyboard.switchToToolbarEnd).toBe('toolbar-end');
-    expect(keyboard.switchIntoComponent).toBe('component-input');
-  }, 60000);
+    const appAcceptance = result.appAcceptance;
+    expect(appAcceptance.counts.pages).toBeGreaterThanOrEqual(13);
+    expect(appAcceptance.counts.components).toBeGreaterThanOrEqual(12);
+    expect(appAcceptance.componentRaised.component).toBeGreaterThan(appAcceptance.componentRaised.main);
+    expect(appAcceptance.mainRaised.main).toBeGreaterThan(appAcceptance.mainRaised.component);
+
+    for (const size of VIEWPORTS) {
+      const actual = appAcceptance.geometry.find((entry) =>
+        entry.viewport.width === size.width && entry.viewport.height === size.height,
+      );
+      expect(actual).toBeDefined();
+      expect(actual.body).toEqual(size);
+      expect(actual.shell).toEqual(size);
+      expect(actual.racks).toHaveLength(2);
+      for (const rack of actual.racks) {
+        expect(rack.rect.left).toBeGreaterThanOrEqual(0);
+        expect(rack.rect.right).toBeLessThanOrEqual(size.width);
+        expect(rack.rect.top).toBeGreaterThanOrEqual(56);
+        expect(rack.rect.bottom).toBeLessThanOrEqual(size.height - 27);
+        expect(rack.rect.height).toBeLessThanOrEqual(size.height - 83);
+      }
+    }
+  }, 180000);
 });
 
 
@@ -475,191 +408,6 @@ async function startViteApp() {
   }
 }
 
-async function launchAppChromium() {
-  if (!chromium) throw new Error('Chromium is unavailable; set CHROMIUM_BIN.');
-  // Each test gets a unique browser profile, isolating localStorage and IndexedDB.
-  const profile = mkdtempSync(join(tmpdir(), 'folio-app-rack-profile-'));
-  const portServer = createServer();
-  await new Promise((resolvePort, reject) => {
-    portServer.once('error', reject);
-    portServer.listen(0, '127.0.0.1', resolvePort);
-  });
-  const port = portServer.address().port;
-  await new Promise((resolveClose, reject) =>
-    portServer.close((error) => error ? reject(error) : resolveClose()),
-  );
-
-  const child = spawn(chromium, [
-    '--headless=new', '--no-sandbox', '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage', '--disable-gpu', '--disable-background-networking',
-    '--disable-extensions', '--disable-breakpad', '--disable-crash-reporter',
-    '--no-first-run', '--no-default-browser-check',
-    '--remote-allow-origins=*', '--remote-debugging-address=127.0.0.1',
-    '--remote-debugging-port=' + port, '--user-data-dir=' + profile, 'about:blank',
-  ], { detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe'] });
-
-  let socket;
-  let stderr = '';
-  let cleaned = false;
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
-
-  const cleanup = async () => {
-    if (cleaned) return;
-    cleaned = true;
-    try { socket?.close(); } catch { /* Ignore closed socket. */ }
-    if (child.exitCode === null && child.signalCode === null) {
-      const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
-      try {
-        if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGTERM');
-        else child.kill('SIGTERM');
-      } catch {
-        child.kill('SIGTERM');
-      }
-      const stopped = await Promise.race([exited.then(() => true), delay(4000).then(() => false)]);
-      if (!stopped && child.exitCode === null && child.signalCode === null) {
-        try {
-          if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL');
-          else child.kill('SIGKILL');
-        } catch {
-          child.kill('SIGKILL');
-        }
-        await Promise.race([exited, delay(2000)]);
-      }
-    }
-    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  };
-
-  try {
-    let targets;
-    const endpoint = 'http://127.0.0.1:' + port + '/json/list';
-    const deadline = Date.now() + 20000;
-    while (Date.now() < deadline && child.exitCode === null) {
-      try {
-        const response = await fetch(endpoint);
-        if (response.ok) { targets = await response.json(); break; }
-      } catch {
-        // Chromium is still starting its DevTools endpoint.
-      }
-      await delay(100);
-    }
-    if (!targets) throw new Error('Chromium DevTools startup timeout: ' + stderr.slice(-1500));
-    const page = targets.find((target) => target.type === 'page');
-    if (!page?.webSocketDebuggerUrl) throw new Error('Chromium did not expose its page target.');
-
-    socket = new WebSocket(page.webSocketDebuggerUrl);
-    await new Promise((resolveOpen, reject) => {
-      const timeout = setTimeout(() => reject(new Error('DevTools websocket timeout')), 10000);
-      socket.addEventListener('open', () => { clearTimeout(timeout); resolveOpen(); }, { once: true });
-      socket.addEventListener('error', () => {
-        clearTimeout(timeout);
-        reject(new Error('DevTools websocket error'));
-      }, { once: true });
-    });
-
-    let sequence = 0;
-    const pending = new Map();
-    socket.addEventListener('message', (event) => {
-      let message;
-      try { message = JSON.parse(String(event.data)); } catch { return; }
-      if (!message.id || !pending.has(message.id)) return;
-      const entry = pending.get(message.id);
-      pending.delete(message.id);
-      clearTimeout(entry.timer);
-      if (message.error) entry.reject(new Error(message.error.message || 'DevTools command failed'));
-      else entry.resolve(message.result);
-    });
-
-    const send = (method, params = {}) => new Promise((resolveResult, reject) => {
-      const id = ++sequence;
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error('DevTools command timed out: ' + method));
-      }, 15000);
-      pending.set(id, { resolve: resolveResult, reject, timer });
-      socket.send(JSON.stringify({ id, method, params }));
-    });
-
-    const evaluate = async (expression) => {
-      const result = await send('Runtime.evaluate', {
-        expression, returnByValue: true, awaitPromise: true, userGesture: true,
-      });
-      if (result.exceptionDetails) {
-        throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
-      }
-      return result.result?.value;
-    };
-
-    const setViewport = async ({ width, height }) => {
-      await send('Emulation.setDeviceMetricsOverride', {
-        width, height, deviceScaleFactor: 1, mobile: false,
-      });
-      await evaluate('new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
-    };
-
-    const pressTab = async () => {
-      const key = { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 };
-      await send('Input.dispatchKeyEvent', { type: 'keyDown', ...key });
-      await send('Input.dispatchKeyEvent', { type: 'keyUp', ...key });
-    };
-
-    const pressTabs = async (count) => {
-      for (let index = 0; index < count; index += 1) await pressTab();
-    };
-
-    const focus = async (selector) => {
-      const focused = await evaluate(
-        '(() => { const element = document.querySelector(' + JSON.stringify(selector) + '); ' +
-        'if (!element) throw new Error("Focus target missing: " + ' + JSON.stringify(selector) + '); ' +
-        'element.focus({ preventScroll: true }); return document.activeElement === element; })()',
-      );
-      if (!focused) throw new Error('Browser refused focus for ' + selector);
-    };
-
-    const click = async (selector) => {
-      const point = await evaluate(
-        '(() => { const element = document.querySelector(' + JSON.stringify(selector) + '); ' +
-        'if (!element) throw new Error("Click target missing: " + ' + JSON.stringify(selector) + '); ' +
-        'element.scrollIntoView({ block: "center", inline: "nearest" }); ' +
-        'const rect = element.getBoundingClientRect(); ' +
-        'if (rect.width <= 0 || rect.height <= 0) throw new Error("Click target has no rendered area."); ' +
-        'return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }; })()',
-      );
-      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
-      await send('Input.dispatchMouseEvent', {
-        type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1,
-      });
-      await send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1,
-      });
-    };
-
-    const wheel = async (selector, deltaY = 180) => {
-      const point = await evaluate(
-        '(() => { const element = document.querySelector(' + JSON.stringify(selector) + '); ' +
-        'if (!element) throw new Error("Scroll target missing: " + ' + JSON.stringify(selector) + '); ' +
-        'const rect = element.getBoundingClientRect(); ' +
-        'return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }; })()',
-      );
-      await send('Input.dispatchMouseEvent', {
-        type: 'mouseWheel', x: point.x, y: point.y, deltaX: 0, deltaY,
-      });
-    };
-
-    await send('Page.enable');
-    await send('Runtime.enable');
-    return {
-      send, evaluate, setViewport, pressTab, pressTabs, focus, click, wheel,
-      insertText: (text) => send('Input.insertText', { text }),
-      navigate: (url) => send('Page.navigate', { url }),
-      close: cleanup,
-    };
-  } catch (error) {
-    await cleanup();
-    throw error;
-  }
-}
-
 async function waitForApp(browser, expression, description, timeout = 15000) {
   try {
     await browser.evaluate(
@@ -691,13 +439,11 @@ async function waitForAppRackAnimation(browser, selector) {
   );
 }
 
-async function runAppAcceptance() {
+async function runAppAcceptance(browser) {
   let vite;
-  let browser;
   try {
     vite = await startViteApp();
-    browser = await launchAppChromium();
-    await browser.setViewport({ width: 1280, height: 800 });
+    await browser.viewport({ width: 1280, height: 800 });
     await browser.send('Storage.clearDataForOrigin', {
       origin: new URL(vite.url).origin,
       storageTypes: 'all',
@@ -990,35 +736,7 @@ async function runAppAcceptance() {
 
     return { counts, stackBefore, componentRaised, mainRaised, geometry };
   } finally {
-    try { await browser?.close(); } finally {
-      await vite?.close();
-    }
+    await vite?.close();
   }
 }
 
-describe('Production Preact App Rack browser acceptance (Vite + Chromium CDP)', () => {
-  browserIt(appTestTitle, async () => {
-    const result = await runAppAcceptance();
-    expect(result.counts.pages).toBeGreaterThanOrEqual(13);
-    expect(result.counts.components).toBeGreaterThanOrEqual(12);
-    expect(result.componentRaised.component).toBeGreaterThan(result.componentRaised.main);
-    expect(result.mainRaised.main).toBeGreaterThan(result.mainRaised.component);
-
-    for (const size of VIEWPORTS) {
-      const actual = result.geometry.find((entry) =>
-        entry.viewport.width===size.width && entry.viewport.height===size.height,
-      );
-      expect(actual).toBeDefined();
-      expect(actual.body).toEqual(size);
-      expect(actual.shell).toEqual(size);
-      expect(actual.racks).toHaveLength(2);
-      for (const rack of actual.racks) {
-        expect(rack.rect.left).toBeGreaterThanOrEqual(0);
-        expect(rack.rect.right).toBeLessThanOrEqual(size.width);
-        expect(rack.rect.top).toBeGreaterThanOrEqual(56);
-        expect(rack.rect.bottom).toBeLessThanOrEqual(size.height-27);
-        expect(rack.rect.height).toBeLessThanOrEqual(size.height-83);
-      }
-    }
-  }, 120000);
-});
