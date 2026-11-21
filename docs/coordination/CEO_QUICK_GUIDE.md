@@ -1,54 +1,23 @@
-# Folio CEO Quick Guide — GPT Task Inbox
+# Folio — Codex Quick Guide
 
-## One-time setup (once for each existing GPT1–GPT4 conversation)
+## Normal workflow
 
-After the coordination protocol is merged, open each existing specialist chat and send its matching activation command:
+1. The CEO gives the desired outcome directly to the active Codex session.
+2. Codex checks the live repository, current branch, exact base SHA, relevant PRs, dependencies, and Folio specifications.
+3. Codex selects a bounded, high-value implementation slice and executes it. Prefer production code plus focused regression tests over planning-only output.
+4. Codex validates the change, reviews its diff and ancestry, commits it on a dedicated branch, pushes it, and opens a draft PR when appropriate.
+5. Codex gives the CEO a short factual result with the branch, commit, PR, checks actually run, and any remaining blocker.
 
-- GPT1 chat: **AKTIFKAN GPT1 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
-- GPT2 chat: **AKTIFKAN GPT2 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
-- GPT3 chat: **AKTIFKAN GPT3 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
-- GPT4 chat: **AKTIFKAN GPT4 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
+## When changing Codex accounts
 
-The specialist reads its identity, workflow, Task Board, and recovery instructions from GitHub. This setup does not need to be repeated in that same conversation.
+The second Codex account is additional capacity, not a separate team or coordinator. Before switching accounts, ensure work is committed and pushed. The next session must inspect the repository and exact remote branch HEAD, then continue from that durable state. Never assume uncommitted local changes or chat context transferred between accounts.
 
-## If a chat reaches its limit or you must open a new chat
+## CEO approval gates
 
-Open a new conversation for that same GPT and send only the matching one-line recovery command:
+Codex may carry out ordinary scoped engineering and validation. It must stop for explicit CEO approval before merging, deploying, changing repository/Cloudflare settings or secrets/access, destructive data operations, or materially reversing product/architecture direction.
 
-- New GPT1 chat: **PULIHKAN GPT1 — https://github.com/budapesservices-dotcom/folio-studio**
-- New GPT2 chat: **PULIHKAN GPT2 — https://github.com/budapesservices-dotcom/folio-studio**
-- New GPT3 chat: **PULIHKAN GPT3 — https://github.com/budapesservices-dotcom/folio-studio**
-- New GPT4 chat: **PULIHKAN GPT4 — https://github.com/budapesservices-dotcom/folio-studio**
+## Working references
 
-The new chat reads the current assignment and latest saved checkpoint from GitHub. If the task was IN_PROGRESS, it resumes from the last durable checkpoint. If only DISPATCHED, send MULAI separately. If GitHub evidence is missing or inconsistent, the specialist must report BLOCKED.
-
-**Important:** only work recorded in GitHub can be restored. Uncommitted edits and details that existed only in the old chat cannot be recovered automatically.
-
-## When GPT0 says a specialist is ready
-
-Example GPT0 message:
-
-GPT2 SIAP MULAI — FOLIO-20261121-CANVAS-001. Buka chat GPT2 dan kirim: MULAI.
-
-## What the CEO does
-
-1. Open the named GPT conversation.
-2. Send only: MULAI (or LAKSANAKAN).
-3. GPT2 reads its assigned DISPATCHED task from the repository and replies: DITERIMA — TASK-ID — mulai dikerjakan.
-4. Tell GPT0 **GPT2 mulai — TASK-ID** so it can update the agent/task status after checking the repository.
-5. When GPT2 finishes, it stores evidence in GitHub and replies with one short SELESAI line.
-6. Tell GPT0 **GPT2 selesai — TASK-ID**. GPT0 performs the review and updates the CEO report.
-
-Do not copy the task packet or technical report between chats.
-
-## If GPT says BLOCKED
-
-Do not improvise or choose another task. Send the one-line blocker to GPT0 so it can repair the packet or access problem.
-
-## The three working links to remember
-
-- [Task Board](TASK_BOARD.md)
-- [Agent State](AGENT_STATE.md)
-- [CEO report](AGENT_REPORTS.md)
-
-The full protocol and recovery rules are in [PROTOCOL.md](PROTOCOL.md) and [RECOVERY_PROTOCOL.md](RECOVERY_PROTOCOL.md).
+- Repository-wide rules: [AGENTS.md](../../AGENTS.md)
+- Product architecture: [Architecture](../ARCHITECTURE.md)
+- Acceptance coverage: [Acceptance tests](../ACCEPTANCE_TESTS.md)
