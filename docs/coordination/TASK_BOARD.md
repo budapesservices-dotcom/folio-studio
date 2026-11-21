@@ -39,7 +39,7 @@ No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4
 
 | Agent | Task ID | Current note |
 |---|---|---|
-| GPT0 | FOLIO-CYCLE-20261121-001 | GPT0 mandate active; GPT1 preflight approved; GPT2 candidate, GPT3 QA and GPT4 independent audit submitted; GPT0 disposition recorded for Markdown whitespace and browser-access limitation |
+| GPT0 | FOLIO-CYCLE-20261121-001 | GPT1–GPT4 deliverables reviewed and task statuses approved; PR #10 technically accepted as a reconciliation candidate with source-fidelity exception; browser smoke limitation recorded |
 
 ## Waiting / blocked
 
@@ -54,9 +54,6 @@ No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4
 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | GPT3 | [PR #1 audit report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main comparison snapshot `8d8571cb13da23fb2f39c57cc3d34f556dbf10c1` | READY_FOR_REVIEW — report and packet match; verdict NOT READY |
 | FOLIO-20261121-PR4-PR5-QA-001 | GPT4 | [PR #4 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) · [PR #5 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; both base PR #1 `89780034f32b1809cc49640e83bac5c817d88a91` | READY_FOR_REVIEW — both reports and exact heads match; both verdicts READY WITH CONDITIONS |
 | FOLIO-20261121-PR7-DEPENDENCY-001 | GPT1 | [PR #7 dependency audit](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | PR #7 `76eb40426059ed21ce93156c5065835ea3717467`; PR #5 dependency HEAD `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | READY_FOR_REVIEW — report and exact heads match; verdict COMPATIBLE WITH CONDITIONS |
-| FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | GPT2 | [Draft PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10) · [GPT2 checkpoint](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be`; parents `89780034...` + `c936bbfa...` | READY_FOR_REVIEW — exact-head CI #480 passed; diff-check and whitespace condition pending independent audit |
-| FOLIO-20261121-PR10-CANDIDATE-QA-001 | GPT3 | [PR #10 QA report](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be` | READY_FOR_REVIEW — PASS WITH CONDITIONS; exact CI/scope pass; browser QA NOT RUN because preview host inaccessible |
-| FOLIO-20261121-PR10-CANDIDATE-AUDIT-001 | GPT4 | [PR #10 independent audit](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be` | READY_FOR_REVIEW — APPROVE WITH CONDITIONS; ancestry/scope/policy/CI pass; 82 intentional Markdown hard-breaks are a documented diff-check exception |
 
 ## Approved by GPT0
 
@@ -66,6 +63,9 @@ No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4
 |---|---|---|---|---|
 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | GPT1 | [PR #1 preflight report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4` | APPROVED — two expected conflicts; 31 post-snapshot main commits are coordination-only; live compare 310 ahead / 72 behind. No branch sync or merge performed. |
 | FOLIO-20261121-PR1-RECONCILIATION-REFRESH-001 | GPT1 | [Refreshed preflight report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7060922140) | PR #1 `89780034...`; main source `c936bbfa...` | APPROVED — PASS WITH CONDITIONS; confirmed exact refs, two conflicts, all main-only preservation paths and GPT0 mandate boundaries |
+| FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | GPT2 | [Draft PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10) · [GPT2 report](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be` | APPROVED — technical candidate accepted with explicit source-fidelity exception for 82 intentional Markdown hard breaks; CI #480 passed; no merge/deploy |
+| FOLIO-20261121-PR10-CANDIDATE-QA-001 | GPT3 | [QA report](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be` | APPROVED — report complete; browser smoke NOT RUN because preview inaccessible; no browser pass claimed |
+| FOLIO-20261121-PR10-CANDIDATE-AUDIT-001 | GPT4 | [Independent audit](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be` | APPROVED — report verified; 22 paths and ancestry pass; whitespace exception and limitations documented |
 
 ## CEO route decision
 
