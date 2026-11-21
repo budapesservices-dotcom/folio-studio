@@ -39,6 +39,26 @@ class FakeDatabase {
   private readonly keyPaths = new Map<string, string>();
   private readonly putFailures = new Map<string, DOMException>();
   private nextReadwriteCompletionGate: { notifyStarted: () => void; wait: Promise<void> } | null = null;
+  private nextReadwriteCompletionEventGate: { notifyStarted: () => void; wait: Promise<void> } | null = null;
+
+  holdNextReadwriteCompletionEvent(): { entered: Promise<void>; release: () => void } {
+    if (this.nextReadwriteCompletionEventGate) {
+      throw new Error('A readwrite completion-event gate is already installed.');
+    }
+
+    let notifyEntered!: () => void;
+    let releaseGate!: () => void;
+    const entered = new Promise<void>((resolve) => { notifyEntered = resolve; });
+    const wait = new Promise<void>((resolve) => { releaseGate = resolve; });
+    this.nextReadwriteCompletionEventGate = { notifyStarted: notifyEntered, wait };
+    return { entered, release: releaseGate };
+  }
+
+  private takeReadwriteCompletionEventGate() {
+    const gate = this.nextReadwriteCompletionEventGate;
+    this.nextReadwriteCompletionEventGate = null;
+    return gate;
+  }
 
   holdNextReadwriteCompletion(): { entered: Promise<void>; release: () => void } {
     if (this.nextReadwriteCompletionGate) {
@@ -72,7 +92,8 @@ class FakeDatabase {
   transaction(_names: string | string[], mode: IDBTransactionMode): IDBTransaction {
     if (mode === 'readwrite') this.metrics.readwriteTransactions += 1;
     const completionGate = mode === 'readwrite' ? this.takeReadwriteCompletionGate() : null;
-    return new FakeTransaction(this, mode, completionGate) as unknown as IDBTransaction;
+    const completionEventGate = mode === 'readwrite' ? this.takeReadwriteCompletionEventGate() : null;
+    return new FakeTransaction(this, mode, completionGate, completionEventGate) as unknown as IDBTransaction;
   }
 
   keyPathFor(name: string): string {
@@ -115,12 +136,14 @@ class FakeTransaction {
   private pending = 0;
   private completionScheduled = false;
   private aborted = false;
+  private committed = false;
   private readonly pendingWrites: Array<() => void> = [];
 
   constructor(
     private readonly database: FakeDatabase,
     private readonly mode: IDBTransactionMode,
     private completionGate: { notifyStarted: () => void; wait: Promise<void> } | null = null,
+    private completionEventGate: { notifyStarted: () => void; wait: Promise<void> } | null = null,
   ) {}
 
   objectStore(name: string) {
@@ -159,6 +182,9 @@ class FakeTransaction {
   }
 
   abort(error = new DOMException('The transaction was aborted.', 'AbortError')): void {
+    if (this.committed) {
+      throw new DOMException('The transaction has already committed.', 'InvalidStateError');
+    }
     if (this.aborted) return;
     this.aborted = true;
     this.error = error;
@@ -228,9 +254,21 @@ class FakeTransaction {
       if (this.mode === 'readwrite') {
         const writes = this.pendingWrites.splice(0);
         writes.forEach((write) => {
+          // Apply writes to the actual fake object store before signalling the
+          // completion-event gate. This is the modeled durable-commit point.
           write();
           this.database.recordWriteCommitted();
         });
+        this.committed = true;
+
+        const completionEventGate = this.completionEventGate;
+        this.completionEventGate = null;
+        if (completionEventGate) {
+          // The records are already durable; only transaction.oncomplete is
+          // withheld. abort() must now behave as too-late / InvalidStateError.
+          completionEventGate.notifyStarted();
+          await completionEventGate.wait;
+        }
       }
       this.oncomplete?.call(this, new Event('complete'));
     });
@@ -834,6 +872,129 @@ describe('Main Canvas revision-fenced autosave', () => {
     )).rejects.toThrow('Simulated IndexedDB write failure.');
 
     expect((await loadProjectById(project.metadata.id))?.metadata.name).toBe('Durable before failure');
+  });
+
+  it('returns stale when canonical revision changes after durable commit but before completion notification', async () => {
+    const project = projectWithId(
+      'main-autosave-post-commit-event-race',
+      'Durable revision R-1',
+      '2026-11-21T03:40:00.000Z',
+    );
+    const store = createCanonicalEditorStore(createEditorState(project));
+    await saveProject(project, 0);
+
+    const candidateMutation = store.dispatchLegacyAction({
+      type: 'rename-project',
+      name: 'Canonical candidate revision R',
+    });
+    expect(candidateMutation.status).toBe('committed');
+    const revisionR = candidateMutation.snapshot.projectRevision;
+    const candidateR = candidateMutation.snapshot.editorState.project;
+
+    const database = fakeIndexedDB.database!;
+    const scheduledBefore = database.metrics.scheduledWrites;
+    const committedBefore = database.metrics.committedWrites;
+    const rolledBackBefore = database.metrics.rolledBackWrites;
+    const readwriteBefore = database.metrics.readwriteTransactions;
+    const completionEventGate = database.holdNextReadwriteCompletionEvent();
+
+    let saveStatus: 'saving' | 'saved' | 'error' = 'saving';
+    const statusHistory: string[] = ['saving'];
+    let notifyUiCallbackEntered!: () => void;
+    let releaseUiCallback!: () => void;
+    const uiCallbackEntered = new Promise<void>((resolve) => { notifyUiCallbackEntered = resolve; });
+    const uiCallbackGate = new Promise<void>((resolve) => { releaseUiCallback = resolve; });
+    let pendingSave: Promise<Awaited<ReturnType<typeof saveProjectIfRevisionCurrent>>> | undefined;
+
+    try {
+      pendingSave = saveProjectIfRevisionCurrent(
+        candidateR,
+        revisionR,
+        () => store.getSnapshot().projectRevision,
+        (listener) => store.subscribe(listener),
+      );
+
+      // This gate fires only after put has executed AND its staged write has
+      // been applied to the backing store. It withholds only oncomplete.
+      await completionEventGate.entered;
+      expect(database.metrics.readwriteTransactions).toBe(readwriteBefore + 1);
+      expect(database.metrics.scheduledWrites).toBe(scheduledBefore + 1);
+      expect(database.metrics.committedWrites).toBe(committedBefore + 1);
+      expect(database.metrics.rolledBackWrites).toBe(rolledBackBefore);
+      expect((await loadProjectById(project.metadata.id))?.metadata.name)
+        .toBe('Canonical candidate revision R');
+
+      const nextMutation = store.dispatchLegacyAction({
+        type: 'rename-project',
+        name: 'Canonical revision R+1',
+      });
+      expect(nextMutation.status).toBe('committed');
+      expect(nextMutation.snapshot.projectRevision).toBe(revisionR + 1);
+
+      // The persistence listener attempts invalidation, but the fake
+      // transaction models a completed durable commit: abort cannot undo it.
+      // The committed R record remains visible while oncomplete is withheld.
+      expect(database.metrics.rolledBackWrites).toBe(rolledBackBefore);
+      expect(database.metrics.committedWrites).toBe(committedBefore + 1);
+      expect((await loadProjectById(project.metadata.id))?.metadata.name)
+        .toBe('Canonical candidate revision R');
+
+      // The new revision has already moved the UI to saving. A delayed callback
+      // from revision R must not be able to announce that old snapshot as saved.
+      saveStatus = 'saving';
+      statusHistory.push('saving');
+      const lateUiCallback = pendingSave.then(async (result) => {
+        notifyUiCallbackEntered();
+        await uiCallbackGate;
+        if (result.status === 'saved') {
+          setRevisionFencedAutosaveStatus(
+            revisionR,
+            () => store.getSnapshot().projectRevision,
+            'saved',
+            (status) => { saveStatus = status; statusHistory.push(status); },
+          );
+        }
+      });
+
+      completionEventGate.release();
+      const resultR = await pendingSave;
+      expect(resultR).toEqual({ status: 'stale' });
+      await uiCallbackEntered;
+      releaseUiCallback();
+      await lateUiCallback;
+
+      expect(saveStatus).toBe('saving');
+      expect(statusHistory).toEqual(['saving', 'saving']);
+      // The old committed snapshot was not retroactively rolled back; this is
+      // the exact post-commit race that requires the final revision fence.
+      expect((await loadProjectById(project.metadata.id))?.metadata.name)
+        .toBe('Canonical candidate revision R');
+
+      const latest = store.getSnapshot();
+      const resultR1 = await saveProjectIfRevisionCurrent(
+        latest.editorState.project,
+        latest.projectRevision,
+        () => store.getSnapshot().projectRevision,
+        (listener) => store.subscribe(listener),
+      );
+      expect(resultR1).toEqual({ status: 'saved' });
+      setRevisionFencedAutosaveStatus(
+        latest.projectRevision,
+        () => store.getSnapshot().projectRevision,
+        'saved',
+        (status) => { saveStatus = status; statusHistory.push(status); },
+      );
+
+      expect(saveStatus).toBe('saved');
+      expect(statusHistory).toEqual(['saving', 'saving', 'saved']);
+      expect(database.metrics.committedWrites).toBe(committedBefore + 2);
+      expect((await loadProjectById(project.metadata.id))?.metadata.name)
+        .toBe('Canonical revision R+1');
+    } finally {
+      completionEventGate.release();
+      releaseUiCallback();
+      await pendingSave?.catch(() => undefined);
+    }
   });
 
   it('persists a Main Canvas candidate when its revision is still canonical', async () => {
