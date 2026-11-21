@@ -1,6 +1,6 @@
 # Folio Studio — GPT Team Coordination Protocol
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** ACTIVE — coordination protocol adopted after PR #8 merged; persistent recovery extension merged in PR #9
 **Repository:** budapesservices-dotcom/folio-studio
 **Team:** CEO + GPT0 + GPT1–GPT4
