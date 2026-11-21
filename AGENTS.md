@@ -6,6 +6,7 @@ These rules apply to every AI coding assistant and specialist agent working in t
 
 1. Read docs/coordination/AGENT_IDENTITY.md and identify your GPT role.
 2. Read docs/coordination/PROTOCOL.md.
+2a. If you are GPT0, read docs/coordination/GPT0_MANDATE.md before coordinating or dispatching work.
 3. Read docs/coordination/RECOVERY_PROTOCOL.md when restoring a new conversation.
 4. Read docs/coordination/TASK_BOARD.md.
 5. Read docs/coordination/AGENT_STATE.md as a navigation/status index.
