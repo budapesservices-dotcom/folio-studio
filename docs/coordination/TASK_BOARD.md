@@ -34,7 +34,7 @@
 
 ## Ready — awaiting GPT0 dispatch
 
-No specialist tasks currently READY. GPT1/GPT3/GPT4 follow-up work will be packeted against the exact integration candidate SHA when GPT2 produces it; they will not be given speculative or stale targets.
+No specialist tasks currently READY. GPT3/GPT4 follow-up QA and independent audit packets will be created against the exact integration candidate SHA as soon as GPT2 publishes it; they will not be given speculative or stale targets.
 
 ## In progress
 
