@@ -636,7 +636,7 @@ async function runAppAcceptance(browser) {
       'App New Component closes Component Rack',
       30000,
     );
-    const componentCanvasOpened = await browser.evaluate('!!document.querySelector("#component-canvas")');
+    const componentCanvasOpened = await browser.evaluate('!!document.querySelector("[data-window-id="component-canvas"]")');
     expect(componentCanvasOpened).toBe(true);
 
     await browser.click('.component-rack-header-toggle');
@@ -655,7 +655,7 @@ async function runAppAcceptance(browser) {
     const counts = await browser.evaluate(
       '({pages:document.querySelectorAll(".pages-rack-card").length,' +
       'components:document.querySelectorAll(".component-rack-card").length,' +
-      'main:!!document.querySelector("#main-canvas"),componentCanvas:!!document.querySelector("#component-canvas")})',
+      'main:!!document.querySelector("[data-window-id="main-canvas"]"),componentCanvas:!!document.querySelector("[data-window-id="component-canvas"]")})',
     );
     expect(counts.pages).toBeGreaterThanOrEqual(13);
     expect(counts.components).toBeGreaterThanOrEqual(12);
@@ -664,20 +664,20 @@ async function runAppAcceptance(browser) {
 
     // Clicking the real FloatingWindow title bars must continue to update shared window stacking.
     const stackBefore = await browser.evaluate(
-      '({main:Number(getComputedStyle(document.querySelector("#main-canvas")).zIndex),' +
-      'component:Number(getComputedStyle(document.querySelector("#component-canvas")).zIndex)})',
+      '({main:Number(getComputedStyle(document.querySelector("[data-window-id="main-canvas"]")).zIndex),' +
+      'component:Number(getComputedStyle(document.querySelector("[data-window-id="component-canvas"]")).zIndex)})',
     );
-    await browser.click('#component-canvas .workspace-toolbar-draggable');
+    await browser.click('[data-window-id="component-canvas"] .workspace-toolbar-draggable');
     const componentRaised = await browser.evaluate(
-      '({main:Number(getComputedStyle(document.querySelector("#main-canvas")).zIndex),' +
-      'component:Number(getComputedStyle(document.querySelector("#component-canvas")).zIndex)})',
+      '({main:Number(getComputedStyle(document.querySelector("[data-window-id="main-canvas"]")).zIndex),' +
+      'component:Number(getComputedStyle(document.querySelector("[data-window-id="component-canvas"]")).zIndex)})',
     );
     expect(componentRaised.component).toBeGreaterThan(componentRaised.main);
 
-    await browser.click('#main-canvas .workspace-toolbar-draggable');
+    await browser.click('[data-window-id="main-canvas"] .workspace-toolbar-draggable');
     const mainRaised = await browser.evaluate(
-      '({main:Number(getComputedStyle(document.querySelector("#main-canvas")).zIndex),' +
-      'component:Number(getComputedStyle(document.querySelector("#component-canvas")).zIndex)})',
+      '({main:Number(getComputedStyle(document.querySelector("[data-window-id="main-canvas"]")).zIndex),' +
+      'component:Number(getComputedStyle(document.querySelector("[data-window-id="component-canvas"]")).zIndex)})',
     );
     expect(mainRaised.main).toBeGreaterThan(mainRaised.component);
     expect(Number.isFinite(stackBefore.main)).toBe(true);
