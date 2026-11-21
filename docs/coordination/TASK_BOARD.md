@@ -27,7 +27,7 @@
 |---|---|---|---|---|---|
 | GPT4 | FOLIO-20261121-PR4-PR5-QA-001 | [PR #4 + #5 final independent QA](tasks/FOLIO-20261121-PR4-PR5-QA-001.md) | P0 | DISPATCHED | None |
 | GPT1 | FOLIO-20261121-PR7-DEPENDENCY-001 | [PR #7 dependency compatibility audit](tasks/FOLIO-20261121-PR7-DEPENDENCY-001.md) | P1 | DISPATCHED | None for read-only audit |
-| GPT3 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-001 | [PR #1 foundation audit](tasks/FOLIO-20261121-PR1-FOUNDATION-AUDIT-001.md) | P1 | READY | None for read-only audit |
+| GPT3 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-001 | [PR #1 foundation audit](tasks/FOLIO-20261121-PR1-FOUNDATION-AUDIT-001.md) | P1 | DISPATCHED | None for read-only audit |
 
 ## In progress
 
