@@ -4,13 +4,13 @@
 **Coordinator / editor:** GPT0  
 **Product-code baseline:** main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f  
 **PR #1 pinned main comparison snapshot:** 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1  
-**Overall status:** GPT1 main-reconciliation preflight APPROVED; GPT2 PR #1 reconciliation execution packet READY pending separate CEO branch-sync authorization; implementation held  
+**Overall status:** GPT1 refreshed preflight APPROVED; GPT2 produced draft PR #10 candidate `601bedfe...` with exact-head CI #480 passing; GPT3 QA and GPT4 independent audit DISPATCHED in parallel. PR #10 remains unmerged pending whitespace disposition and independent review.  
 **Last verified:** 2026-11-21, live GitHub inspection of task packets, PR metadata, comments and compare results
 **CEO-selected route:** retain PR #1 as common parent; reconcile main into it deliberately, then PR #4 → PR #5 → PR #7
 
 ## CEO summary
 
-The cycle's three specialist reports are now present on GitHub and their audited SHAs match the exact SHAs pinned in their task packets and current PR metadata.
+Earlier specialist audits of PR #1/#4/#5/#7 remain historical evidence for their exact pinned SHAs. The latest active foundation candidate is draft PR #10 at `601bedfeccae8ddaeda772139182d3c4a3a139be`; GPT1's refreshed preflight is approved, GPT2's candidate is in GPT0 review, and GPT3/GPT4 are now testing/auditing that exact SHA.
 
 | Workstream | Specialist verdict | Evidence | GPT0 disposition |
 |---|---|---|---|
@@ -18,6 +18,7 @@ The cycle's three specialist reports are now present on GitHub and their audited
 | PR #4 Native Command Core Phase 1 | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) | Preserve implementation; close QA gaps and combined integration |
 | PR #5 Workspace Window Management | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | Preserve implementation; close live drag/resize and harness gaps |
 | PR #7 Workspace Preferences V1 | **COMPATIBLE WITH CONDITIONS** — GPT1 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | Helper API compatible, but model/persistence adoption blocked; no sync |
+| PR #10 foundation reconciliation | **CANDIDATE — REVIEW PENDING** — GPT2 | [Draft PR and checkpoint](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) | Exact-head CI #480 passed; GPT3/GPT4 reviews dispatched; 82 trailing-space lines await audit disposition |
 
 All four PRs remain open and unmerged. PR #1 is draft and non-mergeable. None of the specialist verdicts is merge approval. GPT2's remediation reserve remains WAITING, and Native Commands Phase 2 is not authorized.
 
@@ -26,6 +27,7 @@ All four PRs remain open and unmerged. PR #1 is draft and non-mergeable. None of
 | PR | Live HEAD | Task-packet HEAD | Base / dependency | Verified state |
 |---|---|---|---|---|
 | #1 | `89780034f32b1809cc49640e83bac5c817d88a91` | Same | main; pinned comparison `8d8571cb13da23fb2f39c57cc3d34f556dbf10c1` | Match; open, draft, `mergeable=false` |
+| #10 | `601bedfeccae8ddaeda772139182d3c4a3a139be` | Same | `feat/canvas-pan-distribute` @ `89780034...` | Match; open, draft, unmerged; `mergeable=true`; two parents exact; CI #480 success |
 | #4 | `9730fdc02f5ee331c17de61c443a0f0d35782c56` | Same | PR #1 @ `89780034...` | Match; open, unmerged; CI #362 pass on exact head |
 | #5 | `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | Same | PR #1 @ `89780034...` | Match; open, unmerged; CI #360 pass on exact head |
 | #7 | `76eb40426059ed21ce93156c5065835ea3717467` | Same | old PR #5 base `b2d7e9045a150a49852b1f266f95b7424986b64d` | Match; open, unmerged; diverged from latest PR #5 |
@@ -33,6 +35,15 @@ All four PRs remain open and unmerged. PR #1 is draft and non-mergeable. None of
 The pinned PR #1 comparison remains 310 ahead / 41 behind. A fresh compare of PR #1 against current main is 310 ahead / 60 behind because main has advanced 19 commits since the pinned snapshot; a direct compare of 8d8571c... → main confirms every one of those 19 commits change only docs/coordination/**, so GPT3's product-code audit baseline remains valid.
 
 Additional live compare confirms PR #7 → latest PR #5 is DIVERGED: merge-base `b2d7e904...`, 23 commits on the PR #5 side and 4 commits on the PR #7 side. The report and task's no-synchronization condition agree.
+
+## Current checkpoint — 2026-11-21
+
+- GPT1 task `FOLIO-20261121-PR1-RECONCILIATION-REFRESH-001`: **APPROVED** by GPT0. Verdict PASS WITH CONDITIONS; exact refs, 310/93 comparison, two add/add conflicts, preservation paths, and GPT0 mandate boundaries were verified. Report: [PR #1 comment](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7060922140).
+- GPT2 task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001`: **READY_FOR_REVIEW**. Draft [PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10) is open against `feat/canvas-pan-distribute`, exact HEAD `601bedfeccae8ddaeda772139182d3c4a3a139be`. Commit has exactly two parents in order: PR #1 foundation `89780034...`, pinned main source `c936bbfa...`.
+- Exact-head GitHub Actions [run #480](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44892246093) succeeded: install, type-check, test, and production build. GPT2 did not run local npm commands or `git diff --check`; GitHub clone DNS was unavailable to its environment.
+- GPT2's patch inspection identified 82 added trailing-space lines in imported coordination Markdown files. The imported files are blob-identical to pinned main, but the required whitespace check was not executed. This remains unresolved and must be independently dispositioned before candidate approval.
+- GPT3 task `FOLIO-20261121-PR10-CANDIDATE-QA-001` and GPT4 task `FOLIO-20261121-PR10-CANDIDATE-AUDIT-001` are **DISPATCHED** in parallel against the same exact candidate SHA. GPT3 checks the existing preview and browser smoke; GPT4 audits ancestry, scope, rules, workflows and whitespace.
+- PR #10 is a review artifact, not a merge. PR #1/#4/#5/#7 remain untouched, open, and unmerged; no product integration or deployment was performed by GPT0.
 
 ## Audit findings and remaining gates
 
