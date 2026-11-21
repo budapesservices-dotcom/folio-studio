@@ -712,17 +712,22 @@ describe('Component Canvas deletion and recovery — actual App / Chromium / Ind
         expect(dialogState.dialog).toBe(true);
         expect(dialogState.initialFocused).toBe(true);
         expect(dialogState.backgroundInert).toBe(true);
-        const rackToggleBefore = await browser.evaluate(
-          'document.querySelector("button.component-rack-header-toggle")?.getAttribute("aria-pressed")',
+        const backgroundFocusAttempt = await browser.evaluate(
+          '(() => {const dialog=document.querySelector(".component-deletion-dialog");' +
+          'const button=document.querySelector("button.component-rack-header-toggle");' +
+          'if(!button)throw new Error("Background Component Rack toggle is missing");' +
+          'const rackPressedBefore=button.getAttribute("aria-pressed");button.focus();' +
+          'return {dialogOpen:!!dialog,activeIsBackground:document.activeElement===button,' +
+          'activeInsideDialog:!!dialog?.contains(document.activeElement),' +
+          'rackPressedBefore,rackPressedAfter:button.getAttribute("aria-pressed")};})()',
         );
-        expect(rackToggleBefore).toBe("true");
-        await browser.click("button.component-rack-header-toggle");
-        const backgroundClick = await browser.evaluate(
-          '({dialogOpen:!!document.querySelector(".component-deletion-dialog"),' +
-          'rackOpen:document.querySelector(".component-rack-panel")?.classList.contains("is-open"),' +
-          'rackPressed:document.querySelector("button.component-rack-header-toggle")?.getAttribute("aria-pressed")})',
-        );
-        expect(backgroundClick).toEqual({ dialogOpen: true, rackOpen: true, rackPressed: "true" });
+        expect(backgroundFocusAttempt).toEqual({
+          dialogOpen: true,
+          activeIsBackground: false,
+          activeInsideDialog: true,
+          rackPressedBefore: "true",
+          rackPressedAfter: "true",
+        });
         expect(dialogState.buttonTexts).toEqual([
           'Cancel',
           'Save buffer as a new component',
