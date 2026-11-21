@@ -16,20 +16,20 @@
 | Field | Value |
 |---|---|
 | Cycle ID | FOLIO-CYCLE-20261121-001 |
-| CEO objective | Execute controlled PR #1 main reconciliation; then refresh PR #4/#5 integration and PR #7 dependency gates |
+| CEO objective | PR #10 merged into the PR #1 foundation; preflight PR #4 base refresh, close exact autosave/IndexedDB QA gaps, then PR #5 and PR #7 |
 | Default branch | main |
 | Product-code baseline | 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
 | PR #1 pinned main comparison snapshot | 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
 | Last full PR #1 vs main comparison checkpoint | main @ `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a`: 310 ahead / 93 behind; merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`; shared changed paths only `AGENTS.md` and `.github/workflows/deploy.yml` |
-| CEO-selected integration route | Retain PR #1 as common parent; reconcile main into it after a specific preflight packet; then PR #4, PR #5, and PR #7 in order |
+| CEO-selected integration route | PR #10 merged as a two-parent commit into PR #1 foundation; keep PR #1 open/draft on main; refresh PR #4 first, then PR #5, then PR #7 |
 | Last reconciled | 2026-11-21 — GPT0 adopted standing delegation, refreshed main snapshot, dispatched GPT2; subsequent GPT0 tracking commits on main touch only docs/coordination/** |
 
 ## Dispatched — awaiting specialist chat wake signal
 
 | Agent | Task ID | Task packet | Pinned refs | Status |
 |---|---|---|---|---|
-No specialist tasks currently DISPATCHED. GPT3 and GPT4 have submitted their exact-candidate reports; see READY_FOR_REVIEW below.
+| GPT1 | FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002 | [FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002](tasks/FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002.md) | PR #1 foundation `d585bc3581aadd335cc4d6292a3d13cb2a650253`; PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56` | DISPATCHED — read-only preflight; wait for CEO MULAI in GPT1 chat |
 
 ## Ready — awaiting GPT0 dispatch
 
@@ -39,13 +39,14 @@ No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4
 
 | Agent | Task ID | Current note |
 |---|---|---|
-| GPT0 | FOLIO-CYCLE-20261121-001 | GPT1–GPT4 deliverables reviewed and task statuses approved; PR #10 technically accepted as a reconciliation candidate with source-fidelity exception; browser smoke limitation recorded |
+| GPT0 | FOLIO-CYCLE-20261121-001 | PR #10 merged to feature foundation at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; PR #1 head verified at same SHA; PR #4 preflight dispatched to GPT1; GPT2 implementation packet prepared but WAITING |
 
 ## Waiting / blocked
 
 | Agent | Task ID | Status | Blocker / dependency |
 |---|---|---|---|
-| GPT2 | FOLIO-20261121-PR4-PR5-REMEDIATION-RESERVE-001 | WAITING | No source/test work until GPT0 publishes a finding-specific revised packet with exact PR, branch, paths, base SHA and tests. Native Commands Phase 2 remains prohibited. |
+| GPT2 | FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-001 | WAITING | Await GPT1 preflight approval and GPT0 release; then sync PR #4 and close App autosave/native IndexedDB evidence gaps. Phase 2/3 prohibited. |
+| GPT2 | FOLIO-20261121-PR4-PR5-REMEDIATION-RESERVE-001 | SUPERSEDED / WAITING | Replaced by the narrower finding-specific PR #4 packet above; do not start this old reserve. |
 
 ## Ready for GPT0 review
 
@@ -69,7 +70,21 @@ No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4
 
 ## CEO route decision
 
-**DECIDED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. Do not recreate/split the foundation at this stage. GPT2 has completed the main→PR #1 reconciliation candidate in draft [PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10), SHA `601bedfe...`; exact-head CI passed. GPT1 preflight is APPROVED. GPT3 reports PASS WITH CONDITIONS (browser QA NOT RUN because the preview host is inaccessible); GPT4 reports APPROVE WITH CONDITIONS (82 intentional Markdown hard-break lines mean standard `git diff --check` would flag them). GPT0 preserves the imported main files byte-identically and records a narrow source-fidelity exception; do not claim diff-check passed. PR #10 is not yet approved for merge because browser smoke remains unverified and the CEO retains the product-branch merge decision. Next sequence remains PR #4 QA/remediation, PR #4 integration, PR #5 integration, then PR #7 last. See `AGENT_REPORTS.md` for the ordered gate sequence.
+**EXECUTED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. CEO authorized PR #10 merge; GitHub confirms PR #10 was merged by a two-parent merge commit `d585bc3581aadd335cc4d6292a3d13cb2a650253`. PR #1 remains open/draft/unmerged against `main`; its feature head is now `d585bc3581aadd335cc4d6292a3d13cb2a650253`. Exact-head CI run [#503](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44896423953) passed.
+
+**Deployment caveat:** `.github/workflows/deploy.yml` has a push trigger for `feat/canvas-pan-distribute`. The merge push can therefore have triggered GitHub Pages deployment. The available workflow-run inspection exposed the CI run, but did not verify the separate Pages deployment run or its final status. Do not claim that no deployment occurred.
+
+**Next sequence:** GPT1 read-only preflight of PR #4 base refresh → GPT2 (only after GPT1 approval and GPT0 release) merge-sync PR #4 and close App-mounted 450 ms autosave / native-browser IndexedDB findings → GPT4 exact-head QA/browser acceptance → PR #5 base refresh and combined App/CSS integration → PR #7 last. PR #5/#7 are not synchronized. Native Commands Phase 2/3 remain prohibited.
+
+## Current post-merge checkpoint — 2026-11-21
+
+- PR #10 is CLOSED/MERGED into `feat/canvas-pan-distribute`; merge commit and current PR #1 feature head: `${merge}`.
+- PR #1 is still OPEN/DRAFT/UNMERGED to `main`; no main merge was performed.
+- PR #4: branch `feat/native-command-core-phase1`, HEAD `${pr4}`; PR #5: branch `feat/workspace-window-management`, HEAD `${pr5}`; PR #7 remains stacked on the older PR #5 base. No child PR branch or base was changed.
+- Compare foundation `${merge}` → PR #4 `${pr4}`: DIVERGED, PR #4 side 98 ahead / foundation side 95 ahead, merge-base `89780034f32b1809cc49640e83bac5c817d88a91`. PR #10 and PR #4 changed-path intersection is empty. PR #5 is also DIVERGED from the foundation (26 ahead / 95 behind, same merge-base).
+- PR #4 and PR #5 continue to share `src/app/App.tsx` and `src/styles/global.css`; preserve PR #4-first ordering.
+- GPT1 packet is DISPATCHED; GPT2 packet is published WAITING. See the exact task files above.
+- CI #503 succeeded on merge commit `${merge}`. GitHub Pages deployment status is unverified because the deploy workflow's push trigger matches this merge and the available connector could not enumerate that separate run.
 
 ## Reconciliation facts
 
