@@ -23,13 +23,13 @@
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
 | Last full PR #1 vs main comparison checkpoint | main @ `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a`: 310 ahead / 93 behind; merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`; shared changed paths only `AGENTS.md` and `.github/workflows/deploy.yml` |
 | CEO-selected integration route | PR #10 merged as a two-parent commit into PR #1 foundation; keep PR #1 open/draft on main; refresh PR #4 first, then PR #5, then PR #7 |
-| Last reconciled | 2026-11-21 — PR #10 merged into the feature foundation at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; GPT1 PR #4 preflight dispatched; GPT2 remediation packet published WAITING |
+| Last reconciled | 2026-11-21 — PR #10 and deploy workflow repair are on the feature foundation at `edb0cc155d87c7580e6d5713935b873402a5182f`; Pages run #63 and CI #518 succeeded; GPT0 completed fresh PR #4 preflight; GPT2 acceptance packet 002 DISPATCHED |
 
 ## Dispatched — awaiting specialist chat wake signal
 
 | Agent | Task ID | Task packet | Pinned refs | Status |
 |---|---|---|---|---|
-| GPT1 | FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002 | [FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002](tasks/FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002.md) | PR #1 foundation `d585bc3581aadd335cc4d6292a3d13cb2a650253`; PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56` | DISPATCHED — read-only preflight; wait for CEO MULAI in GPT1 chat |
+| GPT2 | FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002 | [FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002](tasks/FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002.md) | PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56`; foundation `edb0cc155d87c7580e6d5713935b873402a5182f` | DISPATCHED — GPT0 preflight APPROVE WITH CONDITIONS; implementation + safe two-parent base refresh |
 
 ## Ready — awaiting GPT0 dispatch
 
@@ -39,14 +39,12 @@ No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4
 
 | Agent | Task ID | Current note |
 |---|---|---|
-| GPT0 | FOLIO-CYCLE-20261121-001 | PR #10 merged to feature foundation at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; PR #1 head verified at same SHA; PR #4 preflight dispatched to GPT1; GPT2 implementation packet prepared but WAITING |
+| GPT0 | FOLIO-CYCLE-20261121-001 | PR #10 merged, deploy workflow repaired and Pages run #63 verified; fresh PR #4 preflight posted; GPT2 packet 002 dispatched |
+| GPT2 | FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002 | Base refresh and App-mounted autosave/native IndexedDB acceptance on PR #4; exact refs pinned in task packet |
 
 ## Waiting / blocked
 
-| Agent | Task ID | Status | Blocker / dependency |
-|---|---|---|---|
-| GPT2 | FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-001 | WAITING | Await GPT1 preflight approval and GPT0 release; then sync PR #4 and close App autosave/native IndexedDB evidence gaps. Phase 2/3 prohibited. |
-| GPT2 | FOLIO-20261121-PR4-PR5-REMEDIATION-RESERVE-001 | SUPERSEDED / WAITING | Replaced by the narrower finding-specific PR #4 packet above; do not start this old reserve. |
+No active specialist task is waiting on a technical dependency. GPT3 QA and GPT4 independent audit will be dispatched after GPT2 submits the exact-head implementation report.
 
 ## Ready for GPT0 review
 
@@ -76,7 +74,15 @@ No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4
 
 **Next sequence:** GPT1 read-only preflight of PR #4 base refresh → GPT2 (only after GPT1 approval and GPT0 release) merge-sync PR #4 and close App-mounted 450 ms autosave / native-browser IndexedDB findings → GPT4 exact-head QA/browser acceptance → PR #5 base refresh and combined App/CSS integration → PR #7 last. PR #5/#7 are not synchronized. Native Commands Phase 2/3 remain prohibited.
 
-## Current post-merge checkpoint — 2026-11-21
+## Latest checkpoint — 2026-11-21, PR #4 preflight and GPT2 release
+
+- Current foundation `feat/canvas-pan-distribute`: `edb0cc155d87c7580e6d5713935b873402a5182f`. PR #1 remains OPEN / DRAFT / unmerged to `main`.
+- PR #4 `feat/native-command-core-phase1`: `9730fdc02f5ee331c17de61c443a0f0d35782c56`, OPEN / unmerged.
+- Exact compare foundation `edb0cc1...` → PR #4 `9730fdc...`: DIVERGED 98 / 96, merge-base `89780034f32b1809cc49640e83bac5c817d88a91`; GitHub reports `mergeable=true`, `mergeable_state=clean`.
+- Foundation delta 21 paths vs PR #4 26 paths; intersection empty. GPT0's read-only preflight report: https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061699937.
+- PR #4 / PR #5 intersection remains exactly `src/app/App.tsx` and `src/styles/global.css`; PR #5 remains at `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`, unsynchronized. PR #7 remains at `76eb40426059ed21ce93156c5065835ea3717467`, stacked on the older PR #5 base.
+- GPT1's previous preflight packet 002 was superseded because it pinned the old foundation `d585bc3...`. GPT0 performed and posted a fresh exact-ref read-only preflight instead.
+- GPT2 packet `FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002` is DISPATCHED against the exact new foundation and PR #4 refs. Its scope is limited to the two-parent base refresh and approved App autosave/native IndexedDB work. No PR merge, deployment, PR #5/#7 sync, or Native Commands Phase 2/3 is authorized.
 
 ## GPT0 deployment workflow repair — CEO authorized
 
@@ -89,10 +95,10 @@ Applied on `feat/canvas-pan-distribute`:
 - PR #1 remains open/draft/unmerged to `main`.
 
 The expected automatic push workflows have been created for this exact commit:
-- [Deploy FOLIO Studio run #63](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298913) — currently in progress at last check.
+- [Deploy FOLIO Studio run #63](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298913) — SUCCESS; build, artifact upload and deploy all completed.
 - [FOLIO verification run #518](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298951) — currently in progress at last check.
 
-Do not call deployment successful until run #63 completes successfully and, ideally, the GitHub Pages deployment URL/status is verified.
+Deployment success was verified from the completed run #63 and its environment URL.
 
 
 - PR #10 is CLOSED/MERGED into `feat/canvas-pan-distribute`; merge commit and current PR #1 feature head: `${merge}`.
