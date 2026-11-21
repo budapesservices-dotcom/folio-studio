@@ -667,14 +667,14 @@ async function runAppAcceptance(browser) {
       '({main:Number(getComputedStyle(document.querySelector("[data-window-id=main-canvas]")).zIndex),' +
       'component:Number(getComputedStyle(document.querySelector("[data-window-id=component-canvas]")).zIndex)})',
     );
-    await browser.click('[data-window-id=component-canvas] .workspace-toolbar-draggable');
+    await browser.click('[data-window-id=component-canvas] .workspace-toolbar');
     const componentRaised = await browser.evaluate(
       '({main:Number(getComputedStyle(document.querySelector("[data-window-id=main-canvas]")).zIndex),' +
       'component:Number(getComputedStyle(document.querySelector("[data-window-id=component-canvas]")).zIndex)})',
     );
     expect(componentRaised.component).toBeGreaterThan(componentRaised.main);
 
-    await browser.click('[data-window-id=main-canvas] .workspace-toolbar-draggable');
+    await browser.click('[data-window-id=main-canvas] .workspace-toolbar');
     const mainRaised = await browser.evaluate(
       '({main:Number(getComputedStyle(document.querySelector("[data-window-id=main-canvas]")).zIndex),' +
       'component:Number(getComputedStyle(document.querySelector("[data-window-id=component-canvas]")).zIndex)})',
