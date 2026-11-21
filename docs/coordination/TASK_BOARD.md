@@ -29,18 +29,18 @@
 
 | Agent | Task ID | Task packet | Pinned refs | Status |
 |---|---|---|---|---|
-| GPT2 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | [Execution packet](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main source `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a` | DISPATCHED — GPT0 authorized scoped branch synchronization under CEO delegation; GPT2 chat wake signal pending |
-| GPT1 | FOLIO-20261121-PR1-RECONCILIATION-REFRESH-001 | [Refresh preflight](tasks/FOLIO-20261121-PR1-RECONCILIATION-REFRESH-001.md) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main source `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a` | DISPATCHED — independent read-only refresh; GPT1 chat wake signal pending; runs parallel with GPT2 |
+| GPT3 | FOLIO-20261121-PR10-CANDIDATE-QA-001 | [PR #10 candidate QA](tasks/FOLIO-20261121-PR10-CANDIDATE-QA-001.md) | PR #10 candidate `601bedfeccae8ddaeda772139182d3c4a3a139be` | DISPATCHED — read-only QA and browser smoke on existing preview; GPT3 chat wake signal pending |
+| GPT4 | FOLIO-20261121-PR10-CANDIDATE-AUDIT-001 | [PR #10 candidate audit](tasks/FOLIO-20261121-PR10-CANDIDATE-AUDIT-001.md) | PR #10 candidate `601bedfeccae8ddaeda772139182d3c4a3a139be` | DISPATCHED — independent ancestry/scope/policy/whitespace audit; GPT4 chat wake signal pending |
 
 ## Ready — awaiting GPT0 dispatch
 
-No specialist tasks currently READY. GPT3/GPT4 follow-up QA and independent audit packets will be created against the exact integration candidate SHA as soon as GPT2 publishes it; they will not be given speculative or stale targets.
+No specialist tasks currently READY. GPT3 and GPT4 have now been dispatched against the exact PR #10 candidate SHA; their scopes are independent and read-only.
 
 ## In progress
 
 | Agent | Task ID | Current note |
 |---|---|---|
-| GPT0 | FOLIO-CYCLE-20261121-001 | GPT0 mandate published; GPT2 PR #1 reconciliation task DISPATCHED against refreshed exact refs; no product branch changes yet |
+| GPT0 | FOLIO-CYCLE-20261121-001 | GPT0 mandate active; GPT1 preflight approved; GPT2 produced draft PR #10 candidate; GPT3 QA and GPT4 independent audit DISPATCHED against exact candidate SHA |
 
 ## Waiting / blocked
 
@@ -55,6 +55,7 @@ No specialist tasks currently READY. GPT3/GPT4 follow-up QA and independent audi
 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | GPT3 | [PR #1 audit report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main comparison snapshot `8d8571cb13da23fb2f39c57cc3d34f556dbf10c1` | READY_FOR_REVIEW — report and packet match; verdict NOT READY |
 | FOLIO-20261121-PR4-PR5-QA-001 | GPT4 | [PR #4 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) · [PR #5 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; both base PR #1 `89780034f32b1809cc49640e83bac5c817d88a91` | READY_FOR_REVIEW — both reports and exact heads match; both verdicts READY WITH CONDITIONS |
 | FOLIO-20261121-PR7-DEPENDENCY-001 | GPT1 | [PR #7 dependency audit](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | PR #7 `76eb40426059ed21ce93156c5065835ea3717467`; PR #5 dependency HEAD `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | READY_FOR_REVIEW — report and exact heads match; verdict COMPATIBLE WITH CONDITIONS |
+| FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | GPT2 | [Draft PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10) · [GPT2 checkpoint](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be`; parents `89780034...` + `c936bbfa...` | READY_FOR_REVIEW — exact-head CI #480 passed; diff-check and whitespace condition pending independent audit |
 
 ## Approved by GPT0
 
@@ -63,10 +64,11 @@ No specialist tasks currently READY. GPT3/GPT4 follow-up QA and independent audi
 | Task ID | Agent | Evidence | Verified refs | Disposition |
 |---|---|---|---|---|
 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | GPT1 | [PR #1 preflight report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4` | APPROVED — two expected conflicts; 31 post-snapshot main commits are coordination-only; live compare 310 ahead / 72 behind. No branch sync or merge performed. |
+| FOLIO-20261121-PR1-RECONCILIATION-REFRESH-001 | GPT1 | [Refreshed preflight report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7060922140) | PR #1 `89780034...`; main source `c936bbfa...` | APPROVED — PASS WITH CONDITIONS; confirmed exact refs, two conflicts, all main-only preservation paths and GPT0 mandate boundaries |
 
 ## CEO route decision
 
-**DECIDED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. Do not recreate/split the foundation at this stage. First execute the controlled main→PR #1 reconciliation on a dedicated task branch, preserving main's GPT coordination protocol and combining the product-specific AGENTS guidance plus deploy workflow. GPT2 is now DISPATCHED; GPT0's mandate removes the former duplicate CEO-authorization gate for this scoped branch work. Next, refresh child PR bases and close PR #4 QA gaps before PR #5; PR #7 remains last. See `AGENT_REPORTS.md` for the ordered gate sequence.
+**DECIDED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. Do not recreate/split the foundation at this stage. GPT2 has completed the main→PR #1 reconciliation candidate in draft [PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10), SHA `601bedfe...`; exact-head CI passed. GPT1's refreshed preflight is APPROVED. GPT3 QA and GPT4 audit are now DISPATCHED in parallel. PR #10 must not merge until both reviews and the whitespace condition are resolved. The subsequent sequence remains PR #4 QA/remediation, PR #4 integration, PR #5 integration, then PR #7 last. See `AGENT_REPORTS.md` for the ordered gate sequence.
 
 ## Reconciliation facts
 
