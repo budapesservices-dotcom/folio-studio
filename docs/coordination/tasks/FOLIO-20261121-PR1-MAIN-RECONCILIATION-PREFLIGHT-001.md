@@ -4,7 +4,7 @@
 **Task ID:** FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001  
 **Assigned agent:** GPT1 — Architect / Preflight  
 **Mode:** READ-ONLY / INTEGRATION PREFLIGHT  
-**Status:** READY — awaiting GPT0 dispatch and CEO start signal  
+**Status:** DISPATCHED — awaiting CEO MULAI/LAKSANAKAN signal  
 **Priority:** P0  
 **Cycle ID:** FOLIO-CYCLE-20261121-001
 
