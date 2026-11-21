@@ -18,8 +18,8 @@
 | CEO objective | Repository and PR reconciliation; independent audit before any implementation |
 | Default branch | main |
 | Baseline SHA at cycle start | 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
-| Main comparison tip at dispatch | fe77c47be8f15ffdd45ed5d37a4603a6e824c94f |
-| Coordination packet publication | main, after baseline capture |
+| Main comparison snapshot pinned for PR #1 audit | 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
+| Latest coordination-only packet publication | 1a77debc5baa8bc413f8e798c0230fd8aa93ebc5 |
 | Last updated | 2026-11-21 |
 
 ## Dispatched — awaiting CEO start signal
@@ -28,20 +28,19 @@
 |---|---|---|---|---|---|
 | GPT4 | FOLIO-20261121-PR4-PR5-QA-001 | [PR #4 + #5 final independent QA](tasks/FOLIO-20261121-PR4-PR5-QA-001.md) | P0 | DISPATCHED | None |
 | GPT1 | FOLIO-20261121-PR7-DEPENDENCY-001 | [PR #7 dependency compatibility audit](tasks/FOLIO-20261121-PR7-DEPENDENCY-001.md) | P1 | DISPATCHED | None for read-only audit |
-
+| GPT3 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | [PR #1 foundation audit — rebased packet](tasks/FOLIO-20261121-PR1-FOUNDATION-AUDIT-002.md) | P1 | DISPATCHED | None; refreshed baseline pinned in task |
 
 ## In progress
 
 | Agent | Task ID | Accepted | Current note |
 |---|---|---|---|
-| — | — | — | No specialist has accepted the new-cycle tasks yet |
+| — | — | — | Awaiting CEO MULAI/LAKSANAKAN signals for dispatched tasks |
 
 ## Waiting / blocked
 
 | Agent | Task ID | Status | Blocker / dependency |
 |---|---|---|---|
 | GPT2 | FOLIO-20261121-PR4-PR5-REMEDIATION-RESERVE-001 | WAITING | Must wait for GPT4 final QA and GPT0's finding-specific revised packet; no implementation or Phase 2 authorization |
-| GPT3 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-001 | BLOCKED | GPT3 completion reported in chat, but PR #1 contains no audit report/review; save durable findings to PR #1 before GPT0 can review |
 
 ## Ready for GPT0 review
 
@@ -54,6 +53,12 @@
 | Task ID | Agent | Status | Evidence |
 |---|---|---|---|
 | Previous-cycle implementation tasks | GPT1–GPT4 | Historical checkpoints only; not newly re-verified in this cycle | PR #4 HEAD 9730fdc; PR #5 HEAD a8b2818; PR #7 HEAD 76eb404 |
+
+## Superseded task history
+
+| Task ID | Agent | Status | Reason / replacement |
+|---|---|---|---|
+| FOLIO-20261121-PR1-FOUNDATION-AUDIT-001 | GPT3 | SUPERSEDED | Main comparison snapshot and divergence figures were stale; no durable audit report was published. Replaced by [task 002](tasks/FOLIO-20261121-PR1-FOUNDATION-AUDIT-002.md) |
 
 ---
 
