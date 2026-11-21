@@ -1,67 +1,53 @@
 # Folio Studio — Agent Reports (CEO Dashboard)
 
-**Purpose:** one concise, repository-backed status page for the CEO.  
-**Coordinator / editor:** GPT0 only.  
-**Protocol:** [GPT Team Coordination Protocol](PROTOCOL.md)  
-**Task queue:** [Task Board](TASK_BOARD.md)  
-**Task files:** [Task folder](tasks/README.md)
+**Cycle:** FOLIO-CYCLE-20261121-001  
+**Coordinator / editor:** GPT0  
+**Baseline:** main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f  
+**Overall status:** INDEPENDENT AUDITS DISPATCHED — implementation held  
+**Last verified:** 2026-11-21, live GitHub inspection
 
-> Specialists put technical evidence in their assigned GitHub PR/Issue. GPT0 verifies it and updates this file. GPT1–GPT4 must not edit it directly.
+## CEO summary
 
-## Current work cycle
+The repository is accessible and the coordination/recovery protocol is now present on main (PR #8 and PR #9 merged). PR #1, #4, #5 and #7 remain open/unmerged. PR #1 is the common parent for PR #4/#5 but is draft, currently non-mergeable, and diverged from current main. PR #7 is stacked on an older PR #5 commit and has diverged from current PR #5.
 
-| Field | Value |
-|---|---|
-| Cycle ID | Not started |
-| Current focus | Awaiting CEO instruction |
-| Overall status | NOT_STARTED |
-| Last verified | Not started |
-| Default branch / baseline SHA | To be verified by GPT0 |
+No merge, deployment, source-code edit, test edit, or Phase 2 work was performed by GPT0 in this cycle.
 
-## Specialist status
+## Verified repository and PR state
 
-| Agent | Role | Task ID | Status | Task file / evidence | Short result |
-|---|---|---|---|---|---|
-| GPT1 | Architect / Preflight | — | NOT_ASSIGNED | — | — |
-| GPT2 | Engineer | — | NOT_ASSIGNED | — | — |
-| GPT3 | QA / UI / Regression | — | NOT_ASSIGNED | — | — |
-| GPT4 | Independent Auditor | — | NOT_ASSIGNED | — | — |
+| Area | Current evidence | GPT0 status |
+|---|---|---|
+| main | 49761cd8ca0cd719beb9b84a6becc03dbd2b431f at cycle start | Baseline captured |
+| PR #1 | Open, draft, head 89780034f32b1809cc49640e83bac5c817d88a91; base main at cce72029e35b902c2ccd1644ec762d269c7ff97e | Audit required; 310 ahead / 17 behind current main; mergeable=false |
+| PR #4 | Open, unmerged, head 9730fdc02f5ee331c17de61c443a0f0d35782c56; base feat/canvas-pan-distribute @ 89780034f32b1809cc49640e83bac5c817d88a91 | CI #362 success: 238 tests / 16 files; final independent QA dispatched |
+| PR #5 | Open, unmerged, head a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900; same base 89780034f32b1809cc49640e83bac5c817d88a91 | CI #360 success: 141 tests / 12 files; actual Preact + fixture Chromium test ran; final independent QA dispatched |
+| PR #7 | Open, unmerged, head 76eb40426059ed21ce93156c5065835ea3717467; old base b2d7e9045a150a49852b1f266f95b7424986b64d | CI #331 success historically; branch diverged from current PR #5 (4 commits ahead / 23 behind); dependency audit dispatched |
+| PR #2/#3/#6/#8/#9 | Closed and merged | Prior milestones retained |
 
-## Verified results
+## Principal risks
 
-_No specialist result has been verified in this report yet._
+1. PR #1 is not yet an accepted parent integration. It is 17 commits behind current main and GitHub says mergeable=false. Its additions overlap newer main coordination files created by merged PR #8/#9.
+2. PR #4/#5 depend on PR #1's unmerged head. Their green CI validates their own feature branch snapshots, not final integration with main.
+3. PR #7 is stacked on old PR #5 HEAD b2d7e904... and diverges from latest PR #5 HEAD a8b28182...; no rebase/retarget is authorized.
+4. PR #1 lacks verified PR-triggered CI and full browser acceptance evidence in the current inspection. Cloudflare deployment success is not acceptance.
+5. PR #4 browser preview and PR #5 full release acceptance remain independent from successful automated CI.
 
-| Task ID | Agent | Verified status | Result | Tests / CI | Evidence |
-|---|---|---|---|---|---|
-| — | — | — | — | — | — |
+## Specialist work queue
 
-## Blockers and risks
-
-_None recorded._
-
-| Severity | Task ID | Blocker / risk | Owner | Next action |
+| Agent | Task | Status | Evidence destination | Dependency |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| GPT4 | FOLIO-20261121-PR4-PR5-QA-001 | DISPATCHED | PR #4 and PR #5 comments | None; audit both exact SHAs independently |
+| GPT1 | FOLIO-20261121-PR7-DEPENDENCY-001 | DISPATCHED | PR #7 comment | None for read-only analysis; PR #5 release gate still blocks sync |
+| GPT3 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-001 | DISPATCHED | PR #1 comment | None; audit must precede integration decision |
+| GPT2 | FOLIO-20261121-PR4-PR5-REMEDIATION-RESERVE-001 | WAITING | PR #4/#5 only after explicit reauthorization | GPT4 findings + GPT0 revised packet |
 
-## Decisions needed from CEO
+## Integration sequence recommended
 
-_None recorded._
+1. Complete independent read-only audits: GPT4 on PR #4/#5, GPT3 on PR #1, and GPT1 on PR #7. These tasks do not modify code and have separate evidence destinations.
+2. GPT0 reconciles the three audit reports and determines whether PR #1 is an acceptable parent foundation and how to resolve its divergence from current main.
+3. Only after GPT4 findings are reviewed may GPT2 receive a narrow, finding-specific implementation packet. Phase 2 remains prohibited.
+4. Once PR #1 integration strategy and PR #4/#5 release gates are approved, sequence parent integration before dependent child PRs.
+5. Reconcile/rebase PR #7 only after PR #5 is accepted and GPT0 explicitly authorizes the exact operation.
 
-| Decision | Why it matters | Recommendation | Required by |
-|---|---|---|---|
-| — | — | — | — |
+## CEO action
 
-## Next actions
-
-_To be filled by GPT0 after inspecting the repository and Task Board._
-
----
-
-## Update rules
-
-1. GPT0 updates this dashboard after verifying specialist evidence, not merely after receiving a chat message saying SELESAI.
-2. Keep one current status row per task and link its task file plus GitHub evidence.
-3. APPROVED requires GPT0 to check the acceptance criteria and evidence.
-4. MERGED requires a confirmed GitHub merge and CEO authorization.
-5. Do not paste long logs or diffs here; keep this report executive-readable.
-6. GPT0 is the sole editor. Specialists must not create parallel copies or edit this file.
+Start GPT4, GPT3 and GPT1 using MULAI in their respective specialist conversations. Do not start GPT2; GPT2 is WAITING. When a specialist accepts or finishes, send GPT0 only the one-line agent/task signal. No merge/deploy decision is requested in this cycle.
