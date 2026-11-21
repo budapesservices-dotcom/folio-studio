@@ -414,7 +414,10 @@ function installNativeDeletionProbeSource() {
   const phaseFor = (project) => {
     if (!project || typeof project !== 'object') return null;
     if (project.metadata?.id === 'folio-component-canvas') {
-      return getNodes(project).length === 0 ? 'cleanup' : null;
+      // A clean Component Canvas can autosave an empty buffer before the user
+      // requests deletion. Only call an empty-buffer put "cleanup" after the
+      // canonical deletion transaction has durably completed.
+      return probe.canonicalDeletionCommitted && getNodes(project).length === 0 ? 'cleanup' : null;
     }
     if (!Array.isArray(project.components) || !probe.masterId) return null;
     const hasMaster = project.components.some((component) => component.id === probe.masterId);
@@ -452,6 +455,9 @@ function installNativeDeletionProbeSource() {
       probe.writes.push(entry);
       const transaction = this.transaction;
       transaction.addEventListener('complete', () => {
+        if (phase === 'deletion' || phase === 'plain-deletion') {
+          probe.canonicalDeletionCommitted = true;
+        }
         probe.events.push({ phase, event: 'complete', projectId: entry.projectId });
       }, { once: true });
       transaction.addEventListener('abort', () => {
@@ -480,7 +486,8 @@ async function armNativeDeletionProbe(browser, masterId, masterName, abortPhase 
   return browser.evaluate(
     '(() => { const p=window.__folioComponentRecoveryProbe; if(!p)throw new Error("Native deletion probe is not installed");' +
     'p.masterId=' + JSON.stringify(masterId) + ';p.masterName=' + JSON.stringify(masterName) + ';' +
-    'p.abortPhase=' + JSON.stringify(abortPhase) + ';p.tracking=true;p.writes=[];p.events=[];p.triggerErrors=[];return true;})()',
+    'p.abortPhase=' + JSON.stringify(abortPhase) + ';p.canonicalDeletionCommitted=false;' +
+    'p.tracking=true;p.writes=[];p.events=[];p.triggerErrors=[];return true;})()',
   );
 }
 
