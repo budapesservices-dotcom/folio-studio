@@ -28,7 +28,6 @@
 |---|---|---|---|---|---|
 | GPT4 | FOLIO-20261121-PR4-PR5-QA-001 | [PR #4 + #5 final independent QA](tasks/FOLIO-20261121-PR4-PR5-QA-001.md) | P0 | DISPATCHED | None |
 | GPT1 | FOLIO-20261121-PR7-DEPENDENCY-001 | [PR #7 dependency compatibility audit](tasks/FOLIO-20261121-PR7-DEPENDENCY-001.md) | P1 | DISPATCHED | None for read-only audit |
-| GPT3 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | [PR #1 foundation audit — rebased packet](tasks/FOLIO-20261121-PR1-FOUNDATION-AUDIT-002.md) | P1 | DISPATCHED | None; refreshed baseline pinned in task |
 
 ## In progress
 
@@ -46,7 +45,7 @@
 
 | Task ID | Agent | Evidence PR / Issue | Submitted SHA | Review status |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | GPT3 | [PR #1 audit comment](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | `89780034f32b1809cc49640e83bac5c817d88a91` | READY_FOR_REVIEW — verdict NOT READY; GPT0 validation pending |
 
 ## Recently verified
 
