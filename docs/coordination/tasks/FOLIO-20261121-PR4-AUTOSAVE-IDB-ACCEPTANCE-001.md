@@ -4,7 +4,7 @@
 **Task ID:** FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-001  
 **Assigned agent:** GPT2 — Engineer  
 **Mode:** IMPLEMENTATION  
-**Status:** WAITING  
+**Status:** SUPERSEDED  
 **Priority:** P1  
 **Cycle ID:** FOLIO-CYCLE-20261121-001
 
@@ -96,3 +96,8 @@ Do not start while WAITING. Do not merge PR #4, PR #5, PR #7, or PR #1. Do not d
 Start: DITERIMA — FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-001 — mulai dikerjakan.  
 Finish: SELESAI — FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-001 — PR #4 COMMENT LINK — menunggu GPT0.  
 Blocker: BLOCKED — FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-001 — ONE-LINE BLOCKER.
+
+
+## Superseded by refreshed exact-ref packet — 2026-11-21
+
+This packet pinned the former foundation target `d585bc3581aadd335cc4d6292a3d13cb2a650253`. The CEO-authorized deployment workflow repair advanced the foundation to `edb0cc155d87c7580e6d5713935b873402a5182f`. Do not execute this packet. It is replaced by [FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002](FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002.md), which is DISPATCHED against the refreshed refs. GPT0's preflight report: https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061699937.
