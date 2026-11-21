@@ -973,7 +973,11 @@ describe('Component Canvas deletion and recovery — actual App / Chromium / Ind
         );
 
         const cleanName = await createComponentMaster(browser);
-        const cleanState = await readNativeProjects(browser);
+        const cleanState = await waitForNativeProjects(
+          browser,
+          (value) => value.root.components.some((component) => component.name === cleanName),
+          'new clean active master is durably present in the root project',
+        );
         const cleanMaster = cleanState.root.components.find((component) => component.name === cleanName);
         expect(cleanMaster).toBeTruthy();
         expect(cleanMaster.nodeCount).toBe(0);
