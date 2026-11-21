@@ -20,7 +20,7 @@
 
 | Agent | Role | Activation | Current task | Task status | Working branch / PR / Issue | Latest durable checkpoint | Next action / blocker | Last updated |
 |---|---|---|---|---|---|---|---|---|
-| GPT0 | Coordinator / Chief of Staff | ACTIVE | FOLIO-CYCLE-20261121-001 | IN_PROGRESS | main coordination records | CEO-authorized PR #10 merge verified at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; PR #1 feature head advanced to same SHA; CI #503 passed | Pages Deploy run #62 was triggered but failed at setup-node because `cache: npm` cannot find a lockfile; install/build/upload were skipped and deploy job was skipped; GPT1 PR #4 preflight is DISPATCHED; GPT2 implementation packet is WAITING | 2026-11-21 |
+| GPT0 | Coordinator / Chief of Staff | ACTIVE | FOLIO-CYCLE-20261121-001 | IN_PROGRESS | main coordination records | CEO-authorized PR #10 merge verified at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; PR #1 feature head advanced to same SHA; CI #503 passed | CEO authorized the minimal deploy workflow fix; commit `edb0cc1` removed only `cache: npm`; Pages run #63 and CI #518 are running; GPT1 PR #4 preflight is DISPATCHED; GPT2 implementation packet is WAITING | 2026-11-21 |
 | GPT1 | Architect / Preflight | ACTIVE | FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002 | DISPATCHED | [PR #4 refresh preflight](tasks/FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002.md); [PR #4](https://github.com/budapesservices-dotcom/folio-studio/pull/4) | Read-only packet published; exact foundation `d585bc3581aadd335cc4d6292a3d13cb2a650253` and PR #4 HEAD `9730fdc02f5ee331c17de61c443a0f0d35782c56`; compare diverged 98/95 with merge-base `89780034...` | Wait for CEO MULAI in GPT1 chat; report exact ancestry/conflicts/path intersection only, no branch mutation | 2026-11-21 |
 | GPT2 | Engineer | ACTIVE | FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-001 | WAITING | [Finding-specific PR #4 packet](tasks/FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-001.md); [PR #4](https://github.com/budapesservices-dotcom/folio-studio/pull/4) | PR #10 reconciliation delivered and merged by GPT0 at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; new PR #4 task narrows GPT4 findings to App autosave and native IndexedDB evidence | Do not start until GPT1 preflight approves and GPT0 changes this packet to DISPATCHED; then preserve parent order and exact refs | 2026-11-21 |
 | GPT3 | QA / UI / Regression | ACTIVE | FOLIO-20261121-PR10-CANDIDATE-QA-001 | APPROVED | [QA packet](tasks/FOLIO-20261121-PR10-CANDIDATE-QA-001.md); [PR #10 QA report](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) | PASS WITH CONDITIONS; exact candidate/CI/scope passed; provider deployment success reported; browser QA NOT RUN because host DNS/page retrieval failed | Report accepted; browser smoke not claimed and remains unverified | 2026-11-21 |
@@ -29,6 +29,23 @@
 | GPT4 | Independent Auditor | ACTIVE | FOLIO-20261121-PR4-PR5-QA-001 | READY_FOR_REVIEW | Read-only audit: PR #4 and PR #5 | [PR #4 report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718); [PR #5 report](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294); exact heads 9730fdc... and a8b2818... | GPT0 review pending; both verdicts READY WITH CONDITIONS; no implementation or merge | 2026-11-21 |
 
 ## Current checkpoint — post PR #10 merge
+
+## GPT0 deployment workflow repair — CEO authorized
+
+CEO explicitly authorized the minimal fix after Deploy FOLIO Studio run #62 failed at `actions/setup-node@v4` because `cache: npm` was configured without a lockfile.
+
+Applied on `feat/canvas-pan-distribute`:
+- Commit: `edb0cc155d87c7580e6d5713935b873402a5182f`
+- File: `.github/workflows/deploy.yml`
+- Exact diff: removed only the `cache: npm` line. No dependency, lockfile, build command, deployment target, source, or product code was changed.
+- PR #1 remains open/draft/unmerged to `main`.
+
+The expected automatic push workflows have been created for this exact commit:
+- [Deploy FOLIO Studio run #63](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298913) — currently in progress at last check.
+- [FOLIO verification run #518](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298951) — currently in progress at last check.
+
+Do not call deployment successful until run #63 completes successfully and, ideally, the GitHub Pages deployment URL/status is verified.
+
 
 - PR #10 CLOSED/MERGED into `feat/canvas-pan-distribute` at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; GitHub confirms PR #1 head is now the same SHA. PR #1 remains open/draft/unmerged to main.
 - CI run #503 passed on the exact merge commit. Pages Deploy run #62 was triggered by the merge push and failed at `actions/setup-node@v4` because `cache: npm` could not find an npm lockfile; install/build/artifact upload were skipped and the deploy job was skipped. The minimal fix (remove `cache: npm`) is reserved for CEO approval because a fix push will retrigger Pages.
