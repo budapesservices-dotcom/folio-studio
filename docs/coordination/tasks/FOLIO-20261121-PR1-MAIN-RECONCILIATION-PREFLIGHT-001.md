@@ -113,3 +113,8 @@ Blocker: BLOCKED — FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 — on
 ## GPT0 review disposition — 2026-11-21
 
 **APPROVED.** The report is complete and its core findings were independently checked against the exact task packet, PR #1 feature ref, current main comparison, branch path sets, workflow files, and the posted GitHub comment. Since GPT1's report, main advanced four additional commits; those commits are coordination-only. Current live comparison: PR #1 is 310 commits ahead / 72 behind current main. PR #1 HEAD is unchanged. This approval accepts the preflight analysis only; it does not approve, execute, or authorize any branch synchronization, PR merge, or deployment.
+
+
+## GPT0 exact-HEAD correction — 2026-11-21
+
+GPT1's published PR #1 preflight comment transcribed the PR #1 HEAD incorrectly. The task packet's exact baseline was correct: `89780034f32b1809cc49640e83bac5c817d88a91`. GitHub's live PR #1 API and commit endpoint confirm that same SHA. GPT0 posted a correction comment on PR #1 (comment ID `7059541346`) and independently repeated the compare using the actual SHA. The merge-base and two-path conflict intersection remain unchanged. The preflight approval is based on the corrected live ref, not the mistyped report string.
