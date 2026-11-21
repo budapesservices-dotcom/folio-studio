@@ -9,21 +9,21 @@
 **Task template:** [Task File Template](TASK_PACKET_TEMPLATE.md)  
 **CEO report:** [Agent Reports](AGENT_REPORTS.md)
 
-> GPT0 creates task files under tasks/ and manages this board. Specialists only read it. DISPATCHED tasks require the CEO's MULAI/LAKSANAKAN signal. A specialist's SELESAI becomes READY_FOR_REVIEW, not APPROVED.
+ > GPT0 creates task files under tasks/ and manages this board. Specialists only read it. DISPATCHED means GPT0 has authorized the packet; the CEO's MULAI/LAKSANAKAN is only a short chat wake signal. A specialist's SELESAI becomes READY_FOR_REVIEW, not APPROVED.
 
 ## Current work cycle
 
 | Field | Value |
 |---|---|
 | Cycle ID | FOLIO-CYCLE-20261121-001 |
-| CEO objective | Reconcile independent audits and define safe PR integration; implementation held |
+| CEO objective | Execute controlled PR #1 main reconciliation; then refresh PR #4/#5 integration and PR #7 dependency gates |
 | Default branch | main |
 | Product-code baseline | 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
 | PR #1 pinned main comparison snapshot | 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
-| Last full PR #1 vs main comparison checkpoint | main @ `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`: 310 ahead / 72 behind; 31 commits since pinned snapshot touch only docs/coordination/**; subsequent GPT0 tracking updates are coordination-only |
+| Last full PR #1 vs main comparison checkpoint | main @ `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a`: 310 ahead / 93 behind; merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`; shared changed paths only `AGENTS.md` and `.github/workflows/deploy.yml` |
 | CEO-selected integration route | Retain PR #1 as common parent; reconcile main into it after a specific preflight packet; then PR #4, PR #5, and PR #7 in order |
-| Last reconciled | 2026-11-21 — GPT0 adopted standing delegation, refreshed main snapshot, and dispatched PR #1 reconciliation to GPT2 |
+| Last reconciled | 2026-11-21 — GPT0 adopted standing delegation, refreshed main snapshot, dispatched GPT2; four later main commits are coordination-only tracking updates |
 
 ## Dispatched — awaiting specialist chat wake signal
 
