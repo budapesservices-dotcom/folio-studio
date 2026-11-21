@@ -1,0 +1,110 @@
+name: Folio Agent Task
+description: A scoped task assigned by GPT0 to a Folio specialist
+title: "[AGENT] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this issue as the canonical task record. Follow docs/coordination/PROTOCOL.md.
+        One issue must represent one task and one Task ID.
+  - type: input
+    id: task_id
+    attributes:
+      label: Task ID
+      description: "Format: FOLIO-YYYYMMDD-AREA-NNN"
+      placeholder: "FOLIO-20261121-CANVAS-001"
+    validations:
+      required: true
+  - type: input
+    id: task_file_url
+    attributes:
+      label: Canonical task file URL
+      description: Link to docs/coordination/tasks/<TASK-ID>.md on the repository default branch.
+      placeholder: https://github.com/budapesservices-dotcom/folio-studio/blob/main/docs/coordination/tasks/FOLIO-YYYYMMDD-AREA-NNN.md
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Assigned specialist
+      options:
+        - GPT1 — Architect / Preflight
+        - GPT2 — Engineer
+        - GPT3 — QA / UI / Regression
+        - GPT4 — Independent Auditor
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Task mode
+      options:
+        - READ-ONLY
+        - IMPLEMENTATION
+        - QA
+        - AUDIT
+        - DOCS
+    validations:
+      required: true
+  - type: input
+    id: target_branch
+    attributes:
+      label: Target branch
+    validations:
+      required: true
+  - type: input
+    id: base_sha
+    attributes:
+      label: Exact base commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective and context
+      description: Include relevant specification links and verified repository facts.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and start condition
+      placeholder: "None; ready now — or WAIT FOR: FOLIO-..."
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Allowed paths and out-of-scope paths
+      description: Be explicit to prevent overlapping edits and scope creep.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Deliverables and acceptance criteria
+      description: List observable results and required validation commands.
+    validations:
+      required: true
+  - type: textarea
+    id: permissions
+    attributes:
+      label: Constraints, permissions, and stop conditions
+      value: |
+        - Do not merge.
+        - Do not deploy.
+        - Do not push directly to main.
+        - Do not edit docs/coordination/AGENT_REPORTS.md.
+    validations:
+      required: true
+  - type: textarea
+    id: reporting
+    attributes:
+      label: Reporting destination
+      value: |
+        Implementation/docs: open a PR using .github/PULL_REQUEST_TEMPLATE.md.
+        Read-only/QA/audit: post the detailed report as a comment on this Issue.
+        Final chat status must be one line: SELESAI — Task ID — evidence link — menunggu GPT0 review.
+    validations:
+      required: true

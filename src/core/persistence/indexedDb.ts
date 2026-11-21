@@ -35,18 +35,85 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-async function persistProject(input: FolioProject, activate: boolean): Promise<void> {
+let projectWriteQueue: Promise<void> = Promise.resolve();
+const persistedProjectRevisions = new Map<string, number>();
+
+function enqueueProjectWrite<T>(operation: () => Promise<T>): Promise<T> {
+  const result = projectWriteQueue.then(operation);
+  projectWriteQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+interface ProjectRevisionFence {
+  isCurrent: () => boolean;
+  subscribe: (listener: () => void) => () => void;
+}
+
+async function persistProjectUnlocked(
+  input: FolioProject,
+  activate: boolean,
+  revisionFence?: ProjectRevisionFence,
+): Promise<boolean> {
   const project = requireValidProject(input);
   if (activate && project.metadata.id === RESERVED_COMPONENT_PROJECT_ID) {
     throw new Error('The Component Canvas workspace cannot be activated as a root project.');
   }
 
   const database = await openDatabase();
+  let revisionInvalidated = false;
+  let activeTransaction: IDBTransaction | null = null;
+  let unsubscribe: () => void = () => undefined;
+
+  const invalidateRevision = () => {
+    if (revisionInvalidated) return;
+    revisionInvalidated = true;
+    try {
+      activeTransaction?.abort();
+    } catch {
+      // A transaction that has already completed cannot be rolled back.
+      // The post-transaction revision fence still prevents a false "saved".
+    }
+  };
 
   try {
+    if (revisionFence) {
+      // Subscribe before the post-open check. The active listener then remains
+      // installed until the transaction settles, allowing revision changes to
+      // abort a staged readwrite transaction rather than merely relabel it.
+      unsubscribe = revisionFence.subscribe(() => {
+        if (!revisionFence.isCurrent()) invalidateRevision();
+      });
+      if (!revisionFence.isCurrent()) {
+        invalidateRevision();
+        return false;
+      }
+    }
+
     await new Promise<void>((resolve, reject) => {
       const stores = activate ? [PROJECT_STORE, APP_STATE_STORE] : PROJECT_STORE;
       const transaction = database.transaction(stores, 'readwrite');
+      activeTransaction = transaction;
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => {
+        const error = transaction.error;
+        // Ignore only the AbortError caused by our own revision invalidation.
+        // A quota, I/O, or other real transaction failure remains an error,
+        // even if a revision update happens around the same time.
+        if (!(revisionInvalidated && (!error || error.name === 'AbortError'))) {
+          reject(error ?? new Error('Could not save the project.'));
+        }
+      };
+      transaction.onabort = () => {
+        const error = transaction.error;
+        if (revisionInvalidated && (!error || error.name === 'AbortError')) resolve();
+        else reject(error ?? new Error('Project save was cancelled.'));
+      };
+
+      if (revisionInvalidated) {
+        try { transaction.abort(); } catch { /* onabort / final fence decides the result. */ }
+        return;
+      }
+
       transaction.objectStore(PROJECT_STORE).put(project);
       if (activate) {
         transaction.objectStore(APP_STATE_STORE).put({
@@ -54,25 +121,95 @@ async function persistProject(input: FolioProject, activate: boolean): Promise<v
           projectId: project.metadata.id,
         });
       }
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error ?? new Error('Could not save the project.'));
-      transaction.onabort = () => reject(transaction.error ?? new Error('Project save was cancelled.'));
     });
+    return !revisionInvalidated;
   } finally {
+    unsubscribe();
     database.close();
   }
 }
 
-export async function saveProject(input: FolioProject): Promise<void> {
-  return persistProject(input, false);
+export function saveProject(input: FolioProject, projectRevision?: number): Promise<void> {
+  const project = requireValidProject(input);
+  return enqueueProjectWrite(async () => {
+    const persistedRevision = persistedProjectRevisions.get(project.metadata.id);
+    if (projectRevision !== undefined && persistedRevision !== undefined && projectRevision < persistedRevision) return;
+    await persistProjectUnlocked(project, false);
+    if (projectRevision !== undefined) {
+      persistedProjectRevisions.set(project.metadata.id, Math.max(projectRevision, persistedRevision ?? projectRevision));
+    }
+  });
+}
+
+/**
+ * Main Canvas autosaves are fenced at queue entry, after openDatabase(), while
+ * the readwrite transaction is active, and once more after transaction
+ * completion. A canonical revision notification aborts an in-flight write;
+ * a change after transaction completion is reported as stale so the newer
+ * canonical snapshot can be autosaved by its own effect.
+ *
+ * Component Canvas deliberately continues to use its independent saveProject
+ * path and does not participate in the canonical Main Canvas revision fence.
+ */
+export interface RevisionFencedProjectSaveResult {
+  readonly status: 'saved' | 'stale';
+}
+
+export function saveProjectIfRevisionCurrent(
+  input: FolioProject,
+  projectRevision: number,
+  getCanonicalRevision: () => number,
+  subscribeToCanonicalRevision: (listener: () => void) => () => void,
+): Promise<RevisionFencedProjectSaveResult> {
+  const project = requireValidProject(input);
+  return enqueueProjectWrite(async () => {
+    const persistedRevision = persistedProjectRevisions.get(project.metadata.id);
+    const isCurrent = () => getCanonicalRevision() === projectRevision;
+    if (!isCurrent() ||
+        (persistedRevision !== undefined && projectRevision < persistedRevision)) {
+      return { status: 'stale' };
+    }
+
+    const persisted = await persistProjectUnlocked(project, false, {
+      isCurrent,
+      subscribe: subscribeToCanonicalRevision,
+    });
+    // The transaction may have committed just before a newer revision was
+    // published. Never return saved unless this final read still matches.
+    if (!persisted || !isCurrent()) return { status: 'stale' };
+
+    persistedProjectRevisions.set(
+      project.metadata.id,
+      Math.max(projectRevision, persistedRevision ?? projectRevision),
+    );
+    return { status: 'saved' };
+  });
+}
+
+/** Serializes a multi-transaction barrier against every ordinary project save. */
+export function withProjectWriteLock<T>(
+  operation: (persist: (project: FolioProject, projectRevision?: number) => Promise<void>) => Promise<T>,
+): Promise<T> {
+  return enqueueProjectWrite(() => operation(async (input, projectRevision) => {
+    const project = requireValidProject(input);
+    const persistedRevision = persistedProjectRevisions.get(project.metadata.id);
+    if (projectRevision !== undefined && persistedRevision !== undefined && projectRevision < persistedRevision) return;
+    await persistProjectUnlocked(project, false);
+    if (projectRevision !== undefined) {
+      persistedProjectRevisions.set(project.metadata.id, Math.max(projectRevision, persistedRevision ?? projectRevision));
+    }
+  }));
 }
 
 /**
  * Persist a project and mark it active in the same IndexedDB transaction.
  * The pointer cannot commit unless the validated project record commits too.
  */
-export async function saveProjectAndActivate(input: FolioProject): Promise<void> {
-  return persistProject(input, true);
+export function saveProjectAndActivate(input: FolioProject): Promise<void> {
+  const project = requireValidProject(input);
+  return enqueueProjectWrite(async () => {
+    await persistProjectUnlocked(project, true);
+  });
 }
 
 export async function loadProjectById(projectId: string): Promise<FolioProject | null> {

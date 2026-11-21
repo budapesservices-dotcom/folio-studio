@@ -1,6 +1,7 @@
-import type { ComponentDefinition, DesignNode, FolioPage, FolioProject } from '../core/document/types';
+import type { ComponentDefinition, DesignNode, FolioDocument, FolioPage, FolioProject } from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
-import { replaceComponentInstancesInDocument } from '../core/document/components';
+import { areDocumentsStructurallyEqual } from '../core/document/equality';
+import { pruneComponentInstanceOverridesInDocument, replaceComponentInstancesInDocument } from '../core/document/components';
 import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, collapseLegacyCanvasInstances, type LayerDropPosition } from '../core/document/layers';
 
 const HISTORY_LIMIT = 60;
@@ -39,9 +40,9 @@ export type EditorAction =
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }
   | { type: 'add-component'; component: ComponentDefinition }
-  | { type: 'update-component'; component: ComponentDefinition }
-  | { type: 'rename-component'; componentId: string; name: string }
-  | { type: 'delete-component'; componentId: string }
+  | { type: 'sync-component-document'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; document: FolioDocument; updatedAt: string }
+  | { type: 'rename-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; name: string }
+  | { type: 'delete-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string }
   | { type: 'replace-project'; project: FolioProject }
   | { type: 'undo' }
   | { type: 'redo' };
@@ -360,17 +361,31 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       }));
     }
 
-    case 'update-component': {
-      if (!state.project.components.some((component) => component.id === action.component.id)) return state;
+    case 'sync-component-document': {
+      const currentComponent = state.project.components.find((component) => component.id === action.componentId);
+      if (!currentComponent || currentComponent.document !== action.expectedMasterDocument ||
+          currentComponent.updatedAt !== action.expectedUpdatedAt ||
+          areDocumentsStructurallyEqual(currentComponent.document, action.document)) return state;
+      const nextNodeIds = new Set(action.document.nodes.map((node) => node.id));
+      const removedNodeIds = new Set(currentComponent.document.nodes
+        .filter((node) => !nextNodeIds.has(node.id))
+        .map((node) => node.id));
+      const pages = removedNodeIds.size === 0 ? state.project.pages : state.project.pages.map((page) => {
+        const document = pruneComponentInstanceOverridesInDocument(page.document, action.componentId, removedNodeIds);
+        return document === page.document ? page : { ...page, document };
+      });
       const components = state.project.components.map((component) =>
-        component.id === action.component.id ? action.component : component);
-      return withSnapshot(state, touch({ ...state.project, components }));
+        component.id === action.componentId
+          ? { ...component, document: action.document, updatedAt: action.updatedAt }
+          : component);
+      return withSnapshot(state, touch({ ...state.project, pages, components }));
     }
 
     case 'rename-component': {
       const name = action.name.trim();
       const target = state.project.components.find((component) => component.id === action.componentId);
-      if (!target || !name || target.name === name) return state;
+      if (!target || target.document !== action.expectedMasterDocument ||
+          target.updatedAt !== action.expectedUpdatedAt || !name || target.name === name) return state;
       const now = new Date().toISOString();
       const components = state.project.components.map((component) =>
         component.id === action.componentId ? { ...component, name, updatedAt: now, document: { ...component.document, name } } : component);
@@ -379,7 +394,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'delete-component': {
       const target = state.project.components.find((component) => component.id === action.componentId);
-      if (!target) return state;
+      if (!target || target.document !== action.expectedMasterDocument ||
+          target.updatedAt !== action.expectedUpdatedAt) return state;
       // Detach all page instances so deleting a master never leaves broken references.
       const pages = state.project.pages.map((page) => ({
         ...page, document: replaceComponentInstancesInDocument(page.document, target),
