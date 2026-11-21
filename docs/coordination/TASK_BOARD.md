@@ -88,6 +88,8 @@ No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4
 
 ## Reconciliation facts
 
+> Historical facts below include pre-PR10 heads and pre-merge workflow status. The current post-merge checkpoint and CEO route decision above are authoritative wherever later GitHub evidence supersedes them.
+
 - At the GPT0 live-comparison checkpoint, main was `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`: PR #1 was 310 ahead / 72 behind, and all 31 commits after the pinned snapshot touched only `docs/coordination/**`. Later GPT0 tracking updates also touched only coordination records; no product branch was changed.
 
 - PR #1 is open, draft, unmerged and `mergeable=false`; retain it as a candidate parent only, not a merge-ready branch.
