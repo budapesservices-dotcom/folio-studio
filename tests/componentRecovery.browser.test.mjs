@@ -543,7 +543,11 @@ async function pressKey(browser, key, virtualKeyCode, shift = false) {
 async function createComponentMaster(browser) {
   await ensureComponentRackOpen(browser);
   const before = await browser.evaluate('document.querySelectorAll(".component-rack-card").length');
-  await browser.click('button[title="Create a new master component"]');
+  const clicked = await browser.evaluate(
+    '(() => {const button=document.querySelector("button[title=\\"Create a new master component\\"]");' +
+    'if(!button)throw new Error("New component button is not mounted");button.focus();button.click();return true;})()',
+  );
+  expect(clicked).toBe(true);
   await waitForApp(
     browser,
     'document.querySelectorAll(".component-rack-card").length===' + (before + 1),
@@ -679,6 +683,17 @@ describe('Component Canvas deletion and recovery — actual App / Chromium / Ind
         expect(await installNativeDeletionProbe(browser)).toBe(true);
         const master = await createDirtyActiveMaster(browser);
         await clickDeleteMaster(browser, master.name);
+        await waitForApp(
+          browser,
+          'document.activeElement===document.querySelector(".component-deletion-dialog [data-dialog-initial-focus]")',
+          'recovery dialog moves focus to its initial safe action',
+        );
+        await waitForApp(
+          browser,
+          'Array.from(document.querySelector(".app-shell").children).filter((child)=>' +
+          'child!==document.querySelector(".component-deletion-modal-host")).every((child)=>child.inert&&child.getAttribute("aria-hidden")==="true")',
+          'recovery dialog makes the App background inert',
+        );
 
         const dialogState = await browser.evaluate(
           '(() => {const shell=document.querySelector(".app-shell");const host=document.querySelector(".component-deletion-modal-host");' +
@@ -951,6 +966,11 @@ describe('Component Canvas deletion and recovery — actual App / Chromium / Ind
         expect(afterDiscard.root.components.some((component) => component.id === dirty.masterId)).toBe(false);
         expect(afterDiscard.root.components.some((component) => component.name === dirty.name + ' (Recovered)')).toBe(false);
         expect(afterDiscard.buffer.nodeCount).toBe(0);
+        await waitForApp(
+          browser,
+          'document.querySelector(' + JSON.stringify('[data-window-id="component-canvas"]') + ')===null',
+          'Component Canvas closes after durable discard and buffer cleanup',
+        );
 
         const cleanName = await createComponentMaster(browser);
         const cleanState = await readNativeProjects(browser);
