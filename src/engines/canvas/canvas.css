@@ -67,3 +67,60 @@
     width: 22px;
   }
 }
+
+
+.canvas-pan-ready,
+.canvas-panning {
+  user-select: none;
+}
+.canvas-pan-ready {
+  cursor: grab;
+}
+.canvas-panning {
+  cursor: grabbing;
+}
+.canvas-pan-ready .artboard,
+.canvas-pan-ready .canvas-node,
+.canvas-panning .artboard,
+.canvas-panning .canvas-node {
+  cursor: inherit !important;
+}
+
+
+.canvas-marquee { fill: #8d7cff22; stroke: #a99aff; stroke-width: 1.25; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; }
+
+
+/* Selection handles communicate the active transform before dragging. */
+.canvas-node {
+  cursor: move;
+}
+.canvas-resize-handle {
+  cursor: move;
+}
+.canvas-resize-handle[data-resize-handle="nw"],
+.canvas-resize-handle[data-resize-handle="se"] {
+  cursor: nwse-resize;
+}
+.canvas-resize-handle[data-resize-handle="ne"],
+.canvas-resize-handle[data-resize-handle="sw"] {
+  cursor: nesw-resize;
+}
+.canvas-resize-handle[data-resize-handle="n"],
+.canvas-resize-handle[data-resize-handle="s"] {
+  cursor: ns-resize;
+}
+.canvas-resize-handle[data-resize-handle="e"],
+.canvas-resize-handle[data-resize-handle="w"] {
+  cursor: ew-resize;
+}
+
+
+.canvas-lasso {
+  fill: rgba(169, 159, 255, .08);
+  stroke: #b2a7ff;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}

@@ -1,3 +1,4 @@
+import { migrateProjectToV2 } from '../document/migrations';
 import { requireValidProject } from '../document/validation';
 import type { FolioProject } from '../document/types';
 
@@ -13,12 +14,13 @@ function safeFileName(name: string): string {
 }
 
 export function downloadProject(project: FolioProject): void {
-  const content = JSON.stringify(project, null, 2);
+  const validatedProject = requireValidProject(project);
+  const content = JSON.stringify(validatedProject, null, 2);
   const blob = new Blob([content], { type: 'application/vnd.folio.project+json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `${safeFileName(project.metadata.name)}.flop`;
+  anchor.download = `${safeFileName(validatedProject.metadata.name)}.flop`;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
@@ -35,5 +37,5 @@ export async function readProjectFile(file: File): Promise<FolioProject> {
     throw new Error('The selected file is not valid JSON.');
   }
 
-  return requireValidProject(parsed);
+  return migrateProjectToV2(parsed);
 }

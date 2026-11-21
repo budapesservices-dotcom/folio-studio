@@ -3,6 +3,7 @@ import {
   FOLIO_FORMAT_VERSION,
   type DesignNode,
   type EllipseNode,
+  type FolioDocument,
   type FolioProject,
   type RectNode,
   type TextNode,
@@ -25,6 +26,7 @@ function baseNode(name: string, x: number, y: number, width: number, height: num
     opacity: 1,
     visible: true,
     locked: false,
+    onCanvas: true,
   };
 }
 
@@ -60,7 +62,7 @@ export function createTextNode(index = 0): TextNode {
   };
 }
 
-export function createNode(type: DesignNode['type'], index = 0): DesignNode {
+export function createNode(type: 'rect' | 'ellipse' | 'text', index = 0): Exclude<DesignNode, { type: 'component-instance' }> {
   switch (type) {
     case 'rect':
       return createRectNode(index);
@@ -69,6 +71,17 @@ export function createNode(type: DesignNode['type'], index = 0): DesignNode {
     case 'text':
       return createTextNode(index);
   }
+}
+
+export function createEmptyDocument(name = 'Main Page', width = 1440, height = 900): FolioDocument {
+  return {
+    id: createId('document'),
+    name,
+    width,
+    height,
+    background: '#F5F2EC',
+    nodes: [],
+  };
 }
 
 export function createInitialProject(name = 'Untitled project'): FolioProject {
@@ -157,13 +170,22 @@ export function createInitialProject(name = 'Untitled project'): FolioProject {
       createdAt: now,
       updatedAt: now,
     },
-    document: {
-      id: createId('document'),
-      name: 'Page 1',
-      width: 1440,
-      height: 900,
-      background: '#F5F2EC',
-      nodes: [visualCard, orbit, sun, eyebrow, title, description, cardCaption],
-    },
+    activePageId: 'page-main',
+    pages: [{
+      id: 'page-main',
+      name: 'Main Page',
+      route: '/',
+      document: {
+        id: createId('document'),
+        name: 'Main Page',
+        width: 1440,
+        height: 900,
+        background: '#F5F2EC',
+        nodes: [visualCard, orbit, sun, eyebrow, title, description, cardCaption],
+      },
+    }],
+    components: [],
+    logicGraphs: [],
+    assets: [],
   };
 }

@@ -1,6 +1,6 @@
 {
   "format": "folio-project",
-  "formatVersion": 1,
+  "formatVersion": 2,
   "appVersion": "0.1.0",
   "metadata": {
     "id": "project-5e32751e-da20-4a6a-8c2e-1cb4a4b0e183",
@@ -8,156 +8,167 @@
     "createdAt": "2026-11-18T05:19:02.576Z",
     "updatedAt": "2026-11-18T05:19:02.576Z"
   },
-  "document": {
-    "id": "document-0e0713a6-764b-4dd4-9bde-7013e5ff5d03",
-    "name": "Page 1",
-    "width": 1440,
-    "height": 900,
-    "background": "#F5F2EC",
-    "nodes": [
-      {
-        "id": "node-d61819c3-1dd1-453c-98ca-29f2015c2920",
-        "name": "Visual card",
-        "x": 850,
-        "y": 155,
-        "width": 465,
-        "height": 590,
-        "rotation": 0,
-        "opacity": 1,
-        "visible": true,
-        "locked": false,
-        "type": "rect",
-        "style": {
-          "fill": "#D8C6AD",
-          "stroke": "#00000000",
-          "strokeWidth": 0,
-          "radius": 28
-        }
-      },
-      {
-        "id": "node-b4c74dc3-3183-4d56-9f79-8842f5890090",
-        "name": "Orbit",
-        "x": 925,
-        "y": 238,
-        "width": 315,
-        "height": 315,
-        "rotation": 0,
-        "opacity": 1,
-        "visible": true,
-        "locked": false,
-        "type": "ellipse",
-        "style": {
-          "fill": "#B3A0E5",
-          "stroke": "#00000000",
-          "strokeWidth": 0
-        }
-      },
-      {
-        "id": "node-9790d189-91cf-41cd-a91a-1ecbd5d29bc6",
-        "name": "Sun",
-        "x": 1060,
-        "y": 352,
-        "width": 145,
-        "height": 145,
-        "rotation": 0,
-        "opacity": 1,
-        "visible": true,
-        "locked": false,
-        "type": "ellipse",
-        "style": {
-          "fill": "#F4B27D",
-          "stroke": "#00000000",
-          "strokeWidth": 0
-        }
-      },
-      {
-        "id": "node-676efbac-de51-45ea-8a8d-49b024fe0c78",
-        "name": "Eyebrow",
-        "x": 118,
-        "y": 150,
-        "width": 420,
-        "height": 28,
-        "rotation": 0,
-        "opacity": 1,
-        "visible": true,
-        "locked": false,
-        "type": "text",
-        "text": "FOLIO  /  CREATIVE CANVAS",
-        "style": {
-          "fill": "#7C7067",
-          "fontSize": 17,
-          "fontFamily": "Arial, sans-serif",
-          "fontWeight": 700,
-          "letterSpacing": 3.5,
-          "lineHeight": 1.2
-        }
-      },
-      {
-        "id": "node-3e55c614-8fae-445a-b722-4eb75ecf150e",
-        "name": "Hero title",
-        "x": 112,
-        "y": 290,
-        "width": 700,
-        "height": 220,
-        "rotation": 0,
-        "opacity": 1,
-        "visible": true,
-        "locked": false,
-        "type": "text",
-        "text": "Ideas become\ninterfaces.",
-        "style": {
-          "fill": "#20212A",
-          "fontSize": 92,
-          "fontFamily": "Arial, sans-serif",
-          "fontWeight": 700,
-          "letterSpacing": -4,
-          "lineHeight": 1.02
-        }
-      },
-      {
-        "id": "node-cbc73193-6ea8-46af-aa8c-68be64cd0b5e",
-        "name": "Description",
-        "x": 120,
-        "y": 565,
-        "width": 520,
-        "height": 90,
-        "rotation": 0,
-        "opacity": 1,
-        "visible": true,
-        "locked": false,
-        "type": "text",
-        "text": "A space to shape the things\nyou have not imagined yet.",
-        "style": {
-          "fill": "#746D67",
-          "fontSize": 25,
-          "fontFamily": "Arial, sans-serif",
-          "fontWeight": 400,
-          "letterSpacing": 0,
-          "lineHeight": 1.35
-        }
-      },
-      {
-        "id": "node-fcf60596-d9c6-40c7-a9c6-75207be9f7b0",
-        "name": "Card caption",
-        "x": 900,
-        "y": 670,
-        "width": 360,
-        "height": 30,
-        "rotation": 0,
-        "opacity": 1,
-        "visible": true,
-        "locked": false,
-        "type": "text",
-        "text": "FORM  /  LIGHT  /  MOTION",
-        "style": {
-          "fill": "#51463D",
-          "fontSize": 14,
-          "fontFamily": "Arial, sans-serif",
-          "fontWeight": 700,
-          "letterSpacing": 2.3,
-          "lineHeight": 1.2
-        }
+  "activePageId": "page-main",
+  "pages": [
+    {
+      "id": "page-main",
+      "name": "Main Page",
+      "route": "/",
+      "document": {
+        "id": "document-0e0713a6-764b-4dd4-9bde-7013e5ff5d03",
+        "name": "Main Page",
+        "width": 1440,
+        "height": 900,
+        "background": "#F5F2EC",
+        "nodes": [
+          {
+            "id": "node-d61819c3-1dd1-453c-98ca-29f2015c2920",
+            "name": "Visual card",
+            "x": 850,
+            "y": 155,
+            "width": 465,
+            "height": 590,
+            "rotation": 0,
+            "opacity": 1,
+            "visible": true,
+            "locked": false,
+            "type": "rect",
+            "style": {
+              "fill": "#D8C6AD",
+              "stroke": "#00000000",
+              "strokeWidth": 0,
+              "radius": 28
+            }
+          },
+          {
+            "id": "node-b4c74dc3-3183-4d56-9f79-8842f5890090",
+            "name": "Orbit",
+            "x": 925,
+            "y": 238,
+            "width": 315,
+            "height": 315,
+            "rotation": 0,
+            "opacity": 1,
+            "visible": true,
+            "locked": false,
+            "type": "ellipse",
+            "style": {
+              "fill": "#B3A0E5",
+              "stroke": "#00000000",
+              "strokeWidth": 0
+            }
+          },
+          {
+            "id": "node-9790d189-91cf-41cd-a91a-1ecbd5d29bc6",
+            "name": "Sun",
+            "x": 1060,
+            "y": 352,
+            "width": 145,
+            "height": 145,
+            "rotation": 0,
+            "opacity": 1,
+            "visible": true,
+            "locked": false,
+            "type": "ellipse",
+            "style": {
+              "fill": "#F4B27D",
+              "stroke": "#00000000",
+              "strokeWidth": 0
+            }
+          },
+          {
+            "id": "node-676efbac-de51-45ea-8a8d-49b024fe0c78",
+            "name": "Eyebrow",
+            "x": 118,
+            "y": 150,
+            "width": 420,
+            "height": 28,
+            "rotation": 0,
+            "opacity": 1,
+            "visible": true,
+            "locked": false,
+            "type": "text",
+            "text": "FOLIO  /  CREATIVE CANVAS",
+            "style": {
+              "fill": "#7C7067",
+              "fontSize": 17,
+              "fontFamily": "Arial, sans-serif",
+              "fontWeight": 700,
+              "letterSpacing": 3.5,
+              "lineHeight": 1.2
+            }
+          },
+          {
+            "id": "node-3e55c614-8fae-445a-b722-4eb75ecf150e",
+            "name": "Hero title",
+            "x": 112,
+            "y": 290,
+            "width": 700,
+            "height": 220,
+            "rotation": 0,
+            "opacity": 1,
+            "visible": true,
+            "locked": false,
+            "type": "text",
+            "text": "Ideas become\ninterfaces.",
+            "style": {
+              "fill": "#20212A",
+              "fontSize": 92,
+              "fontFamily": "Arial, sans-serif",
+              "fontWeight": 700,
+              "letterSpacing": -4,
+              "lineHeight": 1.02
+            }
+          },
+          {
+            "id": "node-cbc73193-6ea8-46af-aa8c-68be64cd0b5e",
+            "name": "Description",
+            "x": 120,
+            "y": 565,
+            "width": 520,
+            "height": 90,
+            "rotation": 0,
+            "opacity": 1,
+            "visible": true,
+            "locked": false,
+            "type": "text",
+            "text": "A space to shape the things\nyou have not imagined yet.",
+            "style": {
+              "fill": "#746D67",
+              "fontSize": 25,
+              "fontFamily": "Arial, sans-serif",
+              "fontWeight": 400,
+              "letterSpacing": 0,
+              "lineHeight": 1.35
+            }
+          },
+          {
+            "id": "node-fcf60596-d9c6-40c7-a9c6-75207be9f7b0",
+            "name": "Card caption",
+            "x": 900,
+            "y": 670,
+            "width": 360,
+            "height": 30,
+            "rotation": 0,
+            "opacity": 1,
+            "visible": true,
+            "locked": false,
+            "type": "text",
+            "text": "FORM  /  LIGHT  /  MOTION",
+            "style": {
+              "fill": "#51463D",
+              "fontSize": 14,
+              "fontFamily": "Arial, sans-serif",
+              "fontWeight": 700,
+              "letterSpacing": 2.3,
+              "lineHeight": 1.2
+            }
+          }
+        ]
       }
-    ]
-  }
+    }
+  ],
+  "components": [],
+  "logicGraphs": [],
+  "assets": []
 }
