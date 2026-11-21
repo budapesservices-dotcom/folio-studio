@@ -4,7 +4,7 @@
 **Task ID:** `FOLIO-20261121-PR1-FOUNDATION-AUDIT-002`  
 **Assigned agent:** GPT3 — QA / UI / Regression  
 **Mode:** READ-ONLY / QA / AUDIT  
-**Status:** DISPATCHED  
+**Status:** READY_FOR_REVIEW — report submitted; GPT0 review pending  
 **Priority:** P1  
 **Cycle ID:** FOLIO-CYCLE-20261121-001
 
@@ -143,3 +143,8 @@ Read-only audit only. No repository mutations except the final top-level report 
 Start: `DITERIMA — FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 — mulai dikerjakan.`  
 Finish: `SELESAI — FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 — PR #1 report link — menunggu GPT0.`  
 Blocker: `BLOCKED — FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 — one-line reason.`
+
+
+## Completion evidence
+
+Specialist report submitted on GitHub. https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585
