@@ -1,5 +1,7 @@
-# Archived coordination records
+# Retired coordination material
 
-The files in this directory are retained only as historical project evidence. They describe an earlier operating process and must not be treated as active instructions, assignments, approvals, or current status.
+The former role-based task queue, status dashboards, onboarding guides, and handoff rules have been removed from the active repository.
 
-For all current repository work, follow the root [AGENTS.md](../../../AGENTS.md), inspect live GitHub state, and use the Codex-only workflow.
+Historical Git commits and GitHub PR/Issue records retain their provenance. This directory contains no operational instructions.
+
+For all current work, follow the repository-root [AGENTS.md](../../../AGENTS.md) and verify live GitHub state.
