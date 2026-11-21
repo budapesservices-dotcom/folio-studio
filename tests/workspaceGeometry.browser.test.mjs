@@ -1,5 +1,4 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { createServer } from 'node:net';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -26,10 +25,8 @@ function findChromium() {
 }
 
 const chromium = findChromium();
-const browserIt = chromium && typeof WebSocket !== 'undefined' ? it : it.skip;
-const browserTestTitle = chromium && typeof WebSocket !== 'undefined'
-  ? 'checks Rack focus and geometry in a single real Chromium session'
-  : 'Rack browser acceptance (SKIPPED: Chromium or Node WebSocket unavailable; set CHROMIUM_BIN)';
+const browserIt = it;
+const browserTestTitle = 'checks Rack fixture CSS and actual Preact App in one Chromium session';
 const VIEWPORTS = [
   { width: 1280, height: 800 },
   { width: 360, height: 280 },
@@ -71,17 +68,13 @@ function createFixture(css) {
     '</div></div></body></html>';
 }
 
-async function launchChromiumAttempt(path) {
+async function launchChromiumAttempt(path, attemptNumber) {
+  // Chrome chooses an unused port itself and writes it to DevToolsActivePort.
+  // This avoids the close-and-rebind race from reserving a TCP port in Node first.
   const profile = mkdtempSync(join(tmpdir(), 'folio-rack-chromium-profile-'));
-  const portServer = createServer();
-  await new Promise((resolvePort, reject) => {
-    portServer.once('error', reject);
-    portServer.listen(0, '127.0.0.1', resolvePort);
-  });
-  const port = portServer.address().port;
-  await new Promise((resolveClose, reject) => portServer.close((error) => error ? reject(error) : resolveClose()));
-  // CI may expose an invalid desktop D-Bus session address. Chromium is
-  // intentionally headless and does not need that session bus.
+  const activePortPath = join(profile, 'DevToolsActivePort');
+
+  // Headless Chromium needs no desktop session bus; strip CI's inherited D-Bus values.
   const chromiumEnv = { ...process.env };
   for (const key of [
     'DBUS_SESSION_BUS_ADDRESS',
@@ -90,61 +83,164 @@ async function launchChromiumAttempt(path) {
     'DBUS_STARTER_ADDRESS',
     'DBUS_STARTER_BUS_TYPE',
   ]) delete chromiumEnv[key];
+
   const child = spawn(chromium, [
-    '--headless=new', '--no-sandbox', '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage', '--disable-gpu', '--disable-background-networking',
-    '--disable-extensions', '--disable-breakpad', '--disable-crash-reporter',
-    '--no-first-run', '--no-default-browser-check',
-    '--remote-allow-origins=*', '--remote-debugging-address=127.0.0.1',
-    '--remote-debugging-port=' + port,
-    '--user-data-dir=' + profile, 'file://' + path,
+    '--headless=new',
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-background-networking',
+    '--disable-extensions',
+    '--disable-breakpad',
+    '--disable-crash-reporter',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--remote-allow-origins=*',
+    '--remote-debugging-address=127.0.0.1',
+    '--remote-debugging-port=0',
+    '--user-data-dir=' + profile,
+    'file://' + path,
   ], {
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'ignore', 'pipe'],
     env: chromiumEnv,
   });
+
   let socket;
   let stderr = '';
+  let spawnError = null;
+  let cleanupPromise = null;
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => { stderr += chunk; });
-  const cleanup = async () => {
-    try { socket?.close(); } catch { /* Ignore an already closed socket. */ }
-    if (child.exitCode === null && child.signalCode === null) {
-      const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
-      try {
-        if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGTERM');
-        else child.kill('SIGTERM');
-      } catch { child.kill('SIGTERM'); }
-      const stopped = await Promise.race([exited.then(() => true), delay(4000).then(() => false)]);
-      if (!stopped && child.exitCode === null && child.signalCode === null) {
-        try {
-          if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL');
-          else child.kill('SIGKILL');
-        } catch { child.kill('SIGKILL'); }
-        await Promise.race([exited, delay(2000)]);
-      }
+  child.on('error', (error) => { spawnError = error; });
+
+  const processGroupIsAlive = () => {
+    if (!child.pid || process.platform === 'win32') {
+      return child.exitCode === null && child.signalCode === null && !spawnError;
     }
-    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    try {
+      process.kill(-child.pid, 0);
+      return true;
+    } catch (error) {
+      return error?.code === 'EPERM';
+    }
   };
+
+  const waitForProcessGroupExit = async (timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    while (processGroupIsAlive() && Date.now() < deadline) await delay(40);
+    return !processGroupIsAlive();
+  };
+
+  const waitForChildExit = async (timeoutMs) => {
+    if (child.exitCode !== null || child.signalCode !== null || spawnError) return;
+    await Promise.race([
+      new Promise((resolveExit) => child.once('exit', resolveExit)),
+      delay(timeoutMs),
+    ]);
+  };
+
+  const cleanup = () => {
+    if (cleanupPromise) return cleanupPromise;
+    cleanupPromise = (async () => {
+      try { socket?.close(); } catch { /* Ignore an already closed websocket. */ }
+
+      if (process.platform !== 'win32' && child.pid) {
+        // Signal the whole detached Chromium process group, including renderer children.
+        try {
+          if (processGroupIsAlive()) process.kill(-child.pid, 'SIGTERM');
+        } catch { /* The group may have exited between the check and signal. */ }
+
+        const stopped = await waitForProcessGroupExit(4000);
+        if (!stopped) {
+          try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Already gone. */ }
+          await waitForProcessGroupExit(2500);
+        }
+      } else if (child.exitCode === null && child.signalCode === null && !spawnError) {
+        try { child.kill('SIGTERM'); } catch { /* Already gone. */ }
+        await waitForChildExit(4000);
+        if (child.exitCode === null && child.signalCode === null) {
+          try { child.kill('SIGKILL'); } catch { /* Already gone. */ }
+          await waitForChildExit(2500);
+        }
+      }
+
+      await waitForChildExit(500);
+      rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    })();
+    return cleanupPromise;
+  };
+
   try {
+    let debugPort = null;
+    let activePortContents = '';
     let targets;
-    const endpoint = 'http://127.0.0.1:' + port + '/json/list';
+    let lastEndpointError = '';
     const startupDeadline = Date.now() + 20000;
-    while (Date.now() < startupDeadline && child.exitCode === null) {
-      try {
-        const response = await fetch(endpoint);
-        if (response.ok) { targets = await response.json(); break; }
-      } catch { /* Chromium is still starting its local DevTools endpoint. */ }
-      await delay(100);
+
+    while (Date.now() < startupDeadline && child.exitCode === null && !spawnError) {
+      if (debugPort === null && existsSync(activePortPath)) {
+        try {
+          activePortContents = readFileSync(activePortPath, 'utf8');
+          const parsedPort = Number(activePortContents.split(/\r?\n/, 1)[0]);
+          if (Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535) {
+            debugPort = parsedPort;
+          }
+        } catch (error) {
+          lastEndpointError = 'Could not read DevToolsActivePort: ' + String(error);
+        }
+      }
+
+      if (debugPort !== null) {
+        try {
+          const response = await fetch(
+            'http://127.0.0.1:' + debugPort + '/json/list',
+            { signal: AbortSignal.timeout(750) },
+          );
+          if (response.ok) {
+            targets = await response.json();
+            if (Array.isArray(targets)) break;
+          } else {
+            lastEndpointError = 'DevTools /json/list returned HTTP ' + response.status;
+          }
+        } catch (error) {
+          lastEndpointError = String(error);
+        }
+      }
+
+      await delay(50);
     }
-    if (!targets) throw new Error('Chromium DevTools startup timeout: ' + stderr.slice(-1000));
-    const page = targets?.find((target) => target.type === 'page' && target.url.startsWith('file://'));
-    if (!page?.webSocketDebuggerUrl) throw new Error('Chromium did not expose the fixture page');
+
+    if (!targets) {
+      const processState = spawnError
+        ? 'spawnError=' + String(spawnError)
+        : 'exitCode=' + String(child.exitCode) + ', signal=' + String(child.signalCode);
+      throw new Error(
+        'Chromium DevTools startup failed on attempt ' + attemptNumber +
+        ' (' + processState + '). DevToolsActivePort=' +
+        (activePortContents.trim() || '<not created>') +
+        (lastEndpointError ? '. Endpoint=' + lastEndpointError : '') +
+        '. stderr tail:\n' + stderr.slice(-3000),
+      );
+    }
+
+    const page = targets.find((target) => target.type === 'page' && target.url.startsWith('file://'));
+    if (!page?.webSocketDebuggerUrl) {
+      throw new Error(
+        'Chromium exposed DevTools on attempt ' + attemptNumber +
+        ' but did not expose the fixture page. Targets=' + JSON.stringify(targets),
+      );
+    }
+
     socket = new WebSocket(page.webSocketDebuggerUrl);
     await new Promise((resolveOpen, reject) => {
       const timeout = setTimeout(() => reject(new Error('DevTools websocket timeout')), 10000);
       socket.addEventListener('open', () => { clearTimeout(timeout); resolveOpen(); }, { once: true });
-      socket.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('DevTools websocket error')); }, { once: true });
+      socket.addEventListener('error', () => {
+        clearTimeout(timeout);
+        reject(new Error('DevTools websocket error'));
+      }, { once: true });
     });
 
     let sequence = 0;
@@ -158,11 +254,20 @@ async function launchChromiumAttempt(path) {
       if (message.error) entry.reject(new Error(message.error.message || 'DevTools command failed'));
       else entry.resolve(message.result);
     });
+
     const send = (method, params = {}) => new Promise((resolveResult, reject) => {
       const id = ++sequence;
-      pending.set(id, { resolve: resolveResult, reject });
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error('DevTools command timed out: ' + method));
+      }, 15000);
+      pending.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolveResult(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
       socket.send(JSON.stringify({ id, method, params }));
     });
+
     const evaluate = async (expression) => {
       const result = await send('Runtime.evaluate', {
         expression, returnByValue: true, awaitPromise: true,
@@ -172,20 +277,24 @@ async function launchChromiumAttempt(path) {
       }
       return result.result?.value;
     };
+
     const viewport = async ({ width, height }) => {
       await send('Emulation.setDeviceMetricsOverride', {
         width, height, deviceScaleFactor: 1, mobile: false,
       });
-      await evaluate('new Promise((resolve) => requestAnimationFrame(() => resolve(true)))');
+      await evaluate('new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     };
+
     const pressTab = async () => {
       const key = { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 };
       await send('Input.dispatchKeyEvent', { type: 'keyDown', ...key });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', ...key });
     };
+
     const pressTabs = async (count) => {
       for (let index = 0; index < count; index += 1) await pressTab();
     };
+
     const focus = async (selector) => {
       const focused = await evaluate(
         '(() => { const element = document.querySelector(' + JSON.stringify(selector) + '); ' +
@@ -194,6 +303,7 @@ async function launchChromiumAttempt(path) {
       );
       if (!focused) throw new Error('Browser refused focus for ' + selector);
     };
+
     const click = async (selector) => {
       const point = await evaluate(
         '(() => { const element = document.querySelector(' + JSON.stringify(selector) + '); ' +
@@ -216,6 +326,7 @@ async function launchChromiumAttempt(path) {
         type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1,
       });
     };
+
     const wheel = async (selector, deltaY = 180) => {
       const point = await evaluate(
         '(() => { const element = document.querySelector(' + JSON.stringify(selector) + '); ' +
@@ -234,6 +345,7 @@ async function launchChromiumAttempt(path) {
       if (await evaluate('document.readyState === "complete"')) break;
       await delay(100);
     }
+
     return {
       send,
       evaluate,
@@ -255,19 +367,20 @@ async function launchChromiumAttempt(path) {
 }
 
 async function launchChromium(path) {
-  let lastError;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const failures = [];
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      return await launchChromiumAttempt(path);
+      return await launchChromiumAttempt(path, attempt);
     } catch (error) {
-      lastError = error;
-      if (attempt === 0) await delay(500);
+      failures.push(String(error?.stack || error));
+      if (attempt < 2) await delay(500);
     }
   }
-  throw new Error('Chromium startup failed after two isolated attempts: ' + String(lastError));
+  throw new Error('Chromium startup failed after two isolated attempts:\n' + failures.join('\n--- retry ---\n'));
 }
-
 async function runRackBrowserChecks() {
+  if (!chromium) throw new Error('Chromium binary not found; set CHROMIUM_BIN or install Chromium in the CI image.');
+  if (typeof WebSocket === 'undefined') throw new Error('Node WebSocket API is unavailable; use the supported Node runtime.');
   const css = readFileSync(resolve(process.cwd(), 'src/styles/global.css'), 'utf8');
   const directory = mkdtempSync(join(tmpdir(), 'folio-rack-fixture-'));
   const path = join(directory, 'workspace.html');
@@ -706,32 +819,54 @@ async function runAppAcceptance(browser) {
     expect(Number.isFinite(stackBefore.main)).toBe(true);
     expect(Number.isFinite(stackBefore.component)).toBe(true);
 
-    // Measure actual body, app-shell and actual Rack DOM at all requested rendered viewports.
-    const geometry = [];
-    for (const viewport of VIEWPORTS) {
-      await browser.setViewport(viewport);
-      const shell = await browser.evaluate(
-        '(() => { const b=document.body.getBoundingClientRect(); const e=document.querySelector(".app-shell"); const r=e.getBoundingClientRect(); ' +
-        'return {body:{width:b.width,height:b.height},shell:{width:r.width,height:r.height},' +
-        'bodyMinWidth:getComputedStyle(document.body).minWidth,shellMinHeight:getComputedStyle(e).minHeight,' +
-        'viewport:{width:innerWidth,height:innerHeight}}; })()',
-      );
-      expect(shell.viewport).toEqual(viewport);
-      expect(shell.body).toEqual(viewport);
-      expect(shell.shell).toEqual(viewport);
-      if (viewport.width<=700) {
-        expect(shell.bodyMinWidth).toBe('0px');
-        expect(shell.shellMinHeight).toBe('0px');
-      }
+    // Open each Rack through the real App toolbar toggle at desktop width,
+    // then retain that live panel while measuring it at every required viewport.
+    // This avoids clicking a compact toolbar toggle whose horizontal overflow is
+    // independently constrained by the app's 240px chrome layout.
+    const geometry = VIEWPORTS.map((viewport) => ({
+      viewport,
+      body: null,
+      shell: null,
+      bodyMinWidth: null,
+      shellMinHeight: null,
+      racks: [],
+    }));
 
-      const racks = [];
-      const definitions = [
-        { toggle:'.pages-rack-header-toggle', panel:'.pages-rack-panel', list:'.pages-rack-list' },
-        { toggle:'.component-rack-header-toggle', panel:'.component-rack-panel', list:'.component-rack-list' },
-      ];
-      for (const rack of definitions) {
-        await browser.click(rack.toggle);
-        await waitForAppRackAnimation(browser, rack.panel);
+    const definitions = [
+      { toggle:'.pages-rack-header-toggle', panel:'.pages-rack-panel', list:'.pages-rack-list' },
+      { toggle:'.component-rack-header-toggle', panel:'.component-rack-panel', list:'.component-rack-list' },
+    ];
+
+    for (const rack of definitions) {
+      await browser.setViewport({ width: 1280, height: 800 });
+      await browser.click(rack.toggle);
+      await waitForAppRackAnimation(browser, rack.panel);
+
+      for (const viewport of VIEWPORTS) {
+        await browser.setViewport(viewport);
+        const shell = await browser.evaluate(
+          '(() => { const b=document.body.getBoundingClientRect(); const e=document.querySelector(".app-shell"); const r=e.getBoundingClientRect(); ' +
+          'return {body:{width:b.width,height:b.height},shell:{width:r.width,height:r.height},' +
+          'bodyMinWidth:getComputedStyle(document.body).minWidth,shellMinHeight:getComputedStyle(e).minHeight,' +
+          'viewport:{width:innerWidth,height:innerHeight}}; })()',
+        );
+
+        expect(shell.viewport).toEqual(viewport);
+        expect(shell.body).toEqual(viewport);
+        expect(shell.shell).toEqual(viewport);
+        if (viewport.width <= 700) {
+          expect(shell.bodyMinWidth).toBe('0px');
+          expect(shell.shellMinHeight).toBe('0px');
+        }
+
+        const entry = geometry.find((item) =>
+          item.viewport.width === viewport.width && item.viewport.height === viewport.height,
+        );
+        entry.body = shell.body;
+        entry.shell = shell.shell;
+        entry.bodyMinWidth = shell.bodyMinWidth;
+        entry.shellMinHeight = shell.shellMinHeight;
+
         const metrics = await browser.evaluate(
           '(() => { const s=document.querySelector(".app-shell").getBoundingClientRect(); ' +
           'const p=document.querySelector(' + JSON.stringify(rack.panel) + '); const r=p.getBoundingClientRect(); ' +
@@ -740,14 +875,14 @@ async function runAppAcceptance(browser) {
           'minHeight:getComputedStyle(p).minHeight,maxHeight:getComputedStyle(p).maxHeight,' +
           'overflowY:getComputedStyle(l).overflowY,clientHeight:l.clientHeight,scrollHeight:l.scrollHeight}; })()',
         );
-        racks.push({ panel:rack.panel, ...metrics });
+        entry.racks.push({ panel:rack.panel, ...metrics });
 
         expect(metrics.rect.left).toBeGreaterThanOrEqual(0);
         expect(metrics.rect.top).toBeGreaterThanOrEqual(56);
         expect(metrics.rect.right).toBeLessThanOrEqual(viewport.width);
-        expect(metrics.rect.bottom).toBeLessThanOrEqual(viewport.height-27);
+        expect(metrics.rect.bottom).toBeLessThanOrEqual(viewport.height - 27);
         expect(metrics.rect.width).toBeLessThanOrEqual(viewport.width);
-        expect(metrics.rect.height).toBeLessThanOrEqual(viewport.height-83);
+        expect(metrics.rect.height).toBeLessThanOrEqual(viewport.height - 83);
         expect(metrics.minHeight).toBe('0px');
         expect(metrics.overflowY).toBe('auto');
         expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
@@ -758,16 +893,16 @@ async function runAppAcceptance(browser) {
           'document.querySelector(' + JSON.stringify(rack.list) + ').scrollTop',
         );
         expect(scrollTop).toBeGreaterThan(0);
-        await browser.click(rack.toggle);
-        await waitForApp(
-          browser,
-          'document.querySelector(' + JSON.stringify(rack.panel) + ').inert',
-          rack.panel + ' closed after geometry',
-        );
       }
-      geometry.push({ viewport, ...shell, racks });
-    }
 
+      await browser.setViewport({ width: 1280, height: 800 });
+      await browser.click(rack.toggle);
+      await waitForApp(
+        browser,
+        'document.querySelector(' + JSON.stringify(rack.panel) + ').inert',
+        rack.panel + ' closed after geometry',
+      );
+    }
     return { counts, stackBefore, componentRaised, mainRaised, geometry };
   } finally {
     await vite?.close();
