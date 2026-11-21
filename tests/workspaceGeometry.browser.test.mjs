@@ -629,13 +629,15 @@ async function runAppAcceptance(browser) {
     // the rendered list without repeatedly opening and rebuilding Component Canvas.
     await browser.click('.component-rack-header-toggle');
     await waitForAppRackAnimation(browser, '.component-rack-panel');
-    await browser.click('.component-rack-panel .component-rack-save');
+    await browser.click('.component-rack-panel button[title="Create a new master component"]');
     await waitForApp(
       browser,
-      'document.querySelector(".component-rack-panel").inert && !!document.querySelector("#component-canvas")',
-      'App New Component handler',
+      'document.querySelector(".component-rack-panel").inert',
+      'App New Component closes Component Rack',
       30000,
     );
+    const componentCanvasOpened = await browser.evaluate('!!document.querySelector("#component-canvas")');
+    expect(componentCanvasOpened).toBe(true);
 
     await browser.click('.component-rack-header-toggle');
     await waitForAppRackAnimation(browser, '.component-rack-panel');
