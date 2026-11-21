@@ -26,9 +26,7 @@
 
 ## Dispatched — awaiting CEO start signal
 
-| Agent | Task ID | Task file | Priority | Status | Depends on |
-|---|---|---|---|---|---|
-| GPT1 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | [PR #1 main reconciliation preflight](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001.md) | P0 | DISPATCHED | CEO MULAI/LAKSANAKAN signal |
+No specialist tasks currently DISPATCHED.
 
 ## Ready — awaiting GPT0 dispatch and CEO start signal
 
@@ -49,6 +47,8 @@ No specialist tasks currently READY.
 ## Ready for GPT0 review
 
 | Task ID | Agent | Evidence | Audited HEAD(s) | Review status |
+| FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001 | GPT1 | [PR #1 preflight report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main `9edc8d7de99baaf155c47f112acf009add1d51e7` | READY_FOR_REVIEW — exact PR #1 HEAD matches; verdict PREFLIGHT PASS WITH TWO MANUAL ADD/ADD RESOLUTIONS REQUIRED |
+
 |---|---|---|---|---|
 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | GPT3 | [PR #1 audit report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main comparison snapshot `8d8571cb13da23fb2f39c57cc3d34f556dbf10c1` | READY_FOR_REVIEW — report and packet match; verdict NOT READY |
 | FOLIO-20261121-PR4-PR5-QA-001 | GPT4 | [PR #4 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) · [PR #5 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; both base PR #1 `89780034f32b1809cc49640e83bac5c817d88a91` | READY_FOR_REVIEW — both reports and exact heads match; both verdicts READY WITH CONDITIONS |
