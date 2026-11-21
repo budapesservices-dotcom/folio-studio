@@ -1,35 +1,43 @@
 # Folio Studio — GPT Team Coordination Protocol
 
-**Version:** 1.1  
-**Status:** Proposed; active after PR approval and merge  
-**Repository:** budapesservices-dotcom/folio-studio  
+**Version:** 1.2
+**Status:** Proposed update; active after this PR is reviewed and merged
+**Repository:** budapesservices-dotcom/folio-studio
 **Team:** CEO + GPT0 + GPT1–GPT4
 
 ## 1. Purpose
 
-The CEO should only carry short start/finish signals between conversations—not technical task packets or long reports.
+The CEO should only carry short start, finish, and recovery signals between conversations—not technical task packets or long reports.
 
-GPT0 writes each assignment to the repository Task Inbox. The CEO opens the named specialist chat and types only MULAI or LAKSANAKAN. The specialist reads its own task from GitHub, acknowledges it briefly, performs the work, and stores its detailed evidence in GitHub. GPT0 reviews that evidence and maintains the one CEO report.
+GPT0 writes each assignment to the repository Task Inbox. The CEO opens the named specialist chat and types only MULAI or LAKSANAKAN. The specialist reads its own task from GitHub, acknowledges it briefly, performs the work, and stores its detailed evidence in GitHub. GPT0 reviews that evidence and maintains one CEO report.
 
-This is intentionally a human-assisted handoff. Separate ChatGPT conversations do not automatically message or invoke one another. The short CEO trigger is the handoff mechanism.
+The repository is also the team's durable work index when a chat reaches its limit. A new conversation can restore the agent's role and latest recorded task checkpoint from GitHub using RECOVERY_PROTOCOL.md. It cannot recover unsaved chat-only work or automatically inherit the old transcript.
+
+This is intentionally a human-assisted handoff. Separate ChatGPT conversations do not automatically message or invoke one another. The CEO sends the short trigger to the intended specialist.
 
 ## 2. The repository is the shared workspace
 
 | Location | Purpose | Owner |
 |---|---|---|
+| AGENTS.md | Repository-wide agent rules | GPT0 / CEO-controlled |
+| docs/coordination/AGENT_IDENTITY.md | Canonical GPT0–GPT4 roles and boundaries | GPT0 |
+| docs/coordination/PROTOCOL.md | Team workflow and permissions | GPT0 |
+| docs/coordination/RECOVERY_PROTOCOL.md | New-chat recovery procedure | GPT0 |
 | docs/coordination/TASK_BOARD.md | Current task queue and status for all specialists | GPT0 only |
+| docs/coordination/AGENT_STATE.md | Concise persistent state/checkpoint index | GPT0 only |
 | docs/coordination/tasks/TASK-ID.md | Full, authoritative assignment packet for one task | GPT0 creates/updates; specialists read |
 | docs/coordination/AGENT_REPORTS.md | Consolidated CEO-facing results | GPT0 only |
-| GitHub PRs | Implementation changes, diffs, test evidence, technical handoff | Assigned specialist |
-| GitHub Issue or related PR comment | QA, audit, and read-only findings when no implementation PR exists | Assigned specialist |
+| GitHub PRs / Issues | Implementation, checkpoints, QA findings, audit evidence, and technical handoff | Assigned specialist within task permissions |
 
-A task packet is the source of truth for the assignment. The chat trigger is only a request to locate and start that packet; it is not a replacement for the packet.
+A task packet is the source of truth for an assignment. GitHub commits and PR/Issue evidence are the source of truth for work completed. The Agent State page is an index, not a transcript or proof by itself.
 
 ## 3. Team roles
 
+See [AGENT_IDENTITY.md](AGENT_IDENTITY.md) for canonical responsibilities and boundaries.
+
 | Agent | Default role | Responsibility |
 |---|---|---|
-| GPT0 | Coordinator / Chief of Staff | Understand CEO intent, inspect repository state, divide work, publish task packets, manage the task board, review evidence, consolidate results, brief CEO |
+| GPT0 | Coordinator / Chief of Staff | Understand CEO intent, inspect repository state, divide work, publish task packets, manage the task board and state, review evidence, consolidate results, brief CEO |
 | GPT1 | Architect / Preflight | Architecture, design decisions, dependency analysis, implementation preflight, compatibility review, technical plans |
 | GPT2 | Engineer | Implement assigned code or documentation, add/update tests, prepare a reviewable PR |
 | GPT3 | QA / UI / Regression | Test planning, regression coverage, acceptance checks, UI verification, test/CI review |
@@ -48,6 +56,7 @@ For each work cycle, GPT0 must:
 3. Add each task to docs/coordination/TASK_BOARD.md with status READY.
 4. Ensure the task file is committed and readable from the repository's default branch before announcing that it is ready. If a task is only on an unmerged branch, GPT0 must say so and provide the branch link; it must not claim that the task is on the default branch.
 5. Set the task file and board status to DISPATCHED, then tell the CEO exactly which specialist may start, with a short link and trigger instruction. Example: "GPT2 SIAP MULAI — FOLIO-20261121-CANVAS-001. Buka chat GPT2 dan kirim: MULAI."
+6. Update AGENT_STATE.md when activation or verified task status changes, including a link to the latest durable checkpoint when one exists.
 
 GPT0 should publish all currently independent tasks together. Dependent tasks must remain WAITING and must not be announced as ready before their prerequisites are approved.
 
@@ -64,13 +73,14 @@ The CEO does not copy the long task packet.
 
 When a specialist receives MULAI or LAKSANAKAN, it must:
 
-1. Identify its own role (GPT1, GPT2, GPT3, or GPT4).
+1. Identify its own role using AGENT_IDENTITY.md.
 2. Read docs/coordination/TASK_BOARD.md from the repository's default branch.
 3. Find exactly one task assigned to that GPT with status DISPATCHED.
 4. Open and read the complete task file before doing any work.
 5. Verify that its dependency and exact base SHA still match.
 6. Respond in chat with one line: "DITERIMA — GPT2 — TASK-ID — mulai dikerjakan."
-7. Update no shared coordination file. It performs work only within the task's permission and scope.
+7. Perform work only within the task's permission and scope.
+8. Store meaningful progress in the task's designated GitHub evidence destination so a new chat can resume safely.
 
 If there is no DISPATCHED task, more than one DISPATCHED task for that specialist, no GitHub access, an inaccessible task file, a stale base SHA, or an unmet dependency, the specialist must stop and respond BLOCKED. It must not guess which task GPT0 intended.
 
@@ -86,18 +96,32 @@ or, for read-only work:
 
 The CEO tells GPT0 only "GPT2 selesai" (or includes the Task ID if there is more than one active task). GPT0 retrieves the evidence directly from GitHub. The CEO never transports the technical report.
 
+### 4.5 New chat / quota recovery
+
+When a specialist chat reaches its limit and the CEO opens a new conversation, send one line only: PULIHKAN GPTN — REPOSITORY: https://github.com/budapesservices-dotcom/folio-studio (for example, PULIHKAN GPT2 — REPOSITORY: https://github.com/budapesservices-dotcom/folio-studio).
+
+The specialist must follow [RECOVERY_PROTOCOL.md](RECOVERY_PROTOCOL.md), reread the canonical identity and current repository state, inspect the task packet and latest GitHub evidence, and then:
+- resume a uniquely identified ACCEPTED or IN_PROGRESS task;
+- wait for MULAI if the task is only DISPATCHED;
+- wait for GPT0 if the task is READY_FOR_REVIEW;
+- remain BLOCKED if a dependency, base SHA, evidence link, or access is invalid;
+- report IDLE if no task is active.
+
+The recovery trigger does not authorize a new task, scope expansion, merge, or deployment. Never claim that the previous conversation's transcript or unrecorded local work has been recovered.
+
 ## 5. GPT0 task creation and task board ownership
 
-GPT0 is the sole writer of TASK_BOARD.md and task packet files under docs/coordination/tasks/.
+GPT0 is the sole writer of TASK_BOARD.md, task packet files under docs/coordination/tasks/, AGENT_STATE.md, and AGENT_REPORTS.md.
 
-After this protocol is approved and merged, the CEO grants GPT0 standing, narrow permission to commit task queue changes directly to the default branch when repository rules allow, limited strictly to:
+After this protocol is approved and merged, the CEO grants GPT0 standing, narrow permission to commit task queue and reporting changes directly to the default branch when repository rules allow, limited strictly to:
 - creating/updating docs/coordination/tasks/TASK-ID.md;
 - updating docs/coordination/TASK_BOARD.md;
+- updating docs/coordination/AGENT_STATE.md;
 - updating docs/coordination/AGENT_REPORTS.md.
 
 This is a coordination-only exception. It does not permit GPT0 or any specialist to push application code, tests, deployment configuration, or unrelated files directly to the default branch. If branch protection or repository policy blocks a direct coordination update, GPT0 must use one coordination branch/PR and clearly tell the CEO that the task is not available on the default branch until that PR is merged.
 
-Specialists must never edit the task board or another agent's task packet. If a task needs a correction, they report it to GPT0 and wait for an updated packet.
+Specialists must never edit the task board, Agent State, CEO report, or another agent's task packet. If a task needs a correction, they report it to GPT0 and wait for an updated packet.
 
 ## 6. Task packet requirements
 
@@ -126,27 +150,40 @@ Use TASK_PACKET_TEMPLATE.md as the file structure. GPT0 fills every field before
 - If two tasks need the same files or depend on the same changing foundation, GPT0 must sequence them.
 - Each implementation task uses its own branch based on the exact SHA in its packet.
 - A specialist must not start a WAITING task.
-- GPT0 alone updates the shared Task Board and CEO report. This prevents concurrent-write conflicts.
+- GPT0 alone updates shared coordination state. This prevents concurrent-write conflicts.
 
-## 8. GitHub work and evidence
+## 8. GitHub work, checkpoints, and evidence
 
 ### Implementation / documentation task
 
 - Create a dedicated branch: agent/GPT-NUMBER/TASK-ID-SLUG.
 - Branch from the exact base SHA in the task file.
 - Change only allowed paths.
-- Run required checks and record actual command results.
-- Open one PR against the target branch named in the task file.
+- Commit meaningful progress regularly so it remains available if the chat is lost.
+- Open a draft PR early when practical; otherwise ensure the task branch commits are pushed and discoverable.
+- Run required checks and record actual command results in the PR.
+- Open/update one PR against the target branch named in the task file.
 - Include the Task ID and task packet link in the PR title/body.
 - Do not merge or deploy.
-- Use .github/PULL_REQUEST_TEMPLATE.md.
 
 ### Read-only / QA / audit task
 
 - Do not modify production code unless remediation is explicitly authorized.
-- Place the full report as a comment on the evidence Issue/PR named in the task packet, or create the specified GitHub Issue if the packet directs it.
+- Put interim findings and the final report as comments on the evidence Issue/PR named in the task packet, or create the specified GitHub Issue if the packet directs it.
 - Each finding includes severity, affected path/line or commit, reproducible evidence, impact, and recommended action.
 - If write access is unavailable, mark BLOCKED. Never claim a report was saved when it was not.
+
+### Checkpoint format
+
+A durable checkpoint should state:
+- Task ID and current task branch / PR / Issue;
+- latest commit SHA or evidence comment link;
+- what is complete;
+- what remains;
+- checks actually performed and their results;
+- next safe action and any blocker.
+
+Do not put secrets, credentials, private data, or long raw logs in the Agent State dashboard. Unsaved chat-only work is not recoverable.
 
 ### One CEO report
 
@@ -166,7 +203,7 @@ docs/coordination/AGENT_REPORTS.md is the sole consolidated specialist report fo
 | WAITING | Task depends on another task; do not start |
 | READY | Task is published on the default branch but GPT0 has not dispatched it yet; do not start |
 | DISPATCHED | GPT0 announced the task to the CEO; the assigned GPT may start after receiving the CEO's MULAI/LAKSANAKAN trigger |
-| ACCEPTED | Specialist has acknowledged the task |
+| ACCEPTED | Specialist has acknowledged the task; work is not assumed to have started until recorded |
 | IN_PROGRESS | Work is underway |
 | BLOCKED | Work cannot safely continue; blocker is recorded |
 | READY_FOR_REVIEW | Specialist submitted GitHub evidence; GPT0 review is pending |
@@ -184,6 +221,7 @@ Specialist chat must stay short:
 - On start: DITERIMA — TASK-ID — mulai dikerjakan.
 - On completion: SELESAI — TASK-ID — PR/ISSUE LINK — menunggu GPT0.
 - On blocker: BLOCKED — TASK-ID — ONE-LINE BLOCKER.
+- On new-chat recovery: PULIH — GPTN — TASK-ID/IDLE — checkpoint/status.
 
 GPT0's start announcement to the CEO should stay short:
 
@@ -204,7 +242,7 @@ When the CEO says an agent is done, GPT0 must:
 5. Verify the actual test commands/results and CI for the exact PR HEAD SHA.
 6. Check for unrelated changes, regressions, missing tests, unresolved review comments, and dependency gaps.
 7. For QA/audit tasks, verify that findings are specific, reproducible, and evidence-backed.
-8. Set the appropriate status and update TASK_BOARD.md and AGENT_REPORTS.md.
+8. Set the appropriate status and update TASK_BOARD.md, AGENT_STATE.md, and AGENT_REPORTS.md.
 9. Send the CEO a short Indonesian digest and only ask for decisions that require CEO authority.
 
 A chat message saying SELESAI is not evidence of a successful implementation. If the Issue/PR cannot be found or evidence is incomplete, keep the task READY_FOR_REVIEW or BLOCKED and explain why.
@@ -233,4 +271,4 @@ Do not dump specialist logs, raw test output, or long technical explanations int
 
 ## 14. Adoption
 
-This protocol becomes active only after this documentation PR is reviewed and merged by the CEO. Until then, it is a proposed operating contract.
+This protocol update becomes active only after it is reviewed and merged by the CEO.
