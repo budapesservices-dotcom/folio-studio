@@ -6,7 +6,7 @@
 **PR #1 pinned main comparison snapshot:** 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1  
 **Overall status:** PR #10 is CLOSED/MERGED into the PR #1 feature foundation at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; PR #1 remains open/draft/unmerged to `main`. CI #503 passed. GitHub Pages deployment status after the feature-branch push remains unverified.  
 **Last verified:** 2026-11-21, live GitHub inspection of merge result, PR refs, compare results and workflow configuration
-**CEO-selected route:** retain PR #1 as common parent; reconcile main into it deliberately, then PR #4 → PR #5 → PR #7
+**CEO-selected route:** PR #10 main reconciliation merged into the PR #1 feature foundation; refresh PR #4 → PR #5 → PR #7 in order
 
 ## Current checkpoint — 2026-11-21, after PR #10 merge
 
@@ -40,11 +40,11 @@ PR #1, #4, #5 and #7 remain open and unmerged. PR #10 is closed/merged into the 
 
 | PR | Live HEAD | Task-packet HEAD | Base / dependency | Verified state |
 |---|---|---|---|---|
-| #1 | `89780034f32b1809cc49640e83bac5c817d88a91` | Same | main; pinned comparison `8d8571cb13da23fb2f39c57cc3d34f556dbf10c1` | Match; open, draft, `mergeable=false` |
-| #10 | `601bedfeccae8ddaeda772139182d3c4a3a139be` | Same | `feat/canvas-pan-distribute` @ `89780034...` | Match; open, draft, unmerged; `mergeable=true`; two parents exact; CI #480 success |
-| #4 | `9730fdc02f5ee331c17de61c443a0f0d35782c56` | Same | PR #1 @ `89780034...` | Match; open, unmerged; CI #362 pass on exact head |
-| #5 | `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | Same | PR #1 @ `89780034...` | Match; open, unmerged; CI #360 pass on exact head |
-| #7 | `76eb40426059ed21ce93156c5065835ea3717467` | Same | old PR #5 base `b2d7e9045a150a49852b1f266f95b7424986b64d` | Match; open, unmerged; diverged from latest PR #5 |
+| #1 | `d585bc3581aadd335cc4d6292a3d13cb2a650253` | Updated by merged PR #10 | main | Match; open, draft, unmerged to main |
+| #10 | `601bedfeccae8ddaeda772139182d3c4a3a139be` | Same | `feat/canvas-pan-distribute` | CLOSED/MERGED; merge commit `d585bc3...`; CI #503 passed |
+| #4 | `9730fdc02f5ee331c17de61c443a0f0d35782c56` | Same | old base `89780034...`; refresh preflight dispatched | Open/unmerged; exact old-head CI #362 was green; base refresh not yet executed |
+| #5 | `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | Same | old base `89780034...`; PR #4 must go first | Open/unmerged; diverged from current foundation |
+| #7 | `76eb40426059ed21ce93156c5065835ea3717467` | Same | old PR #5 base `b2d7e904...` | Open/unmerged; remains last; no sync authorized |
 
 The pinned PR #1 comparison remains 310 ahead / 41 behind. A fresh compare of PR #1 against current main is 310 ahead / 60 behind because main has advanced 19 commits since the pinned snapshot; a direct compare of 8d8571c... → main confirms every one of those 19 commits change only docs/coordination/**, so GPT3's product-code audit baseline remains valid.
 
