@@ -20,7 +20,7 @@
 | Product-code baseline | 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
 | PR #1 pinned main comparison snapshot | 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
-| Current live PR #1 vs main comparison | 310 ahead / 72 behind; 31 commits since pinned snapshot touch only docs/coordination/**; current main `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4` |
+| Last full PR #1 vs main comparison checkpoint | main @ `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`: 310 ahead / 72 behind; 31 commits since pinned snapshot touch only docs/coordination/**; subsequent GPT0 tracking updates are coordination-only |
 | CEO-selected integration route | Retain PR #1 as common parent; reconcile main into it after a specific preflight packet; then PR #4, PR #5, and PR #7 in order |
 | Last reconciled | 2026-11-21 — GPT0 review of GPT1 preflight and current main freshness check |
 
@@ -64,7 +64,7 @@ No specialist tasks currently READY.
 
 ## Reconciliation facts
 
-- Current main HEAD is `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`. The live PR #1 comparison is 310 ahead / 72 behind; all 31 commits after the pinned snapshot touch only `docs/coordination/**`.
+- At the GPT0 live-comparison checkpoint, main was `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`: PR #1 was 310 ahead / 72 behind, and all 31 commits after the pinned snapshot touched only `docs/coordination/**`. Later GPT0 tracking updates also touched only coordination records; no product branch was changed.
 
 - PR #1 is open, draft, unmerged and `mergeable=false`; retain it as a candidate parent only, not a merge-ready branch.
 - PR #2, PR #3 and PR #6 merged into `feat/canvas-pan-distribute`, not `main`. Their merge chain culminates at PR #1 HEAD `89780034...`; their contents are present on the feature branch. PR #8 and PR #9 are the coordination/recovery PRs merged into `main`.
