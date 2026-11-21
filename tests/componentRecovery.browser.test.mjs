@@ -511,7 +511,7 @@ async function clickCardAction(browser, componentName, action) {
     'if(!card)throw new Error("Component Rack card not found: "+' + JSON.stringify(componentName) + ');' +
     'const button=card.querySelector(' + JSON.stringify(action) + ');' +
     'if(!button)throw new Error("Component action not found: "+' + JSON.stringify(action) + ');' +
-    'button.click();return true;})()',
+    'button.focus();button.click();return true;})()',
   );
   expect(result).toBe(true);
 }
@@ -555,9 +555,10 @@ async function createComponentMaster(browser) {
   );
   expect(name).toBeTruthy();
   await ensureComponentRackOpen(browser);
+  const renameSelector = 'button[title=' + JSON.stringify('Rename ' + name) + ']';
   await waitForApp(
     browser,
-    '!!document.querySelector("button[title="+JSON.stringify("Rename " +' + JSON.stringify(name) + ') + "]")',
+    'document.querySelector(' + JSON.stringify(renameSelector) + ')!==null',
     'new master action controls are available',
   );
   return name;
@@ -567,12 +568,12 @@ async function createDirtyActiveMaster(browser) {
   const originalName = await createComponentMaster(browser);
   const renamedName = originalName + ' QA';
   await browser.click('button[title=' + JSON.stringify('Rename ' + originalName) + ']');
+  const inputSelector = 'input[aria-label=' + JSON.stringify('Rename ' + originalName) + ']';
   await waitForApp(
     browser,
-    '!!document.querySelector("input[aria-label="+JSON.stringify(' + JSON.stringify('Rename ' + originalName) + ')+"]")',
+    'document.querySelector(' + JSON.stringify(inputSelector) + ')!==null',
     'Component Rack rename form opens',
   );
-  const inputSelector = 'input[aria-label=' + JSON.stringify('Rename ' + originalName) + ']';
   await browser.evaluate(
     '(() => {const input=document.querySelector(' + JSON.stringify(inputSelector) + ');' +
     'if(!input)throw new Error("Rename input missing");input.focus();input.select();return true;})()',
@@ -710,7 +711,7 @@ describe('Component Canvas deletion and recovery — actual App / Chromium / Ind
         await waitForDialogClosed(browser);
         const cancelState = await readNativeProjects(browser);
         expect(cancelState.root.components.some((component) => component.id === master.masterId)).toBe(true);
-        expect(cancelState.buffer.nodeIds).toEqual(master.buffer.nodes.map((node) => node.id));
+        expect(cancelState.buffer.nodes.map((node) => node.id)).toEqual(master.buffer.nodes.map((node) => node.id));
         const focusReturned = await browser.evaluate(
           'document.activeElement===document.querySelector("button[aria-label="+JSON.stringify(' +
           JSON.stringify('Delete ' + master.name) + ')+"]")',
@@ -842,21 +843,33 @@ describe('Component Canvas deletion and recovery — actual App / Chromium / Ind
         );
         expect(retryDialog).toContain('Recovery copy saved; deletion needs retry');
 
+        await clickDialogAction(browser, 'Retry deletion using saved recovery');
+        await waitForDialogClosed(browser);
+        await waitForNativeProjects(
+          browser,
+          (value) => !value.root.components.some((component) => component.id === master.masterId) &&
+            value.buffer?.nodeCount === 0,
+          'the actual App retries only the deletion and then performs buffer cleanup',
+        );
+        const retryProbe = await readNativeDeletionProbe(browser);
+        expect(retryProbe.triggerErrors).toEqual([]);
+        expect(retryProbe.events).toContainEqual(expect.objectContaining({ phase: 'recovery', event: 'complete' }));
+        expect(retryProbe.events).toContainEqual(expect.objectContaining({ phase: 'deletion', event: 'abort' }));
+        expect(retryProbe.events).toContainEqual(expect.objectContaining({ phase: 'deletion', event: 'complete' }));
+        expect(retryProbe.events).toContainEqual(expect.objectContaining({ phase: 'cleanup', event: 'complete' }));
+        const completedBeforeReload = await readNativeProjects(browser);
+        expect(completedBeforeReload.root.components.some((component) => component.id === master.masterId)).toBe(false);
+        expect(completedBeforeReload.root.components.filter((component) =>
+          component.name === master.name + ' (Recovered)').length).toBe(1);
+        expect(completedBeforeReload.buffer.nodeCount).toBe(0);
+
         await browser.reload();
         await waitForAppReload(browser);
-        const reloadedAfterFailure = await readNativeProjects(browser);
-        expect(reloadedAfterFailure.root.components.some((component) => component.id === master.masterId)).toBe(true);
-        expect(reloadedAfterFailure.root.components.filter((component) =>
+        const restored = await readNativeProjects(browser);
+        expect(restored.root.components.some((component) => component.id === master.masterId)).toBe(false);
+        expect(restored.root.components.filter((component) =>
           component.name === master.name + ' (Recovered)').length).toBe(1);
-        expect(reloadedAfterFailure.buffer.nodes.map((node) => node.id)).toEqual(master.buffer.nodes.map((node) => node.id));
-
-        // App reload intentionally drops its in-memory recovery decision/session.
-        // The exact durable state is still proven; retry is covered below in the
-        // same-origin App before reload would lose that transient dialog state.
-        const latestMaster = await browser.evaluate(
-          'Array.from(document.querySelectorAll(".component-rack-card-name")).map((item)=>item.textContent.trim())',
-        );
-        expect(latestMaster).toContain(master.name);
+        expect(restored.buffer.nodeCount).toBe(0);
       } finally {
         await closeDisposableApp(context);
       }
