@@ -4,7 +4,7 @@
 **Task ID:** FOLIO-20261121-PR1-FOUNDATION-AUDIT-001  
 **Assigned agent:** GPT3 — QA / UI / Regression  
 **Mode:** READ-ONLY / QA / AUDIT  
-**Status:** READY  
+**Status:** DISPATCHED  
 **Priority:** P1  
 **Cycle ID:** FOLIO-CYCLE-20261121-001
 
