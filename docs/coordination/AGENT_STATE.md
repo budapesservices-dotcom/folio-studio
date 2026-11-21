@@ -11,7 +11,7 @@
 | Last verified | 2026-11-21, live GitHub inspection by GPT0 |
 | Product-code baseline | main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
 | PR #1 comparison snapshot | main @ 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
-| Current main after GPT0 coordination packet updates | main @ 1a77debc5baa8bc413f8e798c0230fd8aa93ebc5; updates are confined to docs/coordination/** |
+| Post-snapshot main changes | GPT0 coordination-only updates under docs/coordination/**; no non-coordination changes observed |
 
 ## Agent state
 
