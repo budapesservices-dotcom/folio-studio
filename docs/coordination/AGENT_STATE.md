@@ -8,7 +8,7 @@
 | Field | Value |
 |---|---|
 | Cycle ID | FOLIO-CYCLE-20261121-001 |
-| Last full compare checkpoint | 2026-11-21, comparison main snapshot `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a`; PR #1 is 310 ahead / 93 behind; changed-path intersection only `AGENTS.md` and `.github/workflows/deploy.yml`. Current main `ee984ed108f13c905a98307eb8cfd453ebe0f9d0` is four coordination-only commits later |
+| Last full compare checkpoint | 2026-11-21, comparison main snapshot `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a`; PR #1 is 310 ahead / 93 behind; changed-path intersection only `AGENTS.md` and `.github/workflows/deploy.yml`. Subsequent GPT0 tracking commits on main touch only `docs/coordination/**` |
 | Product-code baseline | main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
 | PR #1 comparison snapshot | main @ 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
 | PR #1 delta at pinned snapshot | 310 ahead / 41 behind; diverged |
