@@ -7,12 +7,12 @@
 
 In a newly opened conversation, the CEO sends the matching one-line trigger:
 
-- **PULIHKAN GPT1**
-- **PULIHKAN GPT2**
-- **PULIHKAN GPT3**
-- **PULIHKAN GPT4**
+- **PULIHKAN GPT1 — REPOSITORY: https://github.com/budapesservices-dotcom/folio-studio**
+- **PULIHKAN GPT2 — REPOSITORY: https://github.com/budapesservices-dotcom/folio-studio**
+- **PULIHKAN GPT3 — REPOSITORY: https://github.com/budapesservices-dotcom/folio-studio**
+- **PULIHKAN GPT4 — REPOSITORY: https://github.com/budapesservices-dotcom/folio-studio**
 
-The CEO does not need to paste the previous conversation, task packet, long report, or technical history. The new conversation must retrieve the current information from the repository and the task's GitHub evidence.
+The repository URL in the trigger tells a fresh conversation where to begin. The CEO does not need to paste the previous conversation, task packet, long report, or technical history. The new conversation must retrieve the current information from the repository and the task's GitHub evidence.
 
 This is a recovery request, not permission to select a new task or expand scope.
 
