@@ -4,10 +4,10 @@
 
 After the coordination protocol is merged, open each existing specialist chat and send its matching activation command:
 
-- GPT1 chat: **AKTIFKAN GPT1 DARI REPOSITORY FOLIO**
-- GPT2 chat: **AKTIFKAN GPT2 DARI REPOSITORY FOLIO**
-- GPT3 chat: **AKTIFKAN GPT3 DARI REPOSITORY FOLIO**
-- GPT4 chat: **AKTIFKAN GPT4 DARI REPOSITORY FOLIO**
+- GPT1 chat: **AKTIFKAN GPT1 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
+- GPT2 chat: **AKTIFKAN GPT2 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
+- GPT3 chat: **AKTIFKAN GPT3 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
+- GPT4 chat: **AKTIFKAN GPT4 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
 
 The specialist reads its identity, workflow, Task Board, and recovery instructions from GitHub. This setup does not need to be repeated in that same conversation.
 
@@ -15,10 +15,10 @@ The specialist reads its identity, workflow, Task Board, and recovery instructio
 
 Open a new conversation for that same GPT and send only the matching one-line recovery command:
 
-- New GPT1 chat: **PULIHKAN GPT1**
-- New GPT2 chat: **PULIHKAN GPT2**
-- New GPT3 chat: **PULIHKAN GPT3**
-- New GPT4 chat: **PULIHKAN GPT4**
+- New GPT1 chat: **PULIHKAN GPT1 — https://github.com/budapesservices-dotcom/folio-studio**
+- New GPT2 chat: **PULIHKAN GPT2 — https://github.com/budapesservices-dotcom/folio-studio**
+- New GPT3 chat: **PULIHKAN GPT3 — https://github.com/budapesservices-dotcom/folio-studio**
+- New GPT4 chat: **PULIHKAN GPT4 — https://github.com/budapesservices-dotcom/folio-studio**
 
 The new chat reads the current assignment and latest saved checkpoint from GitHub. If the task was IN_PROGRESS, it resumes from the last durable checkpoint. If only DISPATCHED, send MULAI separately. If GitHub evidence is missing or inconsistent, the specialist must report BLOCKED.
 
