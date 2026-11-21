@@ -2,7 +2,8 @@
 
 **Cycle:** FOLIO-CYCLE-20261121-001  
 **Coordinator / editor:** GPT0  
-**Baseline:** main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f  
+**Product-code baseline at cycle start:** main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f  
+**Main comparison tip at dispatch:** fe77c47be8f15ffdd45ed5d37a4603a6e824c94f  
 **Overall status:** INDEPENDENT AUDITS DISPATCHED — implementation held  
 **Last verified:** 2026-11-21, live GitHub inspection
 
@@ -25,7 +26,7 @@ No merge, deployment, source-code edit, test edit, or Phase 2 work was performed
 
 ## Principal risks
 
-1. PR #1 is not yet an accepted parent integration. At the pinned main comparison snapshot e4cf6f94cd9d794393cc8293fd084e7ba6152615 it is 29 commits behind and GitHub says mergeable=false. Its additions overlap newer main coordination files created by merged PR #8/#9.
+1. PR #1 is not yet an accepted parent integration. At the pinned main comparison snapshot fe77c47be8f15ffdd45ed5d37a4603a6e824c94f it is 32 commits behind and GitHub says mergeable=false. Its additions overlap newer main coordination files created by merged PR #8/#9.
 2. PR #4/#5 depend on PR #1's unmerged head. Their green CI validates their own feature branch snapshots, not final integration with main.
 3. PR #7 is stacked on old PR #5 HEAD b2d7e904... and diverges from latest PR #5 HEAD a8b28182...; no rebase/retarget is authorized.
 4. PR #1 lacks verified PR-triggered CI and full browser acceptance evidence in the current inspection. Cloudflare deployment success is not acceptance.
