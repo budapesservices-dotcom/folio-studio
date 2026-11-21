@@ -109,3 +109,19 @@ Manual browser acceptance for Task 07 remains **pending**. Verify initial Cancel
 - IndexedDB project writes share one in-memory serialized queue. A recovery-copy save resolves only after its read/write transaction fires `oncomplete`; the master is re-read and CAS-checked after that barrier. Deletion is a separate canonical commit and its project transaction completes before the reserved Component Canvas buffer record is cleared.
 - Main Canvas autosaves include their captured monotonic `projectRevision`; an older queued autosave is skipped after a newer durable revision. Component Canvas uses an independent single-writer debounce controller; discard/recovery first flushes the current buffer, invalidates pending timers, and waits for any in-flight write before the cleanup barrier.
 - Persistence failures keep the local buffer. A failed canonical persistence rolls the in-memory project back to its last durable snapshot through a guarded new commit; the in-memory `projectRevision` therefore continues to increase. IndexedDB schema/database version remains v2; no session journal or new project store is introduced.
+
+### GPT4 manual browser acceptance gate — Component Canvas deletion and recovery
+
+The following App-level scenarios are a separate manual acceptance gate. They are not covered by the automated Main Canvas autosave / native IndexedDB test and must not be reported as passed until GPT4 exercises them against the actual application:
+
+1. **Cancel:** make the active Component Canvas buffer dirty, request deletion of its master, choose Cancel, and verify the master, buffer contents, history, active session, and canonical project revision remain unchanged.
+2. **Save as new:** choose Save buffer as a new component and verify the recovery component's complete document is durably committed before the original master's compare-and-swap (CAS) deletion is attempted.
+3. **Stale CAS:** change the canonical master after the recovery copy is durable but before deletion. Verify both the recovery copy and original master remain, and the local buffer is preserved.
+4. **Recovery persistence failure:** force the recovery-copy IndexedDB write to fail. Verify the original master deletion is never attempted, the original master remains, and the local buffer remains editable and recoverable.
+5. **Deletion persistence failure:** allow the recovery copy to become durable, then force the canonical deletion write to fail. Verify the original master and local buffer are not cleared; retry must not create a duplicate recovery copy.
+6. **Discard ordering:** choose Discard buffer and delete. Verify the local buffer is cleared only after the canonical deletion transaction has completed durably.
+7. **Clean active-master deletion:** verify canonical deletion and Component Canvas cleanup each reach their required IndexedDB completion barriers before the Component Canvas closes or resets.
+8. **Modal accessibility:** verify initial focus is placed inside the dialog; Tab and Shift+Tab remain trapped; Escape maps to the safe Cancel action; background content is inert and cannot be activated; focus returns to the invoking control after close.
+9. **Failure and retry:** reload after each injected failure and verify the last durable canonical project and Component Canvas buffer are restored without silent data loss.
+
+GPT4 must record each scenario as PASS, FAIL, or NOT RUN with reproducible observations. These manual deletion/recovery and modal scenarios remain pending until independently verified; passing the automated Chromium autosave test does not close this gate.
