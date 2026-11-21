@@ -177,3 +177,12 @@ GPT2's previous PR #4/#5 remediation reserve remains WAITING; Native Commands Ph
 ## GPT0 correction to GPT1 PR #1 preflight exact-head reference
 
 GPT1's preflight report comment contains a transcription typo in the PR #1 feature HEAD. The live GitHub PR API and commit endpoint confirm the actual head is `89780034f32b1809cc49640e83bac5c817d88a91`, not the string printed in GPT1's report. GPT0 repeated the comparison using the actual commit and verified merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`, 310 ahead / 78 behind against the pinned main source, and the exact two-path intersection `AGENTS.md` + `.github/workflows/deploy.yml`. The report's SHA typo is explicitly corrected in a GPT0 follow-up comment on PR #1. The preflight approval is based on GPT0's independent verification of the actual live refs, not on the mistyped string.
+
+
+## GPT0 executive mandate — adopted and GPT2 reconciliation dispatched
+
+On 2026-11-21 the CEO directed GPT0 to stop pausing for repeated routine approvals and to move GPT1–GPT4 work forward, stopping only for material risks or reserved decisions. GPT0 recorded this standing delegation in [GPT0_MANDATE.md](GPT0_MANDATE.md) and updated [PROTOCOL.md](PROTOCOL.md) to version 1.3. The mandate authorizes scoped task-branch work, validation, draft PRs, dispatch, and follow-up coordination without a second per-task approval. Product PR merges, production deployment, destructive data actions, security/financial changes, and material product-direction changes remain explicit CEO gates.
+
+GPT0 refreshed the PR #1 reconciliation source to main `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a`. Live verification confirms PR #1 remains open/draft/unmerged at `89780034f32b1809cc49640e83bac5c817d88a91`; merge-base remains `cce72029e35b902c2ccd1644ec762d269c7ff97e`; current divergence is 310 ahead / 93 behind; changed-path intersection remains exactly `AGENTS.md` and `.github/workflows/deploy.yml`.
+
+Task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001` is now **DISPATCHED** to GPT2 on the refreshed exact refs. The former separate CEO branch-synchronization authorization gate has been removed. GPT2 may create and push only its named task branch and open the required draft PR; it may not merge or deploy. GPT1/GPT3/GPT4 follow-up packets will be dispatched as soon as GPT2 publishes the exact candidate SHA, so their reviews target real artifacts rather than speculative refs.
