@@ -10,6 +10,23 @@
 
 ## Current checkpoint — 2026-11-21, after PR #10 merge
 
+## GPT0 deployment workflow repair — CEO authorized
+
+CEO explicitly authorized the minimal fix after Deploy FOLIO Studio run #62 failed at `actions/setup-node@v4` because `cache: npm` was configured without a lockfile.
+
+Applied on `feat/canvas-pan-distribute`:
+- Commit: `edb0cc155d87c7580e6d5713935b873402a5182f`
+- File: `.github/workflows/deploy.yml`
+- Exact diff: removed only the `cache: npm` line. No dependency, lockfile, build command, deployment target, source, or product code was changed.
+- PR #1 remains open/draft/unmerged to `main`.
+
+The expected automatic push workflows have been created for this exact commit:
+- [Deploy FOLIO Studio run #63](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298913) — currently in progress at last check.
+- [FOLIO verification run #518](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298951) — currently in progress at last check.
+
+Do not call deployment successful until run #63 completes successfully and, ideally, the GitHub Pages deployment URL/status is verified.
+
+
 **PR #10 reconciliation was executed under CEO authorization.** GitHub confirms PR #10 is closed/merged into `feat/canvas-pan-distribute` as a normal merge commit:
 
 - Merge commit: [`d585bc3581aadd335cc4d6292a3d13cb2a650253`](https://github.com/budapesservices-dotcom/folio-studio/commit/d585bc3581aadd335cc4d6292a3d13cb2a650253).
