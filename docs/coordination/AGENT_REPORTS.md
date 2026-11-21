@@ -20,7 +20,7 @@ Earlier specialist audits of PR #1/#4/#5/#7 remain historical evidence for their
 | PR #7 Workspace Preferences V1 | **COMPATIBLE WITH CONDITIONS** — GPT1 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | Helper API compatible, but model/persistence adoption blocked; no sync |
 | PR #10 foundation reconciliation | **CANDIDATE — REVIEW PENDING** — GPT2 | [Draft PR and checkpoint](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) | Exact-head CI #480 passed; GPT3/GPT4 reviews dispatched; 82 trailing-space lines await audit disposition |
 
-All four PRs remain open and unmerged. PR #1 is draft and non-mergeable. None of the specialist verdicts is merge approval. GPT2's remediation reserve remains WAITING, and Native Commands Phase 2 is not authorized.
+Product PRs #1, #4, #5 and #7 remain open and unmerged; PR #10 is an additional draft integration candidate, also open and unmerged. PR #1 is draft and non-mergeable. None of the specialist verdicts is merge approval. GPT2's separate PR #4/#5 remediation reserve remains WAITING, and Native Commands Phase 2 is not authorized. The current-checkpoint section above supersedes older task-status and comparison statements in the historical notes below.
 
 ## Exact-ref reconciliation
 
