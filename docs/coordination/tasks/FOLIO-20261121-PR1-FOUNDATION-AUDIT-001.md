@@ -12,7 +12,7 @@ Repository: budapesservices-dotcom/folio-studio
 Task file: docs/coordination/tasks/FOLIO-20261121-PR1-FOUNDATION-AUDIT-001.md  
 Evidence destination: PR #1 conversation thread  
 Target branch: feat/canvas-pan-distribute, read-only  
-Exact main comparison snapshot at dispatch: e4cf6f94cd9d794393cc8293fd084e7ba6152615; product-code baseline captured at cycle start: 49761cd8ca0cd719beb9b84a6becc03dbd2b431f; PR #1 originally opened against main at cce72029e35b902c2ccd1644ec762d269c7ff97e
+Exact main comparison snapshot at dispatch: fe77c47be8f15ffdd45ed5d37a4603a6e824c94f; product-code baseline captured at cycle start: 49761cd8ca0cd719beb9b84a6becc03dbd2b431f; PR #1 originally opened against main at cce72029e35b902c2ccd1644ec762d269c7ff97e
 
 ### Objective
 Audit PR #1 as the foundational workspace branch on which PR #4 and PR #5 are based. Determine whether its WIP scope, divergence from main, validation evidence, and remaining acceptance work make it safe to retain as the parent integration step.
@@ -22,7 +22,7 @@ Audit PR #1 as the foundational workspace branch on which PR #4 and PR #5 are ba
 - PR #1 exact HEAD: 89780034f32b1809cc49640e83bac5c817d88a91
 - PR #1 original base: cce72029e35b902c2ccd1644ec762d269c7ff97e
 - Current main comparison snapshot after cycle coordination publication: e4cf6f94cd9d794393cc8293fd084e7ba6152615; product-code baseline before coordination-only commits: 49761cd8ca0cd719beb9b84a6becc03dbd2b431f
-- Live compare at snapshot e4cf6f94cd9d794393cc8293fd084e7ba6152615: diverged; PR #1 is 310 commits ahead and 29 commits behind main; GitHub currently reports mergeable=false. The 12 coordination-only commits published by GPT0 after cycle baseline are included in this comparison snapshot.
+- Live compare at snapshot e4cf6f94cd9d794393cc8293fd084e7ba6152615: diverged; PR #1 is 310 commits ahead and 32 commits behind main; GitHub currently reports mergeable=false. The coordination-only commits published by GPT0 after cycle baseline are included in this comparison snapshot.
 - PR #1 reports 60 changed files, approximately 14,127 additions and 799 deletions.
 - PR #1 description says automated checks and browser visual review were not confirmed.
 - No PR-triggered workflow run or combined status was returned for the exact PR #1 HEAD during GPT0 inspection.
