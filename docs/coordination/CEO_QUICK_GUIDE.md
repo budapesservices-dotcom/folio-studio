@@ -1,8 +1,28 @@
 # Folio CEO Quick Guide — GPT Task Inbox
 
-## One-time setup (do this once per GPT1–GPT4)
+## One-time setup (once for each existing GPT1–GPT4 conversation)
 
-After the protocol PR is merged, send each specialist the matching role-specific message from [SPECIALIST_ONBOARDING.md](SPECIALIST_ONBOARDING.md). This is needed because repository instructions are not automatically injected into every separate Custom GPT conversation. Once activated, the daily start trigger is only one word.
+After the coordination protocol is merged, open each existing specialist chat and send its matching activation command:
+
+- GPT1 chat: **AKTIFKAN GPT1 DARI REPOSITORY FOLIO**
+- GPT2 chat: **AKTIFKAN GPT2 DARI REPOSITORY FOLIO**
+- GPT3 chat: **AKTIFKAN GPT3 DARI REPOSITORY FOLIO**
+- GPT4 chat: **AKTIFKAN GPT4 DARI REPOSITORY FOLIO**
+
+The specialist reads its identity, workflow, Task Board, and recovery instructions from GitHub. This setup does not need to be repeated in that same conversation.
+
+## If a chat reaches its limit or you must open a new chat
+
+Open a new conversation for that same GPT and send only the matching one-line recovery command:
+
+- New GPT1 chat: **PULIHKAN GPT1**
+- New GPT2 chat: **PULIHKAN GPT2**
+- New GPT3 chat: **PULIHKAN GPT3**
+- New GPT4 chat: **PULIHKAN GPT4**
+
+The new chat reads the current assignment and latest saved checkpoint from GitHub. If the task was IN_PROGRESS, it resumes from the last durable checkpoint. If only DISPATCHED, send MULAI separately. If GitHub evidence is missing or inconsistent, the specialist must report BLOCKED.
+
+**Important:** only work recorded in GitHub can be restored. Uncommitted edits and details that existed only in the old chat cannot be recovered automatically.
 
 ## When GPT0 says a specialist is ready
 
@@ -12,12 +32,12 @@ GPT2 SIAP MULAI — FOLIO-20261121-CANVAS-001. Buka chat GPT2 dan kirim: MULAI.
 
 ## What the CEO does
 
-1. Open the GPT2 conversation.
+1. Open the named GPT conversation.
 2. Send only: MULAI (or LAKSANAKAN).
 3. GPT2 reads its assigned DISPATCHED task from the repository and replies: DITERIMA — TASK-ID — mulai dikerjakan.
-4. Optionally tell GPT0: GPT2 mulai, so the Task Board can reflect the start immediately.
+4. Tell GPT0 **GPT2 mulai — TASK-ID** so it can update the agent/task status after checking the repository.
 5. When GPT2 finishes, it stores evidence in GitHub and replies with one short SELESAI line.
-6. Tell GPT0: GPT2 selesai. GPT0 performs the review and updates the CEO report.
+6. Tell GPT0 **GPT2 selesai — TASK-ID**. GPT0 performs the review and updates the CEO report.
 
 Do not copy the task packet or technical report between chats.
 
@@ -25,8 +45,10 @@ Do not copy the task packet or technical report between chats.
 
 Do not improvise or choose another task. Send the one-line blocker to GPT0 so it can repair the packet or access problem.
 
-## The three links to remember
+## The three working links to remember
 
-- Task Board: TASK_BOARD.md
-- Task packet folder: tasks/
-- CEO report: AGENT_REPORTS.md
+- [Task Board](TASK_BOARD.md)
+- [Agent State](AGENT_STATE.md)
+- [CEO report](AGENT_REPORTS.md)
+
+The full protocol and recovery rules are in [PROTOCOL.md](PROTOCOL.md) and [RECOVERY_PROTOCOL.md](RECOVERY_PROTOCOL.md).
