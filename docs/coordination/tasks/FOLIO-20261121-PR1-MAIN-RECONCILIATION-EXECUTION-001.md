@@ -12,7 +12,7 @@
 **Task file:** `docs/coordination/tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md`  
 **Evidence destination:** New draft PR targeting `feat/canvas-pan-distribute` (the head branch of PR #1); include this Task ID and packet link in its title/body.  
 **Target branch:** `feat/canvas-pan-distribute`  
-**Exact target/base SHA:** `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`  
+**Exact target/base SHA:** `89780034f32b1809cc49640e83bac5c817d88a91`  
 **Pinned main snapshot to merge:** `df08c279f9ddc77b3fed180bcd9913e641ddfe2d`  
 **Integration branch:** `agent/GPT2/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001`
 
@@ -23,10 +23,10 @@ Create a reviewable two-parent merge candidate that brings the pinned main snaps
 
 ### Context and authoritative references
 - GPT0-approved read-only preflight: [PR #1 report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863).
-- PR #1 foundation HEAD at task preparation: `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`.
+- PR #1 foundation HEAD at task preparation: `89780034f32b1809cc49640e83bac5c817d88a91`.
 - Pinned main source snapshot: `df08c279f9ddc77b3fed180bcd9913e641ddfe2d`.
 - Verified merge-base: `cce72029e35b902c2ccd1644ec762d269c7ff97e`.
-- Main changes since the pinned product comparison snapshot touch only `docs/coordination/**`; retain those changes from the pinned main snapshot.
+- Main changes since the pinned product comparison snapshot touch only `docs/coordination/**`. Relative to the common merge-base, main also contributes `.github/ISSUE_TEMPLATE/agent-task.yml` and `.github/PULL_REQUEST_TEMPLATE.md` as main-only additions, plus the two expected add/add conflicts. Preserve the templates and coordination files from pinned main.
 - Feature `.github/workflows/ci.yml` includes both `main` and `feat/canvas-pan-distribute` push triggers. Preserve it.
 - Main `.github/workflows/deploy.yml` adds `cache: npm` under `actions/setup-node@v4 > with`; feature deploy configuration is otherwise the desired configuration.
 - Main `AGENTS.md` owns current GPT identities, dispatch, task status, permissions, evidence, and no-unapproved-merge/deploy rules. Feature `AGENTS.md` owns Folio-specific product architecture, engineering guardrails, source-of-truth distinctions, execution rules, and task summaries. Compose both without contradictory duplicate authority.
@@ -48,7 +48,7 @@ Create a reviewable two-parent merge candidate that brings the pinned main snaps
 **Out of scope:** application source, tests, product docs, package manifests/lockfiles, any other manually edited path, PR #4/#5/#7, rebase, squash, force-push, cherry-pick, direct push to the foundation branch, PR merge, deployment, repository settings, secrets, Phase 2, and GPT2's remediation-reserve work.
 
 ### Required work
-1. Verify live PR #1 is open, draft, unmerged and still at exact head `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`. Verify pinned main commit `df08c279f9ddc77b3fed180bcd9913e641ddfe2d` is available and ancestry matches the approved preflight. If either ref differs, stop BLOCKED; GPT0 must refresh the packet.
+1. Verify live PR #1 is open, draft, unmerged and still at exact head `89780034f32b1809cc49640e83bac5c817d88a91`. Verify pinned main commit `df08c279f9ddc77b3fed180bcd9913e641ddfe2d` is available and ancestry matches the approved preflight. If either ref differs, stop BLOCKED; GPT0 must refresh the packet.
 2. Verify the separate CEO authorization before creating/pushing any branch or merge commit.
 3. Create the named integration branch from the exact PR #1 base SHA, not from main.
 4. Merge the pinned main SHA into the integration branch using a normal non-fast-forward merge commit. No rebase or cherry-pick.
@@ -68,7 +68,7 @@ Create a reviewable two-parent merge candidate that brings the pinned main snaps
 - [ ] Final `AGENTS.md` preserves main coordination authority and Folio-specific guardrails without contradiction.
 - [ ] Final `deploy.yml` preserves feature deployment behavior and includes `cache: npm`.
 - [ ] Final `ci.yml` preserves the feature push trigger and existing verification steps.
-- [ ] No unrelated manual source/test/product-doc changes.
+- [ ] Main-only `.github/ISSUE_TEMPLATE/agent-task.yml`, `.github/PULL_REQUEST_TEMPLATE.md`, and `docs/coordination/**` are preserved unchanged from the pinned source; no unrelated manual source/test/product-doc changes.
 - [ ] Local checks pass on exact candidate and GitHub CI is green on exact draft PR HEAD.
 - [ ] Draft PR is open against the foundation branch; no merge or deployment occurred.
 - [ ] Draft PR contains Task ID, parent SHAs, candidate SHA, resolution summary, changed paths, and actual check evidence.
@@ -128,3 +128,8 @@ Blocker: `BLOCKED — FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 — a
 - [x] Evidence destination and validation commands specified.
 - [x] Separate CEO authorization gate made explicit; READY does not grant execution permission.
 - [x] No branch, PR, application code, test, or deployment configuration was modified by GPT0.
+
+
+### GPT0 SHA correction note — 2026-11-21
+
+GPT1's preflight comment contains a transcription error in the PR #1 HEAD string. The live GitHub PR API and commit endpoint independently confirm the actual PR #1 head is `89780034f32b1809cc49640e83bac5c817d88a91`. GPT0 reran the exact-ref comparison and the merge-base changed-path intersection against that actual commit. The result remains: merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`, PR #1 is 310 commits ahead / 78 behind the pinned main snapshot, and the only intersection of paths changed on both sides is `AGENTS.md` and `.github/workflows/deploy.yml`. The execution packet pins the corrected exact PR #1 SHA.
