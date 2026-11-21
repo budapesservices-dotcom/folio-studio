@@ -149,7 +149,7 @@ Task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001` is **READY_FOR_REVIE
 
 GPT0 reviewed Task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001` against its packet, GPT1's full report comment ([PR #1 report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863)), and current live GitHub evidence. **Disposition: APPROVED.**
 
-- PR #1 feature ref remains exactly `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`.
+- PR #1 feature ref remains exactly `89780034f32b1809cc49640e83bac5c817d88a91`.
 - The current main ref is `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`; the live comparison is 310 commits ahead / 72 behind.
 - There are 31 main commits after the pinned product-code snapshot. All changed paths are under `docs/coordination/**`; the four commits added after GPT1's report are also coordination-only.
 - GPT0 independently rebuilt the changed-path sets from merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`. The only intersection is `AGENTS.md` and `.github/workflows/deploy.yml`.
@@ -165,10 +165,15 @@ GPT0 published `FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001` for GPT2 â
 - Task packet: [FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md)
 - Status: **READY** â€” not dispatched and not started.
 - Integration branch to be created only after authorization: `agent/GPT2/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001`.
-- Target branch: `feat/canvas-pan-distribute`, exact base `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`.
+- Target branch: `feat/canvas-pan-distribute`, exact base `89780034f32b1809cc49640e83bac5c817d88a91`.
 - Pinned main source to merge: `df08c279f9ddc77b3fed180bcd9913e641ddfe2d`.
 - Manual conflict paths: `AGENTS.md` and `.github/workflows/deploy.yml`. `.github/workflows/ci.yml` is verification-only and must retain the feature push trigger.
 - Expected output: a two-parent merge candidate on a dedicated integration branch and a draft PR targeting the PR #1 foundation branch. GPT2 must not merge it or deploy.
 - Authorization gate: the CEO must separately and explicitly authorize branch synchronization before GPT0 dispatches the task or GPT2 creates/pushes the integration branch. The CEO's request to prepare this packet is not treated as execution authorization.
 
 GPT2's previous PR #4/#5 remediation reserve remains WAITING; Native Commands Phase 2 remains prohibited. PR #4/#5/#7 are not changed by this task.
+
+
+## GPT0 correction to GPT1 PR #1 preflight exact-head reference
+
+GPT1's preflight report comment contains a transcription typo in the PR #1 feature HEAD. The live GitHub PR API and commit endpoint confirm the actual head is `89780034f32b1809cc49640e83bac5c817d88a91`, not the string printed in GPT1's report. GPT0 repeated the comparison using the actual commit and verified merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`, 310 ahead / 78 behind against the pinned main source, and the exact two-path intersection `AGENTS.md` + `.github/workflows/deploy.yml`. The report's SHA typo is explicitly corrected in a GPT0 follow-up comment on PR #1. The preflight approval is based on GPT0's independent verification of the actual live refs, not on the mistyped string.
