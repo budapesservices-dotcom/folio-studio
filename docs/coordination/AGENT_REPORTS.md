@@ -8,7 +8,17 @@
 **Last verified:** 2026-11-21, live GitHub inspection of merge result, PR refs, compare results and workflow configuration
 **CEO-selected route:** PR #10 main reconciliation merged into the PR #1 feature foundation; refresh PR #4 → PR #5 → PR #7 in order
 
-## Latest checkpoint — 2026-11-21, PR #4 base-refresh and GPT2 dispatch
+## Latest checkpoint — PR #4 GPT2 implementation accepted; GPT4 QA dispatched
+
+- PR #4 HEAD `4555a46160fe7c57342e976e06b26a8f8859ed77`; base foundation `edb0cc155d87c7580e6d5713935b873402a5182f`; PR #4 remains OPEN / unmerged.
+- Sync commit `94bd1aeeeacde491c4ae0ce40e67138e3595e5ff` verified parent order: original PR #4 HEAD `9730fdc...` first, foundation `edb0cc1...` second.
+- Post-sync diff: exactly `tests/nativePersistence.browser.test.mjs` and `docs/ACCEPTANCE_TESTS.md`.
+- Exact-head CI #539 passed (17 test files / 239 tests); GitHub log explicitly shows 1 Chromium test executed in ~21.1 seconds, not skipped.
+- GPT0 implementation review: APPROVED for GPT2 task only — https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061990741. PR #4 is not merge-approved.
+- GPT4 task `FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001` is DISPATCHED against exact head `4555a46...`; manual component deletion/recovery/modal acceptance remains the release gate.
+- Current preview: https://4fddb5cf.folio-studio-preview.pages.dev. PR #5/#7 unchanged; no child merge, main merge, or Native Commands Phase 2/3.
+
+## Historical checkpoint — 2026-11-21, PR #4 base-refresh and GPT2 dispatch
 
 - Live foundation `feat/canvas-pan-distribute`: `edb0cc155d87c7580e6d5713935b873402a5182f`; PR #1 remains open/draft/unmerged to main.
 - PR #4 exact head `9730fdc02f5ee331c17de61c443a0f0d35782c56`; exact comparison to foundation is DIVERGED 98/96 with merge-base `89780034f32b1809cc49640e83bac5c817d88a91`; GitHub reports clean mergeability.
@@ -59,7 +69,7 @@ GPT0 completed a fresh read-only PR #4 base-refresh preflight after the foundati
 | Workstream | Specialist verdict | Evidence | GPT0 disposition |
 |---|---|---|---|
 | PR #1 foundation (old audit base) | **NOT READY at audited SHA** — GPT3 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #10 and deploy repair are now on feature base; PR #1 remains open/draft against main |
-| PR #4 Native Command Core Phase 1 | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) | GPT0 approved base refresh with conditions; GPT2 task 002 is DISPATCHED to sync + close mounted autosave/native IndexedDB gaps |
+| PR #4 Native Command Core Phase 1 | **GPT2 IMPLEMENTATION APPROVED; GPT4 MANUAL QA PENDING** | [GPT2 report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061964698) · [GPT0 review](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061990741) · [GPT4 QA packet](tasks/FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001.md) | Exact HEAD `4555a46...`; CI #539 and native Chromium test pass; do not merge until GPT4 manual acceptance and final integration review |
 | PR #5 Workspace Window Management | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | Preserve implementation; do not synchronize until PR #4 is accepted; shared App/CSS integration remains |
 | PR #7 Workspace Preferences V1 | **COMPATIBLE WITH CONDITIONS** — GPT1 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | Keep stacked on PR #5; do not sync until PR #5 is accepted |
 | PR #10 foundation reconciliation | **PASS WITH CONDITIONS** — GPT2/GPT3/GPT4 | [GPT2](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) · [GPT3](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) · [GPT4](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | Merged into PR #1 feature foundation as `d585bc3...`; deploy repair `edb0cc1...` now verified live |
