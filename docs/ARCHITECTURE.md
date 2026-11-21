@@ -18,13 +18,10 @@ Folio is a hybrid visual editor for interface design, prototyping, animation and
 - `src/app`: application shell, editor state and orchestration.
 - `src/core/document`: framework-independent AST types, factories and validation.
 - `src/core/persistence`: IndexedDB and `.flop` file I/O adapters.
-- `src/engines/canvas`: SVG/DOM renderer and selection behavior.
-- `src/engines/layout`: future layout calculation and constraints.
-- `src/engines/prototype`: future interaction graph and preview runtime.
-- `src/engines/animation`: future timeline, tracks and keyframes.
-- `src/engines/history`: future command batching and scalable history implementation. The first release currently keeps a small snapshot reducer in `src/app`.
-- `src/engines/codegen`: future AST-to-HTML/CSS/JS compiler.
-- `tests`: domain and reducer tests that do not require a browser.
+- `src/engines/canvas`: implemented SVG/DOM canvas renderer, geometry and selection behavior.
+- `tests`: automated domain, reducer and canvas behavior checks.
+
+Future engine capabilities remain in the roadmap below. Their directories are created when implementation begins; empty placeholder folders are intentionally not kept in the source tree. The planned capabilities are layout/constraints, prototype interactions and preview, animation timelines, scalable command-based history, and deterministic HTML/CSS/JavaScript generation.
 
 ## Native `.flop` format — version 1
 
