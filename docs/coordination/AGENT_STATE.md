@@ -20,18 +20,23 @@
 
 | Agent | Role | Activation | Current task | Task status | Working branch / PR / Issue | Latest durable checkpoint | Next action / blocker | Last updated |
 |---|---|---|---|---|---|---|---|---|
-| GPT0 | Coordinator / Chief of Staff | ACTIVE | FOLIO-CYCLE-20261121-001 | IN_PROGRESS | main coordination records | CEO-authorized PR #10 merge verified at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; PR #1 feature head advanced to same SHA; CI #503 passed | CEO-authorized deploy workflow fix `edb0cc1` removed only `cache: npm`; Pages run #63 and CI #518 both completed successfully; GPT1 PR #4 preflight is DISPATCHED; GPT2 implementation packet is WAITING | 2026-11-21 |
-| GPT1 | Architect / Preflight | ACTIVE | FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002 | DISPATCHED | [PR #4 refresh preflight](tasks/FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002.md); [PR #4](https://github.com/budapesservices-dotcom/folio-studio/pull/4) | Read-only packet published; exact foundation `d585bc3581aadd335cc4d6292a3d13cb2a650253` and PR #4 HEAD `9730fdc02f5ee331c17de61c443a0f0d35782c56`; compare diverged 98/95 with merge-base `89780034...` | Wait for CEO MULAI in GPT1 chat; report exact ancestry/conflicts/path intersection only, no branch mutation | 2026-11-21 |
-| GPT2 | Engineer | ACTIVE | FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-001 | WAITING | [Finding-specific PR #4 packet](tasks/FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-001.md); [PR #4](https://github.com/budapesservices-dotcom/folio-studio/pull/4) | PR #10 reconciliation delivered and merged by GPT0 at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; new PR #4 task narrows GPT4 findings to App autosave and native IndexedDB evidence | Do not start until GPT1 preflight approves and GPT0 changes this packet to DISPATCHED; then preserve parent order and exact refs | 2026-11-21 |
+| GPT0 | Coordinator / Chief of Staff | ACTIVE | FOLIO-CYCLE-20261121-001 | IN_PROGRESS | main coordination records | PR #10 merged; deploy repair `edb0cc1` and Pages run #63 / CI #518 verified successful; fresh PR #4 preflight comment posted | GPT2 packet 002 dispatched on exact foundation `edb0cc1` and PR #4 `9730fdc`; preserve PR4 → PR5 → PR7 order | 2026-11-21 |
+| GPT1 | Architect / Preflight | ACTIVE | — | IDLE | No active task | Prior preflight packet 002 superseded because foundation advanced from `d585bc3` to `edb0cc1` | No work requested; GPT0 performed and recorded fresh exact-ref preflight on PR #4 | 2026-11-21 |
+| GPT2 | Engineer | ACTIVE | FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002 | DISPATCHED | [Refreshed PR #4 task](tasks/FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002.md); [PR #4](https://github.com/budapesservices-dotcom/folio-studio/pull/4) | GPT0 preflight approved sync with conditions; exact start PR #4 `9730fdc...`, foundation target `edb0cc1...`; no source changes yet | Begin after short MULAI signal in GPT2 chat; perform two-parent sync first, then scoped App autosave/native IndexedDB work only | 2026-11-21 |
 | GPT3 | QA / UI / Regression | ACTIVE | FOLIO-20261121-PR10-CANDIDATE-QA-001 | APPROVED | [QA packet](tasks/FOLIO-20261121-PR10-CANDIDATE-QA-001.md); [PR #10 QA report](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) | PASS WITH CONDITIONS; exact candidate/CI/scope passed; provider deployment success reported; browser QA NOT RUN because host DNS/page retrieval failed | Report accepted; browser smoke not claimed and remains unverified | 2026-11-21 |
 | GPT4 | Independent Auditor | ACTIVE | FOLIO-20261121-PR10-CANDIDATE-AUDIT-001 | APPROVED | [Audit packet](tasks/FOLIO-20261121-PR10-CANDIDATE-AUDIT-001.md); [PR #10 audit report](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | APPROVE WITH CONDITIONS; ancestry, 22-path scope, 20/20 blobs, AGENTS authority, workflows and CI verified; 82 Markdown hard breaks explicitly dispositioned | Report accepted; standard git diff --check is known to flag those lines and is not claimed as passed | 2026-11-21 |
 | GPT3 | QA / UI / Regression | ACTIVE | FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | READY_FOR_REVIEW | Read-only audit: PR #1 feat/canvas-pan-distribute | [PR #1 report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585); exact PR #1 HEAD 89780034f32b1809cc49640e83bac5c817d88a91; pinned main snapshot 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 | GPT0 review pending; audit verdict NOT READY; no branch or code changes | 2026-11-21 |
 | GPT4 | Independent Auditor | ACTIVE | FOLIO-20261121-PR4-PR5-QA-001 | READY_FOR_REVIEW | Read-only audit: PR #4 and PR #5 | [PR #4 report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718); [PR #5 report](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294); exact heads 9730fdc... and a8b2818... | GPT0 review pending; both verdicts READY WITH CONDITIONS; no implementation or merge | 2026-11-21 |
 
-## Current checkpoint — post PR #10 merge
+## Latest checkpoint — 2026-11-21, PR #4 preflight and GPT2 release
 
-**Deployment repair verified:** CEO authorized the minimal fix, and GPT0 removed only `cache: npm` from `.github/workflows/deploy.yml` in commit `edb0cc155d87c7580e6d5713935b873402a5182f`. Exact-commit CI [run #518](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298951) passed. GitHub Pages [Deploy run #63](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298913) completed successfully: build, artifact upload, and deploy jobs all succeeded; deploy log reports Pages deployment success and environment URL https://budapesservices-dotcom.github.io/folio-studio/.
-
+- Current foundation `feat/canvas-pan-distribute`: `edb0cc155d87c7580e6d5713935b873402a5182f`. PR #1 remains OPEN / DRAFT / unmerged to `main`.
+- PR #4 `feat/native-command-core-phase1`: `9730fdc02f5ee331c17de61c443a0f0d35782c56`, OPEN / unmerged.
+- Exact compare foundation `edb0cc1...` → PR #4 `9730fdc...`: DIVERGED 98 / 96, merge-base `89780034f32b1809cc49640e83bac5c817d88a91`; GitHub reports `mergeable=true`, `mergeable_state=clean`.
+- Foundation delta 21 paths vs PR #4 26 paths; intersection empty. GPT0's read-only preflight report: https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061699937.
+- PR #4 / PR #5 intersection remains exactly `src/app/App.tsx` and `src/styles/global.css`; PR #5 remains at `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`, unsynchronized. PR #7 remains at `76eb40426059ed21ce93156c5065835ea3717467`, stacked on the older PR #5 base.
+- GPT1's previous preflight packet 002 was superseded because it pinned the old foundation `d585bc3...`. GPT0 performed and posted a fresh exact-ref read-only preflight instead.
+- GPT2 packet `FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002` is DISPATCHED against the exact new foundation and PR #4 refs. Its scope is limited to the two-parent base refresh and approved App autosave/native IndexedDB work. No PR merge, deployment, PR #5/#7 sync, or Native Commands Phase 2/3 is authorized.
 
 ## GPT0 deployment workflow repair — CEO authorized
 
@@ -44,10 +49,10 @@ Applied on `feat/canvas-pan-distribute`:
 - PR #1 remains open/draft/unmerged to `main`.
 
 The expected automatic push workflows have been created for this exact commit:
-- [Deploy FOLIO Studio run #63](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298913) — currently in progress at last check.
+- [Deploy FOLIO Studio run #63](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298913) — SUCCESS; build, artifact upload and deploy all completed.
 - [FOLIO verification run #518](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298951) — currently in progress at last check.
 
-Do not call deployment successful until run #63 completes successfully and, ideally, the GitHub Pages deployment URL/status is verified.
+Deployment success was verified from completed run #63 and its environment URL.
 
 
 - PR #10 CLOSED/MERGED into `feat/canvas-pan-distribute` at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; GitHub confirms PR #1 head is now the same SHA. PR #1 remains open/draft/unmerged to main.
