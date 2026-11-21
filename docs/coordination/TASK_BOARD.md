@@ -20,7 +20,9 @@
 | Product-code baseline | 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
 | PR #1 pinned main comparison snapshot | 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
-| Last reconciled | 2026-11-21 — GPT0 live GitHub verification |
+| Current live PR #1 vs main comparison | 310 ahead / 57 behind; 16 commits since pinned snapshot are docs/coordination/** only |
+| CEO-selected integration route | Retain PR #1 as common parent; reconcile main into it after a specific preflight packet; then PR #4, PR #5, and PR #7 in order |
+| Last reconciled | 2026-11-21 — GPT0 live GitHub verification and CEO route selection |
 
 ## Dispatched — awaiting CEO start signal
 
@@ -47,6 +49,10 @@
 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | GPT3 | [PR #1 audit report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main comparison snapshot `8d8571cb13da23fb2f39c57cc3d34f556dbf10c1` | READY_FOR_REVIEW — report and packet match; verdict NOT READY |
 | FOLIO-20261121-PR4-PR5-QA-001 | GPT4 | [PR #4 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) · [PR #5 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; both base PR #1 `89780034f32b1809cc49640e83bac5c817d88a91` | READY_FOR_REVIEW — both reports and exact heads match; both verdicts READY WITH CONDITIONS |
 | FOLIO-20261121-PR7-DEPENDENCY-001 | GPT1 | [PR #7 dependency audit](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | PR #7 `76eb40426059ed21ce93156c5065835ea3717467`; PR #5 dependency HEAD `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | READY_FOR_REVIEW — report and exact heads match; verdict COMPATIBLE WITH CONDITIONS |
+
+## CEO route decision
+
+**DECIDED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. Do not recreate/split the foundation at this stage. First prepare a controlled main→PR #1 reconciliation that preserves main's GPT coordination protocol and carefully combines the product-specific AGENTS guidance plus deploy workflow. No source branch has been changed yet. Next, refresh child PR bases and close PR #4 QA gaps before PR #5; PR #7 remains last. See `AGENT_REPORTS.md` for the ordered gate sequence.
 
 ## Reconciliation facts
 
