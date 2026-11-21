@@ -10,6 +10,9 @@
 
 ## Current checkpoint — 2026-11-21, after PR #10 merge
 
+**Deployment repair verified:** CEO authorized the minimal fix, and GPT0 removed only `cache: npm` from `.github/workflows/deploy.yml` in commit `edb0cc155d87c7580e6d5713935b873402a5182f`. Exact-commit CI [run #518](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298951) passed. GitHub Pages [Deploy run #63](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298913) completed successfully: build, artifact upload, and deploy jobs all succeeded; deploy log reports Pages deployment success and environment URL https://budapesservices-dotcom.github.io/folio-studio/.
+
+
 ## GPT0 deployment workflow repair — CEO authorized
 
 CEO explicitly authorized the minimal fix after Deploy FOLIO Studio run #62 failed at `actions/setup-node@v4` because `cache: npm` was configured without a lockfile.
