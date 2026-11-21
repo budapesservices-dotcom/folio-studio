@@ -28,11 +28,11 @@ Earlier specialist audits of PR #1/#4/#5/#7 and the PR #10 candidate reviews rem
 
 | Workstream | Specialist verdict | Evidence | GPT0 disposition |
 |---|---|---|---|
-| PR #1 foundation | **NOT READY** — GPT3 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | Keep open as candidate parent; no merge |
+| PR #1 foundation (audit of old base) | **NOT READY at audited SHA** — GPT3 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585) | PR #10 is now merged into the feature base; PR #1 remains open/draft against main and still needs later integration/acceptance gates |
 | PR #4 Native Command Core Phase 1 | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) | Preserve implementation; close QA gaps and combined integration |
 | PR #5 Workspace Window Management | **READY WITH CONDITIONS** — GPT4 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | Preserve implementation; close live drag/resize and harness gaps |
 | PR #7 Workspace Preferences V1 | **COMPATIBLE WITH CONDITIONS** — GPT1 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | Helper API compatible, but model/persistence adoption blocked; no sync |
-| PR #10 foundation reconciliation | **PASS WITH CONDITIONS** — GPT2/GPT3/GPT4 | [GPT2](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) · [GPT3](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) · [GPT4](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | Ancestry/scope/workflows/CI pass; 82 intentional Markdown hard-breaks preserved under source-fidelity exception; browser smoke NOT RUN due preview inaccessibility; CEO merge decision remains reserved |
+| PR #10 foundation reconciliation | **PASS WITH CONDITIONS** — GPT2/GPT3/GPT4 | [GPT2](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) · [GPT3](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) · [GPT4](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | Accepted with source-fidelity and browser-smoke limitations, then merged to PR #1 feature base as `d585bc3...`; CI #503 passed; automatic Pages run #62 failed before artifact upload/deploy |
 
 PR #1, #4, #5 and #7 remain open and unmerged. PR #10 is closed/merged into the feature foundation only; this does not merge PR #1 to main. None of the earlier specialist verdicts independently constitutes merge approval for the child PRs. The new GPT2 PR #4 implementation packet is WAITING, and Native Commands Phase 2/3 are not authorized. The current-checkpoint section above supersedes older task-status and comparison statements in the historical notes below.
 
@@ -50,7 +50,9 @@ The pinned PR #1 comparison remains 310 ahead / 41 behind. A fresh compare of PR
 
 Additional live compare confirms PR #7 → latest PR #5 is DIVERGED: merge-base `b2d7e904...`, 23 commits on the PR #5 side and 4 commits on the PR #7 side. The report and task's no-synchronization condition agree.
 
-## Current checkpoint — 2026-11-21
+## Historical checkpoint — PR #10 candidate review before merge
+
+The notes below record the pre-merge candidate review and are superseded by the post-merge checkpoint at the top of this document.
 
 - GPT1 task `FOLIO-20261121-PR1-RECONCILIATION-REFRESH-001`: **APPROVED** by GPT0. Verdict PASS WITH CONDITIONS; exact refs, 310/93 comparison, two add/add conflicts, preservation paths, and GPT0 mandate boundaries were verified. Report: [PR #1 comment](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7060922140).
 - GPT2 task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001`: **APPROVED**. Draft [PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10) is open against `feat/canvas-pan-distribute`, exact HEAD `601bedfeccae8ddaeda772139182d3c4a3a139be`. Commit has exactly two parents in order: PR #1 foundation `89780034...`, pinned main source `c936bbfa...`.
@@ -64,7 +66,7 @@ Additional live compare confirms PR #7 → latest PR #5 is DIVERGED: merge-base 
 
 ## Audit findings and remaining gates
 
-### PR #1 — foundation: NOT READY
+### PR #1 — foundation: NOT READY at the audited pre-PR10 SHA
 
 - The unified project / .flop / AST / Layers / Canvas foundation is directionally aligned with Folio's accepted architecture.
 - Confirmed P1 risks at the audited base: Component Canvas master deletion can discard an active local buffer; whole-component synchronization lacks stale-master protection. PR #4 contains the later remediation, but is not integrated into PR #1.
@@ -73,7 +75,7 @@ Additional live compare confirms PR #7 → latest PR #5 is DIVERGED: merge-base 
 - PR #4/#5 are both children of this exact PR #1 head and overlap on `src/app/App.tsx` and `src/styles/global.css`.
 - GPT3 found and corrected a factual error in its own task packet: PR #2, #3 and #6 merged into `feat/canvas-pan-distribute`, not `main`. Their merge chain culminates at PR #1 HEAD `89780034...`; they are included in the feature branch. PR #8 and #9 are the coordination/recovery PRs merged to main.
 
-**Disposition:** preserve PR #1 as the common candidate parent while GPT0/CEO selects a foundation reconciliation route. Do not merge it as-is.
+**Historical disposition at the audited SHA:** preserve PR #1 as the common candidate parent and resolve its main-side conflicts. The main→foundation reconciliation is now merged by PR #10; PR #1 itself remains open and unmerged to main.
 
 ### PR #4 — Native Command Core Phase 1: READY WITH CONDITIONS
 
