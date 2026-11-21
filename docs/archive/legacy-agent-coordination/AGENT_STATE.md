@@ -1,3 +1,5 @@
+> ARCHIVED HISTORICAL RECORD — not an active instruction, task queue, or source of current status. The former coordination workflow has been retired. Use the repository-root AGENTS.md and live GitHub state for all current work.
+
 # Folio Studio — Persistent Agent State
 
 **Coordinator / sole editor:** GPT0  

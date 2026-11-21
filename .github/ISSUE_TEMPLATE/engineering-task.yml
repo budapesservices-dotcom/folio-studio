@@ -1,0 +1,47 @@
+name: Folio Engineering Task
+description: Track one concrete, measurable Folio engineering outcome
+title: "[Engineering] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this issue to describe one engineering outcome. Codex owns normal technical execution and reports durable evidence here or in the related pull request.
+  - type: textarea
+    id: objective
+    attributes:
+      label: Desired outcome and context
+      description: Describe the user-visible or engine-level result and link relevant specifications.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and constraints
+      description: State included work, excluded work, dependencies, and any protected branches or files.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable results and relevant regression expectations.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: List relevant checks. Record only commands and checks actually executed.
+    validations:
+      required: false
+  - type: textarea
+    id: permissions
+    attributes:
+      label: Approval boundaries
+      value: |
+        - No merge or deployment without explicit CEO approval.
+        - No repository/Cloudflare settings or secret/access changes without explicit CEO approval.
+        - No destructive data operation without explicit CEO approval.
+    validations:
+      required: true
