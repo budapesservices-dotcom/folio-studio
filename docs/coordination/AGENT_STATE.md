@@ -8,11 +8,11 @@
 | Field | Value |
 |---|---|
 | Cycle ID | FOLIO-CYCLE-20261121-001 |
-| Last verified | 2026-11-21, live GitHub inspection by GPT0; main @ `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4` |
+| Last full compare checkpoint | 2026-11-21, main @ `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`; subsequent GPT0 tracking commits are coordination-only |
 | Product-code baseline | main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f |
 | PR #1 comparison snapshot | main @ 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 |
 | PR #1 delta at pinned snapshot | 310 ahead / 41 behind; diverged |
-| Current PR #1 vs main compare | 310 ahead / 72 behind; 31 commits since pinned snapshot touch only docs/coordination/** |
+| Last PR #1 vs main compare checkpoint | main @ `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`: 310 ahead / 72 behind; 31 commits since pinned snapshot touch only docs/coordination/**; later GPT0 updates are coordination-only |
 | PR #2/#3/#6 merge target | feat/canvas-pan-distribute, not main |
 | Main coordination changes | GPT0 updates are restricted to docs/coordination/** |
 
