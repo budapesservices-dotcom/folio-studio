@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -29,7 +29,7 @@ const browserAvailability = chromium
   ? (typeof WebSocket !== 'undefined' ? 'available' : 'Node WebSocket unavailable')
   : 'Chromium binary unavailable; set CHROMIUM_BIN or install Chromium in the CI image';
 
-async function launchChromium() {
+async function launchChromiumAttempt(path, attemptNumber) {
   if (!chromium) throw new Error(browserAvailability);
   if (typeof WebSocket === 'undefined') throw new Error(browserAvailability);
 
@@ -50,7 +50,8 @@ async function launchChromium() {
     '--disable-breakpad', '--disable-crash-reporter', '--no-first-run',
     '--no-default-browser-check', '--remote-allow-origins=*',
     '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
-    '--user-data-dir=' + profile, 'about:blank',
+    '--user-data-dir=' + profile,
+    'file://' + path,
   ], {
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -154,16 +155,18 @@ async function launchChromium() {
       const processState = spawnError ? 'spawnError=' + String(spawnError)
         : 'exitCode=' + String(child.exitCode) + ', signal=' + String(child.signalCode);
       throw new Error(
-        'Chromium DevTools startup failed (' + processState + '). DevToolsActivePort=' +
+        'Chromium DevTools startup failed on attempt ' + attemptNumber + ' (' + processState + '). DevToolsActivePort=' +
         (activePortContents.trim() || '<not created>') +
         (lastEndpointError ? '. Endpoint=' + lastEndpointError : '') +
         '. stderr tail:\n' + stderr.slice(-3000),
       );
     }
 
-    const page = targets.find((target) => target.type === 'page' && target.url === 'about:blank')
-      ?? targets.find((target) => target.type === 'page');
-    if (!page?.webSocketDebuggerUrl) throw new Error('Chromium did not expose a page target.');
+    const page = targets.find((target) => target.type === 'page' && target.url.startsWith('file://'));
+
+    if (!page?.webSocketDebuggerUrl) {
+      throw new Error('Chromium exposed DevTools on attempt ' + attemptNumber + ' but no fixture page target. Targets=' + JSON.stringify(targets));
+    }
 
     socket = new WebSocket(page.webSocketDebuggerUrl);
     await new Promise((resolveOpen, reject) => {
@@ -238,6 +241,20 @@ async function launchChromium() {
     await cleanup();
     throw error;
   }
+}
+
+
+async function launchChromium(path) {
+  const failures = [];
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await launchChromiumAttempt(path, attempt);
+    } catch (error) {
+      failures.push(String(error?.stack || error));
+      if (attempt < 2) await delay(500);
+    }
+  }
+  throw new Error('Chromium startup failed after two isolated attempts:\\n' + failures.join('\\n--- retry ---\\n'));
 }
 
 async function startViteApp() {
@@ -404,9 +421,13 @@ describe('Main Canvas App autosave with native Chromium IndexedDB', () => {
     async () => {
       let vite;
       let browser;
+      let fixtureDirectory;
       try {
+        fixtureDirectory = mkdtempSync(join(tmpdir(), 'folio-native-persistence-fixture-'));
+        const fixturePath = join(fixtureDirectory, 'browser.html');
+        writeFileSync(fixturePath, '<!doctype html><html><head><meta charset=\"utf-8\"></head><body></body></html>');
         vite = await startViteApp();
-        browser = await launchChromium();
+        browser = await launchChromium(fixturePath);
         await browser.send('Emulation.setDeviceMetricsOverride', {
           width: 1280, height: 800, deviceScaleFactor: 1, mobile: false,
         });
@@ -547,6 +568,7 @@ describe('Main Canvas App autosave with native Chromium IndexedDB', () => {
       } finally {
         await browser?.close();
         await vite?.close();
+        if (fixtureDirectory) rmSync(fixtureDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       }
     },
     120000,
