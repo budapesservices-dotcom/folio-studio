@@ -22,31 +22,23 @@
 |---|---|---|---|---|---|---|---|---|
 | GPT0 | Coordinator / Chief of Staff | ACTIVE | FOLIO-CYCLE-20261121-001 | IN_PROGRESS | main coordination records | GPT2 PR #4 implementation task approved at `4555a46`; exact CI #539 and Chromium test independently verified; GPT0 review posted | GPT4 post-implementation independent QA dispatched against exact PR #4 HEAD; preserve PR4 → PR5 → PR7 order | 2026-11-21 |
 | GPT1 | Architect / Preflight | ACTIVE | — | IDLE | No active task | Prior preflight packet 002 superseded because foundation advanced from `d585bc3` to `edb0cc1` | No work requested; GPT0 performed and recorded fresh exact-ref preflight on PR #4 | 2026-11-21 |
-| GPT2 | Engineer | ACTIVE | — | IDLE | No active task | PR #4 task 002 approved as implementation deliverable; final HEAD `4555a46160fe7c57342e976e06b26a8f8859ed77`; sync ancestry and exact CI #539 verified | No further work until a new scoped packet is issued; PR #4 still awaits GPT4 manual QA and GPT0 merge gate | 2026-11-21 |
+| GPT2 | Engineer | ACTIVE | FOLIO-20261121-PR4-COMPONENT-RECOVERY-BROWSER-ACCEPTANCE-001 | DISPATCHED | [Component recovery browser task](tasks/FOLIO-20261121-PR4-COMPONENT-RECOVERY-BROWSER-ACCEPTANCE-001.md); [PR #4](https://github.com/budapesservices-dotcom/folio-studio/pull/4) | Previous PR #4 task 002 approved; current exact HEAD `4555a46160fe7c57342e976e06b26a8f8859ed77`; CI #539 / native autosave browser test passed | Build actual-App native IndexedDB deletion/recovery/modal browser acceptance; only new browser test + acceptance docs are allowed | 2026-11-21 |
 | GPT3 | QA / UI / Regression | ACTIVE | FOLIO-20261121-PR10-CANDIDATE-QA-001 | APPROVED | [QA packet](tasks/FOLIO-20261121-PR10-CANDIDATE-QA-001.md); [PR #10 QA report](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) | PASS WITH CONDITIONS; exact candidate/CI/scope passed; provider deployment success reported; browser QA NOT RUN because host DNS/page retrieval failed | Report accepted; browser smoke not claimed and remains unverified | 2026-11-21 |
-| GPT4 | Independent Auditor | ACTIVE | FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001 | DISPATCHED | [New exact-head QA packet](tasks/FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001.md); [PR #4](https://github.com/budapesservices-dotcom/folio-studio/pull/4) | Exact PR #4 HEAD `4555a46160fe7c57342e976e06b26a8f8859ed77`; GPT0 implementation review accepted GPT2 task; CI #539 browser test confirmed executed | Await CEO MULAI in GPT4 chat; independently inspect native persistence test and attempt manual Component Canvas recovery/modal scenarios using disposable preview profile | 2026-11-21 |
+| GPT4 | Independent Auditor | ACTIVE | — | IDLE | No active task | Post-implementation report on PR #4 completed at exact HEAD `4555a46160fe7c57342e976e06b26a8f8859ed77`; verdict NOT READY — BLOCKED because both preview hosts inaccessible | Await new exact-head packet after GPT2 creates actual-App/native IndexedDB browser acceptance tests; then independently review CI and scenario evidence | 2026-11-21 |
 | GPT3 | QA / UI / Regression | ACTIVE | FOLIO-20261121-PR1-FOUNDATION-AUDIT-002 | READY_FOR_REVIEW | Read-only audit: PR #1 feat/canvas-pan-distribute | [PR #1 report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059122585); exact PR #1 HEAD 89780034f32b1809cc49640e83bac5c817d88a91; pinned main snapshot 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1 | GPT0 review pending; audit verdict NOT READY; no branch or code changes | 2026-11-21 |
 | GPT4 | Independent Auditor | ACTIVE | FOLIO-20261121-PR4-PR5-QA-001 | READY_FOR_REVIEW | Read-only audit: PR #4 and PR #5 | [PR #4 report](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718); [PR #5 report](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294); exact heads 9730fdc... and a8b2818... | GPT0 review pending; both verdicts READY WITH CONDITIONS; no implementation or merge | 2026-11-21 |
 
-## Latest checkpoint — PR #4 GPT2 implementation accepted; GPT4 QA dispatched
+## Latest checkpoint — GPT4 manual QA blocked; GPT2 browser-test fallback dispatched
 
-- PR #4 HEAD `4555a46160fe7c57342e976e06b26a8f8859ed77`; base foundation `edb0cc155d87c7580e6d5713935b873402a5182f`; PR #4 remains OPEN / unmerged.
-- Sync commit `94bd1aeeeacde491c4ae0ce40e67138e3595e5ff` verified parent order: original PR #4 HEAD `9730fdc...` first, foundation `edb0cc1...` second.
-- Post-sync diff: exactly `tests/nativePersistence.browser.test.mjs` and `docs/ACCEPTANCE_TESTS.md`.
-- Exact-head CI #539 passed (17 test files / 239 tests); GitHub log explicitly shows 1 Chromium test executed in ~21.1 seconds, not skipped.
-- GPT0 implementation review: APPROVED for GPT2 task only — https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061990741. PR #4 is not merge-approved.
-- GPT4 task `FOLIO-20261121-PR4-POST-AUTOSAVE-INDEPENDENT-QA-001` is DISPATCHED against exact head `4555a46...`; manual component deletion/recovery/modal acceptance remains the release gate.
-- Current preview: https://4fddb5cf.folio-studio-preview.pages.dev. PR #5/#7 unchanged; no child merge, main merge, or Native Commands Phase 2/3.
+- PR #4 remains OPEN / UNMERGED at `4555a46160fe7c57342e976e06b26a8f8859ed77`; base foundation `edb0cc155d87c7580e6d5713935b873402a5182f`.
+- GPT2 implementation task 002 is approved by GPT0. Its exact-head CI #539 passed (17 files / 239 tests), including one native Chromium autosave / IndexedDB browser test actually executed.
+- GPT4 report completed against the exact SHA: **NOT READY — BLOCKED**. Both Cloudflare preview URLs failed DNS/navigation in GPT4's isolated environment; GPT0 also could not open either URL using available web inspection.
+- All nine manual Component Canvas deletion/recovery/modal scenarios and viewport smoke checks remain **NOT RUN**. No product QA pass is claimed.
+- GPT4 assignment is approved as a completed report only; GPT4 is now IDLE. Report: https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7062150965.
+- GPT2 is DISPATCHED on `FOLIO-20261121-PR4-COMPONENT-RECOVERY-BROWSER-ACCEPTANCE-001` to add a real-App / real-Chromium / native-IndexedDB end-to-end test under the current Vite/CI environment. Allowed paths: new test file and acceptance documentation only; no production code/dependencies/scripts/workflows.
+- After GPT2 submits the test, GPT4 must independently inspect its exact-head run and browser evidence. PR #4 stays unmerged; PR #5/#7 remain untouched; Phase 2/3 remain prohibited.
 
-## Historical checkpoint — 2026-11-21, PR #4 preflight and GPT2 release
-
-- Current foundation `feat/canvas-pan-distribute`: `edb0cc155d87c7580e6d5713935b873402a5182f`. PR #1 remains OPEN / DRAFT / unmerged to `main`.
-- PR #4 `feat/native-command-core-phase1`: `9730fdc02f5ee331c17de61c443a0f0d35782c56`, OPEN / unmerged.
-- Exact compare foundation `edb0cc1...` → PR #4 `9730fdc...`: DIVERGED 98 / 96, merge-base `89780034f32b1809cc49640e83bac5c817d88a91`; GitHub reports `mergeable=true`, `mergeable_state=clean`.
-- Foundation delta 21 paths vs PR #4 26 paths; intersection empty. GPT0's read-only preflight report: https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061699937.
-- PR #4 / PR #5 intersection remains exactly `src/app/App.tsx` and `src/styles/global.css`; PR #5 remains at `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`, unsynchronized. PR #7 remains at `76eb40426059ed21ce93156c5065835ea3717467`, stacked on the older PR #5 base.
-- GPT1's previous preflight packet 002 was superseded because it pinned the old foundation `d585bc3...`. GPT0 performed and posted a fresh exact-ref read-only preflight instead.
-- GPT2 packet `FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002` is DISPATCHED against the exact new foundation and PR #4 refs. Its scope is limited to the two-parent base refresh and approved App autosave/native IndexedDB work. No PR merge, deployment, PR #5/#7 sync, or Native Commands Phase 2/3 is authorized.
+## Historical checkpoint — PR #4 GPT2 implementation accepted; GPT4 QA dispatched
 
 ## GPT0 deployment workflow repair — CEO authorized
 
