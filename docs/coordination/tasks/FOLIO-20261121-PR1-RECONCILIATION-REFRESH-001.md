@@ -4,7 +4,7 @@
 **Task ID:** `FOLIO-20261121-PR1-RECONCILIATION-REFRESH-001`  
 **Assigned agent:** GPT1 — Architect / Preflight  
 **Mode:** READ-ONLY  
-**Status:** DISPATCHED  
+**Status:** APPROVED  
 **Priority:** P0  
 **Cycle ID:** `FOLIO-CYCLE-20261121-001`
 
