@@ -1,5 +1,17 @@
 # Folio CEO Quick Guide — GPT Task Inbox
 
+## Default: Codex coordinator
+
+For repository work, start with one Codex coordinator. Give it the goal and relevant context; it reads the task packet and live GitHub state, verifies the exact base SHA and dependencies, creates bounded assignments, and delegates GPT1–GPT4 specialist profiles as native subagents. It tracks status, gathers evidence and reports, and keeps one CEO-facing summary. Separate GPT1–GPT4 chats and their wake/recovery commands below are a fallback when native delegation is unavailable.
+
+Every task must name its goal, unique ID, exact base SHA, allowed and forbidden paths, dependencies, evidence destination, checks, and stop conditions. Subagents are assumed to inherit the coordinator's effective permissions, so assignments stay least-privilege and explicitly bounded. GitHub is the durable record; chat-only state is not recoverable.
+
+Allow one repository writer at a time until isolated worktrees are proven safe. The coordinator waits for the writer to stop, checks the diff and freezes the exact candidate SHA, then starts one independent read-only QA/audit review against that SHA. If changes are needed, return them to the writer and freeze a new SHA before another review. Independent read-only analysis may run in parallel within actual session capacity; there is no fixed concurrency promise.
+
+CEO approval is still required for product PR merges, production deployment, repository settings/secrets changes, destructive data actions, and material product-direction changes. See [Codex Orchestration V1](CODEX_ORCHESTRATION_V1.md).
+
+## GPT conversation fallback
+
 ## One-time setup (once for each existing GPT1–GPT4 conversation)
 
 After the coordination protocol is merged, open each existing specialist chat and send its matching activation command:

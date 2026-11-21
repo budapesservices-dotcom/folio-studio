@@ -1,19 +1,27 @@
 # Folio Studio — GPT Team Coordination Protocol
 
-**Version:** 1.3
-**Status:** ACTIVE — version 1.3 applies the CEO-delegated GPT0 executive mandate
+**Version:** 1.4
+**Status:** ACTIVE — version 1.4 adds the Codex-native coordinator workflow while retaining GPT chat fallback
 **Repository:** budapesservices-dotcom/folio-studio
-**Team:** CEO + GPT0 + GPT1–GPT4
+**Team:** CEO + Codex coordinator + GPT1–GPT4 specialist profiles
 
 ## 1. Purpose
 
-The CEO should only carry short wake, finish, and recovery signals between conversations—not technical task packets or long reports. GPT0 is expected to coordinate proactively and must not request repeated approval for ordinary low-risk work already covered by its mandate. Read [GPT0 Executive Mandate](GPT0_MANDATE.md).
+For repository work, one Codex coordinator is the CEO's primary interface. It reads task context and live GitHub state, verifies exact SHAs and dependencies, creates bounded assignments, delegates GPT1–GPT4 specialist profiles as native subagents, tracks status, gathers reports, and maintains one CEO-facing summary. Native delegation is the default; the human-assisted GPT conversation workflow below remains a fallback when native delegation is unavailable. See [Codex Orchestration V1](CODEX_ORCHESTRATION_V1.md).
+
+Assume subagents inherit the coordinator's effective permissions. Keep assignments least-privilege and explicitly bounded. Until isolated worktrees are proven safe, allow one repository writer at a time. QA/audit starts only after the writer stops and the exact candidate SHA is frozen; reviewers inspect that SHA read-only. Independent read-only analysis can run in parallel within actual session capacity; do not promise a fixed concurrency count.
+
+Every task must identify a unique ID, goal, exact base SHA, allowed and forbidden paths, dependencies, evidence destination, required checks, permissions, and stop conditions. Store task status, checkpoints, and evidence durably in GitHub, not only in chat. CEO approval remains required for product PR merges, production deployment, repository settings/secrets changes, destructive data actions, and material product-direction changes.
+
+### 1.1 GPT chat workflow fallback
+
+When native delegation is unavailable, the CEO should only carry short wake, finish, and recovery signals between conversations—not technical task packets or long reports. GPT0 coordinates under its existing mandate and must not request repeated approval for ordinary low-risk work already covered by it. Read [GPT0 Executive Mandate](GPT0_MANDATE.md).
 
 GPT0 writes each assignment to the repository Task Inbox. The CEO opens the named specialist chat and types only MULAI or LAKSANAKAN. The specialist reads its own task from GitHub, acknowledges it briefly, performs the work, and stores its detailed evidence in GitHub. GPT0 reviews that evidence and maintains one CEO report.
 
 The repository is also the team's durable work index when a chat reaches its limit. A new conversation can restore the agent's role and latest recorded task checkpoint from GitHub using RECOVERY_PROTOCOL.md. It cannot recover unsaved chat-only work or automatically inherit the old transcript.
 
-This is intentionally a human-assisted handoff. Separate ChatGPT conversations do not automatically message or invoke one another. The CEO sends the short trigger to the intended specialist.
+In this fallback, separate ChatGPT conversations do not automatically message or invoke one another. The CEO sends the short trigger to the intended specialist.
 
 ## 2. The repository is the shared workspace
 
@@ -147,7 +155,8 @@ Use TASK_PACKET_TEMPLATE.md as the file structure. GPT0 fills every field before
 ## 7. Parallel work and conflict prevention
 
 - Default: no more than one READY, DISPATCHED, ACCEPTED, or IN_PROGRESS task per specialist at a time. This makes the simple MULAI trigger unambiguous.
-- GPT0 may publish multiple tasks for different specialists in parallel only when dependencies are satisfied and write scopes do not overlap.
+- The coordinator may delegate independent read-only analysis in parallel when dependencies are satisfied and actual session capacity permits. No fixed number of concurrent agents is promised.
+- Until isolated worktrees are proven safe, permit only one repository writer at a time. QA/audit begins only after the writer stops and the coordinator freezes the exact candidate SHA; the reviewer is read-only and inspects that SHA. Any fixes return to the single writer and require a new frozen SHA and review pass.
 - If two tasks need the same files or depend on the same changing foundation, GPT0 must sequence them.
 - Each implementation task uses its own branch based on the exact SHA in its packet.
 - A specialist must not start a WAITING task.
@@ -272,4 +281,4 @@ Do not dump specialist logs, raw test output, or long technical explanations int
 
 ## 14. Adoption
 
-The Task Inbox coordination protocol was merged through PR #8 (merge commit cb51e560b069baf7bd49f8f1a0f35f26d866ae0c). The persistent identity and new-chat recovery extension was merged through PR #9 (merge commit 49761cd8ca0cd719beb9b84a6becc03dbd2b431f). Version 1.3 and [GPT0 Executive Mandate](GPT0_MANDATE.md) record the CEO's standing delegation for low-risk task orchestration and task-scoped execution. This does not authorize product PR merges, production deployment, destructive data operations, security/financial changes, or material product-direction changes; those remain explicit CEO gates.
+The Task Inbox coordination protocol was merged through PR #8 (merge commit cb51e560b069baf7bd49f8f1a0f35f26d866ae0c). The persistent identity and new-chat recovery extension was merged through PR #9 (merge commit 49761cd8ca0cd719beb9b84a6becc03dbd2b431f). Version 1.3 and [GPT0 Executive Mandate](GPT0_MANDATE.md) record the CEO's standing delegation for low-risk task orchestration and task-scoped execution. Version 1.4 adds Codex-native delegation and keeps the GPT chat path as fallback. Neither version authorizes product PR merges, production deployment, destructive data operations, security/financial changes, or material product-direction changes; those remain explicit CEO gates.

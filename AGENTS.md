@@ -1,5 +1,15 @@
 # Folio Studio — Agent Instructions
 
+## Default Codex orchestration
+
+For repository work, the CEO's primary interface is one Codex coordinator. The coordinator reads the complete task context and live GitHub state, verifies the exact base SHA and dependencies, creates a bounded task plan, delegates specialist profiles as native subagents, tracks status, gathers their reports, and keeps one CEO-facing summary. GPT1–GPT4 remain reusable specialist profiles; separate GPT conversations and their wake/recovery commands are a fallback when native delegation is unavailable.
+
+Every delegated task must have a unique ID, goal, exact base SHA, allowed and forbidden paths, dependencies, evidence destination, required checks, and stop conditions. Assume subagents inherit the coordinator's effective permissions: constrain each assignment to the least privilege and smallest scope needed. Persist task state, checkpoints, and evidence in GitHub; chat memory alone is not durable.
+
+Allow only one repository writer at a time until isolated worktrees have been proven safe. Start QA or audit only after the writer has stopped and the candidate commit SHA is frozen; reviewers inspect that exact SHA read-only. Independent read-only analysis may run in parallel within the actual session capacity. Do not promise a fixed concurrency count. See [Codex Orchestration V1](docs/coordination/CODEX_ORCHESTRATION_V1.md).
+
+CEO approval remains required for product PR merges, production deployment, repository settings or secrets changes, destructive data actions, and material product-direction changes. This workflow does not change Folio's product architecture.
+
 These rules apply to every AI coding assistant and specialist agent working in this repository.
 
 ## Mandatory first read
