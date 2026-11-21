@@ -40,7 +40,7 @@ Independently assess whether PR #1 can safely remain the foundational workspace 
 
 - PR #1: https://github.com/budapesservices-dotcom/folio-studio/pull/1
 - PR #4 and PR #5 both depend on PR #1 HEAD `89780034...`.
-- PR #2 Native Commands V1, PR #3 `.flop` workflow, PR #6 Workspace Architecture V1, PR #8 Task Inbox protocol, and PR #9 recovery protocol are merged into main.
+- PR #2 Native Commands V1, PR #3 `.flop` workflow, and PR #6 Workspace Architecture V1 were merged into `feat/canvas-pan-distribute` (merge chain: PR #3 → `8d8133f90d0a647f79637e03e0d8c10848e7675c`; PR #2 → `d8a773bfa12a38915c88ed416b79fda580450a4e`; PR #6 → `89780034f32b1809cc49640e83bac5c817d88a91`). Their content is present in PR #1's feature HEAD, not in `main`. PR #8 Task Inbox and PR #9 recovery protocol are merged into `main`.
 - PR #1 description says the legacy floating-window model was removed and a shared Window System should be designed before individual windows return.
 - PR #1 remains draft and non-mergeable. Do not interpret Cloudflare deployment success as acceptance.
 - The previous task `FOLIO-20261121-PR1-FOUNDATION-AUDIT-001` is superseded because its main snapshot/divergence figures were stale and no durable report was published.
