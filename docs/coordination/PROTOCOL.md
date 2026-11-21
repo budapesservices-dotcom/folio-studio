@@ -1,13 +1,13 @@
 # Folio Studio — GPT Team Coordination Protocol
 
 **Version:** 1.3
-**Status:** ACTIVE — coordination protocol adopted after PR #8 merged; persistent recovery extension merged in PR #9
+**Status:** ACTIVE — version 1.3 applies the CEO-delegated GPT0 executive mandate
 **Repository:** budapesservices-dotcom/folio-studio
 **Team:** CEO + GPT0 + GPT1–GPT4
 
 ## 1. Purpose
 
-The CEO should only carry short start, finish, and recovery signals between conversations—not technical task packets or long reports.
+The CEO should only carry short wake, finish, and recovery signals between conversations—not technical task packets or long reports. GPT0 is expected to coordinate proactively and must not request repeated approval for ordinary low-risk work already covered by its mandate. Read [GPT0 Executive Mandate](GPT0_MANDATE.md).
 
 GPT0 writes each assignment to the repository Task Inbox. The CEO opens the named specialist chat and types only MULAI or LAKSANAKAN. The specialist reads its own task from GitHub, acknowledges it briefly, performs the work, and stores its detailed evidence in GitHub. GPT0 reviews that evidence and maintains one CEO report.
 
@@ -21,6 +21,7 @@ This is intentionally a human-assisted handoff. Separate ChatGPT conversations d
 |---|---|---|
 | AGENTS.md | Repository-wide agent rules | GPT0 / CEO-controlled |
 | docs/coordination/AGENT_IDENTITY.md | Canonical GPT0–GPT4 roles and boundaries | GPT0 |
+| docs/coordination/GPT0_MANDATE.md | Standing operational authority and risk gates for GPT0 | GPT0 |
 | docs/coordination/PROTOCOL.md | Team workflow and permissions | GPT0 |
 | docs/coordination/RECOVERY_PROTOCOL.md | New-chat recovery procedure | GPT0 |
 | docs/coordination/TASK_BOARD.md | Current task queue and status for all specialists | GPT0 only |
@@ -55,19 +56,19 @@ For each work cycle, GPT0 must:
 2. Create one task file per specialist at docs/coordination/tasks/TASK-ID.md.
 3. Add each task to docs/coordination/TASK_BOARD.md with status READY.
 4. Ensure the task file is committed and readable from the repository's default branch before announcing that it is ready. If a task is only on an unmerged branch, GPT0 must say so and provide the branch link; it must not claim that the task is on the default branch.
-5. Set the task file and board status to DISPATCHED, then tell the CEO exactly which specialist may start, with a short link and trigger instruction. Example: "GPT2 SIAP MULAI — FOLIO-20261121-CANVAS-001. Buka chat GPT2 dan kirim: MULAI."
+5. Set the task file and board status to DISPATCHED, then tell the CEO which specialist chat needs its short wake signal. DISPATCHED is GPT0's operational authorization for all ordinary actions expressly listed in the packet; do not insert a separate CEO approval gate unless a reserved risk/action applies. Example: "GPT2 SIAP MULAI — FOLIO-20261121-CANVAS-001. Kirim MULAI di chat GPT2."
 6. Update AGENT_STATE.md when activation or verified task status changes, including a link to the latest durable checkpoint when one exists.
 
 GPT0 should publish all currently independent tasks together. Dependent tasks must remain WAITING and must not be announced as ready before their prerequisites are approved.
 
 ### 4.2 CEO starts the specialist
 
-The CEO opens the named specialist conversation and sends only:
+The CEO may need to open the named specialist conversation and send only:
 
 - MULAI
 - or LAKSANAKAN
 
-The CEO does not copy the long task packet.
+This is a short wake/start signal because separate chats cannot message one another; it is not a second approval of routine task execution. The CEO does not copy the long task packet.
 
 ### 4.3 Specialist reads and accepts its task
 
@@ -113,7 +114,7 @@ The recovery trigger does not authorize a new task, scope expansion, merge, or d
 
 GPT0 is the sole writer of TASK_BOARD.md, task packet files under docs/coordination/tasks/, AGENT_STATE.md, and AGENT_REPORTS.md.
 
-After this protocol is approved and merged, the CEO grants GPT0 standing, narrow permission to commit task queue and reporting changes directly to the default branch when repository rules allow, limited strictly to:
+The CEO grants GPT0 standing, narrow permission to commit task queue and reporting changes directly to the default branch when repository rules allow, limited strictly to the coordination paths below (see [GPT0 Executive Mandate](GPT0_MANDATE.md)). GPT0 may dispatch specialists and authorize the task-scoped actions listed in their packets without obtaining a second approval for each routine step. This permission does not expand GPT0's direct source-code write scope. The coordination-write scope remains limited to:
 - creating/updating docs/coordination/tasks/TASK-ID.md;
 - updating docs/coordination/TASK_BOARD.md;
 - updating docs/coordination/AGENT_STATE.md;
@@ -271,4 +272,4 @@ Do not dump specialist logs, raw test output, or long technical explanations int
 
 ## 14. Adoption
 
-The Task Inbox coordination protocol was merged through PR #8 (merge commit cb51e560b069baf7bd49f8f1a0f35f26d866ae0c). The persistent identity and new-chat recovery extension was merged through PR #9 (merge commit 49761cd8ca0cd719beb9b84a6becc03dbd2b431f). This protocol is ACTIVE for the current FOLIO work cycle. Any substantive future change to authority, workflow, or permissions requires CEO review and approval.
+The Task Inbox coordination protocol was merged through PR #8 (merge commit cb51e560b069baf7bd49f8f1a0f35f26d866ae0c). The persistent identity and new-chat recovery extension was merged through PR #9 (merge commit 49761cd8ca0cd719beb9b84a6becc03dbd2b431f). Version 1.3 and [GPT0 Executive Mandate](GPT0_MANDATE.md) record the CEO's standing delegation for low-risk task orchestration and task-scoped execution. This does not authorize product PR merges, production deployment, destructive data operations, security/financial changes, or material product-direction changes; those remain explicit CEO gates.
