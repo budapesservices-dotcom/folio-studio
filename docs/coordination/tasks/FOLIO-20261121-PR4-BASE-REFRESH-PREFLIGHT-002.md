@@ -4,7 +4,7 @@
 **Task ID:** FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002  
 **Assigned agent:** GPT1 — Architect / Preflight  
 **Mode:** READ-ONLY  
-**Status:** DISPATCHED  
+**Status:** SUPERSEDED  
 **Priority:** P1  
 **Cycle ID:** FOLIO-CYCLE-20261121-001
 
@@ -77,3 +77,8 @@ Do not merge, deploy, update refs, rebase, retarget PRs, approve PRs, or change 
 
 Finish: SELESAI — FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002 — PR #4 COMMENT LINK — verdict — menunggu GPT0.  
 Blocker: BLOCKED — FOLIO-20261121-PR4-BASE-REFRESH-PREFLIGHT-002 — ONE-LINE BLOCKER.
+
+
+## Superseded by live foundation movement — 2026-11-21
+
+The foundation moved from the pinned `d585bc3581aadd335cc4d6292a3d13cb2a650253` to `edb0cc155d87c7580e6d5713935b873402a5182f` after the CEO-authorized deploy workflow repair. This packet must not be executed. GPT0 completed a fresh exact-ref read-only preflight and posted the current decision on PR #4: https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061699937. Replaced for orchestration purposes; no GPT1 work or branch mutation was performed.
