@@ -1,54 +1,63 @@
-# Folio CEO Quick Guide — GPT Task Inbox
+# Folio CEO Quick Guide — Codex Coordinator
 
-## One-time setup (once for each existing GPT1–GPT4 conversation)
+## Default: work through the local Codex coordinator
 
-After the coordination protocol is merged, open each existing specialist chat and send its matching activation command:
+For normal repository work, open the local Codex session attached to Folio and
+state the outcome you want. The Codex coordinator is the CEO's primary and
+default repository interface.
 
-- GPT1 chat: **AKTIFKAN GPT1 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
-- GPT2 chat: **AKTIFKAN GPT2 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
-- GPT3 chat: **AKTIFKAN GPT3 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
-- GPT4 chat: **AKTIFKAN GPT4 DARI REPOSITORY FOLIO — https://github.com/budapesservices-dotcom/folio-studio**
+The coordinator verifies the live repository, scope, exact base SHA,
+dependencies, and risks. It then invokes reusable native specialist profiles
+when useful:
 
-The specialist reads its identity, workflow, Task Board, and recovery instructions from GitHub. This setup does not need to be repeated in that same conversation.
+- **GPT1 — Architect / Preflight** for architecture and compatibility work.
+- **GPT2 — Engineer** for a bounded implementation or documentation change.
+- **GPT3 — QA / UI / Regression** for read-only validation of an exact SHA.
+- **GPT4 — Independent Auditor** for independent evidence and risk review.
 
-## If a chat reaches its limit or you must open a new chat
+These are profiles for native child subagents, not separate chats that the CEO
+must open or wake. The coordinator owns ordinary dispatch, status collection,
+and technical handoff; it keeps the evidence in the task's GitHub Issue or PR.
 
-Open a new conversation for that same GPT and send only the matching one-line recovery command:
+## What remains a CEO decision
 
-- New GPT1 chat: **PULIHKAN GPT1 — https://github.com/budapesservices-dotcom/folio-studio**
-- New GPT2 chat: **PULIHKAN GPT2 — https://github.com/budapesservices-dotcom/folio-studio**
-- New GPT3 chat: **PULIHKAN GPT3 — https://github.com/budapesservices-dotcom/folio-studio**
-- New GPT4 chat: **PULIHKAN GPT4 — https://github.com/budapesservices-dotcom/folio-studio**
+The coordinator proceeds with ordinary, low-risk work within an approved
+scope. It stops and asks before a merge, preview/production deployment,
+repository or Cloudflare setting change, secret/access change, destructive
+action, material architecture/product decision, or other high-impact risk.
 
-The new chat reads the current assignment and latest saved checkpoint from GitHub. If the task was IN_PROGRESS, it resumes from the last durable checkpoint. If only DISPATCHED, send MULAI separately. If GitHub evidence is missing or inconsistent, the specialist must report BLOCKED.
+No candidate is treated as approved merely because a child says it is done.
+The coordinator checks the exact diff, branch ancestry, frozen candidate SHA,
+required checks, and independent QA evidence first.
 
-**Important:** only work recorded in GitHub can be restored. Uncommitted edits and details that existed only in the old chat cannot be recovered automatically.
+## The normal candidate lifecycle
 
-## When GPT0 says a specialist is ready
+1. One native writer changes only the allowed paths on a dedicated branch from
+   the exact base SHA.
+2. The coordinator inspects the commit and freezes its exact SHA.
+3. A different, read-only native QA child reviews that exact SHA, not a moving
+   branch.
+4. If correction is needed, the same writer produces a new candidate; the
+   coordinator freezes it and obtains fresh independent QA.
+5. Only then does the coordinator open/update the authorized draft PR and
+   record evidence. No merge or deployment follows without CEO approval.
 
-Example GPT0 message:
+## Legacy fallback: separate GPT chats
 
-GPT2 SIAP MULAI — FOLIO-20261121-CANVAS-001. Buka chat GPT2 dan kirim: MULAI.
+The old GPT0 Chief-of-Staff / Task Inbox workflow is retained only if native
+Codex orchestration is unavailable and the CEO explicitly selects this fallback.
+It is not the normal way to operate Folio.
 
-## What the CEO does
+In that fallback, GPT0 publishes a task packet and the CEO may open the named
+GPT1–GPT4 chat and send `MULAI` or `LAKSANAKAN`. A replacement fallback chat
+uses `PULIHKAN GPTN — REPOSITORY: https://github.com/budapesservices-dotcom/folio-studio`.
+The specialist reads the packet, stores evidence in GitHub, and returns a
+short status signal. Never copy technical reports between chats.
 
-1. Open the named GPT conversation.
-2. Send only: MULAI (or LAKSANAKAN).
-3. GPT2 reads its assigned DISPATCHED task from the repository and replies: DITERIMA — TASK-ID — mulai dikerjakan.
-4. Tell GPT0 **GPT2 mulai — TASK-ID** so it can update the agent/task status after checking the repository.
-5. When GPT2 finishes, it stores evidence in GitHub and replies with one short SELESAI line.
-6. Tell GPT0 **GPT2 selesai — TASK-ID**. GPT0 performs the review and updates the CEO report.
+## Working links
 
-Do not copy the task packet or technical report between chats.
-
-## If GPT says BLOCKED
-
-Do not improvise or choose another task. Send the one-line blocker to GPT0 so it can repair the packet or access problem.
-
-## The three working links to remember
-
+- [Native Codex orchestration](CODEX_ORCHESTRATION_V1.md)
+- [Protocol](PROTOCOL.md)
 - [Task Board](TASK_BOARD.md)
 - [Agent State](AGENT_STATE.md)
 - [CEO report](AGENT_REPORTS.md)
-
-The full protocol and recovery rules are in [PROTOCOL.md](PROTOCOL.md) and [RECOVERY_PROTOCOL.md](RECOVERY_PROTOCOL.md).
