@@ -6,6 +6,7 @@
 **PR #1 pinned main comparison snapshot:** 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1  
 **Overall status:** THREE INDEPENDENT AUDITS SUBMITTED — READY_FOR_REVIEW; implementation held  
 **Last verified:** 2026-11-21, live GitHub inspection of task packets, PR metadata, comments and compare results
+**CEO-selected route:** retain PR #1 as common parent; reconcile main into it deliberately, then PR #4 → PR #5 → PR #7
 
 ## CEO summary
 
@@ -28,6 +29,8 @@ All four PRs remain open and unmerged. PR #1 is draft and non-mergeable. None of
 | #4 | `9730fdc02f5ee331c17de61c443a0f0d35782c56` | Same | PR #1 @ `89780034...` | Match; open, unmerged; CI #362 pass on exact head |
 | #5 | `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | Same | PR #1 @ `89780034...` | Match; open, unmerged; CI #360 pass on exact head |
 | #7 | `76eb40426059ed21ce93156c5065835ea3717467` | Same | old PR #5 base `b2d7e9045a150a49852b1f266f95b7424986b64d` | Match; open, unmerged; diverged from latest PR #5 |
+
+The pinned PR #1 comparison remains 310 ahead / 41 behind. A fresh compare of PR #1 against current main is 310 ahead / 57 behind because main has advanced 16 commits since the pinned snapshot; a direct compare of 8d8571c... → main confirms every one of those 16 commits changes only docs/coordination/**, so GPT3's product-code audit baseline remains valid.
 
 Additional live compare confirms PR #7 → latest PR #5 is DIVERGED: merge-base `b2d7e904...`, 23 commits on the PR #5 side and 4 commits on the PR #7 side. The report and task's no-synchronization condition agree.
 
@@ -71,6 +74,30 @@ Additional live compare confirms PR #7 → latest PR #5 is DIVERGED: merge-base 
 
 **Disposition:** leave PR #7 untouched until PR #5 is accepted and its base is settled. Then prepare a separate schema/behavior integration packet before any sync or App adoption.
 
+## CEO route decision — ACCEPTED
+
+The CEO delegated the route choice to GPT0 with the requirement to prioritize speed, quality, and efficiency. GPT0 selected the recommended path:
+
+**Keep PR #1 as the shared parent. Do not split or recreate the foundation.** This avoids rebuilding a 60-file foundation and preserves the exact dependency structure already used by PR #4 and PR #5. Resolve the main-side integration carefully rather than discarding either side.
+
+This decision authorizes GPT0 to prepare the controlled sequence and scoped task packets. It does **not** authorize a product-branch update, PR merge, deployment, or Phase 2 by itself.
+
+### Chosen execution sequence
+
+1. **Foundation preflight (PR #1):** prepare a read-only preflight packet against current main and PR #1 HEAD. Reconfirm that only AGENTS.md and .github/workflows/deploy.yml require direct content reconciliation, preserve main's Task Board/recovery instructions, incorporate product-specific Folio agent guidance, and keep the deploy workflow cache configuration. After an explicit start signal, create a merge commit from current main into feat/canvas-pan-distribute only after the exact file conflict plan and post-merge checks are approved. Keep PR #1 open.
+2. **Refresh the parent-dependent children:** once PR #1 has one accepted new HEAD, synchronize PR #4 and PR #5 to that exact parent in controlled order. Each SHA change invalidates the prior exact-head audits; rerun CI and independent review where required.
+3. **PR #4 first:** keep the canonical command/store and persistence boundary. Close the GPT4 findings with an App-mounted autosave revision-race regression, real-browser IndexedDB transaction/durability evidence, and actual App browser acceptance for component recovery/deletion/modal behavior. GPT2 may only receive a narrow revised packet after target base SHA is fixed.
+4. **PR #5 second:** combine its window/panel/focus work after PR #4 is on the selected parent. Reconcile shared App.tsx and global.css; add live App drag/resize/viewport-pointer-session coverage; assert process-group cleanup; replace residual fixed sleeps with condition polling. Run combined check/test/build and browser acceptance on the integrated candidate.
+5. **PR #7 last:** after PR #5 is accepted, synchronize its branch by a normal merge commit (no rebase/force-push unless separately justified). Resolve window/panel stack representation, focused stack target vs active editor, minimized-shell semantics and Inspector visibility. Integrate adapter hydration only with real viewport, explicit recovery/reconciliation, and retirement of legacy App persistence writers/readers in the same scoped change.
+
+### Efficiency guardrails
+
+- Do not rewrite PR #1 from scratch or create a second project/store.
+- Do not perform bulk rebases or force-pushes. Prefer explicit merge commits on existing feature branches for reviewable lineage.
+- Avoid unrelated cleanup and feature expansion; only close documented blocking findings and integration conflicts.
+- Keep GPT2 WAITING until a packet pins one exact branch/head, allowed paths, expected changes, deterministic tests and acceptance criteria.
+- Keep GPT3/GPT4 in hold state until a new exact integrated candidate exists. Reports on old SHAs remain historical evidence, not automatic approval of new SHAs.
+- Do not merge any of these PRs into main or deploy without a separate explicit CEO authorization. Native Commands Phase 2 remains prohibited.
 ## Recommended resolution plan
 
 1. **CEO foundation decision first.** Choose whether to keep PR #1 as the common parent and reconcile it in place, or supersede/split it into a smaller promotion candidate. GPT3 recommends keeping it open as the parent while reconciling; its non-mergeable status and main-side file collisions mean the route must be explicit.
