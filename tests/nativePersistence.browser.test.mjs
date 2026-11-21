@@ -357,6 +357,31 @@ async function installNativePersistenceProbe(browser) {
       const page = project.pages?.find((item) => item.id === project.activePageId) ?? project.pages?.[0];
       return Array.isArray(page?.document?.nodes) ? page.document.nodes : [];
     };
+    const observePersistedNodeCount = (field, projectId) => {
+      // Reopen after the active transaction event; the app closes its writer
+      // connection when the save Promise settles.
+      window.setTimeout(() => {
+        const open = indexedDB.open('folio-studio');
+        open.onerror = () => { probe[field] = -1; };
+        open.onsuccess = () => {
+          const db = open.result;
+          let transaction;
+          try {
+            transaction = db.transaction('projects', 'readonly');
+          } catch {
+            probe[field] = -1;
+            db.close();
+            return;
+          }
+          const request = transaction.objectStore('projects').get(projectId);
+          request.onsuccess = () => { probe[field] = projectNodes(request.result).length; };
+          request.onerror = () => { probe[field] = -1; };
+          transaction.oncomplete = () => db.close();
+          transaction.onabort = () => { probe[field] = -1; db.close(); };
+          transaction.onerror = () => { probe[field] = -1; };
+        };
+      }, 0);
+    };
     const clickMenuItem = (label, mode) => {
       const item = Array.from(document.querySelectorAll('.tool-rack-menu button[role="menuitem"]'))
         .find((button) => button.textContent.trim() === label);
@@ -385,20 +410,12 @@ async function installNativePersistenceProbe(browser) {
         const transaction = this.transaction;
         transaction.addEventListener('abort', () => {
           probe.events.push({ mode, event: 'abort' });
-          const read = transaction.db.transaction('projects', 'readonly');
-          const request = read.objectStore('projects').get(value.metadata.id);
-          request.onsuccess = () => {
-            probe.abortReadNodeCount = projectNodes(request.result).length;
-          };
+          observePersistedNodeCount('abortReadNodeCount', value.metadata.id);
         }, { once: true });
         transaction.addEventListener('complete', () => {
           probe.events.push({ mode, event: 'complete' });
           if (mode === 'after-commit') {
-            const read = transaction.db.transaction('projects', 'readonly');
-            const request = read.objectStore('projects').get(value.metadata.id);
-            request.onsuccess = () => {
-              probe.afterCommitReadNodeCount = projectNodes(request.result).length;
-            };
+            observePersistedNodeCount('afterCommitReadNodeCount', value.metadata.id);
             clickMenuItem('Text', mode);
           }
         }, { once: true });
