@@ -1,7 +1,8 @@
 # Folio Studio — GPT Task Board
 
 **Coordinator and sole editor:** GPT0  
-**Protocol:** [GPT Team Coordination Protocol](PROTOCOL.md) — ACTIVE  
+**Protocol:** [GPT Team Coordination Protocol](PROTOCOL.md) — ACTIVE v1.3
+**GPT0 mandate:** [GPT0 Executive Mandate](GPT0_MANDATE.md) — ACTIVE  
 **Agent identity:** [Canonical Agent Identity](AGENT_IDENTITY.md)  
 **Recovery:** [New-Chat Recovery Protocol](RECOVERY_PROTOCOL.md)  
 **Agent state:** [Persistent Agent State](AGENT_STATE.md)  
@@ -22,23 +23,23 @@
 | PR #1 divergence at pinned snapshot | 310 commits ahead / 41 commits behind; diverged |
 | Last full PR #1 vs main comparison checkpoint | main @ `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`: 310 ahead / 72 behind; 31 commits since pinned snapshot touch only docs/coordination/**; subsequent GPT0 tracking updates are coordination-only |
 | CEO-selected integration route | Retain PR #1 as common parent; reconcile main into it after a specific preflight packet; then PR #4, PR #5, and PR #7 in order |
-| Last reconciled | 2026-11-21 — GPT0 review of GPT1 preflight and current main freshness check |
+| Last reconciled | 2026-11-21 — GPT0 adopted standing delegation, refreshed main snapshot, and dispatched PR #1 reconciliation to GPT2 |
 
-## Dispatched — awaiting CEO start signal
-
-No specialist tasks currently DISPATCHED.
-
-## Ready — awaiting GPT0 dispatch and CEO start signal
+## Dispatched — awaiting specialist chat wake signal
 
 | Agent | Task ID | Task packet | Pinned refs | Status |
 |---|---|---|---|---|
-| GPT2 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | [Execution packet](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main source `df08c279f9ddc77b3fed180bcd9913e641ddfe2d` | READY — requires separate explicit CEO authorization for branch synchronization before dispatch/start |
+| GPT2 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | [Execution packet](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main source `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a` | DISPATCHED — GPT0 authorized scoped branch synchronization under CEO delegation; GPT2 chat wake signal pending |
+
+## Ready — awaiting GPT0 dispatch
+
+No specialist tasks currently READY. GPT1/GPT3/GPT4 follow-up work will be packeted against the exact integration candidate SHA when GPT2 produces it; they will not be given speculative or stale targets.
 
 ## In progress
 
 | Agent | Task ID | Current note |
 |---|---|---|
-| GPT0 | FOLIO-CYCLE-20261121-001 | GPT1 preflight APPROVED; GPT2 execution packet published READY with exact PR #1/main refs and explicit CEO authorization gate; no product branch changes |
+| GPT0 | FOLIO-CYCLE-20261121-001 | GPT0 mandate published; GPT2 PR #1 reconciliation task DISPATCHED against refreshed exact refs; no product branch changes yet |
 
 ## Waiting / blocked
 
@@ -64,13 +65,14 @@ No specialist tasks currently DISPATCHED.
 
 ## CEO route decision
 
-**DECIDED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. Do not recreate/split the foundation at this stage. First prepare a controlled main→PR #1 reconciliation that preserves main's GPT coordination protocol and carefully combines the product-specific AGENTS guidance plus deploy workflow. No source branch has been changed yet. Next, refresh child PR bases and close PR #4 QA gaps before PR #5; PR #7 remains last. See `AGENT_REPORTS.md` for the ordered gate sequence.
+**DECIDED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. Do not recreate/split the foundation at this stage. First execute the controlled main→PR #1 reconciliation on a dedicated task branch, preserving main's GPT coordination protocol and combining the product-specific AGENTS guidance plus deploy workflow. GPT2 is now DISPATCHED; GPT0's mandate removes the former duplicate CEO-authorization gate for this scoped branch work. Next, refresh child PR bases and close PR #4 QA gaps before PR #5; PR #7 remains last. See `AGENT_REPORTS.md` for the ordered gate sequence.
 
 ## Reconciliation facts
 
 - At the GPT0 live-comparison checkpoint, main was `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`: PR #1 was 310 ahead / 72 behind, and all 31 commits after the pinned snapshot touched only `docs/coordination/**`. Later GPT0 tracking updates also touched only coordination records; no product branch was changed.
 
 - PR #1 is open, draft, unmerged and `mergeable=false`; retain it as a candidate parent only, not a merge-ready branch.
+- GPT0 refreshed the reconciliation source to main `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a`; exact comparison from merge-base still intersects PR #1 only at `AGENTS.md` and `.github/workflows/deploy.yml`. Current divergence is 310 ahead / 93 behind.
 - PR #2, PR #3 and PR #6 merged into `feat/canvas-pan-distribute`, not `main`. Their merge chain culminates at PR #1 HEAD `89780034...`; their contents are present on the feature branch. PR #8 and PR #9 are the coordination/recovery PRs merged into `main`.
 - PR #4 and PR #5 remain open/unmerged and both target PR #1 HEAD `89780034...`. Their independent CI runs do not validate their combined App/CSS changes.
 - PR #7 remains stacked on old PR #5 base `b2d7e904...`; comparison against latest PR #5 HEAD `a8b2818...` is diverged (23 commits on PR #5 side / 4 on PR #7 side). No synchronization is authorized.
