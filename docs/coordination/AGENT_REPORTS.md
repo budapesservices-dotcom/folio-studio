@@ -4,7 +4,7 @@
 **Coordinator / editor:** GPT0  
 **Product-code baseline:** main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f  
 **PR #1 pinned main comparison snapshot:** 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1  
-**Overall status:** THREE INDEPENDENT AUDITS SUBMITTED — READY_FOR_REVIEW; implementation held  
+**Overall status:** THREE INDEPENDENT AUDITS SUBMITTED — READY_FOR_REVIEW; GPT1 main-reconciliation preflight DISPATCHED awaiting CEO start signal; implementation held  
 **Last verified:** 2026-11-21, live GitHub inspection of task packets, PR metadata, comments and compare results
 **CEO-selected route:** retain PR #1 as common parent; reconcile main into it deliberately, then PR #4 → PR #5 → PR #7
 
@@ -133,3 +133,8 @@ GPT1's read-only task packet [FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-0
 - GPT0 did not change product source/tests, PR bases, branch refs, merge status, approvals or deployments.
 - No merge, deploy, Phase 2 implementation or GPT2 start is authorized by these reports.
 - Each `READY_FOR_REVIEW` item remains pending GPT0's final review. Do not mark APPROVED or MERGED until the relevant criteria and CEO authority are satisfied.
+
+
+## GPT1 main-reconciliation preflight dispatch
+
+Task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001` is now **DISPATCHED**. GPT1 may begin only after the CEO sends `MULAI`/`LAKSANAKAN`. Scope remains strictly read-only; no branch, code, test, PR metadata, merge, or deployment changes are authorized.
