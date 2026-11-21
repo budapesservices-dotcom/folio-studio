@@ -181,7 +181,13 @@ describe('Folio unified project v2', () => {
     const added = editorReducer(createEditorState(project), { type: 'add-component', component });
     expect(added.project.components).toHaveLength(1);
     expect(added.project.components[0].id).toBe('component-button');
-    const deleted = editorReducer(added, { type: 'delete-component', componentId: 'component-button' });
+    const addedMaster = added.project.components[0];
+    const deleted = editorReducer(added, {
+      type: 'delete-component',
+      componentId: 'component-button',
+      expectedMasterDocument: addedMaster.document,
+      expectedUpdatedAt: addedMaster.updatedAt,
+    });
     expect(deleted.project.components).toHaveLength(0);
   });
   it('inserts a multi-node component as one undoable batch', () => {
@@ -321,7 +327,16 @@ describe('linked master components and instances', () => {
         secondPage,
       ],
     };
-    const synced = editorReducer(createEditorState(linkedProject), { type: 'update-component', component: updatedMaster });
+    const linkedState = createEditorState(linkedProject);
+    const canonicalMaster = linkedState.project.components[0];
+    const synced = editorReducer(linkedState, {
+      type: 'sync-component-document',
+      componentId: canonicalMaster.id,
+      expectedMasterDocument: canonicalMaster.document,
+      expectedUpdatedAt: canonicalMaster.updatedAt,
+      document: updatedMaster.document,
+      updatedAt: updatedMaster.updatedAt,
+    });
     for (const page of synced.project.pages) {
       const pageInstance = page.document.nodes.find((node) => node.type === 'component-instance');
       if (!pageInstance || pageInstance.type !== 'component-instance') throw new Error('Missing linked page instance.');
@@ -390,11 +405,18 @@ describe('linked master components and instances', () => {
     expect(detached[0].type).toBe('rect');
     expect(detached[0].id).not.toBe(source.id);
 
-    const withMaster = editorReducer(createEditorState({
+    const stateWithMaster = createEditorState({
       ...project,
       components: [master],
       pages: project.pages.map((page) => ({ ...page, document: { ...page.document, nodes: [...page.document.nodes, instance] } })),
-    }), { type: 'delete-component', componentId: master.id });
+    });
+    const canonicalMaster = stateWithMaster.project.components[0];
+    const withMaster = editorReducer(stateWithMaster, {
+      type: 'delete-component',
+      componentId: canonicalMaster.id,
+      expectedMasterDocument: canonicalMaster.document,
+      expectedUpdatedAt: canonicalMaster.updatedAt,
+    });
     expect(withMaster.project.components).toHaveLength(0);
     expect(withMaster.project.pages[0].document.nodes.some((node) => node.type === 'component-instance')).toBe(false);
     expect(validateProject(withMaster.project).ok).toBe(true);

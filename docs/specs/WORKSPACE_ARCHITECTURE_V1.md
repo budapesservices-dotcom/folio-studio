@@ -8,7 +8,8 @@
 **Audited base SHA:** d8a773bfa12a38915c88ed416b79fda580450a4e  
 **Native Command Core references (PR #4 branch; open and unmerged, neither part of the audited base):**  
 - Historical checkpoint: [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff)  
-- Latest PR #4 Revision Task 04 reference: [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f)  
+- PR #4 Revision Task 04 checkpoint: [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f)  
+- PR #4 current pre-Task-07 reference: [9180b52969d3c6cd83c7bd9690ed29faf4176d9f](https://github.com/budapesservices-dotcom/folio-studio/commit/9180b52969d3c6cd83c7bd9690ed29faf4176d9f)  
 **Document path:** docs/specs/WORKSPACE_ARCHITECTURE_V1.md
 
 > This is a documentation-only architecture specification. It distinguishes code present at the audited base from the separate, unmerged Native Command Core reference and from future target contracts. It does not implement or authorize a source-code migration.
@@ -163,9 +164,10 @@ The source baseline is exactly:
 The Native Command Core code references are separate from the audited base and belong to PR #4's unmerged branch:
 
 - Historical checkpoint before Revision Task 04: [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff)
-- Latest PR #4 Revision Task 04 reference captured for this audit: [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f)
+- PR #4 Revision Task 04 checkpoint captured for that audit: [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f)
+- PR #4 pre-Task-07 current branch reference: [9180b52969d3c6cd83c7bd9690ed29faf4176d9f](https://github.com/budapesservices-dotcom/folio-studio/commit/9180b52969d3c6cd83c7bd9690ed29faf4176d9f)
 - PR: [#4 — feat: implement Native Command Core Phase 1](https://github.com/budapesservices-dotcom/folio-studio/pull/4)
-- The SHA `52b59ca5a08e255db9faab4960abaff90be2c7ff` is a **historical checkpoint**, not the PR #4 head at this inspection. Before Revision Task 04, it was the recorded checkpoint; the PR #4 branch subsequently advanced 17 commits to `d9688c901973dec9b95829b39bd4fa401890509f`. Both SHAs are references on PR #4's separate open, unmerged branch and neither is included in the audited base. Therefore, this code remains **partially implemented on an unmerged reference branch**, not part of the audited base.
+- The SHA `52b59ca5a08e255db9faab4960abaff90be2c7ff` is a **historical checkpoint**. The Revision Task 04 checkpoint was `d9688c901973dec9b95829b39bd4fa401890509f`; the later PR #4 branch progressed through Revision Task 06 to pre-Task-07 HEAD `9180b52969d3c6cd83c7bd9690ed29faf4176d9f`. These are references on PR #4's separate open, unmerged branch and are not included in the audited base. The Task 04 findings below are historical checkpoint findings, not statements about the later branch head.
 
 No behavior described as existing at base is inferred from PR #4.
 
@@ -190,7 +192,7 @@ No behavior described as existing at base is inferred from PR #4.
 | Maximize / restore | **Partially implemented / proposed** | Browser fullscreen exists. Explicit per-window maximize with remembered restore geometry is not established at the audited base. |
 | Node Logic UI | **Partially implemented** | A Node Logic window and placeholder surface exist. The window is not a graph editor or runtime at the audited base. |
 | Node Logic project schema | **Partially implemented** | LogicGraph, LogicNode, and LogicConnection types exist in FolioProjectV2. LogicNode remains generic; these types are not a typed node registry or execution model. |
-| Native Command Core | **Planned at base; partially implemented on PR #4 reference** | NATIVE_COMMANDS_V1.md defines the architecture. The historical implementation checkpoint was 52b59ca; PR #4 has since advanced 17 commits to d9688c9 through Revision Task 04. The latest reference includes guarded component sync/CAS, orphan-buffer protection, shared-DAG depth checks, and full EditorState candidate validation, but not the complete Component Command Bridge. |
+| Native Command Core | **Planned at base; partially implemented on PR #4 reference** | NATIVE_COMMANDS_V1.md defines the architecture. PR #4 passed the historical Revision Task 04 checkpoint and subsequently added active-master recovery UX in Task 06. The pre-Task-07 branch reference is 9180b52. The full Component Command Bridge remains Phase 3; Phase 2 is document/layer command coverage. |
 | Canonical store at base | **Planned at base** | Main and Component Canvas are separate reducer states in App.tsx. Base does not provide CanonicalEditorStore, commitEditorTransition, or projectRevision. |
 | .flop serialization | **Existing and verified** | src/core/persistence/projectFile.ts validates and serializes the FolioProject JSON as UTF-8 JSON. Native project format version is 2. |
 | IndexedDB | **Existing and verified** | src/core/persistence/indexedDb.ts uses database version 2, a projects store keyed by metadata.id, and app-state for the active-project pointer. saveProjectAndActivate writes the project and pointer in one transaction. |
@@ -218,9 +220,9 @@ These are useful foundations; they are not evidence that the complete target win
 
 ### 3.4 Native Command Core progress — Revision Task 04 reference
 
-The historical implementation checkpoint remains [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff). The current inspected PR #4 head is [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f).
+The historical implementation checkpoint remains [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff). The Revision Task 04 checkpoint is [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f). The latest pre-Task-07 PR #4 reference is [9180b52969d3c6cd83c7bd9690ed29faf4176d9f](https://github.com/budapesservices-dotcom/folio-studio/commit/9180b52969d3c6cd83c7bd9690ed29faf4176d9f).
 
-GitHub confirms PR #4 remains open and unmerged, targets `feat/canvas-pan-distribute` at `d8a773bfa12a38915c88ed416b79fda580450a4e`, and has advanced **17 commits** after the historical checkpoint through Revision Task 04. This implementation remains a separate reference branch and is not part of the audited base SHA for this document.
+PR #4 targets `feat/canvas-pan-distribute` and remains a separate, open, unmerged reference branch. The audited base SHA above remains the historical base for this architecture document; the PR #4 HEAD references below describe later branch progress and must not be confused with that base.
 
 The following changes are verified in source at `d9688c901973dec9b95829b39bd4fa401890509f`:
 
@@ -232,7 +234,7 @@ The following changes are verified in source at `d9688c901973dec9b95829b39bd4fa4
 
 **Transition boundary — not the complete Component Command Bridge:** the current guarded Component Canvas sync is still an app/reducer compatibility action sent through the canonical store. The static Native Command registry at this reference still exposes the Main Canvas node-transform and node-set-properties families; it does not yet provide the complete typed component command family or the fully specified Component Command Bridge. The guarded automatic sync is the transitional safety mechanism. Completing the component command surface and refining the transaction boundary remains the later Component Bridge phase.
 
-**Verified implementation gap:** the current Component Rack Delete handler dispatches `delete-component` directly and resets/closes the Component Canvas buffer when deleting the master being edited. The inspected UI path does not show a dirty-buffer-specific confirmation/recovery step before that reset. The coordinator decision in Section 14 therefore remains a follow-up UX acceptance requirement; this document does not claim Task 04 has implemented it.
+**Later PR #4 progress after this Task 04 checkpoint:** Revision Task 06 added protected active-master deletion choices and CAS-guarded recovery helpers. That work did not by itself establish keyboard-accessible modal behavior or an IndexedDB durability barrier. PR #4 Revision Task 07 is the hardening step for focus management, serialized writes, durability rollback, autosave visibility/retry, and discard ordering. The older Task 04 gap above is historical and must not be read as a description of the later UI; equally, Task 06 UI alone is not proof that Task 07 gates have passed.
 
 These PR #4 capabilities are reference-branch progress only. They do not change what was present at the audited base SHA and do not imply that PR #4 is merged.
 
@@ -671,7 +673,7 @@ Synchronization requirements:
 9. Export must identify which version is exported. A dirty buffer may be overlaid into an immutable export snapshot only under an explicit policy; export overlay is not canonical commit.
 10. Tests cover stale writes, clean/no-op sync, dirty conflicts, master deletion/recovery, rapid edits, Undo/Redo, reload, and export while dirty/conflicted.
 
-At the audited base, synchronization is an effect that dispatches the old full-object update action. At PR #4 head `d9688c901973dec9b95829b39bd4fa401890509f`, the unsafe action has been removed and guarded automatic sync uses expected master document identity plus updatedAt through the canonical store. That guarded action is a transition mechanism, not completion of the Component Command Bridge. The later bridge must define the typed component command surface, transaction/result contract, session lifecycle, and conflict/recovery integration end to end.
+At the audited base, synchronization is an effect that dispatches the old full-object update action. At the Revision Task 04 checkpoint `d9688c901973dec9b95829b39bd4fa401890509f`, the unsafe action had been removed and guarded automatic sync used expected master document identity plus updatedAt through the canonical store. Later PR #4 revisions added explicit active-master recovery UX. The guarded action remains a transition mechanism, not completion of the Component Command Bridge.
 
 ### 7.5 Component Rack integration contract
 
@@ -1214,7 +1216,7 @@ Recommendations affecting those tasks are **for GPT0 review**:
 - Workspace V1 is now decided: versioned localStorage preferences per browser profile/origin and one instance per workspace kind. These decisions guide future integration but do not silently expand GPT3's current task.
 - Per-window maximize/restore remains deferred from the GPT3 foundation milestone; it is not a new acceptance requirement for that task.
 - PR #4 guarded automatic Component Canvas sync is transitional. The complete Component Command Bridge is a later phase and is not silently added to GPT2 Revision Task 04.
-- Dirty-master deletion requires explicit UX confirmation/recovery. The current PR #4 UI path does not yet satisfy this requirement; GPT0 must schedule it without retroactively changing active Revision Task 04.
+- Dirty-master deletion requires explicit UX confirmation/recovery. PR #4 Revision Task 06 added the recovery choices and Task 07 hardens their keyboard accessibility and persistence ordering. Browser acceptance remains a separate gate; do not infer it from automated tests.
 - Native Command UI adoption remains incremental and follows the phase boundaries in NATIVE_COMMANDS_V1.md. The active command-core task does not become a requirement to migrate every Canvas gesture.
 - Multi-Application uses a new .flop format version after v2 and a versioned application-scoped DocumentAddress. It requires its own migration/task plan; it does not amend either active task.
 
@@ -1305,7 +1307,7 @@ Recommendations affecting those tasks are **for GPT0 review**:
 
 - **Agreed and implemented at the audited base:** \`.flop\` v2 and IndexedDB v2 data boundaries; localStorage already holds per-window/view preferences, but the complete versioned V1 adapter/schema and per-origin policy are coordinator-approved target requirements.
 - **Partially implemented on PR #4:** guarded automatic Component Canvas sync, CAS checks, local-buffer conflict/orphan preservation, and recovery choices. These remain transition mechanisms until the complete Component Command Bridge is delivered.
-- **Coordinator-approved but not implemented:** dirty-master delete confirmation/recovery, full V1 versioned WorkspaceLayout adapter, Node Logic runtime, new Multi-Application format/migration, and application-scoped DocumentAddress version.
+- **Partially implemented on PR #4, pending Task 07 verification:** dirty-master confirmation/recovery was added in Revision Task 06; keyboard accessibility and durable persistence barriers are the Task 07 hardening gate. Other not-yet-implemented decisions remain the full V1 versioned WorkspaceLayout adapter, Node Logic runtime, new Multi-Application format/migration, and application-scoped DocumentAddress version.
 - **Explicitly deferred:** multiple simultaneous instances per workspace kind and per-window maximize/restore during the GPT3 foundation milestone.
 - **No implicit schema migration:** \`.flop\` v2 and IndexedDB database v2 remain unchanged by this document revision.
 
@@ -1508,11 +1510,11 @@ All entries below were inspected at commit d8a773bfa12a38915c88ed416b79fda580450
 
 ### 18.2 Native Command implementation reference and Revision Task 04 (unmerged)
 
-The historical checkpoint [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff) remains recorded. The latest inspected PR #4 / Revision Task 04 head is [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f), exactly 17 commits after the historical checkpoint. PR #4 remained open and unmerged during this audit.
+The historical checkpoint [52b59ca5a08e255db9faab4960abaff90be2c7ff](https://github.com/budapesservices-dotcom/folio-studio/commit/52b59ca5a08e255db9faab4960abaff90be2c7ff) remains recorded. The Revision Task 04 checkpoint was [d9688c901973dec9b95829b39bd4fa401890509f](https://github.com/budapesservices-dotcom/folio-studio/commit/d9688c901973dec9b95829b39bd4fa401890509f). PR #4 subsequently advanced through Revision Task 06 to pre-Task-07 HEAD [9180b52969d3c6cd83c7bd9690ed29faf4176d9f](https://github.com/budapesservices-dotcom/folio-studio/commit/9180b52969d3c6cd83c7bd9690ed29faf4176d9f). The older Task 04 reference is a checkpoint, not the latest branch state.
 
-Latest implementation references inspected at `d9688c901973dec9b95829b39bd4fa401890509f`:
+Revision Task 04 implementation checkpoint references (not the current branch head):
 
-- [App.tsx](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/src/app/App.tsx) — guarded Component Canvas session lifecycle, conflict/orphan recovery, explicit buffer replacement recovery; Component Rack Delete path still lacks dirty-buffer confirmation.
+- [App.tsx](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/src/app/App.tsx) — Component Canvas session lifecycle, conflict/orphan recovery, and explicit buffer replacement recovery as of Task 04. Revision Task 06 later added the protected active-master deletion recovery dialog.
 - [componentCanvasSync.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/src/app/componentCanvasSync.ts) — expected document/timestamp guard, protected buffer state, missing/returned master reconciliation, explicit CAS action construction.
 - [editorReducer.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/src/app/editorReducer.ts) — sync-component-document, guarded rename/delete actions, and absence of the unsafe update-component mutation path.
 - [editorStore.ts](https://github.com/budapesservices-dotcom/folio-studio/blob/d9688c901973dec9b95829b39bd4fa401890509f/src/app/editorStore.ts) — commit-time component compare-and-set guard and full EditorState validation.
