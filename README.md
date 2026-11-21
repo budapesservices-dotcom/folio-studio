@@ -1,29 +1,33 @@
-# FOLIO Studio
+# Folio Studio
 
-FOLIO Studio is a lightweight-first hybrid visual UI/UX design, prototyping, animation, and visual-to-code workspace.
+Folio is a lightweight-first visual development studio for interface design, interactive prototypes, and visual-to-code workflows.
 
-## Open in GitHub Codespaces
+## Local development
 
-This repository is prepared for Codespaces and includes a verified first-run source bootstrap.
-
-1. Open this repository on GitHub.
-2. Choose **Code → Codespaces → Create codespace on main**.
-3. Let the dev container finish creating. It restores the Stage 1 TypeScript/Preact source tree, removes the temporary payload, automatically creates a source commit, and attempts to push that commit to `main`.
-4. In the Codespaces terminal, start the editor:
+Requirements: Node.js 24.11 or newer in the 24.x line, or Node.js 26.x; npm; and a modern browser.
 
 ```bash
+npm install
 npm run dev
 ```
 
-5. Open the forwarded **Folio Studio** port (5173) from the Ports panel.
+Open `http://127.0.0.1:5173`.
 
-The automatic source push uses the GitHub credentials available in Codespaces. If GitHub rejects the push because of an authentication or branch conflict, the source remains in the Codespace and the bootstrap prints the recovery command:
+On Windows, `RUN-FOLIO.bat` checks the supported Node.js range, installs dependencies when needed, and starts the development server.
 
-```bash
-git push origin HEAD:main
-```
+## GitHub Codespaces
 
-## Verify the foundation
+1. Open the repository on GitHub.
+2. Choose **Code → Codespaces → Create codespace on main**.
+3. Wait for the dev container setup and dependency installation to finish.
+4. Run `npm run dev` in the terminal.
+5. Open forwarded port **5173** from the Ports panel.
+
+The dev container installs Node.js 26 and runs `npm install`. It does not create commits or push changes automatically.
+
+See [Codespaces setup](docs/CODESPACES.md) for details.
+
+## Verify changes
 
 ```bash
 npm run check
@@ -31,30 +35,17 @@ npm run test
 npm run build
 ```
 
-## Project decisions
+## Project identity and architecture
 
-- Product: **FOLIO**
-- Application: **Folio Studio**
-- Repository: `folio-studio`
+- Product: **Folio Studio**
 - Native project extension: **.flop**
 - Source of truth: versioned JSON AST
-- Stack: TypeScript, Vite, Preact, DOM + SVG
-- Persistence: IndexedDB
-- Output target: HTML, CSS, JavaScript
+- Stack: TypeScript, Vite, Preact, DOM and SVG
+- Local persistence: IndexedDB
+- Initial code-generation target: HTML, CSS, and JavaScript
 
-## Local development
+See [Architecture](docs/ARCHITECTURE.md), [Stage 1 acceptance tests](docs/ACCEPTANCE_TESTS.md), and [Stage 2 canvas acceptance](docs/STAGE_2_ACCEPTANCE.md).
 
-Requirements: Node.js 26 LTS (or Node.js 24.11+), npm, and a modern browser.
+## Development approach
 
-```bash
-npm install
-npm run dev
-```
-
-Open `http://127.0.0.1:5173` locally.
-
-See `docs/ARCHITECTURE.md`, `docs/CODESPACES.md`, and `docs/ACCEPTANCE_TESTS.md` for architecture and Stage 1 acceptance criteria.
-
-## Development rule
-
-Build one stage at a time. Do not begin the next engine until the current stage passes its automated and manual acceptance tests.
+Build in small, measurable vertical slices. Each change should preserve the document model, include focused regression coverage, and pass the relevant type-check, tests, and production build. Future engines are described in the architecture roadmap and should be created when implementation begins—not as empty placeholder directories.
