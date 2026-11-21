@@ -4,7 +4,7 @@
 **Task ID:** FOLIO-20261121-PR7-DEPENDENCY-001  
 **Assigned agent:** GPT1 — Architect / Preflight  
 **Mode:** READ-ONLY / AUDIT  
-**Status:** READY  
+**Status:** DISPATCHED  
 **Priority:** P1  
 **Cycle ID:** FOLIO-CYCLE-20261121-001
 
