@@ -143,3 +143,16 @@ Task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001` is now **DISPATCHED*
 ## GPT1 PR #1 main-reconciliation preflight — submitted
 
 Task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001` is **READY_FOR_REVIEW**. GPT1's report is posted as a top-level comment on [PR #1](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863). Verdict: **PREFLIGHT PASS WITH TWO MANUAL ADD/ADD RESOLUTIONS REQUIRED** (`AGENTS.md` and `.github/workflows/deploy.yml`). The report confirms the exact PR #1 HEAD remains `89780034f32b1809cc49640e83bac5c817d88a91`; current main at report time was `9edc8d7de99baaf155c47f112acf009add1d51e7`. No branch, code, test, PR metadata, merge, or deployment changes were performed. GPT0 review is pending.
+
+
+## GPT1 PR #1 main-reconciliation preflight — GPT0 verified and approved
+
+GPT0 reviewed Task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001` against its packet, GPT1's full report comment ([PR #1 report](https://github.com/budapesservices-dotcom/folio-studio/pull/1#issuecomment-7059413863)), and current live GitHub evidence. **Disposition: APPROVED.**
+
+- PR #1 feature ref remains exactly `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`.
+- The current main ref is `40a7edce7ab6e159f0dd40efeb9d8b7b2acbead4`; the live comparison is 310 commits ahead / 72 behind.
+- There are 31 main commits after the pinned product-code snapshot. All changed paths are under `docs/coordination/**`; the four commits added after GPT1's report are also coordination-only.
+- GPT0 independently rebuilt the changed-path sets from merge-base `cce72029e35b902c2ccd1644ec762d269c7ff97e`. The only intersection is `AGENTS.md` and `.github/workflows/deploy.yml`.
+- Workflow inspection confirms main's `cache: npm` line is absent from the PR #1 deploy workflow, while PR #1's CI feature-branch push trigger must be preserved.
+
+This approval validates GPT1's preflight analysis and recommended sequence only. It does not execute or authorize a branch synchronization, PR merge, PR retarget, source change, or deployment. GPT2 remains WAITING; Native Commands Phase 2 remains prohibited.
