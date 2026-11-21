@@ -16,7 +16,7 @@
 - `feat/canvas-pan-distribute` now points to the merge commit, and PR #1's live head is the same SHA.
 - PR #1 remains OPEN, DRAFT and UNMERGED against `main`. No PR #1 → main merge was performed.
 - Post-merge verification CI [run #503](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44896423953) completed successfully on the exact merge SHA.
-- **Deployment uncertainty:** `.github/workflows/deploy.yml` has a `push` trigger for `feat/canvas-pan-distribute`, so this merge push is eligible to launch GitHub Pages deployment. The Pages run was inspected: run #62 failed in `actions/setup-node@v4` because the deployment workflow specifies `cache: npm` while no supported npm/yarn lockfile exists. Install, build, artifact upload and the deploy job were skipped; no new Pages publication occurred.
+- **GitHub Pages result:** `.github/workflows/deploy.yml` has a `push` trigger for `feat/canvas-pan-distribute`. The merge push triggered run #62, which failed in `actions/setup-node@v4` because the deployment workflow specifies `cache: npm` while no supported npm/yarn lockfile exists. Install, build, artifact upload and the deploy job were skipped; no new Pages publication occurred.
 
 **Child PRs remain untouched.** PR #4 is still at `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 at `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; PR #7 remains stacked on an older PR #5 base. Compare from foundation `d585bc3581aadd335cc4d6292a3d13cb2a650253` to PR #4 is DIVERGED (98 commits on PR #4 side / 95 on foundation side, merge-base `89780034f32b1809cc49640e83bac5c817d88a91`). PR #10 and PR #4 changed-path intersection is empty. PR #5 is also diverged from the refreshed foundation; PR #4/PR #5 still share `src/app/App.tsx` and `src/styles/global.css`.
 
