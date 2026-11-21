@@ -1,7 +1,7 @@
 # Folio Studio — GPT Team Coordination Protocol
 
 **Version:** 1.2
-**Status:** Proposed update; active after this PR is reviewed and merged
+**Status:** ACTIVE — coordination protocol adopted after PR #8 merged; persistent recovery extension merged in PR #9
 **Repository:** budapesservices-dotcom/folio-studio
 **Team:** CEO + GPT0 + GPT1–GPT4
 
@@ -271,4 +271,4 @@ Do not dump specialist logs, raw test output, or long technical explanations int
 
 ## 14. Adoption
 
-This protocol update becomes active only after it is reviewed and merged by the CEO.
+The Task Inbox coordination protocol was merged through PR #8 (merge commit cb51e560b069baf7bd49f8f1a0f35f26d866ae0c). The persistent identity and new-chat recovery extension was merged through PR #9 (merge commit 49761cd8ca0cd719beb9b84a6becc03dbd2b431f). This protocol is ACTIVE for the current FOLIO work cycle. Any substantive future change to authority, workflow, or permissions requires CEO review and approval.
