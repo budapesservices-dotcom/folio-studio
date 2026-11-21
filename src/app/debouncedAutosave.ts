@@ -9,6 +9,22 @@ export interface DebouncedAutosave<T> {
 }
 
 /**
+ * Main Canvas promise callbacks may run after a newer canonical revision has
+ * already scheduled another save. Only let a callback publish status for the
+ * revision that produced it; Component Canvas debounce semantics are separate.
+ */
+export function setRevisionFencedAutosaveStatus(
+  expectedRevision: number,
+  getCanonicalRevision: () => number,
+  status: AutosaveStatus,
+  setStatus: (status: AutosaveStatus) => void,
+): boolean {
+  if (getCanonicalRevision() !== expectedRevision) return false;
+  setStatus(status);
+  return true;
+}
+
+/**
  * Serializes every buffer write behind one promise chain. A generation token
  * invalidates queued debounce callbacks; cancelAndWait waits for an in-flight
  * IndexedDB write before the caller is allowed to write a cleanup snapshot.

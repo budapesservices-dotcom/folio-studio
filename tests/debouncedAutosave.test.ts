@@ -1,7 +1,58 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDebouncedAutosave } from '../src/app/debouncedAutosave';
+import {
+  createDebouncedAutosave,
+  setRevisionFencedAutosaveStatus,
+} from '../src/app/debouncedAutosave';
 
 afterEach(() => vi.useRealTimers());
+
+describe('Main Canvas autosave status revision fence', () => {
+  it('does not let a delayed old save callback overwrite the newer revision saving status', async () => {
+    let canonicalRevision = 8;
+    let status: 'saving' | 'saved' | 'error' = 'saving';
+    const history: string[] = ['saving'];
+    let releaseCallback!: () => void;
+    const callbackGate = new Promise<void>((resolve) => { releaseCallback = resolve; });
+
+    const completedTransaction = Promise.resolve({ status: 'saved' as const });
+    const delayedCallback = completedTransaction.then(async (result) => {
+      await callbackGate;
+      if (result.status === 'saved') {
+        setRevisionFencedAutosaveStatus(
+          8,
+          () => canonicalRevision,
+          'saved',
+          (next) => { status = next; history.push(next); },
+        );
+      }
+    });
+
+    canonicalRevision = 9;
+    status = 'saving';
+    history.push('saving');
+    releaseCallback();
+    await delayedCallback;
+
+    expect(status).toBe('saving');
+    expect(history).toEqual(['saving', 'saving']);
+  });
+
+  it('does not let a delayed persistence error overwrite a newer revision status', () => {
+    let canonicalRevision = 20;
+    let status: 'saving' | 'saved' | 'error' = 'saving';
+
+    canonicalRevision = 21;
+    const applied = setRevisionFencedAutosaveStatus(
+      20,
+      () => canonicalRevision,
+      'error',
+      (next) => { status = next; },
+    );
+
+    expect(applied).toBe(false);
+    expect(status).toBe('saving');
+  });
+});
 
 describe('Component Canvas autosave ordering', () => {
   it('cancels a pending 450ms write before cleanup and does not resurrect the old buffer', async () => {

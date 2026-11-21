@@ -32,7 +32,7 @@ import {
   requestComponentDeletion,
 } from './componentDeletion';
 import { FloatingWindow } from './FloatingWindow';
-import { createDebouncedAutosave } from './debouncedAutosave';
+import { createDebouncedAutosave, setRevisionFencedAutosaveStatus } from './debouncedAutosave';
 import { activateModalDialog, trapModalDialogKeydown } from './modalFocus';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
@@ -525,22 +525,31 @@ export function App() {
   useEffect(() => {
     if (!isProjectLoaded) return;
     setSaveStatus('saving');
-    const projectRevision = canonicalStore.getSnapshot().projectRevision;
+    const canonicalSnapshot = canonicalStore.getSnapshot();
+    const projectRevision = canonicalSnapshot.projectRevision;
+    const getCanonicalRevision = () => canonicalStore.getSnapshot().projectRevision;
     const timer = window.setTimeout(() => {
       saveProjectIfRevisionCurrent(
-        state.project,
+        canonicalSnapshot.editorState.project,
         projectRevision,
-        () => canonicalStore.getSnapshot().projectRevision,
+        getCanonicalRevision,
+        (listener) => canonicalStore.subscribe(listener),
       )
         .then((result) => {
-          // A queued candidate can become stale after a guarded deletion rollback.
-          // Keep the saving state; the canonical snapshot's own effect schedules
-          // the next autosave. Never announce a skipped candidate as saved.
-          if (result.status === 'saved') setSaveStatus('saved');
+          // A queued or in-flight candidate may be invalidated by a newer
+          // canonical revision. Never let its Promise callback overwrite the
+          // newer revision's "saving" state.
+          if (result.status === 'saved') {
+            setRevisionFencedAutosaveStatus(
+              projectRevision, getCanonicalRevision, 'saved', setSaveStatus,
+            );
+          }
         })
         .catch((error: unknown) => {
           console.error('Folio autosave failed:', error);
-          setSaveStatus('error');
+          setRevisionFencedAutosaveStatus(
+            projectRevision, getCanonicalRevision, 'error', setSaveStatus,
+          );
         });
     }, 450);
     return () => window.clearTimeout(timer);

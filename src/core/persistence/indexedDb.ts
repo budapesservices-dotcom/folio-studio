@@ -44,10 +44,15 @@ function enqueueProjectWrite<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
+interface ProjectRevisionFence {
+  isCurrent: () => boolean;
+  subscribe: (listener: () => void) => () => void;
+}
+
 async function persistProjectUnlocked(
   input: FolioProject,
   activate: boolean,
-  shouldPersist?: () => boolean,
+  revisionFence?: ProjectRevisionFence,
 ): Promise<boolean> {
   const project = requireValidProject(input);
   if (activate && project.metadata.id === RESERVED_COMPONENT_PROJECT_ID) {
@@ -55,15 +60,60 @@ async function persistProjectUnlocked(
   }
 
   const database = await openDatabase();
+  let revisionInvalidated = false;
+  let activeTransaction: IDBTransaction | null = null;
+  let unsubscribe: () => void = () => undefined;
+
+  const invalidateRevision = () => {
+    if (revisionInvalidated) return;
+    revisionInvalidated = true;
+    try {
+      activeTransaction?.abort();
+    } catch {
+      // A transaction that has already completed cannot be rolled back.
+      // The post-transaction revision fence still prevents a false "saved".
+    }
+  };
 
   try {
-    // A revision fence is checked after opening IndexedDB and immediately
-    // before creating the readwrite transaction. The caller holds the shared
-    // project-write queue for this entire operation.
-    if (shouldPersist && !shouldPersist()) return false;
+    if (revisionFence) {
+      // Subscribe before the post-open check. The active listener then remains
+      // installed until the transaction settles, allowing revision changes to
+      // abort a staged readwrite transaction rather than merely relabel it.
+      unsubscribe = revisionFence.subscribe(() => {
+        if (!revisionFence.isCurrent()) invalidateRevision();
+      });
+      if (!revisionFence.isCurrent()) {
+        invalidateRevision();
+        return false;
+      }
+    }
+
     await new Promise<void>((resolve, reject) => {
       const stores = activate ? [PROJECT_STORE, APP_STATE_STORE] : PROJECT_STORE;
       const transaction = database.transaction(stores, 'readwrite');
+      activeTransaction = transaction;
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => {
+        const error = transaction.error;
+        // Ignore only the AbortError caused by our own revision invalidation.
+        // A quota, I/O, or other real transaction failure remains an error,
+        // even if a revision update happens around the same time.
+        if (!(revisionInvalidated && (!error || error.name === 'AbortError'))) {
+          reject(error ?? new Error('Could not save the project.'));
+        }
+      };
+      transaction.onabort = () => {
+        const error = transaction.error;
+        if (revisionInvalidated && (!error || error.name === 'AbortError')) resolve();
+        else reject(error ?? new Error('Project save was cancelled.'));
+      };
+
+      if (revisionInvalidated) {
+        try { transaction.abort(); } catch { /* onabort / final fence decides the result. */ }
+        return;
+      }
+
       transaction.objectStore(PROJECT_STORE).put(project);
       if (activate) {
         transaction.objectStore(APP_STATE_STORE).put({
@@ -71,12 +121,10 @@ async function persistProjectUnlocked(
           projectId: project.metadata.id,
         });
       }
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error ?? new Error('Could not save the project.'));
-      transaction.onabort = () => reject(transaction.error ?? new Error('Project save was cancelled.'));
     });
-    return true;
+    return !revisionInvalidated;
   } finally {
+    unsubscribe();
     database.close();
   }
 }
@@ -94,10 +142,11 @@ export function saveProject(input: FolioProject, projectRevision?: number): Prom
 }
 
 /**
- * Main Canvas autosaves must prove that their captured revision is still the
- * canonical revision when their queued write reaches the front of the shared
- * project-write queue. The second check, after openDatabase(), closes the
- * asynchronous gap immediately before the IndexedDB readwrite transaction.
+ * Main Canvas autosaves are fenced at queue entry, after openDatabase(), while
+ * the readwrite transaction is active, and once more after transaction
+ * completion. A canonical revision notification aborts an in-flight write;
+ * a change after transaction completion is reported as stale so the newer
+ * canonical snapshot can be autosaved by its own effect.
  *
  * Component Canvas deliberately continues to use its independent saveProject
  * path and does not participate in the canonical Main Canvas revision fence.
@@ -110,21 +159,24 @@ export function saveProjectIfRevisionCurrent(
   input: FolioProject,
   projectRevision: number,
   getCanonicalRevision: () => number,
+  subscribeToCanonicalRevision: (listener: () => void) => () => void,
 ): Promise<RevisionFencedProjectSaveResult> {
   const project = requireValidProject(input);
   return enqueueProjectWrite(async () => {
     const persistedRevision = persistedProjectRevisions.get(project.metadata.id);
-    if (getCanonicalRevision() !== projectRevision ||
+    const isCurrent = () => getCanonicalRevision() === projectRevision;
+    if (!isCurrent() ||
         (persistedRevision !== undefined && projectRevision < persistedRevision)) {
       return { status: 'stale' };
     }
 
-    const persisted = await persistProjectUnlocked(
-      project,
-      false,
-      () => getCanonicalRevision() === projectRevision,
-    );
-    if (!persisted) return { status: 'stale' };
+    const persisted = await persistProjectUnlocked(project, false, {
+      isCurrent,
+      subscribe: subscribeToCanonicalRevision,
+    });
+    // The transaction may have committed just before a newer revision was
+    // published. Never return saved unless this final read still matches.
+    if (!persisted || !isCurrent()) return { status: 'stale' };
 
     persistedProjectRevisions.set(
       project.metadata.id,

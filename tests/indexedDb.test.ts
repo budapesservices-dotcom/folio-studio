@@ -4,6 +4,7 @@ import { createInitialProject, createRectNode } from '../src/core/document/facto
 import type { ComponentDefinition, FolioDocument, FolioProject } from '../src/core/document/types';
 import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createEditorState } from '../src/app/editorReducer';
+import { setRevisionFencedAutosaveStatus } from '../src/app/debouncedAutosave';
 import { createComponentCanvasSyncSession } from '../src/app/componentCanvasSync';
 import {
   deleteComponentDurably,
@@ -37,6 +38,26 @@ class FakeDatabase {
   };
   private readonly keyPaths = new Map<string, string>();
   private readonly putFailures = new Map<string, DOMException>();
+  private nextReadwriteCompletionGate: { notifyStarted: () => void; wait: Promise<void> } | null = null;
+
+  holdNextReadwriteCompletion(): { entered: Promise<void>; release: () => void } {
+    if (this.nextReadwriteCompletionGate) {
+      throw new Error('A readwrite transaction completion gate is already installed.');
+    }
+
+    let notifyEntered!: () => void;
+    let releaseGate!: () => void;
+    const entered = new Promise<void>((resolve) => { notifyEntered = resolve; });
+    const wait = new Promise<void>((resolve) => { releaseGate = resolve; });
+    this.nextReadwriteCompletionGate = { notifyStarted: notifyEntered, wait };
+    return { entered, release: releaseGate };
+  }
+
+  private takeReadwriteCompletionGate() {
+    const gate = this.nextReadwriteCompletionGate;
+    this.nextReadwriteCompletionGate = null;
+    return gate;
+  }
 
   get objectStoreNames() {
     return { contains: (name: string) => this.stores.has(name) };
@@ -50,7 +71,8 @@ class FakeDatabase {
 
   transaction(_names: string | string[], mode: IDBTransactionMode): IDBTransaction {
     if (mode === 'readwrite') this.metrics.readwriteTransactions += 1;
-    return new FakeTransaction(this, mode) as unknown as IDBTransaction;
+    const completionGate = mode === 'readwrite' ? this.takeReadwriteCompletionGate() : null;
+    return new FakeTransaction(this, mode, completionGate) as unknown as IDBTransaction;
   }
 
   keyPathFor(name: string): string {
@@ -95,7 +117,11 @@ class FakeTransaction {
   private aborted = false;
   private readonly pendingWrites: Array<() => void> = [];
 
-  constructor(private readonly database: FakeDatabase, private readonly mode: IDBTransactionMode) {}
+  constructor(
+    private readonly database: FakeDatabase,
+    private readonly mode: IDBTransactionMode,
+    private completionGate: { notifyStarted: () => void; wait: Promise<void> } | null = null,
+  ) {}
 
   objectStore(name: string) {
     const records = this.database.stores.get(name);
@@ -177,9 +203,27 @@ class FakeTransaction {
     if (this.aborted || this.pending > 0 || this.completionScheduled) return;
 
     this.completionScheduled = true;
-    queueMicrotask(() => {
+    queueMicrotask(async () => {
+      if (this.aborted || this.pending > 0) {
+        this.completionScheduled = false;
+        return;
+      }
+
+      const gate = this.completionGate;
+      this.completionGate = null;
+      if (this.mode === 'readwrite' && gate) {
+        // Requests (including put staging) have completed, but no writes have
+        // committed. The test can invalidate the canonical revision here.
+        gate.notifyStarted();
+        await gate.wait;
+      }
+
       this.completionScheduled = false;
-      if (this.aborted || this.pending > 0) return;
+      if (this.aborted) return;
+      if (this.pending > 0) {
+        this.completeWhenIdle();
+        return;
+      }
 
       if (this.mode === 'readwrite') {
         const writes = this.pendingWrites.splice(0);
@@ -520,6 +564,7 @@ describe('Main Canvas revision-fenced autosave', () => {
               project,
               revision!,
               () => fixture.store.getSnapshot().projectRevision,
+              (listener) => fixture.store.subscribe(listener),
             );
             void staleAutosave.then(() => { staleAutosaveSettled = true; });
             database.failNextPutForStore('projects');
@@ -566,6 +611,7 @@ describe('Main Canvas revision-fenced autosave', () => {
       latest.editorState.project,
       latest.projectRevision,
       () => fixture.store.getSnapshot().projectRevision,
+      (listener) => fixture.store.subscribe(listener),
     );
     expect(latestResult).toEqual({ status: 'saved' });
     expect(database.metrics.scheduledWrites).toBe(writesBeforeDeletion + 1);
@@ -597,7 +643,12 @@ describe('Main Canvas revision-fenced autosave', () => {
       return revision;
     };
     const candidateAtR = store.getSnapshot().editorState.project;
-    const pendingSave = saveProjectIfRevisionCurrent(candidateAtR, revisionR, getCanonicalRevision);
+    const pendingSave = saveProjectIfRevisionCurrent(
+      candidateAtR,
+      revisionR,
+      getCanonicalRevision,
+      (listener) => store.subscribe(listener),
+    );
 
     try {
       // open() is invoked only after the queued operation's first revision
@@ -630,6 +681,7 @@ describe('Main Canvas revision-fenced autosave', () => {
         latest.editorState.project,
         latest.projectRevision,
         () => store.getSnapshot().projectRevision,
+        (listener) => store.subscribe(listener),
       );
       expect(latestSave).toEqual({ status: 'saved' });
       expect(database.metrics.readwriteTransactions).toBe(readwriteTransactionsBefore + 1);
@@ -644,6 +696,146 @@ describe('Main Canvas revision-fenced autosave', () => {
     }
   });
 
+  it('aborts an in-flight Main Canvas transaction when the canonical revision changes', async () => {
+    const project = projectWithId(
+      'main-autosave-inflight-abort',
+      'Durable revision R',
+      '2026-11-20T12:40:00.000Z',
+    );
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const revisionR = store.getSnapshot().projectRevision;
+    await saveProject(project, revisionR);
+
+    const database = fakeIndexedDB.database!;
+    const committedBefore = database.metrics.committedWrites;
+    const rolledBackBefore = database.metrics.rolledBackWrites;
+    const scheduledBefore = database.metrics.scheduledWrites;
+    const readwriteBefore = database.metrics.readwriteTransactions;
+    const completionGate = database.holdNextReadwriteCompletion();
+    let pendingSave: Promise<Awaited<ReturnType<typeof saveProjectIfRevisionCurrent>>> | undefined;
+
+    try {
+      pendingSave = saveProjectIfRevisionCurrent(
+        project,
+        revisionR,
+        () => store.getSnapshot().projectRevision,
+        (listener) => store.subscribe(listener),
+      );
+
+      // The readwrite transaction exists and its put request has been staged,
+      // but the fake IndexedDB has not committed any staged write.
+      await completionGate.entered;
+      expect(database.metrics.readwriteTransactions).toBe(readwriteBefore + 1);
+      expect(database.metrics.scheduledWrites).toBe(scheduledBefore + 1);
+      expect(database.metrics.committedWrites).toBe(committedBefore);
+      expect((await loadProjectById(project.metadata.id))?.metadata.name).toBe('Durable revision R');
+
+      const mutation = store.dispatchLegacyAction({
+        type: 'rename-project',
+        name: 'Canonical revision R+1',
+      });
+      expect(mutation.status).toBe('committed');
+      expect(mutation.snapshot.projectRevision).toBe(revisionR + 1);
+
+      // The subscription aborts the active transaction before its completion
+      // gate is released, discarding the staged stale put.
+      expect(database.metrics.rolledBackWrites).toBe(rolledBackBefore + 1);
+      completionGate.release();
+      const result = await pendingSave;
+      expect(result).toEqual({ status: 'stale' });
+      expect(database.metrics.committedWrites).toBe(committedBefore);
+      expect((await loadProjectById(project.metadata.id))?.metadata.name).toBe('Durable revision R');
+
+      const latest = store.getSnapshot();
+      const latestResult = await saveProjectIfRevisionCurrent(
+        latest.editorState.project,
+        latest.projectRevision,
+        () => store.getSnapshot().projectRevision,
+        (listener) => store.subscribe(listener),
+      );
+      expect(latestResult).toEqual({ status: 'saved' });
+      expect((await loadProjectById(project.metadata.id))?.metadata.name).toBe('Canonical revision R+1');
+    } finally {
+      completionGate.release();
+      await pendingSave?.catch(() => undefined);
+    }
+  });
+
+  it('does not publish saved when revision changes after transaction completion but before the UI callback', async () => {
+    const project = projectWithId(
+      'main-autosave-late-ui-callback',
+      'Durable revision R',
+      '2026-11-20T12:45:00.000Z',
+    );
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const revisionR = store.getSnapshot().projectRevision;
+    await saveProject(project, revisionR);
+
+    let saveStatus: 'saving' | 'saved' | 'error' = 'saving';
+    let enterUiCallback!: () => void;
+    let releaseUiCallback!: () => void;
+    const uiCallbackEntered = new Promise<void>((resolve) => { enterUiCallback = resolve; });
+    const uiCallbackGate = new Promise<void>((resolve) => { releaseUiCallback = resolve; });
+
+    const save = saveProjectIfRevisionCurrent(
+      project,
+      revisionR,
+      () => store.getSnapshot().projectRevision,
+      (listener) => store.subscribe(listener),
+    );
+    const lateUiCallback = save.then(async (result) => {
+      enterUiCallback();
+      await uiCallbackGate;
+      if (result.status === 'saved') {
+        setRevisionFencedAutosaveStatus(
+          revisionR,
+          () => store.getSnapshot().projectRevision,
+          'saved',
+          (status) => { saveStatus = status; },
+        );
+      }
+    });
+
+    try {
+      await uiCallbackEntered;
+      expect(await save).toEqual({ status: 'saved' });
+      const mutation = store.dispatchLegacyAction({
+        type: 'rename-project',
+        name: 'Canonical revision R+1',
+      });
+      expect(mutation.status).toBe('committed');
+      saveStatus = 'saving';
+      releaseUiCallback();
+      await lateUiCallback;
+      expect(saveStatus).toBe('saving');
+      expect((await loadProjectById(project.metadata.id))?.metadata.name).toBe('Durable revision R');
+    } finally {
+      releaseUiCallback();
+      await lateUiCallback.catch(() => undefined);
+    }
+  });
+
+  it('preserves actual IndexedDB persistence errors instead of reporting revision staleness', async () => {
+    const project = projectWithId(
+      'main-autosave-persistence-error',
+      'Durable before failure',
+      '2026-11-20T12:50:00.000Z',
+    );
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const revision = store.getSnapshot().projectRevision;
+    await saveProject(project, revision);
+    fakeIndexedDB.database!.failNextPutForStore('projects');
+
+    await expect(saveProjectIfRevisionCurrent(
+      project,
+      revision,
+      () => store.getSnapshot().projectRevision,
+      (listener) => store.subscribe(listener),
+    )).rejects.toThrow('Simulated IndexedDB write failure.');
+
+    expect((await loadProjectById(project.metadata.id))?.metadata.name).toBe('Durable before failure');
+  });
+
   it('persists a Main Canvas candidate when its revision is still canonical', async () => {
     const project = projectWithId('main-autosave-current', 'Canonical snapshot', '2026-11-20T12:20:00.000Z');
     const store = createCanonicalEditorStore(createEditorState(project));
@@ -653,6 +845,7 @@ describe('Main Canvas revision-fenced autosave', () => {
       project,
       revision,
       () => store.getSnapshot().projectRevision,
+      (listener) => store.subscribe(listener),
     );
 
     expect(result).toEqual({ status: 'saved' });
