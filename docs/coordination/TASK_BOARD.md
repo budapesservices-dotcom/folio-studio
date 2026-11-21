@@ -30,13 +30,15 @@ No specialist tasks currently DISPATCHED.
 
 ## Ready — awaiting GPT0 dispatch and CEO start signal
 
-No specialist tasks currently READY.
+| Agent | Task ID | Task packet | Pinned refs | Status |
+|---|---|---|---|---|
+| GPT2 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | [Execution packet](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md) | PR #1 `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`; main source `df08c279f9ddc77b3fed180bcd9913e641ddfe2d` | READY — requires separate explicit CEO authorization for branch synchronization before dispatch/start |
 
 ## In progress
 
 | Agent | Task ID | Current note |
 |---|---|---|
-| GPT0 | FOLIO-CYCLE-20261121-001 | GPT1 preflight APPROVED after live verification; PR #1 HEAD unchanged; preparing the next controlled authorization packet; no product branch changes |
+| GPT0 | FOLIO-CYCLE-20261121-001 | GPT1 preflight APPROVED; GPT2 execution packet published READY with exact PR #1/main refs and explicit CEO authorization gate; no product branch changes |
 
 ## Waiting / blocked
 
