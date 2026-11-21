@@ -28,7 +28,7 @@
 |---|---|---|---|---|---|
 | GPT4 | FOLIO-20261121-PR4-PR5-QA-001 | [PR #4 + #5 final independent QA](tasks/FOLIO-20261121-PR4-PR5-QA-001.md) | P0 | DISPATCHED | None |
 | GPT1 | FOLIO-20261121-PR7-DEPENDENCY-001 | [PR #7 dependency compatibility audit](tasks/FOLIO-20261121-PR7-DEPENDENCY-001.md) | P1 | DISPATCHED | None for read-only audit |
-| GPT3 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-001 | [PR #1 foundation audit](tasks/FOLIO-20261121-PR1-FOUNDATION-AUDIT-001.md) | P1 | DISPATCHED | None for read-only audit |
+
 
 ## In progress
 
@@ -41,6 +41,7 @@
 | Agent | Task ID | Status | Blocker / dependency |
 |---|---|---|---|
 | GPT2 | FOLIO-20261121-PR4-PR5-REMEDIATION-RESERVE-001 | WAITING | Must wait for GPT4 final QA and GPT0's finding-specific revised packet; no implementation or Phase 2 authorization |
+| GPT3 | FOLIO-20261121-PR1-FOUNDATION-AUDIT-001 | BLOCKED | GPT3 completion reported in chat, but PR #1 contains no audit report/review; save durable findings to PR #1 before GPT0 can review |
 
 ## Ready for GPT0 review
 
