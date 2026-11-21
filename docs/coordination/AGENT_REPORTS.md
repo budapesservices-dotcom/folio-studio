@@ -4,13 +4,27 @@
 **Coordinator / editor:** GPT0  
 **Product-code baseline:** main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f  
 **PR #1 pinned main comparison snapshot:** 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1  
-**Overall status:** GPT1–GPT4 task reports reviewed and APPROVED by GPT0; PR #10 accepted as a technical reconciliation candidate with a narrow Markdown source-fidelity exception. Browser smoke remains unverified; PR #10 is still draft and unmerged pending CEO merge decision.  
-**Last verified:** 2026-11-21, live GitHub inspection of task packets, PR metadata, comments and compare results
+**Overall status:** PR #10 is CLOSED/MERGED into the PR #1 feature foundation at `d585bc3581aadd335cc4d6292a3d13cb2a650253`; PR #1 remains open/draft/unmerged to `main`. CI #503 passed. GitHub Pages deployment status after the feature-branch push remains unverified.  
+**Last verified:** 2026-11-21, live GitHub inspection of merge result, PR refs, compare results and workflow configuration
 **CEO-selected route:** retain PR #1 as common parent; reconcile main into it deliberately, then PR #4 → PR #5 → PR #7
+
+## Current checkpoint — 2026-11-21, after PR #10 merge
+
+**PR #10 reconciliation was executed under CEO authorization.** GitHub confirms PR #10 is closed/merged into `feat/canvas-pan-distribute` as a normal merge commit:
+
+- Merge commit: [`d585bc3581aadd335cc4d6292a3d13cb2a650253`](https://github.com/budapesservices-dotcom/folio-studio/commit/d585bc3581aadd335cc4d6292a3d13cb2a650253).
+- `feat/canvas-pan-distribute` now points to the merge commit, and PR #1's live head is the same SHA.
+- PR #1 remains OPEN, DRAFT and UNMERGED against `main`. No PR #1 → main merge was performed.
+- Post-merge verification CI [run #503](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44896423953) completed successfully on the exact merge SHA.
+- **Deployment uncertainty:** `.github/workflows/deploy.yml` has a `push` trigger for `feat/canvas-pan-distribute`, so this merge push is eligible to launch GitHub Pages deployment. The separate Pages workflow run and completion status were not available through the current GitHub inspection. Do not claim that deployment did not occur.
+
+**Child PRs remain untouched.** PR #4 is still at `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 at `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; PR #7 remains stacked on an older PR #5 base. Compare from foundation `d585bc3581aadd335cc4d6292a3d13cb2a650253` to PR #4 is DIVERGED (98 commits on PR #4 side / 95 on foundation side, merge-base `89780034f32b1809cc49640e83bac5c817d88a91`). PR #10 and PR #4 changed-path intersection is empty. PR #5 is also diverged from the refreshed foundation; PR #4/PR #5 still share `src/app/App.tsx` and `src/styles/global.css`.
+
+**Next gates:** GPT1 has been dispatched a read-only PR #4 base-refresh preflight. GPT2 has a new finding-specific PR #4 App-autosave/native-IndexedDB implementation packet, published WAITING until GPT1 approval and GPT0 release. PR #5 will be refreshed only after PR #4 acceptance; PR #7 remains last. Native Commands Phase 2 and Phase 3 remain prohibited.
 
 ## CEO summary
 
-Earlier specialist audits of PR #1/#4/#5/#7 remain historical evidence for their exact pinned SHAs. The current foundation candidate is draft PR #10 at `601bedfeccae8ddaeda772139182d3c4a3a139be`; GPT1's refreshed preflight is approved, GPT2's delivery is verified, and GPT3/GPT4 have submitted reports against the exact same SHA.
+Earlier specialist audits of PR #1/#4/#5/#7 and the PR #10 candidate reviews remain historical evidence for their exact pinned SHAs. The PR #10 reconciliation has now been merged into the PR #1 foundation; the current foundation SHA and PR #1 head are `d585bc3581aadd335cc4d6292a3d13cb2a650253`. GPT1 preflight and GPT2 remediation are now focused on safely refreshing PR #4.
 
 | Workstream | Specialist verdict | Evidence | GPT0 disposition |
 |---|---|---|---|
@@ -20,7 +34,7 @@ Earlier specialist audits of PR #1/#4/#5/#7 remain historical evidence for their
 | PR #7 Workspace Preferences V1 | **COMPATIBLE WITH CONDITIONS** — GPT1 | [Full report](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | Helper API compatible, but model/persistence adoption blocked; no sync |
 | PR #10 foundation reconciliation | **PASS WITH CONDITIONS** — GPT2/GPT3/GPT4 | [GPT2](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) · [GPT3](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) · [GPT4](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | Ancestry/scope/workflows/CI pass; 82 intentional Markdown hard-breaks preserved under source-fidelity exception; browser smoke NOT RUN due preview inaccessibility; CEO merge decision remains reserved |
 
-Product PRs #1, #4, #5 and #7 remain open and unmerged; PR #10 is an additional draft integration candidate, also open and unmerged. PR #1 is draft and non-mergeable. None of the specialist verdicts is merge approval. GPT2's separate PR #4/#5 remediation reserve remains WAITING, and Native Commands Phase 2 is not authorized. The current-checkpoint section above supersedes older task-status and comparison statements in the historical notes below.
+PR #1, #4, #5 and #7 remain open and unmerged. PR #10 is closed/merged into the feature foundation only; this does not merge PR #1 to main. None of the earlier specialist verdicts independently constitutes merge approval for the child PRs. The new GPT2 PR #4 implementation packet is WAITING, and Native Commands Phase 2/3 are not authorized. The current-checkpoint section above supersedes older task-status and comparison statements in the historical notes below.
 
 ## Exact-ref reconciliation
 
