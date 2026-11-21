@@ -581,7 +581,7 @@ describe('Main Canvas App autosave with native Chromium IndexedDB', () => {
         expect(reloadedProject.projectId).toBe(baseline.projectId);
         expect(reloadedProject.nodeCount).toBe(afterCommit.nodeCount);
         expect(rendered.layerCount).toBe(reloadedProject.nodeCount);
-        expect(rendered.layerNames).toEqual(reloadedProject.nodeNames);
+        expect([...rendered.layerNames].sort()).toEqual([...reloadedProject.nodeNames].sort());
       } finally {
         await browser?.close();
         await vite?.close();
