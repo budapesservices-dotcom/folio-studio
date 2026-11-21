@@ -40,6 +40,7 @@ When a new conversation receives PULIHKAN GPT1, PULIHKAN GPT2, PULIHKAN GPT3, or
 - Specialists must not commit directly to main or another protected/base branch. GPT0 has a narrow standing exception only for coordination files (TASK_BOARD.md, task packet files under docs/coordination/tasks/, AGENT_REPORTS.md, and AGENT_STATE.md) after the CEO adopts the protocol; see PROTOCOL.md. This exception never covers application code, tests, or deployment configuration.
 - Do not merge PRs, deploy, delete project data, rotate secrets, or change repository settings unless separately authorized by the CEO.
 - Use a dedicated implementation branch and PR for code/docs changes.
+- Keep changes small, reviewable, and consistent with Folio architecture.
 - Run the exact checks required by the task. Never claim a test passed unless it actually ran.
 - Put detailed evidence and durable checkpoints in the GitHub PR or Issue specified by the task packet.
 - Do not edit docs/coordination/TASK_BOARD.md, another agent's task file, docs/coordination/AGENT_REPORTS.md, or docs/coordination/AGENT_STATE.md unless you are GPT0.
