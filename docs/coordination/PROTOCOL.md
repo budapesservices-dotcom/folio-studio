@@ -98,7 +98,7 @@ The CEO tells GPT0 only "GPT2 selesai" (or includes the Task ID if there is more
 
 ### 4.5 New chat / quota recovery
 
-When a specialist chat reaches its limit and the CEO opens a new conversation, send one line only: PULIHKAN GPTN (for example, PULIHKAN GPT2).
+When a specialist chat reaches its limit and the CEO opens a new conversation, send one line only: PULIHKAN GPTN — REPOSITORY: https://github.com/budapesservices-dotcom/folio-studio (for example, PULIHKAN GPT2 — REPOSITORY: https://github.com/budapesservices-dotcom/folio-studio).
 
 The specialist must follow [RECOVERY_PROTOCOL.md](RECOVERY_PROTOCOL.md), reread the canonical identity and current repository state, inspect the task packet and latest GitHub evidence, and then:
 - resume a uniquely identified ACCEPTED or IN_PROGRESS task;
