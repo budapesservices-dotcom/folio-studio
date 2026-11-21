@@ -30,6 +30,7 @@
 | Agent | Task ID | Task packet | Pinned refs | Status |
 |---|---|---|---|---|
 | GPT2 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | [Execution packet](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main source `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a` | DISPATCHED — GPT0 authorized scoped branch synchronization under CEO delegation; GPT2 chat wake signal pending |
+| GPT1 | FOLIO-20261121-PR1-RECONCILIATION-REFRESH-001 | [Refresh preflight](tasks/FOLIO-20261121-PR1-RECONCILIATION-REFRESH-001.md) | PR #1 `89780034f32b1809cc49640e83bac5c817d88a91`; main source `c936bbfa6912286e34d7fc8f5fcc40a60c727d8a` | DISPATCHED — independent read-only refresh; GPT1 chat wake signal pending; runs parallel with GPT2 |
 
 ## Ready — awaiting GPT0 dispatch
 
