@@ -29,18 +29,17 @@
 
 | Agent | Task ID | Task packet | Pinned refs | Status |
 |---|---|---|---|---|
-| GPT3 | FOLIO-20261121-PR10-CANDIDATE-QA-001 | [PR #10 candidate QA](tasks/FOLIO-20261121-PR10-CANDIDATE-QA-001.md) | PR #10 candidate `601bedfeccae8ddaeda772139182d3c4a3a139be` | DISPATCHED — read-only QA and browser smoke on existing preview; GPT3 chat wake signal pending |
-| GPT4 | FOLIO-20261121-PR10-CANDIDATE-AUDIT-001 | [PR #10 candidate audit](tasks/FOLIO-20261121-PR10-CANDIDATE-AUDIT-001.md) | PR #10 candidate `601bedfeccae8ddaeda772139182d3c4a3a139be` | DISPATCHED — independent ancestry/scope/policy/whitespace audit; GPT4 chat wake signal pending |
+No specialist tasks currently DISPATCHED. GPT3 and GPT4 have submitted their exact-candidate reports; see READY_FOR_REVIEW below.
 
 ## Ready — awaiting GPT0 dispatch
 
-No specialist tasks currently READY. GPT3 and GPT4 have now been dispatched against the exact PR #10 candidate SHA; their scopes are independent and read-only.
+No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4 independent audit have all submitted evidence for GPT0 review.
 
 ## In progress
 
 | Agent | Task ID | Current note |
 |---|---|---|
-| GPT0 | FOLIO-CYCLE-20261121-001 | GPT0 mandate active; GPT1 preflight approved; GPT2 produced draft PR #10 candidate; GPT3 QA and GPT4 independent audit DISPATCHED against exact candidate SHA |
+| GPT0 | FOLIO-CYCLE-20261121-001 | GPT0 mandate active; GPT1 preflight approved; GPT2 candidate, GPT3 QA and GPT4 independent audit submitted; GPT0 disposition recorded for Markdown whitespace and browser-access limitation |
 
 ## Waiting / blocked
 
@@ -56,6 +55,8 @@ No specialist tasks currently READY. GPT3 and GPT4 have now been dispatched agai
 | FOLIO-20261121-PR4-PR5-QA-001 | GPT4 | [PR #4 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7058959718) · [PR #5 audit](https://github.com/budapesservices-dotcom/folio-studio/pull/5#issuecomment-7058960294) | PR #4 `9730fdc02f5ee331c17de61c443a0f0d35782c56`; PR #5 `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900`; both base PR #1 `89780034f32b1809cc49640e83bac5c817d88a91` | READY_FOR_REVIEW — both reports and exact heads match; both verdicts READY WITH CONDITIONS |
 | FOLIO-20261121-PR7-DEPENDENCY-001 | GPT1 | [PR #7 dependency audit](https://github.com/budapesservices-dotcom/folio-studio/pull/7#issuecomment-7058956383) | PR #7 `76eb40426059ed21ce93156c5065835ea3717467`; PR #5 dependency HEAD `a8b28182d939ea6e5c4b40f6e7f3e0ac5e2d8900` | READY_FOR_REVIEW — report and exact heads match; verdict COMPATIBLE WITH CONDITIONS |
 | FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001 | GPT2 | [Draft PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10) · [GPT2 checkpoint](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7060964695) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be`; parents `89780034...` + `c936bbfa...` | READY_FOR_REVIEW — exact-head CI #480 passed; diff-check and whitespace condition pending independent audit |
+| FOLIO-20261121-PR10-CANDIDATE-QA-001 | GPT3 | [PR #10 QA report](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061223324) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be` | READY_FOR_REVIEW — PASS WITH CONDITIONS; exact CI/scope pass; browser QA NOT RUN because preview host inaccessible |
+| FOLIO-20261121-PR10-CANDIDATE-AUDIT-001 | GPT4 | [PR #10 independent audit](https://github.com/budapesservices-dotcom/folio-studio/pull/10#issuecomment-7061239671) | PR #10 `601bedfeccae8ddaeda772139182d3c4a3a139be` | READY_FOR_REVIEW — APPROVE WITH CONDITIONS; ancestry/scope/policy/CI pass; 82 intentional Markdown hard-breaks are a documented diff-check exception |
 
 ## Approved by GPT0
 
@@ -68,7 +69,7 @@ No specialist tasks currently READY. GPT3 and GPT4 have now been dispatched agai
 
 ## CEO route decision
 
-**DECIDED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. Do not recreate/split the foundation at this stage. GPT2 has completed the main→PR #1 reconciliation candidate in draft [PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10), SHA `601bedfe...`; exact-head CI passed. GPT1's refreshed preflight is APPROVED. GPT3 QA and GPT4 audit are now DISPATCHED in parallel. PR #10 must not merge until both reviews and the whitespace condition are resolved. The subsequent sequence remains PR #4 QA/remediation, PR #4 integration, PR #5 integration, then PR #7 last. See `AGENT_REPORTS.md` for the ordered gate sequence.
+**DECIDED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. Do not recreate/split the foundation at this stage. GPT2 has completed the main→PR #1 reconciliation candidate in draft [PR #10](https://github.com/budapesservices-dotcom/folio-studio/pull/10), SHA `601bedfe...`; exact-head CI passed. GPT1 preflight is APPROVED. GPT3 reports PASS WITH CONDITIONS (browser QA NOT RUN because the preview host is inaccessible); GPT4 reports APPROVE WITH CONDITIONS (82 intentional Markdown hard-break lines mean standard `git diff --check` would flag them). GPT0 preserves the imported main files byte-identically and records a narrow source-fidelity exception; do not claim diff-check passed. PR #10 is not yet approved for merge because browser smoke remains unverified and the CEO retains the product-branch merge decision. Next sequence remains PR #4 QA/remediation, PR #4 integration, PR #5 integration, then PR #7 last. See `AGENT_REPORTS.md` for the ordered gate sequence.
 
 ## Reconciliation facts
 
