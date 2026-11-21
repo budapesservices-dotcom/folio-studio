@@ -40,7 +40,7 @@ No specialist tasks currently READY. GPT2 execution, GPT3 candidate QA, and GPT4
 | Agent | Task ID | Current note |
 |---|---|---|
 | GPT0 | FOLIO-CYCLE-20261121-001 | PR #10 merged, deploy workflow repaired and Pages run #63 verified; fresh PR #4 preflight posted; GPT2 packet 002 dispatched |
-| GPT2 | FOLIO-20261121-PR4-AUTOSAVE-IDB-ACCEPTANCE-002 | Base refresh and App-mounted autosave/native IndexedDB acceptance on PR #4; exact refs pinned in task packet |
+
 
 ## Waiting / blocked
 
@@ -68,11 +68,11 @@ No active specialist task is waiting on a technical dependency. GPT3 QA and GPT4
 
 ## CEO route decision
 
-**EXECUTED:** retain PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. CEO authorized PR #10 merge; GitHub confirms PR #10 was merged by a two-parent merge commit `d585bc3581aadd335cc4d6292a3d13cb2a650253`. PR #1 remains open/draft/unmerged against `main`; its feature head is now `d585bc3581aadd335cc4d6292a3d13cb2a650253`. Exact-head CI run [#503](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44896423953) passed.
+**EXECUTED:** keep PR #1 (`feat/canvas-pan-distribute`) as the common foundation parent. PR #10 was merged into it with two-parent commit `d585bc3581aadd335cc4d6292a3d13cb2a650253`. The CEO-authorized deploy repair then produced `edb0cc155d87c7580e6d5713935b873402a5182f` as a direct child of that merge commit. Exact-head CI [#518](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298951) and GitHub Pages Deploy [#63](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44897298913) both succeeded. PR #1 remains open/draft/unmerged to `main`.
 
-**GitHub Pages workflow result:** The merge push triggered [Deploy FOLIO Studio run #62](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/44896420740) (event `push`, exact SHA `d585bc3581aadd335cc4d6292a3d13cb2a650253`). The run completed with **failure** in the build job at `actions/setup-node@v4`: `cache: npm` could not find a lockfile (`package-lock.json`, `npm-shrinkwrap.json`, or `yarn.lock`). Install, build, and artifact upload were skipped; the `deploy` job was **skipped**, so this run did not publish a new GitHub Pages artifact/site. CI run #503 separately succeeded. The narrow repair is to remove `cache: npm` from `.github/workflows/deploy.yml` (rather than introduce a lockfile), but that workflow is push-triggered on this feature branch and the fix push would automatically retry Pages deployment. Treat that change/redeployment as a separate reserved CEO authorization; no repair has been applied.
+**PR #4 fresh preflight:** GPT0 independently re-fetched all live refs after the foundation repair and posted **APPROVE SYNC WITH CONDITIONS** on [PR #4](https://github.com/budapesservices-dotcom/folio-studio/pull/4#issuecomment-7061699937). Exact compare `edb0cc1...` → `9730fdc...` is DIVERGED 98/96 with merge-base `89780034...`; GitHub reports `mergeable=true`, `mergeable_state=clean`; foundation/PR #4 changed-path intersection is empty.
 
-**Next sequence:** GPT1 read-only preflight of PR #4 base refresh → GPT2 (only after GPT1 approval and GPT0 release) merge-sync PR #4 and close App-mounted 450 ms autosave / native-browser IndexedDB findings → GPT4 exact-head QA/browser acceptance → PR #5 base refresh and combined App/CSS integration → PR #7 last. PR #5/#7 are not synchronized. Native Commands Phase 2/3 remain prohibited.
+**Next sequence:** GPT2 task 002 performs the two-parent PR #4 base refresh and closes the scoped App-mounted 450 ms autosave / native-browser IndexedDB evidence gaps → GPT4 exact-head QA and browser acceptance → PR #5 base refresh and manual App/CSS reconciliation → PR #7 last. PR #5 and PR #7 remain untouched. No child PR merge, main merge, deployment, or Native Commands Phase 2/3 is authorized by this checkpoint.
 
 ## Latest checkpoint — 2026-11-21, PR #4 preflight and GPT2 release
 
