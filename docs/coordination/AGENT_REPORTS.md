@@ -4,7 +4,7 @@
 **Coordinator / editor:** GPT0  
 **Product-code baseline:** main @ 49761cd8ca0cd719beb9b84a6becc03dbd2b431f  
 **PR #1 pinned main comparison snapshot:** 8d8571cb13da23fb2f39c57cc3d34f556dbf10c1  
-**Overall status:** THREE INDEPENDENT AUDITS SUBMITTED — READY_FOR_REVIEW; GPT1 main-reconciliation preflight DISPATCHED awaiting CEO start signal; implementation held  
+**Overall status:** GPT1 main-reconciliation preflight APPROVED; GPT2 PR #1 reconciliation execution packet READY pending separate CEO branch-sync authorization; implementation held  
 **Last verified:** 2026-11-21, live GitHub inspection of task packets, PR metadata, comments and compare results
 **CEO-selected route:** retain PR #1 as common parent; reconcile main into it deliberately, then PR #4 → PR #5 → PR #7
 
@@ -156,3 +156,19 @@ GPT0 reviewed Task `FOLIO-20261121-PR1-MAIN-RECONCILIATION-PREFLIGHT-001` agains
 - Workflow inspection confirms main's `cache: npm` line is absent from the PR #1 deploy workflow, while PR #1's CI feature-branch push trigger must be preserved.
 
 This approval validates GPT1's preflight analysis and recommended sequence only. It does not execute or authorize a branch synchronization, PR merge, PR retarget, source change, or deployment. GPT2 remains WAITING; Native Commands Phase 2 remains prohibited.
+
+
+## GPT2 PR #1 main-reconciliation execution packet — READY
+
+GPT0 published `FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001` for GPT2 — Engineer.
+
+- Task packet: [FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001](tasks/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001.md)
+- Status: **READY** — not dispatched and not started.
+- Integration branch to be created only after authorization: `agent/GPT2/FOLIO-20261121-PR1-MAIN-RECONCILIATION-EXECUTION-001`.
+- Target branch: `feat/canvas-pan-distribute`, exact base `89780034f32b1809cc49640f6e7f3e0ac5e2d8900`.
+- Pinned main source to merge: `df08c279f9ddc77b3fed180bcd9913e641ddfe2d`.
+- Manual conflict paths: `AGENTS.md` and `.github/workflows/deploy.yml`. `.github/workflows/ci.yml` is verification-only and must retain the feature push trigger.
+- Expected output: a two-parent merge candidate on a dedicated integration branch and a draft PR targeting the PR #1 foundation branch. GPT2 must not merge it or deploy.
+- Authorization gate: the CEO must separately and explicitly authorize branch synchronization before GPT0 dispatches the task or GPT2 creates/pushes the integration branch. The CEO's request to prepare this packet is not treated as execution authorization.
+
+GPT2's previous PR #4/#5 remediation reserve remains WAITING; Native Commands Phase 2 remains prohibited. PR #4/#5/#7 are not changed by this task.
