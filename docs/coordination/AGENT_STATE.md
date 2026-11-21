@@ -37,6 +37,8 @@
 
 ## Reconciliation notes
 
+> Historical notes below preserve the earlier pre-PR10 checkpoint. Where their PR #1 head, PR #10 state, merge/deploy status, or next-task references conflict with the post-merge checkpoint above, the post-merge checkpoint is authoritative.
+
 - PR #1, #4, #5 and #7 remain open and unmerged. PR #1 is draft and non-mergeable.
 - GPT3's audit report is posted on PR #1; it confirms NOT READY and identifies the add/add integration collision in AGENTS.md and .github/workflows/deploy.yml, missing exact-head CI/browser acceptance, and the need to preserve PR #4/#5 remediations.
 - GPT4's two reports are posted on PR #4 and PR #5. Both audited exact task-packet HEADs and both return READY WITH CONDITIONS. PR #4 retains App-mounted autosave, native IndexedDB and deletion/recovery browser gaps. PR #5 retains live App drag/resize and harness cleanup/flakiness gaps. The reports identify App.tsx and global.css as shared PR #4/#5 integration paths.
