@@ -7,7 +7,18 @@
 **Positioning:** The Visual-First Web Development Studio  
 **Native project format:** \`.flop\`
 
-> This document is the canonical reference for FOLIO product intent and target architecture. It is not evidence that every described capability has already been implemented.
+> This document is the canonical reference for FOLIO's agreed target architecture. Product identity, founding purpose, vision, mission, and durable product outcomes are defined in the linked product charter documents below. This blueprint is not evidence that every described capability has already been implemented.
+
+## Product charter — read before architecture work
+
+The product intent behind this architecture is documented in four companion documents:
+
+- [Folio Manifesto](FOLIO_MANIFESTO.md) — why Folio exists and the spirit it must preserve.
+- [Folio Vision](FOLIO_VISION.md) — the desired future product.
+- [Folio Mission](FOLIO_MISSION.md) — how Folio pursues that future.
+- [Folio Product Goals](FOLIO_PRODUCT_GOALS.md) — durable outcomes, experience principles, and boundaries.
+
+These documents define product intent; this blueprint translates that intent into target system architecture. The current [Architecture](ARCHITECTURE.md) remains the record of implementation reality. All AI agents and contributors must read the product charter before proposing or implementing material product or architecture changes.
 
 ## 1. Purpose and status language
 

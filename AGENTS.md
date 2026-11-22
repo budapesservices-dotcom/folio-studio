@@ -48,27 +48,40 @@ These instructions govern repository work. Folio's CEO communicates outcomes dir
 
 The repository coordination, identity, dispatch, permission, status, and evidence rules above remain canonical. This section supplements them with Folio product and engineering requirements; it does not grant additional permissions or override the assigned task packet or CEO decisions.
 
-### Mandatory FOLIO architecture context
+### Mandatory product and architecture context
 
-Before every task that inspects, plans, edits, reviews, or generates code for FOLIO, read:
+Before every task that inspects, plans, edits, reviews, or generates code for FOLIO, read these documents in order:
 
-1. `docs/FOLIO_ARCHITECTURE_BLUEPRINT.md` — product vision, agreed principles, target architecture, and long-term rules.
-2. `docs/ARCHITECTURE.md` — current repository architecture and implementation reality.
-3. `docs/ACCEPTANCE_TESTS.md` — current verification expectations for the relevant stage.
-4. For AST, document, layer, component, or identity work, also read `docs/specs/NATIVE_AST_V1.md`, `docs/specs/NATIVE_AST_COMPATIBILITY_MIGRATION.md`, and `docs/specs/NATIVE_AST_COMPATIBILITY_API.md`.
+1. **Product identity and intent**
+   - `docs/FOLIO_MANIFESTO.md` — founding purpose and non-negotiable product spirit.
+   - `docs/FOLIO_VISION.md` — the future Folio is working toward.
+   - `docs/FOLIO_MISSION.md` — how Folio pursues that future.
+   - `docs/FOLIO_PRODUCT_GOALS.md` — durable product outcomes and boundaries.
+2. **Target architecture**
+   - `docs/FOLIO_ARCHITECTURE_BLUEPRINT.md` — agreed principles, target system, and long-term architecture.
+3. **Current reality and verification**
+   - `docs/ARCHITECTURE.md` — what the repository currently implements.
+   - `docs/ACCEPTANCE_TESTS.md` — current verification expectations for the relevant stage.
+4. **Specialized contracts**
+   - For AST, document, layer, component, or identity work, also read `docs/specs/NATIVE_AST_V1.md`, `docs/specs/NATIVE_AST_COMPATIBILITY_MIGRATION.md`, and `docs/specs/NATIVE_AST_COMPATIBILITY_API.md`.
+   - Read any other engine, feature, migration, or acceptance specification directly relevant to the task.
 
-Also inspect the relevant source files, tests, current branch, and working-tree changes before editing.
-
+Also inspect relevant source files, tests, current branch, and working-tree changes before editing.
 ## Source-of-truth rules
 
-- The product blueprint is authoritative for **product intent and agreed architectural direction**.
-- Current source code, tests, and `docs/ARCHITECTURE.md` describe **what is actually implemented today**.
-- Never describe a proposed or agreed design as implemented unless the code exists.
-- Never describe code as verified unless the relevant checks or acceptance tests have actually passed.
-- When the blueprint and current implementation differ, preserve the implementation's known reality and treat the blueprint as the target direction. Do not silently make a breaking migration to force alignment.
-- When documentation conflicts, identify the conflict and update the appropriate document deliberately. Do not erase useful implementation history.
-- Keep these statuses distinct: **Agreed**, **Proposed**, **Open**, **Implemented**, and **Verified**.
+Apply this authority hierarchy:
 
+- `FOLIO_MANIFESTO.md` defines Folio's founding purpose and enduring values.
+- `FOLIO_VISION.md` defines the desired product future.
+- `FOLIO_MISSION.md` defines the product's approach and commitments.
+- `FOLIO_PRODUCT_GOALS.md` defines durable outcomes and product boundaries.
+- `FOLIO_ARCHITECTURE_BLUEPRINT.md` is authoritative for agreed target architecture and product/engineering direction.
+- Current source code, tests, and `docs/ARCHITECTURE.md` describe what is actually implemented today.
+- Acceptance specifications define what must be verified for a milestone; CI and test results provide evidence only for the checks that actually ran.
+
+Never describe a proposed or agreed design as implemented unless the code exists. Never describe code as verified unless the relevant checks or acceptance tests have actually passed. When the target direction and current implementation differ, preserve the known implementation reality and treat the blueprint as the target; do not silently make a breaking migration to force alignment. When documentation conflicts, identify the conflict and update the appropriate document deliberately. Do not erase useful implementation history.
+
+Keep these statuses distinct: **Agreed**, **Proposed**, **Open**, **Implemented**, and **Verified**.
 ## Product and architecture guardrails
 
 - FOLIO is the **Visual-First Full-Stack Web Development Studio**: visual design, behavior, code, backend, runtime, deployment, AI, and collaboration are parts of one connected product.
