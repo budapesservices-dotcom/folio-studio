@@ -1023,7 +1023,7 @@ async function runAppAcceptance(browser) {
         rack.panel + ' closed after geometry',
       );
     }
-    return { counts, stackBefore, componentRaised, mainRaised, geometry };
+    return { counts, stackBefore, componentRaised, mainRaised, floatingWindowAcceptance, geometry };
   } finally {
     await vite?.close();
   }
