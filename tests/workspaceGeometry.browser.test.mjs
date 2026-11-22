@@ -930,7 +930,9 @@ async function runAppAcceptance(browser) {
         'const r=w.getBoundingClientRect(), p=h.getBoundingClientRect(); ' +
         'const point={x:direction==="s"?p.left+24:p.left+p.width/2,y:p.top+p.height/2}; ' +
         'const hit=document.elementFromPoint(point.x,point.y); ' +
-        'if(!hit || !(hit===h || h.contains(hit))) throw new Error("Resize handle is occluded: ' + direction + '"); ' +
+        'if(!hit || !(hit===h || h.contains(hit))) throw new Error("Resize handle is occluded: ' + direction + ' " + JSON.stringify({' +
+        'hit:hit?.outerHTML?.slice(0,240)||null,point,handleRect:{left:p.left,top:p.top,width:p.width,height:p.height},' +
+        'handleStyle:{position:getComputedStyle(h).position,zIndex:getComputedStyle(h).zIndex,pointerEvents:getComputedStyle(h).pointerEvents}})); ' +
         'return {before:{x:r.left,y:r.top,width:r.width,height:r.height},point}; })()',
       );
       const dx = direction.includes('w') ? -4 : direction.includes('e') ? 4 : 0;
