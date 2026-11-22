@@ -1158,3 +1158,66 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   outline-offset: 2px;
 }
 .component-save-error > span:first-child { color: #ffaaa8; }
+
+
+/* Workspace Preferences V1 recovery and legacy migration confirmation. */
+.workspace-preferences-recovery {
+  position: fixed;
+  top: 68px;
+  left: 50%;
+  z-index: 1350;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: min(720px, calc(100vw - 24px));
+  padding: 12px 14px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 10px;
+  background: rgba(20, 27, 39, 0.97);
+  color: #e2e8f0;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(12px);
+}
+.workspace-preferences-recovery-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.workspace-preferences-recovery-copy strong {
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 700;
+}
+.workspace-preferences-recovery-copy span {
+  color: #cbd5e1;
+}
+.workspace-preferences-recovery button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 6px;
+  background: #334155;
+  color: #f8fafc;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.workspace-preferences-recovery button:hover {
+  background: #475569;
+}
+@media (max-width: 560px) {
+  .workspace-preferences-recovery {
+    top: 66px;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .workspace-preferences-recovery button {
+    align-self: flex-start;
+  }
+}

@@ -36,6 +36,7 @@ import { createDebouncedAutosave, setRevisionFencedAutosaveStatus } from './debo
 import { activateModalDialog, trapModalDialogKeydown } from './modalFocus';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
+import { loadWorkspacePreferences, saveWorkspacePreferences, type WorkspaceKind, type WorkspaceLayoutV1, type WorkspacePreferencesLoadResult } from './workspacePreferences';
 
 function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
@@ -141,6 +142,42 @@ function readCanvasViewState(key: string): CanvasViewState {
 }
 
 export function App() {
+  const workspacePreferencesLoadRef = useRef<WorkspacePreferencesLoadResult | null>(null);
+  if (workspacePreferencesLoadRef.current === null) {
+    workspacePreferencesLoadRef.current = loadWorkspacePreferences({
+      viewport: {
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight,
+      },
+    });
+  }
+  const initialWorkspacePreferences = workspacePreferencesLoadRef.current!;
+  const initialWorkspaceLayout = initialWorkspacePreferences.layout;
+  const initialWorkspaceWindow = (workspace: WorkspaceKind) =>
+    initialWorkspaceLayout.windows.find((record) => record.workspace === workspace)!;
+  const initialMainWindow = initialWorkspaceWindow('main-canvas');
+  const initialComponentWindow = initialWorkspaceWindow('component-canvas');
+  const initialNodeLogicWindow = initialWorkspaceWindow('node-logic');
+  const initialWorkspaceOrder = initialWorkspaceLayout.stackOrder.flatMap((instanceId) => {
+    const record = initialWorkspaceLayout.windows.find((candidate) =>
+      candidate.windowInstanceId === instanceId,
+    );
+    return record ? [record.workspace] : [];
+  });
+  const initialPreferencesNeedReview =
+    initialWorkspacePreferences.status === 'migrated' ||
+    initialWorkspacePreferences.status === 'recovered' ||
+    initialWorkspacePreferences.status === 'malformed';
+  const workspacePreferencesReplaceMalformedRef = useRef(
+    initialWorkspacePreferences.status === 'malformed',
+  );
+  const [workspacePreferencesPersistenceEnabled, setWorkspacePreferencesPersistenceEnabled] =
+    useState(
+      initialWorkspacePreferences.status === 'valid' ||
+      initialWorkspacePreferences.status === 'missing',
+    );
+  const [workspacePreferencesReviewRequired, setWorkspacePreferencesReviewRequired] =
+    useState(initialPreferencesNeedReview);
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const canonicalStore = useMemo(() => createCanonicalEditorStore(initialEditorState), []);
   const [state, setState] = useState(() => canonicalStore.getSnapshot().editorState);
@@ -209,7 +246,7 @@ export function App() {
   const [projectNameEditing, setProjectNameEditing] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState('');
   const projectNameCancelRef = useRef(false);
-  const [layersVisible, setLayersVisible] = useState(true);
+  const [layersVisible, setLayersVisible] = useState(() => initialWorkspaceLayout.panelVisibility.layers);
   const [inspectorVisible, setInspectorVisible] = useState(true);
   const [collapsedLayers, setCollapsedLayers] = useState<Record<EditorTarget, string[]>>({ main: [], component: [] });
   const [layerDropTarget, setLayerDropTarget] = useState<{ nodeId: string; position: LayerDropPosition } | null>(null);
@@ -292,12 +329,21 @@ export function App() {
     };
   }, [layerColorPickerKey]);
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
-  const [windowOrder, setWindowOrder] = useState<WindowId[]>(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
-  const [activeWindowId, setActiveWindowId] = useState<WindowId>('main-canvas');
+  const [windowOrder, setWindowOrder] = useState<WindowId[]>(() => [
+    ...initialWorkspaceOrder,
+    ...(initialWorkspaceLayout.panelVisibility['pages-rack'] ? ['pages' as const] : []),
+  ]);
+  const [activeWindowId, setActiveWindowId] = useState<WindowId>(
+    () => initialWorkspaceLayout.activeWorkspace,
+  );
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
-  const [componentRackOpen, setComponentRackOpen] = useState(false);
-  const [pagesRackOpen, setPagesRackOpen] = useState(false);
+  const [componentRackOpen, setComponentRackOpen] = useState(
+    () => initialWorkspaceLayout.panelVisibility['component-rack'],
+  );
+  const [pagesRackOpen, setPagesRackOpen] = useState(
+    () => initialWorkspaceLayout.panelVisibility['pages-rack'],
+  );
   const pagesRackRef = useRef<HTMLElement | null>(null);
   const componentRackRef = useRef<HTMLElement | null>(null);
   const pagesRackToggleRef = useRef<HTMLButtonElement | null>(null);
@@ -324,129 +370,63 @@ export function App() {
   const [componentNameDraft, setComponentNameDraft] = useState('');
   const ownedComponents = state.project.components;
   const editingComponent = ownedComponents.find((component) => component.id === editingComponentId) ?? null;
-  const [canvasMinimized, setCanvasMinimized] = useState(false);
-  const [canvasClosed, setCanvasClosed] = useState(false);
-  const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating'>(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
-      return saved?.mode === 'floating' ? 'floating' : 'docked';
-    } catch { return 'docked'; }
-  });
+  const [canvasMinimized, setCanvasMinimized] = useState(
+    () => initialMainWindow.visibility === 'minimized',
+  );
+  const [canvasClosed, setCanvasClosed] = useState(
+    () => initialMainWindow.visibility === 'closed',
+  );
+  const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating'>(
+    () => initialMainWindow.presentation,
+  );
   const canvasFloating = canvasWindowMode === 'floating';
-  const [canvasSize, setCanvasSize] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-      // Keep enough free screen area around the window for reliable dragging.
-      const maxWidth = Math.max(280, Math.min(viewportWidth * 0.82, viewportWidth - 24));
-      const maxHeight = Math.max(220, Math.min(viewportHeight * 0.60, viewportHeight - 56 - 27 - 16));
-      const preferredWidth = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(860, viewportWidth * 0.78);
-      const preferredHeight = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(620, viewportHeight * 0.58);
-      return {
-        width: Math.min(maxWidth, Math.max(280, preferredWidth)),
-        height: Math.min(maxHeight, Math.max(220, preferredHeight)),
-      };
-    } catch {
-      return {
-        width: Math.max(280, Math.min(860, window.innerWidth * 0.78, window.innerWidth * 0.82)),
-        height: Math.max(220, Math.min(620, window.innerHeight * 0.58)),
-      };
-    }
-  });
-  const [componentCanvasClosed, setComponentCanvasClosed] = useState(true);
-  const [componentCanvasMinimized, setComponentCanvasMinimized] = useState(false);
-  const [componentCanvasWindowMode, setComponentCanvasWindowMode] = useState<'docked' | 'floating'>(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.component-canvas-window') ?? 'null');
-      return saved?.mode === 'docked' ? 'docked' : 'floating';
-    } catch { return 'floating'; }
-  });
+  const [canvasSize, setCanvasSize] = useState(() => ({
+    width: initialMainWindow.geometry.width,
+    height: initialMainWindow.geometry.height,
+  }));
+
+  const [componentCanvasClosed, setComponentCanvasClosed] = useState(
+    () => initialComponentWindow.visibility === 'closed',
+  );
+  const [componentCanvasMinimized, setComponentCanvasMinimized] = useState(
+    () => initialComponentWindow.visibility === 'minimized',
+  );
+  const [componentCanvasWindowMode, setComponentCanvasWindowMode] =
+    useState<'docked' | 'floating'>(() => initialComponentWindow.presentation);
   const componentCanvasFloating = componentCanvasWindowMode === 'floating';
   const componentCanvasOpen = !componentCanvasClosed && !componentCanvasMinimized;
-  const [componentCanvasSize, setComponentCanvasSize] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.component-canvas-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(680, viewportWidth * 0.72);
-      const height = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(500, viewportHeight * 0.58);
-      return {
-        width: Math.min(Math.max(280, viewportWidth - 24), Math.max(280, width)),
-        height: Math.min(Math.max(220, viewportHeight - 100), Math.max(220, height)),
-      };
-    } catch {
-      return {
-        width: Math.max(280, Math.min(680, window.innerWidth * 0.72)),
-        height: Math.max(220, Math.min(500, window.innerHeight * 0.58)),
-      };
-    }
-  });
-  const [componentCanvasPosition, setComponentCanvasPosition] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.component-canvas-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(680, viewportWidth * 0.72);
-      return {
-        x: Number.isFinite(saved?.position?.x) ? saved.position.x : Math.max(24, viewportWidth - width - 48),
-        y: Math.max(56, Number.isFinite(saved?.position?.y) ? saved.position.y : 112),
-      };
-    } catch { return { x: Math.max(24, window.innerWidth - 700), y: 112 }; }
-  });
+  const [componentCanvasSize, setComponentCanvasSize] = useState(() => ({
+    width: initialComponentWindow.geometry.width,
+    height: initialComponentWindow.geometry.height,
+  }));
+  const [componentCanvasPosition, setComponentCanvasPosition] = useState(() => ({
+    x: initialComponentWindow.geometry.x,
+    y: initialComponentWindow.geometry.y,
+  }));
 
-  const [nodeLogicClosed, setNodeLogicClosed] = useState(true);
-  const [nodeLogicMinimized, setNodeLogicMinimized] = useState(false);
-  const [nodeLogicWindowMode, setNodeLogicWindowMode] = useState<'docked' | 'floating'>(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.node-logic-window') ?? 'null');
-      return saved?.mode === 'docked' ? 'docked' : 'floating';
-    } catch { return 'floating'; }
-  });
+  const [nodeLogicClosed, setNodeLogicClosed] = useState(
+    () => initialNodeLogicWindow.visibility === 'closed',
+  );
+  const [nodeLogicMinimized, setNodeLogicMinimized] = useState(
+    () => initialNodeLogicWindow.visibility === 'minimized',
+  );
+  const [nodeLogicWindowMode, setNodeLogicWindowMode] =
+    useState<'docked' | 'floating'>(() => initialNodeLogicWindow.presentation);
   const nodeLogicFloating = nodeLogicWindowMode === 'floating';
   const nodeLogicOpen = !nodeLogicClosed && !nodeLogicMinimized;
-  const [nodeLogicSize, setNodeLogicSize] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.node-logic-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(720, viewportWidth * 0.74);
-      const height = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(540, viewportHeight * 0.60);
-      return {
-        width: Math.min(Math.max(280, viewportWidth - 24), Math.max(280, width)),
-        height: Math.min(Math.max(220, viewportHeight - 100), Math.max(220, height)),
-      };
-    } catch {
-      return {
-        width: Math.max(280, Math.min(720, window.innerWidth * 0.74)),
-        height: Math.max(220, Math.min(540, window.innerHeight * 0.60)),
-      };
-    }
-  });
-  const [nodeLogicPosition, setNodeLogicPosition] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.node-logic-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(720, viewportWidth * 0.74);
-      return {
-        x: Number.isFinite(saved?.position?.x) ? saved.position.x : Math.max(40, Math.round((viewportWidth - width) * 0.18)),
-        y: Math.max(56, Number.isFinite(saved?.position?.y) ? saved.position.y : 146),
-      };
-    } catch { return { x: Math.max(40, Math.round((window.innerWidth - 720) * 0.18)), y: 146 }; }
-  });
+  const [nodeLogicSize, setNodeLogicSize] = useState(() => ({
+    width: initialNodeLogicWindow.geometry.width,
+    height: initialNodeLogicWindow.geometry.height,
+  }));
+  const [nodeLogicPosition, setNodeLogicPosition] = useState(() => ({
+    x: initialNodeLogicWindow.geometry.x,
+    y: initialNodeLogicWindow.geometry.y,
+  }));
 
-  const [canvasPosition, setCanvasPosition] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
-      const savedX = Number.isFinite(saved?.position?.x) ? saved.position.x : 48;
-      const savedY = Number.isFinite(saved?.position?.y) ? saved.position.y : 80;
-      // Horizontal and bottom placement are intentionally unbounded; only keep
-      // the titlebar below the app header so the window can always be recovered.
-      return {
-        x: savedX,
-        y: Math.max(56, savedY),
-      };
-    } catch { return { x: 48, y: 80 }; }
-  });
+  const [canvasPosition, setCanvasPosition] = useState(() => ({
+    x: initialMainWindow.geometry.x,
+    y: initialMainWindow.geometry.y,
+  }));
 
   useEffect(() => {
     try { window.localStorage.setItem('folio.main-canvas-view', JSON.stringify(mainView)); }
@@ -458,37 +438,129 @@ export function App() {
     catch (error) { console.warn('Folio could not persist Component Canvas view:', error); }
   }, [componentView]);
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem('folio.canvas-window', JSON.stringify({ mode: canvasWindowMode, position: canvasPosition, size: canvasSize }));
-    } catch (error) {
-      console.warn('Folio could not persist Canvas window layout:', error);
+
+  const workspacePreferencesSnapshot = useMemo<WorkspaceLayoutV1>(() => {
+    const currentWindows: WorkspaceLayoutV1['windows'] = [
+      {
+        ...initialMainWindow,
+        visibility: canvasClosed ? 'closed' : canvasMinimized ? 'minimized' : 'open',
+        presentation: canvasWindowMode,
+        geometry: {
+          x: canvasPosition.x,
+          y: canvasPosition.y,
+          width: canvasSize.width,
+          height: canvasSize.height,
+        },
+      },
+      {
+        ...initialComponentWindow,
+        visibility: componentCanvasClosed
+          ? 'closed'
+          : componentCanvasMinimized ? 'minimized' : 'open',
+        presentation: componentCanvasWindowMode,
+        geometry: {
+          x: componentCanvasPosition.x,
+          y: componentCanvasPosition.y,
+          width: componentCanvasSize.width,
+          height: componentCanvasSize.height,
+        },
+      },
+      {
+        ...initialNodeLogicWindow,
+        visibility: nodeLogicClosed ? 'closed' : nodeLogicMinimized ? 'minimized' : 'open',
+        presentation: nodeLogicWindowMode,
+        geometry: {
+          x: nodeLogicPosition.x,
+          y: nodeLogicPosition.y,
+          width: nodeLogicSize.width,
+          height: nodeLogicSize.height,
+        },
+      },
+    ];
+
+    const stackOrder = windowOrder.flatMap((id) => {
+      if (id !== 'main-canvas' && id !== 'component-canvas' && id !== 'node-logic') {
+        return [];
+      }
+      const record = currentWindows.find((candidate) => candidate.workspace === id);
+      return record?.visibility === 'open' ? [record.windowInstanceId] : [];
+    });
+    for (const record of currentWindows) {
+      if (record.visibility === 'open' && !stackOrder.includes(record.windowInstanceId)) {
+        stackOrder.push(record.windowInstanceId);
+      }
     }
-  }, [canvasWindowMode, canvasPosition, canvasSize]);
+
+    const activeRecord =
+      currentWindows.find((record) =>
+        record.workspace === activeWindowId && record.visibility === 'open',
+      ) ??
+      currentWindows.find((record) =>
+        record.windowInstanceId === stackOrder.at(-1),
+      );
+    const stackPositions = new Map(stackOrder.map((id, index) => [id, index]));
+
+    return {
+      ...initialWorkspaceLayout,
+      windows: currentWindows.map((record) => ({
+        ...record,
+        stackOrder: stackPositions.get(record.windowInstanceId) ?? 0,
+      })),
+      stackOrder,
+      activeWindowInstanceId: activeRecord?.windowInstanceId ?? null,
+      activeWorkspace: activeRecord?.workspace ?? 'main-canvas',
+      panelVisibility: {
+        'pages-rack': pagesRackOpen,
+        'component-rack': componentRackOpen,
+        layers: layersVisible,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+  }, [
+    initialWorkspaceLayout,
+    initialMainWindow,
+    initialComponentWindow,
+    initialNodeLogicWindow,
+    canvasClosed,
+    canvasMinimized,
+    canvasWindowMode,
+    canvasPosition,
+    canvasSize,
+    componentCanvasClosed,
+    componentCanvasMinimized,
+    componentCanvasWindowMode,
+    componentCanvasPosition,
+    componentCanvasSize,
+    nodeLogicClosed,
+    nodeLogicMinimized,
+    nodeLogicWindowMode,
+    nodeLogicPosition,
+    nodeLogicSize,
+    windowOrder,
+    activeWindowId,
+    pagesRackOpen,
+    componentRackOpen,
+    layersVisible,
+  ]);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem('folio.component-canvas-window', JSON.stringify({
-        mode: componentCanvasWindowMode,
-        position: componentCanvasPosition,
-        size: componentCanvasSize,
-      }));
-    } catch (error) {
-      console.warn('Folio could not persist Component Canvas window layout:', error);
+    if (!workspacePreferencesPersistenceEnabled) return;
+    const saved = saveWorkspacePreferences(workspacePreferencesSnapshot, {
+      reconciliationComplete: true,
+      replaceUnsupportedVersion: workspacePreferencesReplaceMalformedRef.current,
+      viewport: {
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight,
+      },
+    });
+    if (!saved.ok) {
+      console.warn('Folio could not persist its workspace layout:', saved.reason);
+      setNotice('Workspace layout could not be saved: ' + saved.reason + '.');
+      return;
     }
-  }, [componentCanvasWindowMode, componentCanvasPosition, componentCanvasSize]);
+    workspacePreferencesReplaceMalformedRef.current = false;
+  }, [workspacePreferencesSnapshot, workspacePreferencesPersistenceEnabled]);
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem('folio.node-logic-window', JSON.stringify({
-        mode: nodeLogicWindowMode,
-        position: nodeLogicPosition,
-        size: nodeLogicSize,
-      }));
-    } catch (error) {
-      console.warn('Folio could not persist Node Logic window layout:', error);
-    }
-  }, [nodeLogicWindowMode, nodeLogicPosition, nodeLogicSize]);
 
   useEffect(() => {
     let active = true;
@@ -1923,6 +1995,43 @@ export function App() {
           </div>
         </div>
       </header>
+      {(workspacePreferencesReviewRequired ||
+        initialWorkspacePreferences.status === 'unsupported-newer-schema' ||
+        initialWorkspacePreferences.status === 'storage-unavailable') && (
+        <div class="workspace-preferences-recovery" role="status" aria-live="polite">
+          <div class="workspace-preferences-recovery-copy">
+            <strong>Workspace layout preferences</strong>
+            <span>
+              {initialWorkspacePreferences.status === 'migrated'
+                ? 'Legacy window settings were found. Review the restored layout before converting them to Workspace Preferences V1.'
+                : initialWorkspacePreferences.status === 'recovered'
+                  ? 'Some saved layout values needed safe recovery. Review the restored layout before saving it.'
+                  : initialWorkspacePreferences.status === 'malformed'
+                    ? 'The saved workspace layout is unreadable. The app loaded safe defaults; replacing the damaged record requires your approval.'
+                    : initialWorkspacePreferences.status === 'unsupported-newer-schema'
+                      ? 'This layout was saved by a newer Folio version. Safe defaults are active and the newer record will not be overwritten.'
+                      : 'Browser storage is unavailable. Workspace layout changes cannot be saved in this session.'}
+            </span>
+          </div>
+          {workspacePreferencesReviewRequired && (
+            <button type="button" onClick={() => {
+              setWorkspacePreferencesReviewRequired(false);
+              setWorkspacePreferencesPersistenceEnabled(true);
+              setNotice(
+                initialWorkspacePreferences.status === 'migrated'
+                  ? 'Workspace Preferences V1 migration enabled.'
+                  : 'Recovered workspace layout accepted and saving enabled.',
+              );
+            }}>
+              {initialWorkspacePreferences.status === 'migrated'
+                ? 'Migrate saved layout'
+                : initialWorkspacePreferences.status === 'malformed'
+                  ? 'Replace damaged layout'
+                  : 'Use recovered layout'}
+            </button>
+          )}
+        </div>
+      )}
       <nav class="tool-rail" aria-label="Tool Rack" onMouseEnter={() => updateToolbarHint('TOOL RACK', 'Choose a cursor tool or create a design object. The active cursor tool works in both Canvas workspaces.')}>
         <div class="tool-rack-caption">TOOLS</div>
         {CANVAS_TOOL_GROUPS.map((group) => {

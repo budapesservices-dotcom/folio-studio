@@ -638,6 +638,29 @@ async function runAppAcceptance(browser) {
       componentsPointer: 'none',
     });
 
+    await waitForApp(
+      browser,
+      '(() => { try { const saved=JSON.parse(localStorage.getItem("folio.workspace-layout.v1")||"null"); return saved?.schemaVersion===1 && saved.windows?.some((record)=>record.workspace==="main-canvas" && record.visibility==="open"); } catch { return false; } })()',
+      'clean startup creates one complete Workspace Preferences V1 snapshot',
+    );
+    const initialWorkspacePreferences = await browser.evaluate(
+      '(() => { const saved=JSON.parse(localStorage.getItem("folio.workspace-layout.v1")); ' +
+      'const find=(workspace)=>saved.windows.find((record)=>record.workspace===workspace); ' +
+      'return {schemaVersion:saved.schemaVersion,mainVisibility:find("main-canvas").visibility,' +
+      'componentVisibility:find("component-canvas").visibility,nodeLogicVisibility:find("node-logic").visibility,' +
+      'pagesRack:saved.panelVisibility["pages-rack"],componentRack:saved.panelVisibility["component-rack"],' +
+      'layers:saved.panelVisibility.layers}; })()',
+    );
+    expect(initialWorkspacePreferences).toEqual({
+      schemaVersion: 1,
+      mainVisibility: 'open',
+      componentVisibility: 'closed',
+      nodeLogicVisibility: 'closed',
+      pagesRack: false,
+      componentRack: false,
+      layers: true,
+    });
+
     // Real Tab key events and focusin observations prove both closed Rack subtrees are skipped.
     await browser.evaluate(
       '(() => { const p=document.querySelector(".pages-rack-panel"); const c=document.querySelector(".component-rack-panel"); ' +
@@ -1131,7 +1154,55 @@ async function runAppAcceptance(browser) {
         rack.panel + ' closed after geometry',
       );
     }
-    return { counts, stackBefore, componentRaised, mainRaised, floatingWindowAcceptance, geometry };
+
+    await waitForApp(
+      browser,
+      '(() => { try { const saved=JSON.parse(localStorage.getItem("folio.workspace-layout.v1")||"null"); ' +
+      'const component=saved?.windows?.find((record)=>record.workspace==="component-canvas"); ' +
+      'const window=document.querySelector("[data-window-id=component-canvas]"); ' +
+      'const shell=document.querySelector(".app-shell"); if(!saved || !component || !window || !shell) return false; ' +
+      'const r=window.getBoundingClientRect(), s=shell.getBoundingClientRect(); ' +
+      'return saved.schemaVersion===1 && component.visibility==="open" && ' +
+      'Math.abs(component.geometry.x-(r.left-s.left))<1 && Math.abs(component.geometry.y-(r.top-s.top))<1 && ' +
+      'Math.abs(component.geometry.width-r.width)<1 && Math.abs(component.geometry.height-r.height)<1 && ' +
+      'saved.panelVisibility["pages-rack"]===false && saved.panelVisibility["component-rack"]===false; ' +
+      '} catch { return false; } })()',
+      'V1 snapshot matches actual window geometry, visibility and panel state',
+      15000,
+    );
+    const savedWorkspaceBeforeReload = await browser.evaluate(
+      'JSON.parse(localStorage.getItem("folio.workspace-layout.v1"))',
+    );
+    await browser.send('Page.reload', { ignoreCache: true });
+    await waitForApp(
+      browser,
+      'document.querySelector(".app-shell")?.getAttribute("aria-busy")==="false" && ' +
+      '!!document.querySelector("[data-window-id=component-canvas]")',
+      'actual Preact App restores its open Component Canvas from Workspace Preferences V1',
+      30000,
+    );
+    const restoredWorkspace = await browser.evaluate(
+      '(() => { const saved=JSON.parse(localStorage.getItem("folio.workspace-layout.v1")); ' +
+      'const component=saved.windows.find((record)=>record.workspace==="component-canvas"); ' +
+      'const window=document.querySelector("[data-window-id=component-canvas]"); ' +
+      'const shell=document.querySelector(".app-shell"); const r=window.getBoundingClientRect(), s=shell.getBoundingClientRect(); ' +
+      'return {visibility:component.visibility,presentation:component.presentation,' +
+      'geometry:{x:r.left-s.left,y:r.top-s.top,width:r.width,height:r.height},' +
+      'savedGeometry:component.geometry,pagesClosed:document.querySelector(".pages-rack-panel").inert,' +
+      'componentsClosed:document.querySelector(".component-rack-panel").inert}; })()',
+    );
+    expect(restoredWorkspace.visibility).toBe('open');
+    expect(restoredWorkspace.presentation).toBe('floating');
+    expect(restoredWorkspace.geometry.x).toBeCloseTo(savedWorkspaceBeforeReload.windows.find((record) => record.workspace === 'component-canvas').geometry.x, 0);
+    expect(restoredWorkspace.geometry.y).toBeCloseTo(savedWorkspaceBeforeReload.windows.find((record) => record.workspace === 'component-canvas').geometry.y, 0);
+    expect(restoredWorkspace.geometry.width).toBeCloseTo(savedWorkspaceBeforeReload.windows.find((record) => record.workspace === 'component-canvas').geometry.width, 0);
+    expect(restoredWorkspace.geometry.height).toBeCloseTo(savedWorkspaceBeforeReload.windows.find((record) => record.workspace === 'component-canvas').geometry.height, 0);
+    expect(restoredWorkspace.pagesClosed).toBe(true);
+    expect(restoredWorkspace.componentsClosed).toBe(true);
+    return {
+      counts, stackBefore, componentRaised, mainRaised, floatingWindowAcceptance, geometry,
+      initialWorkspacePreferences, savedWorkspaceBeforeReload, restoredWorkspace,
+    };
   } finally {
     await vite?.close();
   }
