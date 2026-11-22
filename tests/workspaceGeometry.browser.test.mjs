@@ -855,6 +855,10 @@ async function runAppAcceptance(browser) {
       'shell:!!w?.closest(".app-shell")}; })()',
     );
     expect(floatingWindowReady).toEqual({ floating: 'true', handles: 8, shell: true });
+    expect(await browser.evaluate(
+      '(() => { const w=document.querySelector("[data-window-id=main-canvas]"); ' +
+      'return {floating:w?.getAttribute("data-window-floating"),handles:w?.querySelectorAll("[data-window-resize]").length ?? 0}; })()',
+    )).toEqual({ floating: 'false', handles: 0 });
 
     const dragStart = await browser.evaluate(
       '(() => { const w=document.querySelector("[data-window-id=component-canvas]"); ' +
@@ -914,24 +918,41 @@ async function runAppAcceptance(browser) {
     expect(afterResize.right).toBeLessThanOrEqual(1280);
     expect(afterResize.bottom).toBeLessThanOrEqual(800 - 27);
 
-    // Also exercise a straight edge resize, not only the southeast corner.
-    const eastResizeStart = await browser.evaluate(
-      '(() => { const w=document.querySelector("[data-window-id=component-canvas]"); ' +
-      'const h=w?.querySelector("[data-window-resize=e]"); ' +
-      'if(!w || !h) throw new Error("East resize handle is missing"); ' +
-      'const r=w.getBoundingClientRect(), p=h.getBoundingClientRect(); ' +
-      'return {before:{x:r.left,y:r.top,width:r.width,height:r.height},' +
-      'point:{x:p.left+p.width/2,y:p.top+p.height/2}}; })()',
-    );
-    await dispatchMouseDrag(eastResizeStart.point, 35, 0);
-    const afterEastResize = await browser.evaluate(
-      '(() => { const r=document.querySelector("[data-window-id=component-canvas]").getBoundingClientRect(); ' +
-      'return {x:r.left,y:r.top,width:r.width,height:r.height}; })()',
-    );
-    expect(afterEastResize.x).toBeCloseTo(eastResizeStart.before.x, 0);
-    expect(afterEastResize.y).toBeCloseTo(eastResizeStart.before.y, 0);
-    expect(afterEastResize.width).toBeCloseTo(eastResizeStart.before.width + 35, 0);
-    expect(afterEastResize.height).toBeCloseTo(eastResizeStart.before.height, 0);
+    // Exercise every remaining resize edge/corner in the real App. The
+    // south-east corner was checked above; each other handle must preserve its
+    // opposite edge while changing only the requested axes.
+    const directionalResizeAcceptance = [];
+    for (const direction of ['n', 's', 'e', 'w', 'ne', 'nw', 'sw']) {
+      const start = await browser.evaluate(
+        '(() => { const w=document.querySelector("[data-window-id=component-canvas]"); ' +
+        'const h=w?.querySelector("[data-window-resize=' + direction + ']"); ' +
+        'if(!w || !h) throw new Error("Resize handle is missing: ' + direction + '"); ' +
+        'const r=w.getBoundingClientRect(), p=h.getBoundingClientRect(); ' +
+        'const point={x:p.left+p.width/2,y:p.top+p.height/2}; ' +
+        'const hit=document.elementFromPoint(point.x,point.y); ' +
+        'if(!hit || !(hit===h || h.contains(hit))) throw new Error("Resize handle is occluded: ' + direction + '"); ' +
+        'return {before:{x:r.left,y:r.top,width:r.width,height:r.height},point}; })()',
+      );
+      const dx = direction.includes('w') ? -4 : direction.includes('e') ? 4 : 0;
+      const dy = direction.includes('n') ? -4 : direction.includes('s') ? 4 : 0;
+      await dispatchMouseDrag(start.point, dx, dy);
+      const after = await browser.evaluate(
+        '(() => { const r=document.querySelector("[data-window-id=component-canvas]").getBoundingClientRect(); ' +
+        'return {x:r.left,y:r.top,width:r.width,height:r.height}; })()',
+      );
+      const expected = {
+        x: start.before.x + (direction.includes('w') ? -4 : 0),
+        y: start.before.y + (direction.includes('n') ? -4 : 0),
+        width: start.before.width + (direction.includes('e') || direction.includes('w') ? 4 : 0),
+        height: start.before.height + (direction.includes('n') || direction.includes('s') ? 4 : 0),
+      };
+      expect(after.x, direction + ' left edge').toBeCloseTo(expected.x, 0);
+      expect(after.y, direction + ' top edge').toBeCloseTo(expected.y, 0);
+      expect(after.width, direction + ' width').toBeCloseTo(expected.width, 0);
+      expect(after.height, direction + ' height').toBeCloseTo(expected.height, 0);
+      directionalResizeAcceptance.push({ direction, before: start.before, after, expected });
+    }
+    const afterEastResize = directionalResizeAcceptance.find((entry) => entry.direction === 'e').after;
 
     // Resizing the viewport during a live drag must re-clamp the actual App
     // window to the new shell and leave the pointer interaction recoverable.
@@ -1005,6 +1026,7 @@ async function runAppAcceptance(browser) {
       afterResize,
       beforeEastResize: eastResizeStart.before,
       afterEastResize,
+      directionalResizeAcceptance,
       afterViewportResize,
       afterBlurCleanup,
       afterPostBlurMove,
