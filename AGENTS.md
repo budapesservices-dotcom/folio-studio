@@ -1,62 +1,46 @@
-# Folio Studio — Agent Instructions
+# Folio — Repository Instructions
 
-These rules apply to every AI coding assistant and specialist agent working in this repository.
+These instructions govern repository work. Folio's CEO communicates outcomes directly to the active Codex session.
 
-## Mandatory first read
+## Sole operating model
 
-1. Read docs/coordination/AGENT_IDENTITY.md and identify your GPT role.
-2. Read docs/coordination/PROTOCOL.md.
-2a. If you are GPT0, read docs/coordination/GPT0_MANDATE.md before coordinating or dispatching work.
-3. Read docs/coordination/RECOVERY_PROTOCOL.md when restoring a new conversation.
-4. Read docs/coordination/TASK_BOARD.md.
-5. Read docs/coordination/AGENT_STATE.md as a navigation/status index.
-6. Read the complete assigned task file under docs/coordination/tasks/.
-7. Read relevant architecture/specification documents before touching implementation.
+- Codex is the only default coordinator and engineering interface for Folio.
+- Do not use a separate numbered-role roster, chat activation/recovery signals, mandatory handoff chain, or specialist task-board workflow.
+- Codex may use its available tools or native subagents when they materially improve execution. These are implementation choices, not separate operating authorities or fixed role identities.
+- The CEO should not have to relay technical reports or coordinate routine task dispatch between AI sessions.
 
-## Starting a task
+## Execution default
 
-When the CEO says MULAI or LAKSANAKAN in a GPT1–GPT4 conversation:
+- Prefer implementation and measurable product progress over repeated audits, planning documents, status checks, or coordination overhead.
+- Inspect the live repository, current branch, exact base commit, open PRs, dependencies, and relevant Folio specifications before changing files. Treat stale documents and chat summaries as non-authoritative.
+- Choose the smallest high-value, unblocked vertical slice. Implement production behavior and the tests needed to prove it.
+- Do not stop after proposing a plan when the task is sufficiently specified and safe to execute.
+- Avoid duplicate implementations. Extend existing engine boundaries and preserve the Unified Project Model and Native Engine First direction.
+- Keep work bounded, modular, reviewable, and compatible with existing branches. One writer per mutable worktree/scope at a time.
 
-1. Identify yourself using AGENT_IDENTITY.md.
-2. Read the Task Board from the repository default branch.
-3. Find exactly one DISPATCHED task assigned to your GPT role.
-4. Open the task file and validate its base SHA and dependencies.
-5. If exactly one valid task is found, reply: DITERIMA — TASK-ID — mulai dikerjakan. Then execute only that task.
-6. If zero or multiple matching tasks exist, the base is stale, a dependency is unmet, or GitHub cannot be accessed, stop and reply BLOCKED with the reason. Never guess.
+## Git and authority boundaries
 
-## Recovering after a chat change
+- Use a dedicated branch from the verified base SHA for implementation.
+- Never force-push, rewrite another branch, overwrite uncommitted work, or silently rebase an existing PR.
+- Do not commit product changes directly to `main`.
+- Do not modify, rebase, merge, close, or retarget PR #4, #5, or #7 without explicit CEO authorization.
+- Do not merge PRs, deploy, change repository or Cloudflare settings, modify secrets/access, or perform destructive data operations without explicit CEO approval.
+- Open a draft PR when the candidate is coherent and reviewable. A draft PR is not approval to merge or deploy.
 
-When a new conversation receives PULIHKAN GPT1, PULIHKAN GPT2, PULIHKAN GPT3, or PULIHKAN GPT4:
+## Validation and reporting
 
-1. Follow docs/coordination/RECOVERY_PROTOCOL.md in full.
-2. Reconstruct role, task status, scope, and latest durable checkpoint from GitHub.
-3. Resume only a uniquely identified ACCEPTED or IN_PROGRESS task; a DISPATCHED task still requires MULAI/LAKSANAKAN.
-4. Never claim to remember the previous chat or any work that is not present in repository evidence.
-5. If recovery is ambiguous or evidence is inaccessible, report BLOCKED and state what is missing.
+- Run relevant checks at meaningful implementation milestones. Report exact commands and actual results; never claim a check ran when it did not.
+- Inspect the final diff, changed paths, branch ancestry, and commit SHA before handoff.
+- Add or update regression tests for changed behavior. Keep unrelated findings out of scope unless they create a material safety or correctness risk.
+- Report only durable facts: what changed, exact branch/commit/PR, checks actually run, known limitations, and the next concrete action.
+- If blocked, state the specific unavailable capability or failed precondition and the smallest action needed to unblock. Do not replace execution with repeated status narration.
 
-## Non-negotiable rules
+## Folio product invariants
 
-- Work only on the assigned Task ID, mode, scope, and paths.
-- Do not silently expand scope or combine unrelated tasks.
-- Specialists must not commit directly to main or another protected/base branch. GPT0 has a narrow standing exception only for coordination files (TASK_BOARD.md, task packet files under docs/coordination/tasks/, AGENT_REPORTS.md, and AGENT_STATE.md) after the CEO adopts the protocol; see PROTOCOL.md. This exception never covers application code, tests, or deployment configuration.
-- Do not merge PRs, deploy, delete project data, rotate secrets, or change repository settings unless separately authorized by the CEO.
-- Use a dedicated implementation branch and PR for code/docs changes.
-- Keep changes small, reviewable, and consistent with Folio architecture.
-- Run the exact checks required by the task. Never claim a test passed unless it actually ran.
-- Put detailed evidence and durable checkpoints in the GitHub PR or Issue specified by the task packet.
-- Do not edit docs/coordination/TASK_BOARD.md, another agent's task file, docs/coordination/AGENT_REPORTS.md, or docs/coordination/AGENT_STATE.md unless you are GPT0.
-- If access, context, a dependency, or an acceptance criterion is missing, stop and report BLOCKED.
-
-## Chat communication
-
-Chat is only for short status signals. Do not paste long technical reports in the specialist chat.
-
-- Start: DITERIMA — TASK-ID — mulai dikerjakan.
-- Finish: SELESAI — TASK-ID — PR/ISSUE LINK — menunggu GPT0.
-- Blocked: BLOCKED — TASK-ID — ONE-LINE BLOCKER.
-- New conversation recovery: PULIH — GPTN — TASK-ID/IDLE — checkpoint/status.
-
-A SELESAI response means READY_FOR_REVIEW only. It does not mean approved or merged.
+- Product name: Folio. Project container extension: `.flop`.
+- Preserve Native Engine First, the Unified Project Model, typed engine boundaries, modularity, and the accepted Designer/Developer integration rules.
+- Prefer lightweight, incremental implementations and reuse mature foundations where appropriate.
+- Do not reverse material product or architecture decisions without CEO direction.
 
 ---
 

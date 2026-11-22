@@ -1,34 +1,30 @@
-## Folio task
+## Outcome
 
-- **Task ID:**
-- **Assigned agent:** GPTN — ROLE
-- **Task file:** docs/coordination/tasks/TASK-ID.md
-- **Evidence destination (Issue/PR):**
+- **Related issue / request:**
 - **Target branch:**
 - **Exact base SHA:**
 
 ## Summary
 
-<!-- What changed and why? Keep this concise. -->
+<!-- What changed and why? -->
 
-## Scope check
+## Scope
 
-- [ ] Only the assigned paths/scope were changed.
-- [ ] No unrelated refactor or dependency change was included.
-- [ ] No direct main-branch implementation commit, merge, or deployment was performed.
+- [ ] Changes stay within the intended scope.
+- [ ] No unrelated refactor or dependency change is included.
 - **Changed paths:**
   -
 
-## Validation evidence
+## Validation
 
-| Command / check | Result | Evidence / CI link |
+| Command / check | Result | Evidence |
 |---|---|---|
-| npm run check | NOT RUN / PASS / FAIL | |
-| npm run test | NOT RUN / PASS / FAIL | |
-| npm run build | NOT RUN / PASS / FAIL | |
-| Other task-specific check | NOT RUN / PASS / FAIL | |
+| `npm run check` | NOT RUN / PASS / FAIL | |
+| `npm run test` | NOT RUN / PASS / FAIL | |
+| `npm run build` | NOT RUN / PASS / FAIL | |
+| Other relevant check | NOT RUN / PASS / FAIL | |
 
-Record only checks actually executed. If a check was not run, explain why.
+Record only checks actually executed. Explain any required check that was not run.
 
 ## Acceptance criteria
 
@@ -36,18 +32,16 @@ Record only checks actually executed. If a check was not run, explain why.
 - [ ] Criterion 2:
 - [ ] Criterion 3:
 
-## Risks, limitations, and deviations
+## Risks and limitations
 
-- **Risks / known gaps:**
-- **Out-of-scope findings (do not fix here):**
-- **Deviations from task file:**
+- **Known gaps:**
+- **Out-of-scope findings:**
 - **Follow-up required:**
 
-## Handoff to GPT0
+## Review and authority
 
 - **Exact PR HEAD SHA:**
-- **CI status for this exact SHA:**
-- **Recommended status:** READY_FOR_REVIEW / BLOCKED
-- **What GPT0 must inspect:**
+- **CI/check status for this exact SHA:**
+- **Remaining review needs:**
 
-> Do not merge this PR. GPT0 reviews and consolidates the result in docs/coordination/AGENT_REPORTS.md. The CEO retains merge authority.
+> Do not merge or deploy without explicit CEO approval.
