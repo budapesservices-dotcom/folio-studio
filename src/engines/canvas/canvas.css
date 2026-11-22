@@ -517,3 +517,20 @@
   font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
 }
 
+/* Measure single-click layer bounds highlight */
+.canvas-measure-box {
+  fill: rgba(239, 83, 80, 0.08);
+  stroke: #ef5350;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Live Smooth brush radius preview ring */
+.canvas-smooth-brush {
+  fill: rgba(245, 158, 11, 0.08);
+  stroke: #f59e0b;
+  stroke-width: 1.25;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}

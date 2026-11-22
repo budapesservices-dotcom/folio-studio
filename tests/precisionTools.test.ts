@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createFrameNode,
   createInitialProject,
+  createLineNode,
   createPolygonNode,
   createStarNode,
 } from '../src/core/document/factory';
@@ -25,7 +26,8 @@ import {
   rotateNodesAroundPivot,
   snapPointToTargets,
 } from '../src/engines/canvas/geometry';
-import { getStudioTool } from '../src/engines/canvas/tools/studioRegistry';
+import { canvasToolRegistry } from '../src/engines/canvas/tools/registry';
+import { getStudioTool, studioToolRegistry } from '../src/engines/canvas/tools/studioRegistry';
 import {
   DEFAULT_CANVAS_TOOL_OPTIONS,
   type CanvasToolContext,
@@ -473,3 +475,244 @@ describe('On-Canvas Smart Handles, Alt-Hover Redlines & Smart Measure (Breakthro
     expect(strokeSample.sampledColor?.target).toBe('stroke');
   });
 });
+
+describe('Existing Tool Quality, Precision & Efficiency Polish (Zero New Tools)', () => {
+  it('strictly preserves exact tool counts (26 studio tools, 6 Wave 1 tools)', () => {
+    expect(studioToolRegistry.list()).toHaveLength(26);
+    expect(canvasToolRegistry.list()).toHaveLength(6);
+  });
+
+  it('reuses stable clone IDs across Alt+Drag pointermove frames to prevent DOM thrashing', () => {
+    const rect = makeRect('orig', 100, 100, 80, 60);
+    const select = getStudioTool('select');
+    const down = select.onPointerDown(
+      makePointer({ targetNodeId: 'orig', point: { x: 120, y: 120 }, altKey: true }),
+      makeContext([rect], ['orig']),
+    );
+    const move1 = select.onPointerMove(
+      makePointer({ point: { x: 180, y: 120 }, altKey: true }),
+      makeContext([rect], ['orig'], { session: down.session ?? null }),
+    );
+    const move2 = select.onPointerMove(
+      makePointer({ point: { x: 240, y: 140 }, altKey: true }),
+      makeContext([rect], ['orig'], { session: move1.session ?? null }),
+    );
+    expect(move1.previewCreateNodes?.[0].id).toBeDefined();
+    expect(move2.previewCreateNodes?.[0].id).toBe(move1.previewCreateNodes?.[0].id);
+  });
+
+  it('supports Arrow-key nudging (1px / Shift 10px) for layers and Direct Selection active anchors', () => {
+    const rect = makeRect('nudge-box', 100, 100, 80, 60);
+    const select = getStudioTool('select');
+    const right1 = select.onKeyDown(
+      { key: 'ArrowRight', code: 'ArrowRight', shiftKey: false, ctrlKey: false, metaKey: false, altKey: false },
+      makeContext([rect], ['nudge-box']),
+    );
+    expect(right1.commitNodes?.[0]).toMatchObject({ x: 101, y: 100 });
+
+    const down10 = select.onKeyDown(
+      { key: 'ArrowDown', code: 'ArrowDown', shiftKey: true, ctrlKey: false, metaKey: false, altKey: false },
+      makeContext([rect], ['nudge-box']),
+    );
+    expect(down10.commitNodes?.[0]).toMatchObject({ x: 100, y: 110 });
+
+    // Direct Selection nudges the exact focused Bezier anchor point
+    const poly = createPolygonNode(100, 100, 100, 100, 4);
+    const beforeWorld = nodeLocalPointToWorld(poly, poly.points[0]);
+    const direct = getStudioTool('direct-selection');
+    const anchorNudge = direct.onKeyDown(
+      { key: 'ArrowRight', code: 'ArrowRight', shiftKey: true, ctrlKey: false, metaKey: false, altKey: false },
+      makeContext([poly], [poly.id], { activeAnchor: { nodeId: poly.id, pointIndex: 0 } }),
+    );
+    const updated = anchorNudge.commitNodes?.[0] as PathNode;
+    const afterWorld = nodeLocalPointToWorld(updated, updated.points[0]);
+    expect(afterWorld.x).toBeCloseTo(beforeWorld.x + 10, 1);
+    expect(afterWorld.y).toBeCloseTo(beforeWorld.y, 1);
+  });
+
+  it('preserves selection on Marquee pointerDown/Escape, supports Direct Selection marquee, and maps directional resize cursors', () => {
+    const a = makeRect('a', 50, 50, 40, 40);
+    const b = makeRect('b', 160, 50, 40, 40);
+    const select = getStudioTool('select');
+    const down = select.onPointerDown(makePointer({ point: { x: 10, y: 10 }, shiftKey: true }), makeContext([a, b], ['a']));
+    expect(down.selection).toBeUndefined();
+    const esc = select.onKeyDown(
+      { key: 'Escape', code: 'Escape', shiftKey: false, ctrlKey: false, metaKey: false, altKey: false },
+      makeContext([a, b], ['a'], { session: down.session ?? null }),
+    );
+    expect(esc.session).toBeNull();
+    expect(esc.selection).toBeUndefined();
+
+    // Direct Selection marquee selects exact nodes in box
+    const direct = getStudioTool('direct-selection');
+    const dDown = direct.onPointerDown(makePointer({ point: { x: 150, y: 40 } }), makeContext([a, b], ['a']));
+    const dUp = direct.onPointerUp(
+      makePointer({ point: { x: 210, y: 100 } }),
+      makeContext([a, b], ['a'], { session: dDown.session ?? null }),
+    );
+    expect(dUp.selection).toEqual(['b']);
+
+    // Directional resize cursors
+    const rDown = select.onPointerDown(
+      makePointer({ point: { x: 70, y: 50 }, resizeHandle: 'n' }),
+      makeContext([a], ['a']),
+    );
+    expect(select.cursorStyle(makeContext([a], ['a'], { session: rDown.session ?? null }))).toBe('ns-resize');
+    const eDown = select.onPointerDown(
+      makePointer({ point: { x: 90, y: 70 }, resizeHandle: 'e' }),
+      makeContext([a], ['a']),
+    );
+    expect(select.cursorStyle(makeContext([a], ['a'], { session: eDown.session ?? null }))).toBe('ew-resize');
+  });
+
+  it('supports Magic Wand Shift-add, Ctrl-subtract, and visible stroke-color matching', () => {
+    const a = makeRect('a', 10, 10, 50, 50, '#FF0000');
+    const b = makeRect('b', 80, 10, 50, 50, '#00FF00');
+    const wand = getStudioTool('magic-wand');
+    const added = wand.onPointerDown(
+      makePointer({ targetNodeId: 'b', shiftKey: true }),
+      makeContext([a, b], ['a']),
+    );
+    expect(added.selection).toEqual(['a', 'b']);
+
+    const subtracted = wand.onPointerDown(
+      makePointer({ targetNodeId: 'b', ctrlKey: true }),
+      makeContext([a, b], ['a', 'b']),
+    );
+    expect(subtracted.selection).toEqual(['a']);
+
+    // Stroke-color fallback when fill is none
+    const line1 = createLineNode(10, 10, 100, 10, { stroke: '#38BDF8', strokeWidth: 3 });
+    const line2 = createLineNode(10, 40, 100, 40, { stroke: '#38BDF8', strokeWidth: 2 });
+    const line3 = createLineNode(10, 70, 100, 70, { stroke: '#F43F5E', strokeWidth: 3 });
+    const strokeHit = wand.onPointerDown(
+      makePointer({ targetNodeId: line1.id }),
+      makeContext([line1, line2, line3]),
+    );
+    expect(strokeHit.selection).toEqual([line1.id, line2.id]);
+  });
+
+  it('supports Hand double-click reset and Scrubby Zoom click-in / Alt+click-out', () => {
+    const hand = getStudioTool('hand');
+    const reset = hand.onPointerDown(makePointer({ detail: 2 }), makeContext([], [], { zoom: 1.75, pan: { x: 120, y: -60 } }));
+    expect(reset.zoom).toBe(1);
+    expect(reset.pan).toEqual({ x: 0, y: 0 });
+
+    const zoomTool = getStudioTool('scrubby-zoom');
+    const zDown = zoomTool.onPointerDown(makePointer({ clientX: 200, viewportAnchor: { x: 0, y: 0 } }), makeContext([], [], { zoom: 1 }));
+    const zIn = zoomTool.onPointerUp(makePointer({ clientX: 200 }), makeContext([], [], { zoom: 1, session: zDown.session ?? null }));
+    expect(zIn.zoom).toBe(1.25);
+
+    const zOut = zoomTool.onPointerUp(
+      makePointer({ clientX: 200, altKey: true }),
+      makeContext([], [], { zoom: 1, session: zDown.session ?? null }),
+    );
+    expect(zOut.zoom).toBe(0.8);
+  });
+
+  it('supports Draw Text instant inline edit, Draw Star Left/Right inner-ratio tuning, and Line angle HUD', () => {
+    const drawText = getStudioTool('draw-text');
+    const tDown = drawText.onPointerDown(makePointer({ point: { x: 100, y: 100 } }), makeContext([]));
+    const tUp = drawText.onPointerUp(
+      makePointer({ point: { x: 100, y: 100 } }),
+      makeContext([], [], { session: tDown.session ?? null }),
+    );
+    expect(tUp.editTextNodeId).toBe(tUp.createNodes?.[0].id);
+
+    const drawStar = getStudioTool('draw-star');
+    let session = drawStar.onPointerDown(makePointer({ point: { x: 100, y: 100 } }), makeContext([])).session ?? null;
+    session = drawStar.onPointerMove(makePointer({ point: { x: 240, y: 240 } }), makeContext([], [], { session })).session ?? null;
+    session = drawStar.onKeyDown(
+      { key: 'ArrowRight', code: 'ArrowRight', shiftKey: false, ctrlKey: false, metaKey: false, altKey: false },
+      makeContext([], [], { session }),
+    ).session ?? null;
+    const starUp = drawStar.onPointerUp(makePointer({ point: { x: 240, y: 240 } }), makeContext([], [], { session }));
+    expect((starUp.createNodes?.[0] as PathNode).shapeMeta).toEqual({ kind: 'star', spikes: 5, innerRatio: 0.48 });
+
+    const drawLine = getStudioTool('draw-line');
+    const lDown = drawLine.onPointerDown(makePointer({ point: { x: 100, y: 100 } }), makeContext([]));
+    const lMove = drawLine.onPointerMove(makePointer({ point: { x: 200, y: 200 } }), makeContext([], [], { session: lDown.session ?? null }));
+    const overlay = drawLine.renderOverlay(makeContext([], [], { session: lMove.session ?? null }));
+    expect(overlay?.kind === 'draw-preview' && overlay.label).toContain('45°');
+  });
+
+  it('supports Pen handle retraction, Curvature live spline preview, and Scissors prioritizing clicked path', () => {
+    const pen = getStudioTool('pen');
+    let session = pen.onPointerDown(makePointer({ point: { x: 100, y: 100 } }), makeContext([])).session ?? null;
+    session = pen.onPointerMove(makePointer({ point: { x: 140, y: 100 } }), makeContext([], [], { session })).session ?? null;
+    session = pen.onPointerUp(makePointer({ point: { x: 140, y: 100 } }), makeContext([], [], { session })).session ?? null;
+    // Click directly back on last anchor to retract handleOut
+    const retracted = pen.onPointerDown(makePointer({ point: { x: 101, y: 100 } }), makeContext([], [], { session }));
+    expect(retracted.session?.kind === 'pen-draft' && retracted.session.points[0].handleOut).toBeUndefined();
+
+    // Curvature renders live spline previewPoints toward cursor
+    const curvature = getStudioTool('curvature');
+    let cSession = curvature.onPointerDown(makePointer({ point: { x: 40, y: 40 } }), makeContext([])).session ?? null;
+    cSession = curvature.onPointerDown(makePointer({ point: { x: 120, y: 80 } }), makeContext([], [], { session: cSession })).session ?? null;
+    cSession = curvature.onPointerMove(makePointer({ point: { x: 200, y: 40 } }), makeContext([], [], { session: cSession })).session ?? null;
+    const cOverlay = curvature.renderOverlay(makeContext([], [], { session: cSession }));
+    expect(cOverlay?.kind).toBe('pen-draft');
+    if (cOverlay?.kind === 'pen-draft') {
+      expect(cOverlay.previewPoints?.length).toBe(3);
+    }
+
+    // Scissors cuts the directly clicked path even when another path is selected
+    const selectedPath = createLineNode(10, 10, 110, 10);
+    const clickedPath = createLineNode(10, 120, 110, 120);
+    const scissors = getStudioTool('scissors');
+    const cut = scissors.onPointerDown(
+      makePointer({ targetNodeId: clickedPath.id, point: { x: 60, y: 120 } }),
+      makeContext([selectedPath, clickedPath], [selectedPath.id]),
+    );
+    expect(cut.replaceNodeWithNodes?.nodeId).toBe(clickedPath.id);
+    expect(cut.replaceNodeWithNodes?.nodes).toHaveLength(2);
+  });
+
+  it('supports Rotate Alt+Drag clone-orbit, Shape Builder quick-select + mid-drag Alt toggle, and Measure click-to-inspect', () => {
+    const rect = makeRect('petal', 100, 100, 60, 40);
+    const rotate = getStudioTool('rotate');
+    const rDown = rotate.onPointerDown(
+      makePointer({ point: { x: 200, y: 120 }, altKey: true }),
+      makeContext([rect], ['petal']),
+    );
+    const rMove = rotate.onPointerMove(
+      makePointer({ point: { x: 130, y: 200 }, altKey: true, shiftKey: true }),
+      makeContext([rect], ['petal'], { session: rDown.session ?? null }),
+    );
+    expect(rMove.previewCreateNodes).toHaveLength(1);
+    const rUp = rotate.onPointerUp(
+      makePointer({ point: { x: 130, y: 200 }, altKey: true, shiftKey: true }),
+      makeContext([rect], ['petal'], { session: rMove.session ?? null }),
+    );
+    expect(rUp.createNodes).toHaveLength(1);
+    expect(rUp.createNodes![0].id).not.toBe('petal');
+
+    // Shape Builder quick-select when < 2 selected, and reactive Alt toggle mid-drag
+    const a = makeRect('sb-a', 100, 100, 100, 100);
+    const b = makeRect('sb-b', 150, 100, 100, 100);
+    const sb = getStudioTool('shape-builder');
+    const qs1 = sb.onPointerDown(makePointer({ targetNodeId: 'sb-a' }), makeContext([a, b], []));
+    expect(qs1.selection).toEqual(['sb-a']);
+    const qs2 = sb.onPointerDown(makePointer({ targetNodeId: 'sb-b', shiftKey: true }), makeContext([a, b], ['sb-a']));
+    expect(qs2.selection).toEqual(['sb-a', 'sb-b']);
+
+    const sbDown = sb.onPointerDown(makePointer({ point: { x: 120, y: 150 }, altKey: true }), makeContext([a, b], ['sb-a', 'sb-b']));
+    expect(sbDown.session?.kind === 'shape-builder' && sbDown.session.mode).toBe('punch');
+    const sbMoveBack = sb.onPointerMove(
+      makePointer({ point: { x: 175, y: 150 }, altKey: false }),
+      makeContext([a, b], ['sb-a', 'sb-b'], { session: sbDown.session ?? null }),
+    );
+    expect(sbMoveBack.session?.kind === 'shape-builder' && sbMoveBack.session.mode).toBe('merge');
+
+    // Measure single-click on a layer pins its bounding box (even when SVG pointer capture clears targetNodeId on pointerUp)
+    const measure = getStudioTool('measure');
+    const mDown = measure.onPointerDown(makePointer({ targetNodeId: 'petal', point: { x: 130, y: 120 } }), makeContext([rect]));
+    const mUp = measure.onPointerUp(
+      makePointer({ targetNodeId: null, point: { x: 130, y: 120 } }),
+      makeContext([rect], [], { session: mDown.session ?? null }),
+    );
+    const mOverlay = measure.renderOverlay(makeContext([rect], [], { session: mUp.session ?? null }));
+    expect(mOverlay?.kind === 'measure' && mOverlay.inspectedBounds).toEqual({ x: 100, y: 100, width: 60, height: 40 });
+  });
+});
+

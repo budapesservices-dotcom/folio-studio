@@ -136,32 +136,35 @@ export function NodeShape({ node, mask = false }: { node: PrimitiveNode; mask?: 
           stroke-width={node.style.strokeWidth}
         />
       )}
-      {node.type === 'path' && (
-        <g transform={`translate(${node.x} ${node.y})`}>
-          {!mask && !node.closed && (
+      {node.type === 'path' && (() => {
+        const pathD = serializePathPointsToSvgD(node.points, node.closed, node.subpaths);
+        return (
+          <g transform={`translate(${node.x} ${node.y})`}>
+            {!mask && !node.closed && (
+              <path
+                d={pathD}
+                fill="none"
+                stroke="transparent"
+                stroke-width={Math.max(12, node.style.strokeWidth + 8)}
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                pointer-events="stroke"
+              />
+            )}
             <path
-              d={serializePathPointsToSvgD(node.points, node.closed, node.subpaths)}
-              fill="none"
-              stroke="transparent"
-              stroke-width={Math.max(12, node.style.strokeWidth + 8)}
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              pointer-events="stroke"
+              d={pathD}
+              fill={mask ? (node.style.fill === 'none' ? 'none' : '#fff') : node.style.fill}
+              fill-rule={node.style.fillRule ?? 'nonzero'}
+              stroke={mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke}
+              stroke-width={node.style.strokeWidth}
+              stroke-linecap={node.style.strokeLinecap ?? 'round'}
+              stroke-linejoin={node.style.strokeLinejoin ?? 'round'}
+              stroke-dasharray={node.style.strokeDasharray || undefined}
             />
-          )}
-          <path
-            d={serializePathPointsToSvgD(node.points, node.closed, node.subpaths)}
-            fill={mask ? (node.style.fill === 'none' ? 'none' : '#fff') : node.style.fill}
-            fill-rule={node.style.fillRule ?? 'nonzero'}
-            stroke={mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke}
-            stroke-width={node.style.strokeWidth}
-            stroke-linecap={node.style.strokeLinecap ?? 'round'}
-            stroke-linejoin={node.style.strokeLinejoin ?? 'round'}
-            stroke-dasharray={node.style.strokeDasharray || undefined}
-          />
-          {renderPathArrowheads(node, mask)}
-        </g>
-      )}
+            {renderPathArrowheads(node, mask)}
+          </g>
+        );
+      })()}
       {node.type === 'text' && (
         <text
           x={node.x}

@@ -361,6 +361,12 @@ export function Canvas({
   const [activeAnchor, setActiveAnchor] = useState<{ nodeId: string; pointIndex: number } | null>(null);
   const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(null);
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
+  const lastPointerRef = useRef<{ point: { x: number; y: number } | null; nodeId: string | null }>({
+    point: null,
+    nodeId: null,
+  });
+  const pendingInlineEditRef = useRef<InlineTextEditState | null>(null);
+  const prevDocumentIdRef = useRef<string>(document.id);
   const [renderedSvgWidth, setRenderedSvgWidth] = useState<number>(0);
 
   useEffect(() => {
@@ -392,13 +398,22 @@ export function Canvas({
 
   // Clear in-progress tool sessions when switching tools or documents so no stale drafts leak.
   useEffect(() => {
+    const docChanged = prevDocumentIdRef.current !== document.id;
+    prevDocumentIdRef.current = document.id;
     updateToolSession(null);
     previewRef.current = null;
     setPreviewNodes(null);
     setPreviewCreateNodes(null);
     setGuides([]);
-    setInlineTextEdit(null);
     setActiveAnchor(null);
+    if (docChanged) {
+      pendingInlineEditRef.current = null;
+      setInlineTextEdit(null);
+    } else if (pendingInlineEditRef.current) {
+      pendingInlineEditRef.current = null;
+    } else {
+      setInlineTextEdit(null);
+    }
   }, [toolId, document.id]);
 
   // Reset custom pivot and focused anchor when active selection changes.
@@ -406,13 +421,6 @@ export function Canvas({
     setCustomPivot(null);
     setActiveAnchor(null);
   }, [selectionKey, document.id]);
-
-  useEffect(() => {
-    if (inlineTextEdit && inlineTextInputRef.current) {
-      inlineTextInputRef.current.focus();
-      inlineTextInputRef.current.select();
-    }
-  }, [inlineTextEdit?.nodeId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -536,6 +544,31 @@ export function Canvas({
     const node = nodeById.get(inlineTextEdit.nodeId);
     return node?.type === 'text' ? (node as TextNode) : null;
   }, [inlineTextEdit, nodeById]);
+
+  useEffect(() => {
+    if (inlineEditNode && inlineTextInputRef.current) {
+      inlineTextInputRef.current.focus();
+      inlineTextInputRef.current.select();
+    }
+  }, [inlineEditNode?.id]);
+
+  const needsHoverTracking =
+    toolId === 'eyedropper' ||
+    toolId === 'anchor-point' ||
+    toolId === 'scissors' ||
+    toolId === 'smooth' ||
+    (toolId === 'shape-builder' && Boolean(shapeBuilderHoverArrangement)) ||
+    (altHeld && Boolean(selectionBounds) && (toolId === 'select' || toolId === 'direct-selection'));
+
+  useEffect(() => {
+    if (needsHoverTracking) {
+      setHoverPoint(lastPointerRef.current.point);
+      setHoverNodeId(lastPointerRef.current.nodeId);
+    } else {
+      setHoverPoint((prev) => (prev === null ? prev : null));
+      setHoverNodeId((prev) => (prev === null ? prev : null));
+    }
+  }, [needsHoverTracking]);
 
   const canResize = selectedNodes.length > 0;
   const activeTool = getStudioTool(toolId);
@@ -767,6 +800,16 @@ export function Canvas({
     }
     if ('customPivot' in transition) setCustomPivot(transition.customPivot ?? null);
     if ('activeAnchor' in transition) setActiveAnchor(transition.activeAnchor ?? null);
+    if (transition.editTextNodeId && onInlineTextCommit) {
+      const createdText = transition.createNodes?.find(
+        (n): n is TextNode => n.id === transition.editTextNodeId && n.type === 'text',
+      );
+      if (createdText) {
+        const nextEdit = { nodeId: createdText.id, draft: createdText.text };
+        pendingInlineEditRef.current = nextEdit;
+        setInlineTextEdit(nextEdit);
+      }
+    }
     if (transition.nextToolId) onToolChange?.(transition.nextToolId);
     if (transition.notice) onToolNotice?.(transition.notice);
     if (transition.pan) onPanChange(transition.pan);
@@ -787,15 +830,19 @@ export function Canvas({
 
   const handlePointerMove = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
     const input = createPointerInput(event);
-    setHoverPoint(input.point);
-    setHoverNodeId(input.targetNodeId);
+    lastPointerRef.current = { point: input.point, nodeId: input.targetNodeId };
+    if (needsHoverTracking) {
+      setHoverPoint(input.point);
+      setHoverNodeId((prev) => (prev === input.targetNodeId ? prev : input.targetNodeId));
+    }
     const transition = activeTool.onPointerMove(input, createToolContext());
     applyToolTransition(transition, event.currentTarget, event.pointerId, event);
   };
 
   const handlePointerLeave = () => {
-    setHoverPoint(null);
-    setHoverNodeId(null);
+    lastPointerRef.current = { point: null, nodeId: null };
+    setHoverPoint((prev) => (prev === null ? prev : null));
+    setHoverNodeId((prev) => (prev === null ? prev : null));
   };
 
   const finishPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
@@ -831,7 +878,12 @@ export function Canvas({
   toolKeyDownRef.current = (event: KeyboardEvent) => {
     if (inlineTextEdit) return;
     const target = event.target;
-    if (target instanceof HTMLElement && (target.isContentEditable || target.matches('input, textarea, select'))) {
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        target.matches('input, textarea, select, button, a, [role="button"], [role="treeitem"], [role="separator"], [role="menuitem"]') ||
+        Boolean(target.closest('[role="tree"], [role="menu"], [role="menubar"]')))
+    ) {
       return;
     }
     const transition = getStudioTool(toolId).onKeyDown({
@@ -1031,15 +1083,17 @@ export function Canvas({
           </defs>
           <rect x="0" y="0" width={document.width} height={document.height} fill={document.background} />
           {visibleRenderNodes.map((node) => (
-            <MaskedNodeArtwork
-              key={node.id}
-              node={node}
-              nodes={canvasNodes}
-              components={components}
-              maskPrefix={maskPrefix}
-              clipMaskMap={clipMaskMap}
-              componentById={componentById}
-            />
+            inlineEditNode?.id === node.id ? null : (
+              <MaskedNodeArtwork
+                key={node.id}
+                node={node}
+                nodes={canvasNodes}
+                components={components}
+                maskPrefix={maskPrefix}
+                clipMaskMap={clipMaskMap}
+                componentById={componentById}
+              />
+            )
           ))}
 
           {/* Live Alt+Drag Clone Ghost Preview */}
@@ -1099,7 +1153,12 @@ export function Canvas({
                   d={serializePathPointsToSvgD(toolOverlay.points, false)}
                 />
               )}
-              {toolOverlay.points.length >= 1 && (() => {
+              {toolOverlay.previewPoints && toolOverlay.previewPoints.length >= 2 ? (
+                <path
+                  class="canvas-pen-rubberband"
+                  d={serializePathPointsToSvgD(toolOverlay.previewPoints, Boolean(toolOverlay.closedPreview))}
+                />
+              ) : toolOverlay.points.length >= 1 && (() => {
                 const last = toolOverlay.points[toolOverlay.points.length - 1];
                 const target = toolOverlay.hoverClose && toolOverlay.points.length >= 3
                   ? toolOverlay.points[0]
@@ -1136,6 +1195,14 @@ export function Canvas({
                   />
                 </g>
               ))}
+              {toolOverlay.segmentHud && (
+                <HudBadge
+                  x={toolOverlay.cursor.x}
+                  y={toolOverlay.cursor.y - 20 * invZoom}
+                  text={toolOverlay.segmentHud}
+                  invZoom={invZoom}
+                />
+              )}
             </g>
           )}
           {toolOverlay?.kind === 'freehand' && toolOverlay.points.length >= 2 && (
@@ -1178,42 +1245,63 @@ export function Canvas({
           )}
           {toolOverlay?.kind === 'measure' && (
             <g class="canvas-measure-overlay" pointer-events="none">
-              <line
-                class="canvas-measure-guide"
-                x1={toolOverlay.start.x}
-                y1={toolOverlay.start.y}
-                x2={toolOverlay.end.x}
-                y2={toolOverlay.start.y}
-              />
-              <line
-                class="canvas-measure-guide"
-                x1={toolOverlay.end.x}
-                y1={toolOverlay.start.y}
-                x2={toolOverlay.end.x}
-                y2={toolOverlay.end.y}
-              />
-              <line
-                class="canvas-measure-line"
-                x1={toolOverlay.start.x}
-                y1={toolOverlay.start.y}
-                x2={toolOverlay.end.x}
-                y2={toolOverlay.end.y}
-              />
-              {toolOverlay.snappedStart && (
-                <circle class="canvas-measure-snap-ring" cx={toolOverlay.start.x} cy={toolOverlay.start.y} r={6.5 * invZoom} />
+              {toolOverlay.inspectedBounds ? (
+                <>
+                  <rect
+                    class="canvas-measure-box"
+                    x={toolOverlay.inspectedBounds.x}
+                    y={toolOverlay.inspectedBounds.y}
+                    width={Math.max(1, toolOverlay.inspectedBounds.width)}
+                    height={Math.max(1, toolOverlay.inspectedBounds.height)}
+                  />
+                  <HudBadge
+                    x={toolOverlay.inspectedBounds.x + toolOverlay.inspectedBounds.width / 2}
+                    y={toolOverlay.inspectedBounds.y - 16 * invZoom}
+                    text={toolOverlay.inspectedLabel ?? `${Math.round(toolOverlay.inspectedBounds.width)} × ${Math.round(toolOverlay.inspectedBounds.height)}`}
+                    variant="measure"
+                    invZoom={invZoom}
+                  />
+                </>
+              ) : (
+                <>
+                  <line
+                    class="canvas-measure-guide"
+                    x1={toolOverlay.start.x}
+                    y1={toolOverlay.start.y}
+                    x2={toolOverlay.end.x}
+                    y2={toolOverlay.start.y}
+                  />
+                  <line
+                    class="canvas-measure-guide"
+                    x1={toolOverlay.end.x}
+                    y1={toolOverlay.start.y}
+                    x2={toolOverlay.end.x}
+                    y2={toolOverlay.end.y}
+                  />
+                  <line
+                    class="canvas-measure-line"
+                    x1={toolOverlay.start.x}
+                    y1={toolOverlay.start.y}
+                    x2={toolOverlay.end.x}
+                    y2={toolOverlay.end.y}
+                  />
+                  {toolOverlay.snappedStart && (
+                    <circle class="canvas-measure-snap-ring" cx={toolOverlay.start.x} cy={toolOverlay.start.y} r={6.5 * invZoom} />
+                  )}
+                  {toolOverlay.snappedEnd && (
+                    <circle class="canvas-measure-snap-ring" cx={toolOverlay.end.x} cy={toolOverlay.end.y} r={6.5 * invZoom} />
+                  )}
+                  <circle class="canvas-measure-dot" cx={toolOverlay.start.x} cy={toolOverlay.start.y} r={3.5 * invZoom} />
+                  <circle class="canvas-measure-dot" cx={toolOverlay.end.x} cy={toolOverlay.end.y} r={3.5 * invZoom} />
+                  <HudBadge
+                    x={(toolOverlay.start.x + toolOverlay.end.x) / 2}
+                    y={Math.min(toolOverlay.start.y, toolOverlay.end.y) - 18 * invZoom}
+                    text={`${toolOverlay.distance}px · ΔX ${toolOverlay.dx} · ΔY ${toolOverlay.dy} · ${toolOverlay.angleDeg}°`}
+                    variant="measure"
+                    invZoom={invZoom}
+                  />
+                </>
               )}
-              {toolOverlay.snappedEnd && (
-                <circle class="canvas-measure-snap-ring" cx={toolOverlay.end.x} cy={toolOverlay.end.y} r={6.5 * invZoom} />
-              )}
-              <circle class="canvas-measure-dot" cx={toolOverlay.start.x} cy={toolOverlay.start.y} r={3.5 * invZoom} />
-              <circle class="canvas-measure-dot" cx={toolOverlay.end.x} cy={toolOverlay.end.y} r={3.5 * invZoom} />
-              <HudBadge
-                x={(toolOverlay.start.x + toolOverlay.end.x) / 2}
-                y={Math.min(toolOverlay.start.y, toolOverlay.end.y) - 18 * invZoom}
-                text={`${toolOverlay.distance}px · ΔX ${toolOverlay.dx} · ΔY ${toolOverlay.dy} · ${toolOverlay.angleDeg}°`}
-                variant="measure"
-                invZoom={invZoom}
-              />
             </g>
           )}
 
@@ -1476,25 +1564,42 @@ export function Canvas({
             />
           )}
 
-          {/* Live Eyedropper Loupe */}
-          {eyedropperLoupe && (
-            <g
-              class="canvas-eyedropper-loupe"
-              transform={`translate(${eyedropperLoupe.x} ${eyedropperLoupe.y}) scale(${invZoom})`}
+          {/* Live Smooth Brush Radius Ring */}
+          {toolId === 'smooth' && hoverPoint && (
+            <circle
+              class="canvas-smooth-brush"
+              cx={hoverPoint.x}
+              cy={hoverPoint.y}
+              r={Math.max(8, toolOptions.smoothRadius)}
               pointer-events="none"
-            >
-              <g transform="translate(22 -26)">
-                <rect class="canvas-loupe-card" x="-2" y="-16" width="112" height="32" rx="6" />
-                <circle class="canvas-loupe-swatch" cx="14" cy="0" r="9.5" fill={eyedropperLoupe.color} />
-                <text class="canvas-loupe-hex" x="30" y="-3" dominant-baseline="middle">
-                  {eyedropperLoupe.color.toUpperCase().slice(0, 7)}
-                </text>
-                <text class="canvas-loupe-meta" x="30" y="9" dominant-baseline="middle">
-                  {eyedropperLoupe.target} · {eyedropperLoupe.sourceName.slice(0, 9)}
-                </text>
-              </g>
-            </g>
+            />
           )}
+
+          {/* Live Eyedropper Loupe (Edge-Clamped to Artboard Bounds) */}
+          {eyedropperLoupe && (() => {
+            const flipX = eyedropperLoupe.x + 152 * invZoom > document.width;
+            const flipY = eyedropperLoupe.y - 48 * invZoom < 0;
+            const offsetX = flipX ? -144 : 22;
+            const offsetY = flipY ? 26 : -26;
+            return (
+              <g
+                class="canvas-eyedropper-loupe"
+                transform={`translate(${eyedropperLoupe.x} ${eyedropperLoupe.y}) scale(${invZoom})`}
+                pointer-events="none"
+              >
+                <g transform={`translate(${offsetX} ${offsetY})`}>
+                  <rect class="canvas-loupe-card" x="-2" y="-16" width="126" height="32" rx="6" />
+                  <circle class="canvas-loupe-swatch" cx="14" cy="0" r="9.5" fill={eyedropperLoupe.color} />
+                  <text class="canvas-loupe-hex" x="30" y="-3" dominant-baseline="middle">
+                    {eyedropperLoupe.color.toUpperCase().slice(0, 7)}
+                  </text>
+                  <text class="canvas-loupe-meta" x="30" y="9" dominant-baseline="middle">
+                    {eyedropperLoupe.target} · {eyedropperLoupe.sourceName.slice(0, 9)}
+                  </text>
+                </g>
+              </g>
+            );
+          })()}
 
           {inlineEditNode && inlineTextEdit && (
             <foreignObject

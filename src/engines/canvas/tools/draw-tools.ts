@@ -8,6 +8,7 @@ import {
   createTextNode,
 } from '../../../core/document/factory';
 import type { DesignNode } from '../../../core/document/types';
+import { getBounds, snapPointToTargets, type Bounds } from '../geometry';
 import {
   DEFAULT_CANVAS_TOOL_OPTIONS,
   type CanvasToolContext,
@@ -17,6 +18,25 @@ import {
   type CanvasToolTransition,
   type DrawShapeSession,
 } from './types';
+
+function getDrawSnapTargets(context: CanvasToolContext): Bounds[] {
+  const targets: Bounds[] = [{ x: 0, y: 0, width: context.document.width, height: context.document.height }];
+  for (const node of context.selectableNodes) {
+    const b = getBounds([node]);
+    if (b) targets.push(b);
+  }
+  return targets;
+}
+
+function resolveDrawPoint(
+  rawPoint: { x: number; y: number },
+  bypassSnap: boolean,
+  context: CanvasToolContext,
+): { x: number; y: number } {
+  if (bypassSnap) return rawPoint;
+  const tolerance = 7 / Math.max(0.35, context.zoom);
+  return snapPointToTargets(rawPoint, getDrawSnapTargets(context), tolerance).point;
+}
 
 function computeDraftRect(
   start: { x: number; y: number },
@@ -141,7 +161,8 @@ function buildDrawnNode(
     }
     case 'draw-star': {
       const spikes = session.spikesOverride ?? opts.starPoints;
-      const node = createStarNode(box.x, box.y, box.width, box.height, spikes, opts.starInnerRatio);
+      const innerRatio = session.innerRatioOverride ?? opts.starInnerRatio;
+      const node = createStarNode(box.x, box.y, box.width, box.height, spikes, innerRatio);
       return { ...node, style: { ...node.style, fill: opts.fillColor, ...shapeStrokeStyle } };
     }
     case 'draw-text': {
@@ -182,17 +203,18 @@ function createDrawTool(config: {
     onPointerDown(event, context): CanvasToolTransition {
       if (event.button !== 0) return {};
       const opts = context.toolOptions ?? DEFAULT_CANVAS_TOOL_OPTIONS;
+      const start = resolveDrawPoint(event.point, event.ctrlKey || event.metaKey, context);
       return {
         session: {
           kind: 'draw-shape',
           pointerId: event.pointerId,
           toolId: config.id,
-          start: event.point,
-          current: event.point,
+          start,
+          current: start,
           constrain: event.shiftKey,
           fromCenter: event.altKey,
           ...(config.id === 'draw-polygon' ? { sidesOverride: opts.polygonSides } : {}),
-          ...(config.id === 'draw-star' ? { spikesOverride: opts.starPoints } : {}),
+          ...(config.id === 'draw-star' ? { spikesOverride: opts.starPoints, innerRatioOverride: opts.starInnerRatio } : {}),
         },
         capturePointer: true,
         preventDefault: true,
@@ -201,10 +223,11 @@ function createDrawTool(config: {
     onPointerMove(event, context): CanvasToolTransition {
       const session = context.session;
       if (!session || session.kind !== 'draw-shape' || session.pointerId !== event.pointerId) return {};
+      const current = resolveDrawPoint(event.point, event.ctrlKey || event.metaKey, context);
       return {
         session: {
           ...session,
-          current: event.point,
+          current,
           constrain: event.shiftKey,
           fromCenter: event.altKey,
         },
@@ -214,9 +237,10 @@ function createDrawTool(config: {
     onPointerUp(event, context): CanvasToolTransition {
       const session = context.session;
       if (!session || session.kind !== 'draw-shape' || session.pointerId !== event.pointerId) return {};
+      const current = resolveDrawPoint(event.point, event.ctrlKey || event.metaKey, context);
       const finalSession: DrawShapeSession = {
         ...session,
-        current: event.point,
+        current,
         constrain: event.shiftKey,
         fromCenter: event.altKey,
       };
@@ -230,6 +254,7 @@ function createDrawTool(config: {
         createNodes: [node],
         selection: [node.id],
         session: null,
+        ...(config.id === 'draw-text' ? { editTextNodeId: node.id } : {}),
         ...(keepActive ? {} : { nextToolId: 'select' }),
         preventDefault: true,
       };
@@ -242,6 +267,11 @@ function createDrawTool(config: {
       if (!session || session.kind !== 'draw-shape') return {};
       if (event.key === 'Escape') {
         return { session: null, preventDefault: true };
+      }
+      if (event.key === 'Shift' || event.key === 'Alt') {
+        return {
+          session: { ...session, constrain: event.shiftKey, fromCenter: event.altKey },
+        };
       }
       // Illustrator live Up/Down arrow adjustment while drawing Polygons & Stars!
       if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
@@ -261,6 +291,16 @@ function createDrawTool(config: {
           };
         }
       }
+      // Star inner-ratio live tuning via Left/Right arrows while dragging!
+      if (session.toolId === 'draw-star' && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        const delta = event.key === 'ArrowRight' ? 0.04 : -0.04;
+        const curr = session.innerRatioOverride ?? (context.toolOptions?.starInnerRatio ?? 0.44);
+        const nextRatio = Math.max(0.15, Math.min(0.9, Math.round((curr + delta) * 100) / 100));
+        return {
+          session: { ...session, innerRatioOverride: nextRatio },
+          preventDefault: true,
+        };
+      }
       return {};
     },
     renderOverlay(context) {
@@ -274,11 +314,19 @@ function createDrawTool(config: {
         session.toolId === 'draw-polygon' && session.sidesOverride
           ? ` · ${session.sidesOverride} sides`
           : session.toolId === 'draw-star' && session.spikesOverride
-            ? ` · ${session.spikesOverride} pts`
+            ? ` · ${session.spikesOverride} pts · ${Math.round((session.innerRatioOverride ?? context.toolOptions?.starInnerRatio ?? 0.44) * 100)}%`
             : '';
-      const label = isLine
-        ? `${Math.round(dist)} px`
-        : `${Math.round(preview.width)} × ${Math.round(preview.height)}${extra}`;
+      let label: string;
+      if (isLine) {
+        const snappedEnd = snapLineEnd(session.start, session.current, session.constrain);
+        const dx = snappedEnd.x - session.start.x;
+        const dy = snappedEnd.y - session.start.y;
+        const lineLen = Math.round(Math.hypot(dx, dy));
+        const angleDeg = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
+        label = `${lineLen} px · ${angleDeg}°`;
+      } else {
+        label = `${Math.round(preview.width)} × ${Math.round(preview.height)}${extra}`;
+      }
       return {
         kind: 'draw-preview',
         node: preview,

@@ -6,6 +6,36 @@ function computeAngleDeg(center: { x: number; y: number }, point: { x: number; y
   return (Math.atan2(point.y - center.y, point.x - center.x) * 180) / Math.PI;
 }
 
+function createRotateCloneId(): string {
+  const rand = globalThis.crypto?.randomUUID?.();
+  return `node-${rand ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+function getOrCreateRotateCloneIdMap(
+  nodes: readonly DesignNode[],
+  existing?: Record<string, string>,
+): Record<string, string> {
+  if (existing) return existing;
+  const map: Record<string, string> = {};
+  for (const node of nodes) map[node.id] = createRotateCloneId();
+  return map;
+}
+
+function remapRotatedClones(nodes: readonly DesignNode[], idMap: Record<string, string>): DesignNode[] {
+  return nodes.map((node) => {
+    const clonedId = idMap[node.id] ?? createRotateCloneId();
+    const remappedParent = node.parentId && idMap[node.parentId] ? idMap[node.parentId] : node.parentId;
+    const remappedClip = node.clipMaskBaseId && idMap[node.clipMaskBaseId] ? idMap[node.clipMaskBaseId] : node.clipMaskBaseId;
+    return {
+      ...node,
+      id: clonedId,
+      name: `${node.name} Copy`,
+      ...(remappedParent !== undefined ? { parentId: remappedParent } : {}),
+      ...(remappedClip !== undefined ? { clipMaskBaseId: remappedClip } : {}),
+    };
+  });
+}
+
 export function extractSampledColor(
   node: DesignNode | undefined,
   artboardBackground: string,
@@ -84,6 +114,7 @@ export const rotateTool: CanvasToolHandler = {
               pivot,
               startAngle: computeAngleDeg(pivot, event.point),
               currentAngle: 0,
+              cloneMode: event.altKey,
             },
             capturePointer: true,
             preventDefault: true,
@@ -109,6 +140,7 @@ export const rotateTool: CanvasToolHandler = {
         pivot,
         startAngle: computeAngleDeg(pivot, event.point),
         currentAngle: 0,
+        cloneMode: event.altKey,
       },
       capturePointer: true,
       preventDefault: true,
@@ -143,10 +175,21 @@ export const rotateTool: CanvasToolHandler = {
       deltaAngle = Math.round(deltaAngle / 15) * 15;
     }
     const rounded = Math.round(deltaAngle * 10) / 10;
-    const previewNodes = rotateNodesAroundPivot(session.nodes, rounded, pivot);
+    const rotated = rotateNodesAroundPivot(session.nodes, rounded, pivot);
+    if (event.altKey) {
+      const cloneIdMap = getOrCreateRotateCloneIdMap(session.nodes, session.cloneIdMap);
+      const clonedPreview = remapRotatedClones(rotated, cloneIdMap);
+      return {
+        session: { ...session, cloneMode: true, cloneIdMap, currentAngle: rounded, previewNodes: clonedPreview },
+        previewNodes: null,
+        previewCreateNodes: clonedPreview,
+        preventDefault: true,
+      };
+    }
     return {
-      session: { ...session, currentAngle: rounded, previewNodes },
-      previewNodes,
+      session: { ...session, cloneMode: false, currentAngle: rounded, previewNodes: rotated },
+      previewNodes: rotated,
+      previewCreateNodes: null,
       preventDefault: true,
     };
   },
@@ -161,18 +204,30 @@ export const rotateTool: CanvasToolHandler = {
       };
     }
     if (session.kind !== 'select-transform' || session.mode !== 'rotate') return {};
+    if (session.cloneMode && session.previewNodes && session.previewNodes.length > 0) {
+      return {
+        createNodes: session.previewNodes,
+        selection: session.previewNodes.map((n) => n.id),
+        session: null,
+        previewNodes: null,
+        previewCreateNodes: null,
+        notice: `Rotated & cloned ${session.previewNodes.length} layer${session.previewNodes.length === 1 ? '' : 's'} by ${session.currentAngle ?? 0}°.`,
+        preventDefault: true,
+      };
+    }
     return {
       ...(session.previewNodes ? { commitNodes: session.previewNodes } : {}),
       session: null,
       previewNodes: null,
+      previewCreateNodes: null,
       preventDefault: true,
     };
   },
   onPointerCancel(_event, context) {
-    return context.session ? { session: null, previewNodes: null } : {};
+    return context.session ? { session: null, previewNodes: null, previewCreateNodes: null } : {};
   },
   onKeyDown(event, context) {
-    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null, preventDefault: true } : {};
+    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null, previewCreateNodes: null, preventDefault: true } : {};
   },
   renderOverlay(context) {
     const session = context.session;
@@ -189,6 +244,7 @@ export const rotateTool: CanvasToolHandler = {
   },
   cursorStyle(context) {
     if (context.session?.kind === 'smart-handle') return 'grabbing';
+    if (context.session?.kind === 'select-transform' && context.session.cloneMode) return 'copy';
     return context.session?.kind === 'select-transform' ? 'grabbing' : 'grab';
   },
 };
@@ -262,6 +318,7 @@ export const measureTool: CanvasToolHandler = {
         active: true,
         snappedStart: snapped.snapped,
         snappedEnd: snapped.snapped,
+        targetNodeId: event.targetNodeId,
       },
       capturePointer: true,
       preventDefault: true,
@@ -289,6 +346,25 @@ export const measureTool: CanvasToolHandler = {
   onPointerUp(event, context): CanvasToolTransition {
     const session = context.session;
     if (!session || session.kind !== 'measure' || session.pointerId !== event.pointerId) return {};
+    const dist = Math.hypot(session.current.x - session.start.x, session.current.y - session.start.y);
+    const clickedNodeId = event.targetNodeId ?? session.targetNodeId ?? null;
+    if (dist < 3 && clickedNodeId) {
+      const hit = context.selectableNodes.find((node) => node.id === clickedNodeId);
+      const b = hit ? getBounds([hit]) : null;
+      if (hit && b) {
+        return {
+          session: {
+            ...session,
+            active: false,
+            start: { x: b.x, y: b.y },
+            current: { x: b.x + b.width, y: b.y + b.height },
+            inspectedBounds: b,
+            inspectedLabel: `${hit.name} · ${Math.round(b.width)} × ${Math.round(b.height)} · (${Math.round(b.x)}, ${Math.round(b.y)})`,
+          },
+          preventDefault: true,
+        };
+      }
+    }
     return { session: { ...session, active: false }, preventDefault: true };
   },
   onPointerCancel(_event, context) {
@@ -314,6 +390,7 @@ export const measureTool: CanvasToolHandler = {
       angleDeg,
       snappedStart: session.snappedStart,
       snappedEnd: session.snappedEnd,
+      ...(session.inspectedBounds ? { inspectedBounds: session.inspectedBounds, inspectedLabel: session.inspectedLabel } : {}),
     };
   },
   cursorStyle() {

@@ -1,10 +1,14 @@
 import type { CanvasToolHandler, CanvasToolTransition } from './types';
 export const handTool: CanvasToolHandler = {
-  id: 'hand', label: 'Hand',
-  description: 'Pan the Canvas viewport by dragging anywhere, without selecting or moving artwork.',
+  id: 'hand', label: 'Hand', shortcut: 'H',
+  description: 'Pan the Canvas viewport by dragging anywhere (double-click to reset view to 100%).',
   group: 'navigation', icon: 'hand',
   onPointerDown(event, context): CanvasToolTransition {
-    return event.button !== 0 ? {} : {
+    if (event.button !== 0) return {};
+    if ((event.detail ?? 0) >= 2) {
+      return { pan: { x: 0, y: 0 }, zoom: 1, session: null, notice: 'Reset viewport to 100%.', preventDefault: true };
+    }
+    return {
       session: { kind: 'hand', pointerId: event.pointerId, startClientX: event.clientX, startClientY: event.clientY, startPan: context.pan },
       capturePointer: true, preventDefault: true,
     };

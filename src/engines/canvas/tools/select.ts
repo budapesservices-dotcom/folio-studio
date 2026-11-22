@@ -27,15 +27,28 @@ function createCloneId(): string {
   return `node-${rand ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
 }
 
-function cloneNodesForDuplicate(nodes: readonly DesignNode[], dx: number, dy: number): DesignNode[] {
-  const idMap = new Map<string, string>();
+function getOrCreateCloneIdMap(
+  nodes: readonly DesignNode[],
+  existing?: Record<string, string>,
+): Record<string, string> {
+  if (existing) return existing;
+  const map: Record<string, string> = {};
   for (const node of nodes) {
-    idMap.set(node.id, createCloneId());
+    map[node.id] = createCloneId();
   }
+  return map;
+}
+
+function cloneNodesForDuplicate(
+  nodes: readonly DesignNode[],
+  dx: number,
+  dy: number,
+  idMap: Record<string, string>,
+): DesignNode[] {
   return nodes.map((node) => {
-    const clonedId = idMap.get(node.id)!;
-    const remappedParent = node.parentId && idMap.has(node.parentId) ? idMap.get(node.parentId)! : node.parentId;
-    const remappedClip = node.clipMaskBaseId && idMap.has(node.clipMaskBaseId) ? idMap.get(node.clipMaskBaseId)! : node.clipMaskBaseId;
+    const clonedId = idMap[node.id] ?? createCloneId();
+    const remappedParent = node.parentId && idMap[node.parentId] ? idMap[node.parentId] : node.parentId;
+    const remappedClip = node.clipMaskBaseId && idMap[node.clipMaskBaseId] ? idMap[node.clipMaskBaseId] : node.clipMaskBaseId;
     return {
       ...node,
       id: clonedId,
@@ -240,9 +253,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       }
 
       if (!event.targetNodeId) {
-        if (exactLayer) return { selection: [], activeAnchor: null, preventDefault: true };
         return {
-          selection: [],
           activeAnchor: null,
           session: {
             kind: 'marquee-selection',
@@ -477,11 +488,13 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       );
 
       if (cloneMode) {
-        const clonedPreview = cloneNodesForDuplicate(session.nodes, snapped.dx, snapped.dy);
+        const cloneIdMap = getOrCreateCloneIdMap(session.nodes, session.cloneIdMap);
+        const clonedPreview = cloneNodesForDuplicate(session.nodes, snapped.dx, snapped.dy, cloneIdMap);
         return {
           session: {
             ...session,
             cloneMode: true,
+            cloneIdMap,
             previewNodes: clonedPreview,
             hudLabel: `Clone · ΔX ${Math.round(snapped.dx)} · ΔY ${Math.round(snapped.dy)}`,
           },
@@ -534,22 +547,27 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       }
       if (session.kind === 'marquee-selection') {
         const box = rectangleBounds(session.start, event.point);
-        const ids = box.width > 1 || box.height > 1
-          ? context.selectableNodes
-              .filter(
-                (node) =>
-                  node.x <= box.x + box.width &&
-                  node.x + node.width >= box.x &&
-                  node.y <= box.y + box.height &&
-                  node.y + node.height >= box.y,
-              )
-              .map((node) => node.id)
-          : [];
-        const expanded = expandSelectedLayerIds(context.canvasNodes, ids);
+        const dragged = box.width > 1 || box.height > 1;
+        if (!dragged) {
+          const selection = session.additive || session.subtractive ? session.initialIds : [];
+          return { selection, session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true };
+        }
+        const ids = context.selectableNodes
+          .filter(
+            (node) =>
+              node.x <= box.x + box.width &&
+              node.x + node.width >= box.x &&
+              node.y <= box.y + box.height &&
+              node.y + node.height >= box.y,
+          )
+          .map((node) => node.id);
+        const expanded = exactLayer ? ids : expandSelectedLayerIds(context.canvasNodes, ids);
         let selection: string[];
         if (session.subtractive) {
           const removed = new Set(expanded);
-          ids.forEach((id) => getLayerAncestorIds(context.canvasNodes, id).forEach((ancestor) => removed.add(ancestor)));
+          if (!exactLayer) {
+            ids.forEach((id) => getLayerAncestorIds(context.canvasNodes, id).forEach((ancestor) => removed.add(ancestor)));
+          }
           selection = session.initialIds.filter((id) => !removed.has(id));
         } else if (session.additive) {
           selection = [...new Set([...session.initialIds, ...expanded])];
@@ -628,6 +646,55 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           return { commitNodes: [updated], notice: `Star points: ${nextSpikes}`, preventDefault: true };
         }
       }
+      // Precision Arrow-Key Nudge (1px, or 10px with Shift) for selected layers or active Bezier anchor!
+      if (
+        !context.session &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'ArrowUp' || event.key === 'ArrowDown')
+      ) {
+        const step = event.shiftKey ? 10 : 1;
+        const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
+        const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
+
+        if (exactLayer && context.activeAnchor) {
+          const targetPath = context.selectableNodes.find(
+            (node): node is PathNode => node.id === context.activeAnchor?.nodeId && node.type === 'path',
+          );
+          if (targetPath && context.activeAnchor.pointIndex >= 0 && context.activeAnchor.pointIndex < targetPath.points.length) {
+            const localDelta = worldDeltaToNodeLocalDelta(targetPath.rotation || 0, dx, dy);
+            const points = targetPath.points.map((pt, index) => {
+              if (index !== context.activeAnchor?.pointIndex) return pt;
+              return {
+                ...pt,
+                x: Math.round((pt.x + localDelta.x) * 100) / 100,
+                y: Math.round((pt.y + localDelta.y) * 100) / 100,
+                ...(pt.handleIn ? { handleIn: { x: Math.round((pt.handleIn.x + localDelta.x) * 100) / 100, y: Math.round((pt.handleIn.y + localDelta.y) * 100) / 100 } } : {}),
+                ...(pt.handleOut ? { handleOut: { x: Math.round((pt.handleOut.x + localDelta.x) * 100) / 100, y: Math.round((pt.handleOut.y + localDelta.y) * 100) / 100 } } : {}),
+              };
+            });
+            const normalized = normalizePathNode({ ...targetPath, points, shapeMeta: undefined });
+            return {
+              commitNodes: [normalized],
+              activeAnchor: context.activeAnchor,
+              preventDefault: true,
+            };
+          }
+        }
+
+        if (context.selectedNodes.length > 0) {
+          const nudged = context.selectedNodes.map((node) => ({
+            ...node,
+            x: Math.round((node.x + dx) * 100) / 100,
+            y: Math.round((node.y + dy) * 100) / 100,
+          }));
+          return {
+            commitNodes: nudged,
+            preventDefault: true,
+          };
+        }
+      }
       return {};
     },
 
@@ -674,7 +741,12 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       if (context.session?.kind === 'select-transform') {
         if (context.session.mode === 'rotate') return 'grabbing';
         if (context.session.cloneMode) return 'copy';
-        return context.session.mode === 'move' ? 'move' : 'nwse-resize';
+        if (context.session.mode === 'move') return 'move';
+        const h = context.session.handle;
+        if (h === 'n' || h === 's') return 'ns-resize';
+        if (h === 'e' || h === 'w') return 'ew-resize';
+        if (h === 'ne' || h === 'sw') return 'nesw-resize';
+        return 'nwse-resize';
       }
       return 'default';
     },

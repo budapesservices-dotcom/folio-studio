@@ -122,6 +122,7 @@ export interface SelectTransformSession {
   startAngle?: number;
   currentAngle?: number;
   cloneMode?: boolean;
+  cloneIdMap?: Record<string, string>;
   previewNodes?: DesignNode[];
   hudLabel?: string;
 }
@@ -195,6 +196,7 @@ export interface DrawShapeSession {
   fromCenter: boolean;
   sidesOverride?: number;
   spikesOverride?: number;
+  innerRatioOverride?: number;
 }
 
 export interface PenDraftSession {
@@ -236,6 +238,9 @@ export interface MeasureSession {
   active: boolean;
   snappedStart?: boolean;
   snappedEnd?: boolean;
+  targetNodeId?: string | null;
+  inspectedBounds?: Bounds;
+  inspectedLabel?: string;
 }
 
 export type CanvasToolSession =
@@ -274,10 +279,10 @@ export type CanvasToolOverlay =
   | { kind: 'marquee'; bounds: Bounds }
   | { kind: 'lasso'; points: Array<{ x: number; y: number }> }
   | { kind: 'draw-preview'; node: DesignNode; label: string; labelX: number; labelY: number }
-  | { kind: 'pen-draft'; points: VectorAnchorPoint[]; cursor: { x: number; y: number }; hoverClose: boolean; closedPreview?: boolean }
+  | { kind: 'pen-draft'; points: VectorAnchorPoint[]; cursor: { x: number; y: number }; hoverClose: boolean; closedPreview?: boolean; previewPoints?: VectorAnchorPoint[]; segmentHud?: string }
   | { kind: 'freehand'; points: Array<{ x: number; y: number }>; mode: 'pencil' | 'smooth' }
   | { kind: 'rotate-ring'; center: { x: number; y: number }; radius: number; angleDeg: number }
-  | { kind: 'measure'; start: { x: number; y: number }; end: { x: number; y: number }; dx: number; dy: number; distance: number; angleDeg: number; snappedStart?: boolean; snappedEnd?: boolean }
+  | { kind: 'measure'; start: { x: number; y: number }; end: { x: number; y: number }; dx: number; dy: number; distance: number; angleDeg: number; snappedStart?: boolean; snappedEnd?: boolean; inspectedBounds?: Bounds; inspectedLabel?: string }
   | { kind: 'smart-hud'; x: number; y: number; text: string; variant?: 'default' | 'measure' | 'rotate' }
   | { kind: 'shape-builder'; arrangement: PlanarArrangement; touchedFaceIds: number[]; strokePoints: Array<{ x: number; y: number }>; mode: 'merge' | 'punch' };
 
@@ -293,6 +298,7 @@ export interface CanvasToolTransition {
   sampledColor?: { color: string; sourceName: string; target?: 'fill' | 'stroke' };
   customPivot?: { x: number; y: number } | null;
   activeAnchor?: { nodeId: string; pointIndex: number } | null;
+  editTextNodeId?: string;
   nextToolId?: CanvasToolId;
   notice?: string;
   pan?: { x: number; y: number };

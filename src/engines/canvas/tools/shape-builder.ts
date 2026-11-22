@@ -29,6 +29,22 @@ export const shapeBuilderTool: CanvasToolHandler = {
     if (event.button !== 0) return {};
     const { candidates, arrangement } = decomposeNodesForShapeBuilder(context.selectedNodes);
     if (candidates.length < 2 || arrangement.faces.length === 0) {
+      if (event.targetNodeId) {
+        const hit = context.selectableNodes.find((node) => node.id === event.targetNodeId);
+        if (hit && (hit.type === 'rect' || hit.type === 'ellipse' || hit.type === 'frame' || hit.type === 'path')) {
+          const nextIds = event.shiftKey
+            ? [...new Set([...context.selectedNodeIds, hit.id])]
+            : [hit.id];
+          return {
+            selection: nextIds,
+            notice:
+              nextIds.length >= 2
+                ? `Selected ${nextIds.length} shapes — drag across overlapping regions to merge (Alt to punch).`
+                : 'Selected 1 shape — Shift+Click another overlapping shape to start Shape Builder.',
+            preventDefault: true,
+          };
+        }
+      }
       return {
         notice: 'Select at least 2 shapes or vector paths first to use Shape Builder.',
         preventDefault: true,
@@ -70,7 +86,7 @@ export const shapeBuilderTool: CanvasToolHandler = {
     return {
       session: {
         ...session,
-        mode: event.altKey ? 'punch' : session.mode,
+        mode: event.altKey ? 'punch' : 'merge',
         strokePoints: nextStroke,
         touchedFaceIds,
       },
