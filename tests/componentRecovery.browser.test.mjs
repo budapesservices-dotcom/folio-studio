@@ -291,16 +291,35 @@ async function startViteApp() {
 }
 
 async function waitForApp(browser, expression, description, timeout = 30000) {
-  try {
-    await browser.evaluate(
-      'new Promise((resolve,reject)=>{const deadline=Date.now()+' + timeout + ';' +
-      'const check=()=>{let passed=false;try{passed=Boolean(' + expression + ');}catch(error){reject(error);return;}' +
-      'if(passed)resolve(true);else if(Date.now()>=deadline)reject(new Error("Timed out waiting for " + ' +
-      JSON.stringify(description) + '));else setTimeout(check,40);};check();})',
-    );
-  } catch (error) {
-    throw new Error('Browser wait failed (' + description + '): ' + String(error));
+  const deadline = Date.now() + timeout;
+  let lastNavigationError = null;
+  while (Date.now() < deadline) {
+    const remaining = Math.max(1, deadline - Date.now());
+    try {
+      await browser.evaluate(
+        'new Promise((resolve,reject)=>{const deadline=Date.now()+' + remaining + ';' +
+        'const check=()=>{let passed=false;try{passed=Boolean(' + expression + ');}catch(error){reject(error);return;}' +
+        'if(passed)resolve(true);else if(Date.now()>=deadline)reject(new Error("Timed out waiting for " +' +
+        JSON.stringify(description) + '));else setTimeout(check,40);};check();})',
+      );
+      return;
+    } catch (error) {
+      const message = String(error);
+      if (/Inspected target navigated or closed|Execution context was destroyed|Cannot find context with specified id|No frame with given id/i.test(message)) {
+        // A reload may destroy the current Runtime execution context after
+        // Page.reload resolves. Recreate the polling promise in the new page
+        // context instead of treating that expected transition as a test failure.
+        lastNavigationError = message;
+        await delay(40);
+        continue;
+      }
+      throw new Error('Browser wait failed (' + description + '): ' + message);
+    }
   }
+  throw new Error(
+    'Browser wait failed (' + description + '): timed out after ' + timeout + 'ms' +
+    (lastNavigationError ? '; last transient navigation error: ' + lastNavigationError : ''),
+  );
 }
 
 
