@@ -816,6 +816,15 @@ async function runAppAcceptance(browser) {
     expect(counts.main).toBe(true);
     expect(counts.componentCanvas).toBe(true);
 
+    // Component Rack intentionally sits above floating workspace windows.
+    // Close it before testing pointer access to the workspace resize handles.
+    await browser.click('.component-rack-header-toggle');
+    await waitForApp(
+      browser,
+      'document.querySelector(".component-rack-panel")?.inert===true',
+      'Component Rack closes before floating-window pointer acceptance',
+    );
+
     // Clicking the real FloatingWindow title bars must continue to update shared window stacking.
     const stackBefore = await browser.evaluate(
       '({main:Number(getComputedStyle(document.querySelector("[data-window-id=main-canvas]")).zIndex),' +
