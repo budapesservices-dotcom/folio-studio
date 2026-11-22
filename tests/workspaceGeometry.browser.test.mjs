@@ -928,7 +928,7 @@ async function runAppAcceptance(browser) {
         'const h=w?.querySelector("[data-window-resize=' + direction + ']"); ' +
         'if(!w || !h) throw new Error("Resize handle is missing: ' + direction + '"); ' +
         'const r=w.getBoundingClientRect(), p=h.getBoundingClientRect(); ' +
-        'const point={x:direction==="s"?p.left+24:p.left+p.width/2,y:p.top+p.height/2}; ' +
+        'const point={x:' + JSON.stringify(direction) + '==="s"?p.left+24:p.left+p.width/2,y:p.top+p.height/2}; ' +
         'const hit=document.elementFromPoint(point.x,point.y); ' +
         'if(!hit || !(hit===h || h.contains(hit))) throw new Error("Resize handle is occluded: ' + direction + ' " + JSON.stringify({' +
         'hit:hit?.outerHTML?.slice(0,240)||null,point,handleRect:{left:p.left,top:p.top,width:p.width,height:p.height},' +
