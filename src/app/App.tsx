@@ -360,7 +360,12 @@ export function App() {
   const [panelWidths, setPanelWidths] = useState<PanelWidths>(() => loadPanelWidths());
   const [resizingPanel, setResizingPanel] = useState<ResizablePanelId | null>(null);
   const panelWidthsRef = useRef<PanelWidths>(panelWidths);
-  panelWidthsRef.current = panelWidths;
+  const resizingPanelRef = useRef<ResizablePanelId | null>(null);
+  const layersResizeHandleRef = useRef<HTMLDivElement | null>(null);
+  const inspectorResizeHandleRef = useRef<HTMLDivElement | null>(null);
+  if (resizingPanelRef.current === null) {
+    panelWidthsRef.current = panelWidths;
+  }
   const panelResizeCleanupRef = useRef<(() => void) | null>(null);
   const [componentRackOpen, setComponentRackOpen] = useState(
     () => initialWorkspaceLayout.panelVisibility['component-rack'],
@@ -1780,6 +1785,7 @@ export function App() {
   };
 
   const updateToolbarHint = (panel: string, description: string, shortcuts: string[] = []) => {
+    if (resizingPanelRef.current !== null) return;
     setToolbarHint({ panel, description, shortcuts });
   };
 
@@ -1831,14 +1837,22 @@ export function App() {
     otherPanelWidth: panel === 'layers' ? widths.inspector : widths.layers,
   }), [layersVisible, inspectorVisible]);
 
-  const applyPanelWidth = useCallback((panel: ResizablePanelId, nextWidth: number, persist = false) => {
-    const cssVar = panel === 'layers' ? '--layers-panel-width' : '--inspector-panel-width';
-    appShellRef.current?.style.setProperty(cssVar, `${nextWidth}px`);
-    const nextWidths: PanelWidths = { ...panelWidthsRef.current, [panel]: nextWidth };
-    panelWidthsRef.current = nextWidths;
-    setPanelWidths((current) => (current[panel] === nextWidth ? current : { ...current, [panel]: nextWidth }));
-    if (persist) savePanelWidths(nextWidths);
-  }, []);
+  const applyPanelWidth = useCallback(
+    (panel: ResizablePanelId, nextWidth: number, options: { persist?: boolean; syncState?: boolean } = {}) => {
+      const { persist = false, syncState = true } = options;
+      const cssVar = panel === 'layers' ? '--layers-panel-width' : '--inspector-panel-width';
+      appShellRef.current?.style.setProperty(cssVar, `${nextWidth}px`);
+      const handleEl = panel === 'layers' ? layersResizeHandleRef.current : inspectorResizeHandleRef.current;
+      handleEl?.setAttribute('aria-valuenow', String(nextWidth));
+      const nextWidths: PanelWidths = { ...panelWidthsRef.current, [panel]: nextWidth };
+      panelWidthsRef.current = nextWidths;
+      if (syncState) {
+        setPanelWidths((current) => (current[panel] === nextWidth ? current : { ...current, [panel]: nextWidth }));
+      }
+      if (persist) savePanelWidths(nextWidths);
+    },
+    [],
+  );
 
   const startPanelResize = useCallback((panel: ResizablePanelId, event: MouseEvent) => {
     if (event.button !== 0) return;
@@ -1850,10 +1864,14 @@ export function App() {
     const startClientX = event.clientX;
     const initialWidths: PanelWidths = { ...panelWidthsRef.current };
     const startWidth = initialWidths[panel];
+    let active = true;
+
+    resizingPanelRef.current = panel;
     appShellRef.current?.classList.add('is-resizing-panel');
     setResizingPanel(panel);
 
     const throttledMove = createThrottledMouseMove<number>((clientX) => {
+      if (!active) return;
       const nextWidth = computeResizedPanelWidth(
         panel,
         startWidth,
@@ -1861,41 +1879,65 @@ export function App() {
         clientX,
         getPanelClampContext(panel, panelWidthsRef.current),
       );
-      applyPanelWidth(panel, nextWidth, false);
+      applyPanelWidth(panel, nextWidth, { persist: false, syncState: false });
     }, { intervalMs: DEFAULT_RESIZE_THROTTLE_MS });
 
     const detach = () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', finishResize);
+      window.removeEventListener('mousemove', onMouseMove, true);
+      window.removeEventListener('mouseup', finishResize, true);
       window.removeEventListener('blur', finishResize);
       window.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       appShellRef.current?.classList.remove('is-resizing-panel');
+      if (resizingPanelRef.current === panel) {
+        resizingPanelRef.current = null;
+      }
       if (panelResizeCleanupRef.current === cleanupAndCancel) {
         panelResizeCleanupRef.current = null;
       }
     };
 
     const onMouseMove = (moveEvent: MouseEvent) => {
+      if (!active) return;
+      if (moveEvent.isTrusted && moveEvent.buttons === 0) {
+        finishResize();
+        return;
+      }
       throttledMove(moveEvent.clientX);
     };
 
     const finishResize = () => {
+      if (!active) return;
       throttledMove.flush();
+      active = false;
       detach();
-      savePanelWidths(panelWidthsRef.current);
+      const committed: PanelWidths = { ...panelWidthsRef.current };
+      setPanelWidths(committed);
+      savePanelWidths(committed);
       setResizingPanel(null);
     };
 
     const cancelResize = () => {
+      if (!active) return;
+      active = false;
       throttledMove.cancel();
       detach();
-      applyPanelWidth(panel, initialWidths[panel], false);
+      applyPanelWidth(panel, initialWidths[panel], { persist: false, syncState: true });
       setResizingPanel(null);
     };
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        finishResize();
+      }
+    };
+
     const cleanupAndCancel = () => {
+      if (!active) return;
+      active = false;
       throttledMove.cancel();
       detach();
+      setResizingPanel(null);
     };
 
     const onKeyDown = (keyEvent: KeyboardEvent) => {
@@ -1907,10 +1949,11 @@ export function App() {
     };
 
     panelResizeCleanupRef.current = cleanupAndCancel;
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', finishResize);
+    window.addEventListener('mousemove', onMouseMove, true);
+    window.addEventListener('mouseup', finishResize, true);
     window.addEventListener('blur', finishResize);
     window.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
   }, [applyPanelWidth, getPanelClampContext]);
 
   const resetPanelWidth = useCallback((panel: ResizablePanelId) => {
@@ -1919,7 +1962,7 @@ export function App() {
       PANEL_RESIZE_CONSTRAINTS[panel].defaultWidth,
       getPanelClampContext(panel),
     );
-    applyPanelWidth(panel, nextWidth, true);
+    applyPanelWidth(panel, nextWidth, { persist: true, syncState: true });
   }, [applyPanelWidth, getPanelClampContext]);
 
   const handlePanelResizeKeyDown = useCallback((panel: ResizablePanelId, event: KeyboardEvent) => {
@@ -1941,8 +1984,17 @@ export function App() {
 
     if (target === null) return;
     event.preventDefault();
-    applyPanelWidth(panel, clampPanelWidth(panel, target, context), true);
+    applyPanelWidth(panel, clampPanelWidth(panel, target, context), { persist: true, syncState: true });
   }, [applyPanelWidth, getPanelClampContext]);
+
+  useEffect(() => {
+    if (
+      (resizingPanelRef.current === 'layers' && !layersVisible) ||
+      (resizingPanelRef.current === 'inspector' && !inspectorVisible)
+    ) {
+      panelResizeCleanupRef.current?.();
+    }
+  }, [layersVisible, inspectorVisible]);
 
   useEffect(() => () => {
     panelResizeCleanupRef.current?.();
@@ -2114,12 +2166,14 @@ export function App() {
       ref={appShellRef}
       class={`app-shell ${layersVisible ? "" : "layers-hidden"} ${inspectorVisible ? "" : "inspector-hidden"} ${isHydrating ? "is-hydrating" : ""} ${resizingPanel ? "is-resizing-panel" : ""}`}
       style={{
-        '--layers-panel-width': `${panelWidths.layers}px`,
-        '--inspector-panel-width': `${panelWidths.inspector}px`,
+        '--layers-panel-width': `${panelWidthsRef.current.layers}px`,
+        '--inspector-panel-width': `${panelWidthsRef.current.inspector}px`,
       } as JSX.CSSProperties}
       data-active-window={activeWindowId}
       aria-busy={isHydrating}
-      onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}
+      onMouseLeave={() => {
+        if (resizingPanelRef.current === null) setToolbarHint(DEFAULT_TOOLBAR_HINT);
+      }}
       onKeyDown={(event) => {
         if (isHydrating) {
           event.preventDefault();
@@ -2393,6 +2447,7 @@ export function App() {
 
       <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Each Layer is one object. Drag an object that is off Canvas to restore it; an object already on Canvas cannot be duplicated by dragging.', ['CTRL/CMD + M: MASK', 'CTRL/CMD + SHIFT + M: UNMASK'])}>
         <div
+          ref={layersResizeHandleRef}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize Layers sidebar"
@@ -2403,6 +2458,7 @@ export function App() {
           data-resize-panel="layers"
           class={`panel-resize-handle panel-resize-handle-right ${resizingPanel === 'layers' ? 'is-active' : ''}`}
           title="Drag to resize Layers sidebar (double-click to reset)"
+          onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => startPanelResize('layers', event)}
           onDblClick={() => resetPanelWidth('layers')}
           onKeyDown={(event) => handlePanelResizeKeyDown('layers', event)}
@@ -2830,6 +2886,7 @@ export function App() {
         }
       }} onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
         <div
+          ref={inspectorResizeHandleRef}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize Inspector panel"
@@ -2840,6 +2897,7 @@ export function App() {
           data-resize-panel="inspector"
           class={`panel-resize-handle panel-resize-handle-left ${resizingPanel === 'inspector' ? 'is-active' : ''}`}
           title="Drag to resize Inspector panel (double-click to reset)"
+          onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => startPanelResize('inspector', event)}
           onDblClick={() => resetPanelWidth('inspector')}
           onKeyDown={(event) => handlePanelResizeKeyDown('inspector', event)}

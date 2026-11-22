@@ -202,10 +202,12 @@ export function NodeArtwork({
   node,
   components = [],
   maskPrefix,
+  emitNodeId = true,
 }: {
   node: DesignNode;
   components?: ComponentDefinition[];
   maskPrefix: string;
+  emitNodeId?: boolean;
 }) {
   if (node.type === 'component-instance') {
     const component = components.find((item) => item.id === node.componentId);
@@ -220,7 +222,12 @@ export function NodeArtwork({
     const childStates = getEffectiveLayerStates(resolvedChildren);
     const instanceMaskPrefix = `${maskPrefix}-inst-${sanitizeMaskIdSegment(node.id)}`;
     return (
-      <g data-node-id={node.id} transform={transform} opacity={node.opacity} class="canvas-node component-instance-artwork">
+      <g
+        data-node-id={emitNodeId ? node.id : undefined}
+        transform={transform}
+        opacity={node.opacity}
+        class="canvas-node component-instance-artwork"
+      >
         {component ? (
           <g transform={`translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})`}>
             <defs>
@@ -232,6 +239,14 @@ export function NodeArtwork({
                 maskPrefix={instanceMaskPrefix}
               />
             </defs>
+            <rect
+              x="0"
+              y="0"
+              width={component.document.width}
+              height={component.document.height}
+              fill="transparent"
+              pointer-events="all"
+            />
             {getLayerRenderOrder(resolvedChildren)
               .filter((child) => {
                 if (!childStates.get(child.id)?.visible) return false;
@@ -247,6 +262,7 @@ export function NodeArtwork({
                       nodes={resolvedChildren}
                       components={components}
                       maskPrefix={instanceMaskPrefix}
+                      emitNodeId={false}
                     />
                   )
               ))}
@@ -261,13 +277,14 @@ export function NodeArtwork({
             stroke="#D45B5B"
             stroke-dasharray="6 4"
             stroke-width="2"
+            pointer-events="all"
           />
         )}
       </g>
     );
   }
 
-  return <g data-node-id={node.id}><NodeShape node={node as PrimitiveNode} /></g>;
+  return <g data-node-id={emitNodeId ? node.id : undefined}><NodeShape node={node as PrimitiveNode} /></g>;
 }
 
 export function MaskedNodeArtwork({
@@ -275,16 +292,18 @@ export function MaskedNodeArtwork({
   nodes,
   components,
   maskPrefix,
+  emitNodeId = true,
 }: {
   node: DesignNode;
   nodes: DesignNode[];
   components: ComponentDefinition[];
   maskPrefix: string;
+  emitNodeId?: boolean;
 }) {
   const maskIds = getLayerClipMaskBaseIds(nodes, node.id);
   return maskIds.reduceRight(
     (artwork, maskId) => <g mask={`url(#${buildMaskElementId(maskPrefix, maskId)})`}>{artwork}</g>,
-    <NodeArtwork node={node} components={components} maskPrefix={maskPrefix} />,
+    <NodeArtwork node={node} components={components} maskPrefix={maskPrefix} emitNodeId={emitNodeId} />,
   );
 }
 

@@ -112,6 +112,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .app-shell.is-resizing-panel * {
   cursor: col-resize !important;
 }
+.app-shell.is-resizing-panel .workspace,
+.app-shell.is-resizing-panel .layers-panel > :not(.panel-resize-handle),
+.app-shell.is-resizing-panel .inspector-panel > :not(.panel-resize-handle),
+.app-shell.is-resizing-panel .pages-rack-panel,
+.app-shell.is-resizing-panel .component-rack-panel {
+  pointer-events: none;
+}
 
 .app-shell:fullscreen {
   width: 100vw;
@@ -386,7 +393,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   top: 0;
   bottom: 0;
   z-index: 95;
-  width: 9px;
+  width: 8px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -394,23 +401,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   touch-action: none;
   outline: none;
 }
-.panel-resize-handle-right { right: -5px; }
-.panel-resize-handle-left { left: -5px; }
+.panel-resize-handle-right { right: 0; }
+.panel-resize-handle-left { left: 0; }
 .panel-resize-handle::before {
   content: '';
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 4px;
   width: 2px;
   background: transparent;
   transition: background-color 120ms ease, box-shadow 120ms ease;
 }
+.panel-resize-handle-right::before { right: 0; }
+.panel-resize-handle-left::before { left: 0; }
 .panel-resize-handle::after {
   content: '';
   position: absolute;
   top: 50%;
-  left: 3px;
   width: 4px;
   height: 28px;
   border-radius: 999px;
@@ -418,6 +425,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   transform: translateY(-50%);
   transition: background-color 120ms ease;
 }
+.panel-resize-handle-right::after { right: 1px; }
+.panel-resize-handle-left::after { left: 1px; }
 .panel-resize-handle:hover::before,
 .panel-resize-handle:focus-visible::before {
   background: rgba(164, 148, 255, 0.55);

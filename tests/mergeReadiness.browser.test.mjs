@@ -474,6 +474,41 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
           const allIds = Array.from(document.querySelectorAll('[id]')).map((el) => el.id);
           const duplicateIds = allIds.filter((id, idx) => allIds.indexOf(id) !== idx);
 
+          // Regression: clicking and dragging a child <rect> inside a Component Instance must select & move the instance normally
+          const instanceArtwork = document.querySelector('[data-window-id="main-canvas"] .component-instance-artwork');
+          const nestedNodeIdCount = instanceArtwork ? instanceArtwork.querySelectorAll('[data-node-id]').length : -1;
+          const mainSvg = document.querySelector('[data-window-id="main-canvas"] svg.artboard');
+          const instanceTransformGroup = instanceArtwork?.querySelector(':scope > g[transform]');
+          const parseTranslate = (el) => {
+            const raw = el?.getAttribute('transform') || '';
+            const m = raw.match(/translate\\(([-0-9.]+)[ ,]+([-0-9.]+)\\)/);
+            return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+          };
+          const beforeDragPos = parseTranslate(instanceTransformGroup);
+          const innerShapeRect = instanceArtwork?.querySelector('g.canvas-node rect');
+          const innerRectBox = innerShapeRect?.getBoundingClientRect();
+          let afterDragPos = null;
+          let instanceSelectedAfterDrag = false;
+          if (innerShapeRect && innerRectBox && mainSvg) {
+            const startX = innerRectBox.left + innerRectBox.width / 2;
+            const startY = innerRectBox.top + innerRectBox.height / 2;
+            innerShapeRect.dispatchEvent(new PointerEvent('pointerdown', {
+              bubbles: true, cancelable: true, pointerId: 1, button: 0, buttons: 1, clientX: startX, clientY: startY,
+            }));
+            await new Promise((r) => setTimeout(r, 30));
+            mainSvg.dispatchEvent(new PointerEvent('pointermove', {
+              bubbles: true, cancelable: true, pointerId: 1, button: 0, buttons: 1, clientX: startX + 90, clientY: startY + 55,
+            }));
+            await new Promise((r) => setTimeout(r, 30));
+            mainSvg.dispatchEvent(new PointerEvent('pointerup', {
+              bubbles: true, cancelable: true, pointerId: 1, button: 0, buttons: 0, clientX: startX + 90, clientY: startY + 55,
+            }));
+            await new Promise((r) => setTimeout(r, 80));
+            const updatedGroup = document.querySelector('[data-window-id="main-canvas"] .component-instance-artwork > g[transform]');
+            afterDragPos = parseTranslate(updatedGroup);
+            instanceSelectedAfterDrag = Boolean(document.querySelector('[data-window-id="main-canvas"] .canvas-selection-outline'));
+          }
+
           // WEB-09 secondary action: explicitly save selected layer on Component Canvas as a NEW component
           compToggle.click();
           await new Promise((r) => setTimeout(r, 60));
@@ -498,6 +533,10 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
             thumbMaskCount,
             instanceMasks,
             duplicateIds,
+            nestedNodeIdCount,
+            beforeDragPos,
+            afterDragPos,
+            instanceSelectedAfterDrag,
             countAfterSaveAsNew,
           };
         `);
@@ -513,10 +552,22 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(componentWorkflow.thumbMaskCount).toBeGreaterThanOrEqual(1);
         expect(componentWorkflow.instanceMasks).toBeGreaterThanOrEqual(1);
         expect(componentWorkflow.duplicateIds).toEqual([]);
+        expect(componentWorkflow.nestedNodeIdCount).toBe(0);
+        expect(componentWorkflow.beforeDragPos).not.toBeNull();
+        expect(componentWorkflow.afterDragPos).not.toBeNull();
+        expect(componentWorkflow.afterDragPos.x).toBeGreaterThan(componentWorkflow.beforeDragPos.x + 20);
+        expect(componentWorkflow.afterDragPos.y).toBeGreaterThan(componentWorkflow.beforeDragPos.y + 15);
+        expect(componentWorkflow.instanceSelectedAfterDrag).toBe(true);
         expect(componentWorkflow.countAfterSaveAsNew).toBe(2);
 
         // 7. Throttled mousemove resizing handles for Layers sidebar & Inspector panel
         const resizeCheck = await browser.evalJs(`
+          // Close floating Component Canvas opened in section 6 so docked side-panel handles are unobstructed
+          const closeCompCanvas = document.querySelector('[data-window-id="component-canvas"] .window-control-close');
+          if (closeCompCanvas) {
+            closeCompCanvas.click();
+            await new Promise((r) => setTimeout(r, 60));
+          }
           const layersPanel = document.querySelector('.layers-panel');
           const inspectorPanel = document.querySelector('.inspector-panel');
           const layersHandle = document.querySelector('[data-resize-panel="layers"]');
@@ -525,82 +576,146 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
           const initialLayersW = Math.round(layersPanel.getBoundingClientRect().width);
           const initialInspectorW = Math.round(inspectorPanel.getBoundingClientRect().width);
 
-          // Burst 25 rapid mousemove events dragging Layers handle +90px right
+          // Verify neither handle is occluded by .workspace at center or either horizontal edge
           const lRect = layersHandle.getBoundingClientRect();
-          const lStartX = lRect.left + lRect.width / 2;
-          layersHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: lStartX, clientY: 300 }));
-          const resizingClassActive = document.querySelector('.app-shell').classList.contains('is-resizing-panel');
-          for (let i = 1; i <= 25; i++) {
-            window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: lStartX + (90 * i) / 25, clientY: 300 }));
-          }
-          window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: lStartX + 90, clientY: 300 }));
-          await new Promise((r) => setTimeout(r, 40));
-          const resizedLayersW = Math.round(layersPanel.getBoundingClientRect().width);
-          const resizingClassCleared = !document.querySelector('.app-shell').classList.contains('is-resizing-panel');
-
-          // Burst 25 rapid mousemove events dragging Inspector handle -80px left (widens Inspector by 80px)
           const iRect = inspectorHandle.getBoundingClientRect();
-          const iStartX = iRect.left + iRect.width / 2;
-          inspectorHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: iStartX, clientY: 300 }));
-          for (let i = 1; i <= 25; i++) {
-            window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: iStartX - (80 * i) / 25, clientY: 300 }));
-          }
-          window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: iStartX - 80, clientY: 300 }));
-          await new Promise((r) => setTimeout(r, 40));
-          const resizedInspectorW = Math.round(inspectorPanel.getBoundingClientRect().width);
+          const lMidY = lRect.top + lRect.height / 2;
+          const iMidY = iRect.top + iRect.height / 2;
+          const layersHandleHit =
+            document.elementFromPoint(lRect.left + 1, lMidY) === layersHandle &&
+            document.elementFromPoint(lRect.left + lRect.width / 2, lMidY) === layersHandle &&
+            document.elementFromPoint(lRect.right - 1, lMidY) === layersHandle;
+          const inspectorHandleHit =
+            document.elementFromPoint(iRect.left + 1, iMidY) === inspectorHandle &&
+            document.elementFromPoint(iRect.left + iRect.width / 2, iMidY) === inspectorHandle &&
+            document.elementFromPoint(iRect.right - 1, iMidY) === inspectorHandle;
 
-          // Verify Pages Rack right edge tracks the widened Inspector panel without overlapping
-          const pagesToggle = document.querySelector('.pages-rack-header-toggle');
-          pagesToggle.click();
-          await new Promise((r) => setTimeout(r, 60));
-          const pagesRack = document.querySelector('.pages-rack-panel');
-          const rackRight = Math.round(pagesRack.getBoundingClientRect().right);
-          const inspectorLeft = Math.round(inspectorPanel.getBoundingClientRect().left);
-          pagesToggle.click();
-          await new Promise((r) => setTimeout(r, 40));
-
-          // Escape mid-drag cancels and reverts width
-          const beforeCancelX = layersHandle.getBoundingClientRect().left + 4;
-          layersHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: beforeCancelX, clientY: 300 }));
-          window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: beforeCancelX + 120, clientY: 300 }));
-          await new Promise((r) => setTimeout(r, 25));
-          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-          await new Promise((r) => setTimeout(r, 40));
-          const layersAfterEscapeW = Math.round(layersPanel.getBoundingClientRect().width);
-
-          // Keyboard ArrowLeft narrows Layers by 16px
-          layersHandle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
-          await new Promise((r) => setTimeout(r, 40));
-          const layersAfterKeyW = Math.round(layersPanel.getBoundingClientRect().width);
-
-          // Double-click resets both panels to defaults
-          layersHandle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-          inspectorHandle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-          await new Promise((r) => setTimeout(r, 40));
-          const resetLayersW = Math.round(layersPanel.getBoundingClientRect().width);
-          const resetInspectorW = Math.round(inspectorPanel.getBoundingClientRect().width);
-
-          return {
-            initialLayersW,
-            initialInspectorW,
-            resizingClassActive,
-            resizingClassCleared,
-            resizedLayersW,
-            resizedInspectorW,
-            rackAlignedToInspector: Math.abs(rackRight - inspectorLeft) <= 2,
-            layersAfterEscapeW,
-            layersAfterKeyW,
-            resetLayersW,
-            resetInspectorW,
+          // Track active window mousemove/mouseup listeners to guarantee clean attach & removal
+          const activeMouseListeners = new Set();
+          let mouseMoveAdds = 0;
+          let mouseMoveRemoves = 0;
+          const origAdd = window.addEventListener.bind(window);
+          const origRemove = window.removeEventListener.bind(window);
+          window.addEventListener = function(type, listener, options) {
+            const capture = typeof options === 'boolean' ? options : Boolean(options && options.capture);
+            if (type === 'mousemove' || type === 'mouseup') {
+              activeMouseListeners.add(type + ':' + capture + ':' + String(listener));
+              if (type === 'mousemove') mouseMoveAdds += 1;
+            }
+            return origAdd(type, listener, options);
           };
+          window.removeEventListener = function(type, listener, options) {
+            const capture = typeof options === 'boolean' ? options : Boolean(options && options.capture);
+            if (type === 'mousemove' || type === 'mouseup') {
+              activeMouseListeners.delete(type + ':' + capture + ':' + String(listener));
+              if (type === 'mousemove') mouseMoveRemoves += 1;
+            }
+            return origRemove(type, listener, options);
+          };
+
+          try {
+            // Burst 25 rapid mousemove events dragging Layers handle +90px right
+            const lStartX = lRect.left + lRect.width / 2;
+            layersHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: lStartX, clientY: 300 }));
+            const resizingClassActive = document.querySelector('.app-shell').classList.contains('is-resizing-panel');
+            const listenersAttachedDuringDrag = activeMouseListeners.size;
+            for (let i = 1; i <= 25; i++) {
+              window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: lStartX + (90 * i) / 25, clientY: 300 }));
+            }
+            window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: lStartX + 90, clientY: 300 }));
+            await new Promise((r) => setTimeout(r, 40));
+            const resizedLayersW = Math.round(layersPanel.getBoundingClientRect().width);
+            const resizingClassCleared = !document.querySelector('.app-shell').classList.contains('is-resizing-panel');
+            // Moving mouse after mouseup must NOT affect width
+            window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: lStartX + 240, clientY: 300 }));
+            await new Promise((r) => setTimeout(r, 30));
+            const layersAfterPostUpMoveW = Math.round(layersPanel.getBoundingClientRect().width);
+
+            // Burst 25 rapid mousemove events dragging Inspector handle -80px left (widens Inspector by 80px)
+            const iStartX = iRect.left + iRect.width / 2;
+            inspectorHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: iStartX, clientY: 300 }));
+            for (let i = 1; i <= 25; i++) {
+              window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: iStartX - (80 * i) / 25, clientY: 300 }));
+            }
+            window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: iStartX - 80, clientY: 300 }));
+            await new Promise((r) => setTimeout(r, 40));
+            const resizedInspectorW = Math.round(inspectorPanel.getBoundingClientRect().width);
+            window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: iStartX - 240, clientY: 300 }));
+            await new Promise((r) => setTimeout(r, 30));
+            const inspectorAfterPostUpMoveW = Math.round(inspectorPanel.getBoundingClientRect().width);
+
+            // Verify Pages Rack right edge tracks the widened Inspector panel without overlapping
+            const pagesToggle = document.querySelector('.pages-rack-header-toggle');
+            pagesToggle.click();
+            await new Promise((r) => setTimeout(r, 60));
+            const pagesRack = document.querySelector('.pages-rack-panel');
+            const rackRight = Math.round(pagesRack.getBoundingClientRect().right);
+            const inspectorLeft = Math.round(inspectorPanel.getBoundingClientRect().left);
+            pagesToggle.click();
+            await new Promise((r) => setTimeout(r, 40));
+
+            // Escape mid-drag cancels, reverts width, and removes mousemove listener
+            const beforeCancelX = layersHandle.getBoundingClientRect().left + 4;
+            layersHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: beforeCancelX, clientY: 300 }));
+            window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: beforeCancelX + 120, clientY: 300 }));
+            await new Promise((r) => setTimeout(r, 25));
+            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            await new Promise((r) => setTimeout(r, 40));
+            const layersAfterEscapeW = Math.round(layersPanel.getBoundingClientRect().width);
+
+            // Keyboard ArrowLeft narrows Layers by 16px
+            layersHandle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+            await new Promise((r) => setTimeout(r, 40));
+            const layersAfterKeyW = Math.round(layersPanel.getBoundingClientRect().width);
+
+            // Double-click resets both panels to defaults
+            layersHandle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+            inspectorHandle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+            await new Promise((r) => setTimeout(r, 40));
+            const resetLayersW = Math.round(layersPanel.getBoundingClientRect().width);
+            const resetInspectorW = Math.round(inspectorPanel.getBoundingClientRect().width);
+
+            return {
+              initialLayersW,
+              initialInspectorW,
+              layersHandleHit,
+              inspectorHandleHit,
+              resizingClassActive,
+              resizingClassCleared,
+              listenersAttachedDuringDrag,
+              leakedMouseListeners: activeMouseListeners.size,
+              mouseMoveAdds,
+              mouseMoveRemoves,
+              resizedLayersW,
+              layersAfterPostUpMoveW,
+              resizedInspectorW,
+              inspectorAfterPostUpMoveW,
+              rackAlignedToInspector: Math.abs(rackRight - inspectorLeft) <= 2,
+              layersAfterEscapeW,
+              layersAfterKeyW,
+              resetLayersW,
+              resetInspectorW,
+            };
+          } finally {
+            window.addEventListener = origAdd;
+            window.removeEventListener = origRemove;
+          }
         `);
 
         expect(resizeCheck.initialLayersW).toBe(240);
         expect(resizeCheck.initialInspectorW).toBe(292);
+        expect(resizeCheck.layersHandleHit).toBe(true);
+        expect(resizeCheck.inspectorHandleHit).toBe(true);
         expect(resizeCheck.resizingClassActive).toBe(true);
         expect(resizeCheck.resizingClassCleared).toBe(true);
+        expect(resizeCheck.listenersAttachedDuringDrag).toBe(2);
+        expect(resizeCheck.leakedMouseListeners).toBe(0);
+        expect(resizeCheck.mouseMoveAdds).toBe(3);
+        expect(resizeCheck.mouseMoveRemoves).toBe(3);
         expect(resizeCheck.resizedLayersW).toBe(330);
+        expect(resizeCheck.layersAfterPostUpMoveW).toBe(330);
         expect(resizeCheck.resizedInspectorW).toBe(372);
+        expect(resizeCheck.inspectorAfterPostUpMoveW).toBe(372);
         expect(resizeCheck.rackAlignedToInspector).toBe(true);
         expect(resizeCheck.layersAfterEscapeW).toBe(330);
         expect(resizeCheck.layersAfterKeyW).toBe(314);
