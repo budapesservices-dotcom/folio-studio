@@ -43,5 +43,11 @@ export const scrubbyZoomTool: CanvasToolHandler = {
     const session = context.session;
     return session?.kind === 'scrubby-zoom' && session.pointerId === event.pointerId ? { zoom: session.startZoom, pan: session.startPan, session: null } : {};
   },
-  onKeyDown: () => ({}), renderOverlay: () => null, cursorStyle: (context) => (context.session?.kind === 'scrubby-zoom' ? 'ew-resize' : 'zoom-in'),
+  onKeyDown(event, context) {
+    const session = context.session;
+    return event.key === 'Escape' && session?.kind === 'scrubby-zoom'
+      ? { zoom: session.startZoom, pan: session.startPan, session: null, preventDefault: true }
+      : {};
+  },
+  renderOverlay: () => null, cursorStyle: (context) => (context.session?.kind === 'scrubby-zoom' ? 'ew-resize' : 'zoom-in'),
 };

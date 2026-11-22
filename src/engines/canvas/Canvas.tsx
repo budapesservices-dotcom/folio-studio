@@ -78,12 +78,14 @@ const VECTOR_OVERLAY_TOOLS = new Set<CanvasToolId>([
 
 function toCanvasPoint(svg: SVGSVGElement, clientX: number, clientY: number): { x: number; y: number } {
   const matrix = svg.getScreenCTM();
-  if (matrix) {
+  if (matrix && Math.abs(matrix.a) > 1e-6 && Math.abs(matrix.d) > 1e-6) {
     const point = svg.createSVGPoint();
     point.x = clientX;
     point.y = clientY;
     const local = point.matrixTransform(matrix.inverse());
-    return { x: local.x, y: local.y };
+    if (Number.isFinite(local.x) && Number.isFinite(local.y)) {
+      return { x: local.x, y: local.y };
+    }
   }
 
   const rect = svg.getBoundingClientRect();
@@ -365,9 +367,24 @@ export function Canvas({
     point: null,
     nodeId: null,
   });
+  const lastActivePointerInputRef = useRef<CanvasToolPointerInput | null>(null);
+  const capturedPointerRef = useRef<{ svg: SVGSVGElement; pointerId: number } | null>(null);
   const pendingInlineEditRef = useRef<InlineTextEditState | null>(null);
   const prevDocumentIdRef = useRef<string>(document.id);
   const [renderedSvgWidth, setRenderedSvgWidth] = useState<number>(0);
+
+  const releaseCapturedPointer = () => {
+    const captured = capturedPointerRef.current;
+    capturedPointerRef.current = null;
+    if (!captured) return;
+    try {
+      if (captured.svg.hasPointerCapture?.(captured.pointerId)) {
+        captured.svg.releasePointerCapture(captured.pointerId);
+      }
+    } catch {
+      // Ignore if pointer already ended or element detached.
+    }
+  };
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -386,26 +403,38 @@ export function Canvas({
     return () => window.removeEventListener('resize', updateWidth);
   }, [document.width, zoom]);
 
-  const invZoom = renderedSvgWidth > 20
-    ? Math.min(3.5, Math.max(0.35, document.width / renderedSvgWidth))
-    : 1 / Math.max(0.35, zoom);
+  const rawCanvasUnitsPerPixel = renderedSvgWidth > 10
+    ? document.width / renderedSvgWidth
+    : 1 / Math.max(0.05, zoom);
+  const canvasUnitsPerPixel = Math.min(20, Math.max(0.05, rawCanvasUnitsPerPixel));
+  const invZoom = canvasUnitsPerPixel;
   const selectionKey = selectedNodeIds.join(',');
 
   const updateToolSession = (next: CanvasToolSession | null) => {
     toolSessionRef.current = next;
+    if (!next) {
+      lastActivePointerInputRef.current = null;
+      releaseCapturedPointer();
+    }
     setToolSession(next);
   };
 
-  // Clear in-progress tool sessions when switching tools or documents so no stale drafts leak.
+  // Clear in-progress tool sessions, pointer capture, previews, and guides when switching tools or documents.
   useEffect(() => {
     const docChanged = prevDocumentIdRef.current !== document.id;
     prevDocumentIdRef.current = document.id;
+    releaseCapturedPointer();
+    lastActivePointerInputRef.current = null;
+    panRef.current = null;
+    setIsPanning(false);
     updateToolSession(null);
     previewRef.current = null;
     setPreviewNodes(null);
     setPreviewCreateNodes(null);
     setGuides([]);
     setActiveAnchor(null);
+    setHoverPoint(null);
+    setHoverNodeId(null);
     if (docChanged) {
       pendingInlineEditRef.current = null;
       setInlineTextEdit(null);
@@ -422,6 +451,8 @@ export function Canvas({
     setActiveAnchor(null);
   }, [selectionKey, document.id]);
 
+  const syncActiveSessionModifiersRef = useRef<(event: KeyboardEvent) => void>(() => {});
+
   useEffect(() => {
     const controller = new AbortController();
     const { signal } = controller;
@@ -431,24 +462,35 @@ export function Canvas({
       return target.isContentEditable || target.matches('input, textarea, select, button, a, [role="button"]');
     };
 
+    const isModifierKey = (key: string): boolean =>
+      key === 'Shift' || key === 'Alt' || key === 'Control' || key === 'Meta';
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Alt') setAltHeld(true);
       if (event.key === 'Shift') setShiftHeld(true);
-      if (event.code === 'Space' && !isInteractiveTarget(event.target)) {
+      if (event.code === 'Space' && !toolSessionRef.current && !isInteractiveTarget(event.target)) {
         setSpaceHeld(true);
         event.preventDefault();
+      }
+      if (isModifierKey(event.key) && toolSessionRef.current) {
+        syncActiveSessionModifiersRef.current(event);
       }
     };
     const handleKeyUp = (event: KeyboardEvent) => {
       if (event.key === 'Alt') setAltHeld(false);
       if (event.key === 'Shift') setShiftHeld(false);
       if (event.code === 'Space') setSpaceHeld(false);
+      if (isModifierKey(event.key) && toolSessionRef.current) {
+        syncActiveSessionModifiersRef.current(event);
+      }
     };
     const handleWindowBlur = () => {
       setSpaceHeld(false);
       setAltHeld(false);
       setShiftHeld(false);
       panRef.current = null;
+      lastActivePointerInputRef.current = null;
+      releaseCapturedPointer();
       updateToolSession(null);
       previewRef.current = null;
       setPreviewNodes(null);
@@ -584,6 +626,7 @@ export function Canvas({
     selectedNodes,
     selectionBounds,
     zoom,
+    canvasUnitsPerPixel,
     pan,
     viewportWidth: scrollAreaRef.current?.clientWidth ?? document.width,
     session: toolSessionRef.current,
@@ -596,6 +639,7 @@ export function Canvas({
   const capturePointer = (svg: SVGSVGElement, pointerId: number) => {
     try {
       svg.setPointerCapture(pointerId);
+      capturedPointerRef.current = { svg, pointerId };
     } catch {
       // Pointer capture can fail when the browser cancels the initiating pointer.
     }
@@ -617,7 +661,7 @@ export function Canvas({
 
     if (event.ctrlKey || event.metaKey) {
       const direction = deltaY > 0 ? -1 : 1;
-      const nextZoom = Math.min(2.5, Math.max(0.35, Number((zoom * (direction > 0 ? 1.1 : 1 / 1.1)).toFixed(3))));
+      const nextZoom = Math.min(8, Math.max(0.15, Number((zoom * (direction > 0 ? 1.1 : 1 / 1.1)).toFixed(3))));
       if (nextZoom === zoom) return;
 
       const rect = event.currentTarget.getBoundingClientRect();
@@ -652,7 +696,7 @@ export function Canvas({
     }
 
     const isMiddleDrag = event.button === 1;
-    const isSpaceDrag = event.button === 0 && spaceHeld;
+    const isSpaceDrag = event.button === 0 && spaceHeld && !toolSessionRef.current;
     if (!isMiddleDrag && !isSpaceDrag) return;
 
     event.preventDefault();
@@ -822,17 +866,23 @@ export function Canvas({
   };
 
   const handlePointerDown = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
-    if (spaceHeld) return;
+    if (spaceHeld && !toolSessionRef.current) return;
     if ((event.target as Element)?.closest('.canvas-inline-text-editor')) return;
     if (inlineTextEdit) commitInlineText();
     const input = createPointerInput(event);
     const transition = activeTool.onPointerDown(input, createToolContext());
+    if (transition.session) {
+      lastActivePointerInputRef.current = input;
+    }
     applyToolTransition(transition, event.currentTarget, event.pointerId, event);
   };
 
   const handlePointerMove = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
     const input = createPointerInput(event);
     lastPointerRef.current = { point: input.point, nodeId: input.targetNodeId };
+    if (toolSessionRef.current) {
+      lastActivePointerInputRef.current = input;
+    }
     if (needsHoverTracking) {
       setHoverPoint(input.point);
       setHoverNodeId((prev) => (prev === input.targetNodeId ? prev : input.targetNodeId));
@@ -851,12 +901,34 @@ export function Canvas({
     const input = createPointerInput(event);
     const transition = activeTool.onPointerUp(input, createToolContext());
     applyToolTransition(transition, event.currentTarget, event.pointerId, event);
+    if (!toolSessionRef.current) {
+      releaseCapturedPointer();
+      lastActivePointerInputRef.current = null;
+    }
   };
 
   const cancelPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
     const input = createPointerInput(event);
     const transition = activeTool.onPointerCancel(input, createToolContext());
     applyToolTransition(transition, event.currentTarget, event.pointerId, event);
+    releaseCapturedPointer();
+    lastActivePointerInputRef.current = null;
+  };
+
+  // Re-evaluate live tool previews immediately when Shift/Alt/Ctrl/Meta toggles mid-drag.
+  syncActiveSessionModifiersRef.current = (event: KeyboardEvent) => {
+    const lastInput = lastActivePointerInputRef.current;
+    if (!toolSessionRef.current || !lastInput) return;
+    const syntheticInput: CanvasToolPointerInput = {
+      ...lastInput,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+    };
+    lastActivePointerInputRef.current = syntheticInput;
+    const transition = getStudioTool(toolId).onPointerMove(syntheticInput, createToolContext());
+    applyToolTransition(transition);
   };
 
   const handleDoubleClick = (event: JSX.TargetedMouseEvent<SVGSVGElement>) => {
@@ -879,6 +951,38 @@ export function Canvas({
   const toolKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
   toolKeyDownRef.current = (event: KeyboardEvent) => {
     if (inlineTextEdit) return;
+
+    // Escape during an active canvas pan or tool session ALWAYS cancels cleanly regardless of DOM focus.
+    if (event.key === 'Escape') {
+      if (panRef.current) {
+        onPanChange(panRef.current.startPan);
+        panRef.current = null;
+        setIsPanning(false);
+        event.preventDefault();
+        return;
+      }
+      if (toolSessionRef.current) {
+        const transition = getStudioTool(toolId).onKeyDown({
+          key: event.key,
+          code: event.code,
+          shiftKey: event.shiftKey,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          altKey: event.altKey,
+        }, createToolContext());
+        applyToolTransition(transition, undefined, undefined, event);
+        if (toolSessionRef.current !== null) {
+          // Hard fallback: guarantee Escape always clears transient session state with zero commits.
+          updateToolSession(null);
+          updatePreview(null);
+          setPreviewCreateNodes(null);
+          setGuides([]);
+          event.preventDefault();
+        }
+        return;
+      }
+    }
+
     const target = event.target;
     if (
       target instanceof HTMLElement &&

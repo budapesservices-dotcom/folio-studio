@@ -1,5 +1,6 @@
 import type { DesignNode } from '../../../core/document/types';
-import { getBounds, rotateNodesAroundPivot, snapPointToTargets, type Bounds } from '../geometry';
+import { getBounds, nodesGeometryChanged, rotateNodesAroundPivot, snapPointToTargets, type Bounds } from '../geometry';
+import { getCanvasUnitsPerPixel } from './geometry';
 import type { CanvasToolHandler, CanvasToolTransition } from './types';
 
 function computeAngleDeg(center: { x: number; y: number }, point: { x: number; y: number }): number {
@@ -89,6 +90,7 @@ export const rotateTool: CanvasToolHandler = {
           handle: event.smartHandleHit,
           start: event.point,
           pivot: event.point,
+          initialPivot: context.customPivot ?? null,
         },
         capturePointer: true,
         preventDefault: true,
@@ -152,7 +154,9 @@ export const rotateTool: CanvasToolHandler = {
 
     if (session.kind === 'smart-handle' && session.handle.kind === 'pivot') {
       const targets: Bounds[] = context.selectionBounds ? [context.selectionBounds] : [];
-      const snapped = snapPointToTargets(event.point, targets, 10 / Math.max(0.35, context.zoom));
+      const snapped = event.ctrlKey || event.metaKey
+        ? { point: event.point, snapped: false }
+        : snapPointToTargets(event.point, targets, 10 * getCanvasUnitsPerPixel(context));
       return {
         session: {
           ...session,
@@ -205,29 +209,47 @@ export const rotateTool: CanvasToolHandler = {
     }
     if (session.kind !== 'select-transform' || session.mode !== 'rotate') return {};
     if (session.cloneMode && session.previewNodes && session.previewNodes.length > 0) {
+      if (Math.abs(session.currentAngle ?? 0) < 0.05) {
+        return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true };
+      }
       return {
         createNodes: session.previewNodes,
         selection: session.previewNodes.map((n) => n.id),
         session: null,
         previewNodes: null,
         previewCreateNodes: null,
+        guides: [],
         notice: `Rotated & cloned ${session.previewNodes.length} layer${session.previewNodes.length === 1 ? '' : 's'} by ${session.currentAngle ?? 0}°.`,
         preventDefault: true,
       };
     }
+    const changed = session.previewNodes && nodesGeometryChanged(session.nodes, session.previewNodes);
     return {
-      ...(session.previewNodes ? { commitNodes: session.previewNodes } : {}),
+      ...(changed && session.previewNodes ? { commitNodes: session.previewNodes } : {}),
       session: null,
       previewNodes: null,
       previewCreateNodes: null,
+      guides: [],
       preventDefault: true,
     };
   },
   onPointerCancel(_event, context) {
-    return context.session ? { session: null, previewNodes: null, previewCreateNodes: null } : {};
+    if (!context.session) return {};
+    const restorePivot =
+      context.session.kind === 'smart-handle' && context.session.handle.kind === 'pivot'
+        ? { customPivot: context.session.initialPivot ?? null }
+        : {};
+    return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], ...restorePivot };
   },
   onKeyDown(event, context) {
-    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null, previewCreateNodes: null, preventDefault: true } : {};
+    if (event.key === 'Escape' && context.session) {
+      const restorePivot =
+        context.session.kind === 'smart-handle' && context.session.handle.kind === 'pivot'
+          ? { customPivot: context.session.initialPivot ?? null }
+          : {};
+      return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], ...restorePivot, preventDefault: true };
+    }
+    return {};
   },
   renderOverlay(context) {
     const session = context.session;
@@ -307,8 +329,11 @@ export const measureTool: CanvasToolHandler = {
   description: 'Drag to measure ΔX, ΔY, distance & angle with magnetic edge snapping (Shift snaps 45°).',
   onPointerDown(event, context): CanvasToolTransition {
     if (event.button !== 0) return {};
-    const tolerance = 9 / Math.max(0.35, context.zoom);
-    const snapped = snapPointToTargets(event.point, getMeasureSnapTargets(context), tolerance);
+    const bypassSnap = event.ctrlKey || event.metaKey || event.altKey;
+    const tolerance = 9 * getCanvasUnitsPerPixel(context);
+    const snapped = bypassSnap
+      ? { point: event.point, snapped: false }
+      : snapPointToTargets(event.point, getMeasureSnapTargets(context), tolerance);
     return {
       session: {
         kind: 'measure',
@@ -335,8 +360,8 @@ export const measureTool: CanvasToolHandler = {
       const dist = Math.hypot(dx, dy);
       const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
       current = { x: session.start.x + Math.cos(angle) * dist, y: session.start.y + Math.sin(angle) * dist };
-    } else {
-      const tolerance = 9 / Math.max(0.35, context.zoom);
+    } else if (!(event.ctrlKey || event.metaKey || event.altKey)) {
+      const tolerance = 9 * getCanvasUnitsPerPixel(context);
       const snapped = snapPointToTargets(event.point, getMeasureSnapTargets(context), tolerance);
       current = snapped.point;
       snappedEnd = snapped.snapped;
@@ -347,8 +372,9 @@ export const measureTool: CanvasToolHandler = {
     const session = context.session;
     if (!session || session.kind !== 'measure' || session.pointerId !== event.pointerId) return {};
     const dist = Math.hypot(session.current.x - session.start.x, session.current.y - session.start.y);
+    const clickThreshold = Math.max(1, Math.min(6, 3 * getCanvasUnitsPerPixel(context)));
     const clickedNodeId = event.targetNodeId ?? session.targetNodeId ?? null;
-    if (dist < 3 && clickedNodeId) {
+    if (dist < clickThreshold && clickedNodeId) {
       const hit = context.selectableNodes.find((node) => node.id === clickedNodeId);
       const b = hit ? getBounds([hit]) : null;
       if (hit && b) {
@@ -368,10 +394,10 @@ export const measureTool: CanvasToolHandler = {
     return { session: { ...session, active: false }, preventDefault: true };
   },
   onPointerCancel(_event, context) {
-    return context.session?.kind === 'measure' ? { session: null } : {};
+    return context.session?.kind === 'measure' ? { session: null, guides: [] } : {};
   },
   onKeyDown(event, context) {
-    return event.key === 'Escape' && context.session?.kind === 'measure' ? { session: null, preventDefault: true } : {};
+    return event.key === 'Escape' && context.session?.kind === 'measure' ? { session: null, guides: [], preventDefault: true } : {};
   },
   renderOverlay(context) {
     const session = context.session;

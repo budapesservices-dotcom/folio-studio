@@ -19,6 +19,8 @@ import {
   type DrawShapeSession,
 } from './types';
 
+import { getCanvasUnitsPerPixel } from './geometry';
+
 function getDrawSnapTargets(context: CanvasToolContext): Bounds[] {
   const targets: Bounds[] = [{ x: 0, y: 0, width: context.document.width, height: context.document.height }];
   for (const node of context.selectableNodes) {
@@ -34,7 +36,7 @@ function resolveDrawPoint(
   context: CanvasToolContext,
 ): { x: number; y: number } {
   if (bypassSnap) return rawPoint;
-  const tolerance = 7 / Math.max(0.35, context.zoom);
+  const tolerance = 7 * getCanvasUnitsPerPixel(context);
   return snapPointToTargets(rawPoint, getDrawSnapTargets(context), tolerance).point;
 }
 
@@ -244,29 +246,36 @@ function createDrawTool(config: {
         constrain: event.shiftKey,
         fromCenter: event.altKey,
       };
+      const unitsPerPx = getCanvasUnitsPerPixel(context);
       const dragDistance = Math.hypot(
         finalSession.current.x - finalSession.start.x,
         finalSession.current.y - finalSession.start.y,
       );
-      const node = buildDrawnNode(finalSession, context, dragDistance < 5);
+      const clickFallbackThreshold = Math.max(1.5, Math.min(8, 5 * unitsPerPx));
+      const node = buildDrawnNode(finalSession, context, dragDistance < clickFallbackThreshold);
       const keepActive = Boolean(context.toolOptions?.keepToolActive);
       return {
         createNodes: [node],
         selection: [node.id],
         session: null,
+        previewNodes: null,
+        previewCreateNodes: null,
+        guides: [],
         ...(config.id === 'draw-text' ? { editTextNodeId: node.id } : {}),
         ...(keepActive ? {} : { nextToolId: 'select' }),
         preventDefault: true,
       };
     },
     onPointerCancel(_event, context) {
-      return context.session?.kind === 'draw-shape' ? { session: null } : {};
+      return context.session?.kind === 'draw-shape'
+        ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [] }
+        : {};
     },
     onKeyDown(event, context) {
       const session = context.session;
       if (!session || session.kind !== 'draw-shape') return {};
       if (event.key === 'Escape') {
-        return { session: null, preventDefault: true };
+        return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true };
       }
       if (event.key === 'Shift' || event.key === 'Alt') {
         return {
@@ -306,8 +315,9 @@ function createDrawTool(config: {
     renderOverlay(context) {
       const session = context.session;
       if (!session || session.kind !== 'draw-shape') return null;
+      const unitsPerPx = getCanvasUnitsPerPixel(context);
       const dist = Math.hypot(session.current.x - session.start.x, session.current.y - session.start.y);
-      if (dist < 2) return null;
+      if (dist < Math.max(0.5, Math.min(4, 2 * unitsPerPx))) return null;
       const preview = buildDrawnNode(session, context, false);
       const isLine = session.toolId === 'draw-line' || session.toolId === 'draw-arrow';
       const extra =
@@ -332,7 +342,7 @@ function createDrawTool(config: {
         node: preview,
         label,
         labelX: preview.x + preview.width / 2,
-        labelY: preview.y + preview.height + 16 / Math.max(0.35, context.zoom),
+        labelY: preview.y + preview.height + 16 * unitsPerPx,
       };
     },
     cursorStyle() {

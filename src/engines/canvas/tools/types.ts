@@ -135,6 +135,7 @@ export interface SmartHandleSession {
   node?: DesignNode;
   previewNode?: DesignNode;
   pivot?: { x: number; y: number };
+  initialPivot?: { x: number; y: number } | null;
   hudLabel?: string;
   hudPoint?: { x: number; y: number };
 }
@@ -266,6 +267,7 @@ export interface CanvasToolContext {
   selectedNodes: DesignNode[];
   selectionBounds: Bounds | null;
   zoom: number;
+  canvasUnitsPerPixel?: number;
   pan: { x: number; y: number };
   viewportWidth: number;
   session: CanvasToolSession | null;

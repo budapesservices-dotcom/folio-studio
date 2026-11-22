@@ -25,6 +25,12 @@ export const handTool: CanvasToolHandler = {
     const session = context.session;
     return session?.kind === 'hand' && session.pointerId === event.pointerId ? { pan: session.startPan, session: null } : {};
   },
-  onKeyDown: () => ({}), renderOverlay: () => null,
+  onKeyDown(event, context) {
+    const session = context.session;
+    return event.key === 'Escape' && session?.kind === 'hand'
+      ? { pan: session.startPan, session: null, preventDefault: true }
+      : {};
+  },
+  renderOverlay: () => null,
   cursorStyle(context) { return context.session?.kind === 'hand' ? 'grabbing' : 'grab'; },
 };

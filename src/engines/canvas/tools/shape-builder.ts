@@ -4,6 +4,7 @@ import {
   hitTestPlanarFacesAlongStroke,
 } from '../../../core/document/vector';
 import type { CanvasToolHandler, CanvasToolTransition } from './types';
+import { getCanvasUnitsPerPixel } from './geometry';
 
 function createBuilderId(): string {
   const randomId = globalThis.crypto?.randomUUID?.();
@@ -76,8 +77,9 @@ export const shapeBuilderTool: CanvasToolHandler = {
       return {};
     }
     const last = session.strokePoints[session.strokePoints.length - 1];
+    const sampleDist = Math.max(0.5, 2 * getCanvasUnitsPerPixel(context));
     const nextStroke =
-      Math.hypot(event.point.x - last.x, event.point.y - last.y) >= 2
+      Math.hypot(event.point.x - last.x, event.point.y - last.y) >= sampleDist
         ? [...session.strokePoints, event.point]
         : session.strokePoints;
     const newlyHit = hitTestPlanarFacesAlongStroke(session.arrangement, [last, event.point]);
@@ -136,12 +138,19 @@ export const shapeBuilderTool: CanvasToolHandler = {
   },
 
   onPointerCancel(_event, context) {
-    return context.session?.kind === 'shape-builder' ? { session: null } : {};
+    return context.session?.kind === 'shape-builder'
+      ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [] }
+      : {};
   },
 
   onKeyDown(event, context) {
-    if (event.key === 'Escape' && context.session?.kind === 'shape-builder') {
-      return { session: null, preventDefault: true };
+    const session = context.session;
+    if (!session || session.kind !== 'shape-builder') return {};
+    if (event.key === 'Escape') {
+      return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true };
+    }
+    if (event.key === 'Alt') {
+      return { session: { ...session, mode: event.altKey ? 'punch' : 'merge' } };
     }
     return {};
   },

@@ -36,3 +36,24 @@ export function polygonIntersectsBounds(polygon: readonly CanvasPoint[], bounds:
 export function rectangleBounds(start: CanvasPoint, end: CanvasPoint): Bounds {
   return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
 }
+
+/**
+ * Computes exact canvas units per CSS pixel so hit tolerances, snap thresholds,
+ * and handle sizes stay visually and physically consistent from extreme zoom-out
+ * (e.g. 15%) to extreme zoom-in (e.g. 800%+).
+ */
+export function getCanvasUnitsPerPixel(context: {
+  zoom: number;
+  canvasUnitsPerPixel?: number;
+  document?: { width: number };
+  viewportWidth?: number;
+}): number {
+  if (typeof context.canvasUnitsPerPixel === 'number' && Number.isFinite(context.canvasUnitsPerPixel) && context.canvasUnitsPerPixel > 0) {
+    return context.canvasUnitsPerPixel;
+  }
+  const safeZoom = Math.max(0.05, Number.isFinite(context.zoom) ? context.zoom : 1);
+  if (context.document && context.viewportWidth && context.viewportWidth > 0) {
+    return (context.document.width / context.viewportWidth) / safeZoom;
+  }
+  return 1 / safeZoom;
+}

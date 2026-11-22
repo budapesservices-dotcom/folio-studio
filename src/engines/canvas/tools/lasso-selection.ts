@@ -1,6 +1,6 @@
 import { expandSelectedLayerIds, getCanvasClickSelectionIds, getLayerAncestorIds } from '../../../core/document/layers';
 import { getBounds } from '../geometry';
-import { polygonIntersectsBounds } from './geometry';
+import { getCanvasUnitsPerPixel, polygonIntersectsBounds } from './geometry';
 import type { CanvasToolContext, CanvasToolHandler, LassoSelectionSession } from './types';
 
 function mergeSelection(session: LassoSelectionSession, hits: string[], nodes: CanvasToolContext['canvasNodes']): string[] {
@@ -37,7 +37,8 @@ export const lassoSelectionTool: CanvasToolHandler = {
     const session = context.session;
     if (!session || session.kind !== 'lasso-selection' || session.pointerId !== event.pointerId) return {};
     const last = session.points[session.points.length - 1];
-    if (Math.hypot(event.point.x - last.x, event.point.y - last.y) < 1.5) return {};
+    const minSample = Math.max(0.4, 1.5 * getCanvasUnitsPerPixel(context));
+    if (Math.hypot(event.point.x - last.x, event.point.y - last.y) < minSample) return {};
     return { session: { ...session, points: [...session.points, event.point] }, preventDefault: true };
   },
   onPointerUp(event, context) {
@@ -48,6 +49,7 @@ export const lassoSelectionTool: CanvasToolHandler = {
       return {
         ...(session.additive || session.subtractive ? {} : { selection: [] }),
         session: null,
+        guides: [],
         preventDefault: true,
       };
     }
@@ -55,10 +57,10 @@ export const lassoSelectionTool: CanvasToolHandler = {
       const bounds = getBounds([node]);
       return bounds ? polygonIntersectsBounds(points, bounds) : false;
     }).map((node) => node.id);
-    return { selection: mergeSelection(session, hits, context.canvasNodes), session: null, preventDefault: true };
+    return { selection: mergeSelection(session, hits, context.canvasNodes), session: null, guides: [], preventDefault: true };
   },
-  onPointerCancel(_event, context) { return context.session?.kind === 'lasso-selection' ? { session: null } : {}; },
-  onKeyDown(event, context) { return event.key === 'Escape' && context.session?.kind === 'lasso-selection' ? { session: null, preventDefault: true } : {}; },
+  onPointerCancel(_event, context) { return context.session?.kind === 'lasso-selection' ? { session: null, guides: [] } : {}; },
+  onKeyDown(event, context) { return event.key === 'Escape' && context.session?.kind === 'lasso-selection' ? { session: null, guides: [], preventDefault: true } : {}; },
   renderOverlay(context) {
     const session = context.session;
     return session?.kind === 'lasso-selection' ? { kind: 'lasso', points: session.points } : null;

@@ -10,13 +10,15 @@ import {
 } from '../../../core/document/vector';
 import {
   getBounds,
+  nodesGeometryChanged,
   resizeNodes,
   rotateNodesAroundPivot,
   snapPointToTargets,
+  snapResizeBounds,
   snapTranslation,
 } from '../geometry';
 import type { CanvasToolHandler, CanvasToolId, CanvasToolTransition } from './types';
-import { rectangleBounds } from './geometry';
+import { getCanvasUnitsPerPixel, rectangleBounds } from './geometry';
 
 function computeAngleDeg(center: { x: number; y: number }, point: { x: number; y: number }): number {
   return (Math.atan2(point.y - center.y, point.x - center.x) * 180) / Math.PI;
@@ -119,6 +121,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
               handle: event.smartHandleHit,
               start: event.point,
               pivot: event.point,
+              initialPivot: context.customPivot ?? null,
             },
             capturePointer: true,
             preventDefault: true,
@@ -271,20 +274,30 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
 
       const hit = context.selectableNodes.find((node) => node.id === event.targetNodeId);
       if (!hit) return {};
-      const scope = exactLayer || event.shiftKey ? [hit.id] : getCanvasClickSelectionIds(context.canvasNodes, hit.id);
-      const groupSelected = scope.every((id) => context.selectedNodeIds.includes(id));
       const modifier = event.ctrlKey || event.metaKey;
+      const hasAncestors = getLayerAncestorIds(context.canvasNodes, hit.id).size > 0;
+      const deepSelectSingle = !exactLayer && event.shiftKey && hasAncestors && !modifier;
+      const toggleMulti = modifier || (event.shiftKey && !deepSelectSingle);
+      const scope = exactLayer || deepSelectSingle ? [hit.id] : getCanvasClickSelectionIds(context.canvasNodes, hit.id);
+      const groupSelected = scope.every((id) => context.selectedNodeIds.includes(id));
+
       let nextIds: string[];
-      if (exactLayer || event.shiftKey) nextIds = [hit.id];
-      else if (modifier && groupSelected) {
-        const removed = new Set([...scope, ...getLayerAncestorIds(context.canvasNodes, hit.id)]);
+      if (toggleMulti && groupSelected) {
+        const removed = new Set(
+          exactLayer ? scope : [...scope, ...getLayerAncestorIds(context.canvasNodes, hit.id)],
+        );
         nextIds = context.selectedNodeIds.filter((id) => !removed.has(id));
-      } else if (modifier) nextIds = [...new Set([...context.selectedNodeIds, ...scope])];
-      else if (groupSelected && context.selectedNodeIds.length > 1) {
+        return { selection: nextIds, activeAnchor: null, preventDefault: true };
+      } else if (toggleMulti) {
+        nextIds = [...new Set([...context.selectedNodeIds, ...scope])];
+      } else if (deepSelectSingle) {
+        nextIds = [hit.id];
+      } else if (groupSelected && context.selectedNodeIds.length > 1) {
         // Clicking an already-selected member of a multi-selection keeps the multi-selection intact for dragging!
         nextIds = context.selectedNodeIds;
-      } else nextIds = scope;
-      if (modifier && groupSelected && !exactLayer) return { selection: nextIds, preventDefault: true };
+      } else {
+        nextIds = scope;
+      }
 
       const moving = context.selectableNodes.filter((node) => nextIds.includes(node.id));
       const bounds = getBounds(moving);
@@ -315,10 +328,14 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         return { session: { ...session, current: event.point }, preventDefault: true };
       }
 
+      const unitsPerPx = getCanvasUnitsPerPixel(context);
+
       if (session.kind === 'smart-handle') {
         if (session.handle.kind === 'pivot') {
           const targets = context.selectionBounds ? [context.selectionBounds] : [];
-          const snapped = snapPointToTargets(event.point, targets, 10 / Math.max(0.35, context.zoom));
+          const snapped = event.ctrlKey || event.metaKey
+            ? { point: event.point, snapped: false }
+            : snapPointToTargets(event.point, targets, 10 * unitsPerPx);
           return {
             session: {
               ...session,
@@ -348,7 +365,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
               ...session,
               previewNode,
               hudLabel: `R: ${nextRadius}px`,
-              hudPoint: { x: event.point.x, y: event.point.y - 20 / Math.max(0.35, context.zoom) },
+              hudPoint: { x: event.point.x, y: event.point.y - 20 * unitsPerPx },
             },
             previewNodes: [previewNode],
             preventDefault: true,
@@ -368,7 +385,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
               ...session,
               previewNode,
               hudLabel: `Ratio: ${Math.round(nextRatio * 100)}%`,
-              hudPoint: { x: event.point.x, y: event.point.y - 20 / Math.max(0.35, context.zoom) },
+              hudPoint: { x: event.point.x, y: event.point.y - 20 * unitsPerPx },
             },
             previewNodes: [previewNode],
             preventDefault: true,
@@ -446,14 +463,42 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
 
       let dx = event.point.x - session.start.x;
       let dy = event.point.y - session.start.y;
-      if (Math.abs(dx) + Math.abs(dy) < 0.25) return {};
+      const deadzone = Math.min(0.25, 0.25 * unitsPerPx);
+      if (Math.abs(dx) + Math.abs(dy) < deadzone && !session.previewNodes) return {};
+
+      const bypassSnap = event.ctrlKey || event.metaKey;
+      const snapTolerance = bypassSnap ? 0 : 8 * unitsPerPx;
 
       if (session.mode === 'resize' && session.handle) {
-        const previewNodes = resizeNodes(session.nodes, session.bounds, session.handle, dx, dy, {
-          uniformScale: Boolean(session.uniformScale),
-          fromCenter: event.altKey,
-          constrainAspect: event.shiftKey,
-        });
+        const isCorner =
+          session.handle === 'nw' ||
+          session.handle === 'ne' ||
+          session.handle === 'se' ||
+          session.handle === 'sw';
+        const lockAspect = isCorner || Boolean(session.uniformScale) || event.shiftKey;
+        const resizeTargets = context.otherNodes.filter((node) => !session.ids.includes(node.id));
+        const snappedResize = snapResizeBounds(
+          session.bounds,
+          session.handle,
+          dx,
+          dy,
+          { x: 0, y: 0, width: context.document.width, height: context.document.height },
+          resizeTargets,
+          snapTolerance,
+          { lockAspect, fromCenter: event.altKey },
+        );
+        const previewNodes = resizeNodes(
+          session.nodes,
+          session.bounds,
+          session.handle,
+          snappedResize.dx,
+          snappedResize.dy,
+          {
+            uniformScale: Boolean(session.uniformScale),
+            fromCenter: event.altKey,
+            constrainAspect: event.shiftKey,
+          },
+        );
         const nextBounds = getBounds(previewNodes);
         return {
           session: {
@@ -462,7 +507,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             hudLabel: nextBounds ? `${Math.round(nextBounds.width)} × ${Math.round(nextBounds.height)}` : undefined,
           },
           previewNodes,
-          guides: [],
+          guides: snappedResize.guides,
           preventDefault: true,
         };
       }
@@ -473,7 +518,6 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         else dx = 0;
       }
 
-      const scale = context.document.width / Math.max(1, context.viewportWidth);
       const cloneMode = Boolean(event.altKey);
       const snapTargets = cloneMode
         ? context.otherNodes
@@ -484,7 +528,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         dy,
         { x: 0, y: 0, width: context.document.width, height: context.document.height },
         snapTargets,
-        8 * scale,
+        snapTolerance,
       );
 
       if (cloneMode) {
@@ -530,24 +574,30 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             preventDefault: true,
           };
         }
+        const changed = session.node && session.previewNode && nodesGeometryChanged([session.node], [session.previewNode]);
         return {
-          ...(session.previewNode ? { commitNodes: [session.previewNode] } : {}),
+          ...(changed && session.previewNode ? { commitNodes: [session.previewNode] } : {}),
           session: null,
           previewNodes: null,
+          guides: [],
           preventDefault: true,
         };
       }
       if (session.kind === 'anchor-edit') {
+        const changed = session.previewNode && nodesGeometryChanged([session.node], [session.previewNode]);
         return {
-          ...(session.previewNode ? { commitNodes: [session.previewNode] } : {}),
+          ...(changed && session.previewNode ? { commitNodes: [session.previewNode] } : {}),
           session: null,
           previewNodes: null,
+          guides: [],
           preventDefault: true,
         };
       }
       if (session.kind === 'marquee-selection') {
         const box = rectangleBounds(session.start, event.point);
-        const dragged = box.width > 1 || box.height > 1;
+        const unitsPerPx = getCanvasUnitsPerPixel(context);
+        const clickThreshold = Math.max(0.5, Math.min(4, 1.5 * unitsPerPx));
+        const dragged = box.width > clickThreshold || box.height > clickThreshold;
         if (!dragged) {
           const selection = session.additive || session.subtractive ? session.initialIds : [];
           return { selection, session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true };
@@ -578,6 +628,13 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       }
       if (session.kind === 'select-transform') {
         if (session.cloneMode && session.previewNodes && session.previewNodes.length > 0) {
+          const moved = session.nodes.some((orig, idx) => {
+            const clone = session.previewNodes?.[idx];
+            return clone && (Math.abs(orig.x - clone.x) > 0.01 || Math.abs(orig.y - clone.y) > 0.01 || Math.abs((orig.rotation || 0) - (clone.rotation || 0)) > 0.01);
+          });
+          if (!moved) {
+            return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true };
+          }
           return {
             createNodes: session.previewNodes,
             selection: session.previewNodes.map((n) => n.id),
@@ -589,8 +646,9 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             preventDefault: true,
           };
         }
+        const changed = session.previewNodes && nodesGeometryChanged(session.nodes, session.previewNodes);
         return {
-          ...(session.previewNodes ? { commitNodes: session.previewNodes } : {}),
+          ...(changed && session.previewNodes ? { commitNodes: session.previewNodes } : {}),
           session: null,
           previewNodes: null,
           previewCreateNodes: null,
@@ -602,12 +660,21 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
     },
 
     onPointerCancel(_event, context) {
-      return context.session ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [] } : {};
+      if (!context.session) return {};
+      const restorePivot =
+        context.session.kind === 'smart-handle' && context.session.handle.kind === 'pivot'
+          ? { customPivot: context.session.initialPivot ?? null }
+          : {};
+      return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], ...restorePivot };
     },
 
     onKeyDown(event, context): CanvasToolTransition {
       if (event.key === 'Escape' && context.session) {
-        return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true };
+        const restorePivot =
+          context.session.kind === 'smart-handle' && context.session.handle.kind === 'pivot'
+            ? { customPivot: context.session.initialPivot ?? null }
+            : {};
+        return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], ...restorePivot, preventDefault: true };
       }
       // Direct Selection (A): Delete / Backspace deletes active anchor point cleanly!
       if (exactLayer && !context.session && (event.key === 'Backspace' || event.key === 'Delete') && context.activeAnchor) {
@@ -726,7 +793,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           return {
             kind: 'smart-hud',
             x: b.x + b.width / 2,
-            y: b.y + b.height + 18 / Math.max(0.35, context.zoom),
+            y: b.y + b.height + 18 * getCanvasUnitsPerPixel(context),
             text: session.hudLabel,
             variant: 'default',
           };

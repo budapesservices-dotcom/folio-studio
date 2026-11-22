@@ -190,7 +190,7 @@ function readCanvasViewState(key: string): CanvasViewState {
   try {
     const value = JSON.parse(window.localStorage.getItem(key) ?? 'null');
     return {
-      zoom: Number.isFinite(value?.zoom) ? Math.min(2, Math.max(0.35, value.zoom)) : 0.82,
+      zoom: Number.isFinite(value?.zoom) ? Math.min(8, Math.max(0.15, value.zoom)) : 0.82,
       pan: { x: Number.isFinite(value?.pan?.x) ? value.pan.x : 0, y: Number.isFinite(value?.pan?.y) ? value.pan.y : 0 },
     };
   } catch { return { zoom: 0.82, pan: { x: 0, y: 0 } }; }
@@ -3303,9 +3303,9 @@ export function App() {
               <button class="history-button" title="Undo" disabled={focusedEditor.state.past.length === 0} onClick={() => dispatchFocused({ type: 'undo' })}><Icon name="undo" /></button>
               <button class="history-button" title="Redo" disabled={focusedEditor.state.future.length === 0} onClick={() => dispatchFocused({ type: 'redo' })}><Icon name="redo" /></button>
               <span class="workspace-divider" />
-              <button class="zoom-button" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}><Icon name="minus" /></button>
+              <button class="zoom-button" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.15, Number((value / 1.2).toFixed(2))))}><Icon name="minus" /></button>
               <span class="zoom-value">{Math.round(zoom * 100)}%</span>
-              <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(2, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
+              <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(8, Number((value * 1.2).toFixed(2))))}><Icon name="plus" /></button>
             </div>
             <div class="workspace-window-controls" aria-label="Canvas window controls">
               <button type="button" class="window-control window-control-minimize" title="Minimize canvas" aria-label="Minimize canvas" onClick={() => setCanvasMinimized(true)}></button>
@@ -3440,9 +3440,9 @@ export function App() {
               <button class="history-button" title="Undo" disabled={componentState.past.length === 0} onClick={() => componentDispatch({ type: 'undo' })}><Icon name="undo" /></button>
               <button class="history-button" title="Redo" disabled={componentState.future.length === 0} onClick={() => componentDispatch({ type: 'redo' })}><Icon name="redo" /></button>
               <span class="workspace-divider" />
-              <button class="zoom-button" title="Zoom out" onClick={() => setComponentCanvasZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}><Icon name="minus" /></button>
+              <button class="zoom-button" title="Zoom out" onClick={() => setComponentCanvasZoom((value) => Math.max(0.15, Number((value / 1.2).toFixed(2))))}><Icon name="minus" /></button>
               <span class="zoom-value">{Math.round(componentCanvasZoom * 100)}%</span>
-              <button class="zoom-button" title="Zoom in" onClick={() => setComponentCanvasZoom((value) => Math.min(2, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
+              <button class="zoom-button" title="Zoom in" onClick={() => setComponentCanvasZoom((value) => Math.min(8, Number((value * 1.2).toFixed(2))))}><Icon name="plus" /></button>
             </div>
             <div class="workspace-window-controls" aria-label="Component Canvas window controls">
               <button type="button" class="window-control window-control-minimize" title="Minimize Component Canvas" aria-label="Minimize Component Canvas" disabled={Boolean(pendingComponentDeletion)} onClick={() => { setComponentCanvasMinimized(true); setActiveEditorId('main'); if (!canvasClosed && !canvasMinimized) focusWindow('main-canvas'); }}></button>

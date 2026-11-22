@@ -12,6 +12,8 @@ import {
   toggleAnchorPointType,
   worldPointToNodeLocal,
 } from '../../../core/document/vector';
+import { nodesGeometryChanged } from '../geometry';
+import { getCanvasUnitsPerPixel } from './geometry';
 import {
   DEFAULT_CANVAS_TOOL_OPTIONS,
   type CanvasToolContext,
@@ -116,8 +118,9 @@ export const penTool: CanvasToolHandler = {
     }
 
     // Close path if clicking near first anchor with >= 3 points
+    const unitsPerPx = getCanvasUnitsPerPixel(context);
     const first = current.points[0];
-    const closeThreshold = 12 / Math.max(0.35, context.zoom);
+    const closeThreshold = 12 * unitsPerPx;
     if (current.points.length >= 3 && Math.hypot(event.point.x - first.x, event.point.y - first.y) <= closeThreshold) {
       return finalizePenDraft(current, true, context);
     }
@@ -129,7 +132,7 @@ export const penTool: CanvasToolHandler = {
 
     const prev = current.points[current.points.length - 1];
     // Illustrator-style handle retraction: clicking directly on the last anchor retracts its outgoing curve handle
-    const retractThreshold = 10 / Math.max(0.35, context.zoom);
+    const retractThreshold = 10 * unitsPerPx;
     if (prev && prev.handleOut && Math.hypot(event.point.x - prev.x, event.point.y - prev.y) <= retractThreshold) {
       const retracted: VectorAnchorPoint = {
         ...prev,
@@ -173,13 +176,14 @@ export const penTool: CanvasToolHandler = {
     const session = context.session;
     if (!session || session.kind !== 'pen-draft' || session.mode !== 'pen') return {};
 
+    const unitsPerPx = getCanvasUnitsPerPixel(context);
     if (session.draggingHandle && session.pointerId === event.pointerId && session.points.length > 0) {
       const lastIndex = session.points.length - 1;
       const anchor = session.points[lastIndex];
       const handleTarget = event.shiftKey ? snapAngle45(anchor, event.point) : event.point;
       const dx = handleTarget.x - anchor.x;
       const dy = handleTarget.y - anchor.y;
-      if (Math.hypot(dx, dy) >= 3) {
+      if (Math.hypot(dx, dy) >= Math.max(0.5, 3 * unitsPerPx)) {
         const updated: VectorAnchorPoint = event.altKey
           ? {
               // Alt mid-drag breaks symmetry into independent cusp handle!
@@ -202,7 +206,7 @@ export const penTool: CanvasToolHandler = {
     const prev = session.points[session.points.length - 1];
     const cursor = event.shiftKey && prev ? snapAngle45(prev, event.point) : event.point;
     const first = session.points[0];
-    const closeThreshold = 12 / Math.max(0.35, context.zoom);
+    const closeThreshold = 12 * unitsPerPx;
     const hoverClose = session.points.length >= 3 && Math.hypot(cursor.x - first.x, cursor.y - first.y) <= closeThreshold;
     return { session: { ...session, cursor, hoverClose } };
   },
@@ -216,7 +220,7 @@ export const penTool: CanvasToolHandler = {
     };
   },
   onPointerCancel(_event, context) {
-    return context.session?.kind === 'pen-draft' ? { session: null } : {};
+    return context.session?.kind === 'pen-draft' ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [] } : {};
   },
   onKeyDown(event, context): CanvasToolTransition {
     const session = context.session;
@@ -225,7 +229,7 @@ export const penTool: CanvasToolHandler = {
       return finalizePenDraft(session, false, context);
     }
     if (event.key === 'Escape') {
-      return { session: null, notice: 'Discarded pen draft.', preventDefault: true };
+      return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], notice: 'Discarded pen draft.', preventDefault: true };
     }
     if (event.key === 'Backspace' || event.key === 'Delete') {
       if (session.points.length <= 1) return { session: null, preventDefault: true };
@@ -291,7 +295,7 @@ export const curvatureTool: CanvasToolHandler = {
     }
 
     const rawPoints = current.rawCurvaturePoints ?? [];
-    const closeThreshold = 12 / Math.max(0.35, context.zoom);
+    const closeThreshold = 12 * getCanvasUnitsPerPixel(context);
     if (rawPoints.length >= 3 && Math.hypot(event.point.x - rawPoints[0].x, event.point.y - rawPoints[0].y) <= closeThreshold) {
       return finalizePenDraft(current, true, context);
     }
@@ -323,7 +327,7 @@ export const curvatureTool: CanvasToolHandler = {
     const raw = session.rawCurvaturePoints ?? [];
     const prevRaw = raw[raw.length - 1];
     const cursor = event.shiftKey && prevRaw ? snapAngle45(prevRaw, event.point) : event.point;
-    const closeThreshold = 12 / Math.max(0.35, context.zoom);
+    const closeThreshold = 12 * getCanvasUnitsPerPixel(context);
     const hoverClose = raw.length >= 3 && Math.hypot(cursor.x - raw[0].x, cursor.y - raw[0].y) <= closeThreshold;
     return { session: { ...session, cursor, hoverClose } };
   },
@@ -331,7 +335,7 @@ export const curvatureTool: CanvasToolHandler = {
     return {};
   },
   onPointerCancel(_event, context) {
-    return context.session?.kind === 'pen-draft' ? { session: null } : {};
+    return context.session?.kind === 'pen-draft' ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [] } : {};
   },
   onKeyDown(event, context): CanvasToolTransition {
     const session = context.session;
@@ -340,7 +344,7 @@ export const curvatureTool: CanvasToolHandler = {
       return session.points.length >= 2 ? finalizePenDraft(session, false, context) : { session: null, preventDefault: true };
     }
     if (event.key === 'Escape') {
-      return { session: null, notice: 'Discarded curvature draft.', preventDefault: true };
+      return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], notice: 'Discarded curvature draft.', preventDefault: true };
     }
     if (event.key === 'Backspace' || event.key === 'Delete') {
       const raw = (session.rawCurvaturePoints ?? []).slice(0, -1);
@@ -444,7 +448,7 @@ export const anchorPointTool: CanvasToolHandler = {
       context.selectedNodes.find((n): n is PathNode => n.type === 'path');
     if (targetPath) {
       const localPoint = worldPointToNodeLocal(targetPath, event.point);
-      const hit = findNearestSegmentHit(targetPath, localPoint, 16 / Math.max(0.35, context.zoom));
+      const hit = findNearestSegmentHit(targetPath, localPoint, 16 * getCanvasUnitsPerPixel(context));
       if (hit) {
         const { node: subdivided } = insertAnchorOnPathSegment(targetPath, hit.segmentIndex, hit.t);
         return {
@@ -465,13 +469,14 @@ export const anchorPointTool: CanvasToolHandler = {
     const anchor = session.node.points[session.pointIndex];
     if (!anchor) return {};
 
+    const unitsPerPx = getCanvasUnitsPerPixel(context);
     const rawLocal = worldPointToNodeLocal(session.node, event.point);
     const localPointer = event.shiftKey ? snapAngle45(anchor, rawLocal) : rawLocal;
 
     if (session.symmetricConvert) {
       const dx = localPointer.x - anchor.x;
       const dy = localPointer.y - anchor.y;
-      if (Math.hypot(dx, dy) < 3) return {};
+      if (Math.hypot(dx, dy) < Math.max(0.5, 3 * unitsPerPx)) return {};
       const points = session.node.points.map((pt, idx) =>
         idx === session.pointIndex
           ? {
@@ -505,20 +510,27 @@ export const anchorPointTool: CanvasToolHandler = {
     const session = context.session;
     if (!session || session.kind !== 'anchor-edit' || session.pointerId !== event.pointerId) return {};
     if (session.previewNode) {
-      return { commitNodes: [session.previewNode], session: null, previewNodes: null, preventDefault: true };
+      const changed = nodesGeometryChanged([session.node], [session.previewNode]);
+      return {
+        ...(changed ? { commitNodes: [session.previewNode] } : {}),
+        session: null,
+        previewNodes: null,
+        guides: [],
+        preventDefault: true,
+      };
     }
     // Plain click without drag -> toggle corner <-> smooth
     if (session.symmetricConvert) {
       const toggled = toggleAnchorPointType(session.node, session.pointIndex);
-      return { commitNodes: [{ ...toggled, shapeMeta: undefined }], session: null, previewNodes: null, preventDefault: true };
+      return { commitNodes: [{ ...toggled, shapeMeta: undefined }], session: null, previewNodes: null, guides: [], preventDefault: true };
     }
-    return { session: null, previewNodes: null, preventDefault: true };
+    return { session: null, previewNodes: null, guides: [], preventDefault: true };
   },
   onPointerCancel(_event, context) {
-    return context.session?.kind === 'anchor-edit' ? { session: null, previewNodes: null } : {};
+    return context.session?.kind === 'anchor-edit' ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [] } : {};
   },
   onKeyDown(event, context) {
-    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null, preventDefault: true } : {};
+    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true } : {};
   },
   renderOverlay() {
     return null;
@@ -560,8 +572,9 @@ export const pencilTool: CanvasToolHandler = {
         preventDefault: true,
       };
     }
+    const unitsPerPx = getCanvasUnitsPerPixel(context);
     const last = session.points[session.points.length - 1];
-    const minSampleDist = Math.max(1.5, 3 / Math.max(0.35, context.zoom));
+    const minSampleDist = Math.max(0.5, 3 * unitsPerPx);
     if (Math.hypot(event.point.x - last.x, event.point.y - last.y) < minSampleDist) return {};
     return {
       session: { ...session, points: [...session.points, event.point] },
@@ -573,9 +586,17 @@ export const pencilTool: CanvasToolHandler = {
     if (!session || session.kind !== 'freehand' || session.mode !== 'pencil' || session.pointerId !== event.pointerId) {
       return {};
     }
+    const unitsPerPx = getCanvasUnitsPerPixel(context);
     const raw = event.shiftKey ? [session.points[0], event.point] : [...session.points, event.point];
     if (raw.length < 2) return { session: null, preventDefault: true };
-    const tolerance = Math.max(1.5, 3.5 / Math.max(0.5, context.zoom));
+    let totalLength = 0;
+    for (let i = 1; i < raw.length; i++) {
+      totalLength += Math.hypot(raw[i].x - raw[i - 1].x, raw[i].y - raw[i - 1].y);
+    }
+    if (totalLength < Math.max(0.75, 2 * unitsPerPx)) {
+      return { session: null, preventDefault: true };
+    }
+    const tolerance = Math.max(0.5, 3.5 * unitsPerPx);
     const simplified = simplifyFreehandToPathPoints(raw, tolerance);
     if (simplified.points.length < 2) return { session: null, preventDefault: true };
     const closed = simplified.closed || (event.altKey && simplified.points.length >= 3);
@@ -598,10 +619,12 @@ export const pencilTool: CanvasToolHandler = {
     };
   },
   onPointerCancel(_event, context) {
-    return context.session?.kind === 'freehand' ? { session: null } : {};
+    return context.session?.kind === 'freehand' ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [] } : {};
   },
   onKeyDown(event, context) {
-    return event.key === 'Escape' && context.session?.kind === 'freehand' ? { session: null, preventDefault: true } : {};
+    return event.key === 'Escape' && context.session?.kind === 'freehand'
+      ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true }
+      : {};
   },
   renderOverlay(context) {
     const session = context.session;
@@ -651,7 +674,7 @@ export const smoothTool: CanvasToolHandler = {
       return {};
     }
     const last = session.points[session.points.length - 1];
-    const minSampleDist = Math.max(2, 3 / Math.max(0.35, context.zoom));
+    const minSampleDist = Math.max(0.5, 3 * getCanvasUnitsPerPixel(context));
     if (last && Math.hypot(event.point.x - last.x, event.point.y - last.y) < minSampleDist) {
       return {};
     }
@@ -669,18 +692,22 @@ export const smoothTool: CanvasToolHandler = {
     if (!session || session.kind !== 'freehand' || session.mode !== 'smooth' || session.pointerId !== event.pointerId) {
       return {};
     }
+    const changed = session.targetNode && session.previewNode && nodesGeometryChanged([session.targetNode], [session.previewNode]);
     return {
-      ...(session.previewNode ? { commitNodes: [session.previewNode], notice: 'Smoothed vector path.' } : {}),
+      ...(changed && session.previewNode ? { commitNodes: [session.previewNode], notice: 'Smoothed vector path.' } : {}),
       session: null,
       previewNodes: null,
+      guides: [],
       preventDefault: true,
     };
   },
   onPointerCancel(_event, context) {
-    return context.session?.kind === 'freehand' ? { session: null, previewNodes: null } : {};
+    return context.session?.kind === 'freehand' ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [] } : {};
   },
   onKeyDown(event, context) {
-    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null, preventDefault: true } : {};
+    return event.key === 'Escape' && context.session
+      ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true }
+      : {};
   },
   renderOverlay(context) {
     const session = context.session;
@@ -717,7 +744,7 @@ export const scissorsTool: CanvasToolHandler = {
       return { notice: 'Click a vector path segment to cut or split it.', preventDefault: true };
     }
     const localPoint = worldPointToNodeLocal(target, event.point);
-    const split = splitPathAtLocalPoint(target, localPoint, () => createNodeId('node'));
+    const split = splitPathAtLocalPoint(target, localPoint, () => createNodeId('node'), 16 * getCanvasUnitsPerPixel(context));
     if (!split) {
       return { notice: 'Click directly on a vector path edge to cut.', preventDefault: true };
     }

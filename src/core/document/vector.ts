@@ -718,9 +718,10 @@ export function splitPathAtLocalPoint(
   node: PathNode,
   localPoint: Point2D,
   createNewId: () => string,
+  tolerance = 18,
 ): PathNode[] | null {
   if (node.points.length < 2) return null;
-  const hit = findNearestSegmentHit(node, localPoint, 18);
+  const hit = findNearestSegmentHit(node, localPoint, tolerance);
   if (!hit) return null;
 
   const { node: subdivided, insertedIndex } = insertAnchorOnPathSegment(node, hit.segmentIndex, hit.t);
