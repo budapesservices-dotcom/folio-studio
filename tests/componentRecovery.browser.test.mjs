@@ -500,14 +500,20 @@ async function readNativeDeletionProbe(browser) {
 }
 
 async function ensureComponentRackOpen(browser) {
-  const isOpen = await browser.evaluate(
-    'document.querySelector(".component-rack-panel")?.classList.contains("is-open")===true',
+  const isInteractive = await browser.evaluate(
+    '(() => {const panel=document.querySelector(".component-rack-panel");' +
+    'return Boolean(panel && panel.classList.contains("is-open") && !panel.inert && panel.getAttribute("aria-hidden")==="false");})()',
   );
-  if (!isOpen) await browser.click('button.component-rack-header-toggle');
+  if (!isInteractive) await browser.click('button.component-rack-header-toggle');
   await waitForApp(
     browser,
-    'document.querySelector(".component-rack-panel")?.classList.contains("is-open")===true',
-    'Component Rack opened',
+    '(() => {const panel=document.querySelector(".component-rack-panel");' +
+    'return Boolean(panel && panel.classList.contains("is-open") && !panel.inert && panel.getAttribute("aria-hidden")==="false");})()',
+    'Component Rack is open and interactive',
+  );
+  await browser.evaluate(
+    'Promise.all(Array.from(document.querySelector(".component-rack-panel").getAnimations())' +
+    '.map((animation)=>animation.finished.catch(()=>undefined)))',
   );
 }
 
@@ -578,12 +584,13 @@ async function createComponentMaster(browser) {
 async function createDirtyActiveMaster(browser) {
   const originalName = await createComponentMaster(browser);
   const renamedName = originalName + ' QA';
-  await browser.click('button[title=' + JSON.stringify('Rename ' + originalName) + ']');
+  await clickCardAction(browser, originalName, 'button[title=' + JSON.stringify('Rename ' + originalName) + ']');
   const inputSelector = 'input[aria-label=' + JSON.stringify('Rename ' + originalName) + ']';
   await waitForApp(
     browser,
     'document.querySelector(' + JSON.stringify(inputSelector) + ')!==null',
     'Component Rack rename form opens',
+    60000,
   );
   await browser.evaluate(
     '(() => {const input=document.querySelector(' + JSON.stringify(inputSelector) + ');' +
