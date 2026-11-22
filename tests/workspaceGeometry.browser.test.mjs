@@ -1035,7 +1035,6 @@ async function runAppAcceptance(browser) {
       afterDrag,
       beforeResize: resizeStart.before,
       afterResize,
-      beforeEastResize: eastResizeStart.before,
       afterEastResize,
       directionalResizeAcceptance,
       afterViewportResize,
