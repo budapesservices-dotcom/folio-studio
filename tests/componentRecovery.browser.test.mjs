@@ -214,15 +214,85 @@ async function launchChromiumAttempt(path, attemptNumber) {
     };
 
     const click = async (selector) => {
+      const waitForClickPoint = function waitForClickPoint(targetSelector) {
+        return new Promise((resolve, reject) => {
+          const element = document.querySelector(targetSelector);
+          if (!element) {
+            reject(new Error('Click target missing: ' + targetSelector));
+            return;
+          }
+
+          element.scrollIntoView({ block: 'center', inline: 'center' });
+          const deadline = performance.now() + 10000;
+          let previousRect = null;
+          let stableFrames = 0;
+
+          const readRect = () => {
+            const rect = element.getBoundingClientRect();
+            return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+          };
+          const sameRect = (first, second) => first &&
+            Math.abs(first.left - second.left) < 0.25 &&
+            Math.abs(first.right - second.right) < 0.25 &&
+            Math.abs(first.top - second.top) < 0.25 &&
+            Math.abs(first.bottom - second.bottom) < 0.25;
+
+          const check = () => {
+            if (performance.now() >= deadline) {
+              reject(new Error('Click target did not finish moving: ' + targetSelector));
+              return;
+            }
+            if (!element.isConnected) {
+              reject(new Error('Click target was unmounted before input: ' + targetSelector));
+              return;
+            }
+
+            const rect = readRect();
+            let hasRunningAnimation = false;
+            for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+              if (ancestor.getAnimations().some((animation) => animation.playState === 'running')) {
+                hasRunningAnimation = true;
+                break;
+              }
+            }
+
+            if (hasRunningAnimation) {
+              previousRect = rect;
+              stableFrames = 0;
+              requestAnimationFrame(check);
+              return;
+            }
+
+            stableFrames = sameRect(previousRect, rect) ? stableFrames + 1 : 0;
+            previousRect = rect;
+            if (stableFrames < 2) {
+              requestAnimationFrame(check);
+              return;
+            }
+
+            const left = Math.max(0, rect.left);
+            const right = Math.min(innerWidth, rect.right);
+            const top = Math.max(0, rect.top);
+            const bottom = Math.min(innerHeight, rect.bottom);
+            if (right <= left || bottom <= top) {
+              reject(new Error('Click target outside viewport: ' + targetSelector));
+              return;
+            }
+
+            const point = { x: left + (right - left) / 2, y: top + (bottom - top) / 2 };
+            const hit = document.elementFromPoint(point.x, point.y);
+            if (!hit || !(hit === element || element.contains(hit))) {
+              reject(new Error('Click target occluded: ' + targetSelector));
+              return;
+            }
+            resolve(point);
+          };
+
+          requestAnimationFrame(check);
+        });
+      };
       const point = await evaluate(
-        '(() => { const element=document.querySelector(' + JSON.stringify(selector) + '); ' +
-        'if(!element) throw new Error("Click target missing: " + ' + JSON.stringify(selector) + '); ' +
-        'element.scrollIntoView({block:"center",inline:"center"}); const rect=element.getBoundingClientRect(); ' +
-        'const left=Math.max(0,rect.left),right=Math.min(innerWidth,rect.right); ' +
-        'const top=Math.max(0,rect.top),bottom=Math.min(innerHeight,rect.bottom); ' +
-        'if(right<=left||bottom<=top) throw new Error("Click target outside viewport"); ' +
-        'const p={x:left+(right-left)/2,y:top+(bottom-top)/2}; const hit=document.elementFromPoint(p.x,p.y); ' +
-        'if(!hit||!(hit===element||element.contains(hit))) throw new Error("Click target occluded"); return p; })()',
+        '(' + waitForClickPoint.toString() + ')(' + JSON.stringify(selector) + ')',
       );
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
@@ -1005,23 +1075,23 @@ describe('Component Canvas deletion and recovery — actual App / Chromium / Ind
         expect(cleanMaster).toBeTruthy();
         expect(cleanMaster.nodeCount).toBe(0);
         await armNativeDeletionProbe(browser, cleanMaster.id, cleanName);
-        await clickDeleteMaster(browser, cleanName);
-        await waitForApp(
-          browser,
-          'document.querySelector(".component-deletion-dialog .component-deletion-progress")!==null',
-          'clean active master shows durable deletion progress dialog',
-        );
-        await waitForDialogClosed(browser);
-        const cleanProbe = await readNativeDeletionProbe(browser);
-        assertPhaseOrder(cleanProbe.events, ['plain-deletion', 'cleanup']);
+        await clickCardAction(browser, cleanName, 'button.component-rack-delete');
         const afterCleanDelete = await waitForNativeProjects(
           browser,
           (value) => !value.root.components.some((component) => component.id === cleanMaster.id) &&
             value.buffer?.nodeCount === 0,
           'clean master canonical deletion and reserved buffer cleanup are durable',
         );
+        const cleanProbe = await readNativeDeletionProbe(browser);
+        assertPhaseOrder(cleanProbe.events, ['plain-deletion', 'cleanup']);
         expect(afterCleanDelete.root.components.some((component) => component.id === cleanMaster.id)).toBe(false);
         expect(afterCleanDelete.buffer.nodeCount).toBe(0);
+        await waitForApp(
+          browser,
+          'document.querySelector(' + JSON.stringify('[data-window-id="component-canvas"]') + ')===null',
+          'clean Component Canvas closes after master deletion and buffer cleanup are durable',
+        );
+        expect(await browser.evaluate('document.querySelector(".component-deletion-dialog")===null')).toBe(true);
       } finally {
         await closeDisposableApp(context);
       }
