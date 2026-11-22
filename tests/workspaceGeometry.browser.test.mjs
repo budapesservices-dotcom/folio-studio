@@ -819,6 +819,126 @@ async function runAppAcceptance(browser) {
     expect(Number.isFinite(stackBefore.main)).toBe(true);
     expect(Number.isFinite(stackBefore.component)).toBe(true);
 
+    // Keyboard focus entering an actual child control must raise its owning window.
+    await browser.focus('[data-window-id="component-canvas"] .window-control-close');
+    const componentRaisedByKeyboard = await browser.evaluate(
+      '({main:Number(getComputedStyle(document.querySelector("[data-window-id=main-canvas]")).zIndex),' +
+      'component:Number(getComputedStyle(document.querySelector("[data-window-id=component-canvas]")).zIndex),' +
+      'focused:document.activeElement?.getAttribute("aria-label")})',
+    );
+    expect(componentRaisedByKeyboard.component).toBeGreaterThan(componentRaisedByKeyboard.main);
+    expect(componentRaisedByKeyboard.focused).toBe('Close Component Canvas window');
+
+    // Exercise the real App FloatingWindow pointer handlers, not a CSS fixture.
+    const floatingWindowReady = await browser.evaluate(
+      '(() => { const w=document.querySelector("[data-window-id=component-canvas]"); ' +
+      'return {floating:w?.getAttribute("data-window-floating"),' +
+      'handles:w?.querySelectorAll("[data-window-resize]").length ?? 0,' +
+      'shell:!!w?.closest(".app-shell")}; })()',
+    );
+    expect(floatingWindowReady).toEqual({ floating: 'true', handles: 8, shell: true });
+
+    const dragStart = await browser.evaluate(
+      '(() => { const w=document.querySelector("[data-window-id=component-canvas]"); ' +
+      'const toolbar=w?.querySelector(".workspace-toolbar-draggable"); ' +
+      'if(!w || !toolbar) throw new Error("Floating Component Canvas drag handle is missing"); ' +
+      'const r=w.getBoundingClientRect(), t=toolbar.getBoundingClientRect(); ' +
+      'const point={x:t.left+Math.min(90,t.width/3),y:t.top+t.height/2}; ' +
+      'const hit=document.elementFromPoint(point.x,point.y); ' +
+      'if(!hit || !toolbar.contains(hit) || hit.closest("button,a,input,select,textarea,[role=button],[contenteditable=true]")) ' +
+      'throw new Error("Chosen drag point is not a non-interactive titlebar target"); ' +
+      'return {before:{x:r.left,y:r.top,width:r.width,height:r.height},point}; })()',
+    );
+    const dispatchMouseDrag = async (point, dx, dy) => {
+      const target = { x: point.x + dx, y: point.y + dy };
+      await browser.send('Input.dispatchMouseEvent', { type:'mouseMoved', x:point.x, y:point.y });
+      await browser.send('Input.dispatchMouseEvent', {
+        type:'mousePressed', x:point.x, y:point.y, button:'left', buttons:1, clickCount:1,
+      });
+      await browser.send('Input.dispatchMouseEvent', {
+        type:'mouseMoved', x:target.x, y:target.y, button:'left', buttons:1,
+      });
+      await browser.send('Input.dispatchMouseEvent', {
+        type:'mouseReleased', x:target.x, y:target.y, button:'left', buttons:0, clickCount:1,
+      });
+      await browser.evaluate('new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    };
+    await dispatchMouseDrag(dragStart.point, -100, 60);
+    const afterDrag = await browser.evaluate(
+      '(() => { const r=document.querySelector("[data-window-id=component-canvas]").getBoundingClientRect(); ' +
+      'return {x:r.left,y:r.top,width:r.width,height:r.height}; })()',
+    );
+    expect(afterDrag.x).toBeCloseTo(dragStart.before.x - 100, 0);
+    expect(afterDrag.y).toBeCloseTo(dragStart.before.y + 60, 0);
+
+    const resizeStart = await browser.evaluate(
+      '(() => { const w=document.querySelector("[data-window-id=component-canvas]"); ' +
+      'const h=w?.querySelector("[data-window-resize=se]"); ' +
+      'if(!w || !h) throw new Error("South-east resize handle is missing"); ' +
+      'const r=w.getBoundingClientRect(), p=h.getBoundingClientRect(); ' +
+      'const point={x:p.left+p.width/2,y:p.top+p.height/2}; ' +
+      'const hit=document.elementFromPoint(point.x,point.y); ' +
+      'if(!hit || !(hit===h || h.contains(hit))) throw new Error("South-east resize handle is occluded"); ' +
+      'return {before:{x:r.left,y:r.top,width:r.width,height:r.height},point}; })()',
+    );
+    await dispatchMouseDrag(resizeStart.point, 45, 35);
+    const afterResize = await browser.evaluate(
+      '(() => { const w=document.querySelector("[data-window-id=component-canvas]"); ' +
+      'const r=w.getBoundingClientRect(), s=document.querySelector(".app-shell").getBoundingClientRect(); ' +
+      'return {x:r.left,y:r.top,width:r.width,height:r.height,right:r.right-s.left,bottom:r.bottom-s.top}; })()',
+    );
+    expect(afterResize.x).toBeCloseTo(resizeStart.before.x, 0);
+    expect(afterResize.y).toBeCloseTo(resizeStart.before.y, 0);
+    expect(afterResize.width).toBeCloseTo(resizeStart.before.width + 45, 0);
+    expect(afterResize.height).toBeCloseTo(resizeStart.before.height + 35, 0);
+    expect(afterResize.x).toBeGreaterThanOrEqual(0);
+    expect(afterResize.y).toBeGreaterThanOrEqual(56);
+    expect(afterResize.right).toBeLessThanOrEqual(1280);
+    expect(afterResize.bottom).toBeLessThanOrEqual(800 - 27);
+
+    // A browser blur during an active drag must end the pointer session; later
+    // mouse movement must not continue moving the window.
+    const blurDragStart = await browser.evaluate(
+      '(() => { const w=document.querySelector("[data-window-id=component-canvas]"); ' +
+      'const t=w.querySelector(".workspace-toolbar-draggable"), r=t.getBoundingClientRect(); ' +
+      'return {x:r.left+Math.min(90,r.width/3),y:r.top+r.height/2}; })()',
+    );
+    await browser.send('Input.dispatchMouseEvent', {
+      type:'mouseMoved', x:blurDragStart.x, y:blurDragStart.y,
+    });
+    await browser.send('Input.dispatchMouseEvent', {
+      type:'mousePressed', x:blurDragStart.x, y:blurDragStart.y, button:'left', buttons:1, clickCount:1,
+    });
+    await browser.send('Input.dispatchMouseEvent', {
+      type:'mouseMoved', x:blurDragStart.x+20, y:blurDragStart.y+15, button:'left', buttons:1,
+    });
+    await browser.evaluate('window.dispatchEvent(new Event("blur"))');
+    const afterBlurCleanup = await browser.evaluate(
+      '(() => { const r=document.querySelector("[data-window-id=component-canvas]").getBoundingClientRect(); ' +
+      'return {x:r.left,y:r.top}; })()',
+    );
+    await browser.send('Input.dispatchMouseEvent', {
+      type:'mouseMoved', x:blurDragStart.x+80, y:blurDragStart.y+60, button:'left', buttons:1,
+    });
+    await browser.send('Input.dispatchMouseEvent', {
+      type:'mouseReleased', x:blurDragStart.x+80, y:blurDragStart.y+60, button:'left', buttons:0, clickCount:1,
+    });
+    const afterPostBlurMove = await browser.evaluate(
+      '(() => { const r=document.querySelector("[data-window-id=component-canvas]").getBoundingClientRect(); ' +
+      'return {x:r.left,y:r.top}; })()',
+    );
+    expect(afterPostBlurMove).toEqual(afterBlurCleanup);
+
+    const floatingWindowAcceptance = {
+      componentRaisedByKeyboard,
+      beforeDrag: dragStart.before,
+      afterDrag,
+      beforeResize: resizeStart.before,
+      afterResize,
+      afterBlurCleanup,
+      afterPostBlurMove,
+    };
+
     // Open each Rack through the real App toolbar toggle at desktop width,
     // then retain that live panel while measuring it at every required viewport.
     // This avoids clicking a compact toolbar toggle whose horizontal overflow is
