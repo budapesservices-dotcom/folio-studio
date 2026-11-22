@@ -54,6 +54,7 @@ import { activateModalDialog, trapModalDialogKeydown } from './modalFocus';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
 import { loadWorkspacePreferences, saveWorkspacePreferences, type WorkspaceKind, type WorkspaceLayoutV1, type WorkspacePreferencesLoadResult } from './workspacePreferences';
+import { createToolbarHintStore, DEFAULT_TOOLBAR_HINT, ToolbarHintBar } from './ToolbarHintBar';
 
 function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
@@ -109,18 +110,6 @@ function LayerIcon({ type }: { type: DesignNode['type'] }) {
 }
 
 type ToolRackGroupId = CanvasToolGroupId | 'create';
-
-type ToolbarHint = {
-  panel: string;
-  description: string;
-  shortcuts: string[];
-};
-
-const DEFAULT_TOOLBAR_HINT: ToolbarHint = {
-  panel: 'WORKSPACE',
-  description: 'Click a parent to select its full hierarchy; click a nested layer to select only that object.',
-  shortcuts: ['SHIFT + CLICK: EXACT LAYER', 'CTRL/CMD + CLICK: GROUP TOGGLE'],
-};
 
 function parseNumericInput(value: string): number | null {
   const normalized = value.trim();
@@ -201,14 +190,17 @@ export function App() {
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const canonicalStore = useMemo(() => createCanonicalEditorStore(initialEditorState), []);
   const [state, setState] = useState(() => canonicalStore.getSnapshot().editorState);
+  const syncStateFromStore = useCallback(() => {
+    const next = canonicalStore.getSnapshot().editorState;
+    setState((current) => (current === next ? current : next));
+  }, [canonicalStore]);
   const dispatch = useCallback((action: EditorAction) => {
     const transition = canonicalStore.dispatchLegacyAction(action);
-    setState(transition.snapshot.editorState);
+    const next = transition.snapshot.editorState;
+    setState((current) => (current === next ? current : next));
     return transition;
   }, [canonicalStore]);
-  useEffect(() => canonicalStore.subscribe(() => {
-    setState(canonicalStore.getSnapshot().editorState);
-  }), [canonicalStore]);
+  useEffect(() => canonicalStore.subscribe(syncStateFromStore), [canonicalStore, syncStateFromStore]);
   const componentInitialState = useMemo(() => {
     const project = createInitialProject('Component Canvas');
     project.metadata.id = 'folio-component-canvas';
@@ -260,7 +252,7 @@ export function App() {
   const setComponentCanvasZoom = (next: number | ((current: number) => number)) => setComponentView((view) => ({ ...view, zoom: typeof next === 'function' ? next(view.zoom) : next }));
   const setMainPan = (pan: { x: number; y: number }) => setMainView((view) => ({ ...view, pan }));
   const setComponentCanvasPan = (pan: { x: number; y: number }) => setComponentView((view) => ({ ...view, pan }));
-  const [toolbarHint, setToolbarHint] = useState<ToolbarHint>(DEFAULT_TOOLBAR_HINT);
+  const toolbarHintStore = useMemo(() => createToolbarHintStore(), []);
   const [activeCanvasToolId, setActiveCanvasToolId] = useState<CanvasToolId>('select');
   const [toolRackOpen, setToolRackOpen] = useState<ToolRackGroupId | null>(null);
   const [projectNameEditing, setProjectNameEditing] = useState(false);
@@ -337,16 +329,13 @@ export function App() {
     };
 
     updatePalettePosition();
-    document.addEventListener('pointerdown', handleOutsidePointerDown, true);
-    document.addEventListener('keydown', handlePaletteKeyDown, true);
-    window.addEventListener('resize', updatePalettePosition);
-    window.addEventListener('scroll', updatePalettePosition, true);
-    return () => {
-      document.removeEventListener('pointerdown', handleOutsidePointerDown, true);
-      document.removeEventListener('keydown', handlePaletteKeyDown, true);
-      window.removeEventListener('resize', updatePalettePosition);
-      window.removeEventListener('scroll', updatePalettePosition, true);
-    };
+    const controller = new AbortController();
+    const { signal } = controller;
+    document.addEventListener('pointerdown', handleOutsidePointerDown, { capture: true, signal });
+    document.addEventListener('keydown', handlePaletteKeyDown, { capture: true, signal });
+    window.addEventListener('resize', updatePalettePosition, { signal });
+    window.addEventListener('scroll', updatePalettePosition, { capture: true, signal });
+    return () => controller.abort();
   }, [layerColorPickerKey]);
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
   const [windowOrder, setWindowOrder] = useState<WindowId[]>(() => [
@@ -481,12 +470,10 @@ export function App() {
         closeMenus();
       }
     };
-    document.addEventListener('pointerdown', handlePointerDown, true);
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown, true);
-      window.removeEventListener('keydown', handleKeyDown, true);
-    };
+    const controller = new AbortController();
+    document.addEventListener('pointerdown', handlePointerDown, { capture: true, signal: controller.signal });
+    window.addEventListener('keydown', handleKeyDown, { capture: true, signal: controller.signal });
+    return () => controller.abort();
   }, [fileMenuOpen, viewMenuOpen]);
 
   useLayoutEffect(() => {
@@ -501,23 +488,51 @@ export function App() {
         setToolRackOpen(null);
       }
     };
-    document.addEventListener('pointerdown', handlePointerDown, true);
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown, true);
-      window.removeEventListener('keydown', handleKeyDown, true);
-    };
+    const controller = new AbortController();
+    document.addEventListener('pointerdown', handlePointerDown, { capture: true, signal: controller.signal });
+    window.addEventListener('keydown', handleKeyDown, { capture: true, signal: controller.signal });
+    return () => controller.abort();
   }, [toolRackOpen]);
 
-  useEffect(() => {
-    try { window.localStorage.setItem('folio.main-canvas-view', JSON.stringify(mainView)); }
+  const latestMainViewRef = useRef(mainView);
+  latestMainViewRef.current = mainView;
+  const mainViewDirtyRef = useRef(false);
+  const mainViewTimerRef = useRef<number | null>(null);
+  const flushMainView = useCallback(() => {
+    if (mainViewTimerRef.current !== null) {
+      window.clearTimeout(mainViewTimerRef.current);
+      mainViewTimerRef.current = null;
+    }
+    if (!mainViewDirtyRef.current) return;
+    mainViewDirtyRef.current = false;
+    try { window.localStorage.setItem('folio.main-canvas-view', JSON.stringify(latestMainViewRef.current)); }
     catch (error) { console.warn('Folio could not persist Main Canvas view:', error); }
-  }, [mainView]);
-
+  }, []);
   useEffect(() => {
-    try { window.localStorage.setItem('folio.component-canvas-view', JSON.stringify(componentView)); }
+    mainViewDirtyRef.current = true;
+    if (mainViewTimerRef.current !== null) window.clearTimeout(mainViewTimerRef.current);
+    mainViewTimerRef.current = window.setTimeout(flushMainView, 160);
+  }, [mainView, flushMainView]);
+
+  const latestComponentViewRef = useRef(componentView);
+  latestComponentViewRef.current = componentView;
+  const componentViewDirtyRef = useRef(false);
+  const componentViewTimerRef = useRef<number | null>(null);
+  const flushComponentView = useCallback(() => {
+    if (componentViewTimerRef.current !== null) {
+      window.clearTimeout(componentViewTimerRef.current);
+      componentViewTimerRef.current = null;
+    }
+    if (!componentViewDirtyRef.current) return;
+    componentViewDirtyRef.current = false;
+    try { window.localStorage.setItem('folio.component-canvas-view', JSON.stringify(latestComponentViewRef.current)); }
     catch (error) { console.warn('Folio could not persist Component Canvas view:', error); }
-  }, [componentView]);
+  }, []);
+  useEffect(() => {
+    componentViewDirtyRef.current = true;
+    if (componentViewTimerRef.current !== null) window.clearTimeout(componentViewTimerRef.current);
+    componentViewTimerRef.current = window.setTimeout(flushComponentView, 160);
+  }, [componentView, flushComponentView]);
 
   const workspacePreferencesSnapshot = useMemo<WorkspaceLayoutV1>(() => {
     const currentWindows: WorkspaceLayoutV1['windows'] = [
@@ -623,9 +638,31 @@ export function App() {
     layersVisible,
   ]);
 
-  useEffect(() => {
-    if (!workspacePreferencesPersistenceEnabled) return;
-    const saved = saveWorkspacePreferences(workspacePreferencesSnapshot, {
+  const workspacePreferencesPersistedOnceRef = useRef(false);
+  const workspacePreferencesEnabledRef = useRef(workspacePreferencesPersistenceEnabled);
+  workspacePreferencesEnabledRef.current = workspacePreferencesPersistenceEnabled;
+  const latestWorkspaceSnapshotRef = useRef(workspacePreferencesSnapshot);
+  latestWorkspaceSnapshotRef.current = workspacePreferencesSnapshot;
+  const workspacePreferencesDirtyRef = useRef(false);
+  const workspacePreferencesTimerRef = useRef<number | null>(null);
+
+  const flushWorkspacePreferences = useCallback((fromPageHide = false) => {
+    if (workspacePreferencesTimerRef.current !== null) {
+      window.clearTimeout(workspacePreferencesTimerRef.current);
+      workspacePreferencesTimerRef.current = null;
+    }
+    if (!workspacePreferencesDirtyRef.current || !workspacePreferencesEnabledRef.current) return;
+    workspacePreferencesDirtyRef.current = false;
+    if (fromPageHide && workspacePreferencesPersistedOnceRef.current) {
+      try {
+        if (window.localStorage.getItem('folio.workspace-layout.v1') === null) {
+          return;
+        }
+      } catch {
+        // Proceed to normal persistence error handling if storage access fails.
+      }
+    }
+    const saved = saveWorkspacePreferences(latestWorkspaceSnapshotRef.current, {
       reconciliationComplete: true,
       replaceUnsupportedVersion: workspacePreferencesReplaceMalformedRef.current,
       viewport: {
@@ -639,7 +676,38 @@ export function App() {
       return;
     }
     workspacePreferencesReplaceMalformedRef.current = false;
-  }, [workspacePreferencesSnapshot, workspacePreferencesPersistenceEnabled]);
+    workspacePreferencesPersistedOnceRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!workspacePreferencesPersistenceEnabled) return;
+    workspacePreferencesDirtyRef.current = true;
+    // Persist immediately on first reconciliation/migration approval; debounce subsequent
+    // high-frequency window drags/resizes to avoid synchronous localStorage jank.
+    if (!workspacePreferencesPersistedOnceRef.current || workspacePreferencesReplaceMalformedRef.current) {
+      flushWorkspacePreferences(false);
+      return;
+    }
+    if (workspacePreferencesTimerRef.current !== null) {
+      window.clearTimeout(workspacePreferencesTimerRef.current);
+    }
+    workspacePreferencesTimerRef.current = window.setTimeout(() => flushWorkspacePreferences(false), 120);
+  }, [workspacePreferencesSnapshot, workspacePreferencesPersistenceEnabled, flushWorkspacePreferences]);
+
+  useEffect(() => {
+    const flushAllPendingStorage = (fromPageHide: boolean) => {
+      flushMainView();
+      flushComponentView();
+      flushWorkspacePreferences(fromPageHide);
+    };
+    const onPageHide = () => flushAllPendingStorage(true);
+    const controller = new AbortController();
+    window.addEventListener('pagehide', onPageHide, { signal: controller.signal });
+    return () => {
+      controller.abort();
+      flushAllPendingStorage(false);
+    };
+  }, [flushMainView, flushComponentView, flushWorkspacePreferences]);
 
   useEffect(() => {
     let active = true;
@@ -747,9 +815,19 @@ export function App() {
   const instanceOverrideTargets = selectedInstanceComponent ? getComponentOverrideTargets(selectedInstanceComponent) : null;
   const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
   const layerSourceNodes = focusedDocument.nodes;
-  const layerSourceIds = new Set(layerSourceNodes.map((node) => node.id));
-  const layerRows = getLayerPanelRows(layerSourceNodes, collapsedLayers[activeEditorId]);
-  const layerEffectiveStates = getEffectiveLayerStates(layerSourceNodes);
+  const activeCollapsedLayers = collapsedLayers[activeEditorId];
+  const layerSourceIds = useMemo(
+    () => new Set(layerSourceNodes.map((node) => node.id)),
+    [layerSourceNodes],
+  );
+  const layerRows = useMemo(
+    () => getLayerPanelRows(layerSourceNodes, activeCollapsedLayers),
+    [layerSourceNodes, activeCollapsedLayers],
+  );
+  const layerEffectiveStates = useMemo(
+    () => getEffectiveLayerStates(layerSourceNodes),
+    [layerSourceNodes],
+  );
   const contextMenuEditor = layerContextMenu
     ? getActiveEditorContext(layerContextMenu.editorId, state, componentState)
     : null;
@@ -843,16 +921,13 @@ export function App() {
         dismiss();
       }
     };
-    document.addEventListener('pointerdown', handlePointerDown, true);
-    document.addEventListener('keydown', handleKeyDown, true);
-    window.addEventListener('resize', dismiss);
-    window.addEventListener('scroll', dismiss, true);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown, true);
-      document.removeEventListener('keydown', handleKeyDown, true);
-      window.removeEventListener('resize', dismiss);
-      window.removeEventListener('scroll', dismiss, true);
-    };
+    const controller = new AbortController();
+    const { signal } = controller;
+    document.addEventListener('pointerdown', handlePointerDown, { capture: true, signal });
+    document.addEventListener('keydown', handleKeyDown, { capture: true, signal });
+    window.addEventListener('resize', dismiss, { signal });
+    window.addEventListener('scroll', dismiss, { capture: true, signal });
+    return () => controller.abort();
   }, [layerContextMenu]);
 
   useEffect(() => {
@@ -878,8 +953,9 @@ export function App() {
       finishLayerRename(true);
     };
 
-    document.addEventListener('pointerdown', handleOutsidePointerDown, true);
-    return () => document.removeEventListener('pointerdown', handleOutsidePointerDown, true);
+    const controller = new AbortController();
+    document.addEventListener('pointerdown', handleOutsidePointerDown, { capture: true, signal: controller.signal });
+    return () => controller.abort();
   }, [layerRename?.anchorId]);
 
   const setLayerColorFromRow = (nodeId: string, color: string) => {
@@ -1792,10 +1868,10 @@ export function App() {
     else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
   };
 
-  const updateToolbarHint = (panel: string, description: string, shortcuts: string[] = []) => {
+  const updateToolbarHint = useCallback((panel: string, description: string, shortcuts: string[] = []) => {
     if (resizingPanelRef.current !== null) return;
-    setToolbarHint({ panel, description, shortcuts });
-  };
+    toolbarHintStore.setHint({ panel, description, shortcuts });
+  }, [toolbarHintStore]);
 
   const chooseCanvasTool = (toolId: CanvasToolId) => {
     const tool = getCanvasTool(toolId);
@@ -2204,7 +2280,7 @@ export function App() {
       data-active-window={activeWindowId}
       aria-busy={isHydrating}
       onMouseLeave={() => {
-        if (resizingPanelRef.current === null) setToolbarHint(DEFAULT_TOOLBAR_HINT);
+        if (resizingPanelRef.current === null) toolbarHintStore.setHint(DEFAULT_TOOLBAR_HINT);
       }}
       onKeyDown={(event) => {
         if (isHydrating) {
@@ -2337,16 +2413,7 @@ export function App() {
             <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
           </div>
         </nav>
-        <div class="global-hint-bar" role="status" aria-live="polite">
-          <span class="hint-panel-label">{toolbarHint.panel}</span>
-          <span class="hint-panel-description">{toolbarHint.description}</span>
-          <span class="hint-shortcut-divider" aria-hidden="true">·</span>
-          <div class="hint-shortcut-list">
-            {toolbarHint.shortcuts.length > 0
-              ? toolbarHint.shortcuts.map((shortcut) => <span class="hint-shortcut" key={shortcut}>{shortcut}</span>)
-              : <span class="hint-no-shortcuts">SHORTCUTS NOT ASSIGNED</span>}
-          </div>
-        </div>
+        <ToolbarHintBar store={toolbarHintStore} />
       </header>
       {(workspacePreferencesReviewRequired ||
         initialWorkspacePreferences.status === 'unsupported-newer-schema' ||

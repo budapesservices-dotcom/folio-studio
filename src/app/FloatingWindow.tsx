@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { ComponentChildren, JSX } from 'preact';
+import { createThrottledMouseMove, DEFAULT_RESIZE_THROTTLE_MS } from './panelResize';
 import {
   clampWindowPosition,
   resizeWindowFromPointer,
@@ -24,6 +25,7 @@ interface FloatingWindowProps {
   onFocus?: () => void;
   onPositionChange: (position: WindowPosition) => void;
   onSizeChange: (size: WindowSize) => void;
+  onGeometryChange?: (next: { position: WindowPosition; size: WindowSize }) => void;
   onMouseEnter?: () => void;
   minWidth?: number;
   minHeight?: number;
@@ -38,6 +40,7 @@ interface PointerSession {
   position: WindowPosition;
   size: WindowSize;
   shell: HTMLElement | null;
+  viewport: WindowViewport;
 }
 
 const RESIZE_DIRECTIONS = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
@@ -64,6 +67,7 @@ export function FloatingWindow({
   onFocus,
   onPositionChange,
   onSizeChange,
+  onGeometryChange,
   onMouseEnter,
   minWidth = 280,
   minHeight = 220,
@@ -111,25 +115,23 @@ export function FloatingWindow({
       position: { ...position },
       size: minimized ? { width: 238, height: 34 } : { ...size },
       shell,
+      viewport: readViewport(shell),
     };
     sessionRef.current = session;
 
-    let cleanup = () => {};
-    const handleMove = (moveEvent: PointerEvent) => {
-      if (sessionRef.current !== session || moveEvent.pointerId !== session.pointerId) return;
-      moveEvent.preventDefault();
+    const controller = new AbortController();
+    const { signal } = controller;
 
-      // Read current bounds on every move so a viewport resize during a drag
-      // cannot leave the active window outside the newly available workspace.
-      const viewport = readViewport(session.shell);
-      const dx = moveEvent.clientX - session.startX;
-      const dy = moveEvent.clientY - session.startY;
+    const applyMove = ({ clientX, clientY }: { clientX: number; clientY: number }) => {
+      if (sessionRef.current !== session || signal.aborted) return;
+      const dx = clientX - session.startX;
+      const dy = clientY - session.startY;
 
       if (session.mode === 'drag') {
         onPositionChange(clampWindowPosition(
           { x: session.position.x + dx, y: session.position.y + dy },
           session.size,
-          viewport,
+          session.viewport,
         ));
       } else {
         const next = resizeWindowFromPointer(
@@ -138,39 +140,78 @@ export function FloatingWindow({
           session.direction,
           dx,
           dy,
-          viewport,
+          session.viewport,
           minWidth,
           minHeight,
         );
-        onPositionChange(next.position);
-        onSizeChange(next.size);
+        if (onGeometryChange) {
+          onGeometryChange(next);
+        } else {
+          onPositionChange(next.position);
+          onSizeChange(next.size);
+        }
       }
     };
-    const handleBlur = () => cleanup();
+
+    const throttledMove = createThrottledMouseMove<{ clientX: number; clientY: number }>(
+      applyMove,
+      { intervalMs: DEFAULT_RESIZE_THROTTLE_MS },
+    );
+
+    const handleViewportResize = () => {
+      if (sessionRef.current !== session) return;
+      session.viewport = readViewport(session.shell);
+    };
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      if (sessionRef.current !== session || moveEvent.pointerId !== session.pointerId) return;
+      moveEvent.preventDefault();
+      throttledMove({ clientX: moveEvent.clientX, clientY: moveEvent.clientY });
+    };
+
+    let cleanup = (_flushPending?: boolean) => {};
+
+    const handleBlur = () => cleanup(false);
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') cleanup();
+      if (document.visibilityState === 'hidden') cleanup(false);
     };
-    const finish = (endEvent?: PointerEvent) => {
-      if (endEvent && endEvent.pointerId !== session.pointerId) return;
-      cleanup();
+    const handlePointerUp = (endEvent: PointerEvent) => {
+      if (endEvent.pointerId !== session.pointerId) return;
+      cleanup(true);
     };
-
-    cleanup = () => {
-      window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', finish);
-      window.removeEventListener('pointercancel', finish);
-      window.removeEventListener('blur', handleBlur);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      if (sessionRef.current === session) sessionRef.current = null;
-      if (cleanupRef.current === cleanup) cleanupRef.current = null;
+    const handlePointerCancel = (endEvent: PointerEvent) => {
+      if (endEvent.pointerId !== session.pointerId) return;
+      cleanup(false);
     };
 
-    window.addEventListener('pointermove', handleMove, { passive: false });
-    window.addEventListener('pointerup', finish);
-    window.addEventListener('pointercancel', finish);
-    window.addEventListener('blur', handleBlur);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    cleanupRef.current = cleanup;
+    cleanup = (flushPending = false) => {
+      try {
+        if (flushPending) {
+          throttledMove.flush();
+        }
+        throttledMove.cancel();
+      } finally {
+        controller.abort();
+        window.removeEventListener('pointermove', handleMove);
+        window.removeEventListener('pointerup', handlePointerUp);
+        window.removeEventListener('pointercancel', handlePointerCancel);
+        window.removeEventListener('resize', handleViewportResize);
+        window.removeEventListener('blur', handleBlur);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        if (sessionRef.current === session) sessionRef.current = null;
+        if (cleanupRef.current === abortCleanup) cleanupRef.current = null;
+      }
+    };
+
+    const abortCleanup = () => cleanup(false);
+
+    window.addEventListener('pointermove', handleMove, { passive: false, signal });
+    window.addEventListener('pointerup', handlePointerUp, { signal });
+    window.addEventListener('pointercancel', handlePointerCancel, { signal });
+    window.addEventListener('resize', handleViewportResize, { signal });
+    window.addEventListener('blur', handleBlur, { signal });
+    document.addEventListener('visibilitychange', handleVisibilityChange, { signal });
+    cleanupRef.current = abortCleanup;
   };
 
   const Root = as === 'main' ? 'main' : 'div';

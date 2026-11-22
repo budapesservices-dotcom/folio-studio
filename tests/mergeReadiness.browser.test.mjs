@@ -818,6 +818,48 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(resizeCheck.resetInspectorAria).toBe('292');
         expect(resizeCheck.persistedWidthsAfterReset).toEqual({ layers: 240, inspector: 292 });
 
+        // 8. Isolated ToolbarHintBar hover updates accurately on pointer enter/leave
+        const hintCheck = await browser.evalJs(`
+          const hintPanelEl = () => document.querySelector('.hint-panel-label')?.textContent?.trim() || '';
+          const hintDescEl = () => document.querySelector('.hint-panel-description')?.textContent?.trim() || '';
+          const appShell = document.querySelector('.app-shell');
+          const menuTriggers = [...document.querySelectorAll('.global-menu-item.menu-trigger')];
+          const fileBtn = menuTriggers.find((el) => el.textContent?.trim() === 'File');
+          const viewBtn = menuTriggers.find((el) => el.textContent?.trim() === 'View');
+          if (!appShell || !fileBtn || !viewBtn) {
+            return { found: false };
+          }
+          fileBtn.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+          await new Promise((r) => setTimeout(r, 25));
+          const filePanel = hintPanelEl();
+          const fileDesc = hintDescEl();
+
+          viewBtn.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+          await new Promise((r) => setTimeout(r, 25));
+          const viewPanel = hintPanelEl();
+          const viewDesc = hintDescEl();
+
+          appShell.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+          await new Promise((r) => setTimeout(r, 25));
+          const afterLeavePanel = hintPanelEl();
+
+          return {
+            found: true,
+            filePanel,
+            fileDesc,
+            viewPanel,
+            viewDesc,
+            afterLeavePanel,
+          };
+        `);
+
+        expect(hintCheck.found).toBe(true);
+        expect(hintCheck.filePanel).toBe('FILE');
+        expect(hintCheck.fileDesc).toContain('.flop');
+        expect(hintCheck.viewPanel).toBe('VIEW');
+        expect(hintCheck.viewDesc.length).toBeGreaterThan(10);
+        expect(hintCheck.afterLeavePanel).toBe('WORKSPACE');
+
         expect(browser.consoleErrors).toEqual([]);
         expect(browser.pageErrors).toEqual([]);
       } finally {

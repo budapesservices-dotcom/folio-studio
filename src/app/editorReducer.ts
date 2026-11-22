@@ -251,7 +251,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const group = nodes.find((node) => node.type === 'group' && !document.nodes.some((old) => old.id === node.id));
       const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       const selectedIds = group ? expandSelectedLayerIds(nodes, [group.id]) : [];
-      return withSnapshot(state, next, group?.id ?? null, selectedIds);
+      return withSnapshot(state, next, selectedIds.length === 1 ? selectedIds[0] : null, selectedIds);
     }
 
     case 'ungroup-layers': {

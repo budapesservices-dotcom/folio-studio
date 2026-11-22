@@ -872,7 +872,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .workspace-resize-handle.resize-se { right: 0; bottom: 0; cursor: nwse-resize; }
 .workspace-resize-handle.resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 .canvas-scroll-area { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; overflow: hidden; padding: 45px 35px 52px; touch-action: none; }
-.canvas-stage { flex: 0 0 auto; max-width: none; filter: drop-shadow(0 18px 34px rgba(0, 0, 0, 0.52)); }
+.canvas-stage { flex: 0 0 auto; max-width: none; }
 .artboard-label { display: flex; justify-content: space-between; margin: 0 0 9px; color: #8c96a8; font-size: 9px; font-weight: 600; letter-spacing: .3px; }
 .artboard {
   display: block;
@@ -887,7 +887,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
     linear-gradient(-45deg, transparent 75%, #212836 75%);
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 .inspector-panel { grid-area: inspector; display: flex; flex-direction: column; border-left: 1px solid var(--line); }

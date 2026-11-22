@@ -1,6 +1,12 @@
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from '../../core/document/types';
 import { resolveComponentInstanceNodes } from '../../core/document/components';
-import { getEffectiveLayerStates, getLayerClipMaskBaseIds, getLayerDescendantIds, getLayerRenderOrder } from '../../core/document/layers';
+import {
+  buildLayerClipMaskMap,
+  getEffectiveLayerStates,
+  getLayerClipMaskBaseIds,
+  getLayerDescendantIds,
+  getLayerRenderOrder,
+} from '../../core/document/layers';
 
 export type PrimitiveNode = Exclude<DesignNode, ComponentInstanceNode>;
 
@@ -10,6 +16,14 @@ export function sanitizeMaskIdSegment(raw: string): string {
 
 export function buildMaskElementId(scopePrefix: string, baseId: string): string {
   return `${scopePrefix}--${sanitizeMaskIdSegment(baseId)}`;
+}
+
+function getComponentById(
+  components: readonly ComponentDefinition[],
+  componentById?: ReadonlyMap<string, ComponentDefinition>,
+): ReadonlyMap<string, ComponentDefinition> {
+  if (componentById) return componentById;
+  return new Map(components.map((component) => [component.id, component]));
 }
 
 export function NodeShape({ node, mask = false }: { node: PrimitiveNode; mask?: boolean }) {
@@ -84,16 +98,21 @@ export function ClipMaskArtwork({
   nodes,
   components,
   maskPrefix,
+  nodeById,
+  componentById,
 }: {
   node: DesignNode;
   nodes: DesignNode[];
   components: ComponentDefinition[];
   maskPrefix: string;
+  nodeById?: ReadonlyMap<string, DesignNode>;
+  componentById?: ReadonlyMap<string, ComponentDefinition>;
 }) {
   if (node.type === 'group') {
+    const resolvedNodeById = nodeById ?? new Map(nodes.map((item) => [item.id, item]));
     const states = getEffectiveLayerStates(nodes);
     const descendants = [...getLayerDescendantIds(nodes, node.id)]
-      .map((id) => nodes.find((item) => item.id === id))
+      .map((id) => resolvedNodeById.get(id))
       .filter((item): item is DesignNode => item !== undefined && item.type !== 'group' && Boolean(states.get(item.id)?.visible));
     if (descendants.length === 0) {
       return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#fff" opacity={node.opacity} />;
@@ -101,14 +120,23 @@ export function ClipMaskArtwork({
     return (
       <g>
         {descendants.map((child) => (
-          <ClipMaskArtwork key={child.id} node={child} nodes={nodes} components={components} maskPrefix={maskPrefix} />
+          <ClipMaskArtwork
+            key={child.id}
+            node={child}
+            nodes={nodes}
+            components={components}
+            maskPrefix={maskPrefix}
+            nodeById={resolvedNodeById}
+            componentById={componentById}
+          />
         ))}
       </g>
     );
   }
 
   if (node.type === 'component-instance') {
-    const component = components.find((item) => item.id === node.componentId);
+    const resolvedComponents = getComponentById(components, componentById);
+    const component = resolvedComponents.get(node.componentId);
     if (!component) {
       const transform = node.rotation
         ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
@@ -122,6 +150,8 @@ export function ClipMaskArtwork({
       : undefined;
     const resolved = resolveComponentInstanceNodes(node, component);
     const visibleChildren = resolved.filter((child) => child.onCanvas !== false);
+    const childNodeById = new Map(visibleChildren.map((child) => [child.id, child]));
+    const childClipMaskMap = buildLayerClipMaskMap(visibleChildren, childNodeById);
     const states = getEffectiveLayerStates(visibleChildren);
     const instanceMaskPrefix = `${maskPrefix}-instmask-${sanitizeMaskIdSegment(node.id)}`;
     return (
@@ -134,15 +164,19 @@ export function ClipMaskArtwork({
               height={component.document.height}
               components={components}
               maskPrefix={instanceMaskPrefix}
+              nodeById={childNodeById}
+              clipMaskMap={childClipMaskMap}
+              componentById={resolvedComponents}
             />
           </defs>
           {getLayerRenderOrder(visibleChildren)
             .filter((child) => {
               if (child.type === 'group' || !states.get(child.id)?.visible) return false;
-              return getLayerClipMaskBaseIds(visibleChildren, child.id).every((baseId) => states.get(baseId)?.visible);
+              const maskIds = childClipMaskMap.get(child.id) ?? [];
+              return maskIds.every((baseId) => states.get(baseId)?.visible);
             })
             .map((child) => {
-              const maskIds = getLayerClipMaskBaseIds(visibleChildren, child.id);
+              const maskIds = childClipMaskMap.get(child.id) ?? [];
               const shape = child.type === 'component-instance'
                 ? <rect key={child.id} x={child.x} y={child.y} width={child.width} height={child.height} fill="#fff" opacity={child.opacity} />
                 : <NodeShape key={child.id} node={child as PrimitiveNode} mask />;
@@ -165,18 +199,35 @@ export function DocumentMaskDefs({
   height,
   components,
   maskPrefix,
+  nodeById,
+  clipMaskMap,
+  componentById,
 }: {
   nodes: DesignNode[];
   width: number;
   height: number;
   components: ComponentDefinition[];
   maskPrefix: string;
+  nodeById?: ReadonlyMap<string, DesignNode>;
+  clipMaskMap?: ReadonlyMap<string, string[]>;
+  componentById?: ReadonlyMap<string, ComponentDefinition>;
 }) {
-  const referencedBaseIds = [...new Set(nodes.flatMap((node) => getLayerClipMaskBaseIds(nodes, node.id)))];
+  const resolvedNodeById = nodeById ?? new Map(nodes.map((node) => [node.id, node]));
+  const resolvedClipMaskMap = clipMaskMap ?? buildLayerClipMaskMap(nodes, resolvedNodeById);
+  const referencedSet = new Set<string>();
+  for (const node of nodes) {
+    const baseIds = resolvedClipMaskMap.get(node.id);
+    if (!baseIds) continue;
+    for (const baseId of baseIds) referencedSet.add(baseId);
+  }
+  if (referencedSet.size === 0) return null;
+
+  const resolvedComponents = getComponentById(components, componentById);
+  const referencedBaseIds = [...referencedSet];
   return (
     <>
       {referencedBaseIds.map((baseId) => {
-        const base = nodes.find((node) => node.id === baseId);
+        const base = resolvedNodeById.get(baseId);
         if (!base) return null;
         return (
           <mask
@@ -190,7 +241,14 @@ export function DocumentMaskDefs({
             height={height}
           >
             <rect x="0" y="0" width={width} height={height} fill="#000" />
-            <ClipMaskArtwork node={base} nodes={nodes} components={components} maskPrefix={maskPrefix} />
+            <ClipMaskArtwork
+              node={base}
+              nodes={nodes}
+              components={components}
+              maskPrefix={maskPrefix}
+              nodeById={resolvedNodeById}
+              componentById={resolvedComponents}
+            />
           </mask>
         );
       })}
@@ -203,14 +261,17 @@ export function NodeArtwork({
   components = [],
   maskPrefix,
   emitNodeId = true,
+  componentById,
 }: {
   node: DesignNode;
   components?: ComponentDefinition[];
   maskPrefix: string;
   emitNodeId?: boolean;
+  componentById?: ReadonlyMap<string, ComponentDefinition>;
 }) {
   if (node.type === 'component-instance') {
-    const component = components.find((item) => item.id === node.componentId);
+    const resolvedComponents = getComponentById(components, componentById);
+    const component = resolvedComponents.get(node.componentId);
     const scaleX = component ? node.width / Math.max(1, component.document.width) : 1;
     const scaleY = component ? node.height / Math.max(1, component.document.height) : 1;
     const transform = node.rotation
@@ -219,6 +280,8 @@ export function NodeArtwork({
     const resolvedChildren = component
       ? resolveComponentInstanceNodes(node, component).filter((child) => child.onCanvas !== false)
       : [];
+    const childNodeById = new Map(resolvedChildren.map((child) => [child.id, child]));
+    const childClipMaskMap = buildLayerClipMaskMap(resolvedChildren, childNodeById);
     const childStates = getEffectiveLayerStates(resolvedChildren);
     const instanceMaskPrefix = `${maskPrefix}-inst-${sanitizeMaskIdSegment(node.id)}`;
     return (
@@ -237,6 +300,9 @@ export function NodeArtwork({
                 height={component.document.height}
                 components={components}
                 maskPrefix={instanceMaskPrefix}
+                nodeById={childNodeById}
+                clipMaskMap={childClipMaskMap}
+                componentById={resolvedComponents}
               />
             </defs>
             <rect
@@ -250,7 +316,8 @@ export function NodeArtwork({
             {getLayerRenderOrder(resolvedChildren)
               .filter((child) => {
                 if (!childStates.get(child.id)?.visible) return false;
-                return getLayerClipMaskBaseIds(resolvedChildren, child.id).every((baseId) => childStates.get(baseId)?.visible);
+                const maskIds = childClipMaskMap.get(child.id) ?? [];
+                return maskIds.every((baseId) => childStates.get(baseId)?.visible);
               })
               .map((effective) => (
                 effective.type === 'component-instance'
@@ -263,6 +330,8 @@ export function NodeArtwork({
                       components={components}
                       maskPrefix={instanceMaskPrefix}
                       emitNodeId={false}
+                      clipMaskMap={childClipMaskMap}
+                      componentById={resolvedComponents}
                     />
                   )
               ))}
@@ -293,17 +362,27 @@ export function MaskedNodeArtwork({
   components,
   maskPrefix,
   emitNodeId = true,
+  clipMaskMap,
+  componentById,
 }: {
   node: DesignNode;
   nodes: DesignNode[];
   components: ComponentDefinition[];
   maskPrefix: string;
   emitNodeId?: boolean;
+  clipMaskMap?: ReadonlyMap<string, string[]>;
+  componentById?: ReadonlyMap<string, ComponentDefinition>;
 }) {
-  const maskIds = getLayerClipMaskBaseIds(nodes, node.id);
+  const maskIds = clipMaskMap ? (clipMaskMap.get(node.id) ?? []) : getLayerClipMaskBaseIds(nodes, node.id);
   return maskIds.reduceRight(
     (artwork, maskId) => <g mask={`url(#${buildMaskElementId(maskPrefix, maskId)})`}>{artwork}</g>,
-    <NodeArtwork node={node} components={components} maskPrefix={maskPrefix} emitNodeId={emitNodeId} />,
+    <NodeArtwork
+      node={node}
+      components={components}
+      maskPrefix={maskPrefix}
+      emitNodeId={emitNodeId}
+      componentById={componentById}
+    />,
   );
 }
 
@@ -317,7 +396,10 @@ export function DocumentArtworkContent({
   maskPrefix: string;
 }) {
   const canvasNodes = document.nodes.filter((node) => node.onCanvas !== false);
+  const nodeById = new Map(canvasNodes.map((node) => [node.id, node]));
+  const clipMaskMap = buildLayerClipMaskMap(canvasNodes, nodeById);
   const layerStates = getEffectiveLayerStates(canvasNodes);
+  const componentById = getComponentById(components);
   return (
     <>
       <defs>
@@ -327,6 +409,9 @@ export function DocumentArtworkContent({
           height={document.height}
           components={components}
           maskPrefix={maskPrefix}
+          nodeById={nodeById}
+          clipMaskMap={clipMaskMap}
+          componentById={componentById}
         />
       </defs>
       {document.background !== '#00000000' && document.background !== 'transparent' && (
@@ -336,7 +421,8 @@ export function DocumentArtworkContent({
         .filter((node) => {
           const state = layerStates.get(node.id);
           if (!state?.visible) return false;
-          return getLayerClipMaskBaseIds(canvasNodes, node.id).every((baseId) => layerStates.get(baseId)?.visible);
+          const maskIds = clipMaskMap.get(node.id) ?? [];
+          return maskIds.every((baseId) => layerStates.get(baseId)?.visible);
         })
         .map((node) => (
           <MaskedNodeArtwork
@@ -345,6 +431,8 @@ export function DocumentArtworkContent({
             nodes={canvasNodes}
             components={components}
             maskPrefix={maskPrefix}
+            clipMaskMap={clipMaskMap}
+            componentById={componentById}
           />
         ))}
     </>

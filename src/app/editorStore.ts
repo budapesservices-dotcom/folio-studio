@@ -9,6 +9,8 @@ const RESERVED_COMPONENT_CANVAS_ID = 'folio-component-canvas';
 const EDITOR_HISTORY_LIMIT = 60;
 const storeIdentities = new WeakMap<object, object>();
 const snapshotOwners = new WeakMap<object, object>();
+const frozenGraphs = new WeakSet<object>();
+const validatedFrozenProjects = new WeakSet<object>();
 
 export interface CanonicalEditorStoreSnapshot {
   readonly editorState: EditorState;
@@ -48,10 +50,12 @@ export interface CanonicalEditorStore {
 function freezeGraph<T>(value: T, seen = new WeakSet<object>()): T {
   if (value === null || typeof value !== 'object') return value;
   const object = value as unknown as object;
-  if (seen.has(object)) return value;
+  if (frozenGraphs.has(object) || seen.has(object)) return value;
   seen.add(object);
   for (const child of Object.values(object)) freezeGraph(child, seen);
-  return Object.freeze(object) as T;
+  Object.freeze(object);
+  frozenGraphs.add(object);
+  return value;
 }
 
 function cloneEventGraph<T>(value: T, seen = new WeakMap<object, unknown>()): T {
@@ -74,11 +78,24 @@ function cloneEventGraph<T>(value: T, seen = new WeakMap<object, unknown>()): T 
   return output as T;
 }
 
+function isValidatedProject(project: EditorState['project']): boolean {
+  if (validatedFrozenProjects.has(project as object)) return true;
+  if (!validateProject(project).ok) return false;
+  if (frozenGraphs.has(project as object)) {
+    validatedFrozenProjects.add(project as object);
+  }
+  return true;
+}
+
 function isHistoricalProject(value: unknown): boolean {
   try {
     if (typeof value !== 'object' || value === null) return false;
     const project = value as EditorState['project'];
-    return project.metadata.id !== RESERVED_COMPONENT_CANVAS_ID && validateProject(project).ok;
+    if (validatedFrozenProjects.has(project as object)) {
+      return project.metadata.id !== RESERVED_COMPONENT_CANVAS_ID;
+    }
+    if (project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) return false;
+    return isValidatedProject(project);
   } catch {
     return false;
   }
@@ -90,7 +107,7 @@ function isEditorState(value: unknown): value is EditorState {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
     const candidate = value as Record<string, unknown>;
     if (typeof candidate.project !== 'object' || candidate.project === null ||
-        !validateProject(candidate.project as EditorState['project']).ok ||
+        !isValidatedProject(candidate.project as EditorState['project']) ||
         !Array.isArray(candidate.past) || !Array.isArray(candidate.future) ||
         candidate.past.length + candidate.future.length > EDITOR_HISTORY_LIMIT ||
         !candidate.past.every(isHistoricalProject) || !candidate.future.every(isHistoricalProject) ||
@@ -152,7 +169,11 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
       throw new Error('The temporary Component Canvas buffer cannot become the canonical Main Canvas project.');
     }
     storeIdentities.set(this, this.identity);
-    this.snapshot = Object.freeze({ editorState: freezeGraph(initialState), projectRevision: 0 });
+    const frozenInitial = freezeGraph(initialState);
+    validatedFrozenProjects.add(frozenInitial.project as object);
+    for (const historical of frozenInitial.past) validatedFrozenProjects.add(historical as object);
+    for (const historical of frozenInitial.future) validatedFrozenProjects.add(historical as object);
+    this.snapshot = Object.freeze({ editorState: frozenInitial, projectRevision: 0 });
     snapshotOwners.set(this.snapshot as object, this.identity);
   }
 
@@ -178,7 +199,13 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     }
     if (this.committing || this.notifying) return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'REENTRANT_COMMIT' };
     if (!isCommitInput(input)) return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_COMMIT_INPUT' };
-    if (!isEditorState(input.expectedEditorState) || !isEditorState(input.candidateState)) {
+    const expectedValid =
+      input.expectedEditorState === beforeSnapshot.editorState ||
+      isEditorState(input.expectedEditorState);
+    const candidateValid =
+      input.candidateState === beforeSnapshot.editorState ||
+      isEditorState(input.candidateState);
+    if (!expectedValid || !candidateValid) {
       return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_EDITOR_STATE' };
     }
     if (input.expectedProjectRevision !== beforeSnapshot.projectRevision) return { status: 'revision-conflict', snapshot: beforeSnapshot };
@@ -212,9 +239,6 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
       if (input.candidateState.project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) {
         return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_CANONICAL_PROJECT' };
       }
-      if (!validateProject(input.candidateState.project).ok) {
-        return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'PROJECT_VALIDATION_FAILED' };
-      }
     }
 
     const nextRevision = beforeSnapshot.projectRevision + (projectMutation ? 1 : 0);
@@ -242,7 +266,12 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     }
 
     let acceptedState: EditorState;
-    try { acceptedState = freezeGraph(input.candidateState); }
+    try {
+      acceptedState = freezeGraph(input.candidateState);
+      validatedFrozenProjects.add(acceptedState.project as object);
+      for (const historical of acceptedState.past) validatedFrozenProjects.add(historical as object);
+      for (const historical of acceptedState.future) validatedFrozenProjects.add(historical as object);
+    }
     catch { return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'COMMIT_FAILED' }; }
 
     const nextSnapshot: CanonicalEditorStoreSnapshot = Object.freeze({

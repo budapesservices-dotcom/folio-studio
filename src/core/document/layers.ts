@@ -54,9 +54,14 @@ export function removeClippingMask(nodes: DesignNode[], nodeId: string): DesignN
   return nodes.map((node) => node.id === nodeId ? { ...node, clipMaskBaseId: undefined } : node);
 }
 
-/** Returns inherited and local clipping bases for Canvas rendering. */
-export function getLayerClipMaskBaseIds(nodes: readonly DesignNode[], nodeId: string): string[] {
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+function resolveClipMaskBaseIdsFromMap(
+  nodeById: ReadonlyMap<string, DesignNode>,
+  nodeId: string,
+  memo?: Map<string, string[]>,
+): string[] {
+  const cached = memo?.get(nodeId);
+  if (cached) return cached;
+
   const result: string[] = [];
   const visited = new Set<string>();
 
@@ -69,19 +74,44 @@ export function getLayerClipMaskBaseIds(nodes: readonly DesignNode[], nodeId: st
       chain.push(current);
       current = current.parentId ? nodeById.get(current.parentId) : undefined;
     }
-    chain.reverse().forEach((owner) => {
-      if (visited.has(owner.id)) return;
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const owner = chain[i];
+      if (visited.has(owner.id)) continue;
       visited.add(owner.id);
       const baseId = owner.clipMaskBaseId;
       if (baseId && nodeById.has(baseId) && baseId !== owner.id) {
         collectOwnerAndAncestors(baseId);
         if (!result.includes(baseId)) result.push(baseId);
       }
-    });
+    }
   };
 
   collectOwnerAndAncestors(nodeId);
+  memo?.set(nodeId, result);
   return result;
+}
+
+/** Precomputes inherited and local clipping bases for all nodes in a single pass. */
+export function buildLayerClipMaskMap(
+  nodes: readonly DesignNode[],
+  existingNodeById?: ReadonlyMap<string, DesignNode>,
+): Map<string, string[]> {
+  const nodeById = existingNodeById ?? new Map(nodes.map((node) => [node.id, node]));
+  const result = new Map<string, string[]>();
+  for (const node of nodes) {
+    resolveClipMaskBaseIdsFromMap(nodeById, node.id, result);
+  }
+  return result;
+}
+
+/** Returns inherited and local clipping bases for Canvas rendering. */
+export function getLayerClipMaskBaseIds(
+  nodes: readonly DesignNode[],
+  nodeId: string,
+  existingNodeById?: ReadonlyMap<string, DesignNode>,
+): string[] {
+  const nodeById = existingNodeById ?? new Map(nodes.map((node) => [node.id, node]));
+  return resolveClipMaskBaseIdsFromMap(nodeById, nodeId);
 }
 
 function getParentId(node: DesignNode, nodeById: Map<string, DesignNode>): string | null {
@@ -161,17 +191,19 @@ export function getLayerRenderOrder(nodes: readonly DesignNode[]): DesignNode[] 
 export function getEffectiveLayerStates(nodes: readonly DesignNode[]): Map<string, EffectiveLayerState> {
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const states = new Map<string, EffectiveLayerState>();
+  const visiting = new Set<string>();
 
-  const resolve = (node: DesignNode, visiting: Set<string>): EffectiveLayerState => {
+  const resolve = (node: DesignNode): EffectiveLayerState => {
     const cached = states.get(node.id);
     if (cached) return cached;
     if (visiting.has(node.id)) return { visible: node.visible, locked: node.locked };
 
-    const nextVisiting = new Set(visiting);
-    nextVisiting.add(node.id);
+    visiting.add(node.id);
     const parentId = getParentId(node, nodeById);
     const parent = parentId ? nodeById.get(parentId) : undefined;
-    const inherited = parent ? resolve(parent, nextVisiting) : { visible: true, locked: false };
+    const inherited = parent ? resolve(parent) : { visible: true, locked: false };
+    visiting.delete(node.id);
+
     const result = {
       visible: node.visible && inherited.visible,
       locked: node.locked || inherited.locked,
@@ -180,7 +212,9 @@ export function getEffectiveLayerStates(nodes: readonly DesignNode[]): Map<strin
     return result;
   };
 
-  nodes.forEach((node) => resolve(node, new Set()));
+  for (const node of nodes) {
+    resolve(node);
+  }
   return states;
 }
 

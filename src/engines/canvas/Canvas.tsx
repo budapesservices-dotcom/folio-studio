@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { ComponentDefinition, DesignNode, FolioDocument } from '../../core/document/types';
-import { getEffectiveLayerStates, getLayerRenderOrder, getLayerClipMaskBaseIds } from '../../core/document/layers';
+import { buildLayerClipMaskMap, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
 import { DocumentMaskDefs, MaskedNodeArtwork, sanitizeMaskIdSegment } from './artwork';
 import { getBounds, type Bounds, type ResizeHandle, type SnapGuide } from './geometry';
 import { getCanvasTool } from './tools/registry';
@@ -116,6 +116,9 @@ export function Canvas({
   const [isPanning, setIsPanning] = useState(false);
 
   useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
+
     const isInteractiveTarget = (target: EventTarget | null): boolean => {
       if (!(target instanceof HTMLElement)) return false;
       return target.isContentEditable || target.matches('input, textarea, select, button, a, [role="button"]');
@@ -140,14 +143,10 @@ export function Canvas({
       setIsPanning(false);
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    window.addEventListener('blur', handleWindowBlur);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('blur', handleWindowBlur);
-    };
+    window.addEventListener('keydown', handleKeyDown, { signal });
+    window.addEventListener('keyup', handleKeyUp, { signal });
+    window.addEventListener('blur', handleWindowBlur, { signal });
+    return () => controller.abort();
   }, []);
 
   const updatePreview = (nodes: DesignNode[] | null) => {
@@ -155,25 +154,67 @@ export function Canvas({
     setPreviewNodes(nodes);
   };
 
-  const displayedNodes = previewNodes
-    ? document.nodes.map((node) => previewNodes.find((preview) => preview.id === node.id) ?? node)
-    : document.nodes;
-  const canvasNodes = displayedNodes.filter((node) => node.onCanvas !== false);
+  const displayedNodes = useMemo(() => {
+    if (!previewNodes || previewNodes.length === 0) return document.nodes;
+    const previewById = new Map(previewNodes.map((node) => [node.id, node]));
+    return document.nodes.map((node) => previewById.get(node.id) ?? node);
+  }, [document.nodes, previewNodes]);
+
+  const canvasNodes = useMemo(
+    () => displayedNodes.filter((node) => node.onCanvas !== false),
+    [displayedNodes],
+  );
+
+  // Precompute lookup maps & layer states once per document/preview update (O(N))
+  const { nodeById, layerStates, clipMaskMap, visibleRenderNodes, selectableNodes } = useMemo(() => {
+    const byId = new Map(canvasNodes.map((node) => [node.id, node]));
+    const states = getEffectiveLayerStates(canvasNodes);
+    const masks = buildLayerClipMaskMap(canvasNodes, byId);
+    const renderNodes = getLayerRenderOrder(canvasNodes).filter((node) => {
+      const state = states.get(node.id);
+      if (!state?.visible) return false;
+      const baseIds = masks.get(node.id) ?? [];
+      return baseIds.every((baseId) => states.get(baseId)?.visible);
+    });
+    const selectable = canvasNodes.filter((node) => {
+      const effective = states.get(node.id);
+      return effective?.visible && !effective.locked;
+    });
+    return {
+      nodeById: byId,
+      layerStates: states,
+      clipMaskMap: masks,
+      visibleRenderNodes: renderNodes,
+      selectableNodes: selectable,
+    };
+  }, [canvasNodes]);
+
+  const componentById = useMemo(
+    () => new Map(components.map((component) => [component.id, component])),
+    [components],
+  );
+
+  const maskPrefix = useMemo(
+    () => `folio-mask-${sanitizeMaskIdSegment(document.id)}`,
+    [document.id],
+  );
 
   // Locked layers may remain selected in the Layers panel, but only placed
   // nodes participate in Canvas selection, transforms and resize bounds.
-  const layerStates = getEffectiveLayerStates(canvasNodes);
-  const selectedSet = new Set(selectedNodeIds);
-  const selectedNodes = canvasNodes.filter((node) => selectedSet.has(node.id)).filter((node) => {
-    const effective = layerStates.get(node.id);
-    return effective?.visible && !effective.locked;
-  });
-  const selectionBounds = getBounds(selectedNodes);
+  const { selectedNodes, selectionBounds } = useMemo(() => {
+    const selectedSet = new Set(selectedNodeIds);
+    const activeSelection = canvasNodes.filter((node) => {
+      if (!selectedSet.has(node.id)) return false;
+      const effective = layerStates.get(node.id);
+      return effective?.visible && !effective.locked;
+    });
+    return {
+      selectedNodes: activeSelection,
+      selectionBounds: getBounds(activeSelection),
+    };
+  }, [canvasNodes, layerStates, selectedNodeIds]);
+
   const canResize = selectedNodes.length > 0;
-  const selectableNodes = canvasNodes.filter((node) => {
-    const effective = layerStates.get(node.id);
-    return effective?.visible && !effective.locked;
-  });
   const activeTool = getCanvasTool(toolId);
 
   const createToolContext = (): CanvasToolContext => ({
@@ -373,21 +414,32 @@ export function Canvas({
     applyToolTransition(transition, event.currentTarget, event.pointerId, event);
   };
 
+  // Keep a single persistent keydown listener via ref + AbortController so pan/zoom/drag
+  // never tear down and re-register window listeners on every animation frame.
+  const toolKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
+  toolKeyDownRef.current = (event: KeyboardEvent) => {
+    const transition = getCanvasTool(toolId).onKeyDown({
+      key: event.key,
+      code: event.code,
+      shiftKey: event.shiftKey,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      altKey: event.altKey,
+    }, createToolContext());
+    applyToolTransition(transition);
+  };
+
   useEffect(() => {
-    const handleToolKeyDown = (event: KeyboardEvent) => {
-      const transition = getCanvasTool(toolId).onKeyDown({
-        key: event.key,
-        code: event.code,
-        shiftKey: event.shiftKey,
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-        altKey: event.altKey,
-      }, createToolContext());
-      applyToolTransition(transition);
-    };
-    window.addEventListener('keydown', handleToolKeyDown);
-    return () => window.removeEventListener('keydown', handleToolKeyDown);
-  }, [toolId, toolSession, selectedNodeIds, zoom, pan, document, previewNodes]);
+    const controller = new AbortController();
+    window.addEventListener('keydown', (event) => toolKeyDownRef.current(event), {
+      signal: controller.signal,
+    });
+    return () => controller.abort();
+  }, []);
+
+  const renderToolContext = createToolContext();
+  const toolCursor = activeTool.cursorStyle(renderToolContext);
+  const toolOverlay = activeTool.renderOverlay(renderToolContext);
 
   return (
     <div
@@ -406,14 +458,14 @@ export function Canvas({
       onPointerCancel={cancelPan}
     >
       <div
-          class="canvas-stage"
-          style={{
-            width: String(zoom * 100) + '%',
-            transform: 'translate(' + pan.x + 'px, ' + pan.y + 'px)',
-            transition: (isPanning || toolSession?.kind === 'hand' || toolSession?.kind === 'scrubby-zoom') ? 'none' : 'transform 110ms ease-out',
-            willChange: 'transform',
-          }}
-        >
+        class="canvas-stage"
+        style={{
+          width: String(zoom * 100) + '%',
+          transform: 'translate(' + pan.x + 'px, ' + pan.y + 'px)',
+          transition: (isPanning || toolSession?.kind === 'hand' || toolSession?.kind === 'scrubby-zoom') ? 'none' : 'transform 110ms ease-out',
+          willChange: 'transform',
+        }}
+      >
         <div class="artboard-label">
           <span>{document.name}</span>
           <span>{document.width} × {document.height}</span>
@@ -422,7 +474,7 @@ export function Canvas({
           ref={svgRef}
           class="artboard"
           data-tool={toolId}
-          style={{ cursor: activeTool.cursorStyle(createToolContext()) }}
+          style={{ cursor: toolCursor }}
           viewBox={'0 0 ' + document.width + ' ' + document.height}
           role="application"
           aria-label="Folio design artboard. Use the active Tool Rack tool to select, navigate, or inspect artwork."
@@ -437,46 +489,41 @@ export function Canvas({
               width={document.width}
               height={document.height}
               components={components}
-              maskPrefix={`folio-mask-${sanitizeMaskIdSegment(document.id)}`}
+              maskPrefix={maskPrefix}
+              nodeById={nodeById}
+              clipMaskMap={clipMaskMap}
+              componentById={componentById}
             />
           </defs>
           <rect x="0" y="0" width={document.width} height={document.height} fill={document.background} />
-          {getLayerRenderOrder(canvasNodes).filter((node) => {
-            const state = layerStates.get(node.id);
-            if (!state?.visible) return false;
-            return getLayerClipMaskBaseIds(canvasNodes, node.id).every((baseId) => layerStates.get(baseId)?.visible);
-          }).map((node) => (
+          {visibleRenderNodes.map((node) => (
             <MaskedNodeArtwork
               key={node.id}
               node={node}
               nodes={canvasNodes}
               components={components}
-              maskPrefix={`folio-mask-${sanitizeMaskIdSegment(document.id)}`}
+              maskPrefix={maskPrefix}
+              clipMaskMap={clipMaskMap}
+              componentById={componentById}
             />
           ))}
-          {activeTool.renderOverlay(createToolContext())?.kind === 'marquee' && (() => {
-            const overlay = activeTool.renderOverlay(createToolContext());
-            return overlay?.kind === 'marquee' ? (
-              <rect
-                class="canvas-marquee"
-                x={overlay.bounds.x}
-                y={overlay.bounds.y}
-                width={overlay.bounds.width}
-                height={overlay.bounds.height}
-                pointer-events="none"
-              />
-            ) : null;
-          })()}
-          {activeTool.renderOverlay(createToolContext())?.kind === 'lasso' && (() => {
-            const overlay = activeTool.renderOverlay(createToolContext());
-            return overlay?.kind === 'lasso' ? (
-              <polyline
-                class="canvas-lasso"
-                points={overlay.points.map((point) => point.x + ',' + point.y).join(' ')}
-                pointer-events="none"
-              />
-            ) : null;
-          })()}
+          {toolOverlay?.kind === 'marquee' && (
+            <rect
+              class="canvas-marquee"
+              x={toolOverlay.bounds.x}
+              y={toolOverlay.bounds.y}
+              width={toolOverlay.bounds.width}
+              height={toolOverlay.bounds.height}
+              pointer-events="none"
+            />
+          )}
+          {toolOverlay?.kind === 'lasso' && (
+            <polyline
+              class="canvas-lasso"
+              points={toolOverlay.points.map((point) => point.x + ',' + point.y).join(' ')}
+              pointer-events="none"
+            />
+          )}
           {selectionBounds && (
             <SelectionOverlay
               bounds={selectionBounds}
