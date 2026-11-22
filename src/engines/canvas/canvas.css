@@ -130,6 +130,7 @@
 .artboard[data-tool="pencil"] .canvas-node,
 .artboard[data-tool="smooth"] .canvas-node,
 .artboard[data-tool="scissors"] .canvas-node,
+.artboard[data-tool="shape-builder"] .canvas-node,
 .artboard[data-tool="eyedropper"] .canvas-node,
 .artboard[data-tool="measure"] .canvas-node {
   cursor: inherit;
@@ -339,3 +340,180 @@
   overflow: hidden;
   box-shadow: 0 4px 16px rgba(10, 14, 24, 0.25);
 }
+
+/* On-Canvas Smart Handles (Corner Radius & Star Inner Ratio) */
+.canvas-smart-handle {
+  cursor: pointer;
+}
+.canvas-smart-handle-hit {
+  fill: transparent;
+  stroke: none;
+}
+.canvas-smart-handle-ring {
+  fill: #ffffff;
+  stroke: #8b7cf6;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-smart-handle-dot {
+  fill: #8b7cf6;
+}
+.artboard[data-workspace="component"] .canvas-smart-handle-ring {
+  stroke: #e59a4c;
+}
+.artboard[data-workspace="component"] .canvas-smart-handle-dot {
+  fill: #e59a4c;
+}
+.canvas-smart-handle-diamond {
+  fill: #ffffff;
+  stroke: #e59a4c;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Draggable Custom Rotation Pivot Crosshair */
+.canvas-pivot-handle {
+  cursor: grab;
+}
+.canvas-pivot-ring {
+  fill: rgba(21, 25, 35, 0.72);
+  stroke: #f59e0b;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-pivot-tick {
+  stroke: #f59e0b;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-pivot-dot {
+  fill: #ffffff;
+  stroke: #f59e0b;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Alt-Hover Spacing Redlines */
+.canvas-redline-target {
+  fill: none;
+  stroke: rgba(244, 63, 94, 0.55);
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-redline-ext {
+  stroke: rgba(244, 63, 94, 0.45);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-redline-line {
+  stroke: #f43f5e;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-redline-chip rect {
+  fill: #e11d48;
+}
+.canvas-redline-chip text {
+  fill: #ffffff;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Measure Magnetic Snap Ring */
+.canvas-measure-snap-ring {
+  fill: rgba(239, 83, 80, 0.14);
+  stroke: #ef5350;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Interactive Shape Builder Regions */
+.canvas-sb-face {
+  fill: rgba(15, 23, 42, 0.04);
+  stroke: rgba(15, 23, 42, 0.45);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 2.5;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-sb-face.is-merge {
+  stroke: #0ea5e9;
+  stroke-width: 2.25;
+  stroke-dasharray: none;
+}
+.artboard[data-workspace="component"] .canvas-sb-face.is-merge {
+  stroke: #f59e0b;
+}
+.canvas-sb-face.is-punch {
+  stroke: #f43f5e;
+  stroke-width: 2.25;
+  stroke-dasharray: 5 2.5;
+}
+.canvas-sb-stroke {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-sb-stroke.is-merge {
+  stroke: #38bdf8;
+}
+.canvas-sb-stroke.is-punch {
+  stroke: #fb7185;
+  stroke-dasharray: 4 3;
+}
+.canvas-sb-glyph circle {
+  fill: #0f172a;
+  stroke: #38bdf8;
+  stroke-width: 1.8;
+}
+.canvas-sb-glyph.is-punch circle {
+  stroke: #f43f5e;
+}
+.canvas-sb-glyph text {
+  fill: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+/* Path-Snap Hover Indicator */
+.canvas-snap-ring {
+  fill: rgba(56, 189, 248, 0.14);
+  stroke: #38bdf8;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-snap-dot {
+  fill: #ffffff;
+  stroke: #38bdf8;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Live Eyedropper Loupe */
+.canvas-loupe-card {
+  fill: #151923;
+  stroke: #3c465a;
+  stroke-width: 1;
+}
+.canvas-loupe-swatch {
+  stroke: #ffffff;
+  stroke-width: 1.5;
+}
+.canvas-loupe-hex {
+  fill: #f0f3fa;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+.canvas-loupe-meta {
+  fill: #94a3b8;
+  font-size: 9.5px;
+  font-weight: 600;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+

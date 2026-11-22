@@ -22,6 +22,7 @@ import {
   scissorsTool,
   smoothTool,
 } from './vector-tools';
+import { shapeBuilderTool } from './shape-builder';
 import { eyedropperTool, measureTool, rotateTool } from './utility-tools';
 import { ToolRegistry } from './registry';
 import type {
@@ -57,13 +58,14 @@ const ALL_STUDIO_TOOLS: CanvasToolHandler[] = [
   drawArrowTool,
   drawPolygonTool,
   drawStarTool,
-  // Vector Craft (Illustrator + Figma)
+  // Vector Craft (Illustrator + Figma + Folio Shape Builder)
   penTool,
   curvatureTool,
   anchorPointTool,
   pencilTool,
   smoothTool,
   scissorsTool,
+  shapeBuilderTool,
   // Typography
   drawTextTool,
   // Illustrator Transform
@@ -83,7 +85,7 @@ export function getStudioTool(id: CanvasToolId): CanvasToolHandler {
 }
 
 /**
- * Main Canvas — Complete Figma Layout & Design Studio toolset + Folio refinements.
+ * Main Canvas — Complete Figma Layout & Design Studio toolset + Folio Shape Builder.
  */
 export const MAIN_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
@@ -113,9 +115,9 @@ export const MAIN_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
     id: 'vector',
     label: 'Vector',
-    description: 'Draw custom cubic Bezier paths with Pen or freehand strokes with Pencil.',
+    description: 'Draw custom Bezier paths (Pen), freehand strokes (Pencil), or fuse/punch regions with Shape Builder (Shift+M).',
     icon: 'pen',
-    tools: ['pen', 'pencil'],
+    tools: ['pen', 'pencil', 'shape-builder'],
     workspaces: ['main'],
   },
   {
@@ -129,7 +131,7 @@ export const MAIN_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
     id: 'inspect',
     label: 'Inspect',
-    description: 'Sample colors with Eyedropper or inspect distances & angles with Precision Measure.',
+    description: 'Sample colors with Eyedropper Loupe or inspect distances & angles with Precision Measure.',
     icon: 'eyedropper',
     tools: ['eyedropper', 'measure'],
     workspaces: ['main'],
@@ -146,8 +148,8 @@ export const MAIN_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
 
 /**
  * Component Canvas — Dedicated Adobe Illustrator Vector Craft Studio toolset.
- * Brings Pen, Curvature, Anchor Point, Pencil, Smooth, Scissors, Rotate, and
- * Vector Shapes right to the forefront for precision component authoring.
+ * Brings Pen, Curvature, Anchor Point, Pencil, Smooth, Scissors, Shape Builder,
+ * Rotate (with custom pivot), and Vector Shapes right to the forefront.
  */
 export const COMPONENT_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
@@ -161,9 +163,9 @@ export const COMPONENT_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
     id: 'vector',
     label: 'Vector',
-    description: 'Illustrator Vector Suite: Pen (P), Curvature (U), Anchor Point (Shift+C), Pencil (N), Smooth, Scissors (C).',
+    description: 'Illustrator Vector Suite: Pen (P), Curvature (U), Anchor Point (Shift+C), Pencil (N), Smooth, Scissors (C), Shape Builder (Shift+M).',
     icon: 'pen',
-    tools: ['pen', 'curvature', 'anchor-point', 'pencil', 'smooth', 'scissors'],
+    tools: ['pen', 'curvature', 'anchor-point', 'pencil', 'smooth', 'scissors', 'shape-builder'],
     workspaces: ['component'],
   },
   {
@@ -177,7 +179,7 @@ export const COMPONENT_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
     id: 'transform',
     label: 'Transform',
-    description: 'Illustrator Rotate (Shift+R) and Proportional Scale (K) transforms.',
+    description: 'Illustrator Rotate with Custom Pivot (Shift+R) and Proportional Scale (K).',
     icon: 'rotate',
     tools: ['rotate', 'scale'],
     workspaces: ['component'],
@@ -193,7 +195,7 @@ export const COMPONENT_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
     id: 'inspect',
     label: 'Inspect',
-    description: 'Eyedropper (I) color sampling and Precision Measure (M) redlines.',
+    description: 'Eyedropper Loupe (I) color sampling and Precision Measure (M) redlines.',
     icon: 'eyedropper',
     tools: ['eyedropper', 'measure'],
     workspaces: ['component'],
@@ -233,6 +235,7 @@ export function findStudioToolByShortcut(
     c: 'anchor-point',
     n: 'smooth',
     r: 'rotate',
+    m: 'shape-builder',
   };
   if (shiftKey && shiftMap[normalized] && availableIds.has(shiftMap[normalized])) {
     return shiftMap[normalized];

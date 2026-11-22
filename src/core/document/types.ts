@@ -104,6 +104,10 @@ export interface EllipseNode extends NodeBase {
   style: ShapeStyle;
 }
 
+export type VectorShapeMeta =
+  | { kind: 'polygon'; sides: number }
+  | { kind: 'star'; spikes: number; innerRatio: number };
+
 export interface PathNode extends NodeBase {
   type: 'path';
   points: VectorAnchorPoint[];
@@ -112,6 +116,8 @@ export interface PathNode extends NodeBase {
   pathKind?: VectorPathKind;
   /** Optional compound subpaths for Illustrator Pathfinder cutouts/exclusions. */
   subpaths?: VectorSubpath[];
+  /** Optional parametric metadata for live on-canvas polygon/star Smart Handles. */
+  shapeMeta?: VectorShapeMeta;
 }
 
 export interface TextNode extends NodeBase {

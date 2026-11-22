@@ -24,6 +24,7 @@ export type EditorAction =
   | { type: 'set-nodes-properties'; nodeIds: string[]; properties: Partial<Pick<DesignNode, 'visible' | 'locked' | 'layerColor'>> }
   | { type: 'rename-nodes'; updates: Array<{ nodeId: string; name: string }> }
   | { type: 'replace-node-with-nodes'; nodeId: string; nodes: DesignNode[] }
+  | { type: 'replace-nodes'; removeIds: string[]; insertNodes: DesignNode[]; selectIds?: string[] }
   | { type: 'edit-node'; node: DesignNode; coalesceKey: string }
   | { type: 'commit-edit' }
   | { type: 'delete-nodes'; nodeIds: string[] }
@@ -145,6 +146,35 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
     }
 
+    case 'replace-nodes': {
+      const removeSet = new Set(action.removeIds);
+      if (removeSet.size === 0 && action.insertNodes.length === 0) return state;
+      let insertIndex = -1;
+      document.nodes.forEach((node, idx) => {
+        if (removeSet.has(node.id)) insertIndex = idx;
+      });
+      if (removeSet.size > 0 && insertIndex === -1 && action.insertNodes.length === 0) return state;
+
+      // Remove targeted nodes (preserving children & cleaning broken clip masks),
+      // then insert replacement nodes at the exact z-index slot in ONE atomic undo step!
+      const survivingBeforeSlot: DesignNode[] = [];
+      const survivingAfterSlot: DesignNode[] = [];
+      const cleaned = removeNodesFromLayers(document.nodes, removeSet);
+      const originalIndexById = new Map(document.nodes.map((n, idx) => [n.id, idx]));
+      for (const node of cleaned) {
+        const origIdx = originalIndexById.get(node.id) ?? 0;
+        if (insertIndex === -1 || origIdx <= insertIndex) survivingBeforeSlot.push(node);
+        else survivingAfterSlot.push(node);
+      }
+      const nodes = [...survivingBeforeSlot, ...action.insertNodes, ...survivingAfterSlot];
+      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
+      const ids = existingSelection(
+        next,
+        action.selectIds ?? action.insertNodes.map((node) => node.id),
+      );
+      return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
+    }
+
     case 'edit-node': {
       const exists = document.nodes.some((node) => node.id === action.node.id);
       if (!exists) return state;
@@ -231,6 +261,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
                 && replacement.style.strokeWidth === node.style.strokeWidth
                 && JSON.stringify(replacement.points) === JSON.stringify(node.points)
                 && JSON.stringify(replacement.subpaths ?? []) === JSON.stringify(node.subpaths ?? [])
+                && JSON.stringify(replacement.shapeMeta ?? null) === JSON.stringify(node.shapeMeta ?? null)
               : node.type === 'rect' || node.type === 'frame'
                 ? (replacement.type === node.type)
                   && replacement.style.strokeWidth === node.style.strokeWidth

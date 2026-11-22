@@ -70,12 +70,14 @@ export function createFrameNode(
 export function createPolygonNode(x: number, y: number, width: number, height: number, sides = 6): PathNode {
   const w = Math.max(8, width);
   const h = Math.max(8, height);
+  const safeSides = Math.max(3, Math.min(24, Math.round(sides)));
   return normalizePathNode({
-    ...baseNode(`Polygon ${sides}`, x, y, w, h),
+    ...baseNode(`Polygon ${safeSides}`, x, y, w, h),
     type: 'path',
-    points: createPolygonPathPoints(w, h, sides),
+    points: createPolygonPathPoints(w, h, safeSides),
     closed: true,
     pathKind: 'polygon',
+    shapeMeta: { kind: 'polygon', sides: safeSides },
     style: {
       fill: '#6E8EFB',
       stroke: '#00000000',
@@ -97,12 +99,15 @@ export function createStarNode(
 ): PathNode {
   const w = Math.max(8, width);
   const h = Math.max(8, height);
+  const safeSpikes = Math.max(3, Math.min(24, Math.round(pointsCount)));
+  const safeRatio = Math.max(0.15, Math.min(0.9, innerRatio));
   return normalizePathNode({
     ...baseNode('Star', x, y, w, h),
     type: 'path',
-    points: createStarPathPoints(w, h, pointsCount, innerRatio),
+    points: createStarPathPoints(w, h, safeSpikes, safeRatio),
     closed: true,
     pathKind: 'star',
+    shapeMeta: { kind: 'star', spikes: safeSpikes, innerRatio: safeRatio },
     style: {
       fill: '#F2B56B',
       stroke: '#00000000',

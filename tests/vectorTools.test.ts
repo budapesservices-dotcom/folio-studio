@@ -277,7 +277,7 @@ describe('Core Vector Math & Illustrator Pathfinder Engine', () => {
 });
 
 describe('Studio Tool Registry & Workspace Scoping', () => {
-  it('preserves Wave 1 canvasToolRegistry intact while exposing full 25-tool studioToolRegistry', () => {
+  it('preserves Wave 1 canvasToolRegistry intact while exposing full 26-tool studioToolRegistry', () => {
     expect(canvasToolRegistry.list().map((t) => t.id)).toEqual([
       'select',
       'direct-selection',
@@ -286,7 +286,7 @@ describe('Studio Tool Registry & Workspace Scoping', () => {
       'hand',
       'scrubby-zoom',
     ]);
-    expect(studioToolRegistry.list().length).toBe(25);
+    expect(studioToolRegistry.list().length).toBe(26);
   });
 
   it('scopes Figma layout tools to Main Canvas and Adobe Illustrator vector craft tools to Component Canvas', () => {
@@ -317,9 +317,13 @@ describe('Studio Tool Registry & Workspace Scoping', () => {
     expect(isToolAvailableInWorkspace('smooth', 'component')).toBe(true);
     expect(isToolAvailableInWorkspace('anchor-point', 'component')).toBe(true);
     expect(isToolAvailableInWorkspace('rotate', 'component')).toBe(true);
+    expect(isToolAvailableInWorkspace('shape-builder', 'main')).toBe(true);
+    expect(isToolAvailableInWorkspace('shape-builder', 'component')).toBe(true);
 
     expect(findStudioToolByShortcut('f', false, 'main')).toBe('frame');
     expect(findStudioToolByShortcut('s', true, 'main')).toBe('section');
+    expect(findStudioToolByShortcut('m', true, 'main')).toBe('shape-builder');
+    expect(findStudioToolByShortcut('m', true, 'component')).toBe('shape-builder');
     expect(findStudioToolByShortcut('u', false, 'component')).toBe('curvature');
     expect(findStudioToolByShortcut('c', false, 'component')).toBe('scissors');
     expect(findStudioToolByShortcut('c', true, 'component')).toBe('anchor-point');

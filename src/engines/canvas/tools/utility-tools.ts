@@ -1,11 +1,15 @@
 import type { DesignNode } from '../../../core/document/types';
+import { getBounds, rotateNodesAroundPivot, snapPointToTargets, type Bounds } from '../geometry';
 import type { CanvasToolHandler, CanvasToolTransition } from './types';
 
 function computeAngleDeg(center: { x: number; y: number }, point: { x: number; y: number }): number {
   return (Math.atan2(point.y - center.y, point.x - center.x) * 180) / Math.PI;
 }
 
-function extractSampledColor(node: DesignNode | undefined, artboardBackground: string): { color: string; sourceName: string } {
+export function extractSampledColor(
+  node: DesignNode | undefined,
+  artboardBackground: string,
+): { color: string; sourceName: string } {
   if (!node) {
     return {
       color: artboardBackground === '#00000000' || artboardBackground === 'transparent' ? '#171B24' : artboardBackground,
@@ -27,9 +31,10 @@ function extractSampledColor(node: DesignNode | undefined, artboardBackground: s
 }
 
 /**
- * Adobe Illustrator Rotate Tool (Shift+R):
- * Drag anywhere around the selected artwork to rotate smoothly around its
- * bounding center with a live angle ring readout (Shift snaps to 15°).
+ * Adobe Illustrator Rotate Tool (Shift+R) with Draggable Custom Pivot:
+ * - Drag anywhere around selected artwork to orbit around its center or custom pivot.
+ * - Drag the pivot crosshair anywhere (snaps to 9-point selection bounds); double-click pivot to recenter.
+ * - Hold Shift to snap to 15° increments.
  */
 export const rotateTool: CanvasToolHandler = {
   id: 'rotate',
@@ -38,15 +43,34 @@ export const rotateTool: CanvasToolHandler = {
   group: 'transform',
   icon: 'rotate',
   workspaces: ['component'],
-  description: 'Illustrator Rotate tool: drag around selected artwork to rotate freely. Hold Shift to snap to 15°.',
+  description: 'Drag to orbit around pivot (Shift snaps 15°). Drag pivot crosshair anywhere; double-click to recenter.',
   onPointerDown(event, context): CanvasToolTransition {
     if (event.button !== 0) return {};
+
+    // Dragging or double-clicking the custom rotation pivot crosshair
+    if (event.smartHandleHit?.kind === 'pivot') {
+      if ((event.detail ?? 0) >= 2) {
+        return { customPivot: null, notice: 'Reset rotation pivot to selection center.', preventDefault: true };
+      }
+      return {
+        session: {
+          kind: 'smart-handle',
+          pointerId: event.pointerId,
+          handle: event.smartHandleHit,
+          start: event.point,
+          pivot: event.point,
+        },
+        capturePointer: true,
+        preventDefault: true,
+      };
+    }
+
     if (!context.selectionBounds || context.selectedNodes.length === 0) {
       if (event.targetNodeId) {
         const hit = context.selectableNodes.find((n) => n.id === event.targetNodeId);
         if (hit) {
           const bounds = { x: hit.x, y: hit.y, width: hit.width, height: hit.height };
-          const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+          const pivot = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
           return {
             selection: [hit.id],
             session: {
@@ -57,7 +81,8 @@ export const rotateTool: CanvasToolHandler = {
               nodes: [hit],
               bounds,
               ids: [hit.id],
-              startAngle: computeAngleDeg(center, event.point),
+              pivot,
+              startAngle: computeAngleDeg(pivot, event.point),
               currentAngle: 0,
             },
             capturePointer: true,
@@ -68,7 +93,7 @@ export const rotateTool: CanvasToolHandler = {
       return { notice: 'Select an object first to rotate it.', preventDefault: true };
     }
 
-    const center = {
+    const pivot = context.customPivot ?? {
       x: context.selectionBounds.x + context.selectionBounds.width / 2,
       y: context.selectionBounds.y + context.selectionBounds.height / 2,
     };
@@ -81,7 +106,8 @@ export const rotateTool: CanvasToolHandler = {
         nodes: context.selectedNodes,
         bounds: context.selectionBounds,
         ids: context.selectedNodes.map((n) => n.id),
-        startAngle: computeAngleDeg(center, event.point),
+        pivot,
+        startAngle: computeAngleDeg(pivot, event.point),
         currentAngle: 0,
       },
       capturePointer: true,
@@ -90,22 +116,34 @@ export const rotateTool: CanvasToolHandler = {
   },
   onPointerMove(event, context): CanvasToolTransition {
     const session = context.session;
-    if (!session || session.kind !== 'select-transform' || session.mode !== 'rotate' || session.pointerId !== event.pointerId) {
-      return {};
+    if (!session || session.pointerId !== event.pointerId) return {};
+
+    if (session.kind === 'smart-handle' && session.handle.kind === 'pivot') {
+      const targets: Bounds[] = context.selectionBounds ? [context.selectionBounds] : [];
+      const snapped = snapPointToTargets(event.point, targets, 10 / Math.max(0.35, context.zoom));
+      return {
+        session: {
+          ...session,
+          pivot: snapped.point,
+          hudLabel: snapped.snapped ? 'Pivot (Snapped)' : 'Pivot',
+          hudPoint: snapped.point,
+        },
+        customPivot: snapped.point,
+        preventDefault: true,
+      };
     }
-    const center = {
+
+    if (session.kind !== 'select-transform' || session.mode !== 'rotate') return {};
+    const pivot = session.pivot ?? {
       x: session.bounds.x + session.bounds.width / 2,
       y: session.bounds.y + session.bounds.height / 2,
     };
-    let deltaAngle = computeAngleDeg(center, event.point) - (session.startAngle ?? 0);
+    let deltaAngle = computeAngleDeg(pivot, event.point) - (session.startAngle ?? 0);
     if (event.shiftKey) {
       deltaAngle = Math.round(deltaAngle / 15) * 15;
     }
     const rounded = Math.round(deltaAngle * 10) / 10;
-    const previewNodes = session.nodes.map((node) => ({
-      ...node,
-      rotation: Math.round(((node.rotation + rounded) % 360) * 10) / 10,
-    }));
+    const previewNodes = rotateNodesAroundPivot(session.nodes, rounded, pivot);
     return {
       session: { ...session, currentAngle: rounded, previewNodes },
       previewNodes,
@@ -114,9 +152,15 @@ export const rotateTool: CanvasToolHandler = {
   },
   onPointerUp(event, context): CanvasToolTransition {
     const session = context.session;
-    if (!session || session.kind !== 'select-transform' || session.mode !== 'rotate' || session.pointerId !== event.pointerId) {
-      return {};
+    if (!session || session.pointerId !== event.pointerId) return {};
+    if (session.kind === 'smart-handle') {
+      return {
+        session: null,
+        notice: 'Updated custom rotation pivot (double-click pivot to recenter).',
+        preventDefault: true,
+      };
     }
+    if (session.kind !== 'select-transform' || session.mode !== 'rotate') return {};
     return {
       ...(session.previewNodes ? { commitNodes: session.previewNodes } : {}),
       session: null,
@@ -128,27 +172,31 @@ export const rotateTool: CanvasToolHandler = {
     return context.session ? { session: null, previewNodes: null } : {};
   },
   onKeyDown(event, context) {
-    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null } : {};
+    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null, preventDefault: true } : {};
   },
   renderOverlay(context) {
     const session = context.session;
+    if (session?.kind === 'smart-handle' && session.hudLabel && session.hudPoint) {
+      return { kind: 'smart-hud', x: session.hudPoint.x, y: session.hudPoint.y, text: session.hudLabel, variant: 'rotate' };
+    }
     if (!session || session.kind !== 'select-transform' || session.mode !== 'rotate') return null;
-    const center = {
+    const center = session.pivot ?? {
       x: session.bounds.x + session.bounds.width / 2,
       y: session.bounds.y + session.bounds.height / 2,
     };
     const radius = Math.max(36, Math.hypot(session.bounds.width, session.bounds.height) / 2);
     return { kind: 'rotate-ring', center, radius, angleDeg: session.currentAngle ?? 0 };
   },
-  cursorStyle() {
-    return 'grab';
+  cursorStyle(context) {
+    if (context.session?.kind === 'smart-handle') return 'grabbing';
+    return context.session?.kind === 'select-transform' ? 'grabbing' : 'grab';
   },
 };
 
 /**
- * Figma & Illustrator Eyedropper Tool (I):
- * Click any artwork or artboard to sample its color, update the active tool
- * swatch, and apply it directly to currently selected layers!
+ * Figma & Illustrator Eyedropper Tool (I) with Live Color Loupe & Shift Stroke Mode:
+ * - Hover anywhere for a live color loupe readout.
+ * - Click to sample Fill; Shift+Click to sample directly into Stroke!
  */
 export const eyedropperTool: CanvasToolHandler = {
   id: 'eyedropper',
@@ -156,16 +204,17 @@ export const eyedropperTool: CanvasToolHandler = {
   shortcut: 'I',
   group: 'inspect',
   icon: 'eyedropper',
-  description: 'Sample any fill color from the artboard and apply it to the current selection.',
+  description: 'Hover for live color loupe. Click to apply Fill; Shift+Click to apply Stroke.',
   onPointerDown(event, context): CanvasToolTransition {
     if (event.button !== 0) return {};
     const hit = event.targetNodeId
       ? context.canvasNodes.find((node) => node.id === event.targetNodeId)
       : undefined;
     const sampled = extractSampledColor(hit, context.document.background);
+    const target: 'fill' | 'stroke' = event.shiftKey ? 'stroke' : 'fill';
     return {
-      sampledColor: sampled,
-      notice: `Sampled ${sampled.color.toUpperCase()} from ${sampled.sourceName}.`,
+      sampledColor: { ...sampled, target },
+      notice: `Sampled ${sampled.color.toUpperCase()} (${target}) from ${sampled.sourceName}.`,
       preventDefault: true,
     };
   },
@@ -179,10 +228,19 @@ export const eyedropperTool: CanvasToolHandler = {
   },
 };
 
+function getMeasureSnapTargets(context: { document: { width: number; height: number }; selectableNodes: DesignNode[] }): Bounds[] {
+  const targets: Bounds[] = [{ x: 0, y: 0, width: context.document.width, height: context.document.height }];
+  for (const node of context.selectableNodes) {
+    const b = getBounds([node]);
+    if (b) targets.push(b);
+  }
+  return targets;
+}
+
 /**
- * Folio Signature Precision Measure Tool (M):
- * Drag anywhere on the artboard to inspect exact pixel distance, ΔX, ΔY, and
- * angle θ° with live engineering redlines. Hold Shift to lock axis/45° angles!
+ * Folio Signature Precision Measure Tool (M) with Magnetic Smart Snap:
+ * Drag between any two points (snaps magnetically to object & artboard edges/centers)
+ * to inspect exact pixel distance, ΔX, ΔY, and angle θ°. Hold Shift for 45° lock!
  */
 export const measureTool: CanvasToolHandler = {
   id: 'measure',
@@ -190,11 +248,21 @@ export const measureTool: CanvasToolHandler = {
   shortcut: 'M',
   group: 'inspect',
   icon: 'measure',
-  description: 'Drag between any two points to inspect exact ΔX, ΔY, distance (px) and angle.',
-  onPointerDown(event): CanvasToolTransition {
+  description: 'Drag to measure ΔX, ΔY, distance & angle with magnetic edge snapping (Shift snaps 45°).',
+  onPointerDown(event, context): CanvasToolTransition {
     if (event.button !== 0) return {};
+    const tolerance = 9 / Math.max(0.35, context.zoom);
+    const snapped = snapPointToTargets(event.point, getMeasureSnapTargets(context), tolerance);
     return {
-      session: { kind: 'measure', pointerId: event.pointerId, start: event.point, current: event.point, active: true },
+      session: {
+        kind: 'measure',
+        pointerId: event.pointerId,
+        start: snapped.point,
+        current: snapped.point,
+        active: true,
+        snappedStart: snapped.snapped,
+        snappedEnd: snapped.snapped,
+      },
       capturePointer: true,
       preventDefault: true,
     };
@@ -203,14 +271,20 @@ export const measureTool: CanvasToolHandler = {
     const session = context.session;
     if (!session || session.kind !== 'measure' || !session.active || session.pointerId !== event.pointerId) return {};
     let current = event.point;
+    let snappedEnd = false;
     if (event.shiftKey) {
       const dx = event.point.x - session.start.x;
       const dy = event.point.y - session.start.y;
       const dist = Math.hypot(dx, dy);
       const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
       current = { x: session.start.x + Math.cos(angle) * dist, y: session.start.y + Math.sin(angle) * dist };
+    } else {
+      const tolerance = 9 / Math.max(0.35, context.zoom);
+      const snapped = snapPointToTargets(event.point, getMeasureSnapTargets(context), tolerance);
+      current = snapped.point;
+      snappedEnd = snapped.snapped;
     }
-    return { session: { ...session, current }, preventDefault: true };
+    return { session: { ...session, current, snappedEnd }, preventDefault: true };
   },
   onPointerUp(event, context): CanvasToolTransition {
     const session = context.session;
@@ -238,6 +312,8 @@ export const measureTool: CanvasToolHandler = {
       dy,
       distance,
       angleDeg,
+      snappedStart: session.snappedStart,
+      snappedEnd: session.snappedEnd,
     };
   },
   cursorStyle() {

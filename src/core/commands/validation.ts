@@ -369,7 +369,7 @@ function isDesignNodeData(value: unknown): value is DesignNode {
   }
 
   if (value.type === 'path') {
-    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'points', 'closed', 'style', 'pathKind', 'subpaths'])) return false;
+    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'points', 'closed', 'style', 'pathKind', 'subpaths', 'shapeMeta'])) return false;
     if (!isRecord(value.style) || !Array.isArray(value.points) || value.points.length === 0 || value.points.length > 500) {
       return false;
     }
@@ -401,6 +401,35 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     if (value.pathKind !== undefined &&
       !['pen', 'curvature', 'pencil', 'line', 'arrow', 'polygon', 'star', 'boolean', 'outline'].includes(String(value.pathKind))) {
       return false;
+    }
+    if (value.shapeMeta !== undefined) {
+      if (!isRecord(value.shapeMeta)) return false;
+      if (value.shapeMeta.kind === 'polygon') {
+        if (
+          !hasOnlyKeys(value.shapeMeta, ['kind', 'sides']) ||
+          !isFiniteNumber(value.shapeMeta.sides) ||
+          !Number.isInteger(value.shapeMeta.sides) ||
+          value.shapeMeta.sides < 3 ||
+          value.shapeMeta.sides > 32
+        ) {
+          return false;
+        }
+      } else if (value.shapeMeta.kind === 'star') {
+        if (
+          !hasOnlyKeys(value.shapeMeta, ['kind', 'spikes', 'innerRatio']) ||
+          !isFiniteNumber(value.shapeMeta.spikes) ||
+          !Number.isInteger(value.shapeMeta.spikes) ||
+          value.shapeMeta.spikes < 3 ||
+          value.shapeMeta.spikes > 32 ||
+          !isFiniteNumber(value.shapeMeta.innerRatio) ||
+          value.shapeMeta.innerRatio < 0.1 ||
+          value.shapeMeta.innerRatio > 0.95
+        ) {
+          return false;
+        }
+      } else {
+        return false;
+      }
     }
     const style = value.style;
     if (!hasOnlyKeys(style, [

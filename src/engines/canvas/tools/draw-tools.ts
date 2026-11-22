@@ -77,6 +77,10 @@ function buildDrawnNode(
   const isTransparent = context.document.background === '#00000000' || context.document.background === 'transparent';
   const defaultSize = isCompact ? 110 : 180;
   const strokeColor = isTransparent && opts.strokeColor === '#20212A' ? '#E6EAF2' : opts.strokeColor;
+  const hasVisibleStroke = Number.isFinite(opts.strokeWidth) && opts.strokeWidth > 0;
+  const shapeStrokeStyle = hasVisibleStroke
+    ? { stroke: strokeColor, strokeWidth: opts.strokeWidth }
+    : { stroke: '#00000000', strokeWidth: 0 };
 
   if (session.toolId === 'draw-line' || session.toolId === 'draw-arrow') {
     const end = isClickFallback
@@ -91,8 +95,8 @@ function buildDrawnNode(
 
   const box = isClickFallback
     ? {
-        x: Math.round(session.start.x - defaultSize / 2),
-        y: Math.round(session.start.y - (session.toolId === 'draw-text' ? 28 : defaultSize * 0.35)),
+        x: Math.round(session.start.x - (session.toolId === 'draw-text' ? 0 : defaultSize / 2)),
+        y: Math.round(session.start.y - (session.toolId === 'draw-text' ? 0 : defaultSize * 0.35)),
         width: session.toolId === 'frame' || session.toolId === 'section' ? (isCompact ? 180 : 320) : defaultSize,
         height: session.toolId === 'draw-text' ? 56 : session.toolId === 'frame' || session.toolId === 'section' ? (isCompact ? 120 : 220) : Math.round(defaultSize * (session.toolId === 'draw-rect' ? 0.7 : 1)),
       }
@@ -114,6 +118,7 @@ function buildDrawnNode(
         style: {
           ...base.style,
           fill: opts.fillColor,
+          ...shapeStrokeStyle,
           radius: Math.min(12, Math.floor(Math.min(box.width, box.height) / 5)),
         },
       };
@@ -126,24 +131,26 @@ function buildDrawnNode(
         y: box.y,
         width: Math.max(8, box.width),
         height: Math.max(8, box.height),
-        style: { ...base.style, fill: opts.fillColor },
+        style: { ...base.style, fill: opts.fillColor, ...shapeStrokeStyle },
       };
     }
     case 'draw-polygon': {
-      const node = createPolygonNode(box.x, box.y, box.width, box.height, opts.polygonSides);
-      return { ...node, style: { ...node.style, fill: opts.fillColor } };
+      const sides = session.sidesOverride ?? opts.polygonSides;
+      const node = createPolygonNode(box.x, box.y, box.width, box.height, sides);
+      return { ...node, style: { ...node.style, fill: opts.fillColor, ...shapeStrokeStyle } };
     }
     case 'draw-star': {
-      const node = createStarNode(box.x, box.y, box.width, box.height, opts.starPoints, opts.starInnerRatio);
-      return { ...node, style: { ...node.style, fill: opts.fillColor } };
+      const spikes = session.spikesOverride ?? opts.starPoints;
+      const node = createStarNode(box.x, box.y, box.width, box.height, spikes, opts.starInnerRatio);
+      return { ...node, style: { ...node.style, fill: opts.fillColor, ...shapeStrokeStyle } };
     }
     case 'draw-text': {
       const base = createTextNode(context.document.nodes.length);
       const fontSize = isCompact ? 20 : Math.max(16, Math.min(72, Math.round(box.height * 0.55)));
       return {
         ...base,
-        x: Math.round(session.start.x),
-        y: Math.round(session.start.y),
+        x: box.x,
+        y: box.y,
         width: Math.max(120, box.width),
         height: Math.max(36, box.height),
         text: isClickFallback ? 'Type something' : 'Heading text',
@@ -172,8 +179,9 @@ function createDrawTool(config: {
 }): CanvasToolHandler {
   return {
     ...config,
-    onPointerDown(event): CanvasToolTransition {
+    onPointerDown(event, context): CanvasToolTransition {
       if (event.button !== 0) return {};
+      const opts = context.toolOptions ?? DEFAULT_CANVAS_TOOL_OPTIONS;
       return {
         session: {
           kind: 'draw-shape',
@@ -183,6 +191,8 @@ function createDrawTool(config: {
           current: event.point,
           constrain: event.shiftKey,
           fromCenter: event.altKey,
+          ...(config.id === 'draw-polygon' ? { sidesOverride: opts.polygonSides } : {}),
+          ...(config.id === 'draw-star' ? { spikesOverride: opts.starPoints } : {}),
         },
         capturePointer: true,
         preventDefault: true,
@@ -228,8 +238,28 @@ function createDrawTool(config: {
       return context.session?.kind === 'draw-shape' ? { session: null } : {};
     },
     onKeyDown(event, context) {
-      if (event.key === 'Escape' && context.session?.kind === 'draw-shape') {
+      const session = context.session;
+      if (!session || session.kind !== 'draw-shape') return {};
+      if (event.key === 'Escape') {
         return { session: null, preventDefault: true };
+      }
+      // Illustrator live Up/Down arrow adjustment while drawing Polygons & Stars!
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        const delta = event.key === 'ArrowUp' ? 1 : -1;
+        if (session.toolId === 'draw-polygon') {
+          const curr = session.sidesOverride ?? (context.toolOptions?.polygonSides ?? 6);
+          return {
+            session: { ...session, sidesOverride: Math.max(3, Math.min(24, curr + delta)) },
+            preventDefault: true,
+          };
+        }
+        if (session.toolId === 'draw-star') {
+          const curr = session.spikesOverride ?? (context.toolOptions?.starPoints ?? 5);
+          return {
+            session: { ...session, spikesOverride: Math.max(3, Math.min(24, curr + delta)) },
+            preventDefault: true,
+          };
+        }
       }
       return {};
     },
@@ -240,15 +270,21 @@ function createDrawTool(config: {
       if (dist < 2) return null;
       const preview = buildDrawnNode(session, context, false);
       const isLine = session.toolId === 'draw-line' || session.toolId === 'draw-arrow';
+      const extra =
+        session.toolId === 'draw-polygon' && session.sidesOverride
+          ? ` · ${session.sidesOverride} sides`
+          : session.toolId === 'draw-star' && session.spikesOverride
+            ? ` · ${session.spikesOverride} pts`
+            : '';
       const label = isLine
         ? `${Math.round(dist)} px`
-        : `${Math.round(preview.width)} × ${Math.round(preview.height)}`;
+        : `${Math.round(preview.width)} × ${Math.round(preview.height)}${extra}`;
       return {
         kind: 'draw-preview',
         node: preview,
         label,
         labelX: preview.x + preview.width / 2,
-        labelY: preview.y + preview.height + 16,
+        labelY: preview.y + preview.height + 16 / Math.max(0.35, context.zoom),
       };
     },
     cursorStyle() {
@@ -317,7 +353,7 @@ export const drawPolygonTool = createDrawTool({
   shortcut: 'G',
   group: 'shapes',
   icon: 'polygon',
-  description: 'Click or drag to draw a regular Polygon. Adjust side count in the tool bar.',
+  description: 'Drag to draw a regular Polygon. Press Up/Down arrows while dragging to adjust sides.',
 });
 
 export const drawStarTool = createDrawTool({
@@ -326,7 +362,7 @@ export const drawStarTool = createDrawTool({
   shortcut: 'Shift+G',
   group: 'shapes',
   icon: 'star',
-  description: 'Click or drag to draw a multi-point Star. Adjust points & ratio in the tool bar.',
+  description: 'Drag to draw a multi-point Star. Press Up/Down arrows while dragging to adjust points.',
 });
 
 export const drawTextTool = createDrawTool({

@@ -14,6 +14,7 @@ export interface ToolOptionsBarProps {
   onRotate90: () => void;
   onSimplifyPath: () => void;
   onTogglePathClosed: () => void;
+  onSelectTool?: (toolId: CanvasToolId) => void;
 }
 
 const OPTION_TOOLS = new Set<CanvasToolId>([
@@ -29,6 +30,7 @@ const OPTION_TOOLS = new Set<CanvasToolId>([
   'curvature',
   'pencil',
   'smooth',
+  'shape-builder',
   'draw-text',
   'eyedropper',
   'measure',
@@ -82,6 +84,7 @@ export function ToolOptionsBar({
   onRotate90,
   onSimplifyPath,
   onTogglePathClosed,
+  onSelectTool,
 }: ToolOptionsBarProps) {
   const booleanCandidates = selectedNodes.filter(isBooleanCandidate);
   const canPathfinder = booleanCandidates.length >= 2;
@@ -175,6 +178,18 @@ export function ToolOptionsBar({
             <PathfinderIcon op="exclude" />
             <span>Exclude</span>
           </button>
+          {onSelectTool && (
+            <button
+              type="button"
+              class={'studio-opt-btn' + (toolId === 'shape-builder' ? ' is-active' : '')}
+              disabled={!canPathfinder}
+              aria-pressed={toolId === 'shape-builder'}
+              onClick={() => onSelectTool('shape-builder')}
+              title="Shape Builder (Shift+M) — drag across overlapping regions to merge, hold Alt to punch"
+            >
+              <span>Builder</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -353,11 +368,14 @@ export function ToolOptionsBar({
               <span>Keep Tool</span>
             </button>
           )}
+          {toolId === 'shape-builder' && (
+            <span class="studio-opt-hint">Drag across regions to merge · Hold Alt to punch out regions</span>
+          )}
           {toolId === 'eyedropper' && (
-            <span class="studio-opt-hint">Click any layer to sample color and apply to selection</span>
+            <span class="studio-opt-hint">Hover for live loupe · Click applies Fill · Shift+Click applies Stroke</span>
           )}
           {toolId === 'measure' && (
-            <span class="studio-opt-hint">Drag to inspect distance, ΔX, ΔY, and angle (Shift snaps 45°)</span>
+            <span class="studio-opt-hint">Drag to measure ΔX, ΔY, distance &amp; angle with smart snap (Shift snaps 45°)</span>
           )}
         </div>
       )}

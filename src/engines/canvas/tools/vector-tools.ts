@@ -10,6 +10,7 @@ import {
   smoothPathAnchors,
   splitPathAtLocalPoint,
   toggleAnchorPointType,
+  worldPointToNodeLocal,
 } from '../../../core/document/vector';
 import {
   DEFAULT_CANVAS_TOOL_OPTIONS,
@@ -22,6 +23,18 @@ import {
 function createNodeId(prefix = 'node'): string {
   const randomId = globalThis.crypto?.randomUUID?.();
   return `${prefix}-${randomId ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+function snapAngle45(origin: { x: number; y: number }, target: { x: number; y: number }): { x: number; y: number } {
+  const dx = target.x - origin.x;
+  const dy = target.y - origin.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1e-4) return target;
+  const snapped = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+  return {
+    x: Math.round((origin.x + Math.cos(snapped) * dist) * 100) / 100,
+    y: Math.round((origin.y + Math.sin(snapped) * dist) * 100) / 100,
+  };
 }
 
 function finalizePenDraft(
@@ -39,13 +52,18 @@ function finalizePenDraft(
     ? fitCatmullRomToBezier(session.rawCurvaturePoints, closed, 0.25)
     : session.points;
 
+  // Honor user-configured strokeWidth on closed paths too (no longer silently forcing 0!)
+  const strokeWidth = closed
+    ? Math.max(0, Number.isFinite(opts.strokeWidth) ? opts.strokeWidth : 0)
+    : Math.max(2, Number.isFinite(opts.strokeWidth) ? opts.strokeWidth : 2);
+
   const node = createVectorPathNode(finalPoints, {
     name: session.mode === 'curvature' ? 'Curvature Path' : 'Vector Path',
     closed,
     pathKind: session.mode,
     fill: closed ? opts.fillColor : 'none',
-    stroke: strokeColor,
-    strokeWidth: closed ? 0 : Math.max(2, opts.strokeWidth),
+    stroke: strokeWidth > 0 ? strokeColor : '#00000000',
+    strokeWidth,
   });
 
   return {
@@ -59,10 +77,10 @@ function finalizePenDraft(
 
 /**
  * Adobe Illustrator & Figma Pen Tool (P):
- * - Click to add sharp corner anchors.
- * - Click-drag to pull symmetric cubic Bezier handles.
+ * - Click to add sharp corner anchors (Shift snaps 45° from previous anchor).
+ * - Click-drag to pull symmetric cubic Bezier handles (Shift snaps 45°, Alt breaks cusp).
  * - Click the first anchor (highlighted close ring) to close the shape.
- * - Double-click or press Enter/Escape to commit an open path; Backspace removes last anchor.
+ * - Double-click or press Enter to commit an open path; Escape discards draft; Backspace undoes last anchor.
  */
 export const penTool: CanvasToolHandler = {
   id: 'pen',
@@ -70,7 +88,7 @@ export const penTool: CanvasToolHandler = {
   shortcut: 'P',
   group: 'vector',
   icon: 'pen',
-  description: 'Click for corners, drag for cubic Bezier curves. Click first point to close; Enter to finish.',
+  description: 'Click for corners, drag for curves. Shift snaps 45°, Alt breaks cusp handle, Enter commits, Esc discards.',
   onPointerDown(event, context): CanvasToolTransition {
     if (event.button !== 0) return {};
     const current = context.session?.kind === 'pen-draft' && context.session.mode === 'pen' ? context.session : null;
@@ -99,7 +117,8 @@ export const penTool: CanvasToolHandler = {
 
     // Close path if clicking near first anchor with >= 3 points
     const first = current.points[0];
-    if (current.points.length >= 3 && Math.hypot(event.point.x - first.x, event.point.y - first.y) <= 12) {
+    const closeThreshold = 12 / Math.max(0.35, context.zoom);
+    if (current.points.length >= 3 && Math.hypot(event.point.x - first.x, event.point.y - first.y) <= closeThreshold) {
       return finalizePenDraft(current, true, context);
     }
 
@@ -108,10 +127,12 @@ export const penTool: CanvasToolHandler = {
       return finalizePenDraft(current, false, context);
     }
 
+    const prev = current.points[current.points.length - 1];
+    const placed = event.shiftKey && prev ? snapAngle45(prev, event.point) : event.point;
     const nextAnchor: VectorAnchorPoint = {
       id: createAnchorId('pen'),
-      x: Math.round(event.point.x * 100) / 100,
-      y: Math.round(event.point.y * 100) / 100,
+      x: Math.round(placed.x * 100) / 100,
+      y: Math.round(placed.y * 100) / 100,
       pointType: 'corner',
     };
     return {
@@ -120,7 +141,7 @@ export const penTool: CanvasToolHandler = {
         points: [...current.points, nextAnchor],
         draggingHandle: true,
         pointerId: event.pointerId,
-        cursor: event.point,
+        cursor: placed,
         hoverClose: false,
       },
       capturePointer: true,
@@ -134,24 +155,35 @@ export const penTool: CanvasToolHandler = {
     if (session.draggingHandle && session.pointerId === event.pointerId && session.points.length > 0) {
       const lastIndex = session.points.length - 1;
       const anchor = session.points[lastIndex];
-      const dx = event.point.x - anchor.x;
-      const dy = event.point.y - anchor.y;
+      const handleTarget = event.shiftKey ? snapAngle45(anchor, event.point) : event.point;
+      const dx = handleTarget.x - anchor.x;
+      const dy = handleTarget.y - anchor.y;
       if (Math.hypot(dx, dy) >= 3) {
-        const updated: VectorAnchorPoint = {
-          ...anchor,
-          handleOut: { x: Math.round((anchor.x + dx) * 100) / 100, y: Math.round((anchor.y + dy) * 100) / 100 },
-          handleIn: { x: Math.round((anchor.x - dx) * 100) / 100, y: Math.round((anchor.y - dy) * 100) / 100 },
-          pointType: 'symmetric',
-        };
+        const updated: VectorAnchorPoint = event.altKey
+          ? {
+              // Alt mid-drag breaks symmetry into independent cusp handle!
+              ...anchor,
+              handleOut: { x: Math.round((anchor.x + dx) * 100) / 100, y: Math.round((anchor.y + dy) * 100) / 100 },
+              pointType: 'corner',
+            }
+          : {
+              ...anchor,
+              handleOut: { x: Math.round((anchor.x + dx) * 100) / 100, y: Math.round((anchor.y + dy) * 100) / 100 },
+              handleIn: { x: Math.round((anchor.x - dx) * 100) / 100, y: Math.round((anchor.y - dy) * 100) / 100 },
+              pointType: 'symmetric',
+            };
         const points = [...session.points.slice(0, lastIndex), updated];
-        return { session: { ...session, points, cursor: event.point }, preventDefault: true };
+        return { session: { ...session, points, cursor: handleTarget }, preventDefault: true };
       }
-      return { session: { ...session, cursor: event.point }, preventDefault: true };
+      return { session: { ...session, cursor: handleTarget }, preventDefault: true };
     }
 
+    const prev = session.points[session.points.length - 1];
+    const cursor = event.shiftKey && prev ? snapAngle45(prev, event.point) : event.point;
     const first = session.points[0];
-    const hoverClose = session.points.length >= 3 && Math.hypot(event.point.x - first.x, event.point.y - first.y) <= 12;
-    return { session: { ...session, cursor: event.point, hoverClose } };
+    const closeThreshold = 12 / Math.max(0.35, context.zoom);
+    const hoverClose = session.points.length >= 3 && Math.hypot(cursor.x - first.x, cursor.y - first.y) <= closeThreshold;
+    return { session: { ...session, cursor, hoverClose } };
   },
   onPointerUp(event, context): CanvasToolTransition {
     const session = context.session;
@@ -172,7 +204,7 @@ export const penTool: CanvasToolHandler = {
       return finalizePenDraft(session, false, context);
     }
     if (event.key === 'Escape') {
-      return session.points.length >= 2 ? finalizePenDraft(session, false, context) : { session: null, preventDefault: true };
+      return { session: null, notice: 'Discarded pen draft.', preventDefault: true };
     }
     if (event.key === 'Backspace' || event.key === 'Delete') {
       if (session.points.length <= 1) return { session: null, preventDefault: true };
@@ -198,7 +230,7 @@ export const penTool: CanvasToolHandler = {
 /**
  * Adobe Illustrator Curvature Tool (U):
  * Click points to automatically sculpt silky smooth Catmull-Rom Bezier curves.
- * Alt+Click (or double-click) drops a sharp corner anchor. Click first point to close!
+ * Alt+Click drops a sharp corner anchor. Click first point to close; Enter commits, Esc discards.
  */
 export const curvatureTool: CanvasToolHandler = {
   id: 'curvature',
@@ -207,7 +239,7 @@ export const curvatureTool: CanvasToolHandler = {
   group: 'vector',
   icon: 'curvature',
   workspaces: ['component'],
-  description: 'Illustrator Curvature tool: click for auto-smooth curves, Alt+click for sharp corners, click start to close.',
+  description: 'Illustrator Curvature tool: click for smooth curves, Alt+click for sharp corners, Enter commits, Esc discards.',
   onPointerDown(event, context): CanvasToolTransition {
     if (event.button !== 0) return {};
     const current = context.session?.kind === 'pen-draft' && context.session.mode === 'curvature' ? context.session : null;
@@ -230,8 +262,13 @@ export const curvatureTool: CanvasToolHandler = {
     }
 
     const rawPoints = current.rawCurvaturePoints ?? [];
-    if (rawPoints.length >= 3 && Math.hypot(event.point.x - rawPoints[0].x, event.point.y - rawPoints[0].y) <= 12) {
+    const closeThreshold = 12 / Math.max(0.35, context.zoom);
+    if (rawPoints.length >= 3 && Math.hypot(event.point.x - rawPoints[0].x, event.point.y - rawPoints[0].y) <= closeThreshold) {
       return finalizePenDraft(current, true, context);
+    }
+
+    if ((event.detail ?? 0) >= 2 && rawPoints.length >= 2) {
+      return finalizePenDraft(current, false, context);
     }
 
     const nextRaw = [
@@ -253,7 +290,8 @@ export const curvatureTool: CanvasToolHandler = {
     const session = context.session;
     if (!session || session.kind !== 'pen-draft' || session.mode !== 'curvature') return {};
     const raw = session.rawCurvaturePoints ?? [];
-    const hoverClose = raw.length >= 3 && Math.hypot(event.point.x - raw[0].x, event.point.y - raw[0].y) <= 12;
+    const closeThreshold = 12 / Math.max(0.35, context.zoom);
+    const hoverClose = raw.length >= 3 && Math.hypot(event.point.x - raw[0].x, event.point.y - raw[0].y) <= closeThreshold;
     return { session: { ...session, cursor: event.point, hoverClose } };
   },
   onPointerUp() {
@@ -265,8 +303,11 @@ export const curvatureTool: CanvasToolHandler = {
   onKeyDown(event, context): CanvasToolTransition {
     const session = context.session;
     if (!session || session.kind !== 'pen-draft' || session.mode !== 'curvature') return {};
-    if (event.key === 'Enter' || event.key === 'Escape') {
+    if (event.key === 'Enter') {
       return session.points.length >= 2 ? finalizePenDraft(session, false, context) : { session: null, preventDefault: true };
+    }
+    if (event.key === 'Escape') {
+      return { session: null, notice: 'Discarded curvature draft.', preventDefault: true };
     }
     if (event.key === 'Backspace' || event.key === 'Delete') {
       const raw = (session.rawCurvaturePoints ?? []).slice(0, -1);
@@ -296,7 +337,7 @@ export const curvatureTool: CanvasToolHandler = {
 /**
  * Adobe Illustrator Anchor Point / Convert Tool (Shift+C):
  * - Click an anchor to convert smooth ↔ corner.
- * - Drag from an anchor to pull fresh symmetric Bezier handles.
+ * - Drag from an anchor to pull fresh symmetric Bezier handles (rotation-safe!).
  * - Click any path segment to insert a new anchor point via de Casteljau subdivision!
  */
 export const anchorPointTool: CanvasToolHandler = {
@@ -347,17 +388,17 @@ export const anchorPointTool: CanvasToolHandler = {
       };
     }
 
-    // Clicking on a PathNode segment inserts a brand new anchor point cleanly!
+    // Clicking on a PathNode segment inserts a brand new anchor point cleanly (rotation-safe!)
     const targetPath = context.selectedNodes.find((n): n is PathNode => n.type === 'path') ??
       context.selectableNodes.find((n): n is PathNode => n.id === event.targetNodeId && n.type === 'path');
     if (targetPath) {
-      const localPoint = { x: event.point.x - targetPath.x, y: event.point.y - targetPath.y };
-      const hit = findNearestSegmentHit(targetPath, localPoint, 16);
+      const localPoint = worldPointToNodeLocal(targetPath, event.point);
+      const hit = findNearestSegmentHit(targetPath, localPoint, 16 / Math.max(0.35, context.zoom));
       if (hit) {
         const { node: subdivided } = insertAnchorOnPathSegment(targetPath, hit.segmentIndex, hit.t);
         return {
           selection: [subdivided.id],
-          commitNodes: [subdivided],
+          commitNodes: [{ ...subdivided, shapeMeta: undefined }],
           notice: 'Added anchor point on path segment.',
           preventDefault: true,
         };
@@ -373,9 +414,11 @@ export const anchorPointTool: CanvasToolHandler = {
     const anchor = session.node.points[session.pointIndex];
     if (!anchor) return {};
 
+    const localPointer = worldPointToNodeLocal(session.node, event.point);
+
     if (session.symmetricConvert) {
-      const dx = event.point.x - (session.node.x + anchor.x);
-      const dy = event.point.y - (session.node.y + anchor.y);
+      const dx = localPointer.x - anchor.x;
+      const dy = localPointer.y - anchor.y;
       if (Math.hypot(dx, dy) < 3) return {};
       const points = session.node.points.map((pt, idx) =>
         idx === session.pointIndex
@@ -387,13 +430,13 @@ export const anchorPointTool: CanvasToolHandler = {
             }
           : pt,
       );
-      const previewNode = normalizePathNode({ ...session.node, points });
+      const previewNode = normalizePathNode({ ...session.node, points, shapeMeta: undefined });
       return { session: { ...session, previewNode }, previewNodes: [previewNode], preventDefault: true };
     }
 
-    // Independent handle break
-    const localX = Math.round((event.point.x - session.node.x) * 100) / 100;
-    const localY = Math.round((event.point.y - session.node.y) * 100) / 100;
+    // Independent handle break in rotated local space
+    const localX = Math.round(localPointer.x * 100) / 100;
+    const localY = Math.round(localPointer.y * 100) / 100;
     const points = session.node.points.map((pt, idx) =>
       idx === session.pointIndex
         ? {
@@ -403,7 +446,7 @@ export const anchorPointTool: CanvasToolHandler = {
           }
         : pt,
     );
-    const previewNode = normalizePathNode({ ...session.node, points });
+    const previewNode = normalizePathNode({ ...session.node, points, shapeMeta: undefined });
     return { session: { ...session, previewNode }, previewNodes: [previewNode], preventDefault: true };
   },
   onPointerUp(event, context): CanvasToolTransition {
@@ -415,7 +458,7 @@ export const anchorPointTool: CanvasToolHandler = {
     // Plain click without drag -> toggle corner <-> smooth
     if (session.symmetricConvert) {
       const toggled = toggleAnchorPointType(session.node, session.pointIndex);
-      return { commitNodes: [toggled], session: null, previewNodes: null, preventDefault: true };
+      return { commitNodes: [{ ...toggled, shapeMeta: undefined }], session: null, previewNodes: null, preventDefault: true };
     }
     return { session: null, previewNodes: null, preventDefault: true };
   },
@@ -423,7 +466,7 @@ export const anchorPointTool: CanvasToolHandler = {
     return context.session?.kind === 'anchor-edit' ? { session: null, previewNodes: null } : {};
   },
   onKeyDown(event, context) {
-    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null } : {};
+    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null, preventDefault: true } : {};
   },
   renderOverlay() {
     return null;
@@ -496,7 +539,7 @@ export const pencilTool: CanvasToolHandler = {
     return context.session?.kind === 'freehand' ? { session: null } : {};
   },
   onKeyDown(event, context) {
-    return event.key === 'Escape' && context.session?.kind === 'freehand' ? { session: null } : {};
+    return event.key === 'Escape' && context.session?.kind === 'freehand' ? { session: null, preventDefault: true } : {};
   },
   renderOverlay(context) {
     const session = context.session;
@@ -510,7 +553,7 @@ export const pencilTool: CanvasToolHandler = {
 
 /**
  * Adobe Illustrator Smooth Tool (Shift+N):
- * Drag across any selected vector path to smoothly relax jagged anchors & curves.
+ * Drag across any selected vector path (including rotated paths!) to smoothly relax jagged curves.
  */
 export const smoothTool: CanvasToolHandler = {
   id: 'smooth',
@@ -570,7 +613,7 @@ export const smoothTool: CanvasToolHandler = {
     return context.session?.kind === 'freehand' ? { session: null, previewNodes: null } : {};
   },
   onKeyDown(event, context) {
-    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null } : {};
+    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null, preventDefault: true } : {};
   },
   renderOverlay(context) {
     const session = context.session;
@@ -584,8 +627,8 @@ export const smoothTool: CanvasToolHandler = {
 
 /**
  * Adobe Illustrator Scissors Tool (C):
- * Click anywhere along a PathNode segment to open a closed path or split an open
- * path into two separate editable PathNodes!
+ * Click anywhere along a PathNode segment (rotation-safe!) to open a closed path or split an open
+ * path into two separate editable PathNodes in one atomic undo step.
  */
 export const scissorsTool: CanvasToolHandler = {
   id: 'scissors',
@@ -602,22 +645,23 @@ export const scissorsTool: CanvasToolHandler = {
     if (!target) {
       return { notice: 'Click a vector path segment to cut or split it.', preventDefault: true };
     }
-    const localPoint = { x: event.point.x - target.x, y: event.point.y - target.y };
+    const localPoint = worldPointToNodeLocal(target, event.point);
     const split = splitPathAtLocalPoint(target, localPoint, () => createNodeId('node'));
     if (!split) {
       return { notice: 'Click directly on a vector path edge to cut.', preventDefault: true };
     }
-    if (split.length === 1) {
+    const cleanedSplit = split.map((item) => ({ ...item, shapeMeta: undefined }));
+    if (cleanedSplit.length === 1) {
       return {
-        commitNodes: split,
-        selection: [split[0].id],
+        commitNodes: cleanedSplit,
+        selection: [cleanedSplit[0].id],
         notice: 'Opened vector path at cut point.',
         preventDefault: true,
       };
     }
     return {
-      replaceNodeWithNodes: { nodeId: target.id, nodes: split },
-      selection: split.map((item) => item.id),
+      replaceNodeWithNodes: { nodeId: target.id, nodes: cleanedSplit },
+      selection: cleanedSplit.map((item) => item.id),
       notice: 'Split path into two editable vector paths.',
       preventDefault: true,
     };

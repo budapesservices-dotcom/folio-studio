@@ -129,6 +129,7 @@ function Icon({ name }: { name: string }) {
     pencil: 'M4 20l3.5-1 11-11a2 2 0 0 0-2.8-2.8l-11 11L4 20zM13.5 6.5l4 4',
     smooth: 'M3 16c3-7 6-7 9 0s6 7 9 0',
     scissors: 'M6 7a2.5 2.5 0 1 0 0 .01M6 17a2.5 2.5 0 1 0 0 .01M8.2 8.4 20 17M8.2 15.6 20 7',
+    shapeBuilder: 'M9 9a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm6-4a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM16 17h4m-2-2v4',
     rotate: 'M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5',
     eyedropper: 'm19 5-4 4m-1-5 6 6m-7-4-8.5 8.5a2 2 0 0 0-.5 1.1L3 21l5.4-1a2 2 0 0 0 1.1-.5L18 11',
     measure: 'M3 16 16 3l5 5L8 21 3 16zM8 11l2 2M11 8l2 2M14 5l2 2',
@@ -2007,24 +2008,59 @@ export function App() {
     }
   };
 
-  const handleSampledColor = (target: EditorTarget, color: string, sourceName: string) => {
-    setToolOptions((current) => ({ ...current, fillColor: color }));
+  const handleCanvasReplaceNodes = (target: EditorTarget, removeIds: string[], insertNodes: DesignNode[]) => {
+    if (isHydrating || removeIds.length === 0) return;
+    selectionSourceRef.current = 'canvas';
+    if (target === 'main') {
+      dispatch({ type: 'replace-nodes', removeIds, insertNodes });
+    } else {
+      componentDispatch({ type: 'replace-nodes', removeIds, insertNodes });
+    }
+  };
+
+  const handleSampledColor = (
+    target: EditorTarget,
+    color: string,
+    sourceName: string,
+    colorTarget: 'fill' | 'stroke' = 'fill',
+  ) => {
+    setToolOptions((current) =>
+      colorTarget === 'stroke' ? { ...current, strokeColor: color } : { ...current, fillColor: color },
+    );
     const editor = target === 'main' ? state : componentState;
     const doc = getActiveDocument(editor.project);
     const selected = doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id));
-    let appliedCount = 0;
+    const updatedNodes: DesignNode[] = [];
     for (const node of selected) {
-      if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'text' || node.type === 'path') {
-        const updated = { ...node, style: { ...node.style, fill: color } } as DesignNode;
-        if (target === 'main') mainCommandClient.replaceNode(updated, 'Apply sampled color');
-        else componentDispatch({ type: 'replace-node', node: updated });
-        appliedCount += 1;
+      if (colorTarget === 'stroke') {
+        if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path') {
+          updatedNodes.push({
+            ...node,
+            style: {
+              ...node.style,
+              stroke: color,
+              strokeWidth: Math.max(1, node.style.strokeWidth || 0),
+            },
+          } as DesignNode);
+        }
+      } else if (
+        node.type === 'rect' ||
+        node.type === 'ellipse' ||
+        node.type === 'frame' ||
+        node.type === 'text' ||
+        node.type === 'path'
+      ) {
+        updatedNodes.push({ ...node, style: { ...node.style, fill: color } } as DesignNode);
       }
     }
+    if (updatedNodes.length > 0) {
+      if (target === 'main') mainCommandClient.transformNodes(updatedNodes, `Apply sampled ${colorTarget}`);
+      else componentDispatch({ type: 'transform-nodes', nodes: updatedNodes });
+    }
     setNotice(
-      appliedCount > 0
-        ? `Sampled ${color.toUpperCase()} from ${sourceName} and applied to ${appliedCount} layer${appliedCount === 1 ? '' : 's'}.`
-        : `Sampled ${color.toUpperCase()} from ${sourceName} into active draw fill.`,
+      updatedNodes.length > 0
+        ? `Sampled ${color.toUpperCase()} (${colorTarget}) from ${sourceName} and applied to ${updatedNodes.length} layer${updatedNodes.length === 1 ? '' : 's'}.`
+        : `Sampled ${color.toUpperCase()} from ${sourceName} into active draw ${colorTarget}.`,
     );
   };
 
@@ -2058,13 +2094,7 @@ export function App() {
       return;
     }
     const removeIds = candidates.map((node) => node.id);
-    if (target === 'main') {
-      mainCommandClient.deleteNodes(removeIds, `Pathfinder ${operation}`);
-      mainCommandClient.createNodes([result], `Pathfinder ${operation}`);
-    } else {
-      componentDispatch({ type: 'delete-nodes', nodeIds: removeIds });
-      componentDispatch({ type: 'add-nodes', nodes: [result] });
-    }
+    handleCanvasReplaceNodes(target, removeIds, [result]);
     setNotice(`Pathfinder ${operation} created “${result.name}”.`);
   };
 
@@ -3124,6 +3154,7 @@ export function App() {
             onRotate90={() => handleRotate90('main')}
             onSimplifyPath={() => handleSimplifyPath('main')}
             onTogglePathClosed={() => handleTogglePathClosed('main')}
+            onSelectTool={(nextTool) => chooseCanvasTool(nextTool, 'main')}
           />
           <Canvas
             document={activeDocument}
@@ -3145,7 +3176,8 @@ export function App() {
             onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'main')}
             onCreateNodes={(nodes) => handleCanvasCreateNodes('main', nodes)}
             onReplaceNodeWithNodes={(nodeId, nodes) => handleCanvasReplaceNodeWithNodes('main', nodeId, nodes)}
-            onSampledColor={(color, sourceName) => handleSampledColor('main', color, sourceName)}
+            onReplaceNodes={(removeIds, insertNodes) => handleCanvasReplaceNodes('main', removeIds, insertNodes)}
+            onSampledColor={(color, sourceName, colorTarget) => handleSampledColor('main', color, sourceName, colorTarget)}
             onToolChange={(nextTool) => chooseCanvasTool(nextTool, 'main')}
             onToolNotice={setNotice}
             onInlineTextCommit={(nodeId, text) => handleInlineTextCommit('main', nodeId, text)}
@@ -3259,6 +3291,7 @@ export function App() {
             onRotate90={() => handleRotate90('component')}
             onSimplifyPath={() => handleSimplifyPath('component')}
             onTogglePathClosed={() => handleTogglePathClosed('component')}
+            onSelectTool={(nextTool) => chooseCanvasTool(nextTool, 'component')}
           />
           <Canvas
             document={componentDocument}
@@ -3279,7 +3312,8 @@ export function App() {
             onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'component')}
             onCreateNodes={(nodes) => handleCanvasCreateNodes('component', nodes)}
             onReplaceNodeWithNodes={(nodeId, nodes) => handleCanvasReplaceNodeWithNodes('component', nodeId, nodes)}
-            onSampledColor={(color, sourceName) => handleSampledColor('component', color, sourceName)}
+            onReplaceNodes={(removeIds, insertNodes) => handleCanvasReplaceNodes('component', removeIds, insertNodes)}
+            onSampledColor={(color, sourceName, colorTarget) => handleSampledColor('component', color, sourceName, colorTarget)}
             onToolChange={(nextTool) => chooseCanvasTool(nextTool, 'component')}
             onToolNotice={setNotice}
             onInlineTextCommit={(nodeId, text) => handleInlineTextCommit('component', nodeId, text)}

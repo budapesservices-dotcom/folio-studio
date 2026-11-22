@@ -120,6 +120,20 @@ function isDesignNode(value: unknown): value is DesignNode {
   }
 
   if (value.type === 'path') {
+    const validShapeMeta =
+      value.shapeMeta === undefined ||
+      (isRecord(value.shapeMeta) &&
+        ((value.shapeMeta.kind === 'polygon' &&
+          isFiniteNumber(value.shapeMeta.sides) &&
+          value.shapeMeta.sides >= 3 &&
+          value.shapeMeta.sides <= 24) ||
+          (value.shapeMeta.kind === 'star' &&
+            isFiniteNumber(value.shapeMeta.spikes) &&
+            value.shapeMeta.spikes >= 3 &&
+            value.shapeMeta.spikes <= 24 &&
+            isFiniteNumber(value.shapeMeta.innerRatio) &&
+            value.shapeMeta.innerRatio >= 0.1 &&
+            value.shapeMeta.innerRatio <= 0.95)));
     return (
       Array.isArray(value.points) &&
       value.points.length > 0 &&
@@ -128,7 +142,8 @@ function isDesignNode(value: unknown): value is DesignNode {
       isPathStyle(value.style) &&
       (value.pathKind === undefined ||
         ['pen', 'curvature', 'pencil', 'line', 'arrow', 'polygon', 'star', 'boolean', 'outline'].includes(String(value.pathKind))) &&
-      (value.subpaths === undefined || (Array.isArray(value.subpaths) && value.subpaths.every(isVectorSubpath)))
+      (value.subpaths === undefined || (Array.isArray(value.subpaths) && value.subpaths.every(isVectorSubpath))) &&
+      validShapeMeta
     );
   }
 

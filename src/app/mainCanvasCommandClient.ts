@@ -196,18 +196,22 @@ export function createMainCanvasCommandClient(
       const hasExtendedGeometryOrStyleChange = nodes.some((node) => {
         const current = astView.getNode(node.id);
         if (!current) return false;
-        if (node.type === 'text' && current.type === 'text' && current.style.fontSize !== node.style.fontSize) {
-          return true;
+        if (node.type === 'text' && current.type === 'text') {
+          return current.style.fontSize !== node.style.fontSize || current.style.fill !== node.style.fill;
         }
         if (node.type === 'path' && current.type === 'path') {
           return current.width !== node.width || current.height !== node.height ||
-            current.points !== node.points || current.style.strokeWidth !== node.style.strokeWidth;
+            current.points !== node.points || current.shapeMeta !== node.shapeMeta ||
+            current.style.fill !== node.style.fill || current.style.stroke !== node.style.stroke ||
+            current.style.strokeWidth !== node.style.strokeWidth;
         }
         if ((node.type === 'rect' || node.type === 'frame') && (current.type === node.type)) {
-          return current.style.strokeWidth !== node.style.strokeWidth || current.style.radius !== node.style.radius;
+          return current.style.fill !== node.style.fill || current.style.stroke !== node.style.stroke ||
+            current.style.strokeWidth !== node.style.strokeWidth || current.style.radius !== node.style.radius;
         }
         if (node.type === 'ellipse' && current.type === 'ellipse') {
-          return current.style.strokeWidth !== node.style.strokeWidth;
+          return current.style.fill !== node.style.fill || current.style.stroke !== node.style.stroke ||
+            current.style.strokeWidth !== node.style.strokeWidth;
         }
         return false;
       });

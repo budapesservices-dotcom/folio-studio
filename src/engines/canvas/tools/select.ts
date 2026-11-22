@@ -1,12 +1,79 @@
 import { expandSelectedLayerIds, getCanvasClickSelectionIds, getLayerAncestorIds } from '../../../core/document/layers';
-import type { PathNode } from '../../../core/document/types';
-import { normalizePathNode, toggleAnchorPointType } from '../../../core/document/vector';
-import { getBounds, resizeNodes, snapTranslation } from '../geometry';
+import type { DesignNode, FrameNode, PathNode, RectNode } from '../../../core/document/types';
+import {
+  deleteAnchorPoint,
+  normalizePathNode,
+  toggleAnchorPointType,
+  updateParametricPathNode,
+  worldDeltaToNodeLocalDelta,
+  worldPointToNodeLocal,
+} from '../../../core/document/vector';
+import {
+  getBounds,
+  resizeNodes,
+  rotateNodesAroundPivot,
+  snapPointToTargets,
+  snapTranslation,
+} from '../geometry';
 import type { CanvasToolHandler, CanvasToolId, CanvasToolTransition } from './types';
 import { rectangleBounds } from './geometry';
 
 function computeAngleDeg(center: { x: number; y: number }, point: { x: number; y: number }): number {
   return (Math.atan2(point.y - center.y, point.x - center.x) * 180) / Math.PI;
+}
+
+function createCloneId(): string {
+  const rand = globalThis.crypto?.randomUUID?.();
+  return `node-${rand ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+function cloneNodesForDuplicate(nodes: readonly DesignNode[], dx: number, dy: number): DesignNode[] {
+  const idMap = new Map<string, string>();
+  for (const node of nodes) {
+    idMap.set(node.id, createCloneId());
+  }
+  return nodes.map((node) => {
+    const clonedId = idMap.get(node.id)!;
+    const remappedParent = node.parentId && idMap.has(node.parentId) ? idMap.get(node.parentId)! : node.parentId;
+    const remappedClip = node.clipMaskBaseId && idMap.has(node.clipMaskBaseId) ? idMap.get(node.clipMaskBaseId)! : node.clipMaskBaseId;
+    return {
+      ...node,
+      id: clonedId,
+      name: `${node.name} Copy`,
+      x: Math.round((node.x + dx) * 100) / 100,
+      y: Math.round((node.y + dy) * 100) / 100,
+      ...(remappedParent !== undefined ? { parentId: remappedParent } : {}),
+      ...(remappedClip !== undefined ? { clipMaskBaseId: remappedClip } : {}),
+    };
+  });
+}
+
+function computeCornerRadiusFromLocal(
+  node: RectNode | FrameNode,
+  corner: 'nw' | 'ne' | 'se' | 'sw',
+  localPt: { x: number; y: number },
+  resetZero: boolean,
+): number {
+  if (resetZero) return 0;
+  const maxR = Math.floor(Math.min(node.width, node.height) / 2);
+  const cornerX = corner.includes('e') ? node.width : 0;
+  const cornerY = corner.includes('s') ? node.height : 0;
+  const insetX = corner.includes('e') ? cornerX - localPt.x : localPt.x - cornerX;
+  const insetY = corner.includes('s') ? cornerY - localPt.y : localPt.y - cornerY;
+  const raw = Math.max(insetX, insetY);
+  return Math.max(0, Math.min(maxR, Math.round(raw)));
+}
+
+function computeStarInnerRatioFromLocal(
+  node: PathNode,
+  localPt: { x: number; y: number },
+): number {
+  const rx = Math.max(4, node.width / 2);
+  const ry = Math.max(4, node.height / 2);
+  const nx = (localPt.x - rx) / rx;
+  const ny = (localPt.y - ry) / ry;
+  const ratio = Math.hypot(nx, ny);
+  return Math.max(0.15, Math.min(0.9, Math.round(ratio * 100) / 100));
 }
 
 function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = false): CanvasToolHandler {
@@ -19,14 +86,85 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
     description: uniformScale
       ? 'Scale objects, strokes, corner radii and typography proportionally together.'
       : exactLayer
-        ? 'Select a nested child directly or drag vector anchor points and Bezier handles.'
-        : 'Select, move, resize, and rotate objects or complete layer hierarchies.',
+        ? 'Select a nested child directly or drag vector anchor points and Bezier handles (Delete removes anchor).'
+        : 'Select, move (Shift locks axis, Alt+Drag clones), resize (Alt from center), and scrub Smart Handles.',
     group: 'selection',
     icon: uniformScale ? 'scale' : exactLayer ? 'directSelection' : 'cursor',
     onPointerDown(event, context): CanvasToolTransition {
       if (event.button !== 0) return {};
 
-      // Direct Selection (A): live Adobe Illustrator-grade vector anchor & Bezier handle editing!
+      // On-Canvas Smart Handles (Corner Radius, Star Inner Ratio, Draggable Rotation Pivot)
+      if (event.smartHandleHit) {
+        if (event.smartHandleHit.kind === 'pivot') {
+          if ((event.detail ?? 0) >= 2) {
+            return { customPivot: null, notice: 'Reset rotation pivot to selection center.', preventDefault: true };
+          }
+          return {
+            session: {
+              kind: 'smart-handle',
+              pointerId: event.pointerId,
+              handle: event.smartHandleHit,
+              start: event.point,
+              pivot: event.point,
+            },
+            capturePointer: true,
+            preventDefault: true,
+          };
+        }
+
+        if (event.smartHandleHit.kind === 'corner-radius') {
+          const targetId = event.smartHandleHit.nodeId;
+          const target = context.selectableNodes.find(
+            (node): node is RectNode | FrameNode =>
+              node.id === targetId && (node.type === 'rect' || node.type === 'frame'),
+          );
+          if (target) {
+            if (event.altKey || (event.detail ?? 0) >= 2) {
+              const resetNode = { ...target, style: { ...target.style, radius: 0 } };
+              return { commitNodes: [resetNode], selection: [target.id], preventDefault: true };
+            }
+            return {
+              selection: [target.id],
+              session: {
+                kind: 'smart-handle',
+                pointerId: event.pointerId,
+                handle: event.smartHandleHit,
+                start: event.point,
+                node: target,
+                hudLabel: `R: ${Math.round(target.style.radius ?? 0)}px`,
+                hudPoint: event.point,
+              },
+              capturePointer: true,
+              preventDefault: true,
+            };
+          }
+        }
+
+        if (event.smartHandleHit.kind === 'star-inner') {
+          const targetId = event.smartHandleHit.nodeId;
+          const target = context.selectableNodes.find(
+            (node): node is PathNode => node.id === targetId && node.type === 'path' && node.shapeMeta?.kind === 'star',
+          );
+          if (target && target.shapeMeta?.kind === 'star') {
+            return {
+              selection: [target.id],
+              session: {
+                kind: 'smart-handle',
+                pointerId: event.pointerId,
+                handle: event.smartHandleHit,
+                start: event.point,
+                node: target,
+                hudLabel: `Ratio: ${Math.round(target.shapeMeta.innerRatio * 100)}%`,
+                hudPoint: event.point,
+              },
+              capturePointer: true,
+              preventDefault: true,
+            };
+          }
+        }
+      }
+
+      // Direct Selection (A): live rotation-safe vector anchor & Bezier handle editing!
       if (exactLayer && event.anchorHit) {
         const pathNode = context.selectableNodes.find(
           (node): node is PathNode => node.id === event.anchorHit?.nodeId && node.type === 'path',
@@ -34,10 +172,16 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         if (pathNode && event.anchorHit.pointIndex >= 0 && event.anchorHit.pointIndex < pathNode.points.length) {
           if (event.anchorHit.part === 'anchor' && (event.altKey || (event.detail ?? 0) >= 2)) {
             const toggled = toggleAnchorPointType(pathNode, event.anchorHit.pointIndex);
-            return { commitNodes: [toggled], selection: [pathNode.id], preventDefault: true };
+            return {
+              commitNodes: [{ ...toggled, shapeMeta: undefined }],
+              selection: [pathNode.id],
+              activeAnchor: { nodeId: pathNode.id, pointIndex: event.anchorHit.pointIndex },
+              preventDefault: true,
+            };
           }
           return {
             selection: [pathNode.id],
+            activeAnchor: { nodeId: pathNode.id, pointIndex: event.anchorHit.pointIndex },
             session: {
               kind: 'anchor-edit',
               pointerId: event.pointerId,
@@ -52,13 +196,13 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         }
       }
 
-      // Corner rotation zone (Figma-style hover/drag outside selection corner)
+      // Corner rotation zone (orbits around shared selection pivot or custom pivot!)
       if (event.rotateHandle && context.selectionBounds && context.selectedNodes.length) {
-        const center = {
+        const pivot = context.customPivot ?? {
           x: context.selectionBounds.x + context.selectionBounds.width / 2,
           y: context.selectionBounds.y + context.selectionBounds.height / 2,
         };
-        const startAngle = computeAngleDeg(center, event.point);
+        const startAngle = computeAngleDeg(pivot, event.point);
         return {
           session: {
             kind: 'select-transform',
@@ -68,6 +212,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             nodes: context.selectedNodes,
             bounds: context.selectionBounds,
             ids: context.selectedNodes.map((n) => n.id),
+            pivot,
             startAngle,
             currentAngle: 0,
           },
@@ -95,9 +240,10 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       }
 
       if (!event.targetNodeId) {
-        if (exactLayer) return { selection: [], preventDefault: true };
+        if (exactLayer) return { selection: [], activeAnchor: null, preventDefault: true };
         return {
           selection: [],
+          activeAnchor: null,
           session: {
             kind: 'marquee-selection',
             pointerId: event.pointerId,
@@ -123,7 +269,10 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         const removed = new Set([...scope, ...getLayerAncestorIds(context.canvasNodes, hit.id)]);
         nextIds = context.selectedNodeIds.filter((id) => !removed.has(id));
       } else if (modifier) nextIds = [...new Set([...context.selectedNodeIds, ...scope])];
-      else nextIds = scope;
+      else if (groupSelected && context.selectedNodeIds.length > 1) {
+        // Clicking an already-selected member of a multi-selection keeps the multi-selection intact for dragging!
+        nextIds = context.selectedNodeIds;
+      } else nextIds = scope;
       if (modifier && groupSelected && !exactLayer) return { selection: nextIds, preventDefault: true };
 
       const moving = context.selectableNodes.filter((node) => nextIds.includes(node.id));
@@ -131,6 +280,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       if (!moving.length || !bounds) return { selection: nextIds, preventDefault: true };
       return {
         selection: nextIds,
+        activeAnchor: null,
         session: {
           kind: 'select-transform',
           pointerId: event.pointerId,
@@ -140,6 +290,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           bounds,
           ids: moving.map((n) => n.id),
           uniformScale,
+          cloneMode: event.altKey,
         },
         capturePointer: true,
         preventDefault: true,
@@ -153,22 +304,89 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         return { session: { ...session, current: event.point }, preventDefault: true };
       }
 
+      if (session.kind === 'smart-handle') {
+        if (session.handle.kind === 'pivot') {
+          const targets = context.selectionBounds ? [context.selectionBounds] : [];
+          const snapped = snapPointToTargets(event.point, targets, 10 / Math.max(0.35, context.zoom));
+          return {
+            session: {
+              ...session,
+              pivot: snapped.point,
+              hudLabel: snapped.snapped ? 'Pivot (Snapped)' : 'Pivot',
+              hudPoint: snapped.point,
+            },
+            customPivot: snapped.point,
+            preventDefault: true,
+          };
+        }
+
+        if (session.handle.kind === 'corner-radius' && session.node && (session.node.type === 'rect' || session.node.type === 'frame')) {
+          const localPt = worldPointToNodeLocal(session.node, event.point);
+          const nextRadius = computeCornerRadiusFromLocal(
+            session.node,
+            session.handle.corner,
+            localPt,
+            event.altKey,
+          );
+          const previewNode: RectNode | FrameNode = {
+            ...session.node,
+            style: { ...session.node.style, radius: nextRadius },
+          };
+          return {
+            session: {
+              ...session,
+              previewNode,
+              hudLabel: `R: ${nextRadius}px`,
+              hudPoint: { x: event.point.x, y: event.point.y - 20 / Math.max(0.35, context.zoom) },
+            },
+            previewNodes: [previewNode],
+            preventDefault: true,
+          };
+        }
+
+        if (session.handle.kind === 'star-inner' && session.node?.type === 'path' && session.node.shapeMeta?.kind === 'star') {
+          const localPt = worldPointToNodeLocal(session.node, event.point);
+          const nextRatio = computeStarInnerRatioFromLocal(session.node, localPt);
+          const previewNode = updateParametricPathNode(session.node, {
+            kind: 'star',
+            spikes: session.node.shapeMeta.spikes,
+            innerRatio: nextRatio,
+          });
+          return {
+            session: {
+              ...session,
+              previewNode,
+              hudLabel: `Ratio: ${Math.round(nextRatio * 100)}%`,
+              hudPoint: { x: event.point.x, y: event.point.y - 20 / Math.max(0.35, context.zoom) },
+            },
+            previewNodes: [previewNode],
+            preventDefault: true,
+          };
+        }
+
+        return {};
+      }
+
       if (session.kind === 'anchor-edit') {
-        const dx = event.point.x - session.start.x;
-        const dy = event.point.y - session.start.y;
+        const localDelta = worldDeltaToNodeLocalDelta(
+          session.node.rotation || 0,
+          event.point.x - session.start.x,
+          event.point.y - session.start.y,
+        );
+        const localPointer = worldPointToNodeLocal(session.node, event.point);
         const points = session.node.points.map((pt, index) => {
           if (index !== session.pointIndex) return pt;
           if (session.part === 'anchor') {
             return {
               ...pt,
-              x: Math.round((pt.x + dx) * 100) / 100,
-              y: Math.round((pt.y + dy) * 100) / 100,
-              ...(pt.handleIn ? { handleIn: { x: Math.round((pt.handleIn.x + dx) * 100) / 100, y: Math.round((pt.handleIn.y + dy) * 100) / 100 } } : {}),
-              ...(pt.handleOut ? { handleOut: { x: Math.round((pt.handleOut.x + dx) * 100) / 100, y: Math.round((pt.handleOut.y + dy) * 100) / 100 } } : {}),
+              x: Math.round((pt.x + localDelta.x) * 100) / 100,
+              y: Math.round((pt.y + localDelta.y) * 100) / 100,
+              ...(pt.handleIn ? { handleIn: { x: Math.round((pt.handleIn.x + localDelta.x) * 100) / 100, y: Math.round((pt.handleIn.y + localDelta.y) * 100) / 100 } } : {}),
+              ...(pt.handleOut ? { handleOut: { x: Math.round((pt.handleOut.x + localDelta.x) * 100) / 100, y: Math.round((pt.handleOut.y + localDelta.y) * 100) / 100 } } : {}),
             };
           }
-          const localX = Math.round((event.point.x - session.node.x) * 100) / 100;
-          const localY = Math.round((event.point.y - session.node.y) * 100) / 100;
+          const localX = Math.round(localPointer.x * 100) / 100;
+          const localY = Math.round(localPointer.y * 100) / 100;
           if (session.part === 'handle-out') {
             const mirror = !event.altKey && pt.pointType !== 'corner';
             return {
@@ -186,7 +404,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             pointType: event.altKey ? ('corner' as const) : pt.pointType,
           };
         });
-        const previewNode = normalizePathNode({ ...session.node, points });
+        const previewNode = normalizePathNode({ ...session.node, points, shapeMeta: undefined });
         return {
           session: { ...session, previewNode },
           previewNodes: [previewNode],
@@ -197,19 +415,16 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       if (session.kind !== 'select-transform') return {};
 
       if (session.mode === 'rotate') {
-        const center = {
+        const pivot = session.pivot ?? {
           x: session.bounds.x + session.bounds.width / 2,
           y: session.bounds.y + session.bounds.height / 2,
         };
-        let deltaAngle = computeAngleDeg(center, event.point) - (session.startAngle ?? 0);
+        let deltaAngle = computeAngleDeg(pivot, event.point) - (session.startAngle ?? 0);
         if (event.shiftKey) {
           deltaAngle = Math.round(deltaAngle / 15) * 15;
         }
         const roundedDelta = Math.round(deltaAngle * 10) / 10;
-        const previewNodes = session.nodes.map((node) => ({
-          ...node,
-          rotation: Math.round(((node.rotation + roundedDelta) % 360) * 10) / 10,
-        }));
+        const previewNodes = rotateNodesAroundPivot(session.nodes, roundedDelta, pivot);
         return {
           session: { ...session, currentAngle: roundedDelta, previewNodes },
           previewNodes,
@@ -218,33 +433,97 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         };
       }
 
-      const dx = event.point.x - session.start.x;
-      const dy = event.point.y - session.start.y;
+      let dx = event.point.x - session.start.x;
+      let dy = event.point.y - session.start.y;
       if (Math.abs(dx) + Math.abs(dy) < 0.25) return {};
 
       if (session.mode === 'resize' && session.handle) {
         const previewNodes = resizeNodes(session.nodes, session.bounds, session.handle, dx, dy, {
           uniformScale: Boolean(session.uniformScale),
+          fromCenter: event.altKey,
+          constrainAspect: event.shiftKey,
         });
-        return { session: { ...session, previewNodes }, previewNodes, guides: [], preventDefault: true };
+        const nextBounds = getBounds(previewNodes);
+        return {
+          session: {
+            ...session,
+            previewNodes,
+            hudLabel: nextBounds ? `${Math.round(nextBounds.width)} × ${Math.round(nextBounds.height)}` : undefined,
+          },
+          previewNodes,
+          guides: [],
+          preventDefault: true,
+        };
+      }
+
+      // Shift locks Move strictly to dominant horizontal or vertical axis
+      if (event.shiftKey) {
+        if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
+        else dx = 0;
       }
 
       const scale = context.document.width / Math.max(1, context.viewportWidth);
+      const cloneMode = Boolean(event.altKey);
+      const snapTargets = cloneMode
+        ? context.otherNodes
+        : context.otherNodes.filter((node) => !session.ids.includes(node.id));
       const snapped = snapTranslation(
         session.nodes,
         dx,
         dy,
         { x: 0, y: 0, width: context.document.width, height: context.document.height },
-        context.otherNodes.filter((node) => !session.ids.includes(node.id)),
+        snapTargets,
         8 * scale,
       );
-      const previewNodes = session.nodes.map((node) => ({ ...node, x: node.x + snapped.dx, y: node.y + snapped.dy }));
-      return { session: { ...session, previewNodes }, previewNodes, guides: snapped.guides, preventDefault: true };
+
+      if (cloneMode) {
+        const clonedPreview = cloneNodesForDuplicate(session.nodes, snapped.dx, snapped.dy);
+        return {
+          session: {
+            ...session,
+            cloneMode: true,
+            previewNodes: clonedPreview,
+            hudLabel: `Clone · ΔX ${Math.round(snapped.dx)} · ΔY ${Math.round(snapped.dy)}`,
+          },
+          previewNodes: null,
+          previewCreateNodes: clonedPreview,
+          guides: snapped.guides,
+          preventDefault: true,
+        };
+      }
+
+      const previewNodes = session.nodes.map((node) => ({
+        ...node,
+        x: Math.round((node.x + snapped.dx) * 100) / 100,
+        y: Math.round((node.y + snapped.dy) * 100) / 100,
+      }));
+      return {
+        session: { ...session, cloneMode: false, previewNodes, hudLabel: undefined },
+        previewNodes,
+        previewCreateNodes: null,
+        guides: snapped.guides,
+        preventDefault: true,
+      };
     },
 
     onPointerUp(event, context): CanvasToolTransition {
       const session = context.session;
       if (!session || session.pointerId !== event.pointerId) return {};
+      if (session.kind === 'smart-handle') {
+        if (session.handle.kind === 'pivot') {
+          return {
+            session: null,
+            notice: 'Updated custom rotation pivot (double-click pivot to reset).',
+            preventDefault: true,
+          };
+        }
+        return {
+          ...(session.previewNode ? { commitNodes: [session.previewNode] } : {}),
+          session: null,
+          previewNodes: null,
+          preventDefault: true,
+        };
+      }
       if (session.kind === 'anchor-edit') {
         return {
           ...(session.previewNode ? { commitNodes: [session.previewNode] } : {}),
@@ -277,13 +556,26 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         } else {
           selection = expanded;
         }
-        return { selection, session: null, previewNodes: null, guides: [], preventDefault: true };
+        return { selection, session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true };
       }
       if (session.kind === 'select-transform') {
+        if (session.cloneMode && session.previewNodes && session.previewNodes.length > 0) {
+          return {
+            createNodes: session.previewNodes,
+            selection: session.previewNodes.map((n) => n.id),
+            session: null,
+            previewNodes: null,
+            previewCreateNodes: null,
+            guides: [],
+            notice: `Duplicated ${session.previewNodes.length} layer${session.previewNodes.length === 1 ? '' : 's'} with Alt+Drag.`,
+            preventDefault: true,
+          };
+        }
         return {
           ...(session.previewNodes ? { commitNodes: session.previewNodes } : {}),
           session: null,
           previewNodes: null,
+          previewCreateNodes: null,
           guides: [],
           preventDefault: true,
         };
@@ -292,11 +584,51 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
     },
 
     onPointerCancel(_event, context) {
-      return context.session ? { session: null, previewNodes: null, guides: [] } : {};
+      return context.session ? { session: null, previewNodes: null, previewCreateNodes: null, guides: [] } : {};
     },
 
-    onKeyDown(event, context) {
-      return event.key === 'Escape' && context.session ? { session: null, previewNodes: null, guides: [] } : {};
+    onKeyDown(event, context): CanvasToolTransition {
+      if (event.key === 'Escape' && context.session) {
+        return { session: null, previewNodes: null, previewCreateNodes: null, guides: [], preventDefault: true };
+      }
+      // Direct Selection (A): Delete / Backspace deletes active anchor point cleanly!
+      if (exactLayer && !context.session && (event.key === 'Backspace' || event.key === 'Delete') && context.activeAnchor) {
+        const target = context.selectableNodes.find(
+          (node): node is PathNode => node.id === context.activeAnchor?.nodeId && node.type === 'path',
+        );
+        if (target) {
+          const updated = deleteAnchorPoint(target, context.activeAnchor.pointIndex);
+          if (updated) {
+            return {
+              commitNodes: [updated],
+              activeAnchor: null,
+              notice: 'Deleted anchor point.',
+              preventDefault: true,
+            };
+          }
+          return { notice: 'Cannot delete anchor: minimum contour points reached.', preventDefault: true };
+        }
+      }
+      // Parametric Star/Polygon live spikes/sides tuning via Alt+ArrowUp / Alt+ArrowDown when selected
+      if (!context.session && event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown') && context.selectedNodes.length === 1) {
+        const single = context.selectedNodes[0];
+        if (single.type === 'path' && single.shapeMeta) {
+          const step = event.key === 'ArrowUp' ? 1 : -1;
+          if (single.shapeMeta.kind === 'polygon') {
+            const nextSides = Math.max(3, Math.min(24, single.shapeMeta.sides + step));
+            const updated = updateParametricPathNode(single, { kind: 'polygon', sides: nextSides });
+            return { commitNodes: [updated], notice: `Polygon sides: ${nextSides}`, preventDefault: true };
+          }
+          const nextSpikes = Math.max(3, Math.min(24, single.shapeMeta.spikes + step));
+          const updated = updateParametricPathNode(single, {
+            kind: 'star',
+            spikes: nextSpikes,
+            innerRatio: single.shapeMeta.innerRatio,
+          });
+          return { commitNodes: [updated], notice: `Star points: ${nextSpikes}`, preventDefault: true };
+        }
+      }
+      return {};
     },
 
     renderOverlay(context) {
@@ -304,21 +636,44 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       if (session?.kind === 'marquee-selection') {
         return { kind: 'marquee', bounds: rectangleBounds(session.start, session.current) };
       }
+      if (session?.kind === 'smart-handle' && session.hudLabel && session.hudPoint) {
+        return {
+          kind: 'smart-hud',
+          x: session.hudPoint.x,
+          y: session.hudPoint.y,
+          text: session.hudLabel,
+          variant: session.handle.kind === 'pivot' ? 'rotate' : 'default',
+        };
+      }
       if (session?.kind === 'select-transform' && session.mode === 'rotate') {
-        const center = {
+        const center = session.pivot ?? {
           x: session.bounds.x + session.bounds.width / 2,
           y: session.bounds.y + session.bounds.height / 2,
         };
         const radius = Math.max(32, Math.hypot(session.bounds.width, session.bounds.height) / 2);
         return { kind: 'rotate-ring', center, radius, angleDeg: session.currentAngle ?? 0 };
       }
+      if (session?.kind === 'select-transform' && session.hudLabel && session.previewNodes?.length) {
+        const b = getBounds(session.previewNodes);
+        if (b) {
+          return {
+            kind: 'smart-hud',
+            x: b.x + b.width / 2,
+            y: b.y + b.height + 18 / Math.max(0.35, context.zoom),
+            text: session.hudLabel,
+            variant: 'default',
+          };
+        }
+      }
       return null;
     },
 
     cursorStyle(context) {
       if (context.session?.kind === 'anchor-edit') return 'crosshair';
+      if (context.session?.kind === 'smart-handle') return 'grabbing';
       if (context.session?.kind === 'select-transform') {
         if (context.session.mode === 'rotate') return 'grabbing';
+        if (context.session.cloneMode) return 'copy';
         return context.session.mode === 'move' ? 'move' : 'nwse-resize';
       }
       return 'default';

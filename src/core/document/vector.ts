@@ -11,8 +11,22 @@ import type {
   RectNode,
   VectorAnchorPoint,
   VectorPointHandle,
+  VectorShapeMeta,
   VectorSubpath,
 } from './types';
+import {
+  assembleFacesToContours,
+  buildPlanarArrangement,
+  hitTestPlanarFace,
+  hitTestPlanarFacesAlongStroke,
+  type PlanarArrangement,
+  type PlanarFace,
+  type PlanarPoint,
+  type PlanarShapeInput,
+} from './planarBoolean';
+
+export type { PlanarArrangement, PlanarFace, PlanarPoint };
+export { hitTestPlanarFace, hitTestPlanarFacesAlongStroke };
 
 export interface Point2D {
   x: number;
@@ -180,9 +194,48 @@ function scaleAnchorPoint(pt: VectorAnchorPoint, scaleX: number, scaleY: number)
   return next;
 }
 
+function rotatePointAround(pt: Point2D, center: Point2D, degrees: number): Point2D {
+  if (!degrees) return pt;
+  const rad = (degrees * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = pt.x - center.x;
+  const dy = pt.y - center.y;
+  return { x: center.x + dx * cos - dy * sin, y: center.y + dx * sin + dy * cos };
+}
+
+/** Transforms a world/canvas point into a node's unrotated local coordinate space. */
+export function worldPointToNodeLocal(
+  node: Pick<DesignNode, 'x' | 'y' | 'width' | 'height' | 'rotation'>,
+  worldPt: Point2D,
+): Point2D {
+  const center = { x: node.x + node.width / 2, y: node.y + node.height / 2 };
+  const unrotated = rotatePointAround(worldPt, center, -(node.rotation || 0));
+  return { x: unrotated.x - node.x, y: unrotated.y - node.y };
+}
+
+/** Transforms a node-local point into world/canvas coordinates accounting for rotation. */
+export function nodeLocalPointToWorld(
+  node: Pick<DesignNode, 'x' | 'y' | 'width' | 'height' | 'rotation'>,
+  localPt: Point2D,
+): Point2D {
+  const center = { x: node.x + node.width / 2, y: node.y + node.height / 2 };
+  return rotatePointAround({ x: node.x + localPt.x, y: node.y + localPt.y }, center, node.rotation || 0);
+}
+
+/** Rotates a world-space drag delta into a node's rotated local axes. */
+export function worldDeltaToNodeLocalDelta(rotation: number, dx: number, dy: number): Point2D {
+  if (!rotation) return { x: dx, y: dy };
+  const rad = (-rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
+}
+
 /**
  * Re-normalizes a PathNode so its local anchor points start at (0, 0) and
  * its (x, y, width, height) match the true sampled curve bounds.
+ * Compensates world position for `node.rotation` so editing a rotated path never jumps!
  */
 export function normalizePathNode(node: PathNode): PathNode {
   const boundsList = [
@@ -204,10 +257,27 @@ export function normalizePathNode(node: PathNode): PathNode {
   const width = Math.max(1, roundCoord(maxX - minX));
   const height = Math.max(1, roundCoord(maxY - minY));
 
+  let nextX = roundCoord(node.x + minX);
+  let nextY = roundCoord(node.y + minY);
+  if (node.rotation) {
+    // Rotate local center shift by +node.rotation so visual world anchors stay pinned in place!
+    const oldCenterX = node.x + node.width / 2;
+    const oldCenterY = node.y + node.height / 2;
+    const dcx = minX + width / 2 - node.width / 2;
+    const dcy = minY + height / 2 - node.height / 2;
+    const rad = (node.rotation * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const nextCenterX = oldCenterX + dcx * cos - dcy * sin;
+    const nextCenterY = oldCenterY + dcx * sin + dcy * cos;
+    nextX = roundCoord(nextCenterX - width / 2);
+    nextY = roundCoord(nextCenterY - height / 2);
+  }
+
   const next: PathNode = {
     ...node,
-    x: roundCoord(node.x + minX),
-    y: roundCoord(node.y + minY),
+    x: nextX,
+    y: nextY,
     width,
     height,
     points: node.points.map((pt) => shiftAnchorPoint(pt, shiftX, shiftY)),
@@ -418,7 +488,7 @@ export function simplifyFreehandToPathPoints(
 
 /**
  * Illustrator Smooth Tool: locally relaxes anchor points and recomputes smooth
- * tangent handles for anchors within the brush radius of a stroke.
+ * tangent handles for anchors within the brush radius of a stroke (rotation-safe).
  */
 export function smoothPathAnchors(
   node: PathNode,
@@ -431,9 +501,8 @@ export function smoothPathAnchors(
 
   for (let i = 0; i < n; i += 1) {
     if (!node.closed && (i === 0 || i === n - 1)) continue;
-    const worldX = node.x + ptCoord(nextPoints[i], 'x');
-    const worldY = node.y + ptCoord(nextPoints[i], 'y');
-    const nearBrush = brushPoints.some((bp) => Math.hypot(bp.x - worldX, bp.y - worldY) <= radius);
+    const worldPt = nodeLocalPointToWorld(node, nextPoints[i]);
+    const nearBrush = brushPoints.some((bp) => Math.hypot(bp.x - worldPt.x, bp.y - worldPt.y) <= radius);
     if (!nearBrush) continue;
 
     const prev = node.points[(i - 1 + n) % n];
@@ -452,11 +521,47 @@ export function smoothPathAnchors(
     };
   }
 
-  return normalizePathNode({ ...node, points: nextPoints });
+  return normalizePathNode({ ...node, points: nextPoints, shapeMeta: undefined });
 }
 
-function ptCoord(pt: VectorAnchorPoint, axis: 'x' | 'y'): number {
-  return pt[axis];
+/**
+ * Deletes an anchor point cleanly from a PathNode while preserving minimum
+ * contour validity (2 points open, 3 points closed).
+ */
+export function deleteAnchorPoint(node: PathNode, anchorIndex: number): PathNode | null {
+  const minPoints = node.closed ? 3 : 2;
+  if (node.points.length <= minPoints) return null;
+  if (anchorIndex < 0 || anchorIndex >= node.points.length) return null;
+  const nextPoints = node.points.filter((_, idx) => idx !== anchorIndex);
+  return normalizePathNode({ ...node, points: nextPoints, shapeMeta: undefined });
+}
+
+/**
+ * Updates parametric Polygon or Star geometry in-place while preserving visual center,
+ * bounding box size, rotation, and style (powers On-Canvas Smart Handles).
+ */
+export function updateParametricPathNode(node: PathNode, meta: VectorShapeMeta): PathNode {
+  const w = Math.max(8, node.width);
+  const h = Math.max(8, node.height);
+  if (meta.kind === 'polygon') {
+    const sides = Math.max(3, Math.min(24, Math.round(meta.sides)));
+    return {
+      ...node,
+      points: createPolygonPathPoints(w, h, sides),
+      closed: true,
+      pathKind: 'polygon',
+      shapeMeta: { kind: 'polygon', sides },
+    };
+  }
+  const spikes = Math.max(3, Math.min(24, Math.round(meta.spikes)));
+  const innerRatio = Math.max(0.15, Math.min(0.9, Math.round(meta.innerRatio * 100) / 100));
+  return {
+    ...node,
+    points: createStarPathPoints(w, h, spikes, innerRatio),
+    closed: true,
+    pathKind: 'star',
+    shapeMeta: { kind: 'star', spikes, innerRatio },
+  };
 }
 
 /**
@@ -803,18 +908,8 @@ export function flipPathNode(node: PathNode, axis: 'horizontal' | 'vertical'): P
 }
 
 // ============================================================================
-// Illustrator Pathfinder / 2D Geometric Boolean Operations
+// Concave-Safe 2D Planar Pathfinder & Interactive Shape Builder Engine
 // ============================================================================
-
-function rotatePointAround(pt: Point2D, center: Point2D, degrees: number): Point2D {
-  if (!degrees) return pt;
-  const rad = (degrees * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  const dx = pt.x - center.x;
-  const dy = pt.y - center.y;
-  return { x: center.x + dx * cos - dy * sin, y: center.y + dx * sin + dy * cos };
-}
 
 function toWorldPath(node: DesignNode): { points: VectorAnchorPoint[]; closed: boolean; subpaths?: VectorSubpath[] } | null {
   let pathNode: PathNode | null = null;
@@ -855,92 +950,29 @@ function toWorldPath(node: DesignNode): { points: VectorAnchorPoint[]; closed: b
   };
 }
 
-function signedPolygonArea(poly: readonly Point2D[]): number {
-  let area = 0;
-  for (let i = 0; i < poly.length; i += 1) {
-    const a = poly[i];
-    const b = poly[(i + 1) % poly.length];
-    area += a.x * b.y - b.x * a.y;
-  }
-  return area / 2;
-}
-
-function ensureCCW(poly: readonly Point2D[]): Point2D[] {
-  return signedPolygonArea(poly) < 0 ? [...poly].reverse() : [...poly];
-}
-
-function clipPolygonAgainstEdge(subject: readonly Point2D[], edgeStart: Point2D, edgeEnd: Point2D): Point2D[] {
-  if (subject.length === 0) return [];
-  const output: Point2D[] = [];
-  const isInside = (p: Point2D) =>
-    (edgeEnd.x - edgeStart.x) * (p.y - edgeStart.y) - (edgeEnd.y - edgeStart.y) * (p.x - edgeStart.x) >= -EPS;
-
-  const intersect = (a: Point2D, b: Point2D): Point2D => {
-    const dcX = edgeStart.x - edgeEnd.x;
-    const dcY = edgeStart.y - edgeEnd.y;
-    const dpX = a.x - b.x;
-    const dpY = a.y - b.y;
-    const n1 = edgeStart.x * edgeEnd.y - edgeStart.y * edgeEnd.x;
-    const n2 = a.x * b.y - a.y * b.x;
-    const denom = dcX * dpY - dcY * dpX;
-    if (Math.abs(denom) < EPS) return a;
-    return {
-      x: (n1 * dpX - n2 * dcX) / denom,
-      y: (n1 * dpY - n2 * dcY) / denom,
-    };
-  };
-
-  let s = subject[subject.length - 1];
-  for (const e of subject) {
-    const eInside = isInside(e);
-    const sInside = isInside(s);
-    if (eInside) {
-      if (!sInside) output.push(intersect(s, e));
-      output.push(e);
-    } else if (sInside) {
-      output.push(intersect(s, e));
+function worldPathToPlanarShape(world: { points: VectorAnchorPoint[]; closed: boolean; subpaths?: VectorSubpath[] }): PlanarShapeInput {
+  const contours: PlanarPoint[][] = [];
+  const mainPoly = sampleSubpathToPolygon(world.points, true, 14);
+  if (mainPoly.length >= 3) contours.push(mainPoly);
+  if (world.subpaths) {
+    for (const sp of world.subpaths) {
+      const spPoly = sampleSubpathToPolygon(sp.points, true, 14);
+      if (spPoly.length >= 3) contours.push(spPoly);
     }
-    s = e;
   }
-  return output;
-}
-
-/** Sutherland-Hodgman polygon intersection (for convex clippers; falls back cleanly for concave). */
-function intersectPolygons(polyA: readonly Point2D[], polyB: readonly Point2D[]): Point2D[] {
-  let output = ensureCCW(polyA);
-  const clip = ensureCCW(polyB);
-  for (let i = 0; i < clip.length; i += 1) {
-    const a = clip[i];
-    const b = clip[(i + 1) % clip.length];
-    output = clipPolygonAgainstEdge(output, a, b);
-    if (output.length === 0) break;
-  }
-  return output;
+  return { contours };
 }
 
 function polygonToAnchors(poly: readonly Point2D[]): VectorAnchorPoint[] {
-  const simplified = simplifyPolyline([...poly, poly[0]], 0.75);
+  const simplified = simplifyPolyline([...poly, poly[0]], 0.45);
   if (simplified.length > 1) simplified.pop();
-  return simplified.map((pt) => ({
+  const source = simplified.length >= 3 ? simplified : poly;
+  return source.map((pt) => ({
     id: createAnchorId('pf'),
     x: roundCoord(pt.x),
     y: roundCoord(pt.y),
     pointType: 'corner',
   }));
-}
-
-function reverseSubpath(points: readonly VectorAnchorPoint[]): VectorAnchorPoint[] {
-  return [...points].reverse().map((pt) => {
-    const next: VectorAnchorPoint = {
-      id: createAnchorId('rev'),
-      x: pt.x,
-      y: pt.y,
-      pointType: pt.pointType,
-    };
-    if (pt.handleOut) next.handleIn = { ...pt.handleOut };
-    if (pt.handleIn) next.handleOut = { ...pt.handleIn };
-    return next;
-  });
 }
 
 function getBaseStyle(node: DesignNode): PathNode['style'] {
@@ -965,12 +997,55 @@ function getBaseStyle(node: DesignNode): PathNode['style'] {
   };
 }
 
+function buildPathNodeFromFaces(
+  faces: readonly PlanarFace[],
+  templateNode: DesignNode,
+  newId: string,
+  name: string,
+  fillRule: 'nonzero' | 'evenodd' = 'evenodd',
+): PathNode | null {
+  const contours = assembleFacesToContours(faces);
+  if (contours.length === 0) return null;
+  const anchorLoops = contours
+    .map((contour) => polygonToAnchors(contour.points))
+    .filter((pts) => pts.length >= 3);
+  if (anchorLoops.length === 0) return null;
+
+  const baseStyle = getBaseStyle(templateNode);
+  const [mainPoints, ...extraLoops] = anchorLoops;
+  const subpaths: VectorSubpath[] = extraLoops.map((pts) => ({ points: pts, closed: true }));
+
+  return normalizePathNode({
+    id: newId,
+    name,
+    type: 'path',
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    rotation: 0,
+    opacity: templateNode.opacity,
+    visible: true,
+    locked: false,
+    onCanvas: true,
+    ...(templateNode.parentId !== undefined ? { parentId: templateNode.parentId } : {}),
+    points: mainPoints,
+    closed: true,
+    ...(subpaths.length > 0 ? { subpaths } : {}),
+    pathKind: 'boolean',
+    style: {
+      ...baseStyle,
+      fillRule: subpaths.length > 0 ? 'evenodd' : fillRule,
+    },
+  });
+}
+
 /**
- * Executes Adobe Illustrator Pathfinder operations on 2+ vector/shape nodes:
- * - `unite`: merges all shapes into a single compound filled PathNode (`nonzero`).
- * - `subtract` (Minus Front): punches front shapes out of the back shape using exact intersection cutout (`evenodd`).
- * - `intersect`: computes the exact overlapping geometric region of the selected shapes.
- * - `exclude`: computes the crisp symmetric XOR compound PathNode (`evenodd`).
+ * Executes concave-safe 2D Planar Pathfinder operations on 2+ vector/shape nodes:
+ * - `unite`: dissolves internal overlapping seams into clean outer silhouette(s) & true holes.
+ * - `subtract` (Minus Front): punches front shapes cleanly out of base shape (concave-safe!).
+ * - `intersect`: computes the exact overlapping geometric region (works on Stars & concave paths!).
+ * - `exclude`: computes the crisp symmetric XOR region (`odd` parity faces).
  */
 export function applyPathfinderOperation(
   nodes: readonly DesignNode[],
@@ -984,7 +1059,6 @@ export function applyPathfinderOperation(
   if (vectorNodes.length < 2) return null;
 
   const baseNode = vectorNodes[0].node;
-  const baseStyle = getBaseStyle(baseNode);
   const opLabels: Record<PathfinderOperation, string> = {
     unite: 'United Path',
     subtract: 'Subtracted Path',
@@ -992,99 +1066,111 @@ export function applyPathfinderOperation(
     exclude: 'Excluded Path',
   };
 
-  if (operation === 'intersect') {
-    let poly = sampleSubpathToPolygon(vectorNodes[0].world.points, true, 16);
-    for (let i = 1; i < vectorNodes.length; i += 1) {
-      const nextPoly = sampleSubpathToPolygon(vectorNodes[i].world.points, true, 16);
-      poly = intersectPolygons(poly, nextPoly);
-      if (poly.length < 3) return null;
+  const planarShapes = vectorNodes.map((item) => worldPathToPlanarShape(item.world));
+  const arrangement = buildPlanarArrangement(planarShapes);
+  const totalCount = vectorNodes.length;
+
+  let selectedFaces: PlanarFace[];
+  if (operation === 'unite') {
+    selectedFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length >= 1);
+  } else if (operation === 'subtract') {
+    selectedFaces = arrangement.faces.filter(
+      (face) => face.memberShapeIndices.length === 1 && face.memberShapeIndices[0] === 0,
+    );
+  } else if (operation === 'intersect') {
+    selectedFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length === totalCount);
+  } else {
+    selectedFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length % 2 === 1);
+  }
+
+  return buildPathNodeFromFaces(
+    selectedFaces,
+    baseNode,
+    newId,
+    opLabels[operation],
+    operation === 'unite' ? 'nonzero' : 'evenodd',
+  );
+}
+
+/**
+ * Decomposes 2+ selected shape/path nodes into atomic planar faces for the
+ * interactive Shape Builder tool (`Shift+M`).
+ */
+export function decomposeNodesForShapeBuilder(nodes: readonly DesignNode[]): {
+  candidates: DesignNode[];
+  arrangement: PlanarArrangement;
+} {
+  const items = nodes
+    .map((node) => ({ node, world: toWorldPath(node) }))
+    .filter((item): item is { node: DesignNode; world: NonNullable<ReturnType<typeof toWorldPath>> } => item.world !== null);
+  if (items.length < 2) {
+    return { candidates: items.map((i) => i.node), arrangement: { vertices: [], faces: [] } };
+  }
+  const arrangement = buildPlanarArrangement(items.map((item) => worldPathToPlanarShape(item.world)));
+  return { candidates: items.map((item) => item.node), arrangement };
+}
+
+/**
+ * Resolves an interactive Shape Builder gesture (merge touched faces OR Alt-punch
+ * touched faces) into the resulting replacement PathNodes for a single atomic undo step.
+ */
+export function applyShapeBuilderAction(
+  candidates: readonly DesignNode[],
+  arrangement: PlanarArrangement,
+  touchedFaceIds: readonly number[],
+  mode: 'merge' | 'punch',
+  createNewId: () => string,
+): PathNode[] | null {
+  if (candidates.length === 0 || arrangement.faces.length === 0 || touchedFaceIds.length === 0) {
+    return null;
+  }
+  const touchedSet = new Set(touchedFaceIds);
+  const touchedFaces = arrangement.faces.filter((f) => touchedSet.has(f.id));
+  if (touchedFaces.length === 0) return null;
+
+  const resultNodes: PathNode[] = [];
+
+  if (mode === 'merge') {
+    // 1. Merge all touched faces into a single unified PathNode styled after the first touched face's top source shape
+    const firstFace = touchedFaces[0];
+    const styleSourceIdx = firstFace.memberShapeIndices[firstFace.memberShapeIndices.length - 1] ?? 0;
+    const styleTemplate = candidates[styleSourceIdx] ?? candidates[0];
+    const merged = buildPathNodeFromFaces(touchedFaces, styleTemplate, createNewId(), 'Built Shape', 'nonzero');
+    if (!merged) return null;
+
+    // 2. Preserve untouched remaining faces grouped by their top contributing shape
+    const remainingByTopShape = new Map<number, PlanarFace[]>();
+    for (const face of arrangement.faces) {
+      if (touchedSet.has(face.id)) continue;
+      const topIdx = face.memberShapeIndices[face.memberShapeIndices.length - 1] ?? 0;
+      const bucket = remainingByTopShape.get(topIdx);
+      if (bucket) bucket.push(face);
+      else remainingByTopShape.set(topIdx, [face]);
     }
-    const anchors = polygonToAnchors(poly);
-    if (anchors.length < 3) return null;
-    return normalizePathNode({
-      id: newId,
-      name: opLabels[operation],
-      type: 'path',
-      x: 0,
-      y: 0,
-      width: 1,
-      height: 1,
-      rotation: 0,
-      opacity: baseNode.opacity,
-      visible: true,
-      locked: false,
-      onCanvas: true,
-      ...(baseNode.parentId !== undefined ? { parentId: baseNode.parentId } : {}),
-      points: anchors,
-      closed: true,
-      pathKind: 'boolean',
-      style: { ...baseStyle, fillRule: 'nonzero' },
-    });
-  }
 
-  if (operation === 'subtract') {
-    const basePoly = sampleSubpathToPolygon(vectorNodes[0].world.points, true, 16);
-    const cutouts: VectorSubpath[] = [];
-    for (let i = 1; i < vectorNodes.length; i += 1) {
-      const frontPoly = sampleSubpathToPolygon(vectorNodes[i].world.points, true, 16);
-      const overlap = intersectPolygons(basePoly, frontPoly);
-      if (overlap.length >= 3) {
-        cutouts.push({ points: reverseSubpath(polygonToAnchors(overlap)), closed: true });
-      }
+    for (const [shapeIdx, faces] of remainingByTopShape.entries()) {
+      const source = candidates[shapeIdx] ?? candidates[0];
+      const built = buildPathNodeFromFaces(faces, source, createNewId(), `${source.name} Part`, 'evenodd');
+      if (built) resultNodes.push(built);
     }
-    return normalizePathNode({
-      id: newId,
-      name: opLabels[operation],
-      type: 'path',
-      x: 0,
-      y: 0,
-      width: 1,
-      height: 1,
-      rotation: 0,
-      opacity: baseNode.opacity,
-      visible: true,
-      locked: false,
-      onCanvas: true,
-      ...(baseNode.parentId !== undefined ? { parentId: baseNode.parentId } : {}),
-      points: vectorNodes[0].world.points,
-      closed: true,
-      ...(cutouts.length > 0 || (vectorNodes[0].world.subpaths?.length ?? 0) > 0
-        ? { subpaths: [...(vectorNodes[0].world.subpaths ?? []), ...cutouts] }
-        : {}),
-      pathKind: 'boolean',
-      style: { ...baseStyle, fillRule: 'evenodd' },
-    });
+    resultNodes.push(merged);
+    return resultNodes;
   }
 
-  // `unite` (nonzero) and `exclude` (evenodd) preserve exact Bezier curves of all operands as compound subpaths!
-  const allSubpaths: VectorSubpath[] = [];
-  if (vectorNodes[0].world.subpaths) allSubpaths.push(...vectorNodes[0].world.subpaths);
-  for (let i = 1; i < vectorNodes.length; i += 1) {
-    allSubpaths.push({ points: vectorNodes[i].world.points, closed: vectorNodes[i].world.closed });
-    if (vectorNodes[i].world.subpaths) allSubpaths.push(...vectorNodes[i].world.subpaths!);
+  // `punch` (Alt+Click / Alt+Drag): delete touched faces and rebuild surviving regions cleanly
+  const survivingByTopShape = new Map<number, PlanarFace[]>();
+  for (const face of arrangement.faces) {
+    if (touchedSet.has(face.id)) continue;
+    const topIdx = face.memberShapeIndices[face.memberShapeIndices.length - 1] ?? 0;
+    const bucket = survivingByTopShape.get(topIdx);
+    if (bucket) bucket.push(face);
+    else survivingByTopShape.set(topIdx, [face]);
   }
 
-  return normalizePathNode({
-    id: newId,
-    name: opLabels[operation],
-    type: 'path',
-    x: 0,
-    y: 0,
-    width: 1,
-    height: 1,
-    rotation: 0,
-    opacity: baseNode.opacity,
-    visible: true,
-    locked: false,
-    onCanvas: true,
-    ...(baseNode.parentId !== undefined ? { parentId: baseNode.parentId } : {}),
-    points: vectorNodes[0].world.points,
-    closed: vectorNodes[0].world.closed,
-    ...(allSubpaths.length > 0 ? { subpaths: allSubpaths } : {}),
-    pathKind: 'boolean',
-    style: {
-      ...baseStyle,
-      fillRule: operation === 'exclude' ? 'evenodd' : 'nonzero',
-    },
-  });
+  for (const [shapeIdx, faces] of survivingByTopShape.entries()) {
+    const source = candidates[shapeIdx] ?? candidates[0];
+    const built = buildPathNodeFromFaces(faces, source, createNewId(), `${source.name} Carved`, 'evenodd');
+    if (built) resultNodes.push(built);
+  }
+  return resultNodes;
 }

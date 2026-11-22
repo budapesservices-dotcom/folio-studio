@@ -1,4 +1,5 @@
 import type { DesignNode, FolioDocument, PathNode, VectorAnchorPoint } from '../../../core/document/types';
+import type { PlanarArrangement } from '../../../core/document/vector';
 import type { Bounds, ResizeHandle, SnapGuide } from '../geometry';
 
 export type Wave1CanvasToolId =
@@ -26,6 +27,7 @@ export type StudioCanvasToolId =
   | 'pencil'
   | 'smooth'
   | 'scissors'
+  | 'shape-builder'
   | 'draw-text'
   | 'rotate'
   | 'eyedropper'
@@ -73,6 +75,11 @@ export interface VectorAnchorHit {
   part: 'anchor' | 'handle-in' | 'handle-out';
 }
 
+export type SmartHandleHit =
+  | { kind: 'corner-radius'; nodeId: string; corner: 'nw' | 'ne' | 'se' | 'sw' }
+  | { kind: 'star-inner'; nodeId: string }
+  | { kind: 'pivot' };
+
 export interface CanvasToolPointerInput {
   pointerId: number;
   button: number;
@@ -84,6 +91,7 @@ export interface CanvasToolPointerInput {
   resizeHandle: ResizeHandle | null;
   rotateHandle?: boolean;
   anchorHit?: VectorAnchorHit | null;
+  smartHandleHit?: SmartHandleHit | null;
   detail?: number;
   shiftKey: boolean;
   altKey: boolean;
@@ -110,9 +118,24 @@ export interface SelectTransformSession {
   ids: string[];
   handle?: ResizeHandle;
   uniformScale?: boolean;
+  pivot?: { x: number; y: number };
   startAngle?: number;
   currentAngle?: number;
+  cloneMode?: boolean;
   previewNodes?: DesignNode[];
+  hudLabel?: string;
+}
+
+export interface SmartHandleSession {
+  kind: 'smart-handle';
+  pointerId: number;
+  handle: SmartHandleHit;
+  start: { x: number; y: number };
+  node?: DesignNode;
+  previewNode?: DesignNode;
+  pivot?: { x: number; y: number };
+  hudLabel?: string;
+  hudPoint?: { x: number; y: number };
 }
 
 export interface AnchorEditSession {
@@ -170,6 +193,8 @@ export interface DrawShapeSession {
   current: { x: number; y: number };
   constrain: boolean;
   fromCenter: boolean;
+  sidesOverride?: number;
+  spikesOverride?: number;
 }
 
 export interface PenDraftSession {
@@ -192,16 +217,30 @@ export interface FreehandSession {
   previewNode?: PathNode;
 }
 
+export interface ShapeBuilderSession {
+  kind: 'shape-builder';
+  pointerId: number;
+  mode: 'merge' | 'punch';
+  candidateIds: string[];
+  candidates: DesignNode[];
+  arrangement: PlanarArrangement;
+  strokePoints: Array<{ x: number; y: number }>;
+  touchedFaceIds: number[];
+}
+
 export interface MeasureSession {
   kind: 'measure';
   pointerId: number;
   start: { x: number; y: number };
   current: { x: number; y: number };
   active: boolean;
+  snappedStart?: boolean;
+  snappedEnd?: boolean;
 }
 
 export type CanvasToolSession =
   | SelectTransformSession
+  | SmartHandleSession
   | AnchorEditSession
   | MarqueeSelectionSession
   | LassoSelectionSession
@@ -210,6 +249,7 @@ export type CanvasToolSession =
   | DrawShapeSession
   | PenDraftSession
   | FreehandSession
+  | ShapeBuilderSession
   | MeasureSession;
 
 export interface CanvasToolContext {
@@ -226,6 +266,8 @@ export interface CanvasToolContext {
   session: CanvasToolSession | null;
   toolOptions?: CanvasToolOptions;
   workspace?: ToolWorkspaceScope;
+  customPivot?: { x: number; y: number } | null;
+  activeAnchor?: { nodeId: string; pointIndex: number } | null;
 }
 
 export type CanvasToolOverlay =
@@ -235,16 +277,22 @@ export type CanvasToolOverlay =
   | { kind: 'pen-draft'; points: VectorAnchorPoint[]; cursor: { x: number; y: number }; hoverClose: boolean; closedPreview?: boolean }
   | { kind: 'freehand'; points: Array<{ x: number; y: number }>; mode: 'pencil' | 'smooth' }
   | { kind: 'rotate-ring'; center: { x: number; y: number }; radius: number; angleDeg: number }
-  | { kind: 'measure'; start: { x: number; y: number }; end: { x: number; y: number }; dx: number; dy: number; distance: number; angleDeg: number };
+  | { kind: 'measure'; start: { x: number; y: number }; end: { x: number; y: number }; dx: number; dy: number; distance: number; angleDeg: number; snappedStart?: boolean; snappedEnd?: boolean }
+  | { kind: 'smart-hud'; x: number; y: number; text: string; variant?: 'default' | 'measure' | 'rotate' }
+  | { kind: 'shape-builder'; arrangement: PlanarArrangement; touchedFaceIds: number[]; strokePoints: Array<{ x: number; y: number }>; mode: 'merge' | 'punch' };
 
 export interface CanvasToolTransition {
   session?: CanvasToolSession | null;
   selection?: string[];
   previewNodes?: DesignNode[] | null;
+  previewCreateNodes?: DesignNode[] | null;
   commitNodes?: DesignNode[];
   createNodes?: DesignNode[];
   replaceNodeWithNodes?: { nodeId: string; nodes: DesignNode[] };
-  sampledColor?: { color: string; sourceName: string };
+  replaceNodes?: { removeIds: string[]; insertNodes: DesignNode[] };
+  sampledColor?: { color: string; sourceName: string; target?: 'fill' | 'stroke' };
+  customPivot?: { x: number; y: number } | null;
+  activeAnchor?: { nodeId: string; pointIndex: number } | null;
   nextToolId?: CanvasToolId;
   notice?: string;
   pan?: { x: number; y: number };

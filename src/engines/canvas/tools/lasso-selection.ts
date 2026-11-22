@@ -20,9 +20,18 @@ export const lassoSelectionTool: CanvasToolHandler = {
   group: 'selection', icon: 'lasso',
   onPointerDown(event, context) {
     if (event.button !== 0) return {};
-    return { selection: [], session: { kind: 'lasso-selection', pointerId: event.pointerId, points: [event.point],
-      additive: event.shiftKey, subtractive: event.ctrlKey || event.metaKey, initialIds: context.selectedNodeIds },
-      capturePointer: true, preventDefault: true };
+    return {
+      session: {
+        kind: 'lasso-selection',
+        pointerId: event.pointerId,
+        points: [event.point],
+        additive: event.shiftKey,
+        subtractive: event.ctrlKey || event.metaKey,
+        initialIds: context.selectedNodeIds,
+      },
+      capturePointer: true,
+      preventDefault: true,
+    };
   },
   onPointerMove(event, context) {
     const session = context.session;
@@ -35,7 +44,13 @@ export const lassoSelectionTool: CanvasToolHandler = {
     const session = context.session;
     if (!session || session.kind !== 'lasso-selection' || session.pointerId !== event.pointerId) return {};
     const points = [...session.points, event.point];
-    if (points.length < 3) return { session: null, preventDefault: true };
+    if (points.length < 3) {
+      return {
+        ...(session.additive || session.subtractive ? {} : { selection: [] }),
+        session: null,
+        preventDefault: true,
+      };
+    }
     const hits = context.selectableNodes.filter((node) => {
       const bounds = getBounds([node]);
       return bounds ? polygonIntersectsBounds(points, bounds) : false;
@@ -43,7 +58,7 @@ export const lassoSelectionTool: CanvasToolHandler = {
     return { selection: mergeSelection(session, hits, context.canvasNodes), session: null, preventDefault: true };
   },
   onPointerCancel(_event, context) { return context.session?.kind === 'lasso-selection' ? { session: null } : {}; },
-  onKeyDown(event, context) { return event.key === 'Escape' && context.session?.kind === 'lasso-selection' ? { session: null } : {}; },
+  onKeyDown(event, context) { return event.key === 'Escape' && context.session?.kind === 'lasso-selection' ? { session: null, preventDefault: true } : {}; },
   renderOverlay(context) {
     const session = context.session;
     return session?.kind === 'lasso-selection' ? { kind: 'lasso', points: session.points } : null;

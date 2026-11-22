@@ -2,9 +2,17 @@ import type { DesignNode } from '../../../core/document/types';
 import type { CanvasToolHandler, CanvasToolTransition } from './types';
 
 function getFill(node: DesignNode): string | null {
-  if (node.type !== 'rect' && node.type !== 'ellipse' && node.type !== 'text') return null;
+  if (
+    node.type !== 'rect' &&
+    node.type !== 'ellipse' &&
+    node.type !== 'text' &&
+    node.type !== 'frame' &&
+    node.type !== 'path'
+  ) {
+    return null;
+  }
   const fill = node.style.fill.trim().toLowerCase();
-  return !fill || fill === 'none' || fill === 'transparent' ? null : fill;
+  return !fill || fill === 'none' || fill === 'transparent' || fill === '#00000000' ? null : fill;
 }
 export function getMagicWandMatchIds(nodes: readonly DesignNode[], target: DesignNode): string[] {
   const fill = getFill(target);
