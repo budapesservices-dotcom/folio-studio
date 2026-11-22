@@ -901,11 +901,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .property-section { padding: 15px 15px 17px; border-bottom: 1px solid #2b313d; }
 .section-title { margin-bottom: 13px; color: #d8dbe3; font-size: 10px; font-weight: 700; }
 .field-label { display: block; margin: 0 0 8px; color: #818b9c; font-size: 9px; font-weight: 600; }
-.text-field, .number-field, .text-area-field { width: 100%; height: 31px; margin-top: 6px; padding: 0 9px; color: #dce0e8; background: #121720; border: 1px solid #343b49; border-radius: 5px; outline: none; font-size: 10px; }
-.text-field:focus, .number-field:focus, .text-area-field:focus { border-color: #8174dc; }
+.text-field, .number-field, .text-area-field, .select-field { width: 100%; height: 31px; margin-top: 6px; padding: 0 9px; color: #dce0e8; background: #121720; border: 1px solid #343b49; border-radius: 5px; outline: none; font-size: 10px; }
+.text-field:focus, .number-field:focus, .text-area-field:focus, .select-field:focus { border-color: #8174dc; }
+.select-field { cursor: pointer; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 9px; }
 .number-field { font-variant-numeric: tabular-nums; }
 .rotation-field { margin-top: 12px; }
+.opacity-control-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.opacity-range { flex: 1; min-width: 0; accent-color: #8b7cf6; cursor: pointer; }
+.opacity-number-wrap { position: relative; display: flex; align-items: center; width: 62px; flex: 0 0 62px; }
+.opacity-number-field { margin-top: 0; height: 27px; padding: 0 20px 0 7px; text-align: right; }
+.opacity-unit { position: absolute; right: 7px; color: #7e889b; font-size: 9px; pointer-events: none; }
 .color-field-wrap { display: flex; align-items: center; gap: 9px; height: 35px; margin: 4px 0 12px; padding: 4px 8px; border: 1px solid #343b49; border-radius: 5px; background: #121720; }
 .color-swatch { width: 25px; height: 23px; padding: 0; border: 0; border-radius: 3px; background: transparent; cursor: pointer; }
 .color-swatch::-webkit-color-swatch-wrapper { padding: 0; }
@@ -926,6 +932,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .quick-add { display: flex; gap: 7px; margin-top: 9px; }
 .quick-add button { border: 1px solid #3a4050; border-radius: 5px; padding: 7px 9px; color: #aaa2e9; background: #24243a; font-size: 9px; cursor: pointer; }
 .quick-add button:hover { background: #302e4b; }
+.inspector-multi-actions { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 210px; margin-top: 12px; }
+.inspector-multi-actions button { width: 100%; padding: 7px 10px; border: 1px solid #3a4050; border-radius: 5px; color: #d3d7e4; background: #222636; font-size: 9px; font-weight: 600; cursor: pointer; }
+.inspector-multi-actions button:hover { border-color: #6b61b8; color: #f0edff; background: #2c2946; }
 
 .canvas-minimized-window { position: absolute; z-index: 1; width: 238px; height: 34px; overflow: hidden; border: 1px solid #46516a; border-radius: 7px; background: #252e40; box-shadow: 0 8px 22px #0007; }
 .canvas-minimized-titlebar { display: flex; align-items: center; gap: 8px; width: 100%; height: 100%; padding: 0 7px 0 10px; color: #e8edf7; cursor: grab; touch-action: none; user-select: none; }
@@ -1083,6 +1092,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .global-menu-dropdown button:hover { background: #302b4b; color: #f0edff; }
 .global-menu-dropdown button:disabled { opacity: .5; cursor: not-allowed; }
 .global-menu-dropdown button:disabled:hover { background: transparent; color: #d8dce6; }
+.global-menu-divider { height: 1px; margin: 4px 6px; background: #2e3647; }
 .panel-context-indicator {
   display: inline-flex;
   align-items: center;

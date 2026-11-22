@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { ComponentDefinition, DesignNode, FolioDocument, PathNode, TextNode } from '../../core/document/types';
-import { buildLayerClipMaskMap, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
+import { buildFrameClipAncestorMap, buildLayerClipMaskMap, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
 import {
   decomposeNodesForShapeBuilder,
   findNearestSegmentHit,
@@ -480,10 +480,11 @@ export function Canvas({
   );
 
   // Precompute lookup maps & layer states once per document/preview update (O(N))
-  const { nodeById, layerStates, clipMaskMap, visibleRenderNodes, selectableNodes } = useMemo(() => {
+  const { nodeById, layerStates, clipMaskMap, frameClipMap, visibleRenderNodes, selectableNodes } = useMemo(() => {
     const byId = new Map(canvasNodes.map((node) => [node.id, node]));
     const states = getEffectiveLayerStates(canvasNodes);
     const masks = buildLayerClipMaskMap(canvasNodes, byId);
+    const frameClips = buildFrameClipAncestorMap(canvasNodes, byId);
     const renderNodes = getLayerRenderOrder(canvasNodes).filter((node) => {
       const state = states.get(node.id);
       if (!state?.visible) return false;
@@ -498,6 +499,7 @@ export function Canvas({
       nodeById: byId,
       layerStates: states,
       clipMaskMap: masks,
+      frameClipMap: frameClips,
       visibleRenderNodes: renderNodes,
       selectableNodes: selectable,
     };
@@ -1044,6 +1046,7 @@ export function Canvas({
               maskPrefix={maskPrefix}
               nodeById={nodeById}
               clipMaskMap={clipMaskMap}
+              frameClipMap={frameClipMap}
               componentById={componentById}
             />
             <pattern
@@ -1091,6 +1094,7 @@ export function Canvas({
                 components={components}
                 maskPrefix={maskPrefix}
                 clipMaskMap={clipMaskMap}
+                frameClipMap={frameClipMap}
                 componentById={componentById}
               />
             )
@@ -1107,6 +1111,7 @@ export function Canvas({
                   components={components}
                   maskPrefix={maskPrefix}
                   clipMaskMap={clipMaskMap}
+                  frameClipMap={frameClipMap}
                   componentById={componentById}
                 />
               ))}

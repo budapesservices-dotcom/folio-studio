@@ -27,11 +27,20 @@ import {
   convertShapeToPathNode,
   flipPathNode,
   normalizePathNode,
+  scalePathNodeGeometry,
   simplifyPathNode,
   type PathfinderOperation,
 } from '../core/document/vector';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
 import { ToolOptionsBar } from './ToolOptionsBar';
+import { InspectorPanel } from './InspectorPanel';
+import {
+  cloneNodesSubtree,
+  createClipboardPayload,
+  prepareNodesForPaste,
+  type StudioClipboardPayload,
+} from './nodeClipboard';
+import { downloadPngDocument, downloadSvgDocument } from './visualExport';
 import { createEditorState, editorReducer, normalizePositiveDimension } from './editorReducer';
 import type { EditorAction } from './editorReducer';
 import { createCanonicalEditorStore } from './editorStore';
@@ -155,13 +164,6 @@ function LayerIcon({ type }: { type: DesignNode['type'] }) {
 }
 
 type ToolRackGroupId = CanvasToolGroupId | 'create';
-
-function parseNumericInput(value: string): number | null {
-  const normalized = value.trim();
-  if (!normalized) return null;
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
-}
 
 type CanvasViewState = { zoom: number; pan: { x: number; y: number } };
 type LayerRenameSession = {
@@ -321,6 +323,7 @@ export function App() {
   const layerDragSourceRef = useRef<string[] | null>(null);
   const layerDragEditorRef = useRef<EditorTarget | null>(null);
   const selectionSourceRef = useRef<'layers' | 'canvas'>('canvas');
+  const clipboardRef = useRef<StudioClipboardPayload | null>(null);
   const layerSelectionAnchorRef = useRef<Record<EditorTarget, string | null>>({ main: null, component: null });
   const [layerRename, setLayerRename] = useState<LayerRenameSession | null>(null);
   const layerRenameRef = useRef<LayerRenameSession | null>(null);
@@ -1874,6 +1877,51 @@ export function App() {
     }
   };
 
+  const getActiveExportTarget = () => {
+    if (activeEditorId === 'component') {
+      const activeComp = editingComponentId
+        ? state.project.components.find((component) => component.id === editingComponentId)
+        : null;
+      return {
+        document: componentDocument,
+        name: activeComp?.name ?? `${state.project.metadata.name}-component`,
+      };
+    }
+    const activePage = getActivePage(state.project);
+    return {
+      document: activePage.document,
+      name: `${state.project.metadata.name}-${activePage.name}`,
+    };
+  };
+
+  const exportActiveCanvasSvg = () => {
+    setFileMenuOpen(false);
+    if (isHydrating) return;
+    try {
+      const target = getActiveExportTarget();
+      downloadSvgDocument(target.document, state.project.components, target.name);
+      setNotice(`Exported "${target.name}" as standalone SVG.`);
+    } catch (error) {
+      console.error('Folio could not export SVG:', error);
+      const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
+      setNotice('Unable to export SVG: ' + detail);
+    }
+  };
+
+  const exportActiveCanvasPng = async () => {
+    setFileMenuOpen(false);
+    if (isHydrating) return;
+    try {
+      const target = getActiveExportTarget();
+      const result = await downloadPngDocument(target.document, state.project.components, target.name, 2);
+      setNotice(`Exported "${target.name}" as PNG (${result.width}×${result.height}px @2×).`);
+    } catch (error) {
+      console.error('Folio could not export PNG:', error);
+      const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
+      setNotice('Unable to export PNG: ' + detail);
+    }
+  };
+
   const selectedComponentNodes = componentDocument.nodes.filter((node) => componentState.selectedNodeIds.includes(node.id));
   const insertOwnedComponent = (component: ComponentDefinition) => {
     if (isHydrating) return;
@@ -1891,7 +1939,24 @@ export function App() {
     const safePatch = { ...patch };
     if ('width' in patch) safePatch.width = normalizePositiveDimension(Number(patch.width), selectedNode.width);
     if ('height' in patch) safePatch.height = normalizePositiveDimension(Number(patch.height), selectedNode.height);
-    dispatchFocused({ type: 'edit-node', coalesceKey: 'inspector:' + selectedNode.id, node: { ...selectedNode, ...safePatch } as DesignNode });
+    if ('opacity' in patch) {
+      const rawOpacity = Number(patch.opacity);
+      safePatch.opacity = Number.isFinite(rawOpacity) ? Math.min(1, Math.max(0, rawOpacity)) : selectedNode.opacity;
+    }
+
+    let nextNode: DesignNode;
+    if (selectedNode.type === 'path' && ('width' in safePatch || 'height' in safePatch)) {
+      const nextX = 'x' in safePatch && typeof safePatch.x === 'number' ? safePatch.x : selectedNode.x;
+      const nextY = 'y' in safePatch && typeof safePatch.y === 'number' ? safePatch.y : selectedNode.y;
+      const nextW = typeof safePatch.width === 'number' ? safePatch.width : selectedNode.width;
+      const nextH = typeof safePatch.height === 'number' ? safePatch.height : selectedNode.height;
+      const scaled = scalePathNodeGeometry(selectedNode, nextX, nextY, nextW, nextH);
+      nextNode = { ...scaled, ...safePatch, points: scaled.points, subpaths: scaled.subpaths } as DesignNode;
+    } else {
+      nextNode = { ...selectedNode, ...safePatch } as DesignNode;
+    }
+
+    dispatchFocused({ type: 'edit-node', coalesceKey: 'inspector:' + selectedNode.id, node: nextNode });
   };
 
   const updateSelectedStyle = (patch: Record<string, string | number>) => {
@@ -2002,7 +2067,7 @@ export function App() {
     if (isHydrating || nodes.length === 0) return;
     selectionSourceRef.current = 'canvas';
     if (target === 'main') {
-      dispatch({ type: 'replace-node-with-nodes', nodeId, nodes });
+      mainCommandClient.replaceNodeWithNodes(nodeId, nodes, 'Split vector path');
     } else {
       componentDispatch({ type: 'replace-node-with-nodes', nodeId, nodes });
     }
@@ -2012,7 +2077,7 @@ export function App() {
     if (isHydrating || removeIds.length === 0) return;
     selectionSourceRef.current = 'canvas';
     if (target === 'main') {
-      dispatch({ type: 'replace-nodes', removeIds, insertNodes });
+      mainCommandClient.replaceNodes(removeIds, insertNodes, 'Replace vector nodes');
     } else {
       componentDispatch({ type: 'replace-nodes', removeIds, insertNodes });
     }
@@ -2108,14 +2173,25 @@ export function App() {
         (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame'),
     );
     if (convertible.length === 0) return;
-    for (const node of convertible) {
-      const pathNode = convertShapeToPathNode(node);
-      if (!pathNode) continue;
-      if (target === 'main') mainCommandClient.replaceNode(pathNode, 'Convert shape to vector path');
-      else componentDispatch({ type: 'replace-node', node: pathNode });
+    const convertedPaths = convertible
+      .map((node) => convertShapeToPathNode(node))
+      .filter((pathNode): pathNode is NonNullable<typeof pathNode> => pathNode !== null);
+    if (convertedPaths.length === 0) return;
+
+    const removeIds = convertedPaths.map((node) => node.id);
+    if (target === 'main') {
+      const result = mainCommandClient.replaceNodes(
+        removeIds,
+        convertedPaths,
+        convertedPaths.length === 1 ? 'Convert shape to vector path' : 'Convert shapes to vector paths',
+        removeIds,
+      );
+      if (result.status !== 'applied') return;
+    } else {
+      componentDispatch({ type: 'replace-nodes', removeIds, insertNodes: convertedPaths, selectIds: removeIds });
     }
     setWorkspaceToolId(target, 'direct-selection');
-    setNotice(`Converted ${convertible.length} shape${convertible.length === 1 ? '' : 's'} to editable cubic Bezier paths (Direct Selection A).`);
+    setNotice(`Converted ${convertedPaths.length} shape${convertedPaths.length === 1 ? '' : 's'} to editable cubic Bezier paths (Direct Selection A).`);
   };
 
   const handleFlipSelection = (target: EditorTarget, axis: 'horizontal' | 'vertical') => {
@@ -2170,14 +2246,17 @@ export function App() {
     if (paths.length === 0) return;
     let totalBefore = 0;
     let totalAfter = 0;
+    const simplifiedNodes: DesignNode[] = [];
     for (const node of paths) {
       if (node.type !== 'path') continue;
       totalBefore += node.points.length;
       const simplified = simplifyPathNode(node, 2.5);
       totalAfter += simplified.points.length;
-      if (target === 'main') mainCommandClient.replaceNode(simplified, 'Simplify vector path');
-      else componentDispatch({ type: 'replace-node', node: simplified });
+      simplifiedNodes.push(simplified);
     }
+    if (simplifiedNodes.length === 0) return;
+    if (target === 'main') mainCommandClient.transformNodes(simplifiedNodes, 'Simplify vector paths');
+    else componentDispatch({ type: 'transform-nodes', nodes: simplifiedNodes });
     setNotice(`Simplified path anchors (${totalBefore} → ${totalAfter}).`);
   };
 
@@ -2189,20 +2268,98 @@ export function App() {
       (node) => editor.selectedNodeIds.includes(node.id) && node.type === 'path',
     );
     if (paths.length === 0) return;
+    const updatedNodes: DesignNode[] = [];
     for (const node of paths) {
       if (node.type !== 'path') continue;
       const nextClosed = !node.closed;
-      const updated = normalizePathNode({
-        ...node,
-        closed: nextClosed,
-        style: {
-          ...node.style,
-          fill: nextClosed && node.style.fill === 'none' ? toolOptions.fillColor : node.style.fill,
-          strokeWidth: !nextClosed && node.style.strokeWidth === 0 ? Math.max(2, toolOptions.strokeWidth) : node.style.strokeWidth,
-        },
-      });
-      if (target === 'main') mainCommandClient.replaceNode(updated, nextClosed ? 'Close vector path' : 'Open vector path');
-      else componentDispatch({ type: 'replace-node', node: updated });
+      updatedNodes.push(
+        normalizePathNode({
+          ...node,
+          closed: nextClosed,
+          style: {
+            ...node.style,
+            fill: nextClosed && node.style.fill === 'none' ? toolOptions.fillColor : node.style.fill,
+            strokeWidth: !nextClosed && node.style.strokeWidth === 0 ? Math.max(2, toolOptions.strokeWidth) : node.style.strokeWidth,
+          },
+        }),
+      );
+    }
+    if (updatedNodes.length === 0) return;
+    if (target === 'main') mainCommandClient.transformNodes(updatedNodes, 'Toggle closed vector contour');
+    else componentDispatch({ type: 'transform-nodes', nodes: updatedNodes });
+  };
+
+  const duplicateSelection = (target: EditorTarget = activeEditorId) => {
+    if (isHydrating) return;
+    const context = getActiveEditorContext(target, state, componentState);
+    const layerStates = getEffectiveLayerStates(context.document.nodes);
+    const eligibleIds = context.state.selectedNodeIds.filter((id) => {
+      const effective = layerStates.get(id);
+      return effective?.visible && !effective.locked;
+    });
+    if (eligibleIds.length === 0) return;
+    const { clonedNodes } = cloneNodesSubtree(context.document.nodes, eligibleIds, {
+      offsetX: 24,
+      offsetY: 24,
+      nameSuffix: ' copy',
+      preserveExternalParent: true,
+    });
+    if (clonedNodes.length === 0) return;
+    if (target === 'main') mainCommandClient.createNodes(clonedNodes, 'Duplicate layers');
+    else componentDispatch({ type: 'add-nodes', nodes: clonedNodes });
+  };
+
+  const copySelection = (target: EditorTarget = activeEditorId) => {
+    if (isHydrating) return false;
+    const context = getActiveEditorContext(target, state, componentState);
+    if (context.state.selectedNodeIds.length === 0) return false;
+    const payload = createClipboardPayload(context.document.nodes, context.state.selectedNodeIds, {
+      target,
+      pageId: target === 'main' ? state.project.activePageId : null,
+      componentId: target === 'component' ? editingComponentId : null,
+    });
+    if (!payload) return false;
+    clipboardRef.current = payload;
+    const count = payload.nodes.length;
+    setNotice(`Copied ${count} layer${count === 1 ? '' : 's'} to studio clipboard.`);
+    return true;
+  };
+
+  const cutSelection = (target: EditorTarget = activeEditorId) => {
+    if (isHydrating) return;
+    const context = getActiveEditorContext(target, state, componentState);
+    if (context.state.selectedNodeIds.length === 0) return;
+    const copied = copySelection(target);
+    if (!copied) return;
+    const ids = expandSelectedLayerIds(context.document.nodes, context.state.selectedNodeIds);
+    if (target === 'main') mainCommandClient.setNodesCanvasState(ids, false, 'Cut layers');
+    else componentDispatch({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: false });
+    setNotice(`Cut ${ids.length} layer${ids.length === 1 ? '' : 's'} to studio clipboard.`);
+  };
+
+  const pasteSelection = (target: EditorTarget = activeEditorId) => {
+    if (isHydrating || !clipboardRef.current) return;
+    const prepared = prepareNodesForPaste(clipboardRef.current, {
+      target,
+      pageId: target === 'main' ? state.project.activePageId : null,
+      componentId: target === 'component' ? editingComponentId : null,
+      components: state.project.components,
+    });
+    if (prepared.nodes.length === 0) return;
+    clipboardRef.current = {
+      ...clipboardRef.current,
+      pasteCount: prepared.nextPasteCount,
+    };
+    selectionSourceRef.current = 'canvas';
+    if (target === 'main') mainCommandClient.createNodes(prepared.nodes, 'Paste layers');
+    else componentDispatch({ type: 'add-nodes', nodes: prepared.nodes });
+    setInspectorVisible(true);
+    if (prepared.detachedCircularCount > 0) {
+      setNotice(
+        `Pasted ${prepared.nodes.length} layer${prepared.nodes.length === 1 ? '' : 's'} (${prepared.detachedCircularCount} self-referencing component instance detached to prevent recursion).`,
+      );
+    } else {
+      setNotice(`Pasted ${prepared.nodes.length} layer${prepared.nodes.length === 1 ? '' : 's'}.`);
     }
   };
 
@@ -2546,11 +2703,24 @@ export function App() {
       }
       if (modifier && key === 'z') { event.preventDefault(); emit({ type: event.shiftKey ? 'redo' : 'undo' }); return; }
       if (modifier && key === 'y') { event.preventDefault(); emit({ type: 'redo' }); return; }
-      if (modifier && key === 'd' && nodes.length > 0) {
+      if (modifier && !event.shiftKey && key === 'c' && ids.length > 0) {
         event.preventDefault();
-        const copies = nodes.map((node, index) => ({ ...node, id: globalThis.crypto?.randomUUID?.() ?? 'duplicate-' + Date.now() + '-' + index, name: node.name + ' copy', x: node.x + 24, y: node.y + 24 }));
-        if (activeEditorId === 'main') mainCommandClient.createNodes(copies, 'Duplicate layers');
-        else componentDispatch({ type: 'add-nodes', nodes: copies });
+        copySelection(activeEditorId);
+        return;
+      }
+      if (modifier && !event.shiftKey && key === 'x' && ids.length > 0) {
+        event.preventDefault();
+        cutSelection(activeEditorId);
+        return;
+      }
+      if (modifier && !event.shiftKey && key === 'v' && clipboardRef.current) {
+        event.preventDefault();
+        pasteSelection(activeEditorId);
+        return;
+      }
+      if (modifier && key === 'd' && ids.length > 0) {
+        event.preventDefault();
+        duplicateSelection(activeEditorId);
         return;
       }
       if ((event.key === 'Delete' || event.key === 'Backspace') && ids.length > 0) {
@@ -2592,7 +2762,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeEditorId, state, componentState, isHydrating, componentDeletionDialogOpen]);
+  }, [activeEditorId, editingComponentId, state, componentState, isHydrating, componentDeletionDialogOpen]);
 
 
   useEffect(() => {
@@ -2646,7 +2816,10 @@ export function App() {
               <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={fileMenuOpen} onClick={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); setToolRackOpen(null); }} onMouseEnter={() => updateToolbarHint('FILE', 'Open or export the current native .flop project.')}>File</button>
               {fileMenuOpen && <div class="global-menu-dropdown" role="menu" aria-label="File menu">
                 <button type="button" role="menuitem" onClick={openProjectPicker} disabled={isHydrating}>Open Project…</button>
-                <button type="button" role="menuitem" onClick={exportCurrentProject} disabled={isHydrating}>Export Project</button>
+                <button type="button" role="menuitem" onClick={exportCurrentProject} disabled={isHydrating}>Export Project (.flop)</button>
+                <div class="global-menu-divider" role="separator" />
+                <button type="button" role="menuitem" onClick={exportActiveCanvasSvg} disabled={isHydrating}>Export SVG</button>
+                <button type="button" role="menuitem" onClick={exportActiveCanvasPng} disabled={isHydrating}>Export PNG (2×)</button>
               </div>}
               <input
                 ref={projectFileInputRef}
@@ -3395,276 +3568,47 @@ export function App() {
         </FloatingWindow>
       )}
 
-      <aside class={`inspector-panel ${inspectorVisible ? "" : "is-hidden"}`} onFocusOut={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      <InspectorPanel
+        visible={inspectorVisible}
+        width={panelWidths.inspector}
+        isResizing={resizingPanel === 'inspector'}
+        resizeHandleRef={inspectorResizeHandleRef}
+        activeEditorId={activeEditorId}
+        selectedNode={selectedNode}
+        selectedNodes={focusedEditor.selectedNodes}
+        selectedCount={focusedEditor.state.selectedNodeIds.length}
+        canRemoveFromCanvas={selectionSourceRef.current !== 'layers'}
+        selectedInstanceComponent={selectedInstanceComponent}
+        instanceOverrideTargets={instanceOverrideTargets}
+        defaultFillColor={toolOptions.fillColor}
+        renderIcon={(name) => <Icon name={name} />}
+        onStartResize={startPanelResize}
+        onResizeDoubleClick={handlePanelResizeDoubleClick}
+        onResizeKeyDown={handlePanelResizeKeyDown}
+        onCommitEdit={() => {
           dispatch({ type: 'commit-edit' });
           componentDispatch({ type: 'commit-edit' });
+        }}
+        onHoverHint={() =>
+          updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')
         }
-      }} onKeyDown={(event) => {
-        const target = event.target as HTMLElement;
-        if (event.key === 'Enter' && target.matches('input:not([type="checkbox"])')) {
-          // Enter confirms a single-line Inspector field. Blurring also runs
-          // the same commit path used when the user clicks outside the panel.
-          event.preventDefault();
-          target.blur();
-          dispatch({ type: 'commit-edit' });
-          componentDispatch({ type: 'commit-edit' });
-        }
-      }} onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
-        <div
-          ref={inspectorResizeHandleRef}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize Inspector panel"
-          aria-valuenow={panelWidths.inspector}
-          aria-valuemin={PANEL_RESIZE_CONSTRAINTS.inspector.minWidth}
-          aria-valuemax={PANEL_RESIZE_CONSTRAINTS.inspector.maxWidth}
-          tabIndex={inspectorVisible ? 0 : -1}
-          data-resize-panel="inspector"
-          class={`panel-resize-handle panel-resize-handle-left ${resizingPanel === 'inspector' ? 'is-active' : ''}`}
-          title="Drag to resize Inspector panel (double-click to reset)"
-          onPointerDown={(event) => event.stopPropagation()}
-          onMouseDown={(event) => startPanelResize('inspector', event)}
-          onDblClick={(event) => handlePanelResizeDoubleClick('inspector', event)}
-          onKeyDown={(event) => handlePanelResizeKeyDown('inspector', event)}
-        />
-        <div class="panel-heading inspector-heading">
-          <div>
-            <span class="panel-kicker">PROPERTIES</span>
-            <h2>Inspector</h2><span class="panel-context-indicator">{activeEditorId === 'component' ? 'COMPONENT CANVAS' : 'MAIN PAGE'}</span>
-          </div>
-          {selectedNode && selectionSourceRef.current !== 'layers' && <button class="icon-button danger" title="Remove from Canvas only" onClick={() => {
-            if (activeEditorId === 'main') mainCommandClient.setNodesCanvasState([selectedNode.id], false, 'Remove from canvas');
-            else componentDispatch({ type: 'set-nodes-canvas-state', nodeIds: [selectedNode.id], onCanvas: false });
-          }}><Icon name="trash" /></button>}
-        </div>
-
-        {selectedNode ? (
-          <div class="inspector-content">
-            <section class="property-section">
-              <div class="section-title">Layer</div>
-              <label class="field-label">Name</label>
-              <input
-                class="text-field"
-                value={selectedNode.name}
-                onInput={(event) => updateSelected({ name: event.currentTarget.value })}
-              />
-            </section>
-
-            <section class="property-section">
-              <div class="section-title">Position</div>
-              <div class="field-grid">
-                <label class="field-label">X<input class="number-field" type="number" value={Math.round(selectedNode.x)} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelected({ x: value }); }} /></label>
-                <label class="field-label">Y<input class="number-field" type="number" value={Math.round(selectedNode.y)} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelected({ y: value }); }} /></label>
-                <label class="field-label">W<input class="number-field" type="number" min="1" value={Math.round(selectedNode.width)} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelected({ width: normalizePositiveDimension(value, selectedNode.width) }); }} /></label>
-                <label class="field-label">H<input class="number-field" type="number" min="1" value={Math.round(selectedNode.height)} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelected({ height: normalizePositiveDimension(value, selectedNode.height) }); }} /></label>
-              </div>
-              <label class="field-label rotation-field">Rotation<input class="number-field" type="number" value={selectedNode.rotation} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelected({ rotation: value }); }} /></label>
-            </section>
-
-            <section class="property-section">
-              <div class="section-title">Appearance</div>
-              {selectedNode.type === 'component-instance' ? (
-                <>
-                  <span class="field-help">LINKED MASTER · {selectedInstanceComponent?.name ?? 'Missing component'}</span>
-                  {instanceOverrideTargets?.fillNode && (() => {
-                    const target = instanceOverrideTargets.fillNode!;
-                    const value = selectedNode.overrides[target.id]?.fill ?? target.style.fill;
-                    return (
-                      <>
-                        <label class="field-label">Instance fill override</label>
-                        <div class="color-field-wrap">
-                          <input class="color-swatch" type="color"
-                            value={value.startsWith('#') && value.length === 7 ? value : '#8B7CF6'}
-                            onInput={(event) => updateInstanceOverride(target.id, { fill: event.currentTarget.value })} />
-                          <span class="color-value">{value.toUpperCase()}</span>
-                        </div>
-                      </>
-                    );
-                  })()}
-                  {instanceOverrideTargets?.textNode && (() => {
-                    const target = instanceOverrideTargets.textNode!;
-                    return (
-                      <>
-                        <label class="field-label text-content-label">Instance text override</label>
-                        <textarea class="text-area-field" rows={3}
-                          value={selectedNode.overrides[target.id]?.text ?? target.text}
-                          onInput={(event) => updateInstanceOverride(target.id, { text: event.currentTarget.value })} />
-                      </>
-                    );
-                  })()}
-                  <div class="instance-actions">
-                    <button type="button" onClick={resetInstanceOverrides}
-                      disabled={Object.keys(selectedNode.overrides).length === 0}>Reset Overrides</button>
-                    <button type="button" onClick={detachSelectedInstance}>Detach Instance</button>
-                  </div>
-                </>
-              ) : selectedNode.type === 'group' ? (
-                <span class="field-help">GROUP CONTAINER · Holds child layers as one hierarchy.</span>
-              ) : (
-                <>
-                  <label class="field-label">Fill</label>
-                  <div class="color-field-wrap">
-                    <input
-                      class="color-swatch"
-                      type="color"
-                      value={selectedNode.style.fill.startsWith('#') && selectedNode.style.fill.length >= 7 ? selectedNode.style.fill.slice(0, 7) : '#8B7CF6'}
-                      onInput={(event) => updateSelectedStyle({ fill: event.currentTarget.value })}
-                    />
-                    <span class="color-value">{selectedNode.style.fill.toUpperCase()}</span>
-                    {(selectedNode.type === 'path' || selectedNode.type === 'frame') && (
-                      <button
-                        type="button"
-                        class="inspector-inline-chip"
-                        onClick={() => updateSelectedStyle({ fill: selectedNode.style.fill === 'none' ? toolOptions.fillColor : 'none' })}
-                      >
-                        {selectedNode.style.fill === 'none' ? 'Add Fill' : 'None'}
-                      </button>
-                    )}
-                  </div>
-                  {(selectedNode.type === 'rect' || selectedNode.type === 'ellipse' || selectedNode.type === 'frame' || selectedNode.type === 'path') && (
-                    <>
-                      <label class="field-label range-label">Stroke</label>
-                      <div class="color-field-wrap">
-                        <input
-                          class="color-swatch"
-                          type="color"
-                          value={selectedNode.style.stroke.startsWith('#') && selectedNode.style.stroke.length >= 7 ? selectedNode.style.stroke.slice(0, 7) : '#20212A'}
-                          onInput={(event) => updateSelectedStyle({ stroke: event.currentTarget.value, strokeWidth: Math.max(1, selectedNode.style.strokeWidth) })}
-                        />
-                        <span class="color-value">{selectedNode.style.stroke.toUpperCase()}</span>
-                        <input
-                          class="number-field inspector-stroke-width"
-                          type="number"
-                          min="0"
-                          max="32"
-                          step="0.5"
-                          aria-label="Stroke width"
-                          value={selectedNode.style.strokeWidth}
-                          onInput={(event) => {
-                            const value = parseNumericInput(event.currentTarget.value);
-                            if (value !== null) updateSelectedStyle({ strokeWidth: Math.max(0, value) });
-                          }}
-                        />
-                      </div>
-                    </>
-                  )}
-                  {(selectedNode.type === 'rect' || selectedNode.type === 'frame') && (
-                    <label class="field-label range-label">Corner radius
-                      <input class="number-field" type="number" min="0" value={selectedNode.style.radius ?? 0} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelectedStyle({ radius: Math.max(0, value) }); }} />
-                    </label>
-                  )}
-                  {selectedNode.type === 'frame' && (
-                    <label class="toggle-row">
-                      <span>Clip content</span>
-                      <input
-                        type="checkbox"
-                        checked={selectedNode.clipContent !== false}
-                        onChange={(event) => updateSelected({ clipContent: event.currentTarget.checked } as Partial<DesignNode>)}
-                      />
-                    </label>
-                  )}
-                  {(selectedNode.type === 'rect' || selectedNode.type === 'ellipse' || selectedNode.type === 'frame') && (
-                    <div class="instance-actions">
-                      <button type="button" onClick={() => handleConvertToPath(activeEditorId)}>
-                        Convert to Vector Path
-                      </button>
-                    </div>
-                  )}
-                  {selectedNode.type === 'path' && (
-                    <>
-                      <div class="vector-meta-row">
-                        <span>Vector Path</span>
-                        <strong>{selectedNode.points.length} anchors</strong>
-                      </div>
-                      <label class="toggle-row">
-                        <span>Closed contour</span>
-                        <input
-                          type="checkbox"
-                          checked={selectedNode.closed}
-                          onChange={() => handleTogglePathClosed(activeEditorId)}
-                        />
-                      </label>
-                      <label class="toggle-row">
-                        <span>Dashed stroke</span>
-                        <input
-                          type="checkbox"
-                          checked={Boolean(selectedNode.style.strokeDasharray)}
-                          onChange={(event) => updateSelectedStyle({ strokeDasharray: event.currentTarget.checked ? '8 5' : '' })}
-                        />
-                      </label>
-                      {!selectedNode.closed && (
-                        <div class="field-grid single-row">
-                          <label class="toggle-row">
-                            <span>Start Arrow</span>
-                            <input
-                              type="checkbox"
-                              checked={Boolean(selectedNode.style.arrowStart)}
-                              onChange={(event) => updateSelected({
-                                style: { ...selectedNode.style, arrowStart: event.currentTarget.checked },
-                              } as Partial<DesignNode>)}
-                            />
-                          </label>
-                          <label class="toggle-row">
-                            <span>End Arrow</span>
-                            <input
-                              type="checkbox"
-                              checked={Boolean(selectedNode.style.arrowEnd)}
-                              onChange={(event) => updateSelected({
-                                style: { ...selectedNode.style, arrowEnd: event.currentTarget.checked },
-                              } as Partial<DesignNode>)}
-                            />
-                          </label>
-                        </div>
-                      )}
-                      <div class="instance-actions">
-                        <button type="button" onClick={() => chooseCanvasTool('direct-selection', activeEditorId)}>
-                          Edit Anchors (A)
-                        </button>
-                        <button type="button" onClick={() => handleSimplifyPath(activeEditorId)}>
-                          Simplify
-                        </button>
-                      </div>
-                    </>
-                  )}
-                  {selectedNode.type === 'text' && (
-                    <>
-                      <label class="field-label text-content-label">Text content</label>
-                      <textarea class="text-area-field" rows={3} value={selectedNode.text} onInput={(event) => updateSelected({ text: event.currentTarget.value })} />
-                      <div class="field-grid single-row">
-                        <label class="field-label">Font size<input class="number-field" type="number" min="1" value={selectedNode.style.fontSize} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelectedStyle({ fontSize: Math.max(1, value) }); }} /></label>
-                        <label class="field-label">Weight<input class="number-field" type="number" min="100" max="900" step="100" value={selectedNode.style.fontWeight} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelectedStyle({ fontWeight: Math.min(900, Math.max(100, value)) }); }} /></label>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-            </section>
-
-            <section class="property-section last-section">
-              <div class="section-title">Layer options</div>
-              <label class="toggle-row"><span>Visible</span><input type="checkbox" checked={selectedNode.visible} onChange={(event) => updateSelected({ visible: event.currentTarget.checked })} /></label>
-              <label class="toggle-row"><span>Locked</span><input type="checkbox" checked={selectedNode.locked} onChange={(event) => updateSelected({ locked: event.currentTarget.checked })} /></label>
-            </section>
-          </div>
-        ) : focusedEditor.state.selectedNodeIds.length > 1 ? (
-          <div class="inspector-empty multi-inspector">
-            <div class="empty-icon"><Icon name="layers" /></div>
-            <strong>{focusedEditor.state.selectedNodeIds.length} layers selected</strong>
-            <p>Drag to move the group, use the resize handles, or choose an alignment control above the canvas.</p>
-          </div>
-        ) : (
-          <div class="inspector-empty">
-            <div class="empty-icon"><Icon name="cursor" /></div>
-            <strong>Nothing selected</strong>
-            <p>Select a layer on the canvas or in the Layers panel to edit its properties.</p>
-            <div class="quick-add">
-              <button onClick={() => addNode('rect')}>+ Rectangle</button>
-              <button onClick={() => addNode('text')}>+ Text</button>
-            </div>
-          </div>
-        )}
-      </aside>
+        onRemoveFromCanvas={(nodeId) => {
+          if (activeEditorId === 'main') mainCommandClient.setNodesCanvasState([nodeId], false, 'Remove from canvas');
+          else componentDispatch({ type: 'set-nodes-canvas-state', nodeIds: [nodeId], onCanvas: false });
+        }}
+        onUpdateSelected={updateSelected}
+        onUpdateSelectedStyle={updateSelectedStyle}
+        onUpdateInstanceOverride={updateInstanceOverride}
+        onResetInstanceOverrides={resetInstanceOverrides}
+        onDetachInstance={detachSelectedInstance}
+        onConvertToPath={handleConvertToPath}
+        onTogglePathClosed={handleTogglePathClosed}
+        onSimplifyPath={handleSimplifyPath}
+        onChooseTool={chooseCanvasTool}
+        onQuickAdd={addNode}
+        onDuplicateSelection={() => duplicateSelection(activeEditorId)}
+        onCopySelection={() => copySelection(activeEditorId)}
+      />
 
 
       <section ref={pagesRackRef} class={`pages-rack-panel ${pagesRackOpen ? 'is-open' : ''}`} onPointerDown={() => focusWindow('pages')} aria-label="Pages Rack" aria-hidden={!pagesRackOpen} inert={!pagesRackOpen}>

@@ -63,6 +63,13 @@ export interface MainCanvasCommandClient {
   renameProject(name: string): NativeCommandResult;
   createNodes(nodes: readonly DesignNode[], description?: string): NativeCommandResult;
   replaceNode(node: DesignNode, description?: string): NativeCommandResult;
+  replaceNodes(
+    removeIds: readonly string[],
+    insertNodes: readonly DesignNode[],
+    description?: string,
+    selectIds?: readonly string[],
+  ): NativeCommandResult;
+  replaceNodeWithNodes(nodeId: string, nodes: readonly DesignNode[], description?: string): NativeCommandResult;
   transformNodes(nodes: readonly DesignNode[], description?: string): NativeCommandResult;
   setNodesProperties(
     nodeIds: readonly string[],
@@ -185,6 +192,67 @@ export function createMainCanvasCommandClient(
       return submit('node.replace', { kind: 'node', ref }, { node: stripUndefinedEntries(node) }, description);
     },
 
+    replaceNodes(removeIds, insertNodes, description = 'Replace nodes', selectIds) {
+      const astView = getActiveAstView();
+      if (removeIds.length === 0 && insertNodes.length === 0) {
+        return makeNoOpResult('No nodes were supplied to replace.', astView.address);
+      }
+      const cleanInsert = insertNodes.map((node) => stripUndefinedEntries(node));
+      const beforeSnapshot = store.getSnapshot();
+      const transition = store.dispatchLegacyAction({
+        type: 'replace-nodes',
+        removeIds: [...removeIds],
+        insertNodes: cleanInsert,
+        ...(selectIds ? { selectIds: [...selectIds] } : {}),
+      });
+      const afterSnapshot = transition.snapshot;
+      const changed = afterSnapshot.projectRevision !== beforeSnapshot.projectRevision;
+      return {
+        protocolVersion: 1,
+        commandId: createCommandId(),
+        status: changed ? 'applied' : 'no-op',
+        code: changed ? 'APPLIED' : 'NO_OP',
+        message: changed ? description : 'The requested node replacement produced no changes.',
+        projectId: afterSnapshot.editorState.project.metadata.id,
+        projectRevisionBefore: beforeSnapshot.projectRevision,
+        projectRevisionAfter: afterSnapshot.projectRevision,
+        changed,
+        affectedDocuments: [astView.address],
+        affectedNodes: [...removeIds, ...cleanInsert.map((n) => n.id)].map((id) => makeNodeRef(astView, id)),
+        warnings: [],
+      };
+    },
+
+    replaceNodeWithNodes(nodeId, nodes, description = 'Replace node with nodes') {
+      const astView = getActiveAstView();
+      if (nodes.length === 0) {
+        return makeNoOpResult('No replacement nodes were supplied.', astView.address);
+      }
+      const cleanNodes = nodes.map((node) => stripUndefinedEntries(node));
+      const beforeSnapshot = store.getSnapshot();
+      const transition = store.dispatchLegacyAction({
+        type: 'replace-node-with-nodes',
+        nodeId,
+        nodes: cleanNodes,
+      });
+      const afterSnapshot = transition.snapshot;
+      const changed = afterSnapshot.projectRevision !== beforeSnapshot.projectRevision;
+      return {
+        protocolVersion: 1,
+        commandId: createCommandId(),
+        status: changed ? 'applied' : 'no-op',
+        code: changed ? 'APPLIED' : 'NO_OP',
+        message: changed ? description : 'The requested node split produced no changes.',
+        projectId: afterSnapshot.editorState.project.metadata.id,
+        projectRevisionBefore: beforeSnapshot.projectRevision,
+        projectRevisionAfter: afterSnapshot.projectRevision,
+        changed,
+        affectedDocuments: [astView.address],
+        affectedNodes: [nodeId, ...cleanNodes.map((n) => n.id)].map((id) => makeNodeRef(astView, id)),
+        warnings: [],
+      };
+    },
+
     transformNodes(nodes, description = 'Transform nodes') {
       const astView = getActiveAstView();
       if (nodes.length === 0) return makeNoOpResult('No nodes were supplied to transform.', astView.address);
@@ -196,14 +264,25 @@ export function createMainCanvasCommandClient(
       const hasExtendedGeometryOrStyleChange = nodes.some((node) => {
         const current = astView.getNode(node.id);
         if (!current) return false;
+        if (current.opacity !== node.opacity) return true;
         if (node.type === 'text' && current.type === 'text') {
-          return current.style.fontSize !== node.style.fontSize || current.style.fill !== node.style.fill;
+          return current.text !== node.text ||
+            current.style.fontSize !== node.style.fontSize ||
+            current.style.fill !== node.style.fill ||
+            current.style.fontFamily !== node.style.fontFamily ||
+            current.style.fontWeight !== node.style.fontWeight ||
+            current.style.lineHeight !== node.style.lineHeight ||
+            current.style.letterSpacing !== node.style.letterSpacing;
         }
         if (node.type === 'path' && current.type === 'path') {
           return current.width !== node.width || current.height !== node.height ||
+            current.closed !== node.closed ||
             current.points !== node.points || current.shapeMeta !== node.shapeMeta ||
             current.style.fill !== node.style.fill || current.style.stroke !== node.style.stroke ||
-            current.style.strokeWidth !== node.style.strokeWidth;
+            current.style.strokeWidth !== node.style.strokeWidth ||
+            current.style.strokeDasharray !== node.style.strokeDasharray ||
+            current.style.arrowStart !== node.style.arrowStart ||
+            current.style.arrowEnd !== node.style.arrowEnd;
         }
         if ((node.type === 'rect' || node.type === 'frame') && (current.type === node.type)) {
           return current.style.fill !== node.style.fill || current.style.stroke !== node.style.stroke ||

@@ -250,24 +250,29 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           replacement.width === node.width &&
           replacement.height === node.height &&
           replacement.rotation === node.rotation &&
+          replacement.opacity === node.opacity &&
           replacement.onCanvas === node.onCanvas;
         const sameTypeSpecific =
           node.type === replacement.type &&
           (node.type === 'text'
-            ? replacement.type === 'text' && replacement.style.fontSize === node.style.fontSize
+            ? replacement.type === 'text'
+              && replacement.text === node.text
+              && JSON.stringify(replacement.style) === JSON.stringify(node.style)
             : node.type === 'path'
               ? replacement.type === 'path'
                 && replacement.closed === node.closed
-                && replacement.style.strokeWidth === node.style.strokeWidth
+                && JSON.stringify(replacement.style) === JSON.stringify(node.style)
                 && JSON.stringify(replacement.points) === JSON.stringify(node.points)
                 && JSON.stringify(replacement.subpaths ?? []) === JSON.stringify(node.subpaths ?? [])
                 && JSON.stringify(replacement.shapeMeta ?? null) === JSON.stringify(node.shapeMeta ?? null)
-              : node.type === 'rect' || node.type === 'frame'
-                ? (replacement.type === node.type)
-                  && replacement.style.strokeWidth === node.style.strokeWidth
-                  && replacement.style.radius === node.style.radius
-                : node.type === 'ellipse'
-                  ? replacement.type === 'ellipse' && replacement.style.strokeWidth === node.style.strokeWidth
+              : node.type === 'frame'
+                ? replacement.type === 'frame'
+                  && replacement.clipContent === node.clipContent
+                  && replacement.isSection === node.isSection
+                  && JSON.stringify(replacement.style) === JSON.stringify(node.style)
+                : node.type === 'rect' || node.type === 'ellipse'
+                  ? replacement.type === node.type
+                    && JSON.stringify(replacement.style) === JSON.stringify(node.style)
                   : true);
         if (sameGeometry && sameTypeSpecific) return node;
         changed = true;

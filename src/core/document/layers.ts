@@ -114,6 +114,59 @@ export function getLayerClipMaskBaseIds(
   return resolveClipMaskBaseIdsFromMap(nodeById, nodeId);
 }
 
+function resolveFrameClipAncestorIdsFromMap(
+  nodeById: ReadonlyMap<string, DesignNode>,
+  nodeId: string,
+  memo?: Map<string, string[]>,
+): string[] {
+  const cached = memo?.get(nodeId);
+  if (cached) return cached;
+
+  const chain: DesignNode[] = [];
+  const visited = new Set<string>([nodeId]);
+  const self = nodeById.get(nodeId);
+  let current = self?.parentId ? nodeById.get(self.parentId) : undefined;
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    chain.push(current);
+    current = current.parentId ? nodeById.get(current.parentId) : undefined;
+  }
+
+  const result: string[] = [];
+  for (let i = chain.length - 1; i >= 0; i -= 1) {
+    const ancestor = chain[i];
+    if (ancestor.type === 'frame' && ancestor.clipContent !== false && ancestor.onCanvas !== false) {
+      result.push(ancestor.id);
+    }
+  }
+
+  memo?.set(nodeId, result);
+  return result;
+}
+
+/** Precomputes ancestor Frame IDs with clipContent enabled for all nodes in a single pass. */
+export function buildFrameClipAncestorMap(
+  nodes: readonly DesignNode[],
+  existingNodeById?: ReadonlyMap<string, DesignNode>,
+): Map<string, string[]> {
+  const nodeById = existingNodeById ?? new Map(nodes.map((node) => [node.id, node]));
+  const result = new Map<string, string[]>();
+  for (const node of nodes) {
+    resolveFrameClipAncestorIdsFromMap(nodeById, node.id, result);
+  }
+  return result;
+}
+
+/** Returns ancestor Frame IDs (outermost first) whose clipContent clips this layer. */
+export function getLayerFrameClipAncestorIds(
+  nodes: readonly DesignNode[],
+  nodeId: string,
+  existingNodeById?: ReadonlyMap<string, DesignNode>,
+): string[] {
+  const nodeById = existingNodeById ?? new Map(nodes.map((node) => [node.id, node]));
+  return resolveFrameClipAncestorIdsFromMap(nodeById, nodeId);
+}
+
 function getParentId(node: DesignNode, nodeById: Map<string, DesignNode>): string | null {
   const parentId = node.parentId;
   return parentId && parentId !== node.id && nodeById.has(parentId) ? parentId : null;
