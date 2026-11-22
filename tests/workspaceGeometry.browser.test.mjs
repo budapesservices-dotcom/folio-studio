@@ -1199,9 +1199,113 @@ async function runAppAcceptance(browser) {
     expect(restoredWorkspace.geometry.height).toBeCloseTo(savedWorkspaceBeforeReload.windows.find((record) => record.workspace === 'component-canvas').geometry.height, 0);
     expect(restoredWorkspace.pagesClosed).toBe(true);
     expect(restoredWorkspace.componentsClosed).toBe(true);
+
+    // Legacy layout settings are imported only after an explicit user action.
+    const legacyRecords = {
+      'main-canvas': {
+        mode: 'floating',
+        position: { x: 31, y: 88 },
+        size: { width: 600, height: 400 },
+      },
+      'component-canvas': {
+        mode: 'floating',
+        position: { x: 130, y: 112 },
+        size: { width: 500, height: 360 },
+      },
+      'node-logic': {
+        mode: 'docked',
+        position: { x: 180, y: 150 },
+        size: { width: 620, height: 430 },
+      },
+    };
+    await browser.evaluate(
+      '(() => { localStorage.removeItem("folio.workspace-layout.v1"); ' +
+      'const records=' + JSON.stringify(legacyRecords) + '; ' +
+      'for (const [workspace,record] of Object.entries(records)) ' +
+      'localStorage.setItem("folio."+workspace.replace(/-/g,"-").replace("main-canvas","canvas").replace("component-canvas","component-canvas").replace("node-logic","node-logic")+"-window",JSON.stringify(record)); ' +
+      'return true; })()',
+    );
+    await browser.send('Page.reload', { ignoreCache: true });
+    await waitForApp(
+      browser,
+      'document.querySelector(".app-shell")?.getAttribute("aria-busy")==="false" && ' +
+      'document.querySelector(".workspace-preferences-recovery")?.textContent.includes("Legacy window settings")',
+      'legacy layout is restored but awaits user confirmation',
+      30000,
+    );
+    const legacyBeforeApproval = await browser.evaluate(
+      '(() => { const main=document.querySelector("[data-window-id=main-canvas]"); ' +
+      'const shell=document.querySelector(".app-shell"); const r=main.getBoundingClientRect(), s=shell.getBoundingClientRect(); ' +
+      'return {v1:localStorage.getItem("folio.workspace-layout.v1"),' +
+      'main:{x:r.left-s.left,y:r.top-s.top,width:r.width,height:r.height},' +
+      'mode:main.classList.contains("canvas-floating"),' +
+      'legacyMain:localStorage.getItem("folio.canvas-window"),' +
+      'approvalButton:document.querySelector(".workspace-preferences-recovery button")?.textContent.trim()}; })()',
+    );
+    expect(legacyBeforeApproval.v1).toBe(null);
+    expect(legacyBeforeApproval.main.x).toBeCloseTo(31, 0);
+    expect(legacyBeforeApproval.main.y).toBeCloseTo(88, 0);
+    expect(legacyBeforeApproval.main.width).toBeCloseTo(600, 0);
+    expect(legacyBeforeApproval.main.height).toBeCloseTo(400, 0);
+    expect(legacyBeforeApproval.mode).toBe(true);
+    expect(legacyBeforeApproval.legacyMain).not.toBe(null);
+    expect(legacyBeforeApproval.approvalButton).toBe('Migrate saved layout');
+
+    await browser.click('.workspace-preferences-recovery button');
+    await waitForApp(
+      browser,
+      '(() => { try { const saved=JSON.parse(localStorage.getItem("folio.workspace-layout.v1")||"null"); ' +
+      'return saved?.schemaVersion===1 && saved.windows?.some((record)=>record.workspace==="main-canvas"); ' +
+      '} catch { return false; } })()',
+      'explicit approval writes migrated Workspace Preferences V1',
+    );
+    const legacyAfterApproval = await browser.evaluate(
+      '(() => { const saved=JSON.parse(localStorage.getItem("folio.workspace-layout.v1")); ' +
+      'const main=saved.windows.find((record)=>record.workspace==="main-canvas"); ' +
+      'return {geometry:main.geometry,presentation:main.presentation,legacyMain:localStorage.getItem("folio.canvas-window"),' +
+      'legacyComponent:localStorage.getItem("folio.component-canvas-window"),' +
+      'legacyNodeLogic:localStorage.getItem("folio.node-logic-window")}; })()',
+    );
+    expect(legacyAfterApproval.geometry).toEqual({ x:31, y:88, width:600, height:400 });
+    expect(legacyAfterApproval.presentation).toBe('floating');
+    expect(legacyAfterApproval.legacyMain).not.toBe(null);
+    expect(legacyAfterApproval.legacyComponent).not.toBe(null);
+    expect(legacyAfterApproval.legacyNodeLogic).not.toBe(null);
+
+    // A record written by a future schema version is strictly read-only here.
+    const newerSchemaRecord = JSON.stringify({ schemaVersion: 3, marker: 'preserve-future-layout' });
+    await browser.evaluate(
+      'localStorage.setItem("folio.workspace-layout.v1",' + JSON.stringify(newerSchemaRecord) + ')',
+    );
+    await browser.send('Page.reload', { ignoreCache: true });
+    await waitForApp(
+      browser,
+      'document.querySelector(".app-shell")?.getAttribute("aria-busy")==="false" && ' +
+      'document.querySelector(".workspace-preferences-recovery")?.textContent.includes("newer Folio version")',
+      'newer schema shows a read-only compatibility warning',
+      30000,
+    );
+    const newerSchemaBeforeInteraction = await browser.evaluate(
+      '({record:localStorage.getItem("folio.workspace-layout.v1"),' +
+      'button:!!document.querySelector(".workspace-preferences-recovery button")})',
+    );
+    expect(newerSchemaBeforeInteraction).toEqual({ record:newerSchemaRecord, button:false });
+    await browser.click('.component-rack-header-toggle');
+    await waitForAppRackAnimation(browser, '.component-rack-panel');
+    const newerSchemaAfterInteraction = await browser.evaluate(
+      'localStorage.getItem("folio.workspace-layout.v1")',
+    );
+    expect(newerSchemaAfterInteraction).toBe(newerSchemaRecord);
+
+    const migrationAcceptance = {
+      legacyBeforeApproval,
+      legacyAfterApproval,
+      newerSchemaBeforeInteraction,
+      newerSchemaAfterInteraction,
+    };
     return {
       counts, stackBefore, componentRaised, mainRaised, floatingWindowAcceptance, geometry,
-      initialWorkspacePreferences, savedWorkspaceBeforeReload, restoredWorkspace,
+      initialWorkspacePreferences, savedWorkspaceBeforeReload, restoredWorkspace, migrationAcceptance,
     };
   } finally {
     await vite?.close();
