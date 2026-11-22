@@ -46,6 +46,7 @@ let previousDocument: PropertyDescriptor | undefined;
 function renderFloatingWindow(options: {
   onFocus?: () => void;
   onPositionChange?: (position: { x: number; y: number }) => void;
+  onSizeChange?: (size: { width: number; height: number }) => void;
 } = {}) {
   const vnode = FloatingWindow({
     id: 'main-canvas',
@@ -58,7 +59,7 @@ function renderFloatingWindow(options: {
     zIndex: 120,
     onFocus: options.onFocus,
     onPositionChange: options.onPositionChange ?? vi.fn(),
-    onSizeChange: vi.fn(),
+    onSizeChange: options.onSizeChange ?? vi.fn(),
   }) as unknown as { props: RootProps };
   return vnode.props;
 }
@@ -91,6 +92,28 @@ function dispatchMove(pointerId = 7) {
     clientX: 120,
     clientY: 130,
     preventDefault: vi.fn(),
+  });
+}
+
+function startResize(root: RootProps, direction = 'se', pointerId = 9) {
+  const shell = { getBoundingClientRect: () => ({ width: 1600, height: 1000 }) };
+  const resizeHandle = { getAttribute: (name: string) => name === 'data-window-resize' ? direction : null };
+  const target = {
+    closest(selector: string) {
+      if (selector === '[data-window-resize]') return resizeHandle;
+      return null;
+    },
+  };
+  root.onPointerDown({
+    button: 0,
+    isPrimary: true,
+    pointerId,
+    clientX: 100,
+    clientY: 100,
+    target,
+    currentTarget: { closest: () => shell },
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
   });
 }
 
@@ -159,6 +182,35 @@ describe('FloatingWindow focus and pointer-session component contract', () => {
     expect(fakeWindow.listenerCount('pointermove')).toBe(0);
     dispatchMove(7);
     expect(onPositionChange).toHaveBeenCalledOnce();
+  });
+
+  it('cleans an active resize session on pointercancel and ignores later movement', () => {
+    const onPositionChange = vi.fn();
+    const onSizeChange = vi.fn();
+    const root = renderFloatingWindow({ onPositionChange, onSizeChange });
+    startResize(root, 'se');
+
+    expect(fakeWindow.listenerCount('pointermove')).toBe(1);
+    fakeWindow.dispatch('pointermove', {
+      pointerId: 9,
+      clientX: 120,
+      clientY: 115,
+      preventDefault: vi.fn(),
+    });
+    expect(onPositionChange).toHaveBeenCalledOnce();
+    expect(onSizeChange).toHaveBeenCalledOnce();
+    expect(onSizeChange).toHaveBeenLastCalledWith({ width: 880, height: 635 });
+
+    fakeWindow.dispatch('pointercancel', { pointerId: 9 });
+    expect(fakeWindow.listenerCount('pointermove')).toBe(0);
+    fakeWindow.dispatch('pointermove', {
+      pointerId: 9,
+      clientX: 160,
+      clientY: 160,
+      preventDefault: vi.fn(),
+    });
+    expect(onPositionChange).toHaveBeenCalledOnce();
+    expect(onSizeChange).toHaveBeenCalledOnce();
   });
 
   it('cleans the active pointer session on window blur', () => {
