@@ -61,13 +61,75 @@ function isShapeStyle(value: unknown): boolean {
   );
 }
 
+function isVectorHandle(value: unknown): boolean {
+  return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.y);
+}
+
+function isVectorAnchorPoint(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.id) && value.id.length > 0 &&
+    isFiniteNumber(value.x) &&
+    isFiniteNumber(value.y) &&
+    (value.handleIn === undefined || isVectorHandle(value.handleIn)) &&
+    (value.handleOut === undefined || isVectorHandle(value.handleOut)) &&
+    (value.pointType === 'corner' || value.pointType === 'smooth' || value.pointType === 'symmetric')
+  );
+}
+
+function isVectorSubpath(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.closed === 'boolean' &&
+    Array.isArray(value.points) &&
+    value.points.length > 0 &&
+    value.points.every(isVectorAnchorPoint)
+  );
+}
+
+function isPathStyle(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.fill) &&
+    isString(value.stroke) &&
+    isFiniteNumber(value.strokeWidth) && value.strokeWidth >= 0 &&
+    (value.strokeLinecap === undefined || ['butt', 'round', 'square'].includes(String(value.strokeLinecap))) &&
+    (value.strokeLinejoin === undefined || ['miter', 'round', 'bevel'].includes(String(value.strokeLinejoin))) &&
+    (value.strokeDasharray === undefined || isString(value.strokeDasharray)) &&
+    (value.fillRule === undefined || value.fillRule === 'nonzero' || value.fillRule === 'evenodd') &&
+    (value.arrowStart === undefined || typeof value.arrowStart === 'boolean') &&
+    (value.arrowEnd === undefined || typeof value.arrowEnd === 'boolean')
+  );
+}
+
 function isDesignNode(value: unknown): value is DesignNode {
   if (!isRecord(value) || !isCommonNode(value)) return false;
 
   if (value.type === 'group') return true;
 
+  if (value.type === 'frame') {
+    return (
+      isShapeStyle(value.style) &&
+      (value.clipContent === undefined || typeof value.clipContent === 'boolean') &&
+      (value.isSection === undefined || typeof value.isSection === 'boolean')
+    );
+  }
+
   if (value.type === 'rect' || value.type === 'ellipse') {
     return isShapeStyle(value.style);
+  }
+
+  if (value.type === 'path') {
+    return (
+      Array.isArray(value.points) &&
+      value.points.length > 0 &&
+      value.points.every(isVectorAnchorPoint) &&
+      typeof value.closed === 'boolean' &&
+      isPathStyle(value.style) &&
+      (value.pathKind === undefined ||
+        ['pen', 'curvature', 'pencil', 'line', 'arrow', 'polygon', 'star', 'boolean', 'outline'].includes(String(value.pathKind))) &&
+      (value.subpaths === undefined || (Array.isArray(value.subpaths) && value.subpaths.every(isVectorSubpath)))
+    );
   }
 
   if (value.type === 'text') {

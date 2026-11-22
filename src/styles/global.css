@@ -368,7 +368,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .status-right.save-saving .status-ready-dot { background: #e9bd72; }
 .status-right.save-error .status-ready-dot { background: #ed7777; }
 
-.tool-rail { position: relative; z-index: 80; grid-area: tools; display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 14px 0; background: #171b24; border-right: 1px solid var(--line); }
+.tool-rail { position: relative; z-index: 80; grid-area: tools; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; background: #171b24; border-right: 1px solid var(--line); }
+.tool-rail.is-component-studio {
+  background: #19181c;
+  border-right-color: rgba(229, 154, 76, 0.22);
+}
 .tool-button, .history-button, .zoom-button, .icon-button {
   display: grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px;
   border: 1px solid transparent; border-radius: 7px; color: #8791a2; background: transparent; cursor: pointer;
@@ -377,8 +381,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .tool-button.active { color: #b8adff; background: #302b4b; border-color: #48406d; }
 .tool-button:disabled, .history-button:disabled { opacity: .28; cursor: default; }
 .icon-svg { display: block; width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
-.rail-separator { width: 24px; height: 1px; margin: 4px 0; background: #303642; }
-.rail-bottom { display: flex; flex-direction: column; gap: 5px; margin-top: auto; }
+.rail-separator { width: 24px; height: 1px; margin: 3px 0; background: #303642; }
+.rail-bottom { display: flex; flex-direction: column; gap: 4px; margin-top: auto; }
 
 .layers-panel, .inspector-panel { position: relative; z-index: 70; min-width: 0; min-height: 0; background: var(--panel); }
 .layers-panel { grid-area: layers; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
@@ -754,10 +758,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .canvas-workspace {
   position: relative;
   display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: flex-start;
   overflow: hidden;
   border-radius: 0 0 8px 8px;
   background-color: #131722;
@@ -871,7 +876,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .workspace-resize-handle.resize-nw { top: 0; left: 0; cursor: nwse-resize; }
 .workspace-resize-handle.resize-se { right: 0; bottom: 0; cursor: nwse-resize; }
 .workspace-resize-handle.resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
-.canvas-scroll-area { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; overflow: hidden; padding: 45px 35px 52px; touch-action: none; }
+.canvas-scroll-area { display: flex; flex: 1 1 auto; min-height: 0; align-items: center; justify-content: center; width: 100%; overflow: hidden; padding: 38px 32px 44px; touch-action: none; }
 .canvas-stage { flex: 0 0 auto; max-width: none; }
 .artboard-label { display: flex; justify-content: space-between; margin: 0 0 9px; color: #8c96a8; font-size: 9px; font-weight: 600; letter-spacing: .3px; }
 .artboard {
@@ -1170,36 +1175,56 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .layer-row.layer-not-on-canvas:hover { opacity: 1; }
 
 
-/* Modular Tool Rack: grouped tools open compact DAW-style flyouts. */
+/* Modular Tool Rack: workspace-aware Studio Indigo (Page) vs Craft Amber (Component Vector). */
 .tool-rack-caption {
   width: 100%;
-  padding: 0 0 4px;
-  color: #687386;
+  padding: 0 0 3px;
+  color: #7c879c;
   text-align: center;
   font-size: 7px;
   font-weight: 800;
-  letter-spacing: 1px;
+  letter-spacing: 1.1px;
+}
+.tool-rack-caption.is-component {
+  color: #e59a4c;
 }
 .tool-rack-group { position: relative; display: flex; width: 100%; justify-content: center; }
 .tool-rack-group-trigger {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   width: 48px;
-  min-height: 45px;
+  min-height: 38px;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  padding: 4px 2px;
+  gap: 2px;
+  padding: 3px 2px;
   border: 1px solid transparent;
   border-radius: 7px;
   color: #8993a4;
   background: transparent;
   cursor: pointer;
 }
-.tool-rack-group-trigger > .icon-svg:first-child { width: 18px; height: 18px; }
-.tool-rack-group-trigger > span { color: #9ca6b7; font-size: 7px; font-weight: 700; letter-spacing: .15px; }
+.tool-rack-group-trigger > .icon-svg:first-child { width: 16px; height: 16px; }
+.tool-rack-group-trigger > span:not(.tool-rack-corner-tick) { color: #9ca6b7; font-size: 7px; font-weight: 700; letter-spacing: .15px; }
 .tool-rack-group-trigger > .icon-svg:last-child:not(:first-child) { display: none; }
+.tool-rack-corner-tick {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 4px 4px;
+  border-color: transparent transparent #677286 transparent;
+}
+.tool-rack-group-trigger.active .tool-rack-corner-tick {
+  border-color: transparent transparent #b4a7ff transparent;
+}
+.tool-rail.is-component-studio .tool-rack-group-trigger.active .tool-rack-corner-tick {
+  border-color: transparent transparent #f2b774 transparent;
+}
 .tool-rack-group-trigger:hover, .tool-rack-group-trigger.open {
   border-color: #3a4052;
   color: #e7e4ff;
@@ -1210,14 +1235,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   color: #c0b7ff;
   background: #302b4b;
 }
-.tool-rack-group-trigger.active > span { color: #d0caff; }
+.tool-rack-group-trigger.active > span:not(.tool-rack-corner-tick) { color: #d0caff; }
+.tool-rail.is-component-studio .tool-rack-group-trigger.active {
+  border-color: rgba(229, 154, 76, 0.45);
+  color: #f6c68d;
+  background: rgba(229, 154, 76, 0.16);
+}
+.tool-rail.is-component-studio .tool-rack-group-trigger.active > span:not(.tool-rack-corner-tick) {
+  color: #f7cfa0;
+}
 .tool-rack-menu {
   position: absolute;
   z-index: 220;
   top: 0;
   left: calc(100% + 5px);
   display: flex;
-  width: 194px;
+  width: 224px;
   flex-direction: column;
   gap: 2px;
   padding: 6px;
@@ -1226,13 +1259,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   background: #1b2230;
   box-shadow: 0 14px 32px #000a;
 }
+.tool-rail.is-component-studio .tool-rack-menu {
+  border-color: rgba(229, 154, 76, 0.28);
+  background: #1d1c22;
+}
 .tool-rack-item {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   width: 100%;
-  min-height: 36px;
-  padding: 5px 8px;
+  min-height: 32px;
+  padding: 4px 8px;
   border: 1px solid transparent;
   border-radius: 5px;
   color: #c1c8d5;
@@ -1250,10 +1287,29 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   color: #e1dcff;
   background: #302b49;
 }
-.tool-rack-item-icon { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 22px; color: #a99fff; }
-.tool-rack-item-icon .icon-svg { width: 16px; height: 16px; }
-.tool-rack-item-name { flex: 1 1 auto; min-width: 0; font-size: 10px; font-weight: 600; }
+.tool-rail.is-component-studio .tool-rack-item.active {
+  border-color: rgba(229, 154, 76, 0.44);
+  color: #fbe1c3;
+  background: rgba(229, 154, 76, 0.17);
+}
+.tool-rack-item-icon { display: grid; place-items: center; width: 20px; height: 20px; flex: 0 0 20px; color: #a99fff; }
+.tool-rail.is-component-studio .tool-rack-item-icon { color: #e59a4c; }
+.tool-rack-item-icon .icon-svg { width: 15px; height: 15px; }
+.tool-rack-item-name { flex: 1 1 auto; min-width: 0; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.tool-rack-shortcut {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid #353d4e;
+  border-radius: 3px;
+  background: rgba(10, 13, 20, 0.55);
+  color: #8c96aa;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
 .tool-rack-active-mark { color: #a99fff; font-size: 9px; }
+.tool-rail.is-component-studio .tool-rack-active-mark { color: #e59a4c; }
 .artboard .canvas-node { cursor: move; }
 .artboard[data-tool="direct-selection"] .canvas-node,
 .artboard[data-tool="select"] .canvas-node { cursor: move; }
@@ -1261,6 +1317,173 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .artboard[data-tool="scrubby-zoom"] .canvas-node { cursor: ew-resize !important; }
 .artboard[data-tool="lasso-selection"] .canvas-node,
 .artboard[data-tool="magic-wand"] .canvas-node { cursor: crosshair !important; }
+
+/* Studio Contextual Tool Options & Illustrator Pathfinder Bar */
+.studio-options-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 12px;
+  border-bottom: 1px solid #262d3a;
+  background: rgba(20, 24, 34, 0.94);
+  font-size: 11px;
+}
+.studio-options-bar.is-component-bar {
+  border-bottom-color: rgba(229, 154, 76, 0.22);
+  background: rgba(25, 23, 28, 0.96);
+}
+.studio-options-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+  border-right: 1px solid #2a3140;
+}
+.studio-options-group:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+.studio-options-label {
+  margin-right: 3px;
+  color: #8590a3;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+}
+.studio-options-bar.is-component-bar .studio-options-label {
+  color: #d79a58;
+}
+.studio-opt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid #2f3747;
+  border-radius: 5px;
+  color: #cdd4e1;
+  background: #1a202d;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 110ms ease, border-color 110ms ease, color 110ms ease;
+}
+.studio-opt-btn svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+}
+.studio-opt-btn:hover:not(:disabled) {
+  border-color: #5b528d;
+  color: #f4f2ff;
+  background: #2b2744;
+}
+.studio-options-bar.is-component-bar .studio-opt-btn:hover:not(:disabled) {
+  border-color: rgba(229, 154, 76, 0.52);
+  color: #fff2e1;
+  background: rgba(229, 154, 76, 0.18);
+}
+.studio-opt-btn.is-active {
+  border-color: #7c6ef2;
+  color: #e9e4ff;
+  background: rgba(139, 124, 246, 0.24);
+}
+.studio-options-bar.is-component-bar .studio-opt-btn.is-active {
+  border-color: #e59a4c;
+  color: #fde4c6;
+  background: rgba(229, 154, 76, 0.24);
+}
+.studio-opt-btn:disabled {
+  opacity: 0.34;
+  cursor: default;
+}
+.studio-opt-field,
+.studio-opt-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid #2c3342;
+  border-radius: 5px;
+  background: #141822;
+  color: #9ba5b8;
+  font-size: 10px;
+  font-weight: 600;
+}
+.studio-opt-field input[type="number"] {
+  width: 44px;
+  border: 0;
+  background: transparent;
+  color: #eef1f7;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+.studio-opt-field em {
+  font-style: normal;
+  color: #768096;
+}
+.studio-opt-swatch input[type="color"] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid #40495d;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+.studio-opt-hint {
+  color: #95a0b4;
+  font-size: 10px;
+}
+
+/* Inspector Vector & Frame additions */
+.inspector-inline-chip {
+  margin-left: auto;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid #394254;
+  border-radius: 4px;
+  background: #181d29;
+  color: #b5bfd1;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.inspector-inline-chip:hover {
+  border-color: #6f64b5;
+  color: #f0edff;
+}
+.inspector-stroke-width {
+  width: 56px !important;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.vector-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 8px 0 4px;
+  padding: 5px 8px;
+  border: 1px solid #2b3242;
+  border-radius: 5px;
+  background: #151923;
+  color: #9ba5b8;
+  font-size: 11px;
+}
+.vector-meta-row strong {
+  color: #e6eaf2;
+  font-variant-numeric: tabular-nums;
+}
+.layer-type-frame { color: #8b7cf6; }
+.layer-type-path { color: #e59a4c; }
 
 
 /* Accessible Component Canvas recovery dialog and distinct buffer durability status. */

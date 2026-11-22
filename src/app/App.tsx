@@ -10,11 +10,32 @@ import { downloadProject } from '../core/persistence/projectFile';
 import { createProjectExportSnapshot } from './projectExport';
 import { openProjectFile } from './projectFileActions';
 import { Canvas } from '../engines/canvas/Canvas';
-import { CANVAS_TOOL_GROUPS, getCanvasTool, type CanvasToolGroupId, type CanvasToolId } from '../engines/canvas/tools/registry';
+import {
+  findStudioToolByShortcut,
+  getStudioTool,
+  getStudioToolGroupsForWorkspace,
+  isToolAvailableInWorkspace,
+} from '../engines/canvas/tools/studioRegistry';
+import {
+  DEFAULT_CANVAS_TOOL_OPTIONS,
+  type CanvasToolGroupId,
+  type CanvasToolId,
+  type CanvasToolOptions,
+} from '../engines/canvas/tools/types';
+import {
+  applyPathfinderOperation,
+  convertShapeToPathNode,
+  flipPathNode,
+  normalizePathNode,
+  simplifyPathNode,
+  type PathfinderOperation,
+} from '../core/document/vector';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
+import { ToolOptionsBar } from './ToolOptionsBar';
 import { createEditorState, editorReducer, normalizePositiveDimension } from './editorReducer';
 import type { EditorAction } from './editorReducer';
 import { createCanonicalEditorStore } from './editorStore';
+import { createMainCanvasCommandClient } from './mainCanvasCommandClient';
 import {
   advanceComponentCanvasSyncSession,
   createComponentCanvasBufferProject,
@@ -95,6 +116,22 @@ function Icon({ name }: { name: string }) {
     pages: 'M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h8',
     edit: 'M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3zM13.5 6.5l4 4',
     copyPlus: 'M8 8h11v11H8zM5 16H4V4h12v1M13.5 11v5M11 13.5h5',
+    scale: 'M4 15v5h5M20 9V4h-5M4 20l6-6M20 4l-6 6',
+    frame: 'M7 3v18M17 3v18M3 7h18M3 17h18',
+    section: 'M4 6h7l2 2h7v10H4V6z',
+    line: 'M5 19 19 5',
+    arrow: 'M5 19 19 5M11 5h8v8',
+    polygon: 'M12 3l8 5v8l-8 5-8-5V8l8-5z',
+    star: 'm12 3 2.7 5.6 6.2.9-4.5 4.4 1.1 6.1L12 17l-5.5 3 1.1-6.1-4.5-4.4 6.2-.9L12 3z',
+    pen: 'm12 19 7-7 3 3-7 7-3-3zM18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5zM2 2l7.5 7.5M11 11a1.5 1.5 0 1 0 0 .01',
+    curvature: 'M4 18C4 10 10 6 20 6M4 18a1.5 1.5 0 1 0 0 .01M20 6a1.5 1.5 0 1 0 0 .01M10 9a1.5 1.5 0 1 0 0 .01',
+    anchorPoint: 'M4 17 12 6l8 11M10 17h4',
+    pencil: 'M4 20l3.5-1 11-11a2 2 0 0 0-2.8-2.8l-11 11L4 20zM13.5 6.5l4 4',
+    smooth: 'M3 16c3-7 6-7 9 0s6 7 9 0',
+    scissors: 'M6 7a2.5 2.5 0 1 0 0 .01M6 17a2.5 2.5 0 1 0 0 .01M8.2 8.4 20 17M8.2 15.6 20 7',
+    rotate: 'M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5',
+    eyedropper: 'm19 5-4 4m-1-5 6 6m-7-4-8.5 8.5a2 2 0 0 0-.5 1.1L3 21l5.4-1a2 2 0 0 0 1.1-.5L18 11',
+    measure: 'M3 16 16 3l5 5L8 21 3 16zM8 11l2 2M11 8l2 2M14 5l2 2',
   };
 
   return (
@@ -105,7 +142,14 @@ function Icon({ name }: { name: string }) {
 }
 
 function LayerIcon({ type }: { type: DesignNode['type'] }) {
-  const glyph = type === 'group' ? '▣' : type === 'text' ? 'T' : type === 'ellipse' ? '○' : type === 'component-instance' ? '◇' : '□';
+  const glyph =
+    type === 'group' ? '▣'
+      : type === 'frame' ? '⊞'
+      : type === 'path' ? '∿'
+      : type === 'text' ? 'T'
+      : type === 'ellipse' ? '○'
+      : type === 'component-instance' ? '◇'
+      : '□';
   return <span class={`layer-type layer-type-${type}`}>{glyph}</span>;
 }
 
@@ -201,6 +245,10 @@ export function App() {
     return transition;
   }, [canonicalStore]);
   useEffect(() => canonicalStore.subscribe(syncStateFromStore), [canonicalStore, syncStateFromStore]);
+  const commandRejectNoticeRef = useRef<(message: string) => void>(() => {});
+  const mainCommandClient = useMemo(() => createMainCanvasCommandClient(canonicalStore, {
+    onRejected: (result) => commandRejectNoticeRef.current(result.message),
+  }), [canonicalStore]);
   const componentInitialState = useMemo(() => {
     const project = createInitialProject('Component Canvas');
     project.metadata.id = 'folio-component-canvas';
@@ -243,6 +291,7 @@ export function App() {
   const isHydrating = !isProjectLoaded || !componentReady;
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [notice, setNotice] = useState('');
+  commandRejectNoticeRef.current = setNotice;
   const projectFileInputRef = useRef<HTMLInputElement>(null);
   const [mainView, setMainView] = useState<CanvasViewState>(() => readCanvasViewState('folio.main-canvas-view'));
   const [componentView, setComponentView] = useState<CanvasViewState>(() => readCanvasViewState('folio.component-canvas-view'));
@@ -253,7 +302,11 @@ export function App() {
   const setMainPan = (pan: { x: number; y: number }) => setMainView((view) => ({ ...view, pan }));
   const setComponentCanvasPan = (pan: { x: number; y: number }) => setComponentView((view) => ({ ...view, pan }));
   const toolbarHintStore = useMemo(() => createToolbarHintStore(), []);
-  const [activeCanvasToolId, setActiveCanvasToolId] = useState<CanvasToolId>('select');
+  const [workspaceTools, setWorkspaceTools] = useState<Record<EditorTarget, CanvasToolId>>({
+    main: 'select',
+    component: 'select',
+  });
+  const [toolOptions, setToolOptions] = useState<CanvasToolOptions>(DEFAULT_CANVAS_TOOL_OPTIONS);
   const [toolRackOpen, setToolRackOpen] = useState<ToolRackGroupId | null>(null);
   const [projectNameEditing, setProjectNameEditing] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState('');
@@ -903,8 +956,11 @@ export function App() {
         })()
       : [{ nodeId: session.nodeIds[0], name: baseName }];
 
-    const targetDispatch = session.editorId === 'main' ? dispatch : componentDispatch;
-    targetDispatch({ type: 'rename-nodes', updates });
+    if (session.editorId === 'main') {
+      mainCommandClient.renameNodes(updates, session.batch ? 'Batch rename layers' : 'Rename layer');
+    } else {
+      componentDispatch({ type: 'rename-nodes', updates });
+    }
   };
 
   useEffect(() => {
@@ -963,11 +1019,15 @@ export function App() {
     const targetIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId];
     const validIds = layerSourceNodes.filter((node) => targetIds.includes(node.id)).map((node) => node.id);
     if (validIds.length === 0) return;
-    dispatchFocused({
-      type: 'set-nodes-properties',
-      nodeIds: validIds,
-      properties: { layerColor: color },
-    });
+    if (activeEditorId === 'main') {
+      mainCommandClient.setNodesProperties(validIds, { layerColor: color }, 'Set layer color');
+    } else {
+      componentDispatch({
+        type: 'set-nodes-properties',
+        nodeIds: validIds,
+        properties: { layerColor: color },
+      });
+    }
     setLayerColorPickerKey(null);
   };
 
@@ -977,11 +1037,19 @@ export function App() {
     const targets = layerSourceNodes.filter((node) => targetIds.includes(node.id));
     if (targets.length === 0) return;
     const shouldEnable = !targets.every((node) => node[property]);
-    dispatchFocused({
-      type: 'set-nodes-properties',
-      nodeIds: targets.map((node) => node.id),
-      properties: { [property]: shouldEnable },
-    });
+    if (activeEditorId === 'main') {
+      mainCommandClient.setNodesProperties(
+        targets.map((node) => node.id),
+        { [property]: shouldEnable },
+        property === 'visible' ? 'Toggle layer visibility' : 'Toggle layer lock',
+      );
+    } else {
+      componentDispatch({
+        type: 'set-nodes-properties',
+        nodeIds: targets.map((node) => node.id),
+        properties: { [property]: shouldEnable },
+      });
+    }
   };
 
   const selectLayerFromPanel = (nodeId: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
@@ -1112,8 +1180,14 @@ export function App() {
     }
     const position = getLayerDropPosition(event);
     if (draggedIds.length > 0) {
-      dispatchFocused({ type: 'move-layers', nodeIds: draggedIds, targetId, position });
-      if (position === 'inside') {
+      let moved = true;
+      if (activeEditorId === 'main') {
+        const result = mainCommandClient.moveLayers(draggedIds, targetId, position);
+        moved = result.status === 'applied';
+      } else {
+        componentDispatch({ type: 'move-layers', nodeIds: draggedIds, targetId, position });
+      }
+      if (moved && position === 'inside') {
         setCollapsedLayers((current) => ({
           ...current,
           [activeEditorId]: (current[activeEditorId] ?? []).filter((id) => id !== targetId),
@@ -1162,14 +1236,26 @@ export function App() {
 
     // Re-show the exact same nodes. The saved position, size, style and
     // rotation remain on the original layer records; dropping never resets them.
-    targetDispatch({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: true });
-    setNotice(`“${droppedNodes[0].name}” has been restored to the Canvas with its previous properties.`);
+    if (target === 'main') {
+      const result = mainCommandClient.setNodesCanvasState(ids, true, 'Restore layers to canvas');
+      if (result.status === 'applied') {
+        setNotice(`“${droppedNodes[0].name}” has been restored to the Canvas with its previous properties.`);
+      }
+    } else {
+      targetDispatch({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: true });
+      setNotice(`“${droppedNodes[0].name}” has been restored to the Canvas with its previous properties.`);
+    }
     clearDrag();
   };
 
   const addNode = (type: 'rect' | 'ellipse' | 'text') => {
     if (isHydrating) return;
-    dispatchFocused({ type: 'add-node', node: createNodeForDocument(type, focusedDocument) });
+    const node = createNodeForDocument(type, focusedDocument);
+    if (activeEditorId === 'main') {
+      mainCommandClient.createNodes([node], `Create ${type} node`);
+    } else {
+      componentDispatch({ type: 'add-node', node });
+    }
     setInspectorVisible(true);
   };
   const saveNodesAsComponent = (nodes: DesignNode[], sourceNodes: readonly DesignNode[] = activeDocument.nodes) => {
@@ -1759,7 +1845,7 @@ export function App() {
     if (isHydrating) return;
     const name = value.trim();
     if (name && name !== state.project.metadata.name) {
-      dispatch({ type: 'rename-project', name });
+      mainCommandClient.renameProject(name);
     }
   };
 
@@ -1792,7 +1878,8 @@ export function App() {
     if (isHydrating) return;
     const offset = state.project.pages.find((page) => page.id === state.project.activePageId)?.document.nodes.length ?? 0;
     const instance = createComponentInstance(component, 150 + (offset % 4) * 28, 130 + (offset % 4) * 28);
-    dispatch({ type: 'add-node', node: instance });
+    const result = mainCommandClient.createNodes([instance], 'Insert component instance');
+    if (result.status !== 'applied') return;
     openMainCanvas();
     setInspectorVisible(true);
     setNotice(`Linked instance of “${component.name}” added to Main Canvas.`);
@@ -1854,7 +1941,7 @@ export function App() {
     }));
     if (selected.length < 2) return;
     const nextNodes = alignNodes(selected, alignment);
-    if (target === 'main') dispatch({ type: 'transform-nodes', nodes: nextNodes });
+    if (target === 'main') mainCommandClient.transformNodes(nextNodes, `Align layers ${alignment}`);
     else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
   };
 
@@ -1864,7 +1951,7 @@ export function App() {
     const selected = getTransformableNodes(getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
     if (selected.length < 3) return;
     const nextNodes = distributeNodes(selected, axis);
-    if (target === 'main') dispatch({ type: 'transform-nodes', nodes: nextNodes });
+    if (target === 'main') mainCommandClient.transformNodes(nextNodes, `Distribute layers ${axis}`);
     else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
   };
 
@@ -1873,11 +1960,220 @@ export function App() {
     toolbarHintStore.setHint({ panel, description, shortcuts });
   }, [toolbarHintStore]);
 
-  const chooseCanvasTool = (toolId: CanvasToolId) => {
-    const tool = getCanvasTool(toolId);
-    setActiveCanvasToolId(toolId);
+  const activeCanvasToolId = workspaceTools[activeEditorId];
+  const activeToolGroups = getStudioToolGroupsForWorkspace(activeEditorId);
+
+  const setWorkspaceToolId = (target: EditorTarget, toolId: CanvasToolId) => {
+    const resolvedToolId = isToolAvailableInWorkspace(toolId, target) ? toolId : 'select';
+    setWorkspaceTools((current) => (
+      current[target] === resolvedToolId ? current : { ...current, [target]: resolvedToolId }
+    ));
+  };
+
+  const updateToolOptions = (patch: Partial<CanvasToolOptions>) => {
+    setToolOptions((current) => ({ ...current, ...patch }));
+  };
+
+  const chooseCanvasTool = (toolId: CanvasToolId, target: EditorTarget = activeEditorId) => {
+    const resolvedToolId = isToolAvailableInWorkspace(toolId, target) ? toolId : 'select';
+    const tool = getStudioTool(resolvedToolId);
+    setWorkspaceToolId(target, resolvedToolId);
     setToolRackOpen(null);
-    updateToolbarHint(tool.label.toUpperCase(), tool.description);
+    updateToolbarHint(
+      tool.label.toUpperCase(),
+      tool.description,
+      tool.shortcut ? [`KEY: ${tool.shortcut.toUpperCase()}`] : [],
+    );
+  };
+
+  const handleCanvasCreateNodes = (target: EditorTarget, nodes: DesignNode[]) => {
+    if (isHydrating || nodes.length === 0) return;
+    selectionSourceRef.current = 'canvas';
+    if (target === 'main') {
+      mainCommandClient.createNodes(nodes, 'Create with studio tool');
+      setInspectorVisible(true);
+    } else {
+      componentDispatch({ type: 'add-nodes', nodes });
+    }
+  };
+
+  const handleCanvasReplaceNodeWithNodes = (target: EditorTarget, nodeId: string, nodes: DesignNode[]) => {
+    if (isHydrating || nodes.length === 0) return;
+    selectionSourceRef.current = 'canvas';
+    if (target === 'main') {
+      dispatch({ type: 'replace-node-with-nodes', nodeId, nodes });
+    } else {
+      componentDispatch({ type: 'replace-node-with-nodes', nodeId, nodes });
+    }
+  };
+
+  const handleSampledColor = (target: EditorTarget, color: string, sourceName: string) => {
+    setToolOptions((current) => ({ ...current, fillColor: color }));
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const selected = doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id));
+    let appliedCount = 0;
+    for (const node of selected) {
+      if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'text' || node.type === 'path') {
+        const updated = { ...node, style: { ...node.style, fill: color } } as DesignNode;
+        if (target === 'main') mainCommandClient.replaceNode(updated, 'Apply sampled color');
+        else componentDispatch({ type: 'replace-node', node: updated });
+        appliedCount += 1;
+      }
+    }
+    setNotice(
+      appliedCount > 0
+        ? `Sampled ${color.toUpperCase()} from ${sourceName} and applied to ${appliedCount} layer${appliedCount === 1 ? '' : 's'}.`
+        : `Sampled ${color.toUpperCase()} from ${sourceName} into active draw fill.`,
+    );
+  };
+
+  const handleInlineTextCommit = (target: EditorTarget, nodeId: string, text: string) => {
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const node = doc.nodes.find((item) => item.id === nodeId);
+    if (!node || node.type !== 'text' || node.text === text) return;
+    const updated: DesignNode = { ...node, text };
+    if (target === 'main') mainCommandClient.replaceNode(updated, 'Edit text on canvas');
+    else componentDispatch({ type: 'replace-node', node: updated });
+  };
+
+  const handlePathfinder = (target: EditorTarget, operation: PathfinderOperation) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const candidates = doc.nodes.filter(
+      (node) =>
+        editor.selectedNodeIds.includes(node.id) &&
+        (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path'),
+    );
+    if (candidates.length < 2) {
+      setNotice('Select at least 2 shapes or vector paths for Pathfinder.');
+      return;
+    }
+    const newId = globalThis.crypto?.randomUUID?.() ?? `pathfinder-${Date.now()}`;
+    const result = applyPathfinderOperation(candidates, operation, newId);
+    if (!result) {
+      setNotice(`Pathfinder ${operation} produced an empty region. Make sure shapes overlap.`);
+      return;
+    }
+    const removeIds = candidates.map((node) => node.id);
+    if (target === 'main') {
+      mainCommandClient.deleteNodes(removeIds, `Pathfinder ${operation}`);
+      mainCommandClient.createNodes([result], `Pathfinder ${operation}`);
+    } else {
+      componentDispatch({ type: 'delete-nodes', nodeIds: removeIds });
+      componentDispatch({ type: 'add-nodes', nodes: [result] });
+    }
+    setNotice(`Pathfinder ${operation} created “${result.name}”.`);
+  };
+
+  const handleConvertToPath = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const convertible = doc.nodes.filter(
+      (node): node is Extract<DesignNode, { type: 'rect' | 'ellipse' | 'frame' }> =>
+        editor.selectedNodeIds.includes(node.id) &&
+        (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame'),
+    );
+    if (convertible.length === 0) return;
+    for (const node of convertible) {
+      const pathNode = convertShapeToPathNode(node);
+      if (!pathNode) continue;
+      if (target === 'main') mainCommandClient.replaceNode(pathNode, 'Convert shape to vector path');
+      else componentDispatch({ type: 'replace-node', node: pathNode });
+    }
+    setWorkspaceToolId(target, 'direct-selection');
+    setNotice(`Converted ${convertible.length} shape${convertible.length === 1 ? '' : 's'} to editable cubic Bezier paths (Direct Selection A).`);
+  };
+
+  const handleFlipSelection = (target: EditorTarget, axis: 'horizontal' | 'vertical') => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const selected = getTransformableNodes(doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
+    if (selected.length === 0) return;
+    const minX = Math.min(...selected.map((node) => node.x));
+    const maxX = Math.max(...selected.map((node) => node.x + node.width));
+    const minY = Math.min(...selected.map((node) => node.y));
+    const maxY = Math.max(...selected.map((node) => node.y + node.height));
+    const nextNodes = selected.map((node) => {
+      const mirroredX = axis === 'horizontal' ? minX + (maxX - (node.x + node.width)) : node.x;
+      const mirroredY = axis === 'vertical' ? minY + (maxY - (node.y + node.height)) : node.y;
+      if (node.type === 'path') {
+        const flipped = flipPathNode(node, axis);
+        return { ...flipped, x: Math.round(mirroredX * 100) / 100, y: Math.round(mirroredY * 100) / 100 };
+      }
+      return {
+        ...node,
+        x: Math.round(mirroredX * 100) / 100,
+        y: Math.round(mirroredY * 100) / 100,
+        rotation: node.rotation ? (360 - node.rotation) % 360 : 0,
+      };
+    });
+    if (target === 'main') mainCommandClient.transformNodes(nextNodes, `Flip ${axis}`);
+    else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
+  };
+
+  const handleRotate90 = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const selected = getTransformableNodes(doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
+    if (selected.length === 0) return;
+    const nextNodes = selected.map((node) => ({
+      ...node,
+      rotation: ((node.rotation || 0) + 90) % 360,
+    }));
+    if (target === 'main') mainCommandClient.transformNodes(nextNodes, 'Rotate +90°');
+    else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
+  };
+
+  const handleSimplifyPath = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const paths = doc.nodes.filter(
+      (node) => editor.selectedNodeIds.includes(node.id) && node.type === 'path',
+    );
+    if (paths.length === 0) return;
+    let totalBefore = 0;
+    let totalAfter = 0;
+    for (const node of paths) {
+      if (node.type !== 'path') continue;
+      totalBefore += node.points.length;
+      const simplified = simplifyPathNode(node, 2.5);
+      totalAfter += simplified.points.length;
+      if (target === 'main') mainCommandClient.replaceNode(simplified, 'Simplify vector path');
+      else componentDispatch({ type: 'replace-node', node: simplified });
+    }
+    setNotice(`Simplified path anchors (${totalBefore} → ${totalAfter}).`);
+  };
+
+  const handleTogglePathClosed = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const paths = doc.nodes.filter(
+      (node) => editor.selectedNodeIds.includes(node.id) && node.type === 'path',
+    );
+    if (paths.length === 0) return;
+    for (const node of paths) {
+      if (node.type !== 'path') continue;
+      const nextClosed = !node.closed;
+      const updated = normalizePathNode({
+        ...node,
+        closed: nextClosed,
+        style: {
+          ...node.style,
+          fill: nextClosed && node.style.fill === 'none' ? toolOptions.fillColor : node.style.fill,
+          strokeWidth: !nextClosed && node.style.strokeWidth === 0 ? Math.max(2, toolOptions.strokeWidth) : node.style.strokeWidth,
+        },
+      });
+      if (target === 'main') mainCommandClient.replaceNode(updated, nextClosed ? 'Close vector path' : 'Open vector path');
+      else componentDispatch({ type: 'replace-node', node: updated });
+    }
   };
 
   const enterFullscreen = () => {
@@ -2171,7 +2467,8 @@ export function App() {
       if (modifier && event.shiftKey && key === 'g') {
         if (ids.length > 0) {
           event.preventDefault();
-          emit({ type: 'ungroup-layers', nodeIds: ids });
+          if (activeEditorId === 'main') mainCommandClient.ungroupLayers(ids);
+          else componentDispatch({ type: 'ungroup-layers', nodeIds: ids });
         }
         return;
       }
@@ -2180,7 +2477,8 @@ export function App() {
         // grouped: a single Group or a parent with descendants can be wrapped.
         if (ids.length > 0) {
           event.preventDefault();
-          emit({ type: 'group-layers', nodeIds: ids });
+          if (activeEditorId === 'main') mainCommandClient.groupLayers(ids);
+          else componentDispatch({ type: 'group-layers', nodeIds: ids });
         }
         return;
       }
@@ -2196,7 +2494,8 @@ export function App() {
           setNotice('The selected layer is not masked.');
           return;
         }
-        emit({ type: 'unmask-layer', nodeId: target.id });
+        if (activeEditorId === 'main') mainCommandClient.removeClippingMask(target.id);
+        else componentDispatch({ type: 'unmask-layer', nodeId: target.id });
         return;
       }
       if (modifier && !event.shiftKey && key === 'm') {
@@ -2211,7 +2510,8 @@ export function App() {
           setNotice('No layer directly below to use as a clipping mask.');
           return;
         }
-        emit({ type: 'mask-layer', nodeId: roots[0] });
+        if (activeEditorId === 'main') mainCommandClient.createClippingMask(roots[0]);
+        else componentDispatch({ type: 'mask-layer', nodeId: roots[0] });
         return;
       }
       if (modifier && key === 'z') { event.preventDefault(); emit({ type: event.shiftKey ? 'redo' : 'undo' }); return; }
@@ -2219,9 +2519,12 @@ export function App() {
       if (modifier && key === 'd' && nodes.length > 0) {
         event.preventDefault();
         const copies = nodes.map((node, index) => ({ ...node, id: globalThis.crypto?.randomUUID?.() ?? 'duplicate-' + Date.now() + '-' + index, name: node.name + ' copy', x: node.x + 24, y: node.y + 24 }));
-        emit({ type: 'add-nodes', nodes: copies }); return;
+        if (activeEditorId === 'main') mainCommandClient.createNodes(copies, 'Duplicate layers');
+        else componentDispatch({ type: 'add-nodes', nodes: copies });
+        return;
       }
       if ((event.key === 'Delete' || event.key === 'Backspace') && ids.length > 0) {
+        if (event.defaultPrevented) return;
         if (selectionSourceRef.current === 'layers') {
           // Master/source layers can only be deleted deliberately from the
           // Layers context menu, never through an easy-to-hit keyboard key.
@@ -2229,16 +2532,32 @@ export function App() {
           setNotice('Right-click a layer and choose Delete to remove it from Layers and Canvas.');
         } else {
           event.preventDefault();
-          emit({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: false });
+          if (activeEditorId === 'main') mainCommandClient.setNodesCanvasState(ids, false, 'Remove from canvas');
+          else componentDispatch({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: false });
         }
         return;
       }
       if (event.altKey && !event.shiftKey) {
         const alignmentByKey: Record<string, Alignment> = { arrowleft: 'left', arrowright: 'right', arrowup: 'top', arrowdown: 'bottom' };
         const alignment = alignmentByKey[key];
-        if (alignment && nodes.length > 1) { event.preventDefault(); emit({ type: 'transform-nodes', nodes: alignNodes(nodes, alignment) }); }
+        if (alignment && nodes.length > 1) {
+          event.preventDefault();
+          const aligned = alignNodes(nodes, alignment);
+          if (activeEditorId === 'main') mainCommandClient.transformNodes(aligned, `Align layers ${alignment}`);
+          else componentDispatch({ type: 'transform-nodes', nodes: aligned });
+        }
       } else if (event.altKey && event.shiftKey && (key === 'h' || key === 'v') && nodes.length > 2) {
-        event.preventDefault(); emit({ type: 'transform-nodes', nodes: distributeNodes(nodes, key === 'h' ? 'horizontal' : 'vertical') });
+        event.preventDefault();
+        const axis = key === 'h' ? 'horizontal' : 'vertical';
+        const distributed = distributeNodes(nodes, axis);
+        if (activeEditorId === 'main') mainCommandClient.transformNodes(distributed, `Distribute layers ${axis}`);
+        else componentDispatch({ type: 'transform-nodes', nodes: distributed });
+      } else if (!modifier && !event.altKey && !event.repeat && event.key.length === 1) {
+        const matchedTool = findStudioToolByShortcut(event.key, event.shiftKey, activeEditorId);
+        if (matchedTool) {
+          event.preventDefault();
+          chooseCanvasTool(matchedTool, activeEditorId);
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -2452,30 +2771,57 @@ export function App() {
           )}
         </div>
       )}
-      <nav ref={toolRailRef} class="tool-rail" aria-label="Tool Rack" onMouseEnter={() => updateToolbarHint('TOOL RACK', 'Choose a cursor tool or create a design object. The active cursor tool works in both Canvas workspaces.')}>
-        <div class="tool-rack-caption">TOOLS</div>
-        {CANVAS_TOOL_GROUPS.map((group) => {
+      <nav
+        ref={toolRailRef}
+        class={'tool-rail' + (activeEditorId === 'component' ? ' is-component-studio' : '')}
+        data-workspace={activeEditorId}
+        aria-label="Tool Rack"
+        onMouseEnter={() => updateToolbarHint(
+          activeEditorId === 'component' ? 'VECTOR STUDIO' : 'TOOL RACK',
+          activeEditorId === 'component'
+            ? 'Adobe Illustrator-grade Vector Craft Studio for Component Canvas: Pen, Curvature, Anchor Point, Pencil, Smooth, Scissors, Shapes, and Pathfinder.'
+            : 'Figma-grade Layout & Design Studio for Main Canvas: Selection, Frame, Shapes, Pen, Text, Eyedropper, Measure, and Navigation.',
+        )}
+      >
+        <div class={'tool-rack-caption' + (activeEditorId === 'component' ? ' is-component' : '')}>
+          {activeEditorId === 'component' ? 'VECTOR' : 'PAGE'}
+        </div>
+        {activeToolGroups.map((group) => {
           const activeInGroup = group.tools.includes(activeCanvasToolId);
-          const activeTool = activeInGroup ? getCanvasTool(activeCanvasToolId) : null;
+          const activeTool = activeInGroup ? getStudioTool(activeCanvasToolId) : null;
+          const isSingleTool = group.tools.length === 1;
+          const primaryTool = getStudioTool(group.tools[0]);
           return (
             <div class="tool-rack-group" key={group.id}>
               <button
                 type="button"
                 class={'tool-rack-group-trigger ' + (activeInGroup ? 'active' : '') + (toolRackOpen === group.id ? ' open' : '')}
-                title={group.label + ' tools'}
+                title={isSingleTool ? `${primaryTool.label}${primaryTool.shortcut ? ` (${primaryTool.shortcut})` : ''}` : group.label + ' tools'}
                 aria-label={group.label + ' tools'}
-                aria-expanded={toolRackOpen === group.id}
-                onClick={() => { setFileMenuOpen(false); setViewMenuOpen(false); setToolRackOpen((current) => current === group.id ? null : group.id); }}
-                onMouseEnter={() => updateToolbarHint(group.label.toUpperCase(), group.description)}
+                aria-expanded={isSingleTool ? undefined : toolRackOpen === group.id}
+                onClick={() => {
+                  setFileMenuOpen(false);
+                  setViewMenuOpen(false);
+                  if (isSingleTool) {
+                    chooseCanvasTool(group.tools[0], activeEditorId);
+                  } else {
+                    setToolRackOpen((current) => current === group.id ? null : group.id);
+                  }
+                }}
+                onMouseEnter={() => updateToolbarHint(
+                  (activeTool ?? group).label.toUpperCase(),
+                  activeTool ? activeTool.description : group.description,
+                  activeTool?.shortcut ? [`KEY: ${activeTool.shortcut.toUpperCase()}`] : [],
+                )}
               >
                 <Icon name={activeTool?.icon ?? group.icon} />
                 <span>{group.label}</span>
-                <Icon name="chevronRight" />
+                {!isSingleTool && <span class="tool-rack-corner-tick" aria-hidden="true" />}
               </button>
-              {toolRackOpen === group.id && (
+              {!isSingleTool && toolRackOpen === group.id && (
                 <div class="tool-rack-menu" role="menu" aria-label={group.label + ' tools'}>
                   {group.tools.map((id) => {
-                    const tool = getCanvasTool(id);
+                    const tool = getStudioTool(id);
                     return (
                       <button
                         type="button"
@@ -2483,11 +2829,16 @@ export function App() {
                         aria-checked={activeCanvasToolId === id}
                         class={'tool-rack-item ' + (activeCanvasToolId === id ? 'active' : '')}
                         key={id}
-                        onClick={() => chooseCanvasTool(id)}
-                        onMouseEnter={() => updateToolbarHint(tool.label.toUpperCase(), tool.description)}
+                        onClick={() => chooseCanvasTool(id, activeEditorId)}
+                        onMouseEnter={() => updateToolbarHint(
+                          tool.label.toUpperCase(),
+                          tool.description,
+                          tool.shortcut ? [`KEY: ${tool.shortcut.toUpperCase()}`] : [],
+                        )}
                       >
                         <span class="tool-rack-item-icon"><Icon name={tool.icon} /></span>
                         <span class="tool-rack-item-name">{tool.label}</span>
+                        {tool.shortcut && <kbd class="tool-rack-shortcut">{tool.shortcut}</kbd>}
                         {activeCanvasToolId === id && <span class="tool-rack-active-mark">●</span>}
                       </button>
                     );
@@ -2761,11 +3112,26 @@ export function App() {
           </div>
         </div>
         <div class="canvas-workspace">
+          <ToolOptionsBar
+            workspace="main"
+            toolId={workspaceTools.main}
+            toolOptions={toolOptions}
+            selectedNodes={selectedNodes}
+            onChangeOptions={updateToolOptions}
+            onPathfinder={(op) => handlePathfinder('main', op)}
+            onConvertToPath={() => handleConvertToPath('main')}
+            onFlip={(axis) => handleFlipSelection('main', axis)}
+            onRotate90={() => handleRotate90('main')}
+            onSimplifyPath={() => handleSimplifyPath('main')}
+            onTogglePathClosed={() => handleTogglePathClosed('main')}
+          />
           <Canvas
             document={activeDocument}
             components={state.project.components}
             selectedNodeIds={state.selectedNodeIds}
-            toolId={activeCanvasToolId}
+            toolId={workspaceTools.main}
+            workspace="main"
+            toolOptions={toolOptions}
             zoom={zoom}
             pan={mainView.pan}
             onPanChange={setMainPan}
@@ -2775,8 +3141,14 @@ export function App() {
               dispatch({ type: 'select-nodes', nodeIds });
               if (nodeIds.length > 0) setInspectorVisible(true);
             }}
-            onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
+            onTransformCommit={(nodes) => mainCommandClient.transformNodes(nodes, 'Transform on canvas')}
             onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'main')}
+            onCreateNodes={(nodes) => handleCanvasCreateNodes('main', nodes)}
+            onReplaceNodeWithNodes={(nodeId, nodes) => handleCanvasReplaceNodeWithNodes('main', nodeId, nodes)}
+            onSampledColor={(color, sourceName) => handleSampledColor('main', color, sourceName)}
+            onToolChange={(nextTool) => chooseCanvasTool(nextTool, 'main')}
+            onToolNotice={setNotice}
+            onInlineTextCommit={(nodeId, text) => handleInlineTextCommit('main', nodeId, text)}
           />
         </div>
 
@@ -2875,11 +3247,26 @@ export function App() {
           </div>
         </div>
         <div class="canvas-workspace">
+          <ToolOptionsBar
+            workspace="component"
+            toolId={workspaceTools.component}
+            toolOptions={toolOptions}
+            selectedNodes={selectedComponentNodes}
+            onChangeOptions={updateToolOptions}
+            onPathfinder={(op) => handlePathfinder('component', op)}
+            onConvertToPath={() => handleConvertToPath('component')}
+            onFlip={(axis) => handleFlipSelection('component', axis)}
+            onRotate90={() => handleRotate90('component')}
+            onSimplifyPath={() => handleSimplifyPath('component')}
+            onTogglePathClosed={() => handleTogglePathClosed('component')}
+          />
           <Canvas
             document={componentDocument}
             components={state.project.components}
             selectedNodeIds={componentState.selectedNodeIds}
-            toolId={activeCanvasToolId}
+            toolId={workspaceTools.component}
+            workspace="component"
+            toolOptions={toolOptions}
             zoom={componentCanvasZoom}
             pan={componentView.pan}
             onPanChange={setComponentCanvasPan}
@@ -2890,6 +3277,12 @@ export function App() {
             }}
             onTransformCommit={(nodes) => componentDispatch({ type: 'transform-nodes', nodes })}
             onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'component')}
+            onCreateNodes={(nodes) => handleCanvasCreateNodes('component', nodes)}
+            onReplaceNodeWithNodes={(nodeId, nodes) => handleCanvasReplaceNodeWithNodes('component', nodeId, nodes)}
+            onSampledColor={(color, sourceName) => handleSampledColor('component', color, sourceName)}
+            onToolChange={(nextTool) => chooseCanvasTool(nextTool, 'component')}
+            onToolNotice={setNotice}
+            onInlineTextCommit={(nodeId, text) => handleInlineTextCommit('component', nodeId, text)}
           />
         </div>
 
@@ -3006,7 +3399,10 @@ export function App() {
             <span class="panel-kicker">PROPERTIES</span>
             <h2>Inspector</h2><span class="panel-context-indicator">{activeEditorId === 'component' ? 'COMPONENT CANVAS' : 'MAIN PAGE'}</span>
           </div>
-          {selectedNode && selectionSourceRef.current !== 'layers' && <button class="icon-button danger" title="Remove from Canvas only" onClick={() => dispatchFocused({ type: 'set-nodes-canvas-state', nodeIds: [selectedNode.id], onCanvas: false })}><Icon name="trash" /></button>}
+          {selectedNode && selectionSourceRef.current !== 'layers' && <button class="icon-button danger" title="Remove from Canvas only" onClick={() => {
+            if (activeEditorId === 'main') mainCommandClient.setNodesCanvasState([selectedNode.id], false, 'Remove from canvas');
+            else componentDispatch({ type: 'set-nodes-canvas-state', nodeIds: [selectedNode.id], onCanvas: false });
+          }}><Icon name="trash" /></button>}
         </div>
 
         {selectedNode ? (
@@ -3078,15 +3474,124 @@ export function App() {
                     <input
                       class="color-swatch"
                       type="color"
-                      value={selectedNode.style.fill.startsWith('#') && selectedNode.style.fill.length === 7 ? selectedNode.style.fill : '#8B7CF6'}
+                      value={selectedNode.style.fill.startsWith('#') && selectedNode.style.fill.length >= 7 ? selectedNode.style.fill.slice(0, 7) : '#8B7CF6'}
                       onInput={(event) => updateSelectedStyle({ fill: event.currentTarget.value })}
                     />
                     <span class="color-value">{selectedNode.style.fill.toUpperCase()}</span>
+                    {(selectedNode.type === 'path' || selectedNode.type === 'frame') && (
+                      <button
+                        type="button"
+                        class="inspector-inline-chip"
+                        onClick={() => updateSelectedStyle({ fill: selectedNode.style.fill === 'none' ? toolOptions.fillColor : 'none' })}
+                      >
+                        {selectedNode.style.fill === 'none' ? 'Add Fill' : 'None'}
+                      </button>
+                    )}
                   </div>
-                  {selectedNode.type === 'rect' && (
+                  {(selectedNode.type === 'rect' || selectedNode.type === 'ellipse' || selectedNode.type === 'frame' || selectedNode.type === 'path') && (
+                    <>
+                      <label class="field-label range-label">Stroke</label>
+                      <div class="color-field-wrap">
+                        <input
+                          class="color-swatch"
+                          type="color"
+                          value={selectedNode.style.stroke.startsWith('#') && selectedNode.style.stroke.length >= 7 ? selectedNode.style.stroke.slice(0, 7) : '#20212A'}
+                          onInput={(event) => updateSelectedStyle({ stroke: event.currentTarget.value, strokeWidth: Math.max(1, selectedNode.style.strokeWidth) })}
+                        />
+                        <span class="color-value">{selectedNode.style.stroke.toUpperCase()}</span>
+                        <input
+                          class="number-field inspector-stroke-width"
+                          type="number"
+                          min="0"
+                          max="32"
+                          step="0.5"
+                          aria-label="Stroke width"
+                          value={selectedNode.style.strokeWidth}
+                          onInput={(event) => {
+                            const value = parseNumericInput(event.currentTarget.value);
+                            if (value !== null) updateSelectedStyle({ strokeWidth: Math.max(0, value) });
+                          }}
+                        />
+                      </div>
+                    </>
+                  )}
+                  {(selectedNode.type === 'rect' || selectedNode.type === 'frame') && (
                     <label class="field-label range-label">Corner radius
                       <input class="number-field" type="number" min="0" value={selectedNode.style.radius ?? 0} onInput={(event) => { const value = parseNumericInput(event.currentTarget.value); if (value !== null) updateSelectedStyle({ radius: Math.max(0, value) }); }} />
                     </label>
+                  )}
+                  {selectedNode.type === 'frame' && (
+                    <label class="toggle-row">
+                      <span>Clip content</span>
+                      <input
+                        type="checkbox"
+                        checked={selectedNode.clipContent !== false}
+                        onChange={(event) => updateSelected({ clipContent: event.currentTarget.checked } as Partial<DesignNode>)}
+                      />
+                    </label>
+                  )}
+                  {(selectedNode.type === 'rect' || selectedNode.type === 'ellipse' || selectedNode.type === 'frame') && (
+                    <div class="instance-actions">
+                      <button type="button" onClick={() => handleConvertToPath(activeEditorId)}>
+                        Convert to Vector Path
+                      </button>
+                    </div>
+                  )}
+                  {selectedNode.type === 'path' && (
+                    <>
+                      <div class="vector-meta-row">
+                        <span>Vector Path</span>
+                        <strong>{selectedNode.points.length} anchors</strong>
+                      </div>
+                      <label class="toggle-row">
+                        <span>Closed contour</span>
+                        <input
+                          type="checkbox"
+                          checked={selectedNode.closed}
+                          onChange={() => handleTogglePathClosed(activeEditorId)}
+                        />
+                      </label>
+                      <label class="toggle-row">
+                        <span>Dashed stroke</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selectedNode.style.strokeDasharray)}
+                          onChange={(event) => updateSelectedStyle({ strokeDasharray: event.currentTarget.checked ? '8 5' : '' })}
+                        />
+                      </label>
+                      {!selectedNode.closed && (
+                        <div class="field-grid single-row">
+                          <label class="toggle-row">
+                            <span>Start Arrow</span>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(selectedNode.style.arrowStart)}
+                              onChange={(event) => updateSelected({
+                                style: { ...selectedNode.style, arrowStart: event.currentTarget.checked },
+                              } as Partial<DesignNode>)}
+                            />
+                          </label>
+                          <label class="toggle-row">
+                            <span>End Arrow</span>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(selectedNode.style.arrowEnd)}
+                              onChange={(event) => updateSelected({
+                                style: { ...selectedNode.style, arrowEnd: event.currentTarget.checked },
+                              } as Partial<DesignNode>)}
+                            />
+                          </label>
+                        </div>
+                      )}
+                      <div class="instance-actions">
+                        <button type="button" onClick={() => chooseCanvasTool('direct-selection', activeEditorId)}>
+                          Edit Anchors (A)
+                        </button>
+                        <button type="button" onClick={() => handleSimplifyPath(activeEditorId)}>
+                          Simplify
+                        </button>
+                      </div>
+                    </>
                   )}
                   {selectedNode.type === 'text' && (
                     <>
@@ -3256,39 +3761,39 @@ export function App() {
           }}>Rename</button>
           {contextMenuCanGroup && <button type="button" role="menuitem" onClick={() => {
             const menu = layerContextMenu;
-            const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
             setLayerContextMenu(null);
             selectionSourceRef.current = 'layers';
-            targetDispatch({ type: 'group-layers', nodeIds: contextMenuRootIds });
+            if (menu.editorId === 'main') mainCommandClient.groupLayers(contextMenuRootIds);
+            else componentDispatch({ type: 'group-layers', nodeIds: contextMenuRootIds });
           }}>Group</button>}
           {contextMenuCanUngroup && <button type="button" role="menuitem" onClick={() => {
             const menu = layerContextMenu;
-            const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
             setLayerContextMenu(null);
             selectionSourceRef.current = 'layers';
-            targetDispatch({ type: 'ungroup-layers', nodeIds: contextMenuRootIds });
+            if (menu.editorId === 'main') mainCommandClient.ungroupLayers(contextMenuRootIds);
+            else componentDispatch({ type: 'ungroup-layers', nodeIds: contextMenuRootIds });
           }}>Ungroup</button>}
           {contextMenuCanMask && <button type="button" role="menuitem" onClick={() => {
             const menu = layerContextMenu;
-            const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
             setLayerContextMenu(null);
             selectionSourceRef.current = 'layers';
-            targetDispatch({ type: 'mask-layer', nodeId: contextMenuRootIds[0] });
+            if (menu.editorId === 'main') mainCommandClient.createClippingMask(contextMenuRootIds[0]);
+            else componentDispatch({ type: 'mask-layer', nodeId: contextMenuRootIds[0] });
           }}>Create Clipping Mask</button>}
           {contextMenuCanUnmask && <button type="button" role="menuitem" onClick={() => {
             const menu = layerContextMenu;
-            const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
             setLayerContextMenu(null);
             selectionSourceRef.current = 'layers';
-            targetDispatch({ type: 'unmask-layer', nodeId: contextMenuRootIds[0] });
+            if (menu.editorId === 'main') mainCommandClient.removeClippingMask(contextMenuRootIds[0]);
+            else componentDispatch({ type: 'unmask-layer', nodeId: contextMenuRootIds[0] });
           }}>Release Clipping Mask</button>}
           <div class="layer-context-menu-separator" role="separator" />
           <button type="button" role="menuitem" class="layer-context-menu-danger" onClick={() => {
             const menu = layerContextMenu;
-            const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
             setLayerContextMenu(null);
             selectionSourceRef.current = 'layers';
-            targetDispatch({ type: 'delete-nodes', nodeIds: menu.nodeIds });
+            if (menu.editorId === 'main') mainCommandClient.deleteNodes(menu.nodeIds);
+            else componentDispatch({ type: 'delete-nodes', nodeIds: menu.nodeIds });
           }}><Icon name="trash" /> Delete{layerContextMenu.nodeIds.length > 1 ? ` (${layerContextMenu.nodeIds.length})` : ''}</button>
         </div>
       )}

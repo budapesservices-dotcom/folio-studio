@@ -2,12 +2,25 @@ import type {
   DocumentAddress,
   NativeNodeRef,
 } from '../document/ast';
+import type { LayerDropPosition } from '../document/layers';
+import type { DesignNode } from '../document/types';
 import type {
+  LayerClippingMaskPayload,
+  LayerGroupPayload,
+  LayerMoveManyPayload,
+  LayerMovePayload,
+  LayerUngroupPayload,
   NativeCommandEnvelope,
   NativeCommandSource,
   NativeCommandTarget,
+  NodeCreatePayload,
+  NodeDeletePayload,
+  NodeRenamePayload,
+  NodeReplacePayload,
+  NodeSetCanvasStatePayload,
   NodeSetPropertiesPayload,
   NodeTransformPayload,
+  ProjectRenamePayload,
 } from './types';
 
 export type ValidationOutcome<T> =
@@ -142,6 +155,10 @@ function isNonEmptyString(value: unknown, maxLength = 256): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -192,7 +209,7 @@ function isNativeCommandSource(value: unknown): value is NativeCommandSource {
   if (!workspaces.includes(String(value.workspace)) || !isRecord(value.actor)) return false;
   const actor = value.actor;
   if (!['user', 'system', 'plugin', 'ai-agent'].includes(String(actor.kind))) return false;
-  const actorKeys = actor.kind === 'user' ? ['kind', 'actorId'] : ['kind', 'actorId'];
+  const actorKeys = ['kind', 'actorId'];
   if (!hasOnlyKeys(actor, actorKeys)) return false;
   if (actor.kind === 'user') {
     if (actor.actorId !== undefined && !isNonEmptyString(actor.actorId)) return false;
@@ -275,15 +292,232 @@ function validateNativeCommandEnvelopeData(
   return { ok: true, value: input as unknown as NativeCommandEnvelope<string, unknown> };
 }
 
-function hasUniqueNodeRefs(refs: readonly NativeNodeRef[]): boolean {
-  const keys = refs.map((ref) => [
+function nodeRefKey(ref: NativeNodeRef): string {
+  return [
     ref.document.projectId,
     ref.document.owner.kind,
     ref.document.owner.id,
     ref.document.documentId,
     ref.nodeId,
-  ].join('\u0000'));
-  return new Set(keys).size === keys.length;
+  ].join('\u0000');
+}
+
+function hasUniqueNodeRefs(refs: readonly NativeNodeRef[]): boolean {
+  return new Set(refs.map(nodeRefKey)).size === refs.length;
+}
+
+function isLayerDropPosition(value: unknown): value is LayerDropPosition {
+  return value === 'before' || value === 'inside' || value === 'after';
+}
+
+const COMMON_NODE_KEYS = [
+  'id', 'name', 'type', 'x', 'y', 'width', 'height', 'rotation',
+  'opacity', 'visible', 'locked', 'layerColor', 'parentId', 'onCanvas', 'clipMaskBaseId',
+] as const;
+
+function isDesignNodeData(value: unknown): value is DesignNode {
+  if (!isRecord(value)) return false;
+  if (
+    !isNonEmptyString(value.id) ||
+    typeof value.name !== 'string' || value.name.length > 512 ||
+    !isFiniteNumber(value.x) ||
+    !isFiniteNumber(value.y) ||
+    !isFiniteNumber(value.width) || value.width < 0 ||
+    !isFiniteNumber(value.height) || value.height < 0 ||
+    !isFiniteNumber(value.rotation) ||
+    !isFiniteNumber(value.opacity) || value.opacity < 0 || value.opacity > 1 ||
+    typeof value.visible !== 'boolean' ||
+    typeof value.locked !== 'boolean' ||
+    (value.layerColor !== undefined && (typeof value.layerColor !== 'string' || value.layerColor.length > 128)) ||
+    (value.onCanvas !== undefined && typeof value.onCanvas !== 'boolean') ||
+    (value.parentId !== undefined && value.parentId !== null && !isNonEmptyString(value.parentId)) ||
+    (value.clipMaskBaseId !== undefined && !isNonEmptyString(value.clipMaskBaseId))
+  ) {
+    return false;
+  }
+
+  if (value.type === 'group') {
+    return hasOnlyKeys(value, COMMON_NODE_KEYS);
+  }
+
+  if (value.type === 'frame') {
+    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'style', 'clipContent', 'isSection']) || !isRecord(value.style)) {
+      return false;
+    }
+    const style = value.style;
+    if (!hasOnlyKeys(style, ['fill', 'stroke', 'strokeWidth', 'radius'])) return false;
+    return (
+      typeof style.fill === 'string' && style.fill.length <= 128 &&
+      typeof style.stroke === 'string' && style.stroke.length <= 128 &&
+      isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0 &&
+      (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
+      (value.clipContent === undefined || typeof value.clipContent === 'boolean') &&
+      (value.isSection === undefined || typeof value.isSection === 'boolean')
+    );
+  }
+
+  if (value.type === 'rect' || value.type === 'ellipse') {
+    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'style']) || !isRecord(value.style)) return false;
+    const style = value.style;
+    if (!hasOnlyKeys(style, ['fill', 'stroke', 'strokeWidth', 'radius'])) return false;
+    return (
+      typeof style.fill === 'string' && style.fill.length <= 128 &&
+      typeof style.stroke === 'string' && style.stroke.length <= 128 &&
+      isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0 &&
+      (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0))
+    );
+  }
+
+  if (value.type === 'path') {
+    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'points', 'closed', 'style', 'pathKind', 'subpaths'])) return false;
+    if (!isRecord(value.style) || !Array.isArray(value.points) || value.points.length === 0 || value.points.length > 500) {
+      return false;
+    }
+    if (typeof value.closed !== 'boolean') return false;
+    const isHandle = (h: unknown): boolean =>
+      isRecord(h) && hasOnlyKeys(h, ['x', 'y']) && isFiniteNumber(h.x) && isFiniteNumber(h.y);
+    const isAnchor = (pt: unknown): boolean =>
+      isRecord(pt) &&
+      hasOnlyKeys(pt, ['id', 'x', 'y', 'handleIn', 'handleOut', 'pointType']) &&
+      isNonEmptyString(pt.id) &&
+      isFiniteNumber(pt.x) &&
+      isFiniteNumber(pt.y) &&
+      (pt.handleIn === undefined || isHandle(pt.handleIn)) &&
+      (pt.handleOut === undefined || isHandle(pt.handleOut)) &&
+      (pt.pointType === 'corner' || pt.pointType === 'smooth' || pt.pointType === 'symmetric');
+
+    if (!value.points.every(isAnchor)) return false;
+    if (value.subpaths !== undefined) {
+      if (!Array.isArray(value.subpaths) || value.subpaths.length > 64) return false;
+      const validSubpaths = value.subpaths.every((sp) =>
+        isRecord(sp) &&
+        hasOnlyKeys(sp, ['points', 'closed']) &&
+        typeof sp.closed === 'boolean' &&
+        Array.isArray(sp.points) && sp.points.length > 0 && sp.points.length <= 500 &&
+        sp.points.every(isAnchor),
+      );
+      if (!validSubpaths) return false;
+    }
+    if (value.pathKind !== undefined &&
+      !['pen', 'curvature', 'pencil', 'line', 'arrow', 'polygon', 'star', 'boolean', 'outline'].includes(String(value.pathKind))) {
+      return false;
+    }
+    const style = value.style;
+    if (!hasOnlyKeys(style, [
+      'fill', 'stroke', 'strokeWidth', 'strokeLinecap', 'strokeLinejoin',
+      'strokeDasharray', 'fillRule', 'arrowStart', 'arrowEnd',
+    ])) return false;
+    return (
+      typeof style.fill === 'string' && style.fill.length <= 128 &&
+      typeof style.stroke === 'string' && style.stroke.length <= 128 &&
+      isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0 &&
+      (style.strokeLinecap === undefined || ['butt', 'round', 'square'].includes(String(style.strokeLinecap))) &&
+      (style.strokeLinejoin === undefined || ['miter', 'round', 'bevel'].includes(String(style.strokeLinejoin))) &&
+      (style.strokeDasharray === undefined || (typeof style.strokeDasharray === 'string' && style.strokeDasharray.length <= 128)) &&
+      (style.fillRule === undefined || style.fillRule === 'nonzero' || style.fillRule === 'evenodd') &&
+      (style.arrowStart === undefined || typeof style.arrowStart === 'boolean') &&
+      (style.arrowEnd === undefined || typeof style.arrowEnd === 'boolean')
+    );
+  }
+
+  if (value.type === 'text') {
+    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'text', 'style']) || !isRecord(value.style)) return false;
+    if (typeof value.text !== 'string' || value.text.length > 10000) return false;
+    const style = value.style;
+    if (!hasOnlyKeys(style, ['fill', 'fontSize', 'fontFamily', 'fontWeight', 'letterSpacing', 'lineHeight'])) return false;
+    return (
+      typeof style.fill === 'string' && style.fill.length <= 128 &&
+      isFiniteNumber(style.fontSize) && style.fontSize > 0 &&
+      typeof style.fontFamily === 'string' && style.fontFamily.length <= 256 &&
+      isFiniteNumber(style.fontWeight) &&
+      isFiniteNumber(style.letterSpacing) &&
+      isFiniteNumber(style.lineHeight) && style.lineHeight > 0
+    );
+  }
+
+  if (value.type === 'component-instance') {
+    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'componentId', 'overrides'])) return false;
+    if (!isNonEmptyString(value.componentId) || !isRecord(value.overrides)) return false;
+    if (value.width <= 0 || value.height <= 0) return false;
+    return Object.entries(value.overrides).every(([childId, override]) =>
+      isNonEmptyString(childId) &&
+      isRecord(override) &&
+      hasOnlyKeys(override, ['fill', 'text']) &&
+      (override.fill === undefined || (typeof override.fill === 'string' && override.fill.length <= 128)) &&
+      (override.text === undefined || (typeof override.text === 'string' && override.text.length <= 10000)),
+    );
+  }
+
+  return false;
+}
+
+function validateUniqueNodeRefList(
+  value: unknown,
+  label: string,
+): ValidationOutcome<NativeNodeRef[]> {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 100) {
+    return invalid('INVALID_PAYLOAD', `${label} requires between 1 and 100 node references.`);
+  }
+  const refs: NativeNodeRef[] = [];
+  for (const ref of value) {
+    if (!isNativeNodeRefData(ref)) {
+      return invalid('INVALID_REFERENCE', 'Every target must be a complete node reference.');
+    }
+    refs.push(ref);
+  }
+  if (!hasUniqueNodeRefs(refs)) {
+    return invalid('INVALID_REFERENCE', 'A node may appear only once in one command.');
+  }
+  return { ok: true, value: refs };
+}
+
+export function validateProjectRenamePayload(
+  value: unknown,
+): ValidationOutcome<ProjectRenamePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['name']) || !isNonEmptyString(data.name)) {
+    return invalid('INVALID_PAYLOAD', 'Project rename requires a non-empty project name.');
+  }
+  return { ok: true, value: { name: data.name.trim() } };
+}
+
+export function validateNodeCreatePayload(
+  value: unknown,
+): ValidationOutcome<NodeCreatePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['nodes']) ||
+      !Array.isArray(data.nodes) || data.nodes.length === 0 || data.nodes.length > 100) {
+    return invalid('INVALID_PAYLOAD', 'Node creation requires between 1 and 100 valid nodes.');
+  }
+  const nodes: DesignNode[] = [];
+  const seenIds = new Set<string>();
+  for (const entry of data.nodes) {
+    if (!isDesignNodeData(entry)) {
+      return invalid('INVALID_PAYLOAD', 'One or more created nodes do not match the Folio node schema.');
+    }
+    if (seenIds.has(entry.id)) {
+      return invalid('INVALID_REFERENCE', 'Created nodes in one command must have unique IDs.');
+    }
+    seenIds.add(entry.id);
+    nodes.push(entry);
+  }
+  return { ok: true, value: { nodes } };
+}
+
+export function validateNodeReplacePayload(
+  value: unknown,
+): ValidationOutcome<NodeReplacePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['node']) || !isDesignNodeData(data.node)) {
+    return invalid('INVALID_PAYLOAD', 'Node replacement requires a complete valid Folio node.');
+  }
+  return { ok: true, value: { node: data.node } };
 }
 
 export function validateNodeTransformPayload(
@@ -303,7 +537,7 @@ function validateNodeTransformPayloadData(value: unknown): ValidationOutcome<Nod
   const nodes: NodeTransformPayload['nodes'] = [];
   for (const entry of value.nodes) {
     if (!isRecord(entry) || !hasOnlyKeys(entry, ['ref', 'transform']) ||
-        !isNativeNodeRef(entry.ref) || !isRecord(entry.transform)) {
+        !isNativeNodeRefData(entry.ref) || !isRecord(entry.transform)) {
       return invalid('INVALID_PAYLOAD', 'Each transform entry requires a complete node reference and transform object.');
     }
     const transform = entry.transform;
@@ -359,11 +593,134 @@ function validateNodeSetPropertiesPayloadData(value: unknown): ValidationOutcome
 
   const nodes: NativeNodeRef[] = [];
   for (const ref of value.nodes) {
-    if (!isNativeNodeRef(ref)) return invalid('INVALID_REFERENCE', 'Every property target must be a complete node reference.');
+    if (!isNativeNodeRefData(ref)) return invalid('INVALID_REFERENCE', 'Every property target must be a complete node reference.');
     nodes.push(ref);
   }
   if (!hasUniqueNodeRefs(nodes)) {
     return invalid('INVALID_REFERENCE', 'A node may appear only once in one property command.');
   }
   return { ok: true, value: { nodes, properties: properties as NodeSetPropertiesPayload['properties'] } };
+}
+
+export function validateNodeRenamePayload(
+  value: unknown,
+): ValidationOutcome<NodeRenamePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['updates']) ||
+      !Array.isArray(data.updates) || data.updates.length === 0 || data.updates.length > 100) {
+    return invalid('INVALID_PAYLOAD', 'A rename command requires between 1 and 100 node updates.');
+  }
+  const updates: NodeRenamePayload['updates'] = [];
+  for (const entry of data.updates) {
+    if (!isRecord(entry) || !hasOnlyKeys(entry, ['ref', 'name']) ||
+        !isNativeNodeRefData(entry.ref) || !isNonEmptyString(entry.name)) {
+      return invalid('INVALID_PAYLOAD', 'Each rename entry requires a valid node reference and non-empty name.');
+    }
+    updates.push({ ref: entry.ref, name: entry.name.trim() });
+  }
+  if (!hasUniqueNodeRefs(updates.map((item) => item.ref))) {
+    return invalid('INVALID_REFERENCE', 'A node may appear only once in one rename command.');
+  }
+  return { ok: true, value: { updates } };
+}
+
+export function validateNodeDeletePayload(
+  value: unknown,
+): ValidationOutcome<NodeDeletePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['nodes'])) {
+    return invalid('INVALID_PAYLOAD', 'A delete command requires explicit node references.');
+  }
+  const refs = validateUniqueNodeRefList(data.nodes, 'A delete command');
+  if (!refs.ok) return refs;
+  return { ok: true, value: { nodes: refs.value } };
+}
+
+export function validateNodeSetCanvasStatePayload(
+  value: unknown,
+): ValidationOutcome<NodeSetCanvasStatePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['nodes', 'onCanvas']) || typeof data.onCanvas !== 'boolean') {
+    return invalid('INVALID_PAYLOAD', 'A canvas-state command requires node references and a boolean onCanvas flag.');
+  }
+  const refs = validateUniqueNodeRefList(data.nodes, 'A canvas-state command');
+  if (!refs.ok) return refs;
+  return { ok: true, value: { nodes: refs.value, onCanvas: data.onCanvas } };
+}
+
+export function validateLayerMovePayload(
+  value: unknown,
+): ValidationOutcome<LayerMovePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['node', 'target', 'position']) ||
+      !isNativeNodeRefData(data.node) || !isNativeNodeRefData(data.target) || !isLayerDropPosition(data.position)) {
+    return invalid('INVALID_PAYLOAD', 'A layer move command requires node, target and drop position.');
+  }
+  if (nodeRefKey(data.node) === nodeRefKey(data.target)) {
+    return invalid('INVALID_REFERENCE', 'A layer cannot be moved relative to itself.');
+  }
+  return { ok: true, value: { node: data.node, target: data.target, position: data.position } };
+}
+
+export function validateLayerMoveManyPayload(
+  value: unknown,
+): ValidationOutcome<LayerMoveManyPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['nodes', 'target', 'position']) ||
+      !isNativeNodeRefData(data.target) || !isLayerDropPosition(data.position)) {
+    return invalid('INVALID_PAYLOAD', 'A multi-layer move command requires nodes, target and drop position.');
+  }
+  const refs = validateUniqueNodeRefList(data.nodes, 'A multi-layer move command');
+  if (!refs.ok) return refs;
+  return { ok: true, value: { nodes: refs.value, target: data.target, position: data.position } };
+}
+
+export function validateLayerGroupPayload(
+  value: unknown,
+): ValidationOutcome<LayerGroupPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['nodes'])) {
+    return invalid('INVALID_PAYLOAD', 'A group command requires explicit node references.');
+  }
+  const refs = validateUniqueNodeRefList(data.nodes, 'A group command');
+  if (!refs.ok) return refs;
+  return { ok: true, value: { nodes: refs.value } };
+}
+
+export function validateLayerUngroupPayload(
+  value: unknown,
+): ValidationOutcome<LayerUngroupPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['nodes'])) {
+    return invalid('INVALID_PAYLOAD', 'An ungroup command requires explicit node references.');
+  }
+  const refs = validateUniqueNodeRefList(data.nodes, 'An ungroup command');
+  if (!refs.ok) return refs;
+  return { ok: true, value: { nodes: refs.value } };
+}
+
+export function validateLayerClippingMaskPayload(
+  value: unknown,
+): ValidationOutcome<LayerClippingMaskPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['node']) || !isNativeNodeRefData(data.node)) {
+    return invalid('INVALID_PAYLOAD', 'A clipping mask command requires a single complete node reference.');
+  }
+  return { ok: true, value: { node: data.node } };
 }

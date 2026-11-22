@@ -35,8 +35,63 @@ export interface ShapeStyle {
   radius?: number;
 }
 
+export interface VectorPointHandle {
+  x: number;
+  y: number;
+}
+
+export type VectorPointType = 'corner' | 'smooth' | 'symmetric';
+
+export interface VectorAnchorPoint {
+  id: string;
+  /** Local X coordinate relative to the PathNode's x origin. */
+  x: number;
+  /** Local Y coordinate relative to the PathNode's y origin. */
+  y: number;
+  /** Incoming cubic Bezier control handle in local coordinates. */
+  handleIn?: VectorPointHandle;
+  /** Outgoing cubic Bezier control handle in local coordinates. */
+  handleOut?: VectorPointHandle;
+  pointType: VectorPointType;
+}
+
+export interface VectorSubpath {
+  points: VectorAnchorPoint[];
+  closed: boolean;
+}
+
+export interface PathStyle {
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+  strokeLinecap?: 'butt' | 'round' | 'square';
+  strokeLinejoin?: 'miter' | 'round' | 'bevel';
+  strokeDasharray?: string;
+  fillRule?: 'nonzero' | 'evenodd';
+  arrowStart?: boolean;
+  arrowEnd?: boolean;
+}
+
+export type VectorPathKind =
+  | 'pen'
+  | 'curvature'
+  | 'pencil'
+  | 'line'
+  | 'arrow'
+  | 'polygon'
+  | 'star'
+  | 'boolean'
+  | 'outline';
+
 export interface GroupNode extends NodeBase {
   type: 'group';
+}
+
+export interface FrameNode extends NodeBase {
+  type: 'frame';
+  style: ShapeStyle;
+  clipContent?: boolean;
+  isSection?: boolean;
 }
 
 export interface RectNode extends NodeBase {
@@ -47,6 +102,16 @@ export interface RectNode extends NodeBase {
 export interface EllipseNode extends NodeBase {
   type: 'ellipse';
   style: ShapeStyle;
+}
+
+export interface PathNode extends NodeBase {
+  type: 'path';
+  points: VectorAnchorPoint[];
+  closed: boolean;
+  style: PathStyle;
+  pathKind?: VectorPathKind;
+  /** Optional compound subpaths for Illustrator Pathfinder cutouts/exclusions. */
+  subpaths?: VectorSubpath[];
 }
 
 export interface TextNode extends NodeBase {
@@ -69,7 +134,14 @@ export interface ComponentInstanceNode extends NodeBase {
   componentId: string;
   overrides: ComponentInstanceOverrides;
 }
-export type DesignNode = GroupNode | RectNode | EllipseNode | TextNode | ComponentInstanceNode;
+export type DesignNode =
+  | GroupNode
+  | FrameNode
+  | RectNode
+  | EllipseNode
+  | PathNode
+  | TextNode
+  | ComponentInstanceNode;
 
 export interface FolioDocument {
   id: string;

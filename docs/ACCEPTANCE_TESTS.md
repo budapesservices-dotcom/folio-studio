@@ -137,3 +137,36 @@ The actual modal is also browser-tested: initial focus enters the safe dialog ac
 - **Local Automated Gate: PASS (2026-11-22)** — `npm run check` (`tsc --noEmit`), `npm run test` (**23 test files / 310 tests passed**, including four real Chromium browser suites: `mergeReadiness.browser.test.mjs`, `workspaceGeometry.browser.test.mjs`, `nativePersistence.browser.test.mjs`, and `componentRecovery.browser.test.mjs`), and `npm run build` all passed locally.
 - **Coverage added:** `tests/workspacePreferences.test.ts`, `tests/FloatingWindow.test.tsx`, `tests/workspaceGeometry.browser.test.mjs` (reconciled from PR #5), `tests/mergeReadiness.test.ts`, and `tests/mergeReadiness.browser.test.mjs` verifying `WEB-01`..`WEB-14`, Preact kebab-case SVG typography & multiline `<tspan>` rendering, root-stacked layer popovers, live SVG Component Rack thumbnails, clipping masks inside component instances with zero duplicate DOM IDs, compact `420×280` Component Canvas creation bounds, and zero console/page errors.
 - **GitHub CI & Manual Acceptance:** Pending commit/push to `codex/pr1-main-reconciliation-20261122`, green GitHub Actions run on the pushed HEAD, and human manual browser acceptance. Full evidence is recorded in `docs/reports/FOLIO_MERGE_READINESS.md`.
+
+### Native Command Core — Phase 2 & Main Canvas UI Adoption
+
+- **Implementation status:** **Implemented** and **Verified locally** (2026-11-22).
+- **Implemented scope:**
+  - Expanded `src/core/commands/types.ts`, `src/core/commands/validation.ts`, `src/app/nativeCommandRegistry.ts`, and `src/app/nativeCommandExecutor.ts` to 14 versioned Main Canvas commands (`project.rename`, `node.create`, `node.replace`, `node.transform`, `node.set-properties`, `node.rename`, `node.delete`, `node.set-canvas-state`, `layer.move`, `layer.move-many`, `layer.group`, `layer.ungroup`, `layer.create-clipping-mask`, `layer.remove-clipping-mask`).
+  - Integrated `createDocumentAstView` (`src/core/document/ast.ts`) into live command target resolution and Main Canvas command submission.
+  - Added modular `src/app/mainCanvasCommandClient.ts` and routed Main Canvas UI actions in `src/app/App.tsx` through versioned Native Commands with `expectedProjectRevision`, effective lock checks, cycle/clipping precondition rejections, and English toast feedback.
+  - Kept `.flop` v2 JSON schema, IndexedDB v2 schema, live coalesced Inspector `edit-node` typing, page/component management, and Component Canvas's isolated buffer/guarded sync intact.
+- **Local Automated Gate: PASS (2026-11-22):**
+  - `npm run check` (`tsc --noEmit`): **PASS** (0 errors).
+  - `CHROMIUM_BIN=... npx vitest run --fileParallelism=false`: **PASS** (**26 test files / 336 tests passed**, including `tests/nativeCommandCore.test.ts` 60/60, new `tests/nativeCommandPhase2.test.ts` 9/9, and all four real Chromium browser suites: `workspaceGeometry.browser.test.mjs`, `componentRecovery.browser.test.mjs`, `nativePersistence.browser.test.mjs`, `mergeReadiness.browser.test.mjs`). Note: running multiple headless Chromium test suites concurrently in the same container can trigger a CDP `Runtime.evaluate` timeout in `workspaceGeometry.browser.test.mjs`; running with `--fileParallelism=false` eliminates that CPU contention cleanly.
+  - Live headless Chromium verification (`playwright-cli` against `http://localhost:3000` at `1440×900`): **PASS** — verified initial hydration (`7` sample layers), `node.create` (`+ Rectangle` → `8` layers), `project.rename` (`Phase 2 Verified .flop`), locked-layer protection (`Lock Rectangle` + `Delete` → layer retained and English rejection toast `"A locked layer or one of its locked ancestors cannot be modified."` displayed), `layer.group` (`Ctrl+G` → `Group` with nested `Rectangle` and `Sun`), Undo/Redo, and **0 console errors / 0 warnings**.
+  - Production build (`npm run build`): **PASS**.
+- **Pending / Not Claimed:**
+  - Phase 3 Component Command Bridge (Component Canvas commands, component definition/instance/override commands), Node Logic authoring commands, and Code Engine remain future milestones.
+  - Git branch commit/push, GitHub Actions CI run on pushed HEAD, and human manual browser acceptance remain **pending** outside this local workspace.
+
+### Dual-Mode Studio Tool System (Figma Page Studio + Adobe Illustrator Component Vector Studio)
+
+- **Implementation status:** **Implemented** and **Verified locally** (2026-11-22).
+- **Implemented scope:**
+  - Added native `FrameNode` and cubic Bezier `PathNode` support across `src/core/document/*`, `src/core/commands/validation.ts`, `src/engines/canvas/artwork.tsx`, `src/engines/canvas/geometry.ts`, `src/app/editorReducer.ts`, and `src/app/mainCanvasCommandClient.ts`.
+  - Built pure vector geometry & Illustrator Pathfinder boolean operations (`unite`, `subtract`, `intersect`, `exclude`) in `src/core/document/vector.ts`.
+  - Added 25 studio tools in `src/engines/canvas/tools/studioRegistry.ts`, `draw-tools.ts`, `vector-tools.ts`, `utility-tools.ts`, and `select.ts`, with per-workspace tool state, single-key shortcuts, live vector anchor & Bezier handle editing, Figma corner rotation, double-click inline text editing, and modular `src/app/ToolOptionsBar.tsx` while keeping Wave 1 `canvasToolRegistry` and quick `Create tools` browser-test compatibility intact.
+- **Local Automated Gate: PASS (2026-11-22):**
+  - `npm run check` (`tsc --noEmit`): **PASS** (0 errors).
+  - `CHROMIUM_BIN=... npx vitest run --fileParallelism=false`: **PASS** (**27 test files / 349 tests passed**, including new `tests/vectorTools.test.ts` 13/13 and all 4 real Chromium browser suites).
+  - Live headless Chromium visual & interactive verification (`playwright-cli` at `1440×900`): **PASS** — verified Main Canvas `PAGE` Studio Indigo tool rack + Shape flyout + interactive `Shift+G` Star creation + Vector Inspector; Component Canvas warm-amber `VECTOR` mode + Illustrator Vector flyout (`Pen`, `Curvature`, `Anchor Point`, `Pencil`, `Smooth`, `Scissors`) + `Curvature (U)` organic closed Bezier path + `Direct Selection (A)` live 5 anchors / 10 Bezier tangent handles + `Pathfinder Subtract` carving a crisp crescent silhouette; **0 console errors / 0 warnings**.
+- **Pending / Not Claimed:**
+  - External GitHub Actions CI run and human manual browser acceptance remain **pending** outside this local workspace.
+
+

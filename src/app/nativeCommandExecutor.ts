@@ -1,6 +1,6 @@
-import { getEffectiveLayerStates } from '../core/document/layers';
+import { getClippingMaskBaseId, getEffectiveLayerStates } from '../core/document/layers';
 import { validateProject } from '../core/document/validation';
-import type { DocumentAddress, NativeNodeRef } from '../core/document/ast';
+import { createDocumentAstView, type DocumentAddress, type NativeAstDocumentView, type NativeNodeRef } from '../core/document/ast';
 import type { DesignNode, FolioDocument } from '../core/document/types';
 import {
   validateNativeCommandEnvelope,
@@ -15,8 +15,6 @@ import type {
   NativeCommandEnvelope,
   NativeCommandResult,
   NativeCommandWarning,
-  NodeSetPropertiesCommand,
-  NodeTransformCommand,
 } from '../core/commands/types';
 import { NATIVE_COMMAND_REGISTRY, type NativeCommandAdapterContext } from './nativeCommandRegistry';
 import { isSnapshotOwnedByStore, type CanonicalEditorStore, type CanonicalEditorStoreSnapshot } from './editorStore';
@@ -43,6 +41,7 @@ interface PreparedNativeCommandDetails {
   readonly baseProjectRevision: number;
   readonly candidateState: EditorState;
   readonly changeDraft: NativeChangeSetDraft;
+  readonly affectedNodes: NativeNodeRef[];
   readonly warnings: NativeCommandWarning[];
 }
 
@@ -178,8 +177,9 @@ function rejectedPreparation(
 function noOpPreparation(
   snapshot: CanonicalEditorStoreSnapshot,
   command: NativeCommand,
-  address: DocumentAddress,
-  refs: NativeNodeRef[],
+  affectedDocuments: DocumentAddress[],
+  affectedNodes: NativeNodeRef[],
+  message = 'The requested state is already up to date.',
 ): NativeCommandPreparation {
   return {
     status: 'no-op',
@@ -188,28 +188,24 @@ function noOpPreparation(
       command,
       'no-op',
       'NO_OP',
-      'The requested node state is already up to date.',
-      [address],
-      refs,
+      message,
+      affectedDocuments,
+      affectedNodes,
     ),
   };
 }
 
-function resolveTargetDocument(
+function resolveDocumentAddress(
   snapshot: CanonicalEditorStoreSnapshot,
-  target: NativeCommandEnvelope<string, unknown>['target'],
+  address: DocumentAddress,
   context: NativeCommandContext,
-): ValidationOutcome<{ address: DocumentAddress; document: FolioDocument }> {
-  if (target.kind !== 'document') {
-    return { ok: false, code: 'TARGET_SCOPE_MISMATCH', message: 'This command requires an explicitly addressed document.' };
-  }
-  const address = target.address;
+): ValidationOutcome<{ address: DocumentAddress; document: FolioDocument; astView: NativeAstDocumentView }> {
   const project = snapshot.editorState.project;
   if (address.projectId !== context.projectId || address.projectId !== project.metadata.id) {
     return { ok: false, code: 'PROJECT_NOT_FOUND', message: 'The addressed project is not the current Main Canvas project.' };
   }
   if (address.owner.kind !== 'page') {
-    return { ok: false, code: 'TARGET_SCOPE_MISMATCH', message: 'Phase 1 commands only support Main Canvas page documents.' };
+    return { ok: false, code: 'TARGET_SCOPE_MISMATCH', message: 'Main Canvas commands only support Main Canvas page documents.' };
   }
   const page = project.pages.find((item) => item.id === address.owner.id);
   if (!page) {
@@ -221,11 +217,93 @@ function resolveTargetDocument(
   if (project.activePageId !== page.id) {
     return { ok: false, code: 'TARGET_SCOPE_MISMATCH', message: 'The addressed page is inactive; commands cannot fall back to the active page.' };
   }
-  return { ok: true, value: { address, document: page.document } };
+  const astView = createDocumentAstView(page.document, address);
+  return { ok: true, value: { address: astView.address, document: page.document, astView } };
 }
 
-function buildAffectedRefs(command: NativeCommand): NativeNodeRef[] {
-  return command.payload.nodes.map((item) => 'ref' in item ? item.ref : item);
+type ResolvedCommandTarget =
+  | { kind: 'project'; projectId: string }
+  | { kind: 'document'; address: DocumentAddress; document: FolioDocument; astView: NativeAstDocumentView }
+  | { kind: 'node'; address: DocumentAddress; document: FolioDocument; astView: NativeAstDocumentView; targetRef: NativeNodeRef };
+
+function resolveCommandTarget(
+  snapshot: CanonicalEditorStoreSnapshot,
+  target: NativeCommandEnvelope<string, unknown>['target'],
+  context: NativeCommandContext,
+): ValidationOutcome<ResolvedCommandTarget> {
+  const project = snapshot.editorState.project;
+  if (target.kind === 'project') {
+    if (target.projectId !== context.projectId || target.projectId !== project.metadata.id) {
+      return { ok: false, code: 'PROJECT_NOT_FOUND', message: 'The addressed project is not the current Main Canvas project.' };
+    }
+    return { ok: true, value: { kind: 'project', projectId: target.projectId } };
+  }
+  if (target.kind === 'document') {
+    const resolved = resolveDocumentAddress(snapshot, target.address, context);
+    if (!resolved.ok) return resolved;
+    return { ok: true, value: { kind: 'document', ...resolved.value } };
+  }
+  const resolved = resolveDocumentAddress(snapshot, target.ref.document, context);
+  if (!resolved.ok) return resolved;
+  return { ok: true, value: { kind: 'node', ...resolved.value, targetRef: target.ref } };
+}
+
+function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
+  switch (command.type) {
+    case 'project.rename':
+    case 'node.create':
+      return [];
+    case 'node.replace':
+      return command.target.kind === 'node' ? [command.target.ref] : [];
+    case 'node.transform':
+      return command.payload.nodes.map((item) => item.ref);
+    case 'node.set-properties':
+    case 'node.delete':
+    case 'node.set-canvas-state':
+    case 'layer.group':
+    case 'layer.ungroup':
+      return command.payload.nodes;
+    case 'node.rename':
+      return command.payload.updates.map((item) => item.ref);
+    case 'layer.move':
+      return [command.payload.node, command.payload.target];
+    case 'layer.move-many':
+      return [...command.payload.nodes, command.payload.target];
+    case 'layer.create-clipping-mask':
+    case 'layer.remove-clipping-mask':
+      return [command.payload.node];
+  }
+}
+
+function getLockCheckedNodeIds(command: NativeCommand): string[] {
+  switch (command.type) {
+    case 'project.rename':
+    case 'node.create':
+    case 'node.set-properties':
+      return [];
+    case 'node.replace':
+      return command.target.kind === 'node' ? [command.target.ref.nodeId] : [];
+    case 'node.transform':
+      return command.payload.nodes.map((item) => item.ref.nodeId);
+    case 'node.rename':
+      return command.payload.updates.map((item) => item.ref.nodeId);
+    case 'node.delete':
+    case 'node.set-canvas-state':
+    case 'layer.group':
+    case 'layer.ungroup':
+      return command.payload.nodes.map((ref) => ref.nodeId);
+    case 'layer.move':
+      return command.payload.position === 'inside'
+        ? [command.payload.node.nodeId, command.payload.target.nodeId]
+        : [command.payload.node.nodeId];
+    case 'layer.move-many':
+      return command.payload.position === 'inside'
+        ? [...command.payload.nodes.map((ref) => ref.nodeId), command.payload.target.nodeId]
+        : command.payload.nodes.map((ref) => ref.nodeId);
+    case 'layer.create-clipping-mask':
+    case 'layer.remove-clipping-mask':
+      return [command.payload.node.nodeId];
+  }
 }
 
 function buildActions(
@@ -234,6 +312,41 @@ function buildActions(
   context: NativeCommandAdapterContext,
 ): readonly EditorAction[] {
   return definition.toEditorActions(command, context);
+}
+
+function computeDocumentNodeDiff(
+  beforeDocument: FolioDocument,
+  afterDocument: FolioDocument,
+): { added: string[]; updated: string[]; removed: string[] } {
+  const beforeById = new Map<string, { node: DesignNode; index: number }>();
+  beforeDocument.nodes.forEach((node, index) => beforeById.set(node.id, { node, index }));
+
+  const afterById = new Map<string, { node: DesignNode; index: number }>();
+  afterDocument.nodes.forEach((node, index) => afterById.set(node.id, { node, index }));
+
+  const added: string[] = [];
+  const updated: string[] = [];
+  const removed: string[] = [];
+
+  for (const [id, afterEntry] of afterById) {
+    const beforeEntry = beforeById.get(id);
+    if (!beforeEntry) {
+      added.push(id);
+    } else if (
+      beforeEntry.index !== afterEntry.index ||
+      JSON.stringify(beforeEntry.node) !== JSON.stringify(afterEntry.node)
+    ) {
+      updated.push(id);
+    }
+  }
+
+  for (const id of beforeById.keys()) {
+    if (!afterById.has(id)) {
+      removed.push(id);
+    }
+  }
+
+  return { added, updated, removed };
 }
 
 /**
@@ -266,20 +379,16 @@ export function prepareNativeCommand(
     return rejectedPreparation(snapshot, header, 'TARGET_SCOPE_MISMATCH', 'This command does not support the supplied target type.');
   }
 
-  let command: NativeCommand;
-  if (envelope.type === 'node.transform') {
-    const payload = definition.validatePayload(envelope.payload);
-    if (!payload.ok) return rejectedPreparation(snapshot, header, payload.code, payload.message);
-    command = { ...envelope, type: 'node.transform', payload: payload.value as NodeTransformCommand['payload'] };
-  } else if (envelope.type === 'node.set-properties') {
-    const payload = definition.validatePayload(envelope.payload);
-    if (!payload.ok) return rejectedPreparation(snapshot, header, payload.code, payload.message);
-    command = { ...envelope, type: 'node.set-properties', payload: payload.value as NodeSetPropertiesCommand['payload'] };
-  } else {
-    return rejectedPreparation(snapshot, header, 'UNKNOWN_COMMAND', 'This command type is not supported.');
+  const payloadOutcome = definition.validatePayload(envelope.payload);
+  if (!payloadOutcome.ok) {
+    return rejectedPreparation(snapshot, header, payloadOutcome.code, payloadOutcome.message);
   }
 
-  command = freezeGraph(cloneGraph(command));
+  let command = freezeGraph(cloneGraph({
+    ...envelope,
+    type: definition.type,
+    payload: payloadOutcome.value,
+  })) as NativeCommand;
 
   if (!context || typeof context.projectId !== 'string' || context.projectId.trim().length === 0 ||
       !context.principal || typeof context.principal.id !== 'string' || context.principal.id.trim().length === 0 ||
@@ -314,32 +423,91 @@ export function prepareNativeCommand(
     return rejectedPreparation(snapshot, command, 'REVISION_CONFLICT', 'The command was prepared against an outdated project revision.');
   }
 
-  const resolved = resolveTargetDocument(snapshot, command.target, context);
-  if (!resolved.ok) return rejectedPreparation(snapshot, command, resolved.code, resolved.message);
-  const { address, document } = resolved.value;
-  const refs = buildAffectedRefs(command);
-  if (refs.some((ref) => !addressEquals(ref.document, address))) {
-    return rejectedPreparation(snapshot, command, 'TARGET_SCOPE_MISMATCH', 'Every node reference must match the command document address.');
+  const resolvedTarget = resolveCommandTarget(snapshot, command.target, context);
+  if (!resolvedTarget.ok) {
+    return rejectedPreparation(snapshot, command, resolvedTarget.code, resolvedTarget.message);
   }
 
-  const nodeById = new Map(document.nodes.map((node) => [node.id, node]));
-  const resolvedNodes: DesignNode[] = [];
-  for (const ref of refs) {
-    const node = nodeById.get(ref.nodeId);
-    if (!node) {
-      return rejectedPreparation(snapshot, command, 'INVALID_REFERENCE', 'One or more addressed nodes do not exist in this document.');
+  let resolvedNodes: DesignNode[] = [];
+  let targetDocument: FolioDocument | undefined;
+  let targetAddress: DocumentAddress | undefined;
+  let refs: NativeNodeRef[] = [];
+
+  if (resolvedTarget.value.kind !== 'project') {
+    const { address, document, astView } = resolvedTarget.value;
+    targetDocument = document;
+    targetAddress = address;
+    refs = getPayloadNodeRefs(command);
+
+    if (refs.some((ref) => !addressEquals(ref.document, address))) {
+      return rejectedPreparation(snapshot, command, 'TARGET_SCOPE_MISMATCH', 'Every node reference must match the command document address.');
     }
-    resolvedNodes.push(node);
-  }
 
-  if (command.type === 'node.transform') {
-    const effectiveStates = getEffectiveLayerStates(document.nodes);
-    if (resolvedNodes.some((node) => effectiveStates.get(node.id)?.locked)) {
-      return rejectedPreparation(snapshot, command, 'LOCKED_TARGET', 'A locked layer or one of its locked ancestors cannot be transformed.');
+    for (const ref of refs) {
+      const node = astView.getNode(ref.nodeId);
+      if (!node) {
+        return rejectedPreparation(snapshot, command, 'INVALID_REFERENCE', 'One or more addressed nodes do not exist in this document.');
+      }
+      resolvedNodes.push(node);
+    }
+
+    if (command.type === 'node.create') {
+      for (const created of command.payload.nodes) {
+        if (astView.getNode(created.id)) {
+          return rejectedPreparation(snapshot, command, 'INVALID_REFERENCE', `A node with ID "${created.id}" already exists in this document.`);
+        }
+      }
+    }
+
+    if (command.type === 'node.replace' && resolvedTarget.value.kind === 'node') {
+      const existing = resolvedNodes[0];
+      if (command.payload.node.id !== resolvedTarget.value.targetRef.nodeId) {
+        return rejectedPreparation(snapshot, command, 'INVALID_REFERENCE', 'Node replacement cannot change the target node ID.');
+      }
+      if (command.payload.node.type !== existing.type) {
+        return rejectedPreparation(snapshot, command, 'INVALID_PAYLOAD', 'Node replacement cannot change the target node type.');
+      }
+    }
+
+    const lockCheckedIds = getLockCheckedNodeIds(command);
+    if (lockCheckedIds.length > 0) {
+      const effectiveStates = getEffectiveLayerStates(document.nodes);
+      if (lockCheckedIds.some((nodeId) => effectiveStates.get(nodeId)?.locked)) {
+        return rejectedPreparation(snapshot, command, 'LOCKED_TARGET', 'A locked layer or one of its locked ancestors cannot be modified.');
+      }
+    }
+
+    if (command.type === 'layer.move') {
+      const targetId = command.payload.target.nodeId;
+      const descendantIds = new Set(astView.getDescendants(command.payload.node.nodeId).map((item) => item.id));
+      if (descendantIds.has(targetId)) {
+        return rejectedPreparation(snapshot, command, 'PRECONDITION_FAILED', 'A layer cannot be moved inside or relative to its own descendant.');
+      }
+    }
+
+    if (command.type === 'layer.move-many') {
+      const targetId = command.payload.target.nodeId;
+      for (const ref of command.payload.nodes) {
+        if (ref.nodeId === targetId) {
+          return rejectedPreparation(snapshot, command, 'PRECONDITION_FAILED', 'A moved layer cannot also be the drop target.');
+        }
+        const descendantIds = new Set(astView.getDescendants(ref.nodeId).map((item) => item.id));
+        if (descendantIds.has(targetId)) {
+          return rejectedPreparation(snapshot, command, 'PRECONDITION_FAILED', 'A layer cannot be moved inside or relative to its own descendant.');
+        }
+      }
+    }
+
+    if (command.type === 'layer.create-clipping-mask') {
+      const nodeId = command.payload.node.nodeId;
+      const baseId = getClippingMaskBaseId(document.nodes, nodeId);
+      if (!baseId) {
+        return rejectedPreparation(snapshot, command, 'PRECONDITION_FAILED', 'No layer directly below to use as a clipping mask.');
+      }
     }
   }
 
-  const adapterContext: NativeCommandAdapterContext = { document, resolvedNodes };
+  const adapterContext: NativeCommandAdapterContext = { document: targetDocument, resolvedNodes };
   let candidateState = snapshot.editorState;
   try {
     for (const action of buildActions(command, definition, adapterContext)) {
@@ -351,35 +519,51 @@ export function prepareNativeCommand(
 
   if (candidateState === snapshot.editorState ||
       candidateState.project === snapshot.editorState.project) {
-    return noOpPreparation(snapshot, command, address, refs);
+    return noOpPreparation(
+      snapshot,
+      command,
+      targetAddress ? [targetAddress] : [],
+      refs,
+      command.type === 'project.rename'
+        ? 'The project name is already up to date.'
+        : 'The requested node state is already up to date.',
+    );
   }
   if (!validateProject(candidateState.project).ok) {
     return rejectedPreparation(snapshot, command, 'PROJECT_VALIDATION_FAILED', 'The prepared project violates the current Folio project schema.');
   }
 
-  const candidateDocument = candidateState.project.pages.find((page) => page.id === address.owner.id)?.document;
-  const candidateNodeById = new Map((candidateDocument?.nodes ?? []).map((node) => [node.id, node]));
-  const originalNodeById = new Map(document.nodes.map((node) => [node.id, node]));
-  const updatedNodeIds = refs.map((ref) => ref.nodeId).filter((nodeId) => {
-    const before = originalNodeById.get(nodeId);
-    const after = candidateNodeById.get(nodeId);
-    return before !== undefined && after !== undefined && JSON.stringify(before) !== JSON.stringify(after);
-  });
+  let changeDocuments: NativeChangeSetDraft['documents'] = [];
+  let affectedNodes: NativeNodeRef[] = [];
+  const projectMetadataChanged = command.type === 'project.rename';
+
+  if (targetAddress && targetDocument) {
+    const candidateDocument = candidateState.project.pages.find((page) => page.id === targetAddress.owner.id)?.document;
+    const diff = candidateDocument
+      ? computeDocumentNodeDiff(targetDocument, candidateDocument)
+      : { added: [], updated: [], removed: [] };
+
+    changeDocuments = [{
+      address: targetAddress,
+      nodeIds: diff,
+    }];
+
+    const affectedNodeIds = [...new Set([...diff.added, ...diff.updated, ...diff.removed])];
+    affectedNodes = affectedNodeIds.map((nodeId) => ({ document: targetAddress, nodeId }));
+  }
 
   const changeDraft: NativeChangeSetDraft = {
     projectId: snapshot.editorState.project.metadata.id,
     ...(command.transactionId ? { transactionId: command.transactionId } : {}),
     commandIds: [command.commandId],
-    documents: [{
-      address,
-      nodeIds: { added: [], updated: updatedNodeIds, removed: [] },
-    }],
+    documents: changeDocuments,
     components: [],
-    projectMetadataChanged: false,
+    projectMetadataChanged,
   };
 
   const immutableCandidateState = freezeGraph(candidateState);
   const immutableChangeDraft = freezeGraph(changeDraft);
+  const immutableAffectedNodes = freezeGraph(affectedNodes);
   const warnings = freezeGraph([] as NativeCommandWarning[]);
   const preparation = freezeGraph({
     status: 'prepared' as const,
@@ -392,10 +576,15 @@ export function prepareNativeCommand(
     warnings,
   }) as Extract<NativeCommandPreparation, { status: 'prepared' }>;
 
-  const details = {
-    baseSnapshot: snapshot, command, projectId: changeDraft.projectId,
-    baseProjectRevision: snapshot.projectRevision, candidateState: immutableCandidateState,
-    changeDraft: immutableChangeDraft, warnings,
+  const details: PreparedNativeCommandDetails = {
+    baseSnapshot: snapshot,
+    command,
+    projectId: changeDraft.projectId,
+    baseProjectRevision: snapshot.projectRevision,
+    candidateState: immutableCandidateState,
+    changeDraft: immutableChangeDraft,
+    affectedNodes: immutableAffectedNodes,
+    warnings,
   };
   preparedNativeOperations.set(preparation, details);
   return preparation;
@@ -438,14 +627,18 @@ export function commitPreparedCommand(
   }
   const preparedChange: NativeChangeSet = freezeGraph({ ...details.changeDraft, projectRevision: details.baseProjectRevision + 1 });
   const preparedResult: NativeCommandResult = freezeGraph({
-    protocolVersion: 1, commandId: details.command.commandId,
+    protocolVersion: 1,
+    commandId: details.command.commandId,
     ...(details.command.transactionId ? { transactionId: details.command.transactionId } : {}),
-    status: 'applied', code: 'APPLIED', message: 'The command was committed successfully.',
-    projectId: details.projectId, projectRevisionBefore: details.baseProjectRevision,
-    projectRevisionAfter: details.baseProjectRevision + 1, changed: true,
+    status: 'applied',
+    code: 'APPLIED',
+    message: 'The command was committed successfully.',
+    projectId: details.projectId,
+    projectRevisionBefore: details.baseProjectRevision,
+    projectRevisionAfter: details.baseProjectRevision + 1,
+    changed: true,
     affectedDocuments: preparedChange.documents.map((item) => item.address),
-    affectedNodes: details.command.type === 'node.transform'
-      ? details.command.payload.nodes.map((item) => item.ref) : details.command.payload.nodes,
+    affectedNodes: details.affectedNodes,
     warnings: details.warnings,
   });
   const commit = store.commitEditorTransition({
@@ -470,8 +663,15 @@ export function commitPreparedCommand(
   if (commit.status === 'failed') {
     const code = commit.errorCode === 'PROJECT_VALIDATION_FAILED'
       ? 'PROJECT_VALIDATION_FAILED'
-      : commit.errorCode === 'UNAUTHORIZED_EVENT_PUBLICATION' ? 'INVALID_PREPARATION' : 'INTERNAL_ERROR';
-    return createRejectedCommit(commit.snapshot, details.command, code, 'The command could not be committed.');
+      : commit.errorCode === 'MUTATION_LOCKED'
+        ? 'MUTATION_LOCKED'
+        : commit.errorCode === 'UNAUTHORIZED_EVENT_PUBLICATION'
+          ? 'INVALID_PREPARATION'
+          : 'INTERNAL_ERROR';
+    const message = commit.errorCode === 'MUTATION_LOCKED'
+      ? 'The project is temporarily locked while another durable operation completes.'
+      : 'The command could not be committed.';
+    return createRejectedCommit(commit.snapshot, details.command, code, message);
   }
 
   const event = commit.event as NativeChangeEvent;

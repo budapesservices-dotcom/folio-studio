@@ -5,9 +5,19 @@ import {
   type EllipseNode,
   type FolioDocument,
   type FolioProject,
+  type FrameNode,
+  type PathNode,
   type RectNode,
   type TextNode,
+  type VectorAnchorPoint,
+  type VectorPathKind,
 } from './types';
+import {
+  createLinePathPoints,
+  createPolygonPathPoints,
+  createStarPathPoints,
+  normalizePathNode,
+} from './vector';
 
 function createId(prefix: string): string {
   const randomId = globalThis.crypto?.randomUUID?.();
@@ -36,6 +46,128 @@ export function createRectNode(index = 0): RectNode {
     type: 'rect',
     style: { fill: '#8B7CF6', stroke: '#00000000', strokeWidth: 0, radius: 18 },
   };
+}
+
+export function createFrameNode(
+  x = 240,
+  y = 180,
+  width = 360,
+  height = 240,
+  options: { name?: string; isSection?: boolean } = {},
+): FrameNode {
+  const isSection = Boolean(options.isSection);
+  return {
+    ...baseNode(options.name ?? (isSection ? 'Section' : 'Frame'), x, y, Math.max(16, width), Math.max(16, height)),
+    type: 'frame',
+    clipContent: !isSection,
+    ...(isSection ? { isSection: true } : {}),
+    style: isSection
+      ? { fill: 'rgba(139, 124, 246, 0.08)', stroke: '#8B7CF6', strokeWidth: 1.5, radius: 12 }
+      : { fill: '#FFFFFF', stroke: '#D4CFC7', strokeWidth: 1, radius: 0 },
+  };
+}
+
+export function createPolygonNode(x: number, y: number, width: number, height: number, sides = 6): PathNode {
+  const w = Math.max(8, width);
+  const h = Math.max(8, height);
+  return normalizePathNode({
+    ...baseNode(`Polygon ${sides}`, x, y, w, h),
+    type: 'path',
+    points: createPolygonPathPoints(w, h, sides),
+    closed: true,
+    pathKind: 'polygon',
+    style: {
+      fill: '#6E8EFB',
+      stroke: '#00000000',
+      strokeWidth: 0,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+    },
+  });
+}
+
+export function createStarNode(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  pointsCount = 5,
+  innerRatio = 0.44,
+): PathNode {
+  const w = Math.max(8, width);
+  const h = Math.max(8, height);
+  return normalizePathNode({
+    ...baseNode('Star', x, y, w, h),
+    type: 'path',
+    points: createStarPathPoints(w, h, pointsCount, innerRatio),
+    closed: true,
+    pathKind: 'star',
+    style: {
+      fill: '#F2B56B',
+      stroke: '#00000000',
+      strokeWidth: 0,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+    },
+  });
+}
+
+export function createLineNode(
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  options: { arrowEnd?: boolean; stroke?: string; strokeWidth?: number } = {},
+): PathNode {
+  const line = createLinePathPoints(endX - startX, endY - startY);
+  const arrowEnd = Boolean(options.arrowEnd);
+  return {
+    ...baseNode(arrowEnd ? 'Arrow' : 'Line', startX + line.offsetX, startY + line.offsetY, line.width, line.height),
+    type: 'path',
+    points: line.points,
+    closed: false,
+    pathKind: arrowEnd ? 'arrow' : 'line',
+    style: {
+      fill: 'none',
+      stroke: options.stroke ?? '#20212A',
+      strokeWidth: options.strokeWidth ?? 3,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+      ...(arrowEnd ? { arrowEnd: true } : {}),
+    },
+  };
+}
+
+export function createVectorPathNode(
+  worldPoints: VectorAnchorPoint[],
+  options: {
+    name?: string;
+    closed?: boolean;
+    pathKind?: VectorPathKind;
+    fill?: string;
+    stroke?: string;
+    strokeWidth?: number;
+  } = {},
+): PathNode {
+  const closed = Boolean(options.closed);
+  return normalizePathNode({
+    ...baseNode(options.name ?? 'Vector Path', 0, 0, 1, 1),
+    type: 'path',
+    points: worldPoints,
+    closed,
+    pathKind: options.pathKind ?? 'pen',
+    style: {
+      fill: options.fill ?? (closed ? '#8B7CF6' : 'none'),
+      stroke: options.stroke ?? '#20212A',
+      strokeWidth: options.strokeWidth ?? (closed ? 0 : 3),
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+    },
+  });
 }
 
 export function createEllipseNode(index = 0): EllipseNode {

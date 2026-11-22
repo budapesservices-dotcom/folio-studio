@@ -123,7 +123,7 @@ describe('Native Command envelope and registry', () => {
     expect(executeNativeCommand(fixture.store, { ...valid, commandVersion: 2 }, fixture.context)).toMatchObject({
       status: 'rejected', code: 'UNSUPPORTED_COMMAND_VERSION',
     });
-    expect(executeNativeCommand(fixture.store, { ...valid, commandId: nextCommandId(), type: 'node.delete' }, fixture.context)).toMatchObject({
+    expect(executeNativeCommand(fixture.store, { ...valid, commandId: nextCommandId(), type: 'logic.create-node' }, fixture.context)).toMatchObject({
       status: 'rejected', code: 'UNKNOWN_COMMAND',
     });
     const inheritedRegistryKey = prepareNativeCommand(

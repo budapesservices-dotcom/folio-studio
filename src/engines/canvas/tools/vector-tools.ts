@@ -1,0 +1,633 @@
+import { createVectorPathNode } from '../../../core/document/factory';
+import type { PathNode, VectorAnchorPoint } from '../../../core/document/types';
+import {
+  createAnchorId,
+  findNearestSegmentHit,
+  fitCatmullRomToBezier,
+  insertAnchorOnPathSegment,
+  normalizePathNode,
+  simplifyFreehandToPathPoints,
+  smoothPathAnchors,
+  splitPathAtLocalPoint,
+  toggleAnchorPointType,
+} from '../../../core/document/vector';
+import {
+  DEFAULT_CANVAS_TOOL_OPTIONS,
+  type CanvasToolContext,
+  type CanvasToolHandler,
+  type CanvasToolTransition,
+  type PenDraftSession,
+} from './types';
+
+function createNodeId(prefix = 'node'): string {
+  const randomId = globalThis.crypto?.randomUUID?.();
+  return `${prefix}-${randomId ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+function finalizePenDraft(
+  session: PenDraftSession,
+  closed: boolean,
+  context: CanvasToolContext,
+): CanvasToolTransition {
+  if (session.points.length < 2) {
+    return { session: null, preventDefault: true };
+  }
+  const opts = context.toolOptions ?? DEFAULT_CANVAS_TOOL_OPTIONS;
+  const isTransparent = context.document.background === '#00000000' || context.document.background === 'transparent';
+  const strokeColor = isTransparent && opts.strokeColor === '#20212A' ? '#E6EAF2' : opts.strokeColor;
+  const finalPoints = session.mode === 'curvature' && session.rawCurvaturePoints
+    ? fitCatmullRomToBezier(session.rawCurvaturePoints, closed, 0.25)
+    : session.points;
+
+  const node = createVectorPathNode(finalPoints, {
+    name: session.mode === 'curvature' ? 'Curvature Path' : 'Vector Path',
+    closed,
+    pathKind: session.mode,
+    fill: closed ? opts.fillColor : 'none',
+    stroke: strokeColor,
+    strokeWidth: closed ? 0 : Math.max(2, opts.strokeWidth),
+  });
+
+  return {
+    createNodes: [node],
+    selection: [node.id],
+    session: null,
+    notice: closed ? 'Closed vector path created.' : 'Vector path created.',
+    preventDefault: true,
+  };
+}
+
+/**
+ * Adobe Illustrator & Figma Pen Tool (P):
+ * - Click to add sharp corner anchors.
+ * - Click-drag to pull symmetric cubic Bezier handles.
+ * - Click the first anchor (highlighted close ring) to close the shape.
+ * - Double-click or press Enter/Escape to commit an open path; Backspace removes last anchor.
+ */
+export const penTool: CanvasToolHandler = {
+  id: 'pen',
+  label: 'Pen',
+  shortcut: 'P',
+  group: 'vector',
+  icon: 'pen',
+  description: 'Click for corners, drag for cubic Bezier curves. Click first point to close; Enter to finish.',
+  onPointerDown(event, context): CanvasToolTransition {
+    if (event.button !== 0) return {};
+    const current = context.session?.kind === 'pen-draft' && context.session.mode === 'pen' ? context.session : null;
+
+    if (!current) {
+      const first: VectorAnchorPoint = {
+        id: createAnchorId('pen'),
+        x: Math.round(event.point.x * 100) / 100,
+        y: Math.round(event.point.y * 100) / 100,
+        pointType: 'corner',
+      };
+      return {
+        session: {
+          kind: 'pen-draft',
+          mode: 'pen',
+          points: [first],
+          draggingHandle: true,
+          pointerId: event.pointerId,
+          cursor: event.point,
+          hoverClose: false,
+        },
+        capturePointer: true,
+        preventDefault: true,
+      };
+    }
+
+    // Close path if clicking near first anchor with >= 3 points
+    const first = current.points[0];
+    if (current.points.length >= 3 && Math.hypot(event.point.x - first.x, event.point.y - first.y) <= 12) {
+      return finalizePenDraft(current, true, context);
+    }
+
+    // Double-click finishes open path cleanly
+    if ((event.detail ?? 0) >= 2 && current.points.length >= 2) {
+      return finalizePenDraft(current, false, context);
+    }
+
+    const nextAnchor: VectorAnchorPoint = {
+      id: createAnchorId('pen'),
+      x: Math.round(event.point.x * 100) / 100,
+      y: Math.round(event.point.y * 100) / 100,
+      pointType: 'corner',
+    };
+    return {
+      session: {
+        ...current,
+        points: [...current.points, nextAnchor],
+        draggingHandle: true,
+        pointerId: event.pointerId,
+        cursor: event.point,
+        hoverClose: false,
+      },
+      capturePointer: true,
+      preventDefault: true,
+    };
+  },
+  onPointerMove(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'pen-draft' || session.mode !== 'pen') return {};
+
+    if (session.draggingHandle && session.pointerId === event.pointerId && session.points.length > 0) {
+      const lastIndex = session.points.length - 1;
+      const anchor = session.points[lastIndex];
+      const dx = event.point.x - anchor.x;
+      const dy = event.point.y - anchor.y;
+      if (Math.hypot(dx, dy) >= 3) {
+        const updated: VectorAnchorPoint = {
+          ...anchor,
+          handleOut: { x: Math.round((anchor.x + dx) * 100) / 100, y: Math.round((anchor.y + dy) * 100) / 100 },
+          handleIn: { x: Math.round((anchor.x - dx) * 100) / 100, y: Math.round((anchor.y - dy) * 100) / 100 },
+          pointType: 'symmetric',
+        };
+        const points = [...session.points.slice(0, lastIndex), updated];
+        return { session: { ...session, points, cursor: event.point }, preventDefault: true };
+      }
+      return { session: { ...session, cursor: event.point }, preventDefault: true };
+    }
+
+    const first = session.points[0];
+    const hoverClose = session.points.length >= 3 && Math.hypot(event.point.x - first.x, event.point.y - first.y) <= 12;
+    return { session: { ...session, cursor: event.point, hoverClose } };
+  },
+  onPointerUp(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'pen-draft' || session.mode !== 'pen') return {};
+    if (session.pointerId !== event.pointerId) return {};
+    return {
+      session: { ...session, draggingHandle: false, pointerId: null, cursor: event.point },
+      preventDefault: true,
+    };
+  },
+  onPointerCancel(_event, context) {
+    return context.session?.kind === 'pen-draft' ? { session: null } : {};
+  },
+  onKeyDown(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'pen-draft' || session.mode !== 'pen') return {};
+    if (event.key === 'Enter') {
+      return finalizePenDraft(session, false, context);
+    }
+    if (event.key === 'Escape') {
+      return session.points.length >= 2 ? finalizePenDraft(session, false, context) : { session: null, preventDefault: true };
+    }
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      if (session.points.length <= 1) return { session: null, preventDefault: true };
+      return { session: { ...session, points: session.points.slice(0, -1) }, preventDefault: true };
+    }
+    return {};
+  },
+  renderOverlay(context) {
+    const session = context.session;
+    if (!session || session.kind !== 'pen-draft' || session.mode !== 'pen') return null;
+    return {
+      kind: 'pen-draft',
+      points: session.points,
+      cursor: session.cursor,
+      hoverClose: session.hoverClose,
+    };
+  },
+  cursorStyle() {
+    return 'crosshair';
+  },
+};
+
+/**
+ * Adobe Illustrator Curvature Tool (U):
+ * Click points to automatically sculpt silky smooth Catmull-Rom Bezier curves.
+ * Alt+Click (or double-click) drops a sharp corner anchor. Click first point to close!
+ */
+export const curvatureTool: CanvasToolHandler = {
+  id: 'curvature',
+  label: 'Curvature',
+  shortcut: 'U',
+  group: 'vector',
+  icon: 'curvature',
+  workspaces: ['component'],
+  description: 'Illustrator Curvature tool: click for auto-smooth curves, Alt+click for sharp corners, click start to close.',
+  onPointerDown(event, context): CanvasToolTransition {
+    if (event.button !== 0) return {};
+    const current = context.session?.kind === 'pen-draft' && context.session.mode === 'curvature' ? context.session : null;
+
+    if (!current) {
+      const raw = [{ x: Math.round(event.point.x * 100) / 100, y: Math.round(event.point.y * 100) / 100, corner: event.altKey }];
+      return {
+        session: {
+          kind: 'pen-draft',
+          mode: 'curvature',
+          points: fitCatmullRomToBezier(raw, false),
+          rawCurvaturePoints: raw,
+          draggingHandle: false,
+          pointerId: null,
+          cursor: event.point,
+          hoverClose: false,
+        },
+        preventDefault: true,
+      };
+    }
+
+    const rawPoints = current.rawCurvaturePoints ?? [];
+    if (rawPoints.length >= 3 && Math.hypot(event.point.x - rawPoints[0].x, event.point.y - rawPoints[0].y) <= 12) {
+      return finalizePenDraft(current, true, context);
+    }
+
+    const nextRaw = [
+      ...rawPoints,
+      { x: Math.round(event.point.x * 100) / 100, y: Math.round(event.point.y * 100) / 100, corner: event.altKey },
+    ];
+    return {
+      session: {
+        ...current,
+        rawCurvaturePoints: nextRaw,
+        points: fitCatmullRomToBezier(nextRaw, false),
+        cursor: event.point,
+        hoverClose: false,
+      },
+      preventDefault: true,
+    };
+  },
+  onPointerMove(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'pen-draft' || session.mode !== 'curvature') return {};
+    const raw = session.rawCurvaturePoints ?? [];
+    const hoverClose = raw.length >= 3 && Math.hypot(event.point.x - raw[0].x, event.point.y - raw[0].y) <= 12;
+    return { session: { ...session, cursor: event.point, hoverClose } };
+  },
+  onPointerUp() {
+    return {};
+  },
+  onPointerCancel(_event, context) {
+    return context.session?.kind === 'pen-draft' ? { session: null } : {};
+  },
+  onKeyDown(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'pen-draft' || session.mode !== 'curvature') return {};
+    if (event.key === 'Enter' || event.key === 'Escape') {
+      return session.points.length >= 2 ? finalizePenDraft(session, false, context) : { session: null, preventDefault: true };
+    }
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      const raw = (session.rawCurvaturePoints ?? []).slice(0, -1);
+      if (raw.length === 0) return { session: null, preventDefault: true };
+      return {
+        session: { ...session, rawCurvaturePoints: raw, points: fitCatmullRomToBezier(raw, false) },
+        preventDefault: true,
+      };
+    }
+    return {};
+  },
+  renderOverlay(context) {
+    const session = context.session;
+    if (!session || session.kind !== 'pen-draft' || session.mode !== 'curvature') return null;
+    return {
+      kind: 'pen-draft',
+      points: session.points,
+      cursor: session.cursor,
+      hoverClose: session.hoverClose,
+    };
+  },
+  cursorStyle() {
+    return 'crosshair';
+  },
+};
+
+/**
+ * Adobe Illustrator Anchor Point / Convert Tool (Shift+C):
+ * - Click an anchor to convert smooth ↔ corner.
+ * - Drag from an anchor to pull fresh symmetric Bezier handles.
+ * - Click any path segment to insert a new anchor point via de Casteljau subdivision!
+ */
+export const anchorPointTool: CanvasToolHandler = {
+  id: 'anchor-point',
+  label: 'Anchor Point',
+  shortcut: 'Shift+C',
+  group: 'vector',
+  icon: 'anchorPoint',
+  workspaces: ['component'],
+  description: 'Illustrator Anchor Point tool: click anchor to toggle corner/smooth, drag to pull handles, click segment to add anchor.',
+  onPointerDown(event, context): CanvasToolTransition {
+    if (event.button !== 0) return {};
+
+    if (event.anchorHit) {
+      const pathNode = context.selectableNodes.find(
+        (node): node is PathNode => node.id === event.anchorHit?.nodeId && node.type === 'path',
+      );
+      if (!pathNode) return {};
+      if (event.anchorHit.part === 'anchor') {
+        return {
+          selection: [pathNode.id],
+          session: {
+            kind: 'anchor-edit',
+            pointerId: event.pointerId,
+            node: pathNode,
+            pointIndex: event.anchorHit.pointIndex,
+            part: 'anchor',
+            start: event.point,
+            symmetricConvert: true,
+          },
+          capturePointer: true,
+          preventDefault: true,
+        };
+      }
+      // Dragging an individual handle breaks tangent symmetry into independent corner handle
+      return {
+        selection: [pathNode.id],
+        session: {
+          kind: 'anchor-edit',
+          pointerId: event.pointerId,
+          node: pathNode,
+          pointIndex: event.anchorHit.pointIndex,
+          part: event.anchorHit.part,
+          start: event.point,
+        },
+        capturePointer: true,
+        preventDefault: true,
+      };
+    }
+
+    // Clicking on a PathNode segment inserts a brand new anchor point cleanly!
+    const targetPath = context.selectedNodes.find((n): n is PathNode => n.type === 'path') ??
+      context.selectableNodes.find((n): n is PathNode => n.id === event.targetNodeId && n.type === 'path');
+    if (targetPath) {
+      const localPoint = { x: event.point.x - targetPath.x, y: event.point.y - targetPath.y };
+      const hit = findNearestSegmentHit(targetPath, localPoint, 16);
+      if (hit) {
+        const { node: subdivided } = insertAnchorOnPathSegment(targetPath, hit.segmentIndex, hit.t);
+        return {
+          selection: [subdivided.id],
+          commitNodes: [subdivided],
+          notice: 'Added anchor point on path segment.',
+          preventDefault: true,
+        };
+      }
+      return { selection: [targetPath.id], preventDefault: true };
+    }
+    return {};
+  },
+  onPointerMove(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'anchor-edit' || session.pointerId !== event.pointerId) return {};
+
+    const anchor = session.node.points[session.pointIndex];
+    if (!anchor) return {};
+
+    if (session.symmetricConvert) {
+      const dx = event.point.x - (session.node.x + anchor.x);
+      const dy = event.point.y - (session.node.y + anchor.y);
+      if (Math.hypot(dx, dy) < 3) return {};
+      const points = session.node.points.map((pt, idx) =>
+        idx === session.pointIndex
+          ? {
+              ...pt,
+              handleOut: { x: Math.round((pt.x + dx) * 100) / 100, y: Math.round((pt.y + dy) * 100) / 100 },
+              handleIn: { x: Math.round((pt.x - dx) * 100) / 100, y: Math.round((pt.y - dy) * 100) / 100 },
+              pointType: 'symmetric' as const,
+            }
+          : pt,
+      );
+      const previewNode = normalizePathNode({ ...session.node, points });
+      return { session: { ...session, previewNode }, previewNodes: [previewNode], preventDefault: true };
+    }
+
+    // Independent handle break
+    const localX = Math.round((event.point.x - session.node.x) * 100) / 100;
+    const localY = Math.round((event.point.y - session.node.y) * 100) / 100;
+    const points = session.node.points.map((pt, idx) =>
+      idx === session.pointIndex
+        ? {
+            ...pt,
+            ...(session.part === 'handle-out' ? { handleOut: { x: localX, y: localY } } : { handleIn: { x: localX, y: localY } }),
+            pointType: 'corner' as const,
+          }
+        : pt,
+    );
+    const previewNode = normalizePathNode({ ...session.node, points });
+    return { session: { ...session, previewNode }, previewNodes: [previewNode], preventDefault: true };
+  },
+  onPointerUp(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'anchor-edit' || session.pointerId !== event.pointerId) return {};
+    if (session.previewNode) {
+      return { commitNodes: [session.previewNode], session: null, previewNodes: null, preventDefault: true };
+    }
+    // Plain click without drag -> toggle corner <-> smooth
+    if (session.symmetricConvert) {
+      const toggled = toggleAnchorPointType(session.node, session.pointIndex);
+      return { commitNodes: [toggled], session: null, previewNodes: null, preventDefault: true };
+    }
+    return { session: null, previewNodes: null, preventDefault: true };
+  },
+  onPointerCancel(_event, context) {
+    return context.session?.kind === 'anchor-edit' ? { session: null, previewNodes: null } : {};
+  },
+  onKeyDown(event, context) {
+    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null } : {};
+  },
+  renderOverlay() {
+    return null;
+  },
+  cursorStyle() {
+    return 'crosshair';
+  },
+};
+
+/**
+ * Figma & Illustrator Pencil Tool (N):
+ * Draw freehand strokes; automatically simplifies via Douglas-Peucker and fits
+ * smooth cubic Bezier curves on pointer release.
+ */
+export const pencilTool: CanvasToolHandler = {
+  id: 'pencil',
+  label: 'Pencil',
+  shortcut: 'N',
+  group: 'vector',
+  icon: 'pencil',
+  description: 'Draw smooth freehand vector strokes. Automatically simplifies into editable Bezier paths.',
+  onPointerDown(event): CanvasToolTransition {
+    if (event.button !== 0) return {};
+    return {
+      session: { kind: 'freehand', mode: 'pencil', pointerId: event.pointerId, points: [event.point] },
+      capturePointer: true,
+      preventDefault: true,
+    };
+  },
+  onPointerMove(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'freehand' || session.mode !== 'pencil' || session.pointerId !== event.pointerId) {
+      return {};
+    }
+    const last = session.points[session.points.length - 1];
+    if (Math.hypot(event.point.x - last.x, event.point.y - last.y) < 3) return {};
+    return {
+      session: { ...session, points: [...session.points, event.point] },
+      preventDefault: true,
+    };
+  },
+  onPointerUp(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'freehand' || session.mode !== 'pencil' || session.pointerId !== event.pointerId) {
+      return {};
+    }
+    const raw = [...session.points, event.point];
+    if (raw.length < 2) return { session: null, preventDefault: true };
+    const { points, closed } = simplifyFreehandToPathPoints(raw, 4);
+    if (points.length < 2) return { session: null, preventDefault: true };
+    const opts = context.toolOptions ?? DEFAULT_CANVAS_TOOL_OPTIONS;
+    const isTransparent = context.document.background === '#00000000' || context.document.background === 'transparent';
+    const strokeColor = isTransparent && opts.strokeColor === '#20212A' ? '#E6EAF2' : opts.strokeColor;
+    const node = createVectorPathNode(points, {
+      name: 'Pencil Stroke',
+      closed,
+      pathKind: 'pencil',
+      fill: closed ? opts.fillColor : 'none',
+      stroke: strokeColor,
+      strokeWidth: Math.max(2, opts.strokeWidth),
+    });
+    return {
+      createNodes: [node],
+      selection: [node.id],
+      session: null,
+      preventDefault: true,
+    };
+  },
+  onPointerCancel(_event, context) {
+    return context.session?.kind === 'freehand' ? { session: null } : {};
+  },
+  onKeyDown(event, context) {
+    return event.key === 'Escape' && context.session?.kind === 'freehand' ? { session: null } : {};
+  },
+  renderOverlay(context) {
+    const session = context.session;
+    if (!session || session.kind !== 'freehand' || session.mode !== 'pencil') return null;
+    return { kind: 'freehand', points: session.points, mode: 'pencil' };
+  },
+  cursorStyle() {
+    return 'crosshair';
+  },
+};
+
+/**
+ * Adobe Illustrator Smooth Tool (Shift+N):
+ * Drag across any selected vector path to smoothly relax jagged anchors & curves.
+ */
+export const smoothTool: CanvasToolHandler = {
+  id: 'smooth',
+  label: 'Smooth',
+  shortcut: 'Shift+N',
+  group: 'vector',
+  icon: 'smooth',
+  workspaces: ['component'],
+  description: 'Illustrator Smooth tool: drag across a selected vector path to relax and smooth jagged curves.',
+  onPointerDown(event, context): CanvasToolTransition {
+    if (event.button !== 0) return {};
+    const target = context.selectedNodes.find((n): n is PathNode => n.type === 'path') ??
+      context.selectableNodes.find((n): n is PathNode => n.id === event.targetNodeId && n.type === 'path');
+    if (!target) {
+      return { notice: 'Select a vector path first to smooth its curves.', preventDefault: true };
+    }
+    return {
+      selection: [target.id],
+      session: {
+        kind: 'freehand',
+        mode: 'smooth',
+        pointerId: event.pointerId,
+        points: [event.point],
+        targetNode: target,
+      },
+      capturePointer: true,
+      preventDefault: true,
+    };
+  },
+  onPointerMove(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'freehand' || session.mode !== 'smooth' || session.pointerId !== event.pointerId) {
+      return {};
+    }
+    const nextPoints = [...session.points, event.point];
+    const radius = context.toolOptions?.smoothRadius ?? DEFAULT_CANVAS_TOOL_OPTIONS.smoothRadius;
+    const previewNode = session.targetNode ? smoothPathAnchors(session.targetNode, nextPoints, radius) : undefined;
+    return {
+      session: { ...session, points: nextPoints, previewNode },
+      ...(previewNode ? { previewNodes: [previewNode] } : {}),
+      preventDefault: true,
+    };
+  },
+  onPointerUp(event, context): CanvasToolTransition {
+    const session = context.session;
+    if (!session || session.kind !== 'freehand' || session.mode !== 'smooth' || session.pointerId !== event.pointerId) {
+      return {};
+    }
+    return {
+      ...(session.previewNode ? { commitNodes: [session.previewNode], notice: 'Smoothed vector path.' } : {}),
+      session: null,
+      previewNodes: null,
+      preventDefault: true,
+    };
+  },
+  onPointerCancel(_event, context) {
+    return context.session?.kind === 'freehand' ? { session: null, previewNodes: null } : {};
+  },
+  onKeyDown(event, context) {
+    return event.key === 'Escape' && context.session ? { session: null, previewNodes: null } : {};
+  },
+  renderOverlay(context) {
+    const session = context.session;
+    if (!session || session.kind !== 'freehand' || session.mode !== 'smooth') return null;
+    return { kind: 'freehand', points: session.points, mode: 'smooth' };
+  },
+  cursorStyle() {
+    return 'crosshair';
+  },
+};
+
+/**
+ * Adobe Illustrator Scissors Tool (C):
+ * Click anywhere along a PathNode segment to open a closed path or split an open
+ * path into two separate editable PathNodes!
+ */
+export const scissorsTool: CanvasToolHandler = {
+  id: 'scissors',
+  label: 'Scissors',
+  shortcut: 'C',
+  group: 'vector',
+  icon: 'scissors',
+  workspaces: ['component'],
+  description: 'Illustrator Scissors tool: click any vector path segment to open or split the path in two.',
+  onPointerDown(event, context): CanvasToolTransition {
+    if (event.button !== 0) return {};
+    const target = context.selectedNodes.find((n): n is PathNode => n.type === 'path') ??
+      context.selectableNodes.find((n): n is PathNode => n.id === event.targetNodeId && n.type === 'path');
+    if (!target) {
+      return { notice: 'Click a vector path segment to cut or split it.', preventDefault: true };
+    }
+    const localPoint = { x: event.point.x - target.x, y: event.point.y - target.y };
+    const split = splitPathAtLocalPoint(target, localPoint, () => createNodeId('node'));
+    if (!split) {
+      return { notice: 'Click directly on a vector path edge to cut.', preventDefault: true };
+    }
+    if (split.length === 1) {
+      return {
+        commitNodes: split,
+        selection: [split[0].id],
+        notice: 'Opened vector path at cut point.',
+        preventDefault: true,
+      };
+    }
+    return {
+      replaceNodeWithNodes: { nodeId: target.id, nodes: split },
+      selection: split.map((item) => item.id),
+      notice: 'Split path into two editable vector paths.',
+      preventDefault: true,
+    };
+  },
+  onPointerMove() { return {}; },
+  onPointerUp() { return {}; },
+  onPointerCancel() { return {}; },
+  onKeyDown() { return {}; },
+  renderOverlay() { return null; },
+  cursorStyle() {
+    return 'crosshair';
+  },
+};

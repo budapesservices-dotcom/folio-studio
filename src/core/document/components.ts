@@ -1,6 +1,7 @@
-import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from './types';
+import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument, PathNode } from './types';
 import { createEmptyDocument } from './factory';
 import { expandSelectedLayerIds } from './layers';
+import { scalePathNodeGeometry } from './vector';
 
 function createNodeId(instanceId: string, childId: string): string {
   return `${instanceId}__${childId}`;
@@ -30,7 +31,7 @@ export function applyComponentOverrides(
     ...(override.text !== undefined ? { text: override.text } : {}),
     style: { ...node.style, ...(override.fill !== undefined ? { fill: override.fill } : {}) },
   };
-  if (node.type === 'rect' || node.type === 'ellipse') return {
+  if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path') return {
     ...node, style: { ...node.style, ...(override.fill !== undefined ? { fill: override.fill } : {}) },
   };
   return node;
@@ -46,13 +47,13 @@ export function resolveComponentInstanceNodes(
 
 export function getComponentOverrideTargets(component: ComponentDefinition): {
   textNode: Extract<DesignNode, { type: 'text' }> | undefined;
-  fillNode: Extract<DesignNode, { type: 'rect' | 'ellipse' | 'text' }> | undefined;
+  fillNode: Extract<DesignNode, { type: 'rect' | 'ellipse' | 'frame' | 'path' | 'text' }> | undefined;
 } {
   const nodes = component.document.nodes;
   return {
     textNode: nodes.find((node): node is Extract<DesignNode, { type: 'text' }> => node.type === 'text'),
-    fillNode: nodes.find((node): node is Extract<DesignNode, { type: 'rect' | 'ellipse' | 'text' }> =>
-      node.type === 'rect' || node.type === 'ellipse' || node.type === 'text'),
+    fillNode: nodes.find((node): node is Extract<DesignNode, { type: 'rect' | 'ellipse' | 'frame' | 'path' | 'text' }> =>
+      node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path' || node.type === 'text'),
   };
 }
 
@@ -79,7 +80,7 @@ export function detachComponentInstance(instance: ComponentInstanceNode, compone
     const dy = localCenterY - centerY;
     const rotatedX = centerX + dx * cos - dy * sin;
     const rotatedY = centerY + dx * sin + dy * cos;
-    return {
+    const baseDetached = {
       ...effective,
       id: detachedIds.get(sourceNode.id)!,
       parentId: sourceNode.parentId ? (detachedIds.get(sourceNode.parentId) ?? instance.parentId) : instance.parentId,
@@ -93,7 +94,29 @@ export function detachComponentInstance(instance: ComponentInstanceNode, compone
       visible: sourceNode.visible && instance.visible,
       locked: sourceNode.locked || instance.locked,
       onCanvas: instance.onCanvas !== false && sourceNode.onCanvas !== false,
-    } as DesignNode;
+    };
+    if (effective.type === 'path') {
+      const pathCandidate: PathNode = {
+        ...effective,
+        id: baseDetached.id,
+        parentId: baseDetached.parentId,
+        clipMaskBaseId: baseDetached.clipMaskBaseId,
+        name: baseDetached.name,
+        rotation: baseDetached.rotation,
+        opacity: baseDetached.opacity,
+        visible: baseDetached.visible,
+        locked: baseDetached.locked,
+        onCanvas: baseDetached.onCanvas,
+      };
+      return scalePathNodeGeometry(
+        pathCandidate,
+        baseDetached.x,
+        baseDetached.y,
+        width,
+        height,
+      );
+    }
+    return baseDetached as DesignNode;
   });
 }
 

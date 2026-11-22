@@ -1,4 +1,5 @@
 import type { DesignNode } from '../../core/document/types';
+import { scalePathNodeGeometry } from '../../core/document/vector';
 
 export interface Bounds {
   x: number;
@@ -110,6 +111,7 @@ export function resizeNodes(
   handle: ResizeHandle,
   dx: number,
   dy: number,
+  options: { uniformScale?: boolean } = {},
 ): DesignNode[] {
   const minimum = 8;
   let left = bounds.x;
@@ -118,11 +120,10 @@ export function resizeNodes(
   let bottom = bounds.y + bounds.height;
 
   const isCorner = handle === 'nw' || handle === 'ne' || handle === 'se' || handle === 'sw';
-  if (isCorner) {
-    // Corner handles keep the selection's aspect ratio. The opposite corner
-    // stays anchored while the dominant pointer axis determines the scale.
-    const signedWidthChange = (handle.includes('e') ? dx : -dx) / Math.max(minimum, bounds.width);
-    const signedHeightChange = (handle.includes('s') ? dy : -dy) / Math.max(minimum, bounds.height);
+  if (isCorner || options.uniformScale) {
+    // Corner handles (and Figma Scale Tool K) preserve aspect ratio.
+    const signedWidthChange = (handle.includes('e') ? dx : handle.includes('w') ? -dx : 0) / Math.max(minimum, bounds.width);
+    const signedHeightChange = (handle.includes('s') ? dy : handle.includes('n') ? -dy : 0) / Math.max(minimum, bounds.height);
     const scaleChange = Math.abs(signedWidthChange) >= Math.abs(signedHeightChange)
       ? signedWidthChange
       : signedHeightChange;
@@ -161,7 +162,6 @@ export function resizeNodes(
     const width = Math.max(minimum, node.width * scaleX);
     const height = Math.max(minimum, node.height * scaleY);
 
-    // Preserve each discriminated node type and its corresponding style schema.
     if (node.type === 'text') {
       return {
         ...node,
@@ -176,7 +176,7 @@ export function resizeNodes(
       };
     }
 
-    if (node.type === 'rect') {
+    if (node.type === 'rect' || node.type === 'frame') {
       return {
         ...node,
         x,
@@ -186,8 +186,35 @@ export function resizeNodes(
         style: {
           ...node.style,
           radius: node.style.radius === undefined ? undefined : node.style.radius * fontScale,
+          strokeWidth: options.uniformScale
+            ? Math.max(0, Math.round(node.style.strokeWidth * fontScale * 100) / 100)
+            : node.style.strokeWidth,
         },
       };
+    }
+
+    if (node.type === 'ellipse') {
+      return {
+        ...node,
+        x,
+        y,
+        width,
+        height,
+        style: options.uniformScale
+          ? { ...node.style, strokeWidth: Math.max(0, Math.round(node.style.strokeWidth * fontScale * 100) / 100) }
+          : node.style,
+      };
+    }
+
+    if (node.type === 'path') {
+      return scalePathNodeGeometry(
+        node,
+        x,
+        y,
+        width,
+        height,
+        options.uniformScale ? fontScale : undefined,
+      );
     }
 
     return { ...node, x, y, width, height };

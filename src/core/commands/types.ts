@@ -1,4 +1,6 @@
 import type { DocumentAddress, NativeNodeRef } from '../document/ast';
+import type { LayerDropPosition } from '../document/layers';
+import type { DesignNode } from '../document/types';
 
 export type NativeWorkspace =
   | 'main'
@@ -75,6 +77,18 @@ export interface NativeCommandEnvelope<TType extends string, TPayload> {
   metadata?: NativeCommandMetadata;
 }
 
+export interface ProjectRenamePayload {
+  name: string;
+}
+
+export interface NodeCreatePayload {
+  nodes: DesignNode[];
+}
+
+export interface NodeReplacePayload {
+  node: DesignNode;
+}
+
 export type NativeNodeTransform = {
   x?: number;
   y?: number;
@@ -101,9 +115,91 @@ export interface NodeSetPropertiesPayload {
   };
 }
 
+export interface NodeRenamePayload {
+  updates: Array<{
+    ref: NativeNodeRef;
+    name: string;
+  }>;
+}
+
+export interface NodeDeletePayload {
+  nodes: NativeNodeRef[];
+}
+
+export interface NodeSetCanvasStatePayload {
+  nodes: NativeNodeRef[];
+  onCanvas: boolean;
+}
+
+export interface LayerMovePayload {
+  node: NativeNodeRef;
+  target: NativeNodeRef;
+  position: LayerDropPosition;
+}
+
+export interface LayerMoveManyPayload {
+  nodes: NativeNodeRef[];
+  target: NativeNodeRef;
+  position: LayerDropPosition;
+}
+
+export interface LayerGroupPayload {
+  nodes: NativeNodeRef[];
+}
+
+export interface LayerUngroupPayload {
+  nodes: NativeNodeRef[];
+}
+
+export interface LayerClippingMaskPayload {
+  node: NativeNodeRef;
+}
+
+export type ProjectRenameCommand = NativeCommandEnvelope<'project.rename', ProjectRenamePayload>;
+export type NodeCreateCommand = NativeCommandEnvelope<'node.create', NodeCreatePayload>;
+export type NodeReplaceCommand = NativeCommandEnvelope<'node.replace', NodeReplacePayload>;
 export type NodeTransformCommand = NativeCommandEnvelope<'node.transform', NodeTransformPayload>;
 export type NodeSetPropertiesCommand = NativeCommandEnvelope<'node.set-properties', NodeSetPropertiesPayload>;
-export type NativeCommand = NodeTransformCommand | NodeSetPropertiesCommand;
+export type NodeRenameCommand = NativeCommandEnvelope<'node.rename', NodeRenamePayload>;
+export type NodeDeleteCommand = NativeCommandEnvelope<'node.delete', NodeDeletePayload>;
+export type NodeSetCanvasStateCommand = NativeCommandEnvelope<'node.set-canvas-state', NodeSetCanvasStatePayload>;
+export type LayerMoveCommand = NativeCommandEnvelope<'layer.move', LayerMovePayload>;
+export type LayerMoveManyCommand = NativeCommandEnvelope<'layer.move-many', LayerMoveManyPayload>;
+export type LayerGroupCommand = NativeCommandEnvelope<'layer.group', LayerGroupPayload>;
+export type LayerUngroupCommand = NativeCommandEnvelope<'layer.ungroup', LayerUngroupPayload>;
+export type LayerCreateClippingMaskCommand = NativeCommandEnvelope<'layer.create-clipping-mask', LayerClippingMaskPayload>;
+export type LayerRemoveClippingMaskCommand = NativeCommandEnvelope<'layer.remove-clipping-mask', LayerClippingMaskPayload>;
+
+export type NativeCommandPayload =
+  | ProjectRenamePayload
+  | NodeCreatePayload
+  | NodeReplacePayload
+  | NodeTransformPayload
+  | NodeSetPropertiesPayload
+  | NodeRenamePayload
+  | NodeDeletePayload
+  | NodeSetCanvasStatePayload
+  | LayerMovePayload
+  | LayerMoveManyPayload
+  | LayerGroupPayload
+  | LayerUngroupPayload
+  | LayerClippingMaskPayload;
+
+export type NativeCommand =
+  | ProjectRenameCommand
+  | NodeCreateCommand
+  | NodeReplaceCommand
+  | NodeTransformCommand
+  | NodeSetPropertiesCommand
+  | NodeRenameCommand
+  | NodeDeleteCommand
+  | NodeSetCanvasStateCommand
+  | LayerMoveCommand
+  | LayerMoveManyCommand
+  | LayerGroupCommand
+  | LayerUngroupCommand
+  | LayerCreateClippingMaskCommand
+  | LayerRemoveClippingMaskCommand;
 
 export interface NativeCommandWarning {
   code: string;

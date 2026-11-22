@@ -214,15 +214,31 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const nodes = document.nodes.map((node) => {
         const replacement = updates.get(node.id);
         if (!replacement) return node;
-        if (
+        const sameGeometry =
           replacement.x === node.x &&
           replacement.y === node.y &&
           replacement.width === node.width &&
           replacement.height === node.height &&
           replacement.rotation === node.rotation &&
-          replacement.onCanvas === node.onCanvas &&
-          (node.type !== 'text' || replacement.type !== 'text' || replacement.style.fontSize === node.style.fontSize)
-        ) return node;
+          replacement.onCanvas === node.onCanvas;
+        const sameTypeSpecific =
+          node.type === replacement.type &&
+          (node.type === 'text'
+            ? replacement.type === 'text' && replacement.style.fontSize === node.style.fontSize
+            : node.type === 'path'
+              ? replacement.type === 'path'
+                && replacement.closed === node.closed
+                && replacement.style.strokeWidth === node.style.strokeWidth
+                && JSON.stringify(replacement.points) === JSON.stringify(node.points)
+                && JSON.stringify(replacement.subpaths ?? []) === JSON.stringify(node.subpaths ?? [])
+              : node.type === 'rect' || node.type === 'frame'
+                ? (replacement.type === node.type)
+                  && replacement.style.strokeWidth === node.style.strokeWidth
+                  && replacement.style.radius === node.style.radius
+                : node.type === 'ellipse'
+                  ? replacement.type === 'ellipse' && replacement.style.strokeWidth === node.style.strokeWidth
+                  : true);
+        if (sameGeometry && sameTypeSpecific) return node;
         changed = true;
         return replacement;
       });
