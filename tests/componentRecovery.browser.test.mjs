@@ -222,7 +222,8 @@ async function launchChromiumAttempt(path, attemptNumber) {
         'const top=Math.max(0,rect.top),bottom=Math.min(innerHeight,rect.bottom); ' +
         'if(right<=left||bottom<=top) throw new Error("Click target outside viewport"); ' +
         'const p={x:left+(right-left)/2,y:top+(bottom-top)/2}; const hit=document.elementFromPoint(p.x,p.y); ' +
-        'if(!hit||!(hit===element||element.contains(hit))) throw new Error("Click target occluded"); return p; })()',
+        'if(!hit||!(hit===element||element.contains(hit))) throw new Error("Click target occluded by " + ' +
+      '(hit?.outerHTML?.slice(0,360)||"nothing") + " at " + JSON.stringify({point:p,target:element.outerHTML?.slice(0,240),viewport:{width:innerWidth,height:innerHeight}})); return p; })()',
       );
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
