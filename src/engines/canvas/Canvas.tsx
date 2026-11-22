@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
-import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from '../../core/document/types';
-import { resolveComponentInstanceNodes } from '../../core/document/components';
-import { getEffectiveLayerStates, getLayerRenderOrder, getLayerDescendantIds, getLayerClipMaskBaseIds } from '../../core/document/layers';
+import type { ComponentDefinition, DesignNode, FolioDocument } from '../../core/document/types';
+import { getEffectiveLayerStates, getLayerRenderOrder, getLayerClipMaskBaseIds } from '../../core/document/layers';
+import { DocumentMaskDefs, MaskedNodeArtwork, sanitizeMaskIdSegment } from './artwork';
 import { getBounds, type Bounds, type ResizeHandle, type SnapGuide } from './geometry';
 import { getCanvasTool } from './tools/registry';
 import type { CanvasToolContext, CanvasToolId, CanvasToolPointerInput, CanvasToolSession, CanvasToolTransition } from './tools/types';
@@ -48,142 +48,6 @@ function toCanvasPoint(svg: SVGSVGElement, clientX: number, clientY: number): { 
   };
 }
 
-type PrimitiveNode = Exclude<DesignNode, ComponentInstanceNode>;
-
-function NodeShape({ node, mask = false }: { node: PrimitiveNode; mask?: boolean }) {
-  const transform = node.rotation
-    ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
-    : undefined;
-
-  return (
-    <g transform={transform} opacity={node.opacity} class="canvas-node" >
-      {node.type === 'group' && (
-        <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="transparent" pointerEvents="all" />
-      )}
-      {node.type === 'rect' && (
-        <rect x={node.x} y={node.y} width={node.width} height={node.height}
-          rx={node.style.radius ?? 0}
-          fill={mask ? (node.style.fill === 'none' ? 'none' : '#fff') : node.style.fill}
-          stroke={mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke} strokeWidth={node.style.strokeWidth} />
-      )}
-      {node.type === 'ellipse' && (
-        <ellipse cx={node.x + node.width / 2} cy={node.y + node.height / 2}
-          rx={node.width / 2} ry={node.height / 2}
-          fill={mask ? (node.style.fill === 'none' ? 'none' : '#fff') : node.style.fill}
-          stroke={mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke} strokeWidth={node.style.strokeWidth} />
-      )}
-      {node.type === 'text' && (
-        <text x={node.x} y={node.y} fill={mask ? '#fff' : node.style.fill} fontSize={node.style.fontSize}
-          fontFamily={node.style.fontFamily} fontWeight={node.style.fontWeight}
-          letterSpacing={node.style.letterSpacing} dominantBaseline="hanging">
-          {node.text.split('\\n').map((line, index) => (
-            <tspan key={node.id + '-' + index} x={node.x} dy={index === 0 ? 0 : node.style.fontSize * node.style.lineHeight}>
-              {line || ' '}
-            </tspan>
-          ))}
-        </text>
-      )}
-    </g>
-  );
-}
-
-function NodeArtwork({ node, components = [] }: { node: DesignNode; components?: ComponentDefinition[] }) {
-  if (node.type === 'component-instance') {
-    const component = components.find((item) => item.id === node.componentId);
-    const scaleX = component ? node.width / Math.max(1, component.document.width) : 1;
-    const scaleY = component ? node.height / Math.max(1, component.document.height) : 1;
-    const transform = node.rotation
-      ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
-      : undefined;
-    const resolvedChildren = component ? resolveComponentInstanceNodes(node, component) : [];
-    const childStates = getEffectiveLayerStates(resolvedChildren);
-    return (
-      <g data-node-id={node.id} transform={transform} opacity={node.opacity} class="canvas-node component-instance-artwork">
-        {component ? (
-          <g transform={'translate(' + node.x + ' ' + node.y + ') scale(' + scaleX + ' ' + scaleY + ')'}>
-            {getLayerRenderOrder(resolvedChildren).filter((child) => child.onCanvas !== false && childStates.get(child.id)?.visible).map((effective) => (
-              effective.type === 'component-instance'
-                ? null
-                : <NodeShape key={effective.id} node={effective} />
-            ))}
-          </g>
-        ) : (
-          <rect x={node.x} y={node.y} width={node.width} height={node.height}
-            fill="none" stroke="#D45B5B" strokeDasharray="6 4" strokeWidth="2" />
-        )}
-      </g>
-    );
-  }
-
-  return <g data-node-id={node.id}><NodeShape node={node as PrimitiveNode} /></g>;
-}
-
-/** Paint a base layer's alpha silhouette into an SVG mask. Group bases use their descendants. */
-function ClipMaskArtwork({ node, nodes, components }: {
-  node: DesignNode;
-  nodes: DesignNode[];
-  components: ComponentDefinition[];
-}) {
-  if (node.type === 'group') {
-    const states = getEffectiveLayerStates(nodes);
-    const descendants = [...getLayerDescendantIds(nodes, node.id)]
-      .map((id) => nodes.find((item) => item.id === id))
-      .filter((item): item is DesignNode => item !== undefined && item.type !== 'group' && Boolean(states.get(item.id)?.visible));
-    if (descendants.length === 0) {
-      return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#fff" opacity={node.opacity} />;
-    }
-    return (
-      <g>
-        {descendants.map((child) => (
-          <ClipMaskArtwork key={child.id} node={child} nodes={nodes} components={components} />
-        ))}
-      </g>
-    );
-  }
-
-  if (node.type === 'component-instance') {
-    const component = components.find((item) => item.id === node.componentId);
-    if (!component) {
-      const transform = node.rotation
-        ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
-        : undefined;
-      return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#fff" opacity={node.opacity} transform={transform} />;
-    }
-    const scaleX = node.width / Math.max(1, component.document.width);
-    const scaleY = node.height / Math.max(1, component.document.height);
-    const transform = node.rotation
-      ? 'rotate(' + node.rotation + ' ' + (node.x + node.width / 2) + ' ' + (node.y + node.height / 2) + ')'
-      : undefined;
-    const resolved = resolveComponentInstanceNodes(node, component);
-    const states = getEffectiveLayerStates(resolved);
-    return (
-      <g transform={transform} opacity={node.opacity}>
-        <g transform={'translate(' + node.x + ' ' + node.y + ') scale(' + scaleX + ' ' + scaleY + ')'}>
-          {getLayerRenderOrder(resolved).filter((child) => child.type !== 'group' && states.get(child.id)?.visible).map((child) => (
-            child.type === 'component-instance'
-              ? <rect key={child.id} x={child.x} y={child.y} width={child.width} height={child.height} fill="#fff" opacity={child.opacity} />
-              : <NodeShape key={child.id} node={child as PrimitiveNode} mask />
-          ))}
-        </g>
-      </g>
-    );
-  }
-
-  return <NodeShape node={node as PrimitiveNode} mask />;
-}
-
-function MaskedNodeArtwork({ node, nodes, components }: {
-  node: DesignNode;
-  nodes: DesignNode[];
-  components: ComponentDefinition[];
-}) {
-  const maskIds = getLayerClipMaskBaseIds(nodes, node.id);
-  return maskIds.reduceRight(
-    (artwork, maskId) => <g mask={`url(#folio-mask-${maskId})`}>{artwork}</g>,
-    <NodeArtwork node={node} components={components} />,
-  );
-}
-
 function SelectionOverlay({ bounds, canResize }: { bounds: Bounds; canResize: boolean }) {
   const left = bounds.x;
   const right = bounds.x + bounds.width;
@@ -203,7 +67,7 @@ function SelectionOverlay({ bounds, canResize }: { bounds: Bounds; canResize: bo
   ];
 
   return (
-    <g class="canvas-selection" pointerEvents="none">
+    <g class="canvas-selection" pointer-events="none">
       <rect
         class="canvas-selection-outline"
         x={left}
@@ -221,7 +85,7 @@ function SelectionOverlay({ bounds, canResize }: { bounds: Bounds; canResize: bo
           width={HANDLE_SIZE}
           height={HANDLE_SIZE}
           rx="2"
-          pointerEvents="all"
+          pointer-events="all"
         />
       ))}
     </g>
@@ -568,22 +432,13 @@ export function Canvas({
           onPointerCancel={cancelPointer}
         >
           <defs>
-            {[...new Set(canvasNodes.flatMap((node) => getLayerClipMaskBaseIds(canvasNodes, node.id)))].map((baseId) => {
-              const base = canvasNodes.find((node) => node.id === baseId);
-              if (!base) return null;
-              return (
-                <mask
-                  key={baseId}
-                  id={'folio-mask-' + baseId}
-                  maskUnits="userSpaceOnUse"
-                  maskContentUnits="userSpaceOnUse"
-                  x="0" y="0" width={document.width} height={document.height}
-                >
-                  <rect x="0" y="0" width={document.width} height={document.height} fill="#000" />
-                  <ClipMaskArtwork node={base} nodes={canvasNodes} components={components} />
-                </mask>
-              );
-            })}
+            <DocumentMaskDefs
+              nodes={canvasNodes}
+              width={document.width}
+              height={document.height}
+              components={components}
+              maskPrefix={`folio-mask-${sanitizeMaskIdSegment(document.id)}`}
+            />
           </defs>
           <rect x="0" y="0" width={document.width} height={document.height} fill={document.background} />
           {getLayerRenderOrder(canvasNodes).filter((node) => {
@@ -596,6 +451,7 @@ export function Canvas({
               node={node}
               nodes={canvasNodes}
               components={components}
+              maskPrefix={`folio-mask-${sanitizeMaskIdSegment(document.id)}`}
             />
           ))}
           {activeTool.renderOverlay(createToolContext())?.kind === 'marquee' && (() => {
@@ -607,7 +463,7 @@ export function Canvas({
                 y={overlay.bounds.y}
                 width={overlay.bounds.width}
                 height={overlay.bounds.height}
-                pointerEvents="none"
+                pointer-events="none"
               />
             ) : null;
           })()}
@@ -617,7 +473,7 @@ export function Canvas({
               <polyline
                 class="canvas-lasso"
                 points={overlay.points.map((point) => point.x + ',' + point.y).join(' ')}
-                pointerEvents="none"
+                pointer-events="none"
               />
             ) : null;
           })()}

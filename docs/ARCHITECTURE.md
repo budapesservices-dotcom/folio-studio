@@ -107,6 +107,12 @@ Version 2 is UTF-8 JSON. The project is the aggregate root; it contains the acti
 - File → Export Project validates and serializes an immutable aggregate snapshot. While editing a master, the current Component Canvas document buffer is overlaid into the matching component definition before serialization; the canonical project is not mutated and the .flop v2 format is unchanged.
 - replace-project creates a fresh editor state, clearing undo/redo and selection while retaining imported project metadata and stable IDs.
 
+## Workspace Window Management, Preferences & Shared SVG Artwork
+
+- **Workspace layering & window management (`src/app/windowManager.ts`, `src/app/FloatingWindow.tsx`):** Workspace windows (`main-canvas`, `component-canvas`, `node-logic`) share a bounded z-index band (`120..125`), while overlay racks (`pages-rack-panel`, `component-rack-panel` at `300`), application toolbar / tool rail (`1200`), dropdown menus (`1400`), toast (`1500`), root-mounted layer popovers (`1600`), hydration overlay (`2000`), and modal hosts (`10000`) occupy strictly separated layers.
+- **Local workspace preferences (`src/app/workspacePreferences.ts`):** Window geometry, docked/floating mode, and panel visibility persist in versioned local UI preference storage (outside `.flop` project files) with schema validation, legacy migration, corrupt-storage recovery, and small-viewport clamping.
+- **Shared SVG artwork & mask pipeline (`src/engines/canvas/artwork.tsx`, `src/app/ComponentThumbnail.tsx`):** Main Canvas, Component Canvas, linked Component Instances, and Component Rack live SVG thumbnails share one Preact-safe kebab-case SVG renderer with scoped `<mask id>` prefixes (`buildMaskElementId`) so clipping masks render inside component instances and thumbnails without DOM ID collisions.
+
 ## Planned stages
 
 1. **Foundation:** application shell, AST, SVG canvas, local persistence and native file I/O.

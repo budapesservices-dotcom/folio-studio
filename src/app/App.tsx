@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
-import { createEmptyDocument, createInitialProject, createNode } from '../core/document/factory';
+import { createEmptyDocument, createInitialProject, createNodeForDocument } from '../core/document/factory';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument, FolioPage, FolioProject } from '../core/document/types';
 import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, getSelectedLayerRootIds, getClippingMaskBaseId, type LayerDropPosition } from '../core/document/layers';
-import { createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
+import { buildComponentDefinitionFromNodes, createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import { loadMostRecentProject, loadProjectById, saveProject, saveProjectIfRevisionCurrent, saveProjectAndActivate, withProjectWriteLock } from '../core/persistence/indexedDb';
 import { downloadProject } from '../core/persistence/projectFile';
@@ -32,10 +32,25 @@ import {
   requestComponentDeletion,
 } from './componentDeletion';
 import { FloatingWindow } from './FloatingWindow';
+import { ComponentThumbnail } from './ComponentThumbnail';
+import {
+  DEFAULT_RESIZE_THROTTLE_MS,
+  PANEL_RESIZE_CONSTRAINTS,
+  clampPanelWidth,
+  computeResizedPanelWidth,
+  createThrottledMouseMove,
+  getDefaultPanelWidths,
+  getPanelWidthBounds,
+  loadPanelWidths,
+  savePanelWidths,
+  type PanelWidths,
+  type ResizablePanelId,
+} from './panelResize';
 import { createDebouncedAutosave, setRevisionFencedAutosaveStatus } from './debouncedAutosave';
 import { activateModalDialog, trapModalDialogKeydown } from './modalFocus';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
+import { loadWorkspacePreferences, saveWorkspacePreferences, type WorkspaceKind, type WorkspaceLayoutV1, type WorkspacePreferencesLoadResult } from './workspacePreferences';
 
 function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
@@ -74,6 +89,8 @@ function Icon({ name }: { name: string }) {
     inspector: 'M4 4h16v16H4zM15 4v16',
     rack: 'M3 5h18v14H3zM7 9h4v6H7zM14 9h3M14 12h3M14 15h3',
     pages: 'M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h8',
+    edit: 'M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3zM13.5 6.5l4 4',
+    copyPlus: 'M8 8h11v11H8zM5 16H4V4h12v1M13.5 11v5M11 13.5h5',
   };
 
   return (
@@ -141,6 +158,43 @@ function readCanvasViewState(key: string): CanvasViewState {
 }
 
 export function App() {
+  const workspacePreferencesLoadRef = useRef<WorkspacePreferencesLoadResult | null>(null);
+  if (workspacePreferencesLoadRef.current === null) {
+    workspacePreferencesLoadRef.current = loadWorkspacePreferences({
+      viewport: {
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight,
+      },
+    });
+  }
+  const initialWorkspacePreferences = workspacePreferencesLoadRef.current!;
+  const initialWorkspaceLayout = initialWorkspacePreferences.layout;
+  const initialWorkspaceWindow = (workspace: WorkspaceKind) =>
+    initialWorkspaceLayout.windows.find((record) => record.workspace === workspace)!;
+  const initialMainWindow = initialWorkspaceWindow('main-canvas');
+  const initialComponentWindow = initialWorkspaceWindow('component-canvas');
+  const initialNodeLogicWindow = initialWorkspaceWindow('node-logic');
+  const initialWorkspaceOrder = initialWorkspaceLayout.stackOrder.flatMap((instanceId) => {
+    const record = initialWorkspaceLayout.windows.find((candidate) =>
+      candidate.windowInstanceId === instanceId,
+    );
+    return record ? [record.workspace] : [];
+  });
+  const initialPreferencesNeedReview =
+    initialWorkspacePreferences.status === 'migrated' ||
+    initialWorkspacePreferences.status === 'recovered' ||
+    initialWorkspacePreferences.status === 'malformed';
+  const workspacePreferencesReplaceMalformedRef = useRef(
+    initialWorkspacePreferences.status === 'malformed',
+  );
+  const [workspacePreferencesPersistenceEnabled, setWorkspacePreferencesPersistenceEnabled] =
+    useState(
+      initialWorkspacePreferences.status === 'valid' ||
+      initialWorkspacePreferences.status === 'missing',
+    );
+  const [workspacePreferencesReviewRequired, setWorkspacePreferencesReviewRequired] =
+    useState(initialPreferencesNeedReview);
+
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const canonicalStore = useMemo(() => createCanonicalEditorStore(initialEditorState), []);
   const [state, setState] = useState(() => canonicalStore.getSnapshot().editorState);
@@ -209,7 +263,7 @@ export function App() {
   const [projectNameEditing, setProjectNameEditing] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState('');
   const projectNameCancelRef = useRef(false);
-  const [layersVisible, setLayersVisible] = useState(true);
+  const [layersVisible, setLayersVisible] = useState(() => initialWorkspaceLayout.panelVisibility.layers);
   const [inspectorVisible, setInspectorVisible] = useState(true);
   const [collapsedLayers, setCollapsedLayers] = useState<Record<EditorTarget, string[]>>({ main: [], component: [] });
   const [layerDropTarget, setLayerDropTarget] = useState<{ nodeId: string; position: LayerDropPosition } | null>(null);
@@ -292,12 +346,44 @@ export function App() {
     };
   }, [layerColorPickerKey]);
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
-  const [windowOrder, setWindowOrder] = useState<WindowId[]>(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
-  const [activeWindowId, setActiveWindowId] = useState<WindowId>('main-canvas');
+  const [windowOrder, setWindowOrder] = useState<WindowId[]>(() => [
+    ...initialWorkspaceOrder,
+    ...(initialWorkspaceLayout.panelVisibility['pages-rack'] ? ['pages' as const] : []),
+  ]);
+  const [activeWindowId, setActiveWindowId] = useState<WindowId>(
+    () => initialWorkspaceLayout.activeWorkspace,
+  );
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
-  const [componentRackOpen, setComponentRackOpen] = useState(false);
-  const [pagesRackOpen, setPagesRackOpen] = useState(false);
+  const menuBarRef = useRef<HTMLDivElement | null>(null);
+  const toolRailRef = useRef<HTMLElement | null>(null);
+  const [panelWidths, setPanelWidths] = useState<PanelWidths>(() => loadPanelWidths());
+  const [resizingPanel, setResizingPanel] = useState<ResizablePanelId | null>(null);
+  const panelWidthsRef = useRef<PanelWidths>(panelWidths);
+  panelWidthsRef.current = panelWidths;
+  const panelResizeCleanupRef = useRef<(() => void) | null>(null);
+  const [componentRackOpen, setComponentRackOpen] = useState(
+    () => initialWorkspaceLayout.panelVisibility['component-rack'],
+  );
+  const [pagesRackOpen, setPagesRackOpen] = useState(
+    () => initialWorkspaceLayout.panelVisibility['pages-rack'],
+  );
+  const pagesRackRef = useRef<HTMLElement | null>(null);
+  const componentRackRef = useRef<HTMLElement | null>(null);
+  const pagesRackToggleRef = useRef<HTMLButtonElement | null>(null);
+  const componentRackToggleRef = useRef<HTMLButtonElement | null>(null);
+  const closePagesRack = () => {
+    if (pagesRackRef.current?.contains(document.activeElement)) {
+      pagesRackToggleRef.current?.focus({ preventScroll: true });
+    }
+    setPagesRackOpen(false);
+  };
+  const closeComponentRack = () => {
+    if (componentRackRef.current?.contains(document.activeElement)) {
+      componentRackToggleRef.current?.focus({ preventScroll: true });
+    }
+    setComponentRackOpen(false);
+  };
   const [pageNameDraft, setPageNameDraft] = useState('');
   const pages = state.project.pages;
   const activePageId = state.project.activePageId;
@@ -308,129 +394,107 @@ export function App() {
   const [componentNameDraft, setComponentNameDraft] = useState('');
   const ownedComponents = state.project.components;
   const editingComponent = ownedComponents.find((component) => component.id === editingComponentId) ?? null;
-  const [canvasMinimized, setCanvasMinimized] = useState(false);
-  const [canvasClosed, setCanvasClosed] = useState(false);
-  const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating'>(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
-      return saved?.mode === 'floating' ? 'floating' : 'docked';
-    } catch { return 'docked'; }
-  });
+  const [canvasMinimized, setCanvasMinimized] = useState(
+    () => initialMainWindow.visibility === 'minimized',
+  );
+  const [canvasClosed, setCanvasClosed] = useState(
+    () => initialMainWindow.visibility === 'closed',
+  );
+  const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating'>(
+    () => initialMainWindow.presentation,
+  );
   const canvasFloating = canvasWindowMode === 'floating';
-  const [canvasSize, setCanvasSize] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-      // Keep enough free screen area around the window for reliable dragging.
-      const maxWidth = Math.max(280, Math.min(viewportWidth * 0.82, viewportWidth - 24));
-      const maxHeight = Math.max(220, Math.min(viewportHeight * 0.60, viewportHeight - 56 - 27 - 16));
-      const preferredWidth = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(860, viewportWidth * 0.78);
-      const preferredHeight = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(620, viewportHeight * 0.58);
-      return {
-        width: Math.min(maxWidth, Math.max(280, preferredWidth)),
-        height: Math.min(maxHeight, Math.max(220, preferredHeight)),
-      };
-    } catch {
-      return {
-        width: Math.max(280, Math.min(860, window.innerWidth * 0.78, window.innerWidth * 0.82)),
-        height: Math.max(220, Math.min(620, window.innerHeight * 0.58)),
-      };
-    }
-  });
-  const [componentCanvasClosed, setComponentCanvasClosed] = useState(true);
-  const [componentCanvasMinimized, setComponentCanvasMinimized] = useState(false);
-  const [componentCanvasWindowMode, setComponentCanvasWindowMode] = useState<'docked' | 'floating'>(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.component-canvas-window') ?? 'null');
-      return saved?.mode === 'docked' ? 'docked' : 'floating';
-    } catch { return 'floating'; }
-  });
+  const [canvasSize, setCanvasSize] = useState(() => ({
+    width: initialMainWindow.geometry.width,
+    height: initialMainWindow.geometry.height,
+  }));
+
+  const [componentCanvasClosed, setComponentCanvasClosed] = useState(
+    () => initialComponentWindow.visibility === 'closed',
+  );
+  const [componentCanvasMinimized, setComponentCanvasMinimized] = useState(
+    () => initialComponentWindow.visibility === 'minimized',
+  );
+  const [componentCanvasWindowMode, setComponentCanvasWindowMode] =
+    useState<'docked' | 'floating'>(() => initialComponentWindow.presentation);
   const componentCanvasFloating = componentCanvasWindowMode === 'floating';
   const componentCanvasOpen = !componentCanvasClosed && !componentCanvasMinimized;
-  const [componentCanvasSize, setComponentCanvasSize] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.component-canvas-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(680, viewportWidth * 0.72);
-      const height = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(500, viewportHeight * 0.58);
-      return {
-        width: Math.min(Math.max(280, viewportWidth - 24), Math.max(280, width)),
-        height: Math.min(Math.max(220, viewportHeight - 100), Math.max(220, height)),
-      };
-    } catch {
-      return {
-        width: Math.max(280, Math.min(680, window.innerWidth * 0.72)),
-        height: Math.max(220, Math.min(500, window.innerHeight * 0.58)),
-      };
-    }
-  });
-  const [componentCanvasPosition, setComponentCanvasPosition] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.component-canvas-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(680, viewportWidth * 0.72);
-      return {
-        x: Number.isFinite(saved?.position?.x) ? saved.position.x : Math.max(24, viewportWidth - width - 48),
-        y: Math.max(56, Number.isFinite(saved?.position?.y) ? saved.position.y : 112),
-      };
-    } catch { return { x: Math.max(24, window.innerWidth - 700), y: 112 }; }
-  });
+  const [componentCanvasSize, setComponentCanvasSize] = useState(() => ({
+    width: initialComponentWindow.geometry.width,
+    height: initialComponentWindow.geometry.height,
+  }));
+  const [componentCanvasPosition, setComponentCanvasPosition] = useState(() => ({
+    x: initialComponentWindow.geometry.x,
+    y: initialComponentWindow.geometry.y,
+  }));
 
-  const [nodeLogicClosed, setNodeLogicClosed] = useState(true);
-  const [nodeLogicMinimized, setNodeLogicMinimized] = useState(false);
-  const [nodeLogicWindowMode, setNodeLogicWindowMode] = useState<'docked' | 'floating'>(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.node-logic-window') ?? 'null');
-      return saved?.mode === 'docked' ? 'docked' : 'floating';
-    } catch { return 'floating'; }
-  });
+  const [nodeLogicClosed, setNodeLogicClosed] = useState(
+    () => initialNodeLogicWindow.visibility === 'closed',
+  );
+  const [nodeLogicMinimized, setNodeLogicMinimized] = useState(
+    () => initialNodeLogicWindow.visibility === 'minimized',
+  );
+  const [nodeLogicWindowMode, setNodeLogicWindowMode] =
+    useState<'docked' | 'floating'>(() => initialNodeLogicWindow.presentation);
   const nodeLogicFloating = nodeLogicWindowMode === 'floating';
   const nodeLogicOpen = !nodeLogicClosed && !nodeLogicMinimized;
-  const [nodeLogicSize, setNodeLogicSize] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.node-logic-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(720, viewportWidth * 0.74);
-      const height = Number.isFinite(saved?.size?.height) ? saved.size.height : Math.min(540, viewportHeight * 0.60);
-      return {
-        width: Math.min(Math.max(280, viewportWidth - 24), Math.max(280, width)),
-        height: Math.min(Math.max(220, viewportHeight - 100), Math.max(220, height)),
-      };
-    } catch {
-      return {
-        width: Math.max(280, Math.min(720, window.innerWidth * 0.74)),
-        height: Math.max(220, Math.min(540, window.innerHeight * 0.60)),
-      };
-    }
-  });
-  const [nodeLogicPosition, setNodeLogicPosition] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.node-logic-window') ?? 'null');
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-      const width = Number.isFinite(saved?.size?.width) ? saved.size.width : Math.min(720, viewportWidth * 0.74);
-      return {
-        x: Number.isFinite(saved?.position?.x) ? saved.position.x : Math.max(40, Math.round((viewportWidth - width) * 0.18)),
-        y: Math.max(56, Number.isFinite(saved?.position?.y) ? saved.position.y : 146),
-      };
-    } catch { return { x: Math.max(40, Math.round((window.innerWidth - 720) * 0.18)), y: 146 }; }
-  });
+  const [nodeLogicSize, setNodeLogicSize] = useState(() => ({
+    width: initialNodeLogicWindow.geometry.width,
+    height: initialNodeLogicWindow.geometry.height,
+  }));
+  const [nodeLogicPosition, setNodeLogicPosition] = useState(() => ({
+    x: initialNodeLogicWindow.geometry.x,
+    y: initialNodeLogicWindow.geometry.y,
+  }));
 
-  const [canvasPosition, setCanvasPosition] = useState(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('folio.canvas-window') ?? 'null');
-      const savedX = Number.isFinite(saved?.position?.x) ? saved.position.x : 48;
-      const savedY = Number.isFinite(saved?.position?.y) ? saved.position.y : 80;
-      // Horizontal and bottom placement are intentionally unbounded; only keep
-      // the titlebar below the app header so the window can always be recovered.
-      return {
-        x: savedX,
-        y: Math.max(56, savedY),
-      };
-    } catch { return { x: 48, y: 80 }; }
-  });
+  const [canvasPosition, setCanvasPosition] = useState(() => ({
+    x: initialMainWindow.geometry.x,
+    y: initialMainWindow.geometry.y,
+  }));
+
+  useLayoutEffect(() => {
+    if (!fileMenuOpen && !viewMenuOpen) return;
+    const closeMenus = () => {
+      setFileMenuOpen(false);
+      setViewMenuOpen(false);
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && menuBarRef.current?.contains(event.target)) return;
+      closeMenus();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeMenus();
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [fileMenuOpen, viewMenuOpen]);
+
+  useLayoutEffect(() => {
+    if (!toolRackOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && toolRailRef.current?.contains(event.target)) return;
+      setToolRackOpen(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setToolRackOpen(null);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [toolRackOpen]);
 
   useEffect(() => {
     try { window.localStorage.setItem('folio.main-canvas-view', JSON.stringify(mainView)); }
@@ -442,37 +506,127 @@ export function App() {
     catch (error) { console.warn('Folio could not persist Component Canvas view:', error); }
   }, [componentView]);
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem('folio.canvas-window', JSON.stringify({ mode: canvasWindowMode, position: canvasPosition, size: canvasSize }));
-    } catch (error) {
-      console.warn('Folio could not persist Canvas window layout:', error);
+  const workspacePreferencesSnapshot = useMemo<WorkspaceLayoutV1>(() => {
+    const currentWindows: WorkspaceLayoutV1['windows'] = [
+      {
+        ...initialMainWindow,
+        visibility: canvasClosed ? 'closed' : canvasMinimized ? 'minimized' : 'open',
+        presentation: canvasWindowMode,
+        geometry: {
+          x: canvasPosition.x,
+          y: canvasPosition.y,
+          width: canvasSize.width,
+          height: canvasSize.height,
+        },
+      },
+      {
+        ...initialComponentWindow,
+        visibility: componentCanvasClosed
+          ? 'closed'
+          : componentCanvasMinimized ? 'minimized' : 'open',
+        presentation: componentCanvasWindowMode,
+        geometry: {
+          x: componentCanvasPosition.x,
+          y: componentCanvasPosition.y,
+          width: componentCanvasSize.width,
+          height: componentCanvasSize.height,
+        },
+      },
+      {
+        ...initialNodeLogicWindow,
+        visibility: nodeLogicClosed ? 'closed' : nodeLogicMinimized ? 'minimized' : 'open',
+        presentation: nodeLogicWindowMode,
+        geometry: {
+          x: nodeLogicPosition.x,
+          y: nodeLogicPosition.y,
+          width: nodeLogicSize.width,
+          height: nodeLogicSize.height,
+        },
+      },
+    ];
+
+    const stackOrder = windowOrder.flatMap((id) => {
+      if (id !== 'main-canvas' && id !== 'component-canvas' && id !== 'node-logic') {
+        return [];
+      }
+      const record = currentWindows.find((candidate) => candidate.workspace === id);
+      return record?.visibility === 'open' ? [record.windowInstanceId] : [];
+    });
+    for (const record of currentWindows) {
+      if (record.visibility === 'open' && !stackOrder.includes(record.windowInstanceId)) {
+        stackOrder.push(record.windowInstanceId);
+      }
     }
-  }, [canvasWindowMode, canvasPosition, canvasSize]);
+
+    const activeRecord =
+      currentWindows.find((record) =>
+        record.workspace === activeWindowId && record.visibility === 'open',
+      ) ??
+      currentWindows.find((record) =>
+        record.windowInstanceId === stackOrder.at(-1),
+      );
+    const stackPositions = new Map(stackOrder.map((id, index) => [id, index]));
+
+    return {
+      ...initialWorkspaceLayout,
+      windows: currentWindows.map((record) => ({
+        ...record,
+        stackOrder: stackPositions.get(record.windowInstanceId) ?? 0,
+      })),
+      stackOrder,
+      activeWindowInstanceId: activeRecord?.windowInstanceId ?? null,
+      activeWorkspace: activeRecord?.workspace ?? 'main-canvas',
+      panelVisibility: {
+        'pages-rack': pagesRackOpen,
+        'component-rack': componentRackOpen,
+        layers: layersVisible,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+  }, [
+    initialWorkspaceLayout,
+    initialMainWindow,
+    initialComponentWindow,
+    initialNodeLogicWindow,
+    canvasClosed,
+    canvasMinimized,
+    canvasWindowMode,
+    canvasPosition,
+    canvasSize,
+    componentCanvasClosed,
+    componentCanvasMinimized,
+    componentCanvasWindowMode,
+    componentCanvasPosition,
+    componentCanvasSize,
+    nodeLogicClosed,
+    nodeLogicMinimized,
+    nodeLogicWindowMode,
+    nodeLogicPosition,
+    nodeLogicSize,
+    windowOrder,
+    activeWindowId,
+    pagesRackOpen,
+    componentRackOpen,
+    layersVisible,
+  ]);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem('folio.component-canvas-window', JSON.stringify({
-        mode: componentCanvasWindowMode,
-        position: componentCanvasPosition,
-        size: componentCanvasSize,
-      }));
-    } catch (error) {
-      console.warn('Folio could not persist Component Canvas window layout:', error);
+    if (!workspacePreferencesPersistenceEnabled) return;
+    const saved = saveWorkspacePreferences(workspacePreferencesSnapshot, {
+      reconciliationComplete: true,
+      replaceUnsupportedVersion: workspacePreferencesReplaceMalformedRef.current,
+      viewport: {
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight,
+      },
+    });
+    if (!saved.ok) {
+      console.warn('Folio could not persist its workspace layout:', saved.reason);
+      setNotice('Workspace layout could not be saved: ' + saved.reason + '.');
+      return;
     }
-  }, [componentCanvasWindowMode, componentCanvasPosition, componentCanvasSize]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem('folio.node-logic-window', JSON.stringify({
-        mode: nodeLogicWindowMode,
-        position: nodeLogicPosition,
-        size: nodeLogicSize,
-      }));
-    } catch (error) {
-      console.warn('Folio could not persist Node Logic window layout:', error);
-    }
-  }, [nodeLogicWindowMode, nodeLogicPosition, nodeLogicSize]);
+    workspacePreferencesReplaceMalformedRef.current = false;
+  }, [workspacePreferencesSnapshot, workspacePreferencesPersistenceEnabled]);
 
   useEffect(() => {
     let active = true;
@@ -926,32 +1080,79 @@ export function App() {
 
   const addNode = (type: 'rect' | 'ellipse' | 'text') => {
     if (isHydrating) return;
-    dispatchFocused({ type: 'add-node', node: createNode(type, focusedDocument.nodes.length) });
+    dispatchFocused({ type: 'add-node', node: createNodeForDocument(type, focusedDocument) });
     setInspectorVisible(true);
   };
-  const saveNodesAsComponent = (nodes: DesignNode[]) => {
-    const reusableNodes = nodes.filter((node) => node.type !== 'component-instance');
-    if (isHydrating || reusableNodes.length === 0) return;
-    const name = reusableNodes.length === 1 ? reusableNodes[0].name : `Component ${ownedComponents.length + 1}`;
-    const minX = Math.min(...reusableNodes.map((node) => node.x));
-    const minY = Math.min(...reusableNodes.map((node) => node.y));
-    const maxX = Math.max(...reusableNodes.map((node) => node.x + node.width));
-    const maxY = Math.max(...reusableNodes.map((node) => node.y + node.height));
-    const now = new Date().toISOString();
-    const component: ComponentDefinition = {
-      id: globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`,
-      name,
-      document: {
-        ...createEmptyDocument(name, Math.max(1, maxX - minX), Math.max(1, maxY - minY)),
-        background: '#00000000',
-        nodes: reusableNodes.map((node) => ({ ...node, x: node.x - minX, y: node.y - minY })),
-      },
-      createdAt: now,
-      updatedAt: now,
-    };
+  const saveNodesAsComponent = (nodes: DesignNode[], sourceNodes: readonly DesignNode[] = activeDocument.nodes) => {
+    if (isHydrating || nodes.length === 0) return;
+    const component = buildComponentDefinitionFromNodes(
+      sourceNodes,
+      nodes.map((node) => node.id),
+      `Component ${ownedComponents.length + 1}`,
+    );
+    if (!component) return;
     dispatch({ type: 'add-component', component });
+    closePagesRack();
     setComponentRackOpen(true);
-    setNotice(`“${name}” saved to this project’s Component Rack.`);
+    setNotice(`“${component.name}” saved to this project’s Component Rack.`);
+  };
+
+  /**
+   * Explicit Component Canvas save/update action (WEB-09):
+   * - When editing an existing master, updates/syncs that master in place
+   *   without ever creating accidental duplicates.
+   * - When working in a scratch Component Canvas with no active master, creates
+   *   one new master component and attaches the buffer to it.
+   */
+  const saveComponentCanvasMaster = () => {
+    if (isHydrating || pendingComponentDeletionRef.current) return;
+    const bufferDocument = getActiveDocument(componentState.project);
+
+    if (editingComponent) {
+      const session = componentSyncSessionRef.current;
+      if (componentRecoveryStatus !== 'none' || !session || session.conflicted || session.masterStatus !== 'present') {
+        setNotice('Resolve the active Component Canvas recovery state before updating this master.');
+        return;
+      }
+      const syncAction = createComponentCanvasSyncAction(editingComponent, bufferDocument, session);
+      if (!syncAction) {
+        void componentAutosave.flush(componentState.project);
+        setNotice(`“${editingComponent.name}” master is up to date.`);
+        return;
+      }
+      const transition = dispatch(syncAction);
+      if (transition.status === 'committed') {
+        const committedMaster = transition.snapshot.editorState.project.components
+          .find((component) => component.id === editingComponent.id);
+        if (committedMaster) {
+          componentSyncSessionRef.current = advanceComponentCanvasSyncSession(session, committedMaster);
+        }
+        void componentAutosave.flush(componentState.project);
+        setNotice(`Updated master “${editingComponent.name}”.`);
+      } else {
+        componentSyncSessionRef.current = { ...session, conflicted: true };
+        setComponentRecoveryStatus('conflict');
+        setNotice('The master changed before this update could be applied. Review the latest master before saving.');
+      }
+      return;
+    }
+
+    const sourceIds = selectedComponentNodes.length > 0
+      ? selectedComponentNodes.map((node) => node.id)
+      : bufferDocument.nodes.map((node) => node.id);
+    const component = buildComponentDefinitionFromNodes(
+      bufferDocument.nodes,
+      sourceIds,
+      `Component ${ownedComponents.length + 1}`,
+    );
+    if (!component) return;
+    dispatch({ type: 'add-component', component });
+    componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
+    setEditingComponentId(component.id);
+    setComponentRecoveryStatus('none');
+    closePagesRack();
+    setComponentRackOpen(true);
+    setNotice(`Created master “${component.name}” in Component Rack.`);
   };
 
   const loadMasterComponent = (component: ComponentDefinition) => {
@@ -973,7 +1174,7 @@ export function App() {
     setActiveEditorId('component');
     focusWindow('component-canvas');
     setInspectorVisible(true);
-    setComponentRackOpen(false);
+    closeComponentRack();
     setNotice(`Editing master: ${component.name}.`);
   };
 
@@ -1436,7 +1637,7 @@ export function App() {
     if (isHydrating || page.id === activePageId) return;
     setActiveEditorId('main');
     dispatch({ type: 'set-active-page', pageId: page.id });
-    setPagesRackOpen(false);
+    closePagesRack();
     setInspectorVisible(true);
     setNotice(`Switched to ${page.name}.`);
   };
@@ -1458,12 +1659,12 @@ export function App() {
     };
     dispatch({ type: 'add-page', page: { id, name, route, document } });
     setPageNameDraft('');
-    setPagesRackOpen(false);
+    closePagesRack();
     setInspectorVisible(true);
     setNotice(`Created ${name}.`);
   };
 
-  const saveSelectionAsComponent = () => saveNodesAsComponent(focusedEditor.selectedNodes);
+  const saveSelectionAsComponent = () => saveNodesAsComponent(focusedEditor.selectedNodes, focusedDocument.nodes);
 
   const commitProjectName = (value: string) => {
     if (isHydrating) return;
@@ -1623,20 +1824,160 @@ export function App() {
   const openComponentCanvas = () => { recoverWindow('component-canvas'); setComponentCanvasClosed(false); setComponentCanvasMinimized(false); setActiveEditorId('component'); focusWindow('component-canvas'); };
   const openNodeLogic = () => { recoverWindow('node-logic'); setNodeLogicClosed(false); setNodeLogicMinimized(false); focusWindow('node-logic'); };
 
+  const getPanelClampContext = useCallback((panel: ResizablePanelId, widths: PanelWidths = panelWidthsRef.current) => ({
+    viewportWidth: appShellRef.current?.clientWidth || window.innerWidth,
+    layersVisible,
+    inspectorVisible,
+    otherPanelWidth: panel === 'layers' ? widths.inspector : widths.layers,
+  }), [layersVisible, inspectorVisible]);
+
+  const applyPanelWidth = useCallback((panel: ResizablePanelId, nextWidth: number, persist = false) => {
+    const cssVar = panel === 'layers' ? '--layers-panel-width' : '--inspector-panel-width';
+    appShellRef.current?.style.setProperty(cssVar, `${nextWidth}px`);
+    const nextWidths: PanelWidths = { ...panelWidthsRef.current, [panel]: nextWidth };
+    panelWidthsRef.current = nextWidths;
+    setPanelWidths((current) => (current[panel] === nextWidth ? current : { ...current, [panel]: nextWidth }));
+    if (persist) savePanelWidths(nextWidths);
+  }, []);
+
+  const startPanelResize = useCallback((panel: ResizablePanelId, event: MouseEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    panelResizeCleanupRef.current?.();
+
+    const startClientX = event.clientX;
+    const initialWidths: PanelWidths = { ...panelWidthsRef.current };
+    const startWidth = initialWidths[panel];
+    appShellRef.current?.classList.add('is-resizing-panel');
+    setResizingPanel(panel);
+
+    const throttledMove = createThrottledMouseMove<number>((clientX) => {
+      const nextWidth = computeResizedPanelWidth(
+        panel,
+        startWidth,
+        startClientX,
+        clientX,
+        getPanelClampContext(panel, panelWidthsRef.current),
+      );
+      applyPanelWidth(panel, nextWidth, false);
+    }, { intervalMs: DEFAULT_RESIZE_THROTTLE_MS });
+
+    const detach = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', finishResize);
+      window.removeEventListener('blur', finishResize);
+      window.removeEventListener('keydown', onKeyDown, true);
+      appShellRef.current?.classList.remove('is-resizing-panel');
+      if (panelResizeCleanupRef.current === cleanupAndCancel) {
+        panelResizeCleanupRef.current = null;
+      }
+    };
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      throttledMove(moveEvent.clientX);
+    };
+
+    const finishResize = () => {
+      throttledMove.flush();
+      detach();
+      savePanelWidths(panelWidthsRef.current);
+      setResizingPanel(null);
+    };
+
+    const cancelResize = () => {
+      throttledMove.cancel();
+      detach();
+      applyPanelWidth(panel, initialWidths[panel], false);
+      setResizingPanel(null);
+    };
+
+    const cleanupAndCancel = () => {
+      throttledMove.cancel();
+      detach();
+    };
+
+    const onKeyDown = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key === 'Escape') {
+        keyEvent.preventDefault();
+        keyEvent.stopPropagation();
+        cancelResize();
+      }
+    };
+
+    panelResizeCleanupRef.current = cleanupAndCancel;
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', finishResize);
+    window.addEventListener('blur', finishResize);
+    window.addEventListener('keydown', onKeyDown, true);
+  }, [applyPanelWidth, getPanelClampContext]);
+
+  const resetPanelWidth = useCallback((panel: ResizablePanelId) => {
+    const nextWidth = clampPanelWidth(
+      panel,
+      PANEL_RESIZE_CONSTRAINTS[panel].defaultWidth,
+      getPanelClampContext(panel),
+    );
+    applyPanelWidth(panel, nextWidth, true);
+  }, [applyPanelWidth, getPanelClampContext]);
+
+  const handlePanelResizeKeyDown = useCallback((panel: ResizablePanelId, event: KeyboardEvent) => {
+    const step = event.shiftKey ? 32 : 16;
+    const context = getPanelClampContext(panel);
+    const bounds = getPanelWidthBounds(panel, context);
+    const current = panelWidthsRef.current[panel];
+    let target: number | null = null;
+
+    if (event.key === 'ArrowLeft') {
+      target = panel === 'layers' ? current - step : current + step;
+    } else if (event.key === 'ArrowRight') {
+      target = panel === 'layers' ? current + step : current - step;
+    } else if (event.key === 'Home') {
+      target = bounds.minWidth;
+    } else if (event.key === 'End') {
+      target = bounds.maxWidth;
+    }
+
+    if (target === null) return;
+    event.preventDefault();
+    applyPanelWidth(panel, clampPanelWidth(panel, target, context), true);
+  }, [applyPanelWidth, getPanelClampContext]);
+
+  useEffect(() => () => {
+    panelResizeCleanupRef.current?.();
+  }, []);
+
   const resetWindowLayout = () => {
     const layouts = getDefaultWindowLayouts(getViewport());
     setCanvasPosition(layouts['main-canvas'].position); setCanvasSize(layouts['main-canvas'].size);
     setComponentCanvasPosition(layouts['component-canvas'].position); setComponentCanvasSize(layouts['component-canvas'].size);
     setNodeLogicPosition(layouts['node-logic'].position); setNodeLogicSize(layouts['node-logic'].size);
+    const defaultWidths = getDefaultPanelWidths();
+    setPanelWidths(defaultWidths);
+    panelWidthsRef.current = defaultWidths;
+    savePanelWidths(defaultWidths);
     setWindowOrder(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
     setActiveWindowId('main-canvas'); setViewMenuOpen(false); setNotice('Window layout has been reset.');
   };
 
   useEffect(() => {
-    const onResize = () => { recoverWindow('main-canvas'); recoverWindow('component-canvas'); recoverWindow('node-logic'); };
+    const onResize = () => {
+      recoverWindow('main-canvas');
+      recoverWindow('component-canvas');
+      recoverWindow('node-logic');
+      const current = panelWidthsRef.current;
+      const clampedLayers = clampPanelWidth('layers', current.layers, getPanelClampContext('layers', current));
+      const clampedInspector = clampPanelWidth('inspector', current.inspector, getPanelClampContext('inspector', { ...current, layers: clampedLayers }));
+      if (clampedLayers !== current.layers || clampedInspector !== current.inspector) {
+        const nextWidths = { layers: clampedLayers, inspector: clampedInspector };
+        panelWidthsRef.current = nextWidths;
+        setPanelWidths(nextWidths);
+      }
+    };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [canvasPosition, canvasSize, componentCanvasPosition, componentCanvasSize, nodeLogicPosition, nodeLogicSize]);
+  }, [canvasPosition, canvasSize, componentCanvasPosition, componentCanvasSize, nodeLogicPosition, nodeLogicSize, getPanelClampContext]);
 
   useEffect(() => {
     recoverWindow('main-canvas');
@@ -1647,8 +1988,8 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isHydrating || componentDeletionDialogOpen) return;
-      const target = event.target as HTMLElement | null;
-      if (target?.isContentEditable || target?.matches('input, textarea, select, [contenteditable="true"]')) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if ((target instanceof HTMLElement && target.isContentEditable) || target?.matches('input, textarea, select, [contenteditable="true"]')) return;
       const context = getActiveEditorContext(activeEditorId, state, componentState);
       const emit = activeEditorId === 'main' ? dispatch : componentDispatch;
       const layerStates = getEffectiveLayerStates(context.document.nodes);
@@ -1771,7 +2112,11 @@ export function App() {
   return (
     <div
       ref={appShellRef}
-      class={`app-shell ${layersVisible ? "" : "layers-hidden"} ${inspectorVisible ? "" : "inspector-hidden"} ${isHydrating ? "is-hydrating" : ""}`}
+      class={`app-shell ${layersVisible ? "" : "layers-hidden"} ${inspectorVisible ? "" : "inspector-hidden"} ${isHydrating ? "is-hydrating" : ""} ${resizingPanel ? "is-resizing-panel" : ""}`}
+      style={{
+        '--layers-panel-width': `${panelWidths.layers}px`,
+        '--inspector-panel-width': `${panelWidths.inspector}px`,
+      } as JSX.CSSProperties}
       data-active-window={activeWindowId}
       aria-busy={isHydrating}
       onMouseLeave={() => setToolbarHint(DEFAULT_TOOLBAR_HINT)}
@@ -1785,7 +2130,7 @@ export function App() {
       <header class="global-toolbar-slot" aria-label="FOLIO application toolbar">
         <nav class="global-menu-bar" aria-label="Application menus">
           <div class="global-toolbar-left">
-          <div class="global-menu-items">
+          <div class="global-menu-items" ref={menuBarRef}>
             <div class="global-menu-entry">
               <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={fileMenuOpen} onClick={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); }} onMouseEnter={() => updateToolbarHint('FILE', 'Open or export the current native .flop project.')}>File</button>
               {fileMenuOpen && <div class="global-menu-dropdown" role="menu" aria-label="File menu">
@@ -1825,18 +2170,18 @@ export function App() {
               />
             </div>
             <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}>Edit</span>
+            <span class="global-menu-item is-disabled" aria-disabled="true" title="Edit menu (planned)" onMouseEnter={() => updateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}>Edit</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <div class="global-menu-entry">
-              <button type="button" class="global-menu-item menu-trigger" aria-expanded={viewMenuOpen} onClick={() => { setViewMenuOpen((open) => !open); setFileMenuOpen(false); }} onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}>View</button>
-              {viewMenuOpen && <div class="global-menu-dropdown" role="menu"><button type="button" role="menuitem" onClick={resetWindowLayout}>Reset Window Layout</button></div>}
+              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={viewMenuOpen} onClick={() => { setViewMenuOpen((open) => !open); setFileMenuOpen(false); }} onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}>View</button>
+              {viewMenuOpen && <div class="global-menu-dropdown" role="menu" aria-label="View menu"><button type="button" role="menuitem" onClick={resetWindowLayout}>Reset Window Layout</button></div>}
             </div>
             <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('TOOLS', 'Design tools and tool-specific settings will be organized here.')}>Tools</span>
+            <span class="global-menu-item is-disabled" aria-disabled="true" title="Tools menu (planned)" onMouseEnter={() => updateToolbarHint('TOOLS', 'Design tools and tool-specific settings will be organized here.')}>Tools</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('OPTION', 'Application and workspace preferences will be organized here.')}>Option</span>
+            <span class="global-menu-item is-disabled" aria-disabled="true" title="Option menu (planned)" onMouseEnter={() => updateToolbarHint('OPTION', 'Application and workspace preferences will be organized here.')}>Option</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span class="global-menu-item" onMouseEnter={() => updateToolbarHint('HELP', 'Keyboard reference, documentation and support will be organized here.')}>Help</span>
+            <span class="global-menu-item is-disabled" aria-disabled="true" title="Help menu (planned)" onMouseEnter={() => updateToolbarHint('HELP', 'Keyboard reference, documentation and support will be organized here.')}>Help</span>
           </div>
 
           </div>
@@ -1872,13 +2217,37 @@ export function App() {
           )}
         </div>
           <div class="global-panel-toggles" aria-label="Workspace panels">
-            <button class={`global-panel-toggle pages-rack-header-toggle ${pagesRackOpen ? 'active' : ''}`} type="button" title={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-label={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-pressed={pagesRackOpen} onClick={() => { focusWindow('pages'); setPagesRackOpen((value) => !value); setComponentRackOpen(false); }} onMouseEnter={() => updateToolbarHint('PAGES RACK', 'Manage the pages in this project.')}><Icon name="pages" /></button>
-            <button class={`global-panel-toggle component-rack-header-toggle ${componentRackOpen ? 'active' : ''}`} type="button" title={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-label={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-pressed={componentRackOpen} onClick={() => { setComponentRackOpen((value) => !value); setPagesRackOpen(false); }} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse and reuse components saved to your personal library.')}><Icon name="rack" /></button>
-            <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
-            <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) openMainCanvas(); else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
-            <button class={`global-panel-toggle component-canvas-header-toggle ${componentCanvasOpen ? 'active' : ''}`} type="button" title={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-label={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-pressed={componentCanvasOpen} onClick={() => { if (componentCanvasClosed || componentCanvasMinimized) openComponentCanvas(); else { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', componentCanvasClosed || componentCanvasMinimized ? 'Open the Component Canvas window.' : 'Close the Component Canvas window.')}><Icon name="componentCanvas" /></button>
-            <button class={`global-panel-toggle node-logic-header-toggle ${nodeLogicOpen ? 'active' : ''}`} type="button" title={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-label={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-pressed={nodeLogicOpen} onClick={() => { if (nodeLogicClosed || nodeLogicMinimized) openNodeLogic(); else { setNodeLogicClosed(true); setNodeLogicMinimized(false); } }} onMouseEnter={() => updateToolbarHint('NODE LOGIC', nodeLogicClosed || nodeLogicMinimized ? 'Open the Node Logic workspace.' : 'Close the Node Logic workspace.')}><Icon name="logicNodes" /></button>
-            <button class={`global-panel-toggle inspector-header-toggle ${inspectorVisible ? 'active' : ''}`} type="button" title={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-label={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-pressed={inspectorVisible} onClick={() => setInspectorVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('INSPECTOR', inspectorVisible ? 'Hide the properties Inspector. Selecting an object opens it automatically.' : 'Show the properties Inspector. Selecting an object also opens it automatically.')}><Icon name="inspector" /></button>
+            <div class="global-panel-group" role="group" aria-label="Racks">
+              <button ref={pagesRackToggleRef} class={`global-panel-toggle pages-rack-header-toggle ${pagesRackOpen ? 'active' : ''}`} type="button" title={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-label={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-pressed={pagesRackOpen} onClick={() => {
+                setToolRackOpen(null);
+                if (pagesRackOpen) closePagesRack();
+                else {
+                  focusWindow('pages');
+                  setPagesRackOpen(true);
+                  closeComponentRack();
+                }
+              }} onMouseEnter={() => updateToolbarHint('PAGES RACK', 'Manage the pages in this project.')}><Icon name="pages" /></button>
+              <button ref={componentRackToggleRef} class={`global-panel-toggle component-rack-header-toggle ${componentRackOpen ? 'active' : ''}`} type="button" title={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-label={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-pressed={componentRackOpen} onClick={() => {
+                setToolRackOpen(null);
+                if (componentRackOpen) closeComponentRack();
+                else {
+                  setComponentRackOpen(true);
+                  closePagesRack();
+                }
+              }} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse and reuse components saved to your personal library.')}><Icon name="rack" /></button>
+            </div>
+            <span class="global-panel-group-divider" aria-hidden="true" />
+            <div class="global-panel-group" role="group" aria-label="Side panels">
+              <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
+              <button class={`global-panel-toggle inspector-header-toggle ${inspectorVisible ? 'active' : ''}`} type="button" title={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-label={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-pressed={inspectorVisible} onClick={() => setInspectorVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('INSPECTOR', inspectorVisible ? 'Hide the properties Inspector. Selecting an object opens it automatically.' : 'Show the properties Inspector. Selecting an object also opens it automatically.')}><Icon name="inspector" /></button>
+            </div>
+            <span class="global-panel-group-divider" aria-hidden="true" />
+            <div class="global-panel-group" role="group" aria-label="Workspace windows">
+              <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) openMainCanvas(); else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
+              <button class={`global-panel-toggle component-canvas-header-toggle ${componentCanvasOpen ? 'active' : ''}`} type="button" title={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-label={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-pressed={componentCanvasOpen} onClick={() => { if (componentCanvasClosed || componentCanvasMinimized) openComponentCanvas(); else { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); setActiveEditorId('main'); if (!canvasClosed && !canvasMinimized) focusWindow('main-canvas'); } }} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', componentCanvasClosed || componentCanvasMinimized ? 'Open the Component Canvas window.' : 'Close the Component Canvas window.')}><Icon name="componentCanvas" /></button>
+              <button class={`global-panel-toggle node-logic-header-toggle ${nodeLogicOpen ? 'active' : ''}`} type="button" title={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-label={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-pressed={nodeLogicOpen} onClick={() => { if (nodeLogicClosed || nodeLogicMinimized) openNodeLogic(); else { setNodeLogicClosed(true); setNodeLogicMinimized(false); } }} onMouseEnter={() => updateToolbarHint('NODE LOGIC', nodeLogicClosed || nodeLogicMinimized ? 'Open the Node Logic workspace.' : 'Close the Node Logic workspace.')}><Icon name="logicNodes" /></button>
+            </div>
+            <span class="global-panel-group-divider" aria-hidden="true" />
             <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
           </div>
         </nav>
@@ -1893,7 +2262,44 @@ export function App() {
           </div>
         </div>
       </header>
-      <nav class="tool-rail" aria-label="Tool Rack" onMouseEnter={() => updateToolbarHint('TOOL RACK', 'Choose a cursor tool or create a design object. The active cursor tool works in both Canvas workspaces.')}>
+      {(workspacePreferencesReviewRequired ||
+        initialWorkspacePreferences.status === 'unsupported-newer-schema' ||
+        initialWorkspacePreferences.status === 'storage-unavailable') && (
+        <div class="workspace-preferences-recovery" role="status" aria-live="polite">
+          <div class="workspace-preferences-recovery-copy">
+            <strong>Workspace layout preferences</strong>
+            <span>
+              {initialWorkspacePreferences.status === 'migrated'
+                ? 'Legacy window settings were found. Review the restored layout before converting them to Workspace Preferences V1.'
+                : initialWorkspacePreferences.status === 'recovered'
+                  ? 'Some saved layout values needed safe recovery. Review the restored layout before saving it.'
+                  : initialWorkspacePreferences.status === 'malformed'
+                    ? 'The saved workspace layout is unreadable. The app loaded safe defaults; replacing the damaged record requires your approval.'
+                    : initialWorkspacePreferences.status === 'unsupported-newer-schema'
+                      ? 'This layout was saved by a newer Folio version. Safe defaults are active and the newer record will not be overwritten.'
+                      : 'Browser storage is unavailable. Workspace layout changes cannot be saved in this session.'}
+            </span>
+          </div>
+          {workspacePreferencesReviewRequired && (
+            <button type="button" onClick={() => {
+              setWorkspacePreferencesReviewRequired(false);
+              setWorkspacePreferencesPersistenceEnabled(true);
+              setNotice(
+                initialWorkspacePreferences.status === 'migrated'
+                  ? 'Workspace Preferences V1 migration enabled.'
+                  : 'Recovered workspace layout accepted and saving enabled.',
+              );
+            }}>
+              {initialWorkspacePreferences.status === 'migrated'
+                ? 'Migrate saved layout'
+                : initialWorkspacePreferences.status === 'malformed'
+                  ? 'Replace damaged layout'
+                  : 'Use recovered layout'}
+            </button>
+          )}
+        </div>
+      )}
+      <nav ref={toolRailRef} class="tool-rail" aria-label="Tool Rack" onMouseEnter={() => updateToolbarHint('TOOL RACK', 'Choose a cursor tool or create a design object. The active cursor tool works in both Canvas workspaces.')}>
         <div class="tool-rack-caption">TOOLS</div>
         {CANVAS_TOOL_GROUPS.map((group) => {
           const activeInGroup = group.tools.includes(activeCanvasToolId);
@@ -1986,6 +2392,21 @@ export function App() {
       </nav>
 
       <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Each Layer is one object. Drag an object that is off Canvas to restore it; an object already on Canvas cannot be duplicated by dragging.', ['CTRL/CMD + M: MASK', 'CTRL/CMD + SHIFT + M: UNMASK'])}>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize Layers sidebar"
+          aria-valuenow={panelWidths.layers}
+          aria-valuemin={PANEL_RESIZE_CONSTRAINTS.layers.minWidth}
+          aria-valuemax={PANEL_RESIZE_CONSTRAINTS.layers.maxWidth}
+          tabIndex={layersVisible ? 0 : -1}
+          data-resize-panel="layers"
+          class={`panel-resize-handle panel-resize-handle-right ${resizingPanel === 'layers' ? 'is-active' : ''}`}
+          title="Drag to resize Layers sidebar (double-click to reset)"
+          onMouseDown={(event) => startPanelResize('layers', event)}
+          onDblClick={() => resetPanelWidth('layers')}
+          onKeyDown={(event) => handlePanelResizeKeyDown('layers', event)}
+        />
         <div class="panel-heading">
           <h2>Layers</h2>
         </div>
@@ -2104,46 +2525,6 @@ export function App() {
                       setLayerColorPickerKey(key);
                     }}
                   />
-                  {layerColorPickerKey === `${activeEditorId}:${node.id}` && (
-                    <div
-                      ref={layerColorPaletteRef}
-                      class="layer-color-palette"
-                      style={layerColorPickerPosition ? { top: `${layerColorPickerPosition.top}px`, left: `${layerColorPickerPosition.left}px` } : undefined}
-                      role="group"
-                      aria-label={`Color tags for ${node.name}`}
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      <span>Layer color</span>
-                      <div class="layer-color-swatches">
-                        {LAYER_COLOR_PRESETS.map((color) => (
-                          <button
-                            type="button"
-                            key={color}
-                            class={'layer-color-swatch ' + (node.layerColor === color ? 'active' : '')}
-                            style={{ backgroundColor: color }}
-                            title={color}
-                            aria-label={`Apply ${color} to selected layers`}
-                            onClick={() => {
-                              setLayerColorFromRow(node.id, color);
-                              setLayerColorPickerKey(null);
-                              setLayerColorPickerPosition(null);
-                              layerColorAnchorRef.current = null;
-                            }}
-                          />
-                        ))}
-                      </div>
-                      <label class="layer-color-custom">
-                        <span>Custom</span>
-                        <input
-                          type="color"
-                          value={node.layerColor ?? '#7f8797'}
-                          aria-label="Custom layer color"
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={(event) => setLayerColorFromRow(node.id, event.currentTarget.value)}
-                        />
-                      </label>
-                    </div>
-                  )}
                   <button
                     type="button"
                     class={'layer-control ' + (node.visible ? 'active' : '')}
@@ -2175,58 +2556,6 @@ export function App() {
             <div class="empty-layers">Your layers will appear here.</div>
           )}
         </div>
-        {layerContextMenu && (
-          <div
-            ref={layerContextMenuRef}
-            class="layer-context-menu"
-            role="menu"
-            aria-label={`Actions for ${contextMenuNodes.find((node) => node.id === layerContextMenu.nodeId)?.name ?? 'layer'}`}
-            style={{ position: 'fixed', left: layerContextMenu.x + 'px', top: layerContextMenu.y + 'px' }}
-            onContextMenu={(event) => event.preventDefault()}
-          >
-            <button type="button" role="menuitem" onClick={() => {
-              const menu = layerContextMenu;
-              setLayerContextMenu(null);
-              beginLayerRename(menu.nodeId, false);
-            }}>Rename</button>
-            {contextMenuCanGroup && <button type="button" role="menuitem" onClick={() => {
-              const menu = layerContextMenu;
-              const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
-              setLayerContextMenu(null);
-              selectionSourceRef.current = 'layers';
-              targetDispatch({ type: 'group-layers', nodeIds: contextMenuRootIds });
-            }}>Group</button>}
-            {contextMenuCanUngroup && <button type="button" role="menuitem" onClick={() => {
-              const menu = layerContextMenu;
-              const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
-              setLayerContextMenu(null);
-              selectionSourceRef.current = 'layers';
-              targetDispatch({ type: 'ungroup-layers', nodeIds: contextMenuRootIds });
-            }}>Ungroup</button>}
-            {contextMenuCanMask && <button type="button" role="menuitem" onClick={() => {
-              const menu = layerContextMenu;
-              const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
-              setLayerContextMenu(null);
-              selectionSourceRef.current = 'layers';
-              targetDispatch({ type: 'mask-layer', nodeId: contextMenuRootIds[0] });
-            }}>Create Clipping Mask</button>}
-            {contextMenuCanUnmask && <button type="button" role="menuitem" onClick={() => {
-              const menu = layerContextMenu;
-              const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
-              setLayerContextMenu(null);
-              selectionSourceRef.current = 'layers';
-              targetDispatch({ type: 'unmask-layer', nodeId: contextMenuRootIds[0] });
-            }}>Release Clipping Mask</button>}
-            <div class="layer-context-menu-separator" role="separator" />
-            <button type="button" role="menuitem" class="layer-context-menu-danger" onClick={() => {
-              const menu = layerContextMenu;
-              const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
-              setLayerContextMenu(null);
-              selectionSourceRef.current = 'layers';
-              targetDispatch({ type: 'delete-nodes', nodeIds: menu.nodeIds });
-            }}><Icon name="trash" /> Delete{layerContextMenu.nodeIds.length > 1 ? ` (${layerContextMenu.nodeIds.length})` : ''}</button>
-          </div>
-        )}
       </aside>
 
       {!canvasClosed && !canvasMinimized && !(componentCanvasOpen && !componentCanvasFloating && !canvasFloating) && !(nodeLogicOpen && !nodeLogicFloating && !canvasFloating) && <FloatingWindow
@@ -2294,7 +2623,6 @@ export function App() {
             onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
             onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'main')}
           />
-          <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
 
       </FloatingWindow>}
@@ -2347,7 +2675,22 @@ export function App() {
           )}
           <div class="canvas-window-tools">
             <div class="workspace-tools component-canvas-create-tools" aria-label="Component actions">
-              <button type="button" title="Save selected as reusable component" aria-label="Save selected as reusable component" disabled={selectedComponentNodes.length === 0} onClick={() => saveNodesAsComponent(selectedComponentNodes)}><Icon name="save" /></button>
+              <button
+                type="button"
+                class="component-master-save-button"
+                title={editingComponent ? `Update master “${editingComponent.name}”` : 'Save Component Canvas as new component'}
+                aria-label={editingComponent ? `Update master ${editingComponent.name}` : 'Save Component Canvas as new component'}
+                disabled={!editingComponent && componentDocument.nodes.length === 0}
+                onClick={saveComponentCanvasMaster}
+              ><Icon name="save" /></button>
+              <button
+                type="button"
+                class="component-save-new-button"
+                title="Save selected layers as a new component"
+                aria-label="Save selected layers as a new component"
+                disabled={selectedComponentNodes.length === 0}
+                onClick={() => saveNodesAsComponent(selectedComponentNodes, componentDocument.nodes)}
+              ><Icon name="copyPlus" /></button>
             </div>
             {componentState.selectedNodeIds.length > 1 && (
               <div class="alignment-tools" aria-label="Align selected layers">
@@ -2370,9 +2713,9 @@ export function App() {
               <button class="zoom-button" title="Zoom in" onClick={() => setComponentCanvasZoom((value) => Math.min(2, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
             </div>
             <div class="workspace-window-controls" aria-label="Component Canvas window controls">
-              <button type="button" class="window-control window-control-minimize" title="Minimize Component Canvas" aria-label="Minimize Component Canvas" disabled={Boolean(pendingComponentDeletion)} onClick={() => setComponentCanvasMinimized(true)}></button>
+              <button type="button" class="window-control window-control-minimize" title="Minimize Component Canvas" aria-label="Minimize Component Canvas" disabled={Boolean(pendingComponentDeletion)} onClick={() => { setComponentCanvasMinimized(true); setActiveEditorId('main'); if (!canvasClosed && !canvasMinimized) focusWindow('main-canvas'); }}></button>
               <button type="button" class="window-control" title={componentCanvasFloating ? "Dock Component Canvas" : "Float Component Canvas"} aria-label={componentCanvasFloating ? "Dock Component Canvas" : "Float Component Canvas"} aria-pressed={componentCanvasFloating} onClick={() => setComponentCanvasWindowMode(componentCanvasFloating ? 'docked' : 'floating')}>{componentCanvasFloating ? "▣" : "□"}</button>
-              <button type="button" class="window-control window-control-close" title="Close Component Canvas window" aria-label="Close Component Canvas window" disabled={Boolean(pendingComponentDeletion)} onClick={() => { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); setComponentCanvasWindowMode('docked'); }}>×</button>
+              <button type="button" class="window-control window-control-close" title="Close Component Canvas window" aria-label="Close Component Canvas window" disabled={Boolean(pendingComponentDeletion)} onClick={() => { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); setComponentCanvasWindowMode('docked'); setActiveEditorId('main'); if (!canvasClosed && !canvasMinimized) focusWindow('main-canvas'); }}>×</button>
             </div>
           </div>
         </div>
@@ -2393,7 +2736,6 @@ export function App() {
             onTransformCommit={(nodes) => componentDispatch({ type: 'transform-nodes', nodes })}
             onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'component')}
           />
-          <div class="canvas-hint">SCROLL: PAN Y · SHIFT + SCROLL: PAN X · CTRL/CMD + SCROLL: ZOOM · SPACE + DRAG: PAN</div>
         </div>
 
       </FloatingWindow>}
@@ -2487,6 +2829,21 @@ export function App() {
           componentDispatch({ type: 'commit-edit' });
         }
       }} onMouseEnter={() => updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')}>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize Inspector panel"
+          aria-valuenow={panelWidths.inspector}
+          aria-valuemin={PANEL_RESIZE_CONSTRAINTS.inspector.minWidth}
+          aria-valuemax={PANEL_RESIZE_CONSTRAINTS.inspector.maxWidth}
+          tabIndex={inspectorVisible ? 0 : -1}
+          data-resize-panel="inspector"
+          class={`panel-resize-handle panel-resize-handle-left ${resizingPanel === 'inspector' ? 'is-active' : ''}`}
+          title="Drag to resize Inspector panel (double-click to reset)"
+          onMouseDown={(event) => startPanelResize('inspector', event)}
+          onDblClick={() => resetPanelWidth('inspector')}
+          onKeyDown={(event) => handlePanelResizeKeyDown('inspector', event)}
+        />
         <div class="panel-heading inspector-heading">
           <div>
             <span class="panel-kicker">PROPERTIES</span>
@@ -2614,13 +2971,13 @@ export function App() {
       </aside>
 
 
-      <section class={`pages-rack-panel ${pagesRackOpen ? 'is-open' : ''}`} style={{ zIndex: getWindowZIndex(windowOrder, 'pages') }} onPointerDown={() => focusWindow('pages')} aria-label="Pages Rack" aria-hidden={!pagesRackOpen}>
+      <section ref={pagesRackRef} class={`pages-rack-panel ${pagesRackOpen ? 'is-open' : ''}`} onPointerDown={() => focusWindow('pages')} aria-label="Pages Rack" aria-hidden={!pagesRackOpen} inert={!pagesRackOpen}>
         <div class="pages-rack-heading">
           <div class="pages-rack-title"><span class="panel-kicker">PROJECT STRUCTURE</span><strong>Pages</strong><span class="pages-rack-count">{pages.length}</span></div>
           <div class="pages-rack-actions">
             <input class="pages-rack-name-input" type="text" placeholder="New page name..." value={pageNameDraft} onInput={(event) => setPageNameDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') addPage(); }} aria-label="New page name" />
             <button type="button" class="pages-rack-add" onClick={addPage} disabled={!pageNameDraft.trim()}>＋ Add page</button>
-            <button type="button" class="component-rack-close" title="Close Pages Rack" aria-label="Close Pages Rack" onClick={() => setPagesRackOpen(false)}>×</button>
+            <button type="button" class="component-rack-close" title="Close Pages Rack" aria-label="Close Pages Rack" onClick={closePagesRack}>×</button>
           </div>
         </div>
         <div class="pages-rack-list">
@@ -2634,7 +2991,7 @@ export function App() {
         </div>
       </section>
 
-      <section class={`component-rack-panel ${componentRackOpen ? 'is-open' : ''}`} aria-label="Component Rack" aria-hidden={!componentRackOpen}>
+      <section ref={componentRackRef} class={`component-rack-panel ${componentRackOpen ? 'is-open' : ''}`} aria-label="Component Rack" aria-hidden={!componentRackOpen} inert={!componentRackOpen}>
         <div class="component-rack-heading">
           <div class="component-rack-title">
             <span class="panel-kicker">YOUR LIBRARY</span>
@@ -2645,14 +3002,14 @@ export function App() {
             <input class="component-rack-search" type="search" placeholder="Search components..." value={componentRackSearch} onInput={(event) => setComponentRackSearch(event.currentTarget.value)} />
             <button type="button" class="component-rack-save" onClick={createNewMasterComponent} title="Create a new master component">＋ New component</button>
             <button type="button" class="component-rack-save" disabled={selectedNodes.length === 0} onClick={saveSelectionAsComponent} title="Save selected layers as a reusable component">Save selection</button>
-            <button type="button" class="component-rack-close" title="Close Component Rack" aria-label="Close Component Rack" onClick={() => setComponentRackOpen(false)}>×</button>
+            <button type="button" class="component-rack-close" title="Close Component Rack" aria-label="Close Component Rack" onClick={closeComponentRack}>×</button>
           </div>
         </div>
         <div class="component-rack-list">
           {ownedComponents.filter((component) => component.name.toLowerCase().includes(componentRackSearch.toLowerCase())).map((component) => (
             <article class="component-rack-card" key={component.id}>
               <button type="button" class="component-rack-preview" title={`Insert linked ${component.name} into Main Canvas`} onClick={() => insertOwnedComponent(component)}>
-                <span class="component-rack-preview-shapes">{component.document.nodes.slice(0, 5).map((node) => <span class={`component-preview-shape shape-${node.type}`} style={node.type === 'text' ? { color: node.style.fill } : node.type === 'component-instance' || node.type === 'group' ? {} : { background: node.style.fill }} />)}</span>
+                <ComponentThumbnail component={component} components={ownedComponents} />
                 <span class="component-rack-card-name">{component.name}</span>
                 <span class="component-rack-card-meta">{component.document.nodes.length} master layer{component.document.nodes.length === 1 ? '' : 's'}</span>
               </button>
@@ -2676,6 +3033,108 @@ export function App() {
           {ownedComponents.length > 0 && ownedComponents.every((component) => !component.name.toLowerCase().includes(componentRackSearch.toLowerCase())) && <div class="component-rack-empty">No components match “{componentRackSearch}”.</div>}
         </div>
       </section>
+
+      {(() => {
+        if (!layerColorPickerKey) return null;
+        const prefix = `${activeEditorId}:`;
+        if (!layerColorPickerKey.startsWith(prefix)) return null;
+        const targetNodeId = layerColorPickerKey.slice(prefix.length);
+        const colorNode = layerSourceNodes.find((item) => item.id === targetNodeId);
+        if (!colorNode) return null;
+        return (
+          <div
+            ref={layerColorPaletteRef}
+            class="layer-color-palette"
+            style={layerColorPickerPosition ? { top: `${layerColorPickerPosition.top}px`, left: `${layerColorPickerPosition.left}px` } : undefined}
+            role="group"
+            aria-label={`Color tags for ${colorNode.name}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <span>Layer color</span>
+            <div class="layer-color-swatches">
+              {LAYER_COLOR_PRESETS.map((color) => (
+                <button
+                  type="button"
+                  key={color}
+                  class={'layer-color-swatch ' + (colorNode.layerColor === color ? 'active' : '')}
+                  style={{ backgroundColor: color }}
+                  title={color}
+                  aria-label={`Apply ${color} to selected layers`}
+                  onClick={() => {
+                    setLayerColorFromRow(colorNode.id, color);
+                    setLayerColorPickerKey(null);
+                    setLayerColorPickerPosition(null);
+                    layerColorAnchorRef.current = null;
+                  }}
+                />
+              ))}
+            </div>
+            <label class="layer-color-custom">
+              <span>Custom</span>
+              <input
+                type="color"
+                value={colorNode.layerColor ?? '#7f8797'}
+                aria-label="Custom layer color"
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => setLayerColorFromRow(colorNode.id, event.currentTarget.value)}
+              />
+            </label>
+          </div>
+        );
+      })()}
+
+      {layerContextMenu && (
+        <div
+          ref={layerContextMenuRef}
+          class="layer-context-menu"
+          role="menu"
+          aria-label={`Actions for ${contextMenuNodes.find((node) => node.id === layerContextMenu.nodeId)?.name ?? 'layer'}`}
+          style={{ position: 'fixed', left: layerContextMenu.x + 'px', top: layerContextMenu.y + 'px' }}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button type="button" role="menuitem" onClick={() => {
+            const menu = layerContextMenu;
+            setLayerContextMenu(null);
+            beginLayerRename(menu.nodeId, false);
+          }}>Rename</button>
+          {contextMenuCanGroup && <button type="button" role="menuitem" onClick={() => {
+            const menu = layerContextMenu;
+            const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
+            setLayerContextMenu(null);
+            selectionSourceRef.current = 'layers';
+            targetDispatch({ type: 'group-layers', nodeIds: contextMenuRootIds });
+          }}>Group</button>}
+          {contextMenuCanUngroup && <button type="button" role="menuitem" onClick={() => {
+            const menu = layerContextMenu;
+            const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
+            setLayerContextMenu(null);
+            selectionSourceRef.current = 'layers';
+            targetDispatch({ type: 'ungroup-layers', nodeIds: contextMenuRootIds });
+          }}>Ungroup</button>}
+          {contextMenuCanMask && <button type="button" role="menuitem" onClick={() => {
+            const menu = layerContextMenu;
+            const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
+            setLayerContextMenu(null);
+            selectionSourceRef.current = 'layers';
+            targetDispatch({ type: 'mask-layer', nodeId: contextMenuRootIds[0] });
+          }}>Create Clipping Mask</button>}
+          {contextMenuCanUnmask && <button type="button" role="menuitem" onClick={() => {
+            const menu = layerContextMenu;
+            const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
+            setLayerContextMenu(null);
+            selectionSourceRef.current = 'layers';
+            targetDispatch({ type: 'unmask-layer', nodeId: contextMenuRootIds[0] });
+          }}>Release Clipping Mask</button>}
+          <div class="layer-context-menu-separator" role="separator" />
+          <button type="button" role="menuitem" class="layer-context-menu-danger" onClick={() => {
+            const menu = layerContextMenu;
+            const targetDispatch = menu.editorId === 'main' ? dispatch : componentDispatch;
+            setLayerContextMenu(null);
+            selectionSourceRef.current = 'layers';
+            targetDispatch({ type: 'delete-nodes', nodeIds: menu.nodeIds });
+          }}><Icon name="trash" /> Delete{layerContextMenu.nodeIds.length > 1 ? ` (${layerContextMenu.nodeIds.length})` : ''}</button>
+        </div>
+      )}
 
       <footer class="statusbar">
         <div><span class="status-brand">F</span><span>Folio Studio <b>0.1.0</b></span></div>

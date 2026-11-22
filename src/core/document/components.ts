@@ -1,4 +1,6 @@
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument } from './types';
+import { createEmptyDocument } from './factory';
+import { expandSelectedLayerIds } from './layers';
 
 function createNodeId(instanceId: string, childId: string): string {
   return `${instanceId}__${childId}`;
@@ -81,6 +83,7 @@ export function detachComponentInstance(instance: ComponentInstanceNode, compone
       ...effective,
       id: detachedIds.get(sourceNode.id)!,
       parentId: sourceNode.parentId ? (detachedIds.get(sourceNode.parentId) ?? instance.parentId) : instance.parentId,
+      clipMaskBaseId: sourceNode.clipMaskBaseId ? detachedIds.get(sourceNode.clipMaskBaseId) : undefined,
       name: sourceNode.name,
       x: rotatedX - width / 2,
       y: rotatedY - height / 2,
@@ -92,6 +95,64 @@ export function detachComponentInstance(instance: ComponentInstanceNode, compone
       onCanvas: instance.onCanvas !== false && sourceNode.onCanvas !== false,
     } as DesignNode;
   });
+}
+
+/**
+ * Builds a clean, self-contained ComponentDefinition from selected document
+ * layers while preserving nested Group hierarchy and clipping-mask links.
+ * Any parentId or clipMaskBaseId pointing outside the saved subset is safely
+ * stripped so the resulting master document always passes hierarchy validation.
+ */
+export function buildComponentDefinitionFromNodes(
+  sourceNodes: readonly DesignNode[],
+  selectedNodeIds: readonly string[],
+  defaultName: string,
+  options: { id?: string; now?: string } = {},
+): ComponentDefinition | null {
+  const expandedIds = new Set(expandSelectedLayerIds(sourceNodes, selectedNodeIds));
+  const reusableNodes = sourceNodes.filter(
+    (node) => expandedIds.has(node.id) && node.type !== 'component-instance',
+  );
+  if (reusableNodes.length === 0) return null;
+
+  const includedIds = new Set(reusableNodes.map((node) => node.id));
+  const topLevelNodes = reusableNodes.filter((node) => !node.parentId || !includedIds.has(node.parentId));
+  const name = topLevelNodes.length === 1 ? topLevelNodes[0].name : defaultName;
+
+  const minX = Math.min(...reusableNodes.map((node) => node.x));
+  const minY = Math.min(...reusableNodes.map((node) => node.y));
+  const maxX = Math.max(...reusableNodes.map((node) => node.x + node.width));
+  const maxY = Math.max(...reusableNodes.map((node) => node.y + node.height));
+
+  const now = options.now ?? new Date().toISOString();
+  const normalizedNodes: DesignNode[] = reusableNodes.map((node) => {
+    const nextParentId = node.parentId && includedIds.has(node.parentId) ? node.parentId : undefined;
+    const nextClipMaskBaseId = node.clipMaskBaseId && includedIds.has(node.clipMaskBaseId) && node.clipMaskBaseId !== node.id
+      ? node.clipMaskBaseId
+      : undefined;
+    const next: DesignNode = {
+      ...node,
+      x: node.x - minX,
+      y: node.y - minY,
+    };
+    if (nextParentId) next.parentId = nextParentId;
+    else delete next.parentId;
+    if (nextClipMaskBaseId) next.clipMaskBaseId = nextClipMaskBaseId;
+    else delete next.clipMaskBaseId;
+    return next;
+  });
+
+  return {
+    id: options.id ?? (globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`),
+    name,
+    document: {
+      ...createEmptyDocument(name, Math.max(1, maxX - minX), Math.max(1, maxY - minY)),
+      background: '#00000000',
+      nodes: normalizedNodes,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 export function replaceComponentInstancesInDocument(document: FolioDocument, component: ComponentDefinition): FolioDocument {

@@ -12,7 +12,7 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     // Keep the allow-list narrow instead of disabling Vite host validation.
-    allowedHosts: ['.app.github.dev'],
+    allowedHosts: ['.app.github.dev', '.run.app'],
   },
   preview: {
     host: '0.0.0.0',

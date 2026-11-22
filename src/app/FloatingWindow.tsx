@@ -37,10 +37,18 @@ interface PointerSession {
   startY: number;
   position: WindowPosition;
   size: WindowSize;
-  viewport: WindowViewport;
+  shell: HTMLElement | null;
 }
 
 const RESIZE_DIRECTIONS = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+
+function readViewport(shell: HTMLElement | null): WindowViewport {
+  const bounds = shell?.getBoundingClientRect();
+  return {
+    width: Math.max(1, bounds?.width ?? window.innerWidth),
+    height: Math.max(1, bounds?.height ?? window.innerHeight),
+  };
+}
 
 export function FloatingWindow({
   as = 'div',
@@ -75,45 +83,53 @@ export function FloatingWindow({
 
     const target = event.target as HTMLElement;
     const resizeHandle = target.closest('[data-window-resize]') as HTMLElement | null;
-    const dragHandle = target.closest('.workspace-toolbar-draggable, .canvas-minimized-titlebar');
-    const interactive = target.closest('button, a, input, select, textarea, [role="button"]');
-    const mode = resizeHandle && floating ? 'resize' : draggable && dragHandle && !interactive ? 'drag' : null;
+    const dragHandle = target.closest(
+      '.workspace-toolbar-draggable, .canvas-minimized-titlebar, [data-window-drag-handle]',
+    );
+    const interactive = target.closest(
+      'button, a, input, select, textarea, [role="button"], [contenteditable="true"], [data-window-no-drag]',
+    );
+    const mode = resizeHandle && floating
+      ? 'resize'
+      : draggable && dragHandle && !interactive
+        ? 'drag'
+        : null;
+
     if (!mode) return;
 
     event.preventDefault();
     event.stopPropagation();
     cleanupSession();
 
-    const shell = event.currentTarget.closest('.app-shell');
-    const bounds = shell?.getBoundingClientRect();
-    const viewport: WindowViewport = {
-      width: Math.max(1, bounds?.width ?? window.innerWidth),
-      height: Math.max(1, bounds?.height ?? window.innerHeight),
-    };
-    const localX = event.clientX - (bounds?.left ?? 0);
-    const localY = event.clientY - (bounds?.top ?? 0);
+    const shell = event.currentTarget.closest('.app-shell') as HTMLElement | null;
     const session: PointerSession = {
       pointerId: event.pointerId,
       mode,
       direction: resizeHandle?.getAttribute('data-window-resize') ?? '',
-      startX: localX,
-      startY: localY,
+      startX: event.clientX,
+      startY: event.clientY,
       position: { ...position },
       size: minimized ? { width: 238, height: 34 } : { ...size },
-      viewport,
+      shell,
     };
     sessionRef.current = session;
 
+    let cleanup = () => {};
     const handleMove = (moveEvent: PointerEvent) => {
       if (sessionRef.current !== session || moveEvent.pointerId !== session.pointerId) return;
       moveEvent.preventDefault();
-      const dx = moveEvent.clientX - (bounds?.left ?? 0) - session.startX;
-      const dy = moveEvent.clientY - (bounds?.top ?? 0) - session.startY;
+
+      // Read current bounds on every move so a viewport resize during a drag
+      // cannot leave the active window outside the newly available workspace.
+      const viewport = readViewport(session.shell);
+      const dx = moveEvent.clientX - session.startX;
+      const dy = moveEvent.clientY - session.startY;
+
       if (session.mode === 'drag') {
         onPositionChange(clampWindowPosition(
           { x: session.position.x + dx, y: session.position.y + dy },
           session.size,
-          session.viewport,
+          viewport,
         ));
       } else {
         const next = resizeWindowFromPointer(
@@ -122,7 +138,7 @@ export function FloatingWindow({
           session.direction,
           dx,
           dy,
-          session.viewport,
+          viewport,
           minWidth,
           minHeight,
         );
@@ -130,12 +146,16 @@ export function FloatingWindow({
         onSizeChange(next.size);
       }
     };
-
+    const handleBlur = () => cleanup();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') cleanup();
+    };
     const finish = (endEvent?: PointerEvent) => {
       if (endEvent && endEvent.pointerId !== session.pointerId) return;
       cleanup();
     };
-    const cleanup = () => {
+
+    cleanup = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', finish);
       window.removeEventListener('pointercancel', finish);
@@ -143,10 +163,6 @@ export function FloatingWindow({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (sessionRef.current === session) sessionRef.current = null;
       if (cleanupRef.current === cleanup) cleanupRef.current = null;
-    };
-    const handleBlur = () => cleanup();
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') cleanup();
     };
 
     window.addEventListener('pointermove', handleMove, { passive: false });
@@ -169,8 +185,15 @@ export function FloatingWindow({
       class={className}
       style={rootStyle}
       onPointerDown={handlePointerDown}
+      onFocusCapture={(event) => {
+        // Focus entering a child control (including keyboard navigation) raises
+        // the owning window without moving focus or causing a focus loop.
+        if (event.target !== event.currentTarget) onFocus?.();
+      }}
       onMouseEnter={onMouseEnter}
       data-window-id={id}
+      data-window-floating={floating ? 'true' : 'false'}
+      data-window-minimized={minimized ? 'true' : 'false'}
     >
       {children}
       {floating && RESIZE_DIRECTIONS.map((direction) => (
@@ -179,7 +202,7 @@ export function FloatingWindow({
           data-window-resize={direction}
           class={'workspace-resize-handle resize-' + direction}
           role="presentation"
-          aria-label={'Resize window from ' + direction}
+          aria-hidden="true"
         />
       ))}
     </Root>

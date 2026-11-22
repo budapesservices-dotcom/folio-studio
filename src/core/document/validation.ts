@@ -44,7 +44,10 @@ function isCommonNode(value: Record<string, unknown>): boolean {
     isFiniteNumber(value.opacity) && value.opacity >= 0 && value.opacity <= 1 &&
     typeof value.visible === 'boolean' &&
     typeof value.locked === 'boolean' &&
-    (value.parentId === undefined || value.parentId === null || (isString(value.parentId) && value.parentId.length > 0))
+    (value.layerColor === undefined || isString(value.layerColor)) &&
+    (value.onCanvas === undefined || typeof value.onCanvas === 'boolean') &&
+    (value.parentId === undefined || value.parentId === null || (isString(value.parentId) && value.parentId.length > 0)) &&
+    (value.clipMaskBaseId === undefined || (isString(value.clipMaskBaseId) && value.clipMaskBaseId.length > 0))
   );
 }
 
@@ -103,6 +106,9 @@ function isValidLayerHierarchy(nodes: readonly DesignNode[]): boolean {
       if (visited.has(parentId) || !nodeById.has(parentId)) return false;
       visited.add(parentId);
       parentId = nodeById.get(parentId)?.parentId ?? undefined;
+    }
+    if (node.clipMaskBaseId !== undefined) {
+      if (node.clipMaskBaseId === node.id || !nodeById.has(node.clipMaskBaseId)) return false;
     }
   }
   return true;
