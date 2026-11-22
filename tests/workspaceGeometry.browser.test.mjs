@@ -111,6 +111,7 @@ async function launchChromiumAttempt(path, attemptNumber) {
   let stderr = '';
   let spawnError = null;
   let cleanupPromise = null;
+  let cleanupFailure = null;
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   child.on('error', (error) => { spawnError = error; });
@@ -157,7 +158,7 @@ async function launchChromiumAttempt(path, attemptNumber) {
           try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Already gone. */ }
           const stoppedAfterKill = await waitForProcessGroupExit(2500);
           if (!stoppedAfterKill) {
-            throw new Error(
+            cleanupFailure = new Error(
               'Chromium process group remained alive after SIGKILL. PID=' + child.pid +
               '. stderr tail:\\n' + stderr.slice(-3000),
             );
@@ -173,7 +174,14 @@ async function launchChromiumAttempt(path, attemptNumber) {
       }
 
       await waitForChildExit(500);
+      if (process.platform === 'win32' && child.exitCode === null && child.signalCode === null && !spawnError) {
+        cleanupFailure = new Error(
+          'Chromium child process remained alive after termination attempts. PID=' + child.pid +
+          '. stderr tail:\\n' + stderr.slice(-3000),
+        );
+      }
       rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      if (cleanupFailure) throw cleanupFailure;
     })();
     return cleanupPromise;
   };
