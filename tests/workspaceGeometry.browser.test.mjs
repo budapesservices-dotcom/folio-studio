@@ -155,7 +155,13 @@ async function launchChromiumAttempt(path, attemptNumber) {
         const stopped = await waitForProcessGroupExit(4000);
         if (!stopped) {
           try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Already gone. */ }
-          await waitForProcessGroupExit(2500);
+          const stoppedAfterKill = await waitForProcessGroupExit(2500);
+          if (!stoppedAfterKill) {
+            throw new Error(
+              'Chromium process group remained alive after SIGKILL. PID=' + child.pid +
+              '. stderr tail:\\n' + stderr.slice(-3000),
+            );
+          }
         }
       } else if (child.exitCode === null && child.signalCode === null && !spawnError) {
         try { child.kill('SIGTERM'); } catch { /* Already gone. */ }
@@ -786,7 +792,11 @@ async function runAppAcceptance(browser) {
         30000,
       );
     }
-    await delay(800);
+    await waitForApp(
+      browser,
+      'document.querySelectorAll(".component-rack-card").length === 12',
+      'all real Component Rack duplicates remain rendered',
+    );
 
     const counts = await browser.evaluate(
       '({pages:document.querySelectorAll(".pages-rack-card").length,' +
@@ -896,6 +906,56 @@ async function runAppAcceptance(browser) {
     expect(afterResize.right).toBeLessThanOrEqual(1280);
     expect(afterResize.bottom).toBeLessThanOrEqual(800 - 27);
 
+    // Also exercise a straight edge resize, not only the southeast corner.
+    const eastResizeStart = await browser.evaluate(
+      '(() => { const w=document.querySelector("[data-window-id=component-canvas]"); ' +
+      'const h=w?.querySelector("[data-window-resize=e]"); ' +
+      'if(!w || !h) throw new Error("East resize handle is missing"); ' +
+      'const r=w.getBoundingClientRect(), p=h.getBoundingClientRect(); ' +
+      'return {before:{x:r.left,y:r.top,width:r.width,height:r.height},' +
+      'point:{x:p.left+p.width/2,y:p.top+p.height/2}}; })()',
+    );
+    await dispatchMouseDrag(eastResizeStart.point, 35, 0);
+    const afterEastResize = await browser.evaluate(
+      '(() => { const r=document.querySelector("[data-window-id=component-canvas]").getBoundingClientRect(); ' +
+      'return {x:r.left,y:r.top,width:r.width,height:r.height}; })()',
+    );
+    expect(afterEastResize.x).toBeCloseTo(eastResizeStart.before.x, 0);
+    expect(afterEastResize.y).toBeCloseTo(eastResizeStart.before.y, 0);
+    expect(afterEastResize.width).toBeCloseTo(eastResizeStart.before.width + 35, 0);
+    expect(afterEastResize.height).toBeCloseTo(eastResizeStart.before.height, 0);
+
+    // Resizing the viewport during a live drag must re-clamp the actual App
+    // window to the new shell and leave the pointer interaction recoverable.
+    const viewportDragStart = await browser.evaluate(
+      '(() => { const w=document.querySelector("[data-window-id=component-canvas]"); ' +
+      'const t=w.querySelector(".workspace-toolbar-draggable"), r=t.getBoundingClientRect(); ' +
+      'return {x:r.left+Math.min(90,r.width/3),y:r.top+r.height/2}; })()',
+    );
+    await browser.send('Input.dispatchMouseEvent', {
+      type:'mouseMoved', x:viewportDragStart.x, y:viewportDragStart.y,
+    });
+    await browser.send('Input.dispatchMouseEvent', {
+      type:'mousePressed', x:viewportDragStart.x, y:viewportDragStart.y, button:'left', buttons:1, clickCount:1,
+    });
+    await browser.setViewport({ width: 1120, height: 740 });
+    await browser.send('Input.dispatchMouseEvent', {
+      type:'mouseMoved', x:viewportDragStart.x+30, y:viewportDragStart.y+20, button:'left', buttons:1,
+    });
+    await browser.send('Input.dispatchMouseEvent', {
+      type:'mouseReleased', x:viewportDragStart.x+30, y:viewportDragStart.y+20, button:'left', buttons:0, clickCount:1,
+    });
+    const afterViewportResize = await browser.evaluate(
+      '(() => { const r=document.querySelector("[data-window-id=component-canvas]").getBoundingClientRect(); ' +
+      'const s=document.querySelector(".app-shell").getBoundingClientRect(); ' +
+      'return {x:r.left,y:r.top,right:r.right-s.left,bottom:r.bottom-s.top,width:r.width,height:r.height}; })()',
+    );
+    expect(afterViewportResize.x).toBeGreaterThanOrEqual(0);
+    expect(afterViewportResize.y).toBeGreaterThanOrEqual(56);
+    expect(afterViewportResize.right).toBeLessThanOrEqual(1120);
+    expect(afterViewportResize.bottom).toBeLessThanOrEqual(740 - 27);
+    await browser.setViewport({ width: 1280, height: 800 });
+
     // A browser blur during an active drag must end the pointer session; later
     // mouse movement must not continue moving the window.
     const blurDragStart = await browser.evaluate(
@@ -935,6 +995,9 @@ async function runAppAcceptance(browser) {
       afterDrag,
       beforeResize: resizeStart.before,
       afterResize,
+      beforeEastResize: eastResizeStart.before,
+      afterEastResize,
+      afterViewportResize,
       afterBlurCleanup,
       afterPostBlurMove,
     };
@@ -1008,7 +1071,12 @@ async function runAppAcceptance(browser) {
         expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
 
         await browser.wheel(rack.list, 200);
-        await delay(100);
+        await waitForApp(
+          browser,
+          'document.querySelector(' + JSON.stringify(rack.list) + ').scrollTop > 0',
+          rack.panel + ' list scrolls after real wheel input',
+          5000,
+        );
         const scrollTop = await browser.evaluate(
           'document.querySelector(' + JSON.stringify(rack.list) + ').scrollTop',
         );
