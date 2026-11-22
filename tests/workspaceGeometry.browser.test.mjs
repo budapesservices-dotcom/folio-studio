@@ -568,21 +568,32 @@ async function startViteApp() {
 }
 
 async function waitForApp(browser, expression, description, timeout = 15000) {
-  try {
-    await browser.evaluate(
-      'new Promise((resolve, reject) => {' +
-      'const deadline = Date.now() + ' + timeout + ';' +
-      'const check = () => {' +
-      'let passed = false;' +
-      'try { passed = Boolean(' + expression + '); } catch (error) { reject(error); return; }' +
-      'if (passed) resolve(true);' +
-      'else if (Date.now() >= deadline) reject(new Error("Timed out waiting for " + ' + JSON.stringify(description) + '));' +
-      'else setTimeout(check, 50);' +
-      '}; check(); })',
-    );
-  } catch (error) {
-    throw new Error('Browser wait failed (' + description + '): ' + String(error));
+  const deadline = Date.now() + timeout;
+  let lastNavigationError = null;
+  while (Date.now() < deadline) {
+    const remaining = Math.max(1, deadline - Date.now());
+    try {
+      await browser.evaluate(
+        'new Promise((resolve,reject)=>{const deadline=Date.now()+' + remaining + ';' +
+        'const check=()=>{let passed=false;try{passed=Boolean(' + expression + ');}catch(error){reject(error);return;}' +
+        'if(passed)resolve(true);else if(Date.now()>=deadline)reject(new Error("Timed out waiting for " +' +
+        JSON.stringify(description) + '));else setTimeout(check,40);};check();})',
+      );
+      return;
+    } catch (error) {
+      const message = String(error);
+      if (/Inspected target navigated or closed|Execution context was destroyed|Cannot find context with specified id|No frame with given id/i.test(message)) {
+        lastNavigationError = message;
+        await delay(40);
+        continue;
+      }
+      throw new Error('Browser wait failed (' + description + '): ' + message);
+    }
   }
+  throw new Error(
+    'Browser wait failed (' + description + '): timed out after ' + timeout + 'ms' +
+    (lastNavigationError ? '; last transient navigation error: ' + lastNavigationError : ''),
+  );
 }
 
 async function waitForAppRackAnimation(browser, selector) {
@@ -1173,9 +1184,11 @@ async function runAppAcceptance(browser) {
     const savedWorkspaceBeforeReload = await browser.evaluate(
       'JSON.parse(localStorage.getItem("folio.workspace-layout.v1"))',
     );
+    const workspaceTimeOriginBeforeReload = await browser.evaluate('performance.timeOrigin');
     await browser.send('Page.reload', { ignoreCache: true });
     await waitForApp(
       browser,
+      'performance.timeOrigin !== ' + workspaceTimeOriginBeforeReload + ' && ' +
       'document.querySelector(".app-shell")?.getAttribute("aria-busy")==="false" && ' +
       '!!document.querySelector("[data-window-id=component-canvas]")',
       'actual Preact App restores its open Component Canvas from Workspace Preferences V1',
@@ -1225,9 +1238,11 @@ async function runAppAcceptance(browser) {
       'localStorage.setItem("folio."+workspace.replace(/-/g,"-").replace("main-canvas","canvas").replace("component-canvas","component-canvas").replace("node-logic","node-logic")+"-window",JSON.stringify(record)); ' +
       'return true; })()',
     );
+    const legacyTimeOriginBeforeReload = await browser.evaluate('performance.timeOrigin');
     await browser.send('Page.reload', { ignoreCache: true });
     await waitForApp(
       browser,
+      'performance.timeOrigin !== ' + legacyTimeOriginBeforeReload + ' && ' +
       'document.querySelector(".app-shell")?.getAttribute("aria-busy")==="false" && ' +
       'document.querySelector(".workspace-preferences-recovery")?.textContent.includes("Legacy window settings")',
       'legacy layout is restored but awaits user confirmation',
@@ -1277,9 +1292,11 @@ async function runAppAcceptance(browser) {
     await browser.evaluate(
       'localStorage.setItem("folio.workspace-layout.v1",' + JSON.stringify(newerSchemaRecord) + ')',
     );
+    const newerSchemaTimeOriginBeforeReload = await browser.evaluate('performance.timeOrigin');
     await browser.send('Page.reload', { ignoreCache: true });
     await waitForApp(
       browser,
+      'performance.timeOrigin !== ' + newerSchemaTimeOriginBeforeReload + ' && ' +
       'document.querySelector(".app-shell")?.getAttribute("aria-busy")==="false" && ' +
       'document.querySelector(".workspace-preferences-recovery")?.textContent.includes("newer Folio version")',
       'newer schema shows a read-only compatibility warning',
