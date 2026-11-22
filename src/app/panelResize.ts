@@ -105,6 +105,14 @@ export function computeResizedPanelWidth(
   return clampPanelWidth(panel, candidate, context);
 }
 
+export interface ActivePanelResizeSession {
+  readonly sessionId: number;
+  readonly panel: ResizablePanelId;
+  readonly startClientX: number;
+  readonly startWidth: number;
+  readonly initialWidths: PanelWidths;
+}
+
 export interface ThrottledMouseMoveOptions {
   intervalMs?: number;
   now?: () => number;
@@ -116,6 +124,7 @@ export interface ThrottledMouseMoveController<T> {
   (payload: T): void;
   flush: () => void;
   cancel: () => void;
+  reset: () => void;
 }
 
 /**
@@ -189,7 +198,216 @@ export function createThrottledMouseMove<T>(
     pendingPayload = undefined;
   };
 
+  throttled.reset = () => {
+    clearTimer();
+    hasPending = false;
+    pendingPayload = undefined;
+    lastInvokeTime = Number.NEGATIVE_INFINITY;
+  };
+
   return throttled;
+}
+
+export interface PanelResizeEventTarget {
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  removeEventListener?(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions,
+  ): void;
+}
+
+export interface PanelResizeDocumentTarget extends PanelResizeEventTarget {
+  readonly visibilityState?: DocumentVisibilityState;
+  readonly body?: Node | null;
+}
+
+export interface PanelResizeHandleTarget {
+  readonly isConnected: boolean;
+}
+
+export interface PanelResizeListenerHandlers {
+  onMouseMove: (event: MouseEvent) => void;
+  onFinish: () => void;
+  onCancel: () => void;
+  onAbort?: () => void;
+}
+
+export interface AttachPanelResizeListenersOptions {
+  controller?: AbortController;
+  signal?: AbortSignal;
+  windowTarget?: PanelResizeEventTarget | null;
+  documentTarget?: PanelResizeDocumentTarget | null;
+  handleElement?: PanelResizeHandleTarget | null;
+  observeContainer?: Node | null;
+}
+
+/**
+ * Registers all global listeners for a panel resize drag session using an
+ * `AbortController` so `mousemove`, `mouseup`, and interruption handlers are
+ * reliably detached on session end, interruption, or DOM element removal.
+ */
+export function attachPanelResizeListeners(
+  handlers: PanelResizeListenerHandlers,
+  options: AttachPanelResizeListenersOptions = {},
+): () => void {
+  const windowTarget: PanelResizeEventTarget | null =
+    options.windowTarget !== undefined
+      ? options.windowTarget
+      : (typeof window !== 'undefined' ? window : null);
+  const documentTarget: PanelResizeDocumentTarget | null =
+    options.documentTarget !== undefined
+      ? options.documentTarget
+      : (typeof document !== 'undefined' ? document : null);
+  const handleElement = options.handleElement ?? null;
+
+  if (!windowTarget) {
+    return () => {};
+  }
+
+  const controller = options.controller ?? new AbortController();
+  const { signal } = controller;
+  const externalSignal = options.signal;
+
+  if (signal.aborted || externalSignal?.aborted) {
+    controller.abort();
+    return () => {};
+  }
+
+  let observer: MutationObserver | null = null;
+  const disconnectObserver = () => {
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+  };
+
+  const abortSession = () => {
+    disconnectObserver();
+    if (!signal.aborted) {
+      controller.abort();
+    }
+  };
+
+  const triggerDisconnectedAbort = () => {
+    disconnectObserver();
+    if (handlers.onAbort) {
+      handlers.onAbort();
+    } else {
+      handlers.onFinish();
+    }
+    abortSession();
+  };
+
+  if (handleElement && !handleElement.isConnected) {
+    triggerDisconnectedAbort();
+    return abortSession;
+  }
+
+  if (externalSignal && externalSignal !== signal) {
+    const forwardAbort = () => abortSession();
+    externalSignal.addEventListener('abort', forwardAbort, { once: true });
+    signal.addEventListener(
+      'abort',
+      () => externalSignal.removeEventListener('abort', forwardAbort),
+      { once: true },
+    );
+  }
+
+  const handleMouseMove: EventListener = (event) => {
+    if (signal.aborted) return;
+    if (handleElement && !handleElement.isConnected) {
+      triggerDisconnectedAbort();
+      return;
+    }
+    const mouseEvent = event as MouseEvent;
+    if (mouseEvent.isTrusted && mouseEvent.buttons === 0) {
+      handlers.onFinish();
+      return;
+    }
+    handlers.onMouseMove(mouseEvent);
+  };
+
+  const handleFinish: EventListener = () => {
+    if (signal.aborted) return;
+    handlers.onFinish();
+  };
+
+  const handleVisibilityChange: EventListener = () => {
+    if (signal.aborted) return;
+    if (documentTarget?.visibilityState === 'hidden') {
+      handlers.onFinish();
+    }
+  };
+
+  const handleKeyDown: EventListener = (event) => {
+    if (signal.aborted) return;
+    const keyEvent = event as KeyboardEvent;
+    if (keyEvent.key === 'Escape') {
+      keyEvent.preventDefault();
+      keyEvent.stopPropagation();
+      handlers.onCancel();
+    }
+  };
+
+  const bindings: Array<{
+    target: PanelResizeEventTarget;
+    type: string;
+    listener: EventListener;
+    capture: boolean;
+  }> = [
+    { target: windowTarget, type: 'mousemove', listener: handleMouseMove, capture: true },
+    { target: windowTarget, type: 'mouseup', listener: handleFinish, capture: true },
+    { target: windowTarget, type: 'pointercancel', listener: handleFinish, capture: true },
+    { target: windowTarget, type: 'contextmenu', listener: handleFinish, capture: true },
+    { target: windowTarget, type: 'blur', listener: handleFinish, capture: false },
+    { target: windowTarget, type: 'keydown', listener: handleKeyDown, capture: true },
+  ];
+
+  if (documentTarget) {
+    bindings.push({
+      target: documentTarget,
+      type: 'visibilitychange',
+      listener: handleVisibilityChange,
+      capture: false,
+    });
+  }
+
+  try {
+    for (const binding of bindings) {
+      binding.target.addEventListener(binding.type, binding.listener, {
+        capture: binding.capture,
+        signal,
+      });
+    }
+
+    const observationRoot =
+      options.observeContainer ??
+      (documentTarget && 'body' in documentTarget ? documentTarget.body ?? null : null);
+
+    if (handleElement && observationRoot && typeof MutationObserver !== 'undefined') {
+      observer = new MutationObserver(() => {
+        if (signal.aborted) {
+          disconnectObserver();
+          return;
+        }
+        if (!handleElement.isConnected) {
+          triggerDisconnectedAbort();
+        }
+      });
+      observer.observe(observationRoot, { childList: true, subtree: true });
+      signal.addEventListener('abort', disconnectObserver, { once: true });
+    }
+  } catch (error) {
+    abortSession();
+    throw error;
+  }
+
+  return abortSession;
 }
 
 export function loadPanelWidths(

@@ -249,8 +249,20 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(baseline.panelGroups).toEqual(['Racks', 'Side panels', 'Workspace windows']);
         expect(baseline.panelDividers).toBe(3);
 
-        // 2. WEB-02 Menu open & Escape / outside-click dismissal
+        // 2. WEB-02 Menu open, above-tool-rail stacking, & Escape / outside-click dismissal
         const menuDismissal = await browser.evalJs(`
+          const fileBtn = Array.from(document.querySelectorAll('.global-menu-item.menu-trigger')).find((b) => b.textContent?.trim() === 'File');
+          fileBtn.click();
+          await new Promise((r) => setTimeout(r, 40));
+          const exportItem = Array.from(document.querySelectorAll('.global-menu-dropdown [role="menuitem"]')).find((b) => b.textContent?.trim() === 'Export Project');
+          const exportRect = exportItem?.getBoundingClientRect();
+          const exportLeftHit = exportRect
+            ? document.elementFromPoint(exportRect.left + 8, exportRect.top + exportRect.height / 2)
+            : null;
+          const fileDropdownAboveToolRail = Boolean(exportItem && exportLeftHit && exportItem.contains(exportLeftHit));
+          const toolbarZOpen = Number(getComputedStyle(document.querySelector('.global-toolbar-slot')).zIndex);
+          const toolRailZ = Number(getComputedStyle(document.querySelector('.tool-rail')).zIndex);
+
           const viewBtn = Array.from(document.querySelectorAll('.global-menu-item.menu-trigger')).find((b) => b.textContent?.trim() === 'View');
           viewBtn.click();
           await new Promise((r) => setTimeout(r, 40));
@@ -265,9 +277,18 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
           document.querySelector('.canvas-workspace').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
           await new Promise((r) => setTimeout(r, 40));
           const closedAfterOutside = !document.querySelector('.global-menu-dropdown');
-          return { opened, closedAfterEsc, reopened, closedAfterOutside };
+          return {
+            fileDropdownAboveToolRail,
+            toolbarAboveToolRailWhenOpen: toolbarZOpen > toolRailZ,
+            opened,
+            closedAfterEsc,
+            reopened,
+            closedAfterOutside,
+          };
         `);
         expect(menuDismissal).toEqual({
+          fileDropdownAboveToolRail: true,
+          toolbarAboveToolRailWhenOpen: true,
           opened: true,
           closedAfterEsc: true,
           reopened: true,
@@ -590,26 +611,37 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
             document.elementFromPoint(iRect.left + iRect.width / 2, iMidY) === inspectorHandle &&
             document.elementFromPoint(iRect.right - 1, iMidY) === inspectorHandle;
 
-          // Track active window mousemove/mouseup listeners to guarantee clean attach & removal
+          // Track active window mousemove/mouseup listeners via AbortSignal (and removeEventListener fallback)
           const activeMouseListeners = new Set();
           let mouseMoveAdds = 0;
-          let mouseMoveRemoves = 0;
+          let mouseMoveDetaches = 0;
+          let allMouseListenersUseAbortSignal = true;
+          let listenerSeq = 0;
           const origAdd = window.addEventListener.bind(window);
           const origRemove = window.removeEventListener.bind(window);
           window.addEventListener = function(type, listener, options) {
             const capture = typeof options === 'boolean' ? options : Boolean(options && options.capture);
+            const signal = typeof options === 'object' && options !== null ? options.signal : undefined;
             if (type === 'mousemove' || type === 'mouseup') {
-              activeMouseListeners.add(type + ':' + capture + ':' + String(listener));
-              if (type === 'mousemove') mouseMoveAdds += 1;
+              if (!(signal instanceof AbortSignal)) {
+                allMouseListenersUseAbortSignal = false;
+              }
+              if (!signal || !signal.aborted) {
+                const token = type + ':' + capture + ':' + (++listenerSeq);
+                activeMouseListeners.add(token);
+                if (type === 'mousemove') mouseMoveAdds += 1;
+                if (signal instanceof AbortSignal) {
+                  signal.addEventListener('abort', () => {
+                    if (activeMouseListeners.delete(token) && type === 'mousemove') {
+                      mouseMoveDetaches += 1;
+                    }
+                  }, { once: true });
+                }
+              }
             }
             return origAdd(type, listener, options);
           };
           window.removeEventListener = function(type, listener, options) {
-            const capture = typeof options === 'boolean' ? options : Boolean(options && options.capture);
-            if (type === 'mousemove' || type === 'mouseup') {
-              activeMouseListeners.delete(type + ':' + capture + ':' + String(listener));
-              if (type === 'mousemove') mouseMoveRemoves += 1;
-            }
             return origRemove(type, listener, options);
           };
 
@@ -654,7 +686,7 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
             pagesToggle.click();
             await new Promise((r) => setTimeout(r, 40));
 
-            // Escape mid-drag cancels, reverts width, and removes mousemove listener
+            // Escape mid-drag cancels, reverts width, and aborts mousemove/mouseup listeners
             const beforeCancelX = layersHandle.getBoundingClientRect().left + 4;
             layersHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: beforeCancelX, clientY: 300 }));
             window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: beforeCancelX + 120, clientY: 300 }));
@@ -663,17 +695,57 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
             await new Promise((r) => setTimeout(r, 40));
             const layersAfterEscapeW = Math.round(layersPanel.getBoundingClientRect().width);
 
+            // Window blur mid-drag interrupts the session and aborts mousemove/mouseup listeners cleanly
+            const beforeBlurX = layersHandle.getBoundingClientRect().left + 4;
+            layersHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: beforeBlurX, clientY: 300 }));
+            window.dispatchEvent(new Event('blur'));
+            await new Promise((r) => setTimeout(r, 30));
+            window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: beforeBlurX + 150, clientY: 300 }));
+            await new Promise((r) => setTimeout(r, 30));
+            const layersAfterBlurInterruptW = Math.round(layersPanel.getBoundingClientRect().width);
+            const resizingClearedAfterBlur = !document.querySelector('.app-shell').classList.contains('is-resizing-panel');
+
+            // Removing the resize handle DOM element mid-drag immediately aborts the AbortController
+            const beforeRemoveX = layersHandle.getBoundingClientRect().left + 4;
+            const handleParent = layersHandle.parentNode;
+            const handleNextSibling = layersHandle.nextSibling;
+            layersHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: beforeRemoveX, clientY: 300 }));
+            const listenersBeforeDomRemove = activeMouseListeners.size;
+            layersHandle.remove();
+            await new Promise((r) => setTimeout(r, 30));
+            const listenersAfterDomRemove = activeMouseListeners.size;
+            const resizingClearedAfterDomRemove = !document.querySelector('.app-shell').classList.contains('is-resizing-panel');
+            window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: beforeRemoveX + 150, clientY: 300 }));
+            await new Promise((r) => setTimeout(r, 30));
+            const layersAfterDomRemoveW = Math.round(layersPanel.getBoundingClientRect().width);
+            handleParent.insertBefore(layersHandle, handleNextSibling);
+
             // Keyboard ArrowLeft narrows Layers by 16px
             layersHandle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
             await new Promise((r) => setTimeout(r, 40));
             const layersAfterKeyW = Math.round(layersPanel.getBoundingClientRect().width);
 
-            // Double-click resets both panels to defaults
-            layersHandle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-            inspectorHandle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+            // Full realistic double-click sequence resets both panels to PANEL_RESIZE_CONSTRAINTS defaults
+            const dispatchDoubleClick = (handleEl) => {
+              const box = handleEl.getBoundingClientRect();
+              const x = box.left + box.width / 2;
+              const y = box.top + box.height / 2;
+              handleEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, detail: 1, clientX: x, clientY: y }));
+              window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail: 1, clientX: x, clientY: y }));
+              handleEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, detail: 2, clientX: x, clientY: y }));
+              const listenersDuringSecondClick = activeMouseListeners.size;
+              window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail: 2, clientX: x, clientY: y }));
+              handleEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, button: 0, detail: 2, clientX: x, clientY: y }));
+              return listenersDuringSecondClick;
+            };
+            const listenersDuringLayersSecondClick = dispatchDoubleClick(layersHandle);
+            const listenersDuringInspectorSecondClick = dispatchDoubleClick(inspectorHandle);
             await new Promise((r) => setTimeout(r, 40));
             const resetLayersW = Math.round(layersPanel.getBoundingClientRect().width);
             const resetInspectorW = Math.round(inspectorPanel.getBoundingClientRect().width);
+            const resetLayersAria = layersHandle.getAttribute('aria-valuenow');
+            const resetInspectorAria = inspectorHandle.getAttribute('aria-valuenow');
+            const persistedWidthsAfterReset = JSON.parse(window.localStorage.getItem('folio.panel-widths.v1') || 'null');
 
             return {
               initialLayersW,
@@ -682,19 +754,31 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
               inspectorHandleHit,
               resizingClassActive,
               resizingClassCleared,
+              resizingClearedAfterBlur,
               listenersAttachedDuringDrag,
+              listenersBeforeDomRemove,
+              listenersAfterDomRemove,
+              resizingClearedAfterDomRemove,
+              layersAfterDomRemoveW,
+              listenersDuringLayersSecondClick,
+              listenersDuringInspectorSecondClick,
+              allMouseListenersUseAbortSignal,
               leakedMouseListeners: activeMouseListeners.size,
               mouseMoveAdds,
-              mouseMoveRemoves,
+              mouseMoveDetaches,
               resizedLayersW,
               layersAfterPostUpMoveW,
               resizedInspectorW,
               inspectorAfterPostUpMoveW,
               rackAlignedToInspector: Math.abs(rackRight - inspectorLeft) <= 2,
               layersAfterEscapeW,
+              layersAfterBlurInterruptW,
               layersAfterKeyW,
               resetLayersW,
               resetInspectorW,
+              resetLayersAria,
+              resetInspectorAria,
+              persistedWidthsAfterReset,
             };
           } finally {
             window.addEventListener = origAdd;
@@ -708,10 +792,19 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(resizeCheck.inspectorHandleHit).toBe(true);
         expect(resizeCheck.resizingClassActive).toBe(true);
         expect(resizeCheck.resizingClassCleared).toBe(true);
+        expect(resizeCheck.resizingClearedAfterBlur).toBe(true);
         expect(resizeCheck.listenersAttachedDuringDrag).toBe(2);
+        expect(resizeCheck.listenersBeforeDomRemove).toBe(2);
+        expect(resizeCheck.listenersAfterDomRemove).toBe(0);
+        expect(resizeCheck.resizingClearedAfterDomRemove).toBe(true);
+        expect(resizeCheck.layersAfterDomRemoveW).toBe(330);
+        expect(resizeCheck.listenersDuringLayersSecondClick).toBe(0);
+        expect(resizeCheck.listenersDuringInspectorSecondClick).toBe(0);
+        expect(resizeCheck.allMouseListenersUseAbortSignal).toBe(true);
         expect(resizeCheck.leakedMouseListeners).toBe(0);
-        expect(resizeCheck.mouseMoveAdds).toBe(3);
-        expect(resizeCheck.mouseMoveRemoves).toBe(3);
+        expect(resizeCheck.mouseMoveAdds).toBe(7);
+        expect(resizeCheck.mouseMoveDetaches).toBe(7);
+        expect(resizeCheck.layersAfterBlurInterruptW).toBe(330);
         expect(resizeCheck.resizedLayersW).toBe(330);
         expect(resizeCheck.layersAfterPostUpMoveW).toBe(330);
         expect(resizeCheck.resizedInspectorW).toBe(372);
@@ -721,6 +814,9 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(resizeCheck.layersAfterKeyW).toBe(314);
         expect(resizeCheck.resetLayersW).toBe(240);
         expect(resizeCheck.resetInspectorW).toBe(292);
+        expect(resizeCheck.resetLayersAria).toBe('240');
+        expect(resizeCheck.resetInspectorAria).toBe('292');
+        expect(resizeCheck.persistedWidthsAfterReset).toEqual({ layers: 240, inspector: 292 });
 
         expect(browser.consoleErrors).toEqual([]);
         expect(browser.pageErrors).toEqual([]);

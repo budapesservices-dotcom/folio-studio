@@ -1046,12 +1046,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 
 /* The app chrome is intentionally above all dynamic workspace windows. */
-.global-toolbar-slot { z-index: 1200; }
+.global-toolbar-slot { z-index: var(--z-application-toolbar); }
+.global-toolbar-slot.has-open-menu,
+.global-toolbar-slot:has(.global-menu-dropdown) { z-index: var(--z-menu-overlay); }
 .global-toolbar-slot .global-menu-entry { position: relative; display: flex; align-items: center; height: 100%; }
 .global-toolbar-slot .menu-trigger { border: 0; background: transparent; cursor: pointer; }
 .global-menu-dropdown {
   position: absolute;
-  z-index: 1400;
+  z-index: var(--z-menu-overlay);
   top: calc(100% - 1px);
   left: 0;
   min-width: 190px;

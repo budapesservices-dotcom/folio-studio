@@ -36,6 +36,7 @@ import { ComponentThumbnail } from './ComponentThumbnail';
 import {
   DEFAULT_RESIZE_THROTTLE_MS,
   PANEL_RESIZE_CONSTRAINTS,
+  attachPanelResizeListeners,
   clampPanelWidth,
   computeResizedPanelWidth,
   createThrottledMouseMove,
@@ -43,8 +44,10 @@ import {
   getPanelWidthBounds,
   loadPanelWidths,
   savePanelWidths,
+  type ActivePanelResizeSession,
   type PanelWidths,
   type ResizablePanelId,
+  type ThrottledMouseMoveController,
 } from './panelResize';
 import { createDebouncedAutosave, setRevisionFencedAutosaveStatus } from './debouncedAutosave';
 import { activateModalDialog, trapModalDialogKeydown } from './modalFocus';
@@ -361,6 +364,11 @@ export function App() {
   const [resizingPanel, setResizingPanel] = useState<ResizablePanelId | null>(null);
   const panelWidthsRef = useRef<PanelWidths>(panelWidths);
   const resizingPanelRef = useRef<ResizablePanelId | null>(null);
+  const panelVisibilityRef = useRef({ layersVisible, inspectorVisible });
+  panelVisibilityRef.current = { layersVisible, inspectorVisible };
+  const activePanelResizeSessionRef = useRef<ActivePanelResizeSession | null>(null);
+  const panelResizeSessionSeqRef = useRef(0);
+  const throttledPanelMoveRef = useRef<ThrottledMouseMoveController<{ sessionId: number; clientX: number }> | null>(null);
   const layersResizeHandleRef = useRef<HTMLDivElement | null>(null);
   const inspectorResizeHandleRef = useRef<HTMLDivElement | null>(null);
   if (resizingPanelRef.current === null) {
@@ -1832,10 +1840,10 @@ export function App() {
 
   const getPanelClampContext = useCallback((panel: ResizablePanelId, widths: PanelWidths = panelWidthsRef.current) => ({
     viewportWidth: appShellRef.current?.clientWidth || window.innerWidth,
-    layersVisible,
-    inspectorVisible,
+    layersVisible: panelVisibilityRef.current.layersVisible,
+    inspectorVisible: panelVisibilityRef.current.inspectorVisible,
     otherPanelWidth: panel === 'layers' ? widths.inspector : widths.layers,
-  }), [layersVisible, inspectorVisible]);
+  }), []);
 
   const applyPanelWidth = useCallback(
     (panel: ResizablePanelId, nextWidth: number, options: { persist?: boolean; syncState?: boolean } = {}) => {
@@ -1854,109 +1862,126 @@ export function App() {
     [],
   );
 
+  const handleThrottledPanelMove = useCallback(
+    ({ sessionId, clientX }: { sessionId: number; clientX: number }) => {
+      const session = activePanelResizeSessionRef.current;
+      if (!session || session.sessionId !== sessionId) return;
+      const nextWidth = computeResizedPanelWidth(
+        session.panel,
+        session.startWidth,
+        session.startClientX,
+        clientX,
+        getPanelClampContext(session.panel, panelWidthsRef.current),
+      );
+      applyPanelWidth(session.panel, nextWidth, { persist: false, syncState: false });
+    },
+    [applyPanelWidth, getPanelClampContext],
+  );
+
+  const getThrottledPanelMove = useCallback(() => {
+    if (!throttledPanelMoveRef.current) {
+      throttledPanelMoveRef.current = createThrottledMouseMove<{ sessionId: number; clientX: number }>(
+        handleThrottledPanelMove,
+        { intervalMs: DEFAULT_RESIZE_THROTTLE_MS },
+      );
+    }
+    return throttledPanelMoveRef.current;
+  }, [handleThrottledPanelMove]);
+
   const startPanelResize = useCallback((panel: ResizablePanelId, event: MouseEvent) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
 
     panelResizeCleanupRef.current?.();
+    if (event.detail >= 2) return;
 
-    const startClientX = event.clientX;
+    const throttledMove = getThrottledPanelMove();
+    throttledMove.reset();
+
     const initialWidths: PanelWidths = { ...panelWidthsRef.current };
-    const startWidth = initialWidths[panel];
-    let active = true;
+    const session: ActivePanelResizeSession = {
+      sessionId: ++panelResizeSessionSeqRef.current,
+      panel,
+      startClientX: event.clientX,
+      startWidth: initialWidths[panel],
+      initialWidths,
+    };
 
+    const abortController = new AbortController();
+    const handleElement =
+      (event.currentTarget instanceof Element ? event.currentTarget : null) ??
+      (panel === 'layers' ? layersResizeHandleRef.current : inspectorResizeHandleRef.current);
+
+    activePanelResizeSessionRef.current = session;
     resizingPanelRef.current = panel;
     appShellRef.current?.classList.add('is-resizing-panel');
     setResizingPanel(panel);
 
-    const throttledMove = createThrottledMouseMove<number>((clientX) => {
-      if (!active) return;
-      const nextWidth = computeResizedPanelWidth(
-        panel,
-        startWidth,
-        startClientX,
-        clientX,
-        getPanelClampContext(panel, panelWidthsRef.current),
-      );
-      applyPanelWidth(panel, nextWidth, { persist: false, syncState: false });
-    }, { intervalMs: DEFAULT_RESIZE_THROTTLE_MS });
+    const isCurrentSession = () => activePanelResizeSessionRef.current?.sessionId === session.sessionId;
 
-    const detach = () => {
-      window.removeEventListener('mousemove', onMouseMove, true);
-      window.removeEventListener('mouseup', finishResize, true);
-      window.removeEventListener('blur', finishResize);
-      window.removeEventListener('keydown', onKeyDown, true);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      appShellRef.current?.classList.remove('is-resizing-panel');
-      if (resizingPanelRef.current === panel) {
-        resizingPanelRef.current = null;
-      }
-      if (panelResizeCleanupRef.current === cleanupAndCancel) {
-        panelResizeCleanupRef.current = null;
-      }
-    };
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      if (!active) return;
-      if (moveEvent.isTrusted && moveEvent.buttons === 0) {
-        finishResize();
+    const endResize = (mode: 'commit' | 'cancel' | 'abort') => {
+      if (!isCurrentSession()) {
+        abortController.abort();
         return;
       }
-      throttledMove(moveEvent.clientX);
-    };
-
-    const finishResize = () => {
-      if (!active) return;
-      throttledMove.flush();
-      active = false;
-      detach();
-      const committed: PanelWidths = { ...panelWidthsRef.current };
-      setPanelWidths(committed);
-      savePanelWidths(committed);
-      setResizingPanel(null);
-    };
-
-    const cancelResize = () => {
-      if (!active) return;
-      active = false;
-      throttledMove.cancel();
-      detach();
-      applyPanelWidth(panel, initialWidths[panel], { persist: false, syncState: true });
-      setResizingPanel(null);
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        finishResize();
+      try {
+        if (mode === 'commit') {
+          throttledMove.flush();
+        }
+        throttledMove.cancel();
+      } finally {
+        abortController.abort();
+        appShellRef.current?.classList.remove('is-resizing-panel');
+        if (isCurrentSession()) {
+          activePanelResizeSessionRef.current = null;
+        }
+        if (resizingPanelRef.current === panel) {
+          resizingPanelRef.current = null;
+        }
+        if (panelResizeCleanupRef.current === abortResize) {
+          panelResizeCleanupRef.current = null;
+        }
       }
-    };
 
-    const cleanupAndCancel = () => {
-      if (!active) return;
-      active = false;
-      throttledMove.cancel();
-      detach();
+      if (mode === 'commit') {
+        const committed: PanelWidths = { ...panelWidthsRef.current };
+        setPanelWidths(committed);
+        savePanelWidths(committed);
+      } else if (mode === 'cancel') {
+        applyPanelWidth(panel, session.initialWidths[panel], { persist: false, syncState: true });
+      }
       setResizingPanel(null);
     };
 
-    const onKeyDown = (keyEvent: KeyboardEvent) => {
-      if (keyEvent.key === 'Escape') {
-        keyEvent.preventDefault();
-        keyEvent.stopPropagation();
-        cancelResize();
-      }
-    };
+    const abortResize = () => endResize('abort');
+    panelResizeCleanupRef.current = abortResize;
 
-    panelResizeCleanupRef.current = cleanupAndCancel;
-    window.addEventListener('mousemove', onMouseMove, true);
-    window.addEventListener('mouseup', finishResize, true);
-    window.addEventListener('blur', finishResize);
-    window.addEventListener('keydown', onKeyDown, true);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-  }, [applyPanelWidth, getPanelClampContext]);
+    try {
+      attachPanelResizeListeners(
+        {
+          onMouseMove: (moveEvent) => {
+            if (!isCurrentSession()) return;
+            throttledMove({ sessionId: session.sessionId, clientX: moveEvent.clientX });
+          },
+          onFinish: () => endResize('commit'),
+          onCancel: () => endResize('cancel'),
+          onAbort: abortResize,
+        },
+        {
+          controller: abortController,
+          handleElement,
+          observeContainer: appShellRef.current,
+        },
+      );
+    } catch (error) {
+      abortResize();
+      throw error;
+    }
+  }, [applyPanelWidth, getThrottledPanelMove]);
 
   const resetPanelWidth = useCallback((panel: ResizablePanelId) => {
+    panelResizeCleanupRef.current?.();
     const nextWidth = clampPanelWidth(
       panel,
       PANEL_RESIZE_CONSTRAINTS[panel].defaultWidth,
@@ -1964,6 +1989,12 @@ export function App() {
     );
     applyPanelWidth(panel, nextWidth, { persist: true, syncState: true });
   }, [applyPanelWidth, getPanelClampContext]);
+
+  const handlePanelResizeDoubleClick = useCallback((panel: ResizablePanelId, event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    resetPanelWidth(panel);
+  }, [resetPanelWidth]);
 
   const handlePanelResizeKeyDown = useCallback((panel: ResizablePanelId, event: KeyboardEvent) => {
     const step = event.shiftKey ? 32 : 16;
@@ -1998,6 +2029,7 @@ export function App() {
 
   useEffect(() => () => {
     panelResizeCleanupRef.current?.();
+    throttledPanelMoveRef.current?.cancel();
   }, []);
 
   const resetWindowLayout = () => {
@@ -2181,12 +2213,12 @@ export function App() {
         }
       }}
     >
-      <header class="global-toolbar-slot" aria-label="FOLIO application toolbar">
+      <header class={`global-toolbar-slot ${fileMenuOpen || viewMenuOpen ? 'has-open-menu' : ''}`} aria-label="FOLIO application toolbar">
         <nav class="global-menu-bar" aria-label="Application menus">
           <div class="global-toolbar-left">
           <div class="global-menu-items" ref={menuBarRef}>
             <div class="global-menu-entry">
-              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={fileMenuOpen} onClick={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); }} onMouseEnter={() => updateToolbarHint('FILE', 'Open or export the current native .flop project.')}>File</button>
+              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={fileMenuOpen} onClick={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); setToolRackOpen(null); }} onMouseEnter={() => updateToolbarHint('FILE', 'Open or export the current native .flop project.')}>File</button>
               {fileMenuOpen && <div class="global-menu-dropdown" role="menu" aria-label="File menu">
                 <button type="button" role="menuitem" onClick={openProjectPicker} disabled={isHydrating}>Open Project…</button>
                 <button type="button" role="menuitem" onClick={exportCurrentProject} disabled={isHydrating}>Export Project</button>
@@ -2227,7 +2259,7 @@ export function App() {
             <span class="global-menu-item is-disabled" aria-disabled="true" title="Edit menu (planned)" onMouseEnter={() => updateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}>Edit</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <div class="global-menu-entry">
-              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={viewMenuOpen} onClick={() => { setViewMenuOpen((open) => !open); setFileMenuOpen(false); }} onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}>View</button>
+              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={viewMenuOpen} onClick={() => { setViewMenuOpen((open) => !open); setFileMenuOpen(false); setToolRackOpen(null); }} onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}>View</button>
               {viewMenuOpen && <div class="global-menu-dropdown" role="menu" aria-label="View menu"><button type="button" role="menuitem" onClick={resetWindowLayout}>Reset Window Layout</button></div>}
             </div>
             <span class="global-menu-separator" aria-hidden="true">|</span>
@@ -2366,7 +2398,7 @@ export function App() {
                 title={group.label + ' tools'}
                 aria-label={group.label + ' tools'}
                 aria-expanded={toolRackOpen === group.id}
-                onClick={() => setToolRackOpen((current) => current === group.id ? null : group.id)}
+                onClick={() => { setFileMenuOpen(false); setViewMenuOpen(false); setToolRackOpen((current) => current === group.id ? null : group.id); }}
                 onMouseEnter={() => updateToolbarHint(group.label.toUpperCase(), group.description)}
               >
                 <Icon name={activeTool?.icon ?? group.icon} />
@@ -2406,7 +2438,7 @@ export function App() {
             title="Create tools"
             aria-label="Create tools"
             aria-expanded={toolRackOpen === 'create'}
-            onClick={() => setToolRackOpen((current) => current === 'create' ? null : 'create')}
+            onClick={() => { setFileMenuOpen(false); setViewMenuOpen(false); setToolRackOpen((current) => current === 'create' ? null : 'create'); }}
             onMouseEnter={() => updateToolbarHint('CREATE', 'Create new Rectangle, Ellipse or Text objects in the active Canvas workspace.')}
           >
             <Icon name="shapes" />
@@ -2460,7 +2492,7 @@ export function App() {
           title="Drag to resize Layers sidebar (double-click to reset)"
           onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => startPanelResize('layers', event)}
-          onDblClick={() => resetPanelWidth('layers')}
+          onDblClick={(event) => handlePanelResizeDoubleClick('layers', event)}
           onKeyDown={(event) => handlePanelResizeKeyDown('layers', event)}
         />
         <div class="panel-heading">
@@ -2899,7 +2931,7 @@ export function App() {
           title="Drag to resize Inspector panel (double-click to reset)"
           onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => startPanelResize('inspector', event)}
-          onDblClick={() => resetPanelWidth('inspector')}
+          onDblClick={(event) => handlePanelResizeDoubleClick('inspector', event)}
           onKeyDown={(event) => handlePanelResizeKeyDown('inspector', event)}
         />
         <div class="panel-heading inspector-heading">
