@@ -11,7 +11,7 @@ import type {
 import { PANEL_RESIZE_CONSTRAINTS, type ResizablePanelId } from './panelResize';
 import { normalizePositiveDimension } from './editorReducer';
 import type { EditorTarget } from './editorContext';
-import type { CanvasToolId } from '../engines/canvas/tools/registry';
+import type { CanvasToolId } from '../core/tools/operationContract';
 
 export const INSPECTOR_FONT_FAMILIES = [
   { label: 'Inter (UI Sans)', value: 'Inter, system-ui, sans-serif' },

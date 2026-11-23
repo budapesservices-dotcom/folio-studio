@@ -45,6 +45,7 @@ import { createEditorState, editorReducer, normalizePositiveDimension } from './
 import type { EditorAction } from './editorReducer';
 import { createCanonicalEditorStore } from './editorStore';
 import { createMainCanvasCommandClient } from './mainCanvasCommandClient';
+import { createToolOperationExecutor } from './toolOperationExecutor';
 import {
   advanceComponentCanvasSyncSession,
   createComponentCanvasBufferProject,
@@ -2052,26 +2053,63 @@ export function App() {
     );
   };
 
-  const handleCanvasCreateNodes = (target: EditorTarget, nodes: DesignNode[]) => {
-    if (isHydrating || nodes.length === 0) return;
-    selectionSourceRef.current = 'canvas';
-    if (target === 'main') {
-      mainCommandClient.createNodes(nodes, 'Create with studio tool');
-      setInspectorVisible(true);
-    } else {
-      componentDispatch({ type: 'add-nodes', nodes });
-    }
-  };
+  const mainToolOperationExecutor = createToolOperationExecutor({
+    workspace: 'main',
+    commandClient: mainCommandClient,
+    shell: {
+      isHydrating: () => isHydrating,
+      onSelectionChange: (nodeIds) => {
+        selectionSourceRef.current = 'canvas';
+        dispatch({ type: 'select-nodes', nodeIds });
+        if (nodeIds.length > 0) setInspectorVisible(true);
+      },
+      onPanChange: setMainPan,
+      onZoomChange: setZoom,
+      onToolChange: (nextTool) => chooseCanvasTool(nextTool, 'main'),
+      onNotice: setNotice,
+      onSampledColorOptionChange: (color, colorTarget) => {
+        setToolOptions((current) =>
+          colorTarget === 'stroke' ? { ...current, strokeColor: color } : { ...current, fillColor: color },
+        );
+      },
+      onCanvasMutationCommitted: (kind) => {
+        selectionSourceRef.current = 'canvas';
+        if (kind === 'create') setInspectorVisible(true);
+      },
+    },
+  });
 
-  const handleCanvasReplaceNodeWithNodes = (target: EditorTarget, nodeId: string, nodes: DesignNode[]) => {
-    if (isHydrating || nodes.length === 0) return;
-    selectionSourceRef.current = 'canvas';
-    if (target === 'main') {
-      mainCommandClient.replaceNodeWithNodes(nodeId, nodes, 'Split vector path');
-    } else {
-      componentDispatch({ type: 'replace-node-with-nodes', nodeId, nodes });
-    }
-  };
+  const componentToolOperationExecutor = createToolOperationExecutor({
+    workspace: 'component',
+    componentSink: {
+      createNodes: (nodes) => componentDispatch({ type: 'add-nodes', nodes: [...nodes] }),
+      transformNodes: (nodes) => componentDispatch({ type: 'transform-nodes', nodes: [...nodes] }),
+      replaceNode: (node) => componentDispatch({ type: 'replace-node', node }),
+      replaceNodeWithNodes: (nodeId, nodes) =>
+        componentDispatch({ type: 'replace-node-with-nodes', nodeId, nodes: [...nodes] }),
+      replaceNodes: (removeIds, insertNodes) =>
+        componentDispatch({ type: 'replace-nodes', removeIds: [...removeIds], insertNodes: [...insertNodes] }),
+    },
+    shell: {
+      isHydrating: () => isHydrating,
+      onSelectionChange: (nodeIds) => {
+        selectionSourceRef.current = 'canvas';
+        componentDispatch({ type: 'select-nodes', nodeIds });
+      },
+      onPanChange: setComponentCanvasPan,
+      onZoomChange: setComponentCanvasZoom,
+      onToolChange: (nextTool) => chooseCanvasTool(nextTool, 'component'),
+      onNotice: setNotice,
+      onSampledColorOptionChange: (color, colorTarget) => {
+        setToolOptions((current) =>
+          colorTarget === 'stroke' ? { ...current, strokeColor: color } : { ...current, fillColor: color },
+        );
+      },
+      onCanvasMutationCommitted: () => {
+        selectionSourceRef.current = 'canvas';
+      },
+    },
+  });
 
   const handleCanvasReplaceNodes = (target: EditorTarget, removeIds: string[], insertNodes: DesignNode[]) => {
     if (isHydrating || removeIds.length === 0) return;
@@ -2081,62 +2119,6 @@ export function App() {
     } else {
       componentDispatch({ type: 'replace-nodes', removeIds, insertNodes });
     }
-  };
-
-  const handleSampledColor = (
-    target: EditorTarget,
-    color: string,
-    sourceName: string,
-    colorTarget: 'fill' | 'stroke' = 'fill',
-  ) => {
-    setToolOptions((current) =>
-      colorTarget === 'stroke' ? { ...current, strokeColor: color } : { ...current, fillColor: color },
-    );
-    const editor = target === 'main' ? state : componentState;
-    const doc = getActiveDocument(editor.project);
-    const selected = doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id));
-    const updatedNodes: DesignNode[] = [];
-    for (const node of selected) {
-      if (colorTarget === 'stroke') {
-        if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path') {
-          updatedNodes.push({
-            ...node,
-            style: {
-              ...node.style,
-              stroke: color,
-              strokeWidth: Math.max(1, node.style.strokeWidth || 0),
-            },
-          } as DesignNode);
-        }
-      } else if (
-        node.type === 'rect' ||
-        node.type === 'ellipse' ||
-        node.type === 'frame' ||
-        node.type === 'text' ||
-        node.type === 'path'
-      ) {
-        updatedNodes.push({ ...node, style: { ...node.style, fill: color } } as DesignNode);
-      }
-    }
-    if (updatedNodes.length > 0) {
-      if (target === 'main') mainCommandClient.transformNodes(updatedNodes, `Apply sampled ${colorTarget}`);
-      else componentDispatch({ type: 'transform-nodes', nodes: updatedNodes });
-    }
-    setNotice(
-      updatedNodes.length > 0
-        ? `Sampled ${color.toUpperCase()} (${colorTarget}) from ${sourceName} and applied to ${updatedNodes.length} layer${updatedNodes.length === 1 ? '' : 's'}.`
-        : `Sampled ${color.toUpperCase()} from ${sourceName} into active draw ${colorTarget}.`,
-    );
-  };
-
-  const handleInlineTextCommit = (target: EditorTarget, nodeId: string, text: string) => {
-    const editor = target === 'main' ? state : componentState;
-    const doc = getActiveDocument(editor.project);
-    const node = doc.nodes.find((item) => item.id === nodeId);
-    if (!node || node.type !== 'text' || node.text === text) return;
-    const updated: DesignNode = { ...node, text };
-    if (target === 'main') mainCommandClient.replaceNode(updated, 'Edit text on canvas');
-    else componentDispatch({ type: 'replace-node', node: updated });
   };
 
   const handlePathfinder = (target: EditorTarget, operation: PathfinderOperation) => {
@@ -3338,22 +3320,8 @@ export function App() {
             toolOptions={toolOptions}
             zoom={zoom}
             pan={mainView.pan}
-            onPanChange={setMainPan}
-            onZoomChange={setZoom}
-            onSelectionChange={(nodeIds) => {
-              selectionSourceRef.current = 'canvas';
-              dispatch({ type: 'select-nodes', nodeIds });
-              if (nodeIds.length > 0) setInspectorVisible(true);
-            }}
-            onTransformCommit={(nodes) => mainCommandClient.transformNodes(nodes, 'Transform on canvas')}
+            onToolOperation={(operation) => mainToolOperationExecutor.execute(operation)}
             onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'main')}
-            onCreateNodes={(nodes) => handleCanvasCreateNodes('main', nodes)}
-            onReplaceNodeWithNodes={(nodeId, nodes) => handleCanvasReplaceNodeWithNodes('main', nodeId, nodes)}
-            onReplaceNodes={(removeIds, insertNodes) => handleCanvasReplaceNodes('main', removeIds, insertNodes)}
-            onSampledColor={(color, sourceName, colorTarget) => handleSampledColor('main', color, sourceName, colorTarget)}
-            onToolChange={(nextTool) => chooseCanvasTool(nextTool, 'main')}
-            onToolNotice={setNotice}
-            onInlineTextCommit={(nodeId, text) => handleInlineTextCommit('main', nodeId, text)}
           />
         </div>
 
@@ -3475,21 +3443,8 @@ export function App() {
             toolOptions={toolOptions}
             zoom={componentCanvasZoom}
             pan={componentView.pan}
-            onPanChange={setComponentCanvasPan}
-            onZoomChange={setComponentCanvasZoom}
-            onSelectionChange={(nodeIds) => {
-              selectionSourceRef.current = 'canvas';
-              componentDispatch({ type: 'select-nodes', nodeIds });
-            }}
-            onTransformCommit={(nodes) => componentDispatch({ type: 'transform-nodes', nodes })}
+            onToolOperation={(operation) => componentToolOperationExecutor.execute(operation)}
             onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'component')}
-            onCreateNodes={(nodes) => handleCanvasCreateNodes('component', nodes)}
-            onReplaceNodeWithNodes={(nodeId, nodes) => handleCanvasReplaceNodeWithNodes('component', nodeId, nodes)}
-            onReplaceNodes={(removeIds, insertNodes) => handleCanvasReplaceNodes('component', removeIds, insertNodes)}
-            onSampledColor={(color, sourceName, colorTarget) => handleSampledColor('component', color, sourceName, colorTarget)}
-            onToolChange={(nextTool) => chooseCanvasTool(nextTool, 'component')}
-            onToolNotice={setNotice}
-            onInlineTextCommit={(nodeId, text) => handleInlineTextCommit('component', nodeId, text)}
           />
         </div>
 

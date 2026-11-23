@@ -1,6 +1,6 @@
 import type { DesignNode, PathNode } from '../core/document/types';
 import type { PathfinderOperation } from '../core/document/vector';
-import type { CanvasToolId, CanvasToolOptions, ToolWorkspaceScope } from '../engines/canvas/tools/types';
+import type { CanvasToolId, CanvasToolOptions, ToolWorkspaceScope } from '../core/tools/operationContract';
 
 export interface ToolOptionsBarProps {
   workspace: ToolWorkspaceScope;

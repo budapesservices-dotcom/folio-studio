@@ -1,0 +1,598 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createInitialProject, createNodeForDocument } from '../src/core/document/factory';
+import { getActiveDocument } from '../src/core/document/project';
+import type { DesignNode, PathNode, RectNode, TextNode } from '../src/core/document/types';
+import {
+  CANVAS_TOOL_IDS,
+  createToolOperation,
+  extractToolOperationsFromTransition,
+  isDocumentMutationOperation,
+  TOOL_OPERATION_PROTOCOL,
+  TOOL_OPERATION_VERSION,
+  validateToolOperationEnvelope,
+  type ToolOperation,
+} from '../src/core/tools/operationContract';
+import {
+  evaluateToolOperation,
+  evaluateToolOperationBatch,
+  isValidatedToolOperation,
+  type ValidatedToolOperation,
+} from '../src/engines/canvas/geometryEngine';
+import { getBounds } from '../src/engines/canvas/geometry';
+import { getStudioTool } from '../src/engines/canvas/tools/studioRegistry';
+import type { CanvasToolContext, CanvasToolPointerInput, CanvasToolTransition } from '../src/engines/canvas/tools/types';
+import { createEditorState } from '../src/app/editorReducer';
+import { createCanonicalEditorStore } from '../src/app/editorStore';
+import { createMainCanvasCommandClient } from '../src/app/mainCanvasCommandClient';
+import { createToolOperationExecutor } from '../src/app/toolOperationExecutor';
+
+const RAW_SRC_FILES = import.meta.glob<string>('../src/**/*.{ts,tsx}', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+});
+
+function makePointer(overrides: Partial<CanvasToolPointerInput> = {}): CanvasToolPointerInput {
+  return {
+    pointerId: 1,
+    button: 0,
+    point: { x: 100, y: 100 },
+    clientX: 100,
+    clientY: 100,
+    viewportAnchor: { x: 0, y: 0 },
+    targetNodeId: null,
+    resizeHandle: null,
+    shiftKey: false,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    ...overrides,
+  };
+}
+
+function makeToolContext(
+  projectNodes: DesignNode[],
+  selectedNodeIds: string[] = [],
+  overrides: Partial<CanvasToolContext> = {},
+): CanvasToolContext {
+  const project = createInitialProject('P0.3 Test');
+  const doc = { ...getActiveDocument(project), nodes: projectNodes };
+  const selectedNodes = projectNodes.filter((n) => selectedNodeIds.includes(n.id));
+  return {
+    document: doc,
+    canvasNodes: projectNodes,
+    selectableNodes: projectNodes.filter((n) => n.visible && !n.locked),
+    otherNodes: projectNodes.filter((n) => n.visible && !n.locked),
+    selectedNodeIds,
+    selectedNodes,
+    selectionBounds: getBounds(selectedNodes),
+    zoom: 1,
+    canvasUnitsPerPixel: 1,
+    pan: { x: 0, y: 0 },
+    viewportWidth: 1200,
+    session: null,
+    workspace: 'main',
+    ...overrides,
+  };
+}
+
+function extractImportSpecifiers(source: string): string[] {
+  const matches = [...source.matchAll(/^\s*import\s+(?:type\s+)?[\s\S]*?from\s+['"]([^'"]+)['"]/gm)];
+  const sideEffects = [...source.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)];
+  return [...matches.map((m) => m[1]), ...sideEffects.map((m) => m[1])];
+}
+
+function readImportsForSrc(relativeFromSrc: string): string[] {
+  const key = `../src/${relativeFromSrc}`;
+  const source = RAW_SRC_FILES[key];
+  expect(source, `Expected source file ${key} to exist`).toBeTypeOf('string');
+  return extractImportSpecifiers(source);
+}
+
+describe('P0.3 Subsystem Boundaries — Tool Operation Contract', () => {
+  it('defines strict versioned envelopes for all studio tool categories', () => {
+    expect(CANVAS_TOOL_IDS).toHaveLength(26);
+
+    const project = createInitialProject('Contract Test');
+    const doc = getActiveDocument(project);
+    const rect = createNodeForDocument('rect', doc);
+
+    const op = createToolOperation('draw-rect', 'main', {
+      kind: 'create-nodes',
+      nodes: [rect],
+    });
+
+    expect(op.protocol).toBe(TOOL_OPERATION_PROTOCOL);
+    expect(op.version).toBe(TOOL_OPERATION_VERSION);
+    expect(op.category).toBe('document-mutation');
+    expect(op.metadata.atomicHistoryStep).toBe(true);
+    expect(isDocumentMutationOperation(op)).toBe(true);
+    expect(validateToolOperationEnvelope(op)).toEqual({ ok: true });
+  });
+
+  it('rejects malformed or mismatched envelopes', () => {
+    expect(validateToolOperationEnvelope(null).ok).toBe(false);
+    expect(
+      validateToolOperationEnvelope({
+        protocol: 'wrong.protocol',
+        version: 1,
+        operationId: 'op-1',
+        toolId: 'select',
+        workspace: 'main',
+        category: 'selection',
+        payload: { kind: 'select-nodes', nodeIds: [] },
+        metadata: { atomicHistoryStep: false },
+      }).ok,
+    ).toBe(false);
+
+    expect(
+      validateToolOperationEnvelope({
+        protocol: TOOL_OPERATION_PROTOCOL,
+        version: TOOL_OPERATION_VERSION,
+        operationId: 'op-2',
+        toolId: 'select',
+        workspace: 'main',
+        category: 'viewport',
+        payload: { kind: 'select-nodes', nodeIds: [] },
+        metadata: { atomicHistoryStep: false },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('extracts deterministic ToolOperations from Studio Tool transitions without leaking preview state', () => {
+    const project = createInitialProject('Transition Extraction');
+    const doc = getActiveDocument(project);
+    const rect = createNodeForDocument('rect', doc);
+
+    const transition: CanvasToolTransition = {
+      session: null,
+      previewNodes: [rect],
+      previewCreateNodes: [rect],
+      createNodes: [rect],
+      selection: [rect.id],
+      nextToolId: 'select',
+      notice: 'Created rectangle',
+      guides: [],
+    };
+    const operations = extractToolOperationsFromTransition('draw-rect', 'main', transition);
+
+    expect(operations.map((o) => o.payload.kind)).toEqual([
+      'create-nodes',
+      'select-nodes',
+      'switch-tool',
+      'notify',
+    ]);
+    expect(operations.every((o) => validateToolOperationEnvelope(o).ok)).toBe(true);
+  });
+});
+
+describe('P0.3 Subsystem Boundaries — Geometry Engine Validation Gate', () => {
+  it('rejects non-finite coordinates, negative dimensions, duplicate IDs, missing targets, and locked targets', () => {
+    const project = createInitialProject('Geometry Gate');
+    const doc = getActiveDocument(project);
+    const unlockedRect: RectNode = { ...(createNodeForDocument('rect', doc) as RectNode), id: 'rect-1' };
+    const lockedRect: RectNode = { ...(createNodeForDocument('rect', doc) as RectNode), id: 'rect-locked', locked: true };
+    const docWithNodes = { ...doc, nodes: [unlockedRect, lockedRect] };
+    const ctx = { document: docWithNodes, selectedNodeIds: [unlockedRect.id] };
+
+    const nanOp = createToolOperation('select', 'main', {
+      kind: 'transform-nodes',
+      nodes: [{ ...unlockedRect, x: Number.NaN }],
+    });
+    const nanResult = evaluateToolOperation(nanOp, ctx);
+    expect(nanResult.status).toBe('rejected');
+    if (nanResult.status === 'rejected') expect(nanResult.code).toBe('INVALID_GEOMETRY');
+
+    const negOp = createToolOperation('draw-rect', 'main', {
+      kind: 'create-nodes',
+      nodes: [{ ...unlockedRect, id: 'rect-new', width: -10 }],
+    });
+    const negResult = evaluateToolOperation(negOp, ctx);
+    expect(negResult.status).toBe('rejected');
+    if (negResult.status === 'rejected') expect(negResult.code).toBe('INVALID_GEOMETRY');
+
+    const dupOp = createToolOperation('draw-rect', 'main', {
+      kind: 'create-nodes',
+      nodes: [unlockedRect],
+    });
+    const dupResult = evaluateToolOperation(dupOp, ctx);
+    expect(dupResult.status).toBe('rejected');
+    if (dupResult.status === 'rejected') expect(dupResult.code).toBe('DUPLICATE_NODE_ID');
+
+    const lockedOp = createToolOperation('select', 'main', {
+      kind: 'transform-nodes',
+      nodes: [{ ...lockedRect, x: lockedRect.x + 25 }],
+    });
+    const lockedResult = evaluateToolOperation(lockedOp, ctx);
+    expect(lockedResult.status).toBe('rejected');
+    if (lockedResult.status === 'rejected') expect(lockedResult.code).toBe('LOCKED_TARGET');
+
+    const missingOp = createToolOperation('select', 'main', {
+      kind: 'transform-nodes',
+      nodes: [{ ...unlockedRect, id: 'does-not-exist', x: 500 }],
+    });
+    const missingResult = evaluateToolOperation(missingOp, ctx);
+    expect(missingResult.status).toBe('rejected');
+    if (missingResult.status === 'rejected') expect(missingResult.code).toBe('TARGET_NOT_FOUND');
+  });
+
+  it('detects zero-delta transforms as no-op while allowing style and vector-point updates', () => {
+    const project = createInitialProject('Zero Delta Gate');
+    const doc = getActiveDocument(project);
+    const rect: RectNode = { ...(createNodeForDocument('rect', doc) as RectNode), id: 'rect-1' };
+    const path: PathNode = {
+      id: 'path-1',
+      type: 'path',
+      name: 'Vector Path',
+      x: 100,
+      y: 100,
+      width: 100,
+      height: 50,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      closed: false,
+      points: [
+        { id: 'p1', x: 0, y: 0, pointType: 'corner' },
+        { id: 'p2', x: 100, y: 50, pointType: 'corner' },
+      ],
+      style: { fill: 'none', stroke: '#111111', strokeWidth: 2 },
+    };
+    const ctx = { document: { ...doc, nodes: [rect, path] }, selectedNodeIds: [rect.id] };
+
+    const noOpResult = evaluateToolOperation(
+      createToolOperation('select', 'main', { kind: 'transform-nodes', nodes: [{ ...rect }] }),
+      ctx,
+    );
+    expect(noOpResult.status).toBe('no-op');
+    if (noOpResult.status === 'no-op') expect(noOpResult.code).toBe('ZERO_DELTA_NO_OP');
+
+    const radiusResult = evaluateToolOperation(
+      createToolOperation('select', 'main', {
+        kind: 'transform-nodes',
+        nodes: [{ ...rect, style: { ...rect.style, radius: 24 } }],
+      }),
+      ctx,
+    );
+    expect(radiusResult.status).toBe('ready');
+
+    const anchorResult = evaluateToolOperation(
+      createToolOperation('direct-selection', 'main', {
+        kind: 'transform-nodes',
+        nodes: [
+          {
+            ...path,
+            points: [
+              { id: 'p1', x: 12, y: 8, pointType: 'smooth', handleOut: { x: 24, y: 8 } },
+              { id: 'p2', x: 100, y: 50, pointType: 'corner' },
+            ],
+          },
+        ],
+      }),
+      ctx,
+    );
+    expect(anchorResult.status).toBe('ready');
+  });
+
+  it('projects newly created nodes within a batch so follow-up select-nodes validates cleanly', () => {
+    const project = createInitialProject('Batch Projection');
+    const doc = getActiveDocument(project);
+    const created = { ...(createNodeForDocument('rect', doc) as RectNode), id: 'created-rect-1' };
+
+    const batch = evaluateToolOperationBatch(
+      [
+        createToolOperation('draw-rect', 'main', { kind: 'create-nodes', nodes: [created] }),
+        createToolOperation('draw-rect', 'main', { kind: 'select-nodes', nodeIds: [created.id, 'ghost-id'] }),
+      ],
+      { document: doc, selectedNodeIds: [] },
+    );
+
+    expect(batch.rejected).toHaveLength(0);
+    expect(batch.ready).toHaveLength(2);
+    expect(batch.ready[0].payload.kind).toBe('create-nodes');
+    expect(batch.ready[1].payload.kind).toBe('select-nodes');
+    if (batch.ready[1].payload.kind === 'select-nodes') {
+      expect(batch.ready[1].payload.nodeIds).toEqual([created.id]);
+    }
+  });
+
+  it('computes eyedropper color updates inside Geometry Engine while skipping locked layers', () => {
+    const project = createInitialProject('Eyedropper Calculation');
+    const doc = getActiveDocument(project);
+    const unlockedRect: RectNode = { ...(createNodeForDocument('rect', doc) as RectNode), id: 'r1' };
+    const lockedRect: RectNode = { ...(createNodeForDocument('rect', doc) as RectNode), id: 'r2', locked: true };
+
+    const result = evaluateToolOperation(
+      createToolOperation('eyedropper', 'main', {
+        kind: 'sample-color',
+        color: '#ff5500',
+        sourceName: 'Hero Card',
+        target: 'fill',
+      }),
+      {
+        document: { ...doc, nodes: [unlockedRect, lockedRect] },
+        selectedNodeIds: [unlockedRect.id, lockedRect.id],
+      },
+    );
+
+    expect(result.status).toBe('ready');
+    if (result.status === 'ready' && result.operation.payload.kind === 'sample-color') {
+      expect(result.operation.payload.resolvedNodesToUpdate).toHaveLength(1);
+      expect(result.operation.payload.resolvedNodesToUpdate[0].id).toBe('r1');
+      expect((result.operation.payload.resolvedNodesToUpdate[0] as RectNode).style.fill).toBe('#ff5500');
+      expect(result.operation.payload.noticeMessage).toContain('#FF5500');
+    }
+  });
+});
+
+describe('P0.3 Subsystem Boundaries — End-to-End Unidirectional Pipeline', () => {
+  it('executes Studio Tool -> Tool Operation Contract -> Geometry Engine -> Native Command Engine with atomic Undo/Redo', () => {
+    const project = createInitialProject('Pipeline E2E');
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const commandClient = createMainCanvasCommandClient(store);
+    const changeEvents: Array<{ added: string[]; updated: string[] }> = [];
+    store.subscribeChanges((evt) => {
+      const docChange = evt.change.documents[0];
+      changeEvents.push({
+        added: docChange?.nodeIds.added ?? [],
+        updated: docChange?.nodeIds.updated ?? [],
+      });
+    });
+
+    const selectionSpy = vi.fn();
+    const panSpy = vi.fn();
+    const zoomSpy = vi.fn();
+    const toolSpy = vi.fn();
+    const noticeSpy = vi.fn();
+    const colorOptionSpy = vi.fn();
+
+    const executor = createToolOperationExecutor({
+      workspace: 'main',
+      commandClient,
+      shell: {
+        onSelectionChange: (ids) => {
+          selectionSpy(ids);
+          store.dispatchLegacyAction({ type: 'select-nodes', nodeIds: ids });
+        },
+        onPanChange: panSpy,
+        onZoomChange: zoomSpy,
+        onToolChange: toolSpy,
+        onNotice: noticeSpy,
+        onSampledColorOptionChange: colorOptionSpy,
+      },
+    });
+
+    // 1. Draw a rectangle using draw-rect Studio Tool
+    const drawTool = getStudioTool('draw-rect');
+    const initialDoc = getActiveDocument(store.getSnapshot().editorState.project);
+    const ctx1 = makeToolContext(initialDoc.nodes, []);
+    const down = drawTool.onPointerDown(makePointer({ point: { x: 120, y: 120 } }), ctx1);
+    const move = drawTool.onPointerMove(makePointer({ point: { x: 260, y: 220 } }), {
+      ...ctx1,
+      session: down.session ?? null,
+    });
+    const up = drawTool.onPointerUp(makePointer({ point: { x: 260, y: 220 } }), {
+      ...ctx1,
+      session: move.session ?? down.session ?? null,
+    });
+
+    const revBeforeCreate = store.getSnapshot().projectRevision;
+    const ops1 = extractToolOperationsFromTransition('draw-rect', 'main', up);
+    const eval1 = evaluateToolOperationBatch(ops1, {
+      document: initialDoc,
+      selectedNodeIds: [],
+    });
+    expect(eval1.rejected).toHaveLength(0);
+    const reports1 = executor.executeBatch(eval1.ready);
+    expect(reports1.some((r) => r.status === 'applied')).toBe(true);
+    expect(store.getSnapshot().projectRevision).toBe(revBeforeCreate + 1);
+    expect(changeEvents.at(-1)?.added).toHaveLength(1);
+
+    const createdDoc = getActiveDocument(store.getSnapshot().editorState.project);
+    const createdNode = createdDoc.nodes[createdDoc.nodes.length - 1];
+    expect(createdNode.type).toBe('rect');
+    expect(toolSpy).toHaveBeenCalledWith('select');
+
+    // 2. Move the created rectangle using Select tool -> atomic transform
+    const selectTool = getStudioTool('select');
+    const ctx2 = makeToolContext(createdDoc.nodes, [createdNode.id], { otherNodes: [] });
+    const sDown = selectTool.onPointerDown(
+      makePointer({ point: { x: createdNode.x + 20, y: createdNode.y + 20 }, targetNodeId: createdNode.id }),
+      ctx2,
+    );
+    const sMove = selectTool.onPointerMove(
+      makePointer({ point: { x: createdNode.x + 80, y: createdNode.y + 50 }, targetNodeId: createdNode.id }),
+      { ...ctx2, session: sDown.session ?? null },
+    );
+    const sUp = selectTool.onPointerUp(
+      makePointer({ point: { x: createdNode.x + 80, y: createdNode.y + 50 }, targetNodeId: createdNode.id }),
+      { ...ctx2, session: sMove.session ?? sDown.session ?? null },
+    );
+
+    const revBeforeMove = store.getSnapshot().projectRevision;
+    const ops2 = extractToolOperationsFromTransition('select', 'main', sUp);
+    const eval2 = evaluateToolOperationBatch(ops2, {
+      document: createdDoc,
+      selectedNodeIds: [createdNode.id],
+    });
+    expect(eval2.rejected).toHaveLength(0);
+    executor.executeBatch(eval2.ready);
+
+    expect(store.getSnapshot().projectRevision).toBe(revBeforeMove + 1);
+    expect(changeEvents.at(-1)?.updated).toContain(createdNode.id);
+    const movedNode = getActiveDocument(store.getSnapshot().editorState.project).nodes.find((n) => n.id === createdNode.id)!;
+    expect(movedNode.x).toBe(createdNode.x + 60);
+    expect(movedNode.y).toBe(createdNode.y + 30);
+
+    // 3. Single Undo reverts the entire drag atomically
+    store.dispatchLegacyAction({ type: 'undo' });
+    const undoneNode = getActiveDocument(store.getSnapshot().editorState.project).nodes.find((n) => n.id === createdNode.id)!;
+    expect(undoneNode.x).toBe(createdNode.x);
+    expect(undoneNode.y).toBe(createdNode.y);
+  });
+
+  it('commits inline text edits via Native Command Engine and ignores unchanged text', () => {
+    const project = createInitialProject('Inline Text Pipeline');
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const commandClient = createMainCanvasCommandClient(store);
+    const doc = getActiveDocument(store.getSnapshot().editorState.project);
+    const textNode = { ...(createNodeForDocument('text', doc) as TextNode), id: 'text-1', text: 'Original' };
+    commandClient.createNodes([textNode], 'Seed text');
+
+    const executor = createToolOperationExecutor({
+      workspace: 'main',
+      commandClient,
+      shell: {
+        onSelectionChange: () => {},
+        onPanChange: () => {},
+        onZoomChange: () => {},
+      },
+    });
+
+    const revBefore = store.getSnapshot().projectRevision;
+    const unchangedEval = evaluateToolOperation(
+      createToolOperation('draw-text', 'main', { kind: 'commit-inline-text', nodeId: 'text-1', text: 'Original' }),
+      { document: getActiveDocument(store.getSnapshot().editorState.project), selectedNodeIds: ['text-1'] },
+    );
+    expect(unchangedEval.status).toBe('no-op');
+    expect(store.getSnapshot().projectRevision).toBe(revBefore);
+
+    const changedEval = evaluateToolOperation(
+      createToolOperation('draw-text', 'main', { kind: 'commit-inline-text', nodeId: 'text-1', text: 'Updated Title' }),
+      { document: getActiveDocument(store.getSnapshot().editorState.project), selectedNodeIds: ['text-1'] },
+    );
+    expect(changedEval.status).toBe('ready');
+    if (changedEval.status === 'ready') {
+      const report = executor.execute(changedEval.operation);
+      expect(report.status).toBe('applied');
+      expect(store.getSnapshot().projectRevision).toBe(revBefore + 1);
+      const saved = getActiveDocument(store.getSnapshot().editorState.project).nodes.find((n) => n.id === 'text-1') as TextNode;
+      expect(saved.text).toBe('Updated Title');
+    }
+  });
+
+  it('refuses unvalidated raw operations and workspace mismatches at the Native Command Engine boundary', () => {
+    const project = createInitialProject('Boundary Guard');
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const commandClient = createMainCanvasCommandClient(store);
+    const executor = createToolOperationExecutor({
+      workspace: 'main',
+      commandClient,
+      shell: {
+        onSelectionChange: () => {},
+        onPanChange: () => {},
+        onZoomChange: () => {},
+      },
+    });
+
+    const rawUnvalidated: ToolOperation = createToolOperation('select', 'main', {
+      kind: 'select-nodes',
+      nodeIds: [],
+    });
+    expect(isValidatedToolOperation(rawUnvalidated)).toBe(false);
+
+    const forgedReport = executor.execute(rawUnvalidated as unknown as ValidatedToolOperation);
+    expect(forgedReport.status).toBe('rejected');
+
+    const compOp = createToolOperation('select', 'component', { kind: 'select-nodes', nodeIds: [] });
+    const compEval = evaluateToolOperation(compOp, {
+      document: getActiveDocument(store.getSnapshot().editorState.project),
+      selectedNodeIds: [],
+    });
+    expect(compEval.status).toBe('ready');
+    if (compEval.status === 'ready') {
+      const mismatch = executor.execute(compEval.operation);
+      expect(mismatch.status).toBe('rejected');
+      expect(mismatch.reason).toContain('Workspace mismatch');
+    }
+  });
+});
+
+describe('P0.3 Subsystem Boundaries — Static Dependency Enforcement', () => {
+  const FORBIDDEN_IN_TOOLS_AND_GEOMETRY = [
+    '/app/',
+    'editorReducer',
+    'editorStore',
+    'nativeCommandExecutor',
+    'nativeCommandRegistry',
+    'mainCanvasCommandClient',
+    'toolOperationExecutor',
+    'ToolOptionsBar',
+    'InspectorPanel',
+    'ToolbarHintBar',
+    'FloatingWindow',
+    'preact',
+  ];
+
+  it('guarantees zero direct dependencies from Studio Tools to UI panels, legacy reducer, or Native Engine internals', () => {
+    const toolEntries = Object.entries(RAW_SRC_FILES).filter(([path]) =>
+      path.startsWith('../src/engines/canvas/tools/'),
+    );
+    expect(toolEntries.length).toBeGreaterThanOrEqual(10);
+
+    for (const [filePath, source] of toolEntries) {
+      const imports = extractImportSpecifiers(source);
+      for (const specifier of imports) {
+        for (const forbidden of FORBIDDEN_IN_TOOLS_AND_GEOMETRY) {
+          expect(
+            specifier.includes(forbidden),
+            `Studio tool "${filePath}" must not import "${specifier}" (forbidden: ${forbidden})`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('guarantees Tool Operation Contract and Geometry Engine are pure and decoupled from app/UI/Native Engine', () => {
+    const contractImports = readImportsForSrc('core/tools/operationContract.ts');
+    for (const specifier of contractImports) {
+      expect(specifier.includes('/engines/')).toBe(false);
+      for (const forbidden of FORBIDDEN_IN_TOOLS_AND_GEOMETRY) {
+        expect(specifier.includes(forbidden)).toBe(false);
+      }
+    }
+
+    const geometryEngineImports = readImportsForSrc('engines/canvas/geometryEngine.ts');
+    for (const specifier of geometryEngineImports) {
+      for (const forbidden of FORBIDDEN_IN_TOOLS_AND_GEOMETRY) {
+        expect(specifier.includes(forbidden)).toBe(false);
+      }
+    }
+  });
+
+  it('guarantees Canvas host has zero imports from app/UI panels/reducer/Native Engine internals', () => {
+    const canvasImports = readImportsForSrc('engines/canvas/Canvas.tsx');
+    const forbiddenForCanvas = FORBIDDEN_IN_TOOLS_AND_GEOMETRY.filter((entry) => entry !== 'preact');
+    for (const specifier of canvasImports) {
+      for (const forbidden of forbiddenForCanvas) {
+        expect(
+          specifier.includes(forbidden),
+          `Canvas.tsx must not import "${specifier}" (forbidden: ${forbidden})`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it('guarantees UI panels do not import Studio Tools implementation modules directly', () => {
+    const panelFiles = [
+      'app/ToolOptionsBar.tsx',
+      'app/InspectorPanel.tsx',
+      'app/ToolbarHintBar.tsx',
+      'app/FloatingWindow.tsx',
+    ];
+    for (const panel of panelFiles) {
+      const imports = readImportsForSrc(panel);
+      for (const specifier of imports) {
+        expect(
+          specifier.includes('engines/canvas/tools'),
+          `UI panel "${panel}" must not directly import Studio Tools module "${specifier}"`,
+        ).toBe(false);
+        expect(
+          specifier.includes('engines/canvas/Canvas'),
+          `UI panel "${panel}" must not directly import Canvas host "${specifier}"`,
+        ).toBe(false);
+      }
+    }
+  });
+});

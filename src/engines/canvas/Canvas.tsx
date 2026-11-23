@@ -11,8 +11,18 @@ import {
   worldPointToNodeLocal,
   type PlanarFace,
 } from '../../core/document/vector';
+import {
+  createToolOperation,
+  extractToolOperationsFromTransition,
+  type ToolOperation,
+} from '../../core/tools/operationContract';
 import { DocumentMaskDefs, MaskedNodeArtwork, NodeShape, sanitizeMaskIdSegment, type PrimitiveNode } from './artwork';
 import { computeSpacingRedlines, getBounds, type Bounds, type ResizeHandle, type SnapGuide } from './geometry';
+import {
+  evaluateToolOperation,
+  evaluateToolOperationBatch,
+  type ValidatedToolOperation,
+} from './geometryEngine';
 import { getStudioTool } from './tools/studioRegistry';
 import { extractSampledColor } from './tools/utility-tools';
 import {
@@ -38,10 +48,11 @@ interface CanvasProps {
   toolOptions?: CanvasToolOptions;
   zoom: number;
   pan: { x: number; y: number };
-  onPanChange: (pan: { x: number; y: number }) => void;
-  onZoomChange: (zoom: number) => void;
-  onSelectionChange: (nodeIds: string[]) => void;
-  onTransformCommit: (nodes: DesignNode[]) => void;
+  onToolOperation?: (operation: ValidatedToolOperation) => void;
+  onPanChange?: (pan: { x: number; y: number }) => void;
+  onZoomChange?: (zoom: number) => void;
+  onSelectionChange?: (nodeIds: string[]) => void;
+  onTransformCommit?: (nodes: DesignNode[]) => void;
   onLayerDrop: (nodeIds: string[]) => void;
   onCreateNodes?: (nodes: DesignNode[]) => void;
   onReplaceNodeWithNodes?: (nodeId: string, nodes: DesignNode[]) => void;
@@ -331,6 +342,7 @@ export function Canvas({
   toolOptions = DEFAULT_CANVAS_TOOL_OPTIONS,
   zoom,
   pan,
+  onToolOperation,
   onPanChange,
   onZoomChange,
   onSelectionChange,
@@ -645,12 +657,92 @@ export function Canvas({
     }
   };
 
+  const canEditInlineText = Boolean(onToolOperation || onInlineTextCommit);
+
+  const dispatchValidatedOperation = (validated: ValidatedToolOperation) => {
+    if (onToolOperation) {
+      onToolOperation(validated);
+      return;
+    }
+    const payload = validated.payload;
+    switch (payload.kind) {
+      case 'create-nodes':
+        onCreateNodes?.([...payload.nodes]);
+        return;
+      case 'transform-nodes':
+        onTransformCommit?.([...payload.nodes]);
+        return;
+      case 'replace-node-with-nodes':
+        onReplaceNodeWithNodes?.(payload.nodeId, [...payload.nodes]);
+        return;
+      case 'replace-nodes':
+        onReplaceNodes?.([...payload.removeIds], [...payload.insertNodes]);
+        return;
+      case 'sample-color':
+        onSampledColor?.(payload.color, payload.sourceName, payload.target);
+        return;
+      case 'commit-inline-text':
+        onInlineTextCommit?.(payload.nodeId, payload.text);
+        return;
+      case 'select-nodes':
+        onSelectionChange?.([...payload.nodeIds]);
+        return;
+      case 'viewport-update':
+        if (payload.pan !== undefined) onPanChange?.({ x: payload.pan.x, y: payload.pan.y });
+        if (payload.zoom !== undefined) onZoomChange?.(payload.zoom);
+        return;
+      case 'switch-tool':
+        onToolChange?.(payload.nextToolId);
+        return;
+      case 'notify':
+        onToolNotice?.(payload.message);
+        return;
+    }
+  };
+
+  const evaluateAndDispatchOperation = (operation: ToolOperation) => {
+    const result = evaluateToolOperation(operation, {
+      document,
+      selectedNodeIds,
+      effectiveLayerStates: layerStates,
+    });
+    if (result.status === 'ready') {
+      dispatchValidatedOperation(result.operation);
+    }
+  };
+
+  const emitViewportUpdate = (update: { pan?: { x: number; y: number }; zoom?: number }) => {
+    evaluateAndDispatchOperation(
+      createToolOperation(
+        toolId,
+        workspace,
+        {
+          kind: 'viewport-update',
+          ...(update.pan !== undefined ? { pan: update.pan } : {}),
+          ...(update.zoom !== undefined ? { zoom: update.zoom } : {}),
+        },
+        { atomicHistoryStep: false },
+      ),
+    );
+  };
+
   const commitInlineText = () => {
     if (!inlineTextEdit) return;
     const trimmed = inlineTextEdit.draft;
     const nodeId = inlineTextEdit.nodeId;
     setInlineTextEdit(null);
-    onInlineTextCommit?.(nodeId, trimmed.length > 0 ? trimmed : 'Text');
+    evaluateAndDispatchOperation(
+      createToolOperation(
+        toolId,
+        workspace,
+        {
+          kind: 'commit-inline-text',
+          nodeId,
+          text: trimmed.length > 0 ? trimmed : 'Text',
+        },
+        { description: 'Edit text on canvas' },
+      ),
+    );
   };
 
   const handleWheel = (event: JSX.TargetedWheelEvent<HTMLDivElement>) => {
@@ -668,21 +760,23 @@ export function Canvas({
       const pointerX = event.clientX - rect.left - rect.width / 2;
       const pointerY = event.clientY - rect.top - rect.height / 2;
       const ratio = nextZoom / zoom;
-      onPanChange({
-        x: pointerX - (pointerX - pan.x) * ratio,
-        y: pointerY - (pointerY - pan.y) * ratio,
+      emitViewportUpdate({
+        pan: {
+          x: pointerX - (pointerX - pan.x) * ratio,
+          y: pointerY - (pointerY - pan.y) * ratio,
+        },
+        zoom: nextZoom,
       });
-      onZoomChange(nextZoom);
       return;
     }
 
     if (event.shiftKey) {
       const delta = deltaX !== 0 ? deltaX : deltaY;
-      onPanChange({ ...pan, x: pan.x - delta });
+      emitViewportUpdate({ pan: { ...pan, x: pan.x - delta } });
       return;
     }
 
-    onPanChange({ ...pan, y: pan.y - deltaY });
+    emitViewportUpdate({ pan: { ...pan, y: pan.y - deltaY } });
   };
 
   const handlePanPointerDown = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
@@ -690,8 +784,7 @@ export function Canvas({
       event.preventDefault();
       panRef.current = null;
       setIsPanning(false);
-      onPanChange({ x: 0, y: 0 });
-      onZoomChange(1);
+      emitViewportUpdate({ pan: { x: 0, y: 0 }, zoom: 1 });
       return;
     }
 
@@ -718,9 +811,11 @@ export function Canvas({
     const session = panRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
 
-    onPanChange({
-      x: session.startPan.x + event.clientX - session.startClientX,
-      y: session.startPan.y + event.clientY - session.startClientY,
+    emitViewportUpdate({
+      pan: {
+        x: session.startPan.x + event.clientX - session.startClientX,
+        y: session.startPan.y + event.clientY - session.startClientY,
+      },
     });
     event.preventDefault();
   };
@@ -736,7 +831,7 @@ export function Canvas({
   const cancelPan = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
     const session = panRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
-    onPanChange(session.startPan);
+    emitViewportUpdate({ pan: session.startPan });
     panRef.current = null;
     setIsPanning(false);
     event.preventDefault();
@@ -827,42 +922,43 @@ export function Canvas({
     pointerId?: number,
     sourceEvent?: { preventDefault(): void },
   ) => {
+    // 1. Apply local gesture & preview presentation state inside Canvas viewport only.
     if ('session' in transition) updateToolSession(transition.session ?? null);
     if ('previewNodes' in transition) updatePreview(transition.previewNodes ?? null);
     if ('previewCreateNodes' in transition) setPreviewCreateNodes(transition.previewCreateNodes ?? null);
-    if (transition.createNodes && transition.createNodes.length > 0) {
-      onCreateNodes?.(transition.createNodes);
-    }
-    if (transition.replaceNodeWithNodes) {
-      onReplaceNodeWithNodes?.(transition.replaceNodeWithNodes.nodeId, transition.replaceNodeWithNodes.nodes);
-    }
-    if (transition.replaceNodes) {
-      onReplaceNodes?.(transition.replaceNodes.removeIds, transition.replaceNodes.insertNodes);
-    }
-    if (transition.commitNodes) onTransformCommit(transition.commitNodes);
-    if ('selection' in transition) onSelectionChange(transition.selection ?? []);
-    if (transition.sampledColor) {
-      onSampledColor?.(transition.sampledColor.color, transition.sampledColor.sourceName, transition.sampledColor.target);
-    }
     if ('customPivot' in transition) setCustomPivot(transition.customPivot ?? null);
     if ('activeAnchor' in transition) setActiveAnchor(transition.activeAnchor ?? null);
-    if (transition.editTextNodeId && onInlineTextCommit) {
-      const createdText = transition.createNodes?.find(
-        (n): n is TextNode => n.id === transition.editTextNodeId && n.type === 'text',
-      );
-      if (createdText) {
-        const nextEdit = { nodeId: createdText.id, draft: createdText.text };
-        pendingInlineEditRef.current = nextEdit;
-        setInlineTextEdit(nextEdit);
-      }
-    }
-    if (transition.nextToolId) onToolChange?.(transition.nextToolId);
-    if (transition.notice) onToolNotice?.(transition.notice);
-    if (transition.pan) onPanChange(transition.pan);
-    if (transition.zoom !== undefined) onZoomChange(transition.zoom);
     if (transition.guides) setGuides(transition.guides);
     if (transition.capturePointer && svg && pointerId !== undefined) capturePointer(svg, pointerId);
     if (transition.preventDefault) sourceEvent?.preventDefault();
+
+    // 2. Unidirectional flow: Studio Tool -> Tool Operation Contract -> Geometry Engine -> Native Command Engine.
+    const operations = extractToolOperationsFromTransition(toolId, workspace, transition);
+    if (operations.length > 0) {
+      const evaluated = evaluateToolOperationBatch(operations, {
+        document,
+        selectedNodeIds,
+        effectiveLayerStates: layerStates,
+      });
+      for (const validatedOp of evaluated.ready) {
+        dispatchValidatedOperation(validatedOp);
+        const validatedPayload = validatedOp.payload;
+        if (
+          validatedPayload.kind === 'create-nodes' &&
+          validatedPayload.openInlineTextForNodeId &&
+          canEditInlineText
+        ) {
+          const createdText = validatedPayload.nodes.find(
+            (n): n is TextNode => n.id === validatedPayload.openInlineTextForNodeId && n.type === 'text',
+          );
+          if (createdText) {
+            const nextEdit = { nodeId: createdText.id, draft: createdText.text };
+            pendingInlineEditRef.current = nextEdit;
+            setInlineTextEdit(nextEdit);
+          }
+        }
+      }
+    }
   };
 
   const handlePointerDown = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
@@ -932,7 +1028,7 @@ export function Canvas({
   };
 
   const handleDoubleClick = (event: JSX.TargetedMouseEvent<SVGSVGElement>) => {
-    if (!onInlineTextCommit) return;
+    if (!canEditInlineText) return;
     if (toolId !== 'select' && toolId !== 'direct-selection') return;
     const target = event.target as Element;
     if (target.closest('[data-smart-handle]')) return;
@@ -955,7 +1051,7 @@ export function Canvas({
     // Escape during an active canvas pan or tool session ALWAYS cancels cleanly regardless of DOM focus.
     if (event.key === 'Escape') {
       if (panRef.current) {
-        onPanChange(panRef.current.startPan);
+        emitViewportUpdate({ pan: panRef.current.startPan });
         panRef.current = null;
         setIsPanning(false);
         event.preventDefault();

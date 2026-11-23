@@ -1,72 +1,26 @@
 import type { DesignNode, FolioDocument, PathNode, VectorAnchorPoint } from '../../../core/document/types';
 import type { PlanarArrangement } from '../../../core/document/vector';
+import {
+  DEFAULT_CANVAS_TOOL_OPTIONS,
+  type CanvasToolGroupId,
+  type CanvasToolId,
+  type CanvasToolOptions,
+  type StudioCanvasToolId,
+  type ToolOperation,
+  type ToolWorkspaceScope,
+  type Wave1CanvasToolId,
+} from '../../../core/tools/operationContract';
 import type { Bounds, ResizeHandle, SnapGuide } from '../geometry';
 
-export type Wave1CanvasToolId =
-  | 'select'
-  | 'direct-selection'
-  | 'lasso-selection'
-  | 'magic-wand'
-  | 'hand'
-  | 'scrubby-zoom';
-
-export type StudioCanvasToolId =
-  | Wave1CanvasToolId
-  | 'scale'
-  | 'frame'
-  | 'section'
-  | 'draw-rect'
-  | 'draw-ellipse'
-  | 'draw-line'
-  | 'draw-arrow'
-  | 'draw-polygon'
-  | 'draw-star'
-  | 'pen'
-  | 'curvature'
-  | 'anchor-point'
-  | 'pencil'
-  | 'smooth'
-  | 'scissors'
-  | 'shape-builder'
-  | 'draw-text'
-  | 'rotate'
-  | 'eyedropper'
-  | 'measure';
-
-export type CanvasToolId = StudioCanvasToolId;
-
-export type CanvasToolGroupId =
-  | 'selection'
-  | 'layout'
-  | 'shapes'
-  | 'vector'
-  | 'type'
-  | 'transform'
-  | 'inspect'
-  | 'navigation';
-
-export type ToolWorkspaceScope = 'main' | 'component';
-
-export interface CanvasToolOptions {
-  polygonSides: number;
-  starPoints: number;
-  starInnerRatio: number;
-  strokeWidth: number;
-  strokeColor: string;
-  fillColor: string;
-  keepToolActive: boolean;
-  smoothRadius: number;
-}
-
-export const DEFAULT_CANVAS_TOOL_OPTIONS: CanvasToolOptions = {
-  polygonSides: 6,
-  starPoints: 5,
-  starInnerRatio: 0.44,
-  strokeWidth: 2.5,
-  strokeColor: '#20212A',
-  fillColor: '#8B7CF6',
-  keepToolActive: false,
-  smoothRadius: 34,
+export {
+  DEFAULT_CANVAS_TOOL_OPTIONS,
+  type CanvasToolGroupId,
+  type CanvasToolId,
+  type CanvasToolOptions,
+  type StudioCanvasToolId,
+  type ToolOperation,
+  type ToolWorkspaceScope,
+  type Wave1CanvasToolId,
 };
 
 export interface VectorAnchorHit {
@@ -305,6 +259,7 @@ export interface CanvasToolTransition {
   notice?: string;
   pan?: { x: number; y: number };
   zoom?: number;
+  operations?: readonly ToolOperation[];
   guides?: SnapGuide[];
   capturePointer?: boolean;
   preventDefault?: boolean;
