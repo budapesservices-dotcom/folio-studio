@@ -1,16 +1,7 @@
 import type { NativeCommandResult } from '../core/commands/types';
-import type { DesignNode, TextNode } from '../core/document/types';
 import type { CanvasToolId, ToolWorkspaceScope } from '../core/tools/operationContract';
 import { isValidatedToolOperation, type ValidatedToolOperation } from '../engines/canvas/geometryEngine';
-import type { MainCanvasCommandClient } from './mainCanvasCommandClient';
-
-export interface ComponentWorkspaceMutationSink {
-  createNodes(nodes: readonly DesignNode[]): void;
-  transformNodes(nodes: readonly DesignNode[]): void;
-  replaceNode(node: TextNode | DesignNode): void;
-  replaceNodeWithNodes(nodeId: string, nodes: readonly DesignNode[]): void;
-  replaceNodes(removeIds: readonly string[], insertNodes: readonly DesignNode[]): void;
-}
+import type { WorkspaceCommandClient } from './mainCanvasCommandClient';
 
 export interface ToolOperationShellCallbacks {
   readonly isHydrating?: () => boolean;
@@ -23,21 +14,13 @@ export interface ToolOperationShellCallbacks {
   readonly onCanvasMutationCommitted?: (kind: 'create' | 'transform' | 'replace' | 'text' | 'sample-color') => void;
 }
 
-export interface MainToolOperationExecutorOptions {
-  readonly workspace: 'main';
-  readonly commandClient: MainCanvasCommandClient;
+export interface WorkspaceToolOperationExecutorOptions {
+  readonly workspace: ToolWorkspaceScope;
+  readonly commandClient: WorkspaceCommandClient;
   readonly shell: ToolOperationShellCallbacks;
 }
 
-export interface ComponentToolOperationExecutorOptions {
-  readonly workspace: 'component';
-  readonly componentSink: ComponentWorkspaceMutationSink;
-  readonly shell: ToolOperationShellCallbacks;
-}
-
-export type ToolOperationExecutorOptions =
-  | MainToolOperationExecutorOptions
-  | ComponentToolOperationExecutorOptions;
+export type ToolOperationExecutorOptions = WorkspaceToolOperationExecutorOptions;
 
 export interface ToolOperationExecutionReport {
   readonly operationId: string;
@@ -53,12 +36,13 @@ export interface ToolOperationExecutor {
 }
 
 /**
- * Unidirectional Native Command Engine adapter for Canvas Tool Operations.
+ * Unidirectional Native Command Engine adapter for Canvas Tool Operations
+ * across both Main Canvas and Component Canvas workspaces.
  *
  * Accepts ONLY `ValidatedToolOperation` envelopes sealed by the Geometry Engine.
- * Main workspace mutations commit exclusively through `MainCanvasCommandClient`
+ * All document mutations commit exclusively through `WorkspaceCommandClient`
  * (Native Command Engine -> Canonical Editor Store). Studio Tools never see
- * `MainCanvasCommandClient`, `CanonicalEditorStore`, `editorReducer`, or UI panels.
+ * `WorkspaceCommandClient`, `CanonicalEditorStore`, `editorReducer`, or UI panels.
  */
 export function createToolOperationExecutor(options: ToolOperationExecutorOptions): ToolOperationExecutor {
   const execute = (operation: ValidatedToolOperation): ToolOperationExecutionReport => {
@@ -95,23 +79,15 @@ export function createToolOperationExecutor(options: ToolOperationExecutorOption
           };
         }
         options.shell.onCanvasMutationCommitted?.('create');
-        if (options.workspace === 'main') {
-          const commandResult = options.commandClient.createNodes(
-            payload.nodes,
-            description ?? 'Create with studio tool',
-          );
-          return {
-            operationId: operation.operationId,
-            workspace: 'main',
-            status: commandResult.status,
-            commandResult,
-          };
-        }
-        options.componentSink.createNodes(payload.nodes);
+        const commandResult = options.commandClient.createNodes(
+          payload.nodes,
+          description ?? 'Create with studio tool',
+        );
         return {
           operationId: operation.operationId,
-          workspace: 'component',
-          status: 'applied',
+          workspace: options.workspace,
+          status: commandResult.status,
+          commandResult,
         };
       }
 
@@ -125,23 +101,15 @@ export function createToolOperationExecutor(options: ToolOperationExecutorOption
           };
         }
         options.shell.onCanvasMutationCommitted?.('transform');
-        if (options.workspace === 'main') {
-          const commandResult = options.commandClient.transformNodes(
-            payload.nodes,
-            description ?? 'Transform on canvas',
-          );
-          return {
-            operationId: operation.operationId,
-            workspace: 'main',
-            status: commandResult.status,
-            commandResult,
-          };
-        }
-        options.componentSink.transformNodes(payload.nodes);
+        const commandResult = options.commandClient.transformNodes(
+          payload.nodes,
+          description ?? 'Transform on canvas',
+        );
         return {
           operationId: operation.operationId,
-          workspace: 'component',
-          status: 'applied',
+          workspace: options.workspace,
+          status: commandResult.status,
+          commandResult,
         };
       }
 
@@ -155,24 +123,16 @@ export function createToolOperationExecutor(options: ToolOperationExecutorOption
           };
         }
         options.shell.onCanvasMutationCommitted?.('replace');
-        if (options.workspace === 'main') {
-          const commandResult = options.commandClient.replaceNodeWithNodes(
-            payload.nodeId,
-            payload.nodes,
-            description ?? 'Split vector path',
-          );
-          return {
-            operationId: operation.operationId,
-            workspace: 'main',
-            status: commandResult.status,
-            commandResult,
-          };
-        }
-        options.componentSink.replaceNodeWithNodes(payload.nodeId, payload.nodes);
+        const commandResult = options.commandClient.replaceNodeWithNodes(
+          payload.nodeId,
+          payload.nodes,
+          description ?? 'Split vector path',
+        );
         return {
           operationId: operation.operationId,
-          workspace: 'component',
-          status: 'applied',
+          workspace: options.workspace,
+          status: commandResult.status,
+          commandResult,
         };
       }
 
@@ -186,25 +146,17 @@ export function createToolOperationExecutor(options: ToolOperationExecutorOption
           };
         }
         options.shell.onCanvasMutationCommitted?.('replace');
-        if (options.workspace === 'main') {
-          const commandResult = options.commandClient.replaceNodes(
-            payload.removeIds,
-            payload.insertNodes,
-            description ?? 'Replace vector nodes',
-            payload.selectIds,
-          );
-          return {
-            operationId: operation.operationId,
-            workspace: 'main',
-            status: commandResult.status,
-            commandResult,
-          };
-        }
-        options.componentSink.replaceNodes(payload.removeIds, payload.insertNodes);
+        const commandResult = options.commandClient.replaceNodes(
+          payload.removeIds,
+          payload.insertNodes,
+          description ?? 'Replace vector nodes',
+          payload.selectIds,
+        );
         return {
           operationId: operation.operationId,
-          workspace: 'component',
-          status: 'applied',
+          workspace: options.workspace,
+          status: commandResult.status,
+          commandResult,
         };
       }
 
@@ -213,14 +165,10 @@ export function createToolOperationExecutor(options: ToolOperationExecutorOption
         let commandResult: NativeCommandResult | undefined;
         if (!hydrating && payload.resolvedNodesToUpdate.length > 0) {
           options.shell.onCanvasMutationCommitted?.('sample-color');
-          if (options.workspace === 'main') {
-            commandResult = options.commandClient.transformNodes(
-              payload.resolvedNodesToUpdate,
-              description ?? `Apply sampled ${payload.target}`,
-            );
-          } else {
-            options.componentSink.transformNodes(payload.resolvedNodesToUpdate);
-          }
+          commandResult = options.commandClient.transformNodes(
+            payload.resolvedNodesToUpdate,
+            description ?? `Apply sampled ${payload.target}`,
+          );
         }
         options.shell.onNotice?.(payload.noticeMessage);
         return {
@@ -241,23 +189,15 @@ export function createToolOperationExecutor(options: ToolOperationExecutorOption
           };
         }
         options.shell.onCanvasMutationCommitted?.('text');
-        if (options.workspace === 'main') {
-          const commandResult = options.commandClient.replaceNode(
-            payload.resolvedNode,
-            description ?? 'Edit text on canvas',
-          );
-          return {
-            operationId: operation.operationId,
-            workspace: 'main',
-            status: commandResult.status,
-            commandResult,
-          };
-        }
-        options.componentSink.replaceNode(payload.resolvedNode);
+        const commandResult = options.commandClient.replaceNode(
+          payload.resolvedNode,
+          description ?? 'Edit text on canvas',
+        );
         return {
           operationId: operation.operationId,
-          workspace: 'component',
-          status: 'applied',
+          workspace: options.workspace,
+          status: commandResult.status,
+          commandResult,
         };
       }
 

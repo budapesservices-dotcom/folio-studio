@@ -1,6 +1,12 @@
 import type { DocumentAddress, NativeNodeRef } from '../document/ast';
 import type { LayerDropPosition } from '../document/layers';
-import type { DesignNode } from '../document/types';
+import type {
+  ComponentDefinition,
+  DesignNode,
+  FolioDocument,
+  FolioPage,
+  FolioProject,
+} from '../document/types';
 
 export type NativeWorkspace =
   | 'main'
@@ -27,6 +33,9 @@ export interface NativeCommandSource {
 export type NativePermission =
   | 'project.read'
   | 'project.rename'
+  | 'project.replace'
+  | 'page.create'
+  | 'page.switch'
   | 'document.read'
   | 'node.create'
   | 'node.update'
@@ -34,8 +43,11 @@ export type NativePermission =
   | 'node.reorder'
   | 'node.delete'
   | 'component.read'
+  | 'component.create'
   | 'component.update'
-  | 'component.delete';
+  | 'component.delete'
+  | 'selection.update'
+  | 'history.execute';
 
 export interface NativeCommandContext {
   /** Supplied by the trusted host, never copied from command.source. */
@@ -81,6 +93,43 @@ export interface ProjectRenamePayload {
   name: string;
 }
 
+export interface ProjectReplacePayload {
+  project: FolioProject;
+}
+
+export interface PageCreatePayload {
+  page: FolioPage;
+}
+
+export interface PageSetActivePayload {
+  pageId: string;
+}
+
+export interface ComponentCreatePayload {
+  component: ComponentDefinition;
+}
+
+export interface ComponentSyncDocumentPayload {
+  componentId: string;
+  document: FolioDocument;
+  updatedAt: string;
+  expectedUpdatedAt: string;
+  expectedMasterDocument: FolioDocument;
+}
+
+export interface ComponentRenamePayload {
+  componentId: string;
+  name: string;
+  expectedUpdatedAt: string;
+  expectedMasterDocument: FolioDocument;
+}
+
+export interface ComponentDeletePayload {
+  componentId: string;
+  expectedUpdatedAt: string;
+  expectedMasterDocument: FolioDocument;
+}
+
 export interface NodeCreatePayload {
   nodes: DesignNode[];
 }
@@ -88,6 +137,34 @@ export interface NodeCreatePayload {
 export interface NodeReplacePayload {
   node: DesignNode;
 }
+
+export interface NodeReplaceManyPayload {
+  removeIds: string[];
+  insertNodes: DesignNode[];
+  selectIds?: string[];
+}
+
+export interface NodeSplitPayload {
+  nodeId: string;
+  nodes: DesignNode[];
+}
+
+export interface NodeUpdateManyPayload {
+  nodes: DesignNode[];
+}
+
+export interface NodeEditPayload {
+  node: DesignNode;
+  coalesceKey: string;
+}
+
+export interface SelectionSetPayload {
+  nodeIds: string[];
+}
+
+export type HistoryCommitEditPayload = Record<string, never>;
+export type HistoryUndoPayload = Record<string, never>;
+export type HistoryRedoPayload = Record<string, never>;
 
 export type NativeNodeTransform = {
   x?: number;
@@ -156,8 +233,19 @@ export interface LayerClippingMaskPayload {
 }
 
 export type ProjectRenameCommand = NativeCommandEnvelope<'project.rename', ProjectRenamePayload>;
+export type ProjectReplaceCommand = NativeCommandEnvelope<'project.replace', ProjectReplacePayload>;
+export type PageCreateCommand = NativeCommandEnvelope<'page.create', PageCreatePayload>;
+export type PageSetActiveCommand = NativeCommandEnvelope<'page.set-active', PageSetActivePayload>;
+export type ComponentCreateCommand = NativeCommandEnvelope<'component.create', ComponentCreatePayload>;
+export type ComponentSyncDocumentCommand = NativeCommandEnvelope<'component.sync-document', ComponentSyncDocumentPayload>;
+export type ComponentRenameCommand = NativeCommandEnvelope<'component.rename', ComponentRenamePayload>;
+export type ComponentDeleteCommand = NativeCommandEnvelope<'component.delete', ComponentDeletePayload>;
 export type NodeCreateCommand = NativeCommandEnvelope<'node.create', NodeCreatePayload>;
 export type NodeReplaceCommand = NativeCommandEnvelope<'node.replace', NodeReplacePayload>;
+export type NodeReplaceManyCommand = NativeCommandEnvelope<'node.replace-many', NodeReplaceManyPayload>;
+export type NodeSplitCommand = NativeCommandEnvelope<'node.split', NodeSplitPayload>;
+export type NodeUpdateManyCommand = NativeCommandEnvelope<'node.update-many', NodeUpdateManyPayload>;
+export type NodeEditCommand = NativeCommandEnvelope<'node.edit', NodeEditPayload>;
 export type NodeTransformCommand = NativeCommandEnvelope<'node.transform', NodeTransformPayload>;
 export type NodeSetPropertiesCommand = NativeCommandEnvelope<'node.set-properties', NodeSetPropertiesPayload>;
 export type NodeRenameCommand = NativeCommandEnvelope<'node.rename', NodeRenamePayload>;
@@ -169,23 +257,12 @@ export type LayerGroupCommand = NativeCommandEnvelope<'layer.group', LayerGroupP
 export type LayerUngroupCommand = NativeCommandEnvelope<'layer.ungroup', LayerUngroupPayload>;
 export type LayerCreateClippingMaskCommand = NativeCommandEnvelope<'layer.create-clipping-mask', LayerClippingMaskPayload>;
 export type LayerRemoveClippingMaskCommand = NativeCommandEnvelope<'layer.remove-clipping-mask', LayerClippingMaskPayload>;
+export type SelectionSetCommand = NativeCommandEnvelope<'selection.set', SelectionSetPayload>;
+export type HistoryCommitEditCommand = NativeCommandEnvelope<'history.commit-edit', HistoryCommitEditPayload>;
+export type HistoryUndoCommand = NativeCommandEnvelope<'history.undo', HistoryUndoPayload>;
+export type HistoryRedoCommand = NativeCommandEnvelope<'history.redo', HistoryRedoPayload>;
 
-export type NativeCommandPayload =
-  | ProjectRenamePayload
-  | NodeCreatePayload
-  | NodeReplacePayload
-  | NodeTransformPayload
-  | NodeSetPropertiesPayload
-  | NodeRenamePayload
-  | NodeDeletePayload
-  | NodeSetCanvasStatePayload
-  | LayerMovePayload
-  | LayerMoveManyPayload
-  | LayerGroupPayload
-  | LayerUngroupPayload
-  | LayerClippingMaskPayload;
-
-export type NativeCommand =
+export type Phase2NativeCommand =
   | ProjectRenameCommand
   | NodeCreateCommand
   | NodeReplaceCommand
@@ -200,6 +277,55 @@ export type NativeCommand =
   | LayerUngroupCommand
   | LayerCreateClippingMaskCommand
   | LayerRemoveClippingMaskCommand;
+
+export type ExtendedNativeCommand =
+  | ProjectReplaceCommand
+  | PageCreateCommand
+  | PageSetActiveCommand
+  | ComponentCreateCommand
+  | ComponentSyncDocumentCommand
+  | ComponentRenameCommand
+  | ComponentDeleteCommand
+  | NodeReplaceManyCommand
+  | NodeSplitCommand
+  | NodeUpdateManyCommand
+  | NodeEditCommand
+  | SelectionSetCommand
+  | HistoryCommitEditCommand
+  | HistoryUndoCommand
+  | HistoryRedoCommand;
+
+export type NativeCommandPayload =
+  | ProjectRenamePayload
+  | ProjectReplacePayload
+  | PageCreatePayload
+  | PageSetActivePayload
+  | ComponentCreatePayload
+  | ComponentSyncDocumentPayload
+  | ComponentRenamePayload
+  | ComponentDeletePayload
+  | NodeCreatePayload
+  | NodeReplacePayload
+  | NodeReplaceManyPayload
+  | NodeSplitPayload
+  | NodeUpdateManyPayload
+  | NodeEditPayload
+  | NodeTransformPayload
+  | NodeSetPropertiesPayload
+  | NodeRenamePayload
+  | NodeDeletePayload
+  | NodeSetCanvasStatePayload
+  | LayerMovePayload
+  | LayerMoveManyPayload
+  | LayerGroupPayload
+  | LayerUngroupPayload
+  | LayerClippingMaskPayload
+  | SelectionSetPayload
+  | HistoryCommitEditPayload
+  | HistoryUndoPayload
+  | HistoryRedoPayload;
+
+export type NativeCommand = Phase2NativeCommand | ExtendedNativeCommand;
 
 export interface NativeCommandWarning {
   code: string;
@@ -219,6 +345,23 @@ export interface NativeCommandResult {
   projectRevisionBefore: number;
   projectRevisionAfter: number;
   changed: boolean;
+  affectedDocuments: DocumentAddress[];
+  affectedNodes: NativeNodeRef[];
+  warnings: NativeCommandWarning[];
+}
+
+export interface NativeCommandTransactionResult {
+  protocolVersion: 1;
+  transactionId: string;
+  status: NativeCommandStatus;
+  code: string;
+  message: string;
+  projectId: string;
+  projectRevisionBefore: number;
+  projectRevisionAfter: number;
+  changed: boolean;
+  commandResults: NativeCommandResult[];
+  failedCommandIndex?: number;
   affectedDocuments: DocumentAddress[];
   affectedNodes: NativeNodeRef[];
   warnings: NativeCommandWarning[];

@@ -117,9 +117,17 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'select-nodes': {
       const ids = existingSelection(state.project, action.nodeIds);
+      const nextSelectedNodeId = ids.length === 1 ? ids[0] : null;
+      if (
+        nextSelectedNodeId === state.selectedNodeId &&
+        ids.length === state.selectedNodeIds.length &&
+        ids.every((id, index) => id === state.selectedNodeIds[index])
+      ) {
+        return state;
+      }
       return {
         ...state,
-        selectedNodeId: ids.length === 1 ? ids[0] : null,
+        selectedNodeId: nextSelectedNodeId,
         selectedNodeIds: ids,
       };
     }

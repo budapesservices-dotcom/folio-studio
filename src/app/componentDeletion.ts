@@ -1,6 +1,8 @@
 import type { ComponentDefinition, FolioDocument, FolioProject } from '../core/document/types';
 import { shouldProtectComponentCanvasBuffer, type ComponentCanvasSyncSession } from './componentCanvasSync';
 import type { CanonicalEditorStore, CanonicalEditorStoreSnapshot } from './editorStore';
+import { createMainCanvasCommandClient } from './mainCanvasCommandClient';
+import { executeNativeSnapshotRollback } from './nativeCommandExecutor';
 
 export interface ComponentDeletionTarget {
   readonly componentId: string;
@@ -84,21 +86,27 @@ export function deleteComponentIfCurrent(
   const before = store.getSnapshot();
   if (!matchesCurrentMaster(before, target)) return { status: 'stale-master', snapshot: before };
 
-  const transition = store.dispatchLegacyAction({
-    type: 'delete-component',
+  const client = createMainCanvasCommandClient(store, { actorId: 'component-deletion-engine' });
+  const commandResult = client.deleteComponent({
     componentId: target.componentId,
     expectedMasterDocument: target.expectedMasterDocument,
     expectedUpdatedAt: target.expectedUpdatedAt,
-  }, mutationLease);
-  if (transition.status !== 'committed') return { status: 'failed', snapshot: transition.snapshot };
+  }, 'Delete component master', mutationLease);
+  const after = store.getSnapshot();
+  if (commandResult.status === 'rejected') {
+    if (commandResult.code === 'COMPONENT_CONFLICT' || commandResult.code === 'TARGET_NOT_FOUND') {
+      return { status: 'stale-master', snapshot: after };
+    }
+    return { status: 'failed', snapshot: after };
+  }
 
-  const stillExists = transition.snapshot.editorState.project.components.some(
+  const stillExists = after.editorState.project.components.some(
     (component) => component.id === target.componentId,
   );
-  if (stillExists || transition.snapshot === before) {
-    return { status: 'stale-master', snapshot: transition.snapshot };
+  if (stillExists || after === before) {
+    return { status: 'stale-master', snapshot: after };
   }
-  return { status: 'deleted', snapshot: transition.snapshot };
+  return { status: 'deleted', snapshot: after };
 }
 
 function cloneGraph<T>(value: T): T {
@@ -206,17 +214,19 @@ export function saveComponentCanvasRecoveryCopy(
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    const transition = store.dispatchLegacyAction({ type: 'add-component', component }, mutationLease);
-    if (transition.status !== 'committed' ||
-        !transition.snapshot.editorState.project.components.some((item) => item.id === componentId)) {
-      return { status: 'failed', snapshot: transition.snapshot };
+    const client = createMainCanvasCommandClient(store, { actorId: 'component-recovery-engine' });
+    const commandResult = client.createComponent(component, 'Save recovered component copy', mutationLease);
+    const after = store.getSnapshot();
+    if (commandResult.status !== 'applied' ||
+        !after.editorState.project.components.some((item) => item.id === componentId)) {
+      return { status: 'failed', snapshot: after };
     }
     return {
       status: 'saved',
-      component: transition.snapshot.editorState.project.components.find(
+      component: after.editorState.project.components.find(
         (item) => item.id === componentId,
       )!,
-      snapshot: transition.snapshot,
+      snapshot: after,
     };
   } catch {
     return { status: 'failed', snapshot: store.getSnapshot() };
@@ -247,13 +257,7 @@ function rollbackCanonicalSnapshot(
   candidateState: Parameters<CanonicalEditorStore['commitEditorTransition']>[0]['candidateState'],
   mutationLease: object,
 ): CanonicalEditorStoreSnapshot {
-  const current = store.getSnapshot();
-  const rollback = store.commitEditorTransition({
-    expectedProjectRevision: current.projectRevision,
-    expectedEditorState: current.editorState,
-    candidateState,
-  }, mutationLease);
-  return rollback.snapshot;
+  return executeNativeSnapshotRollback(store, candidateState, mutationLease);
 }
 
 /**

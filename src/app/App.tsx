@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNodeForDocument } from '../core/document/factory';
 import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument, FolioPage, FolioProject } from '../core/document/types';
@@ -41,10 +41,9 @@ import {
   type StudioClipboardPayload,
 } from './nodeClipboard';
 import { downloadPngDocument, downloadSvgDocument } from './visualExport';
-import { createEditorState, editorReducer, normalizePositiveDimension } from './editorReducer';
-import type { EditorAction } from './editorReducer';
+import { createEditorState, normalizePositiveDimension } from './editorReducer';
 import { createCanonicalEditorStore } from './editorStore';
-import { createMainCanvasCommandClient } from './mainCanvasCommandClient';
+import { createComponentCanvasCommandClient, createMainCanvasCommandClient } from './mainCanvasCommandClient';
 import { createToolOperationExecutor } from './toolOperationExecutor';
 import {
   advanceComponentCanvasSyncSession,
@@ -242,12 +241,6 @@ export function App() {
     const next = canonicalStore.getSnapshot().editorState;
     setState((current) => (current === next ? current : next));
   }, [canonicalStore]);
-  const dispatch = useCallback((action: EditorAction) => {
-    const transition = canonicalStore.dispatchLegacyAction(action);
-    const next = transition.snapshot.editorState;
-    setState((current) => (current === next ? current : next));
-    return transition;
-  }, [canonicalStore]);
   useEffect(() => canonicalStore.subscribe(syncStateFromStore), [canonicalStore, syncStateFromStore]);
   const commandRejectNoticeRef = useRef<(message: string) => void>(() => {});
   const mainCommandClient = useMemo(() => createMainCanvasCommandClient(canonicalStore, {
@@ -262,7 +255,26 @@ export function App() {
     page.document.nodes = [];
     return createEditorState(project);
   }, []);
-  const [componentState, componentDispatch] = useReducer(editorReducer, componentInitialState);
+  const componentStore = useMemo(
+    () => createCanonicalEditorStore(componentInitialState, { workspace: 'component' }),
+    [componentInitialState],
+  );
+  const [componentState, setComponentState] = useState(() => componentStore.getSnapshot().editorState);
+  const syncComponentStateFromStore = useCallback(() => {
+    const next = componentStore.getSnapshot().editorState;
+    setComponentState((current) => (current === next ? current : next));
+  }, [componentStore]);
+  useEffect(
+    () => componentStore.subscribe(syncComponentStateFromStore),
+    [componentStore, syncComponentStateFromStore],
+  );
+  const componentCommandClient = useMemo(() => createComponentCanvasCommandClient(componentStore, {
+    onRejected: (result) => commandRejectNoticeRef.current(result.message),
+  }), [componentStore]);
+  const getCommandClient = useCallback(
+    (target: EditorTarget) => (target === 'main' ? mainCommandClient : componentCommandClient),
+    [mainCommandClient, componentCommandClient],
+  );
   const [componentReady, setComponentReady] = useState(false);
   const componentSyncSessionRef = useRef<ComponentCanvasSyncSession | null>(null);
   const [componentRecoveryStatus, setComponentRecoveryStatus] = useState<'none' | 'missing' | 'returned' | 'conflict' | 'switch-pending'>('none');
@@ -778,10 +790,10 @@ export function App() {
         const activePage = loadedProject.pages.find((page) => page.id === loadedProject.activePageId)
           ?? loadedProject.pages[0];
         if (!activePage) throw new Error('The saved project does not contain a page.');
-        dispatch({
-          type: 'replace-project',
-          project: { ...loadedProject, activePageId: activePage.id },
-        });
+        mainCommandClient.replaceProject(
+          { ...loadedProject, activePageId: activePage.id },
+          'Restore project from IndexedDB',
+        );
       })
       .catch((error: unknown) => {
         console.error('Folio could not restore the project from IndexedDB:', error);
@@ -792,13 +804,15 @@ export function App() {
       });
 
     return () => { active = false; };
-  }, []);
+  }, [mainCommandClient]);
 
   useEffect(() => {
     let active = true;
     loadProjectById('folio-component-canvas')
       .then((project) => {
-        if (active && project) componentDispatch({ type: 'replace-project', project });
+        if (active && project) {
+          componentCommandClient.replaceProject(project, 'Restore Component Canvas buffer');
+        }
       })
       .catch((error: unknown) => {
         console.warn('Folio could not read Component Canvas autosave:', error);
@@ -807,7 +821,7 @@ export function App() {
         if (active) setComponentReady(true);
       });
     return () => { active = false; };
-  }, []);
+  }, [componentCommandClient]);
 
   useEffect(() => {
     if (!componentReady) return;
@@ -871,7 +885,7 @@ export function App() {
     ? state.project.components.find((component) => component.id === selectedInstance.componentId) ?? null
     : null;
   const instanceOverrideTargets = selectedInstanceComponent ? getComponentOverrideTargets(selectedInstanceComponent) : null;
-  const dispatchFocused = activeEditorId === 'main' ? dispatch : componentDispatch;
+  const focusedCommandClient = getCommandClient(activeEditorId);
   const layerSourceNodes = focusedDocument.nodes;
   const activeCollapsedLayers = collapsedLayers[activeEditorId];
   const layerSourceIds = useMemo(
@@ -961,11 +975,10 @@ export function App() {
         })()
       : [{ nodeId: session.nodeIds[0], name: baseName }];
 
-    if (session.editorId === 'main') {
-      mainCommandClient.renameNodes(updates, session.batch ? 'Batch rename layers' : 'Rename layer');
-    } else {
-      componentDispatch({ type: 'rename-nodes', updates });
-    }
+    getCommandClient(session.editorId).renameNodes(
+      updates,
+      session.batch ? 'Batch rename layers' : 'Rename layer',
+    );
   };
 
   useEffect(() => {
@@ -1024,15 +1037,7 @@ export function App() {
     const targetIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId];
     const validIds = layerSourceNodes.filter((node) => targetIds.includes(node.id)).map((node) => node.id);
     if (validIds.length === 0) return;
-    if (activeEditorId === 'main') {
-      mainCommandClient.setNodesProperties(validIds, { layerColor: color }, 'Set layer color');
-    } else {
-      componentDispatch({
-        type: 'set-nodes-properties',
-        nodeIds: validIds,
-        properties: { layerColor: color },
-      });
-    }
+    focusedCommandClient.setNodesProperties(validIds, { layerColor: color }, 'Set layer color');
     setLayerColorPickerKey(null);
   };
 
@@ -1042,19 +1047,11 @@ export function App() {
     const targets = layerSourceNodes.filter((node) => targetIds.includes(node.id));
     if (targets.length === 0) return;
     const shouldEnable = !targets.every((node) => node[property]);
-    if (activeEditorId === 'main') {
-      mainCommandClient.setNodesProperties(
-        targets.map((node) => node.id),
-        { [property]: shouldEnable },
-        property === 'visible' ? 'Toggle layer visibility' : 'Toggle layer lock',
-      );
-    } else {
-      componentDispatch({
-        type: 'set-nodes-properties',
-        nodeIds: targets.map((node) => node.id),
-        properties: { [property]: shouldEnable },
-      });
-    }
+    focusedCommandClient.setNodesProperties(
+      targets.map((node) => node.id),
+      { [property]: shouldEnable },
+      property === 'visible' ? 'Toggle layer visibility' : 'Toggle layer lock',
+    );
   };
 
   const selectLayerFromPanel = (nodeId: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
@@ -1083,7 +1080,10 @@ export function App() {
       if (start >= 0 && end >= 0) {
         const range = orderedIds.slice(Math.min(start, end), Math.max(start, end) + 1);
         const requested = additive ? [...new Set([...selected, ...range])] : range;
-        dispatchFocused({ type: 'select-nodes', nodeIds: expandSelectedLayerIds(layerSourceNodes, requested) });
+        focusedCommandClient.selectNodes(
+          expandSelectedLayerIds(layerSourceNodes, requested),
+          'Select layer range',
+        );
         setInspectorVisible(true);
         return;
       }
@@ -1102,10 +1102,10 @@ export function App() {
       }
       const anchor = layerSelectionAnchorRef.current[activeEditorId];
       if (!anchor || !selected.includes(anchor)) layerSelectionAnchorRef.current[activeEditorId] = nodeId;
-      dispatchFocused({ type: 'select-nodes', nodeIds: next });
+      focusedCommandClient.selectNodes(next, 'Toggle layer selection');
     } else {
       layerSelectionAnchorRef.current[activeEditorId] = nodeId;
-      dispatchFocused({ type: 'select-nodes', nodeIds: subtreeIds });
+      focusedCommandClient.selectNodes(subtreeIds, 'Select layer');
     }
     setInspectorVisible(true);
   };
@@ -1124,7 +1124,7 @@ export function App() {
 
     if (!currentSelection.includes(nodeId)) {
       layerSelectionAnchorRef.current[activeEditorId] = nodeId;
-      dispatchFocused({ type: 'select-nodes', nodeIds: menuNodeIds });
+      focusedCommandClient.selectNodes(menuNodeIds, 'Select layer for context menu');
       setInspectorVisible(true);
     }
 
@@ -1185,13 +1185,8 @@ export function App() {
     }
     const position = getLayerDropPosition(event);
     if (draggedIds.length > 0) {
-      let moved = true;
-      if (activeEditorId === 'main') {
-        const result = mainCommandClient.moveLayers(draggedIds, targetId, position);
-        moved = result.status === 'applied';
-      } else {
-        componentDispatch({ type: 'move-layers', nodeIds: draggedIds, targetId, position });
-      }
+      const result = focusedCommandClient.moveLayers(draggedIds, targetId, position);
+      const moved = result.status === 'applied';
       if (moved && position === 'inside') {
         setCollapsedLayers((current) => ({
           ...current,
@@ -1218,7 +1213,7 @@ export function App() {
     }
 
     const targetDocument = target === 'main' ? activeDocument : componentDocument;
-    const targetDispatch = target === 'main' ? dispatch : componentDispatch;
+    const targetClient = getCommandClient(target);
     const requested = new Set(nodeIds);
     const droppedNodes = targetDocument.nodes.filter((node) => requested.has(node.id));
     if (droppedNodes.length === 0) {
@@ -1231,7 +1226,7 @@ export function App() {
     selectionSourceRef.current = 'canvas';
     setActiveEditorId(target);
     setInspectorVisible(true);
-    targetDispatch({ type: 'select-nodes', nodeIds: ids });
+    targetClient.selectNodes(ids, 'Select dropped layers');
 
     if (existing) {
       setNotice(`“${existing.name}” is already on the Canvas. Duplicate objects are not allowed.`);
@@ -1241,13 +1236,8 @@ export function App() {
 
     // Re-show the exact same nodes. The saved position, size, style and
     // rotation remain on the original layer records; dropping never resets them.
-    if (target === 'main') {
-      const result = mainCommandClient.setNodesCanvasState(ids, true, 'Restore layers to canvas');
-      if (result.status === 'applied') {
-        setNotice(`“${droppedNodes[0].name}” has been restored to the Canvas with its previous properties.`);
-      }
-    } else {
-      targetDispatch({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: true });
+    const result = targetClient.setNodesCanvasState(ids, true, 'Restore layers to canvas');
+    if (result.status === 'applied') {
       setNotice(`“${droppedNodes[0].name}” has been restored to the Canvas with its previous properties.`);
     }
     clearDrag();
@@ -1256,11 +1246,7 @@ export function App() {
   const addNode = (type: 'rect' | 'ellipse' | 'text') => {
     if (isHydrating) return;
     const node = createNodeForDocument(type, focusedDocument);
-    if (activeEditorId === 'main') {
-      mainCommandClient.createNodes([node], `Create ${type} node`);
-    } else {
-      componentDispatch({ type: 'add-node', node });
-    }
+    focusedCommandClient.createNodes([node], `Create ${type} node`);
     setInspectorVisible(true);
   };
   const saveNodesAsComponent = (nodes: DesignNode[], sourceNodes: readonly DesignNode[] = activeDocument.nodes) => {
@@ -1271,7 +1257,7 @@ export function App() {
       `Component ${ownedComponents.length + 1}`,
     );
     if (!component) return;
-    dispatch({ type: 'add-component', component });
+    mainCommandClient.createComponent(component, 'Save selection as component');
     closePagesRack();
     setComponentRackOpen(true);
     setNotice(`“${component.name}” saved to this project’s Component Rack.`);
@@ -1300,9 +1286,18 @@ export function App() {
         setNotice(`“${editingComponent.name}” master is up to date.`);
         return;
       }
-      const transition = dispatch(syncAction);
-      if (transition.status === 'committed') {
-        const committedMaster = transition.snapshot.editorState.project.components
+      const syncResult = mainCommandClient.syncComponentDocument(
+        {
+          componentId: syncAction.componentId,
+          document: syncAction.document,
+          updatedAt: syncAction.updatedAt,
+          expectedUpdatedAt: syncAction.expectedUpdatedAt,
+          expectedMasterDocument: syncAction.expectedMasterDocument,
+        },
+        'Update component master',
+      );
+      if (syncResult.status === 'applied' || syncResult.status === 'no-op') {
+        const committedMaster = canonicalStore.getSnapshot().editorState.project.components
           .find((component) => component.id === editingComponent.id);
         if (committedMaster) {
           componentSyncSessionRef.current = advanceComponentCanvasSyncSession(session, committedMaster);
@@ -1326,7 +1321,7 @@ export function App() {
       `Component ${ownedComponents.length + 1}`,
     );
     if (!component) return;
-    dispatch({ type: 'add-component', component });
+    mainCommandClient.createComponent(component, 'Create master component');
     componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
     setEditingComponentId(component.id);
     setComponentRecoveryStatus('none');
@@ -1344,10 +1339,10 @@ export function App() {
     componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
     setPendingComponentOpenId(null);
     setComponentRecoveryStatus('none');
-    componentDispatch({
-      type: 'replace-project',
-      project: createComponentCanvasBufferProject(component),
-    });
+    componentCommandClient.replaceProject(
+      createComponentCanvasBufferProject(component),
+      'Load master component into Component Canvas',
+    );
     setEditingComponentId(component.id);
     setComponentCanvasClosed(false);
     setComponentCanvasMinimized(false);
@@ -1423,7 +1418,7 @@ export function App() {
       createdAt: now,
       updatedAt: now,
     };
-    dispatch({ type: 'add-component', component });
+    mainCommandClient.createComponent(component, 'Create new master component');
     openMasterComponent(component);
   };
 
@@ -1435,14 +1430,16 @@ export function App() {
       setNotice('This component is no longer available in the current project.');
       return;
     }
-    const transition = dispatch({
-      type: 'rename-component',
-      componentId,
-      expectedMasterDocument: current.document,
-      expectedUpdatedAt: current.updatedAt,
-      name,
-    });
-    if (transition.status !== 'committed') {
+    const renameResult = mainCommandClient.renameComponent(
+      {
+        componentId,
+        expectedMasterDocument: current.document,
+        expectedUpdatedAt: current.updatedAt,
+        name,
+      },
+      'Rename component',
+    );
+    if (renameResult.status === 'rejected') {
       setNotice('The component changed before the rename could be applied. Review the latest master and retry.');
       return;
     }
@@ -1465,7 +1462,7 @@ export function App() {
       createdAt: now,
       updatedAt: now,
     };
-    dispatch({ type: 'add-component', component: copy });
+    mainCommandClient.createComponent(copy, 'Duplicate component');
     setNotice(`“${component.name}” duplicated.`);
   };
 
@@ -1499,7 +1496,10 @@ export function App() {
     componentSyncPauseAfterCancelRef.current = null;
     setPendingComponentOpenId(null);
     setComponentRecoveryStatus('none');
-    componentDispatch({ type: 'replace-project', project: componentInitialState.project });
+    componentCommandClient.replaceProject(
+      componentInitialState.project,
+      'Reset Component Canvas buffer',
+    );
     setComponentCanvasClosed(true);
     setComponentCanvasMinimized(false);
     setActiveEditorId('main');
@@ -1736,10 +1736,10 @@ export function App() {
     if (!session || session.componentId !== master.id) {
       session = createComponentCanvasSyncSession(master);
       componentSyncSessionRef.current = session;
-      componentDispatch({
-        type: 'replace-project',
-        project: createComponentCanvasBufferProject(master),
-      });
+      componentCommandClient.replaceProject(
+        createComponentCanvasBufferProject(master),
+        'Initialize Component Canvas buffer',
+      );
       return;
     }
 
@@ -1757,10 +1757,10 @@ export function App() {
     if (reconciliation.status === 'reload-buffer') {
       componentSyncSessionRef.current = reconciliation.session;
       setComponentRecoveryStatus('none');
-      componentDispatch({
-        type: 'replace-project',
-        project: createComponentCanvasBufferProject(master),
-      });
+      componentCommandClient.replaceProject(
+        createComponentCanvasBufferProject(master),
+        'Reload Component Canvas buffer from canonical master',
+      );
       return;
     }
     if (reconciliation.status === 'conflict') {
@@ -1780,9 +1780,18 @@ export function App() {
     const syncAction = createComponentCanvasSyncAction(master, editedDocument, session);
     if (!syncAction) return;
 
-    const transition = dispatch(syncAction);
-    if (transition.status === 'committed') {
-      const committedMaster = transition.snapshot.editorState.project.components
+    const syncResult = mainCommandClient.syncComponentDocument(
+      {
+        componentId: syncAction.componentId,
+        document: syncAction.document,
+        updatedAt: syncAction.updatedAt,
+        expectedUpdatedAt: syncAction.expectedUpdatedAt,
+        expectedMasterDocument: syncAction.expectedMasterDocument,
+      },
+      'Sync Component Canvas to master',
+    );
+    if (syncResult.status === 'applied' || syncResult.status === 'no-op') {
+      const committedMaster = canonicalStore.getSnapshot().editorState.project.components
         .find((component) => component.id === master.id);
       if (committedMaster) {
         componentSyncSessionRef.current = advanceComponentCanvasSyncSession(session, committedMaster);
@@ -1795,7 +1804,7 @@ export function App() {
         'Local edits were kept and synchronization is paused; reopen the master to reload the canonical version.',
       );
     }
-  }, [componentState.project.pages, editingComponentId, componentReady, state.project.components, pendingComponentDeletion]);
+  }, [componentState.project.pages, editingComponentId, componentReady, state.project.components, pendingComponentDeletion, canonicalStore, mainCommandClient, componentCommandClient]);
 
   const reloadRecoveredComponentMaster = () => {
     if (!editingComponentId || pendingComponentDeletionRef.current) return;
@@ -1807,7 +1816,10 @@ export function App() {
       return;
     }
     componentSyncSessionRef.current = createComponentCanvasSyncSession(master);
-    componentDispatch({ type: 'replace-project', project: createComponentCanvasBufferProject(master) });
+    componentCommandClient.replaceProject(
+      createComponentCanvasBufferProject(master),
+      'Reload recovered canonical component master',
+    );
     setPendingComponentOpenId(null);
     setComponentRecoveryStatus('none');
     setNotice('The latest canonical master was reloaded. The previous local Component Canvas edits were discarded by explicit request.');
@@ -1816,7 +1828,7 @@ export function App() {
   const switchPage = (page: FolioPage) => {
     if (isHydrating || page.id === activePageId) return;
     setActiveEditorId('main');
-    dispatch({ type: 'set-active-page', pageId: page.id });
+    mainCommandClient.setActivePage(page.id, 'Switch active page');
     closePagesRack();
     setInspectorVisible(true);
     setNotice(`Switched to ${page.name}.`);
@@ -1837,7 +1849,7 @@ export function App() {
       ...createEmptyDocument(name, activeDocument.width, activeDocument.height),
       background: activeDocument.background,
     };
-    dispatch({ type: 'add-page', page: { id, name, route, document } });
+    mainCommandClient.createPage({ id, name, route, document }, 'Create page');
     setPageNameDraft('');
     closePagesRack();
     setInspectorVisible(true);
@@ -1957,12 +1969,16 @@ export function App() {
       nextNode = { ...selectedNode, ...safePatch } as DesignNode;
     }
 
-    dispatchFocused({ type: 'edit-node', coalesceKey: 'inspector:' + selectedNode.id, node: nextNode });
+    focusedCommandClient.editNode(nextNode, 'inspector:' + selectedNode.id, 'Edit layer properties');
   };
 
   const updateSelectedStyle = (patch: Record<string, string | number>) => {
     if (!selectedNode || selectedNode.type === 'component-instance' || selectedNode.type === 'group') return;
-    dispatchFocused({ type: 'edit-node', coalesceKey: 'inspector:' + selectedNode.id, node: { ...selectedNode, style: { ...selectedNode.style, ...patch } } as DesignNode });
+    focusedCommandClient.editNode(
+      { ...selectedNode, style: { ...selectedNode.style, ...patch } } as DesignNode,
+      'inspector:' + selectedNode.id,
+      'Edit layer style',
+    );
   };
 
   const updateInstanceOverride = (childNodeId: string, patch: { fill?: string; text?: string }) => {
@@ -1972,20 +1988,20 @@ export function App() {
       ...instance.overrides,
       [childNodeId]: { ...instance.overrides[childNodeId], ...patch },
     };
-    dispatchFocused({
-      type: 'edit-node',
-      coalesceKey: 'instance-override:' + instance.id,
-      node: { ...instance, overrides },
-    });
+    focusedCommandClient.editNode(
+      { ...instance, overrides },
+      'instance-override:' + instance.id,
+      'Update component instance override',
+    );
   };
 
   const resetInstanceOverrides = () => {
     if (!selectedNode || selectedNode.type !== 'component-instance') return;
-    dispatchFocused({
-      type: 'edit-node',
-      coalesceKey: 'instance-override:' + selectedNode.id,
-      node: { ...selectedNode, overrides: {} },
-    });
+    focusedCommandClient.editNode(
+      { ...selectedNode, overrides: {} },
+      'instance-override:' + selectedNode.id,
+      'Reset component instance overrides',
+    );
   };
 
   const detachSelectedInstance = () => {
@@ -1993,7 +2009,7 @@ export function App() {
     const master = state.project.components.find((component) => component.id === selectedNode.componentId);
     if (!master) { setNotice('The linked master component could not be found.'); return; }
     const detached = detachComponentInstance(selectedNode, master);
-    dispatchFocused({ type: 'replace-node-with-nodes', nodeId: selectedNode.id, nodes: detached });
+    focusedCommandClient.replaceNodeWithNodes(selectedNode.id, detached, 'Detach component instance');
     setNotice('Instance detached. Its nodes can now be edited independently.');
   };
 
@@ -2008,8 +2024,7 @@ export function App() {
     }));
     if (selected.length < 2) return;
     const nextNodes = alignNodes(selected, alignment);
-    if (target === 'main') mainCommandClient.transformNodes(nextNodes, `Align layers ${alignment}`);
-    else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
+    getCommandClient(target).transformNodes(nextNodes, `Align layers ${alignment}`);
   };
 
   const distributeSelection = (axis: DistributionAxis, target: EditorTarget = activeEditorId) => {
@@ -2018,8 +2033,7 @@ export function App() {
     const selected = getTransformableNodes(getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
     if (selected.length < 3) return;
     const nextNodes = distributeNodes(selected, axis);
-    if (target === 'main') mainCommandClient.transformNodes(nextNodes, `Distribute layers ${axis}`);
-    else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
+    getCommandClient(target).transformNodes(nextNodes, `Distribute layers ${axis}`);
   };
 
   const updateToolbarHint = useCallback((panel: string, description: string, shortcuts: string[] = []) => {
@@ -2060,7 +2074,7 @@ export function App() {
       isHydrating: () => isHydrating,
       onSelectionChange: (nodeIds) => {
         selectionSourceRef.current = 'canvas';
-        dispatch({ type: 'select-nodes', nodeIds });
+        mainCommandClient.selectNodes(nodeIds, 'Select layers on canvas');
         if (nodeIds.length > 0) setInspectorVisible(true);
       },
       onPanChange: setMainPan,
@@ -2081,20 +2095,12 @@ export function App() {
 
   const componentToolOperationExecutor = createToolOperationExecutor({
     workspace: 'component',
-    componentSink: {
-      createNodes: (nodes) => componentDispatch({ type: 'add-nodes', nodes: [...nodes] }),
-      transformNodes: (nodes) => componentDispatch({ type: 'transform-nodes', nodes: [...nodes] }),
-      replaceNode: (node) => componentDispatch({ type: 'replace-node', node }),
-      replaceNodeWithNodes: (nodeId, nodes) =>
-        componentDispatch({ type: 'replace-node-with-nodes', nodeId, nodes: [...nodes] }),
-      replaceNodes: (removeIds, insertNodes) =>
-        componentDispatch({ type: 'replace-nodes', removeIds: [...removeIds], insertNodes: [...insertNodes] }),
-    },
+    commandClient: componentCommandClient,
     shell: {
       isHydrating: () => isHydrating,
       onSelectionChange: (nodeIds) => {
         selectionSourceRef.current = 'canvas';
-        componentDispatch({ type: 'select-nodes', nodeIds });
+        componentCommandClient.selectNodes(nodeIds, 'Select layers on component canvas');
       },
       onPanChange: setComponentCanvasPan,
       onZoomChange: setComponentCanvasZoom,
@@ -2114,11 +2120,7 @@ export function App() {
   const handleCanvasReplaceNodes = (target: EditorTarget, removeIds: string[], insertNodes: DesignNode[]) => {
     if (isHydrating || removeIds.length === 0) return;
     selectionSourceRef.current = 'canvas';
-    if (target === 'main') {
-      mainCommandClient.replaceNodes(removeIds, insertNodes, 'Replace vector nodes');
-    } else {
-      componentDispatch({ type: 'replace-nodes', removeIds, insertNodes });
-    }
+    getCommandClient(target).replaceNodes(removeIds, insertNodes, 'Replace vector nodes');
   };
 
   const handlePathfinder = (target: EditorTarget, operation: PathfinderOperation) => {
@@ -2161,17 +2163,13 @@ export function App() {
     if (convertedPaths.length === 0) return;
 
     const removeIds = convertedPaths.map((node) => node.id);
-    if (target === 'main') {
-      const result = mainCommandClient.replaceNodes(
-        removeIds,
-        convertedPaths,
-        convertedPaths.length === 1 ? 'Convert shape to vector path' : 'Convert shapes to vector paths',
-        removeIds,
-      );
-      if (result.status !== 'applied') return;
-    } else {
-      componentDispatch({ type: 'replace-nodes', removeIds, insertNodes: convertedPaths, selectIds: removeIds });
-    }
+    const convertResult = getCommandClient(target).replaceNodes(
+      removeIds,
+      convertedPaths,
+      convertedPaths.length === 1 ? 'Convert shape to vector path' : 'Convert shapes to vector paths',
+      removeIds,
+    );
+    if (convertResult.status !== 'applied') return;
     setWorkspaceToolId(target, 'direct-selection');
     setNotice(`Converted ${convertedPaths.length} shape${convertedPaths.length === 1 ? '' : 's'} to editable cubic Bezier paths (Direct Selection A).`);
   };
@@ -2200,8 +2198,7 @@ export function App() {
         rotation: node.rotation ? (360 - node.rotation) % 360 : 0,
       };
     });
-    if (target === 'main') mainCommandClient.transformNodes(nextNodes, `Flip ${axis}`);
-    else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
+    getCommandClient(target).transformNodes(nextNodes, `Flip ${axis}`);
   };
 
   const handleRotate90 = (target: EditorTarget) => {
@@ -2214,8 +2211,7 @@ export function App() {
       ...node,
       rotation: ((node.rotation || 0) + 90) % 360,
     }));
-    if (target === 'main') mainCommandClient.transformNodes(nextNodes, 'Rotate +90°');
-    else componentDispatch({ type: 'transform-nodes', nodes: nextNodes });
+    getCommandClient(target).transformNodes(nextNodes, 'Rotate +90°');
   };
 
   const handleSimplifyPath = (target: EditorTarget) => {
@@ -2237,8 +2233,7 @@ export function App() {
       simplifiedNodes.push(simplified);
     }
     if (simplifiedNodes.length === 0) return;
-    if (target === 'main') mainCommandClient.transformNodes(simplifiedNodes, 'Simplify vector paths');
-    else componentDispatch({ type: 'transform-nodes', nodes: simplifiedNodes });
+    getCommandClient(target).transformNodes(simplifiedNodes, 'Simplify vector paths');
     setNotice(`Simplified path anchors (${totalBefore} → ${totalAfter}).`);
   };
 
@@ -2267,8 +2262,7 @@ export function App() {
       );
     }
     if (updatedNodes.length === 0) return;
-    if (target === 'main') mainCommandClient.transformNodes(updatedNodes, 'Toggle closed vector contour');
-    else componentDispatch({ type: 'transform-nodes', nodes: updatedNodes });
+    getCommandClient(target).transformNodes(updatedNodes, 'Toggle closed vector contour');
   };
 
   const duplicateSelection = (target: EditorTarget = activeEditorId) => {
@@ -2287,8 +2281,7 @@ export function App() {
       preserveExternalParent: true,
     });
     if (clonedNodes.length === 0) return;
-    if (target === 'main') mainCommandClient.createNodes(clonedNodes, 'Duplicate layers');
-    else componentDispatch({ type: 'add-nodes', nodes: clonedNodes });
+    getCommandClient(target).createNodes(clonedNodes, 'Duplicate layers');
   };
 
   const copySelection = (target: EditorTarget = activeEditorId) => {
@@ -2314,8 +2307,7 @@ export function App() {
     const copied = copySelection(target);
     if (!copied) return;
     const ids = expandSelectedLayerIds(context.document.nodes, context.state.selectedNodeIds);
-    if (target === 'main') mainCommandClient.setNodesCanvasState(ids, false, 'Cut layers');
-    else componentDispatch({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: false });
+    getCommandClient(target).setNodesCanvasState(ids, false, 'Cut layers');
     setNotice(`Cut ${ids.length} layer${ids.length === 1 ? '' : 's'} to studio clipboard.`);
   };
 
@@ -2333,8 +2325,7 @@ export function App() {
       pasteCount: prepared.nextPasteCount,
     };
     selectionSourceRef.current = 'canvas';
-    if (target === 'main') mainCommandClient.createNodes(prepared.nodes, 'Paste layers');
-    else componentDispatch({ type: 'add-nodes', nodes: prepared.nodes });
+    getCommandClient(target).createNodes(prepared.nodes, 'Paste layers');
     setInspectorVisible(true);
     if (prepared.detachedCircularCount > 0) {
       setNotice(
@@ -2616,7 +2607,7 @@ export function App() {
       const target = event.target instanceof Element ? event.target : null;
       if ((target instanceof HTMLElement && target.isContentEditable) || target?.matches('input, textarea, select, [contenteditable="true"]')) return;
       const context = getActiveEditorContext(activeEditorId, state, componentState);
-      const emit = activeEditorId === 'main' ? dispatch : componentDispatch;
+      const activeClient = getCommandClient(activeEditorId);
       const layerStates = getEffectiveLayerStates(context.document.nodes);
       const nodes = getTransformableNodes(context.document.nodes.filter((node) => context.state.selectedNodeIds.includes(node.id)).filter((node) => {
         const effective = layerStates.get(node.id);
@@ -2630,14 +2621,13 @@ export function App() {
         // design-editor Select All command. Keep it scoped to the active
         // canvas/component editor and never hijack text-field selection.
         event.preventDefault();
-        emit({ type: 'select-nodes', nodeIds: context.document.nodes.map((node) => node.id) });
+        activeClient.selectNodes(context.document.nodes.map((node) => node.id), 'Select all layers');
         return;
       }
       if (modifier && event.shiftKey && key === 'g') {
         if (ids.length > 0) {
           event.preventDefault();
-          if (activeEditorId === 'main') mainCommandClient.ungroupLayers(ids);
-          else componentDispatch({ type: 'ungroup-layers', nodeIds: ids });
+          activeClient.ungroupLayers(ids);
         }
         return;
       }
@@ -2646,8 +2636,7 @@ export function App() {
         // grouped: a single Group or a parent with descendants can be wrapped.
         if (ids.length > 0) {
           event.preventDefault();
-          if (activeEditorId === 'main') mainCommandClient.groupLayers(ids);
-          else componentDispatch({ type: 'group-layers', nodeIds: ids });
+          activeClient.groupLayers(ids);
         }
         return;
       }
@@ -2663,8 +2652,7 @@ export function App() {
           setNotice('The selected layer is not masked.');
           return;
         }
-        if (activeEditorId === 'main') mainCommandClient.removeClippingMask(target.id);
-        else componentDispatch({ type: 'unmask-layer', nodeId: target.id });
+        activeClient.removeClippingMask(target.id);
         return;
       }
       if (modifier && !event.shiftKey && key === 'm') {
@@ -2679,12 +2667,16 @@ export function App() {
           setNotice('No layer directly below to use as a clipping mask.');
           return;
         }
-        if (activeEditorId === 'main') mainCommandClient.createClippingMask(roots[0]);
-        else componentDispatch({ type: 'mask-layer', nodeId: roots[0] });
+        activeClient.createClippingMask(roots[0]);
         return;
       }
-      if (modifier && key === 'z') { event.preventDefault(); emit({ type: event.shiftKey ? 'redo' : 'undo' }); return; }
-      if (modifier && key === 'y') { event.preventDefault(); emit({ type: 'redo' }); return; }
+      if (modifier && key === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) activeClient.redo();
+        else activeClient.undo();
+        return;
+      }
+      if (modifier && key === 'y') { event.preventDefault(); activeClient.redo(); return; }
       if (modifier && !event.shiftKey && key === 'c' && ids.length > 0) {
         event.preventDefault();
         copySelection(activeEditorId);
@@ -2714,8 +2706,7 @@ export function App() {
           setNotice('Right-click a layer and choose Delete to remove it from Layers and Canvas.');
         } else {
           event.preventDefault();
-          if (activeEditorId === 'main') mainCommandClient.setNodesCanvasState(ids, false, 'Remove from canvas');
-          else componentDispatch({ type: 'set-nodes-canvas-state', nodeIds: ids, onCanvas: false });
+          activeClient.setNodesCanvasState(ids, false, 'Remove from canvas');
         }
         return;
       }
@@ -2725,15 +2716,13 @@ export function App() {
         if (alignment && nodes.length > 1) {
           event.preventDefault();
           const aligned = alignNodes(nodes, alignment);
-          if (activeEditorId === 'main') mainCommandClient.transformNodes(aligned, `Align layers ${alignment}`);
-          else componentDispatch({ type: 'transform-nodes', nodes: aligned });
+          activeClient.transformNodes(aligned, `Align layers ${alignment}`);
         }
       } else if (event.altKey && event.shiftKey && (key === 'h' || key === 'v') && nodes.length > 2) {
         event.preventDefault();
         const axis = key === 'h' ? 'horizontal' : 'vertical';
         const distributed = distributeNodes(nodes, axis);
-        if (activeEditorId === 'main') mainCommandClient.transformNodes(distributed, `Distribute layers ${axis}`);
-        else componentDispatch({ type: 'transform-nodes', nodes: distributed });
+        activeClient.transformNodes(distributed, `Distribute layers ${axis}`);
       } else if (!modifier && !event.altKey && !event.repeat && event.key.length === 1) {
         const matchedTool = findStudioToolByShortcut(event.key, event.shiftKey, activeEditorId);
         if (matchedTool) {
@@ -2744,7 +2733,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeEditorId, editingComponentId, state, componentState, isHydrating, componentDeletionDialogOpen]);
+  }, [activeEditorId, editingComponentId, state, componentState, isHydrating, componentDeletionDialogOpen, getCommandClient]);
 
 
   useEffect(() => {
@@ -2819,7 +2808,7 @@ export function App() {
                   try {
                     const project = await openProjectFile(file, async (loadedProject) => {
                       await saveProjectAndActivate(loadedProject);
-                      dispatch({ type: 'replace-project', project: loadedProject });
+                      mainCommandClient.replaceProject(loadedProject, 'Open .flop project');
                     });
                     if (!project) return;
                     setActiveEditorId('main');
@@ -3071,10 +3060,10 @@ export function App() {
           )}
         </div>
         <div class="rail-bottom">
-          <button class="tool-button" title="Undo" aria-label="Undo" disabled={focusedEditor.state.past.length === 0} onClick={() => dispatchFocused({ type: 'undo' })}>
+          <button class="tool-button" title="Undo" aria-label="Undo" disabled={focusedEditor.state.past.length === 0} onClick={() => focusedCommandClient.undo()}>
             <Icon name="undo" />
           </button>
-          <button class="tool-button" title="Redo" aria-label="Redo" disabled={focusedEditor.state.future.length === 0} onClick={() => dispatchFocused({ type: 'redo' })}>
+          <button class="tool-button" title="Redo" aria-label="Redo" disabled={focusedEditor.state.future.length === 0} onClick={() => focusedCommandClient.redo()}>
             <Icon name="redo" />
           </button>
         </div>
@@ -3282,8 +3271,8 @@ export function App() {
               </div>
             )}
             <div class="workspace-tools">
-              <button class="history-button" title="Undo" disabled={focusedEditor.state.past.length === 0} onClick={() => dispatchFocused({ type: 'undo' })}><Icon name="undo" /></button>
-              <button class="history-button" title="Redo" disabled={focusedEditor.state.future.length === 0} onClick={() => dispatchFocused({ type: 'redo' })}><Icon name="redo" /></button>
+              <button class="history-button" title="Undo" disabled={focusedEditor.state.past.length === 0} onClick={() => focusedCommandClient.undo()}><Icon name="undo" /></button>
+              <button class="history-button" title="Redo" disabled={focusedEditor.state.future.length === 0} onClick={() => focusedCommandClient.redo()}><Icon name="redo" /></button>
               <span class="workspace-divider" />
               <button class="zoom-button" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.15, Number((value / 1.2).toFixed(2))))}><Icon name="minus" /></button>
               <span class="zoom-value">{Math.round(zoom * 100)}%</span>
@@ -3405,8 +3394,8 @@ export function App() {
               </div>
             )}
             <div class="workspace-tools">
-              <button class="history-button" title="Undo" disabled={componentState.past.length === 0} onClick={() => componentDispatch({ type: 'undo' })}><Icon name="undo" /></button>
-              <button class="history-button" title="Redo" disabled={componentState.future.length === 0} onClick={() => componentDispatch({ type: 'redo' })}><Icon name="redo" /></button>
+              <button class="history-button" title="Undo" disabled={componentState.past.length === 0} onClick={() => componentCommandClient.undo()}><Icon name="undo" /></button>
+              <button class="history-button" title="Redo" disabled={componentState.future.length === 0} onClick={() => componentCommandClient.redo()}><Icon name="redo" /></button>
               <span class="workspace-divider" />
               <button class="zoom-button" title="Zoom out" onClick={() => setComponentCanvasZoom((value) => Math.max(0.15, Number((value / 1.2).toFixed(2))))}><Icon name="minus" /></button>
               <span class="zoom-value">{Math.round(componentCanvasZoom * 100)}%</span>
@@ -3541,15 +3530,14 @@ export function App() {
         onResizeDoubleClick={handlePanelResizeDoubleClick}
         onResizeKeyDown={handlePanelResizeKeyDown}
         onCommitEdit={() => {
-          dispatch({ type: 'commit-edit' });
-          componentDispatch({ type: 'commit-edit' });
+          mainCommandClient.commitEdit();
+          componentCommandClient.commitEdit();
         }}
         onHoverHint={() =>
           updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')
         }
         onRemoveFromCanvas={(nodeId) => {
-          if (activeEditorId === 'main') mainCommandClient.setNodesCanvasState([nodeId], false, 'Remove from canvas');
-          else componentDispatch({ type: 'set-nodes-canvas-state', nodeIds: [nodeId], onCanvas: false });
+          focusedCommandClient.setNodesCanvasState([nodeId], false, 'Remove from canvas');
         }}
         onUpdateSelected={updateSelected}
         onUpdateSelectedStyle={updateSelectedStyle}
@@ -3696,37 +3684,32 @@ export function App() {
             const menu = layerContextMenu;
             setLayerContextMenu(null);
             selectionSourceRef.current = 'layers';
-            if (menu.editorId === 'main') mainCommandClient.groupLayers(contextMenuRootIds);
-            else componentDispatch({ type: 'group-layers', nodeIds: contextMenuRootIds });
+            getCommandClient(menu.editorId).groupLayers(contextMenuRootIds);
           }}>Group</button>}
           {contextMenuCanUngroup && <button type="button" role="menuitem" onClick={() => {
             const menu = layerContextMenu;
             setLayerContextMenu(null);
             selectionSourceRef.current = 'layers';
-            if (menu.editorId === 'main') mainCommandClient.ungroupLayers(contextMenuRootIds);
-            else componentDispatch({ type: 'ungroup-layers', nodeIds: contextMenuRootIds });
+            getCommandClient(menu.editorId).ungroupLayers(contextMenuRootIds);
           }}>Ungroup</button>}
           {contextMenuCanMask && <button type="button" role="menuitem" onClick={() => {
             const menu = layerContextMenu;
             setLayerContextMenu(null);
             selectionSourceRef.current = 'layers';
-            if (menu.editorId === 'main') mainCommandClient.createClippingMask(contextMenuRootIds[0]);
-            else componentDispatch({ type: 'mask-layer', nodeId: contextMenuRootIds[0] });
+            getCommandClient(menu.editorId).createClippingMask(contextMenuRootIds[0]);
           }}>Create Clipping Mask</button>}
           {contextMenuCanUnmask && <button type="button" role="menuitem" onClick={() => {
             const menu = layerContextMenu;
             setLayerContextMenu(null);
             selectionSourceRef.current = 'layers';
-            if (menu.editorId === 'main') mainCommandClient.removeClippingMask(contextMenuRootIds[0]);
-            else componentDispatch({ type: 'unmask-layer', nodeId: contextMenuRootIds[0] });
+            getCommandClient(menu.editorId).removeClippingMask(contextMenuRootIds[0]);
           }}>Release Clipping Mask</button>}
           <div class="layer-context-menu-separator" role="separator" />
           <button type="button" role="menuitem" class="layer-context-menu-danger" onClick={() => {
             const menu = layerContextMenu;
             setLayerContextMenu(null);
             selectionSourceRef.current = 'layers';
-            if (menu.editorId === 'main') mainCommandClient.deleteNodes(menu.nodeIds);
-            else componentDispatch({ type: 'delete-nodes', nodeIds: menu.nodeIds });
+            getCommandClient(menu.editorId).deleteNodes(menu.nodeIds);
           }}><Icon name="trash" /> Delete{layerContextMenu.nodeIds.length > 1 ? ` (${layerContextMenu.nodeIds.length})` : ''}</button>
         </div>
       )}

@@ -1,6 +1,11 @@
 import type { EditorAction } from './editorReducer';
 import type { DesignNode, FolioDocument } from '../core/document/types';
 import {
+  validateComponentCreatePayload,
+  validateComponentDeletePayload,
+  validateComponentRenamePayload,
+  validateComponentSyncDocumentPayload,
+  validateEmptyCommandPayload,
   validateLayerClippingMaskPayload,
   validateLayerGroupPayload,
   validateLayerMoveManyPayload,
@@ -8,38 +13,56 @@ import {
   validateLayerUngroupPayload,
   validateNodeCreatePayload,
   validateNodeDeletePayload,
+  validateNodeEditPayload,
   validateNodeRenamePayload,
+  validateNodeReplaceManyPayload,
   validateNodeReplacePayload,
   validateNodeSetCanvasStatePayload,
   validateNodeSetPropertiesPayload,
+  validateNodeSplitPayload,
   validateNodeTransformPayload,
+  validateNodeUpdateManyPayload,
+  validatePageCreatePayload,
+  validatePageSetActivePayload,
   validateProjectRenamePayload,
+  validateProjectReplacePayload,
+  validateSelectionSetPayload,
   type ValidationOutcome,
 } from '../core/commands/validation';
 import type {
+  ExtendedNativeCommand,
   NativeCommand,
   NativeCommandPayload,
   NativePermission,
+  Phase2NativeCommand,
 } from '../core/commands/types';
 
 export interface NativeCommandAdapterContext {
   document?: FolioDocument;
   /** Resolved from the addressed document in payload order when applicable. */
   resolvedNodes: readonly DesignNode[];
+  /** Live canonical component master document reference verified by CAS before reducer execution. */
+  liveComponentMasterDocument?: FolioDocument;
 }
 
-interface NativeCommandDefinition {
+export interface NativeCommandDefinition {
   type: NativeCommand['type'];
   commandVersion: 1;
   allowedTargets: readonly ('project' | 'document' | 'node')[];
   requiredPermission: NativePermission;
+  /** False for non-project-mutating state commands such as selection.set and history.commit-edit. */
+  mutatesProject?: boolean;
+  /** True for project.replace where the project ID itself may transition. */
+  allowsProjectIdChange?: boolean;
+  /** True when the command resets undo/redo stacks (page.create, page.set-active, project.replace). */
+  resetsHistory?: boolean;
   validatePayload(value: unknown): ValidationOutcome<NativeCommandPayload>;
   toEditorActions(command: NativeCommand, context: NativeCommandAdapterContext): readonly EditorAction[];
 }
 
 /**
- * Static compatibility registry. It is deliberately closed: command callers
- * cannot register handlers or supply reducer actions.
+ * Static Phase 2 compatibility registry (14 commands). Preserved as an immutable
+ * closed contract for Phase 2 compatibility tests and callers.
  */
 export const NATIVE_COMMAND_REGISTRY = Object.freeze({
   'project.rename': Object.freeze({
@@ -226,4 +249,228 @@ export const NATIVE_COMMAND_REGISTRY = Object.freeze({
       return [{ type: 'unmask-layer', nodeId: command.payload.node.nodeId }];
     },
   }),
+} satisfies Record<Phase2NativeCommand['type'], NativeCommandDefinition>);
+
+/**
+ * Extended P1.1 static registry covering Page, Project, Component, Multi-Node,
+ * Coalesced Inspector Editing, Selection, and Undo/Redo History commands.
+ */
+export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
+  'project.replace': Object.freeze({
+    type: 'project.replace' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'project.replace',
+    allowsProjectIdChange: true,
+    resetsHistory: true,
+    validatePayload: validateProjectReplacePayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'project.replace') return [];
+      return [{ type: 'replace-project', project: command.payload.project }];
+    },
+  }),
+  'page.create': Object.freeze({
+    type: 'page.create' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'page.create',
+    resetsHistory: true,
+    validatePayload: validatePageCreatePayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'page.create') return [];
+      return [{ type: 'add-page', page: command.payload.page }];
+    },
+  }),
+  'page.set-active': Object.freeze({
+    type: 'page.set-active' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'page.switch',
+    resetsHistory: true,
+    validatePayload: validatePageSetActivePayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'page.set-active') return [];
+      return [{ type: 'set-active-page', pageId: command.payload.pageId }];
+    },
+  }),
+  'component.create': Object.freeze({
+    type: 'component.create' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'component.create',
+    validatePayload: validateComponentCreatePayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'component.create') return [];
+      return [{ type: 'add-component', component: command.payload.component }];
+    },
+  }),
+  'component.sync-document': Object.freeze({
+    type: 'component.sync-document' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'component.update',
+    validatePayload: validateComponentSyncDocumentPayload,
+    toEditorActions(command: NativeCommand, context: NativeCommandAdapterContext): readonly EditorAction[] {
+      if (command.type !== 'component.sync-document' || !context.liveComponentMasterDocument) return [];
+      return [{
+        type: 'sync-component-document',
+        componentId: command.payload.componentId,
+        document: command.payload.document,
+        updatedAt: command.payload.updatedAt,
+        expectedUpdatedAt: command.payload.expectedUpdatedAt,
+        expectedMasterDocument: context.liveComponentMasterDocument,
+      }];
+    },
+  }),
+  'component.rename': Object.freeze({
+    type: 'component.rename' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'component.update',
+    validatePayload: validateComponentRenamePayload,
+    toEditorActions(command: NativeCommand, context: NativeCommandAdapterContext): readonly EditorAction[] {
+      if (command.type !== 'component.rename' || !context.liveComponentMasterDocument) return [];
+      return [{
+        type: 'rename-component',
+        componentId: command.payload.componentId,
+        name: command.payload.name,
+        expectedUpdatedAt: command.payload.expectedUpdatedAt,
+        expectedMasterDocument: context.liveComponentMasterDocument,
+      }];
+    },
+  }),
+  'component.delete': Object.freeze({
+    type: 'component.delete' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'component.delete',
+    validatePayload: validateComponentDeletePayload,
+    toEditorActions(command: NativeCommand, context: NativeCommandAdapterContext): readonly EditorAction[] {
+      if (command.type !== 'component.delete' || !context.liveComponentMasterDocument) return [];
+      return [{
+        type: 'delete-component',
+        componentId: command.payload.componentId,
+        expectedUpdatedAt: command.payload.expectedUpdatedAt,
+        expectedMasterDocument: context.liveComponentMasterDocument,
+      }];
+    },
+  }),
+  'node.replace-many': Object.freeze({
+    type: 'node.replace-many' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['document'] as const),
+    requiredPermission: 'node.update',
+    validatePayload: validateNodeReplaceManyPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'node.replace-many') return [];
+      return [{
+        type: 'replace-nodes',
+        removeIds: [...command.payload.removeIds],
+        insertNodes: [...command.payload.insertNodes],
+        ...(command.payload.selectIds !== undefined ? { selectIds: [...command.payload.selectIds] } : {}),
+      }];
+    },
+  }),
+  'node.split': Object.freeze({
+    type: 'node.split' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['document'] as const),
+    requiredPermission: 'node.update',
+    validatePayload: validateNodeSplitPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'node.split') return [];
+      return [{
+        type: 'replace-node-with-nodes',
+        nodeId: command.payload.nodeId,
+        nodes: [...command.payload.nodes],
+      }];
+    },
+  }),
+  'node.update-many': Object.freeze({
+    type: 'node.update-many' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['document'] as const),
+    requiredPermission: 'node.update',
+    validatePayload: validateNodeUpdateManyPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'node.update-many') return [];
+      return [{
+        type: 'transform-nodes',
+        nodes: [...command.payload.nodes],
+      }];
+    },
+  }),
+  'node.edit': Object.freeze({
+    type: 'node.edit' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['document'] as const),
+    requiredPermission: 'node.update',
+    validatePayload: validateNodeEditPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'node.edit') return [];
+      return [{
+        type: 'edit-node',
+        node: command.payload.node,
+        coalesceKey: command.payload.coalesceKey,
+      }];
+    },
+  }),
+  'selection.set': Object.freeze({
+    type: 'selection.set' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['document'] as const),
+    requiredPermission: 'selection.update',
+    mutatesProject: false,
+    validatePayload: validateSelectionSetPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'selection.set') return [];
+      return [{ type: 'select-nodes', nodeIds: [...command.payload.nodeIds] }];
+    },
+  }),
+  'history.commit-edit': Object.freeze({
+    type: 'history.commit-edit' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'history.execute',
+    mutatesProject: false,
+    validatePayload: validateEmptyCommandPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'history.commit-edit') return [];
+      return [{ type: 'commit-edit' }];
+    },
+  }),
+  'history.undo': Object.freeze({
+    type: 'history.undo' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'history.execute',
+    validatePayload: validateEmptyCommandPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'history.undo') return [];
+      return [{ type: 'undo' }];
+    },
+  }),
+  'history.redo': Object.freeze({
+    type: 'history.redo' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'history.execute',
+    validatePayload: validateEmptyCommandPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'history.redo') return [];
+      return [{ type: 'redo' }];
+    },
+  }),
+} satisfies Record<ExtendedNativeCommand['type'], NativeCommandDefinition>);
+
+export const ALL_NATIVE_COMMAND_REGISTRY = Object.freeze({
+  ...NATIVE_COMMAND_REGISTRY,
+  ...EXTENDED_NATIVE_COMMAND_REGISTRY,
 } satisfies Record<NativeCommand['type'], NativeCommandDefinition>);
+
+export function getNativeCommandDefinition(type: string): NativeCommandDefinition | undefined {
+  if (!Object.prototype.hasOwnProperty.call(ALL_NATIVE_COMMAND_REGISTRY, type)) {
+    return undefined;
+  }
+  return ALL_NATIVE_COMMAND_REGISTRY[type as keyof typeof ALL_NATIVE_COMMAND_REGISTRY];
+}

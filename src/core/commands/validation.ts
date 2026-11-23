@@ -3,8 +3,22 @@ import type {
   NativeNodeRef,
 } from '../document/ast';
 import type { LayerDropPosition } from '../document/layers';
-import type { DesignNode } from '../document/types';
 import type {
+  ComponentDefinition,
+  DesignNode,
+  FolioDocument,
+  FolioPage,
+  FolioProject,
+} from '../document/types';
+import { validateProject } from '../document/validation';
+import type {
+  ComponentCreatePayload,
+  ComponentDeletePayload,
+  ComponentRenamePayload,
+  ComponentSyncDocumentPayload,
+  HistoryCommitEditPayload,
+  HistoryRedoPayload,
+  HistoryUndoPayload,
   LayerClippingMaskPayload,
   LayerGroupPayload,
   LayerMoveManyPayload,
@@ -15,12 +29,20 @@ import type {
   NativeCommandTarget,
   NodeCreatePayload,
   NodeDeletePayload,
+  NodeEditPayload,
   NodeRenamePayload,
+  NodeReplaceManyPayload,
   NodeReplacePayload,
   NodeSetCanvasStatePayload,
   NodeSetPropertiesPayload,
+  NodeSplitPayload,
   NodeTransformPayload,
+  NodeUpdateManyPayload,
+  PageCreatePayload,
+  PageSetActivePayload,
   ProjectRenamePayload,
+  ProjectReplacePayload,
+  SelectionSetPayload,
 } from './types';
 
 export type ValidationOutcome<T> =
@@ -752,4 +774,333 @@ export function validateLayerClippingMaskPayload(
     return invalid('INVALID_PAYLOAD', 'A clipping mask command requires a single complete node reference.');
   }
   return { ok: true, value: { node: data.node } };
+}
+
+function isFolioDocumentData(value: unknown): value is FolioDocument {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'width', 'height', 'background', 'nodes'])) {
+    return false;
+  }
+  if (
+    !isNonEmptyString(value.id) ||
+    typeof value.name !== 'string' || value.name.length > 512 ||
+    !isFiniteNumber(value.width) || value.width <= 0 ||
+    !isFiniteNumber(value.height) || value.height <= 0 ||
+    typeof value.background !== 'string' || value.background.length > 128 ||
+    !Array.isArray(value.nodes)
+  ) {
+    return false;
+  }
+  const seenIds = new Set<string>();
+  for (const node of value.nodes) {
+    if (!isDesignNodeData(node) || seenIds.has(node.id)) return false;
+    seenIds.add(node.id);
+  }
+  return true;
+}
+
+function isFolioPageData(value: unknown): value is FolioPage {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'route', 'document'])) return false;
+  return (
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.name, 512) &&
+    isNonEmptyString(value.route, 512) &&
+    isFolioDocumentData(value.document)
+  );
+}
+
+function isComponentDefinitionData(value: unknown): value is ComponentDefinition {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'document', 'createdAt', 'updatedAt'])) {
+    return false;
+  }
+  return (
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.name, 512) &&
+    isFolioDocumentData(value.document) &&
+    isIsoTimestamp(value.createdAt) &&
+    isIsoTimestamp(value.updatedAt)
+  );
+}
+
+export function validateProjectReplacePayload(
+  value: unknown,
+): ValidationOutcome<ProjectReplacePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['project']) || !validateProject(data.project).ok) {
+    return invalid('INVALID_PAYLOAD', 'Project replacement requires a complete valid Folio project.');
+  }
+  return { ok: true, value: { project: data.project as FolioProject } };
+}
+
+export function validatePageCreatePayload(
+  value: unknown,
+): ValidationOutcome<PageCreatePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['page']) || !isFolioPageData(data.page)) {
+    return invalid('INVALID_PAYLOAD', 'Page creation requires a valid Folio page.');
+  }
+  return { ok: true, value: { page: data.page } };
+}
+
+export function validatePageSetActivePayload(
+  value: unknown,
+): ValidationOutcome<PageSetActivePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['pageId']) || !isNonEmptyString(data.pageId)) {
+    return invalid('INVALID_PAYLOAD', 'Setting the active page requires a non-empty page ID.');
+  }
+  return { ok: true, value: { pageId: data.pageId } };
+}
+
+export function validateComponentCreatePayload(
+  value: unknown,
+): ValidationOutcome<ComponentCreatePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['component']) || !isComponentDefinitionData(data.component)) {
+    return invalid('INVALID_PAYLOAD', 'Component creation requires a complete valid component definition.');
+  }
+  return { ok: true, value: { component: data.component } };
+}
+
+export function validateComponentSyncDocumentPayload(
+  value: unknown,
+): ValidationOutcome<ComponentSyncDocumentPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['componentId', 'document', 'updatedAt', 'expectedUpdatedAt', 'expectedMasterDocument']) ||
+    !isNonEmptyString(data.componentId) ||
+    !isFolioDocumentData(data.document) ||
+    !isIsoTimestamp(data.updatedAt) ||
+    !isIsoTimestamp(data.expectedUpdatedAt) ||
+    !isFolioDocumentData(data.expectedMasterDocument)
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Component sync requires a valid component ID, document, and optimistic concurrency guard.');
+  }
+  return {
+    ok: true,
+    value: {
+      componentId: data.componentId,
+      document: data.document,
+      updatedAt: data.updatedAt,
+      expectedUpdatedAt: data.expectedUpdatedAt,
+      expectedMasterDocument: data.expectedMasterDocument,
+    },
+  };
+}
+
+export function validateComponentRenamePayload(
+  value: unknown,
+): ValidationOutcome<ComponentRenamePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['componentId', 'name', 'expectedUpdatedAt', 'expectedMasterDocument']) ||
+    !isNonEmptyString(data.componentId) ||
+    !isNonEmptyString(data.name, 512) ||
+    !isIsoTimestamp(data.expectedUpdatedAt) ||
+    !isFolioDocumentData(data.expectedMasterDocument)
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Component rename requires a valid component ID, non-empty name, and concurrency guard.');
+  }
+  return {
+    ok: true,
+    value: {
+      componentId: data.componentId,
+      name: data.name.trim(),
+      expectedUpdatedAt: data.expectedUpdatedAt,
+      expectedMasterDocument: data.expectedMasterDocument,
+    },
+  };
+}
+
+export function validateComponentDeletePayload(
+  value: unknown,
+): ValidationOutcome<ComponentDeletePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['componentId', 'expectedUpdatedAt', 'expectedMasterDocument']) ||
+    !isNonEmptyString(data.componentId) ||
+    !isIsoTimestamp(data.expectedUpdatedAt) ||
+    !isFolioDocumentData(data.expectedMasterDocument)
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Component deletion requires a valid component ID and concurrency guard.');
+  }
+  return {
+    ok: true,
+    value: {
+      componentId: data.componentId,
+      expectedUpdatedAt: data.expectedUpdatedAt,
+      expectedMasterDocument: data.expectedMasterDocument,
+    },
+  };
+}
+
+export function validateNodeReplaceManyPayload(
+  value: unknown,
+): ValidationOutcome<NodeReplaceManyPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['removeIds', 'insertNodes', 'selectIds']) ||
+    !Array.isArray(data.removeIds) ||
+    !Array.isArray(data.insertNodes) ||
+    (data.removeIds.length === 0 && data.insertNodes.length === 0) ||
+    data.removeIds.length > 200 ||
+    data.insertNodes.length > 200
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Multi-node replacement requires valid removeIds and/or insertNodes.');
+  }
+  const removeIds: string[] = [];
+  for (const id of data.removeIds) {
+    if (!isNonEmptyString(id)) return invalid('INVALID_REFERENCE', 'Every removed node ID must be a non-empty string.');
+    removeIds.push(id);
+  }
+  const insertNodes: DesignNode[] = [];
+  const seenInsert = new Set<string>();
+  for (const entry of data.insertNodes) {
+    if (!isDesignNodeData(entry)) return invalid('INVALID_PAYLOAD', 'Inserted nodes must match the Folio node schema.');
+    if (seenInsert.has(entry.id)) return invalid('INVALID_REFERENCE', 'Inserted nodes must have unique IDs.');
+    seenInsert.add(entry.id);
+    insertNodes.push(entry);
+  }
+  let selectIds: string[] | undefined;
+  if (data.selectIds !== undefined) {
+    if (!Array.isArray(data.selectIds) || data.selectIds.length > 200) {
+      return invalid('INVALID_PAYLOAD', 'selectIds must be an array of valid node IDs.');
+    }
+    selectIds = [];
+    for (const id of data.selectIds) {
+      if (!isNonEmptyString(id)) return invalid('INVALID_REFERENCE', 'Every selected node ID must be a non-empty string.');
+      selectIds.push(id);
+    }
+  }
+  return {
+    ok: true,
+    value: {
+      removeIds,
+      insertNodes,
+      ...(selectIds !== undefined ? { selectIds } : {}),
+    },
+  };
+}
+
+export function validateNodeSplitPayload(
+  value: unknown,
+): ValidationOutcome<NodeSplitPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['nodeId', 'nodes']) ||
+    !isNonEmptyString(data.nodeId) ||
+    !Array.isArray(data.nodes) ||
+    data.nodes.length === 0 ||
+    data.nodes.length > 200
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Node split requires a target node ID and replacement nodes.');
+  }
+  const nodes: DesignNode[] = [];
+  const seenIds = new Set<string>();
+  for (const entry of data.nodes) {
+    if (!isDesignNodeData(entry)) return invalid('INVALID_PAYLOAD', 'Replacement nodes must match the Folio node schema.');
+    if (seenIds.has(entry.id)) return invalid('INVALID_REFERENCE', 'Replacement nodes must have unique IDs.');
+    seenIds.add(entry.id);
+    nodes.push(entry);
+  }
+  return { ok: true, value: { nodeId: data.nodeId, nodes } };
+}
+
+export function validateNodeUpdateManyPayload(
+  value: unknown,
+): ValidationOutcome<NodeUpdateManyPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['nodes']) ||
+    !Array.isArray(data.nodes) ||
+    data.nodes.length === 0 ||
+    data.nodes.length > 200
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Multi-node update requires between 1 and 200 valid nodes.');
+  }
+  const nodes: DesignNode[] = [];
+  const seenIds = new Set<string>();
+  for (const entry of data.nodes) {
+    if (!isDesignNodeData(entry)) return invalid('INVALID_PAYLOAD', 'Updated nodes must match the Folio node schema.');
+    if (seenIds.has(entry.id)) return invalid('INVALID_REFERENCE', 'A node may appear only once in one update command.');
+    seenIds.add(entry.id);
+    nodes.push(entry);
+  }
+  return { ok: true, value: { nodes } };
+}
+
+export function validateNodeEditPayload(
+  value: unknown,
+): ValidationOutcome<NodeEditPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['node', 'coalesceKey']) ||
+    !isDesignNodeData(data.node) ||
+    !isNonEmptyString(data.coalesceKey, 256)
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Coalesced node editing requires a valid node and coalesce key.');
+  }
+  return { ok: true, value: { node: data.node, coalesceKey: data.coalesceKey } };
+}
+
+export function validateSelectionSetPayload(
+  value: unknown,
+): ValidationOutcome<SelectionSetPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['nodeIds']) ||
+    !Array.isArray(data.nodeIds) ||
+    data.nodeIds.length > 500
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Selection update requires an array of node IDs.');
+  }
+  const nodeIds: string[] = [];
+  for (const id of data.nodeIds) {
+    if (!isNonEmptyString(id)) return invalid('INVALID_REFERENCE', 'Every selected node ID must be a non-empty string.');
+    nodeIds.push(id);
+  }
+  return { ok: true, value: { nodeIds } };
+}
+
+export function validateEmptyCommandPayload(
+  value: unknown,
+): ValidationOutcome<HistoryCommitEditPayload | HistoryUndoPayload | HistoryRedoPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || Object.keys(data).length !== 0) {
+    return invalid('INVALID_PAYLOAD', 'This command requires an empty payload object.');
+  }
+  return { ok: true, value: {} };
 }

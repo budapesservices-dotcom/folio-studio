@@ -9,8 +9,15 @@ const RESERVED_COMPONENT_CANVAS_ID = 'folio-component-canvas';
 const EDITOR_HISTORY_LIMIT = 60;
 const storeIdentities = new WeakMap<object, object>();
 const snapshotOwners = new WeakMap<object, object>();
+const snapshotWorkspaces = new WeakMap<object, CanonicalEditorStoreWorkspace>();
 const frozenGraphs = new WeakSet<object>();
 const validatedFrozenProjects = new WeakSet<object>();
+
+export type CanonicalEditorStoreWorkspace = 'main' | 'component';
+
+export interface CanonicalEditorStoreOptions {
+  readonly workspace?: CanonicalEditorStoreWorkspace;
+}
 
 export interface CanonicalEditorStoreSnapshot {
   readonly editorState: EditorState;
@@ -39,6 +46,7 @@ export type EditorStoreCommitResult =
   | { status: 'failed'; snapshot: CanonicalEditorStoreSnapshot; errorCode: string };
 
 export interface CanonicalEditorStore {
+  readonly workspace: CanonicalEditorStoreWorkspace;
   getSnapshot(): CanonicalEditorStoreSnapshot;
   subscribe(listener: () => void): () => void;
   subscribeChanges(listener: (event: NativeChangeEvent) => void): () => void;
@@ -87,22 +95,24 @@ function isValidatedProject(project: EditorState['project']): boolean {
   return true;
 }
 
-function isHistoricalProject(value: unknown): boolean {
+function isHistoricalProject(value: unknown, workspace: CanonicalEditorStoreWorkspace): boolean {
   try {
     if (typeof value !== 'object' || value === null) return false;
     const project = value as EditorState['project'];
-    if (validatedFrozenProjects.has(project as object)) {
-      return project.metadata.id !== RESERVED_COMPONENT_CANVAS_ID;
+    if (workspace === 'main' && project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) {
+      return false;
     }
-    if (project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) return false;
+    if (validatedFrozenProjects.has(project as object)) {
+      return true;
+    }
     return isValidatedProject(project);
   } catch {
     return false;
   }
 }
 
-/** Validate the current project, every historical project, and selection against the active Main Canvas document. */
-function isEditorState(value: unknown): value is EditorState {
+/** Validate the current project, every historical project, and selection against the active document. */
+function isEditorState(value: unknown, workspace: CanonicalEditorStoreWorkspace): value is EditorState {
   try {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
     const candidate = value as Record<string, unknown>;
@@ -110,7 +120,8 @@ function isEditorState(value: unknown): value is EditorState {
         !isValidatedProject(candidate.project as EditorState['project']) ||
         !Array.isArray(candidate.past) || !Array.isArray(candidate.future) ||
         candidate.past.length + candidate.future.length > EDITOR_HISTORY_LIMIT ||
-        !candidate.past.every(isHistoricalProject) || !candidate.future.every(isHistoricalProject) ||
+        !candidate.past.every((entry) => isHistoricalProject(entry, workspace)) ||
+        !candidate.future.every((entry) => isHistoricalProject(entry, workspace)) ||
         (candidate.selectedNodeId !== null && typeof candidate.selectedNodeId !== 'string') ||
         !Array.isArray(candidate.selectedNodeIds) ||
         !candidate.selectedNodeIds.every((id) => typeof id === 'string' && id.length > 0) ||
@@ -152,7 +163,8 @@ function isCommitInput(value: unknown): value is EditorStoreCommitInput {
     typeof candidate.candidateState === 'object' && candidate.candidateState !== null;
 }
 
-class MainCanvasEditorStore implements CanonicalEditorStore {
+class WorkspaceCanonicalEditorStore implements CanonicalEditorStore {
+  readonly workspace: CanonicalEditorStoreWorkspace;
   private snapshot: CanonicalEditorStoreSnapshot;
   private readonly identity = {};
   private readonly listeners = new Set<() => void>();
@@ -161,11 +173,16 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
   private notifying = false;
   private mutationLease: object | null = null;
 
-  constructor(initialState: EditorState) {
-    if (!isEditorState(initialState)) {
-      throw new Error('Cannot create the Main Canvas store from an invalid editor state.');
+  constructor(initialState: EditorState, workspace: CanonicalEditorStoreWorkspace) {
+    this.workspace = workspace;
+    if (!isEditorState(initialState, workspace)) {
+      throw new Error(
+        workspace === 'main'
+          ? 'Cannot create the Main Canvas store from an invalid editor state.'
+          : 'Cannot create the Component Canvas store from an invalid editor state.',
+      );
     }
-    if (initialState.project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) {
+    if (workspace === 'main' && initialState.project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) {
       throw new Error('The temporary Component Canvas buffer cannot become the canonical Main Canvas project.');
     }
     storeIdentities.set(this, this.identity);
@@ -175,6 +192,7 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     for (const historical of frozenInitial.future) validatedFrozenProjects.add(historical as object);
     this.snapshot = Object.freeze({ editorState: frozenInitial, projectRevision: 0 });
     snapshotOwners.set(this.snapshot as object, this.identity);
+    snapshotWorkspaces.set(this.snapshot as object, workspace);
   }
 
   getSnapshot(): CanonicalEditorStoreSnapshot { return this.snapshot; }
@@ -201,24 +219,15 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     if (!isCommitInput(input)) return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_COMMIT_INPUT' };
     const expectedValid =
       input.expectedEditorState === beforeSnapshot.editorState ||
-      isEditorState(input.expectedEditorState);
+      isEditorState(input.expectedEditorState, this.workspace);
     const candidateValid =
       input.candidateState === beforeSnapshot.editorState ||
-      isEditorState(input.candidateState);
+      isEditorState(input.candidateState, this.workspace);
     if (!expectedValid || !candidateValid) {
       return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_EDITOR_STATE' };
     }
     if (input.expectedProjectRevision !== beforeSnapshot.projectRevision) return { status: 'revision-conflict', snapshot: beforeSnapshot };
     if (input.expectedEditorState !== beforeSnapshot.editorState) return { status: 'editor-conflict', snapshot: beforeSnapshot };
-
-    if (input.componentSyncGuard) {
-      const expected = input.componentSyncGuard;
-      const currentMaster = beforeSnapshot.editorState.project.components.find((component) => component.id === expected.componentId);
-      if (!currentMaster || currentMaster.document !== expected.expectedMasterDocument ||
-          currentMaster.updatedAt !== expected.expectedUpdatedAt) {
-        return { status: 'component-conflict', snapshot: beforeSnapshot };
-      }
-    }
 
     const authorization = input.nativeCommandPreparation
       ? getNativeCommandCommitAuthorization(input.nativeCommandPreparation)
@@ -227,6 +236,18 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
         authorization.baseSnapshot !== beforeSnapshot || authorization.candidateState !== input.candidateState)) {
       return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'UNAUTHORIZED_EVENT_PUBLICATION' };
     }
+
+    const effectiveSyncGuard = input.componentSyncGuard ?? authorization?.componentSyncGuard;
+    if (effectiveSyncGuard) {
+      const currentMaster = beforeSnapshot.editorState.project.components.find(
+        (component) => component.id === effectiveSyncGuard.componentId,
+      );
+      if (!currentMaster || currentMaster.document !== effectiveSyncGuard.expectedMasterDocument ||
+          currentMaster.updatedAt !== effectiveSyncGuard.expectedUpdatedAt) {
+        return { status: 'component-conflict', snapshot: beforeSnapshot };
+      }
+    }
+
     if (input.candidateState === beforeSnapshot.editorState) {
       return authorization
         ? { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_CHANGE_EVENT_COMMIT' }
@@ -234,25 +255,33 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     }
 
     const projectMutation = input.candidateState.project !== beforeSnapshot.editorState.project;
-    if (authorization && !projectMutation) return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_CHANGE_EVENT_COMMIT' };
+    if (authorization && !projectMutation && !authorization.allowNonProjectMutation) {
+      return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_CHANGE_EVENT_COMMIT' };
+    }
     if (projectMutation) {
-      if (input.candidateState.project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) {
+      if (this.workspace === 'main' && input.candidateState.project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) {
         return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_CANONICAL_PROJECT' };
       }
     }
 
     const nextRevision = beforeSnapshot.projectRevision + (projectMutation ? 1 : 0);
     let event: NativeChangeEvent | undefined;
-    if (authorization) {
+    if (authorization && projectMutation) {
       try {
-        const { changeDraft, changeSource } = authorization;
-        if (changeDraft.projectId !== beforeSnapshot.editorState.project.metadata.id ||
-            changeDraft.commandIds.length !== 1 || !changeDraft.commandIds[0] || changeSource.workspace !== 'main') {
+        const { changeDraft, changeSource, allowProjectIdChange } = authorization;
+        const expectedProjectIdMatches =
+          changeDraft.projectId === beforeSnapshot.editorState.project.metadata.id ||
+          (allowProjectIdChange === true && changeDraft.projectId === input.candidateState.project.metadata.id);
+        if (!expectedProjectIdMatches ||
+            changeDraft.commandIds.length < 1 ||
+            changeDraft.commandIds.some((id) => typeof id !== 'string' || id.length === 0) ||
+            changeSource.workspace !== this.workspace) {
           return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_CHANGE_EVENT_COMMIT' };
         }
         const commandId = changeDraft.commandIds[0];
+        const eventBaseId = changeDraft.transactionId ?? commandId;
         event = freezeGraph(cloneEventGraph({
-          eventId: commandId + ':change',
+          eventId: eventBaseId + ':change',
           projectId: changeDraft.projectId,
           projectRevision: nextRevision,
           commandId,
@@ -261,6 +290,10 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
           change: { ...changeDraft, projectRevision: nextRevision },
         }));
       } catch {
+        return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_CHANGE_EVENT_COMMIT' };
+      }
+    } else if (authorization && !projectMutation) {
+      if (authorization.changeSource.workspace !== this.workspace) {
         return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_CHANGE_EVENT_COMMIT' };
       }
     }
@@ -282,6 +315,7 @@ class MainCanvasEditorStore implements CanonicalEditorStore {
     try {
       this.snapshot = nextSnapshot;
       snapshotOwners.set(nextSnapshot as object, this.identity);
+      snapshotWorkspaces.set(nextSnapshot as object, this.workspace);
       for (const listener of this.listeners) {
         try { listener(); } catch { /* View notifications cannot roll back an accepted transition. */ }
       }
@@ -338,6 +372,13 @@ export function isSnapshotOwnedByStore(store: CanonicalEditorStore, snapshot: Ca
   return identity !== undefined && snapshotOwners.get(snapshot as object) === identity;
 }
 
-export function createCanonicalEditorStore(initialState: EditorState): CanonicalEditorStore {
-  return new MainCanvasEditorStore(initialState);
+export function getSnapshotWorkspace(snapshot: CanonicalEditorStoreSnapshot): CanonicalEditorStoreWorkspace {
+  return snapshotWorkspaces.get(snapshot as object) ?? 'main';
+}
+
+export function createCanonicalEditorStore(
+  initialState: EditorState,
+  options: CanonicalEditorStoreOptions = {},
+): CanonicalEditorStore {
+  return new WorkspaceCanonicalEditorStore(initialState, options.workspace ?? 'main');
 }
