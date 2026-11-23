@@ -18,6 +18,7 @@ import {
   type ToolOperationCategory,
   type ToolOperationMetadata,
   type ToolOperationProtocol,
+  type ToolOperationValidationErrorCode,
   type ToolOperationVersion,
   type ToolWorkspaceScope,
   type TransformNodesOperationPayload,
@@ -314,6 +315,23 @@ export function isValidatedToolOperation(value: unknown): value is ValidatedTool
   );
 }
 
+function mapEnvelopeErrorToGeometryCode(
+  code?: ToolOperationValidationErrorCode,
+): GeometryRejectionCode {
+  switch (code) {
+    case 'INVALID_GEOMETRY':
+    case 'INVALID_NODE':
+    case 'DUPLICATE_NODE_ID':
+    case 'EMPTY_OPERATION':
+    case 'INVALID_COLOR':
+    case 'INVALID_VIEWPORT':
+    case 'INVALID_TOOL':
+      return code;
+    default:
+      return 'INVALID_ENVELOPE';
+  }
+}
+
 /**
  * Pure Geometry Engine gate sitting strictly between Tool Operation Contract
  * and Native Command Engine. Validates geometric invariants, target locks,
@@ -328,7 +346,7 @@ export function evaluateToolOperation(
   if (!envelopeCheck.ok) {
     return {
       status: 'rejected',
-      code: 'INVALID_ENVELOPE',
+      code: mapEnvelopeErrorToGeometryCode(envelopeCheck.code),
       reason: envelopeCheck.error ?? 'Invalid tool operation envelope.',
     };
   }

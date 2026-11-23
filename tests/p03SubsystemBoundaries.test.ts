@@ -7,9 +7,11 @@ import {
   createToolOperation,
   extractToolOperationsFromTransition,
   isDocumentMutationOperation,
+  isToolOperation,
   TOOL_OPERATION_PROTOCOL,
   TOOL_OPERATION_VERSION,
   validateToolOperationEnvelope,
+  validateToolOperationPayload,
   type ToolOperation,
 } from '../src/core/tools/operationContract';
 import {
@@ -163,6 +165,232 @@ describe('P0.3 Subsystem Boundaries — Tool Operation Contract', () => {
       'notify',
     ]);
     expect(operations.every((o) => validateToolOperationEnvelope(o).ok)).toBe(true);
+  });
+
+  it('validates all 10 ToolOperation payload kinds thoroughly and rejects malformed per-kind payloads', () => {
+    const project = createInitialProject('Payload Validation');
+    const doc = getActiveDocument(project);
+    const rect = { ...(createNodeForDocument('rect', doc) as RectNode), id: 'rect-valid-1' };
+    const textNode = { ...(createNodeForDocument('text', doc) as TextNode), id: 'text-valid-1', text: 'Hello' };
+    const pathNode: PathNode = {
+      id: 'path-valid-1',
+      type: 'path',
+      name: 'Curve',
+      x: 10,
+      y: 20,
+      width: 100,
+      height: 80,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      closed: true,
+      points: [
+        { id: 'pt-1', x: 0, y: 0, pointType: 'corner' },
+        { id: 'pt-2', x: 100, y: 0, pointType: 'smooth', handleIn: { x: 80, y: 0 }, handleOut: { x: 100, y: 20 } },
+        { id: 'pt-3', x: 50, y: 80, pointType: 'symmetric' },
+      ],
+      style: { fill: '#4f46e5', stroke: '#111827', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' },
+      pathKind: 'pen',
+    };
+
+    // Valid envelopes for every single ToolOperationPayload kind
+    const validOps: ToolOperation[] = [
+      createToolOperation('draw-rect', 'main', { kind: 'create-nodes', nodes: [rect] }),
+      createToolOperation('draw-text', 'main', {
+        kind: 'create-nodes',
+        nodes: [textNode],
+        openInlineTextForNodeId: textNode.id,
+      }),
+      createToolOperation('select', 'main', { kind: 'transform-nodes', nodes: [rect, pathNode] }),
+      createToolOperation('scissors', 'component', {
+        kind: 'replace-node-with-nodes',
+        nodeId: pathNode.id,
+        nodes: [pathNode],
+      }),
+      createToolOperation('shape-builder', 'main', {
+        kind: 'replace-nodes',
+        removeIds: ['old-1', 'old-2'],
+        insertNodes: [pathNode],
+        selectIds: [pathNode.id],
+      }),
+      createToolOperation('shape-builder', 'main', {
+        kind: 'replace-nodes',
+        removeIds: ['old-1'],
+        insertNodes: [],
+      }),
+      createToolOperation('eyedropper', 'main', {
+        kind: 'sample-color',
+        color: '#8B7CF6',
+        sourceName: 'Hero Card',
+        target: 'stroke',
+      }),
+      createToolOperation('draw-text', 'main', {
+        kind: 'commit-inline-text',
+        nodeId: textNode.id,
+        text: '',
+      }),
+      createToolOperation('select', 'main', { kind: 'select-nodes', nodeIds: [] }),
+      createToolOperation('select', 'main', { kind: 'select-nodes', nodeIds: [rect.id] }),
+      createToolOperation('hand', 'main', { kind: 'viewport-update', pan: { x: -40, y: 120 } }),
+      createToolOperation('scrubby-zoom', 'main', { kind: 'viewport-update', zoom: 1.5, pan: { x: 0, y: 0 } }),
+      createToolOperation('draw-rect', 'main', { kind: 'switch-tool', nextToolId: 'select' }),
+      createToolOperation('measure', 'main', { kind: 'notify', message: 'Distance measured' }),
+    ];
+
+    for (const op of validOps) {
+      expect(validateToolOperationEnvelope(op), `Expected ${op.payload.kind} to pass`).toEqual({ ok: true });
+      expect(isToolOperation(op)).toBe(true);
+    }
+
+    // 1. create-nodes invalid cases
+    expect(validateToolOperationPayload({ kind: 'create-nodes', nodes: [] }).code).toBe('EMPTY_OPERATION');
+    expect(validateToolOperationPayload({ kind: 'create-nodes', nodes: 'not-array' }).code).toBe('INVALID_PAYLOAD');
+    expect(validateToolOperationPayload({ kind: 'create-nodes', nodes: [rect, rect] }).code).toBe('DUPLICATE_NODE_ID');
+    expect(
+      validateToolOperationPayload({
+        kind: 'create-nodes',
+        nodes: [rect],
+        openInlineTextForNodeId: rect.id,
+      }).code,
+    ).toBe('INVALID_PAYLOAD');
+    expect(
+      validateToolOperationPayload({
+        kind: 'create-nodes',
+        nodes: [textNode],
+        openInlineTextForNodeId: 'missing-id',
+      }).code,
+    ).toBe('INVALID_PAYLOAD');
+    expect(
+      validateToolOperationPayload({ kind: 'create-nodes', nodes: [rect], extraKey: true }).code,
+    ).toBe('INVALID_PAYLOAD');
+
+    // 2. transform-nodes invalid cases
+    expect(validateToolOperationPayload({ kind: 'transform-nodes', nodes: [] }).code).toBe('EMPTY_OPERATION');
+    expect(
+      validateToolOperationPayload({
+        kind: 'transform-nodes',
+        nodes: [{ ...rect, opacity: 1.5 }],
+      }).code,
+    ).toBe('INVALID_GEOMETRY');
+    expect(
+      validateToolOperationPayload({
+        kind: 'transform-nodes',
+        nodes: [{ ...pathNode, points: [] }],
+      }).code,
+    ).toBe('INVALID_GEOMETRY');
+    expect(
+      validateToolOperationPayload({
+        kind: 'transform-nodes',
+        nodes: [{ ...pathNode, points: [{ id: 'p1', x: 0, y: 0, pointType: 'invalid-type' }] }],
+      }).code,
+    ).toBe('INVALID_NODE');
+
+    // 3. replace-node-with-nodes invalid cases
+    expect(
+      validateToolOperationPayload({ kind: 'replace-node-with-nodes', nodeId: '   ', nodes: [pathNode] }).code,
+    ).toBe('INVALID_PAYLOAD');
+    expect(
+      validateToolOperationPayload({ kind: 'replace-node-with-nodes', nodeId: 'p1', nodes: [] }).code,
+    ).toBe('EMPTY_OPERATION');
+
+    // 4. replace-nodes invalid cases
+    expect(
+      validateToolOperationPayload({ kind: 'replace-nodes', removeIds: [], insertNodes: [rect] }).code,
+    ).toBe('EMPTY_OPERATION');
+    expect(
+      validateToolOperationPayload({ kind: 'replace-nodes', removeIds: [''], insertNodes: [] }).code,
+    ).toBe('INVALID_PAYLOAD');
+    expect(
+      validateToolOperationPayload({ kind: 'replace-nodes', removeIds: ['r1'], insertNodes: 'bad' }).code,
+    ).toBe('INVALID_PAYLOAD');
+    expect(
+      validateToolOperationPayload({ kind: 'replace-nodes', removeIds: ['r1'], insertNodes: [], selectIds: [123] }).code,
+    ).toBe('INVALID_PAYLOAD');
+
+    // 5. sample-color invalid cases
+    expect(
+      validateToolOperationPayload({ kind: 'sample-color', color: '   ', sourceName: 'Card', target: 'fill' }).code,
+    ).toBe('INVALID_COLOR');
+    expect(
+      validateToolOperationPayload({ kind: 'sample-color', color: '#fff', sourceName: 42, target: 'fill' }).code,
+    ).toBe('INVALID_PAYLOAD');
+    expect(
+      validateToolOperationPayload({ kind: 'sample-color', color: '#fff', sourceName: 'Card', target: 'border' }).code,
+    ).toBe('INVALID_PAYLOAD');
+
+    // 6. commit-inline-text invalid cases
+    expect(
+      validateToolOperationPayload({ kind: 'commit-inline-text', nodeId: '', text: 'Hi' }).code,
+    ).toBe('INVALID_PAYLOAD');
+    expect(
+      validateToolOperationPayload({ kind: 'commit-inline-text', nodeId: 'text-1', text: 999 }).code,
+    ).toBe('INVALID_PAYLOAD');
+
+    // 7. select-nodes invalid cases
+    expect(validateToolOperationPayload({ kind: 'select-nodes', nodeIds: 'n1' }).code).toBe('INVALID_PAYLOAD');
+    expect(validateToolOperationPayload({ kind: 'select-nodes', nodeIds: ['n1', ''] }).code).toBe('INVALID_PAYLOAD');
+    expect(validateToolOperationPayload({ kind: 'select-nodes', nodeIds: [42] }).code).toBe('INVALID_PAYLOAD');
+
+    // 8. viewport-update invalid cases
+    expect(validateToolOperationPayload({ kind: 'viewport-update' }).code).toBe('EMPTY_OPERATION');
+    expect(
+      validateToolOperationPayload({ kind: 'viewport-update', pan: { x: Number.NaN, y: 0 } }).code,
+    ).toBe('INVALID_VIEWPORT');
+    expect(
+      validateToolOperationPayload({ kind: 'viewport-update', pan: { x: 0, y: 0, z: 1 } }).code,
+    ).toBe('INVALID_VIEWPORT');
+    expect(validateToolOperationPayload({ kind: 'viewport-update', zoom: 0 }).code).toBe('INVALID_VIEWPORT');
+    expect(validateToolOperationPayload({ kind: 'viewport-update', zoom: -2 }).code).toBe('INVALID_VIEWPORT');
+    expect(
+      validateToolOperationPayload({ kind: 'viewport-update', zoom: Number.POSITIVE_INFINITY }).code,
+    ).toBe('INVALID_VIEWPORT');
+
+    // 9. switch-tool invalid cases
+    expect(
+      validateToolOperationPayload({ kind: 'switch-tool', nextToolId: 'non-existent-tool' }).code,
+    ).toBe('INVALID_TOOL');
+
+    // 10. notify invalid cases
+    expect(validateToolOperationPayload({ kind: 'notify', message: '   ' }).code).toBe('EMPTY_OPERATION');
+    expect(validateToolOperationPayload({ kind: 'notify', message: 123 }).code).toBe('INVALID_PAYLOAD');
+  });
+
+  it('rejects malformed envelope metadata, unexpected envelope fields, non-plain prototypes, and getter payloads', () => {
+    const base = createToolOperation('select', 'main', { kind: 'select-nodes', nodeIds: [] });
+
+    // Unexpected top-level envelope key
+    expect(validateToolOperationEnvelope({ ...base, injected: true }).code).toBe('INVALID_ENVELOPE');
+
+    // Invalid metadata.description (non-string or whitespace-only) and extra metadata key
+    expect(
+      validateToolOperationEnvelope({ ...base, metadata: { atomicHistoryStep: false, description: '' } }).code,
+    ).toBe('INVALID_METADATA');
+    expect(
+      validateToolOperationEnvelope({ ...base, metadata: { atomicHistoryStep: false, description: 123 } }).code,
+    ).toBe('INVALID_METADATA');
+    expect(
+      validateToolOperationEnvelope({ ...base, metadata: { atomicHistoryStep: false, rogue: true } }).code,
+    ).toBe('INVALID_METADATA');
+
+    // Getter-based payload rejected as non-plain own data
+    const getterPayload = { kind: 'notify' };
+    Object.defineProperty(getterPayload, 'message', {
+      enumerable: true,
+      get: () => 'Sneaky getter',
+    });
+    const getterEnvelope = {
+      ...base,
+      category: 'tool-state',
+      payload: getterPayload,
+    };
+    expect(validateToolOperationEnvelope(getterEnvelope).ok).toBe(false);
+    expect(isToolOperation(getterEnvelope)).toBe(false);
+
+    // Sparse array rejected
+    const sparseIds: unknown[] = [];
+    sparseIds.length = 2;
+    expect(validateToolOperationPayload({ kind: 'select-nodes', nodeIds: sparseIds }).code).toBe('INVALID_PAYLOAD');
   });
 });
 
