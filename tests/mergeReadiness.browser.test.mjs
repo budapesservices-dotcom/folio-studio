@@ -254,7 +254,7 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
           const fileBtn = Array.from(document.querySelectorAll('.global-menu-item.menu-trigger')).find((b) => b.textContent?.trim() === 'File');
           fileBtn.click();
           await new Promise((r) => setTimeout(r, 40));
-          const exportItem = Array.from(document.querySelectorAll('.global-menu-dropdown [role="menuitem"]')).find((b) => b.textContent?.trim() === 'Export Project');
+          const exportItem = Array.from(document.querySelectorAll('.global-menu-dropdown [role="menuitem"]')).find((b) => b.textContent?.trim().startsWith('Export Project'));
           const exportRect = exportItem?.getBoundingClientRect();
           const exportLeftHit = exportRect
             ? document.elementFromPoint(exportRect.left + 8, exportRect.top + exportRect.height / 2)

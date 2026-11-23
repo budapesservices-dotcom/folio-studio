@@ -1,42 +1,125 @@
 # Folio Studio — Architecture
 
-> **Document scope:** This document records the current repository architecture and implementation reality. For FOLIO product vision and long-term agreed architecture, read [FOLIO Architecture Blueprint](FOLIO_ARCHITECTURE_BLUEPRINT.md). Keep both documents aligned, but do not describe planned capabilities as implemented.
-
-## Current implementation architecture
+> **Document scope:** This document records the current repository architecture and implementation reality. For FOLIO product vision and long-term agreed architecture, read [FOLIO Architecture Blueprint](FOLIO_ARCHITECTURE_BLUEPRINT.md). Keep both documents aligned, and keep **Implemented** capabilities strictly distinct from **Planned** engines not yet present on disk.
 
 ## Product direction
 
-Folio is a browser-based visual web builder designed around a single native project and multiple independent workspaces. Its interaction model takes inspiration from DAWs: Main Canvas, Component Canvas, Component Rack, Pages Rack and Node Logic are views over project data, not independent project silos.
+Folio is a browser-based, visual-first full-stack web development studio designed around a single native project aggregate (`.flop` v2) and multiple independent workspaces. Main Canvas, Component Canvas, Component Rack, Pages Rack, and the future Node Logic workspace are views over shared project data, never isolated project silos.
 
 ## Architectural rules
 
-1. **The project AST is the source of truth.** Renderers, inspectors, reusable components, logic graphs, history and code generation consume or transform the same project aggregate.
-2. **Project identity is separate from page identity.** A project owns many pages; each page owns one document and route.
-3. **UI is not the domain model.** \`src/core\` must not import Preact or depend on browser view components.
-4. **Engines are independent modules.** Canvas, layout, prototype, animation and code generation communicate through typed project/document data and commands.
-5. **Persistence is replaceable.** IndexedDB is the current local adapter. \`.flop\` import/export serializes the complete project aggregate.
-6. **Native files are versioned.** Every \`.flop\` file carries a format identifier and \`formatVersion\`. Schema changes require explicit migrations.
-7. **Legacy split storage is not authoritative.** Pages, active page and component definitions live in the project aggregate. Workspace window layout may remain local UI preference state.
+1. **The project AST is the source of truth.** Renderers, inspectors, reusable components, history, and future logic/codegen engines consume or transform the same project aggregate via `NativeAstDocumentView` (`src/core/document/ast.ts`).
+2. **Project identity is separate from page identity.** A project owns many `FolioPage` records; each page owns one `FolioDocument` and route.
+3. **UI is not the domain model.** `src/core` must not import Preact or depend on browser view components.
+4. **Strict unidirectional tool-to-engine boundary (P0.3).** Studio Tools emit versioned `ToolOperation` envelopes (`src/core/tools/operationContract.ts`) -> Geometry Engine validates and seals them (`src/engines/canvas/geometryEngine.ts`) -> Tool Operation Executor (`src/app/toolOperationExecutor.ts`) dispatches through the Native Command Engine. Studio Tools have zero direct imports from UI panels, legacy reducers, or Native Engine internals.
+5. **Zero-bypass Native Command Engine (P1.1).** Every project and editor mutation across Main Canvas, Component Canvas, Inspector, Layers, Pages, Components/Instances, durable deletion/recovery, and Undo/Redo flows through the Native Command Engine (`src/app/nativeCommandExecutor.ts`). Direct `editorReducer` or `commitEditorTransition` bypasses in production `src/` are forbidden and statically tested.
+6. **Persistence is replaceable.** IndexedDB (`src/core/persistence/indexedDb.ts`) is the current local adapter; `.flop` file I/O (`src/core/persistence/projectFile.ts`) serializes the complete project aggregate.
+7. **Native files are versioned.** Every `.flop` file carries `format: "folio-project"` and `formatVersion`. Schema changes require explicit migrations (`src/core/document/migrations.ts`).
+8. **Legacy split storage is not authoritative.** Pages, active page, and component definitions live inside the project aggregate. Workspace window geometry and panel widths remain local UI preferences outside `.flop` files.
 
-## Repository responsibilities
+## Implemented repository structure
 
-- \`src/app\`: application shell, editor state, canonical store, Native Command registry/executor, Main Canvas command client adapter (\`src/app/mainCanvasCommandClient.ts\`) and orchestration.
-- \`src/core/commands\`: framework-independent Native Command v1 envelopes, Phase 2 command payloads/types and finite-budget runtime validation.
-- \`src/core/document\`: framework-independent AST types, read-only \`NativeAstDocumentView\` facade (\`src/core/document/ast.ts\`), factories, active-page helpers, validation and migrations.
-- \`src/core/persistence\`: IndexedDB and \`.flop\` file I/O adapters.
-- \`src/engines/canvas\`: SVG renderer, selection and geometry behavior.
-- \`src/engines/layout\`: future layout calculation and constraints.
-- \`src/engines/prototype\`: future interaction graph and preview runtime.
-- \`src/engines/animation\`: future timeline, tracks and keyframes.
-- \`src/engines/history\`: future command batching and scalable history implementation. The first release currently keeps snapshot history in the app reducer.
-- \`src/engines/codegen\`: future AST-to-HTML/CSS/JS compiler.
-- \`tests\`: domain, command, migration, geometry, reducer, and local Chromium browser tests.
+### `src/core` — Framework-independent domain & contracts (Implemented)
 
-## Native \`.flop\` format — version 2
+- **`src/core/document/`**
+  - `types.ts`: Canonical `.flop` v2 project, page, document, layer, `FrameNode`, `RectNode`, `EllipseNode`, `PathNode` (cubic Bezier anchors, handles, compound subpaths, shape metadata), `TextNode`, `GroupNode`, `ComponentInstanceNode`, `ComponentDefinition`, logic graph, and asset types.
+  - `ast.ts`: Read-only `NativeAstDocumentView` facade with deterministic node lookup, parent/child traversal, and descendant queries.
+  - `factory.ts`: Project, page, document, and typed node factories.
+  - `project.ts`: Active-page / active-document resolution helpers with stale-reference fallback.
+  - `layers.ts`: Layer hierarchy traversal, effective lock/visibility state computation, render ordering, clipping mask base resolution, and layer panel row derivation.
+  - `components.ts`: Master component extraction (`buildComponentDefinitionFromNodes`), linked instance creation (`createComponentInstance`), instance detaching (`detachComponentInstance`), and override target resolution.
+  - `vector.ts`: Deterministic SVG cubic Bezier serialization, bounding-box normalization, anchor/handle scaling, polygon/star/line generators, Catmull-Rom curvature fitting, Ramer-Douglas-Peucker simplification, smooth brush relaxation, segment insertion, corner/smooth toggling, scissors splitting, shape-to-path conversion, flipping, and Pathfinder entry points (`applyPathfinderOperation`).
+  - `src/core/document/planarBoolean.ts`: Planar polygon/curve subdivision and boolean solver backing Illustrator-style Pathfinder operations (`unite`, `subtract`, `intersect`, `exclude`) and Shape Builder regions.
+  - `validation.ts`: Runtime `.flop` v1 and v2 schema, hierarchy, node, component, logic graph, and asset validation.
+  - `migrations.ts`: Deterministic `migrateProjectV1ToV2` upgrade path preserving IDs, document content, and unknown extension fields.
+  - `equality.ts`: Structural equality checks for documents and projects.
+- **`src/core/commands/`**
+  - `types.ts`: Native Command v1 envelope, 14 frozen Phase 2 commands (`NATIVE_COMMAND_REGISTRY`), 15 P1.1 extended commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`, 29 total in `ALL_NATIVE_COMMAND_REGISTRY`), target descriptors, result/error unions, and `NativeChangeEvent` contracts.
+  - `validation.ts`: Closed own-key allowlist and finite-budget runtime validation for all 29 Native Commands.
+- **`src/core/tools/`**
+  - `operationContract.ts`: Versioned `folio.tool-operation` v1 `ToolOperation` contract, `ToolOperationBatch`, `ToolOptionsChange`, `ToolFeedbackMessage`, `ValidatedToolOperation` sealed boundary types, and `extractToolOperationsFromTransition`.
+- **`src/core/persistence/`**
+  - `indexedDb.ts`: IndexedDB v2 persistence (`projects` store keyed by `metadata.id` plus `app-state` store for active-project pointer), revision-fenced saves (`saveProjectIfRevisionCurrent`), atomic import+activation (`saveProjectAndActivate`), and per-project write locks (`withProjectWriteLock`).
+  - `projectFile.ts`: `.flop` UTF-8 JSON file reading, parsing, validation/migration, and download serialization.
 
-Version 2 is UTF-8 JSON. The project is the aggregate root; it contains the active page, all pages, reusable component definitions, reserved logic graph data and asset references.
+### `src/engines/canvas` — Canvas renderer, geometry engine & studio tools (Implemented)
 
-\`\`\`json
+- `Canvas.tsx`: Interactive SVG viewport for both Main Canvas (`PAGE` mode) and Component Canvas (`VECTOR` mode), pointer/keyboard event routing, selection marquee, transform/rotation/Bezier handle overlays, inline text editing, and snapping guides.
+- `artwork.tsx`: Shared Preact-safe kebab-case SVG node renderer with scoped `<mask id>` generation (`buildMaskElementId`) reused across Main Canvas, Component Canvas, Component Instances, and Component Rack thumbnails.
+- `canvas.css`: Canvas viewport, guide, handle, and overlay styling.
+- `geometry.ts`: Bounding boxes, snapping, alignment (`alignNodes`), distribution (`distributeNodes`), hit-testing, and coordinate transforms.
+- `geometryEngine.ts`: Mandatory validation and calculation gate (`evaluateToolOperation`, `evaluateToolOperationBatch`) between Studio Tools and the Native Command Engine. Enforces finite geometry, lock checks, ID uniqueness, zero-delta no-op filtering, inline text/eyedropper sanitization, and runtime-private symbol sealing (`ValidatedToolOperation`).
+- `tools/` (13 modules):
+  - `types.ts`: Tool context, pointer/keyboard input, transition, options, and preview state contracts.
+  - `registry.ts`: Wave 1 `canvasToolRegistry` (preserved for contract compatibility).
+  - `studioRegistry.ts`: Workspace-aware 26-tool registry supporting Main Canvas (`PAGE` mode) and Component Canvas (`VECTOR` mode) groups and shortcuts.
+  - `select.ts`: Selection, multi-selection, marquee, drag with snapping, 8-handle resize, rotation, and Direct Selection (`A`).
+  - `draw-tools.ts`: Frame (`F`), Section (`Shift+S`), Rectangle (`R`), Ellipse (`O`), Line (`L`), Arrow (`Shift+L`), Polygon (`G`), Star (`Shift+G`), and Text (`T`).
+  - `vector-tools.ts`: Pen (`P`), Curvature (`U`), Anchor Point (`Shift+C`), Pencil (`N`), Smooth (`Shift+N`), and Scissors (`C`).
+  - `utility-tools.ts`: Scale (`K`), Rotate (`Shift+R`), Eyedropper (`I`), and Precision Measure (`M`).
+  - `hand.ts`, `scrubby-zoom.ts`, `lasso-selection.ts`, `magic-wand.ts`, `shape-builder.ts`, and `geometry.ts` (tool-local geometry helpers).
+
+### `src/app` — Application shell, command orchestration & workspace UI (Implemented)
+
+- **State & Native Command Engine:**
+  - `editorStore.ts`: `CanonicalEditorStore` for `'main'` and `'component'` workspaces with deep-frozen state snapshots, monotonic `projectRevision`, history bounds, and `NativeChangeEvent` publication.
+  - `editorReducer.ts`: Internal pure state transition implementation invoked exclusively by `nativeCommandExecutor.ts` (no direct production bypasses).
+  - `nativeCommandRegistry.ts`: Closed static handler registry mapping all 29 commands across project, page, document, node, component, selection, and history scopes.
+  - `nativeCommandExecutor.ts`: Validates commands, resolves targets through `createDocumentAstView`, enforces workspace isolation, component CAS guards (`COMPONENT_CONFLICT`), lock/hierarchy preconditions, atomic multi-command transactions (`executeNativeCommandTransaction`) with single-step Undo collapse and rollback, and executor-authenticated rollbacks (`executeNativeSnapshotRollback`).
+  - `mainCanvasCommandClient.ts`: Typed `WorkspaceCommandClient` adapters (`createMainCanvasCommandClient`, `createComponentCanvasCommandClient`) exposing 100% Native Command Engine dispatch for both workspaces.
+  - `toolOperationExecutor.ts`: Consumes sealed `ValidatedToolOperation` items from `geometryEngine.ts` and dispatches them through `WorkspaceCommandClient`.
+- **Workspace shell & panels:**
+  - `App.tsx`: Top-level workspace coordinator (menu bar, tool rail, Main Canvas, Component Canvas, Pages Rack, Component Rack, Layers panel, Inspector, modal dialogs, keyboard shortcuts, and hydration lifecycle).
+  - `InspectorPanel.tsx`, `ToolOptionsBar.tsx`, `ToolbarHintBar.tsx`: Property inspector, context-sensitive tool/Pathfinder options bar, and shortcut hint bar (consuming contract types from `src/core/tools/operationContract.ts`).
+  - `FloatingWindow.tsx`, `windowManager.ts`, `panelResize.ts`, `workspacePreferences.ts`, `modalFocus.ts`, `editorContext.ts`: Window z-index layering, docked/floating geometry persistence, throttled resizable panels, focus trapping, and active workspace resolution.
+  - `ComponentThumbnail.tsx`: Live SVG component thumbnails backed by `src/engines/canvas/artwork.tsx`.
+- **Sync, persistence, clipboard & export orchestration:**
+  - `componentCanvasSync.ts`: Bidirectional master component edit session, buffer protection, and CAS reconciliation between Main Canvas and Component Canvas.
+  - `componentDeletion.ts`: Durable component deletion, recovery, and snapshot rollback orchestration.
+  - `debouncedAutosave.ts`: Revision-fenced debounced IndexedDB autosave controller.
+  - `projectFileActions.ts`, `projectExport.ts`, `visualExport.ts`, `nodeClipboard.ts`: Atomic `.flop` open/export (overlaying live Component Canvas edits without mutating canonical state), SVG/PNG visual export, and subtree clipboard copy/paste.
+
+### `scripts/` & `tests/` — Quality, benchmarks & verification (Implemented)
+
+- `scripts/studioBenchmark.ts` & `scripts/run-benchmark.mjs` (`npm run benchmark`): Reproducible performance benchmark measuring full scene render (`AST + Layers + SVG`), Hand pan (60 frames), Scrubby zoom (40 frames), single-node & 25-node drag (30 snap frames + Native Command commit/undo), and Pathfinder boolean operations (`unite`, `subtract`, `intersect`, `exclude`, compound 4-shape union) on multi-page realistic projects (`small`, `medium`, `large` up to 5 pages / 650 active-page nodes / 1,738 total nodes / 16 master components).
+- `tests/`: Unit and integration Vitest suites (`npm run test:unit`) covering AST, document validation/migrations, layers, vector/planar boolean math, components/overrides/sync/deletion, P0.1–P0.3 tool & subsystem boundary contracts, P1.1 Native Command zero-bypass enforcement, P1.2 lockfile & benchmark checks, plus headless Chromium browser acceptance tests (`npm run test:browser`).
+
+### Planned engines (Not yet implemented on disk)
+
+The following engine directories from the target blueprint do **not** exist in `src/engines/` yet and remain planned for later milestones:
+
+- `src/engines/layout`: Auto-layout calculation, responsive frames, and constraints.
+- `src/engines/prototype`: Node Logic authoring graph, ports, connections, state/API execution, and preview runtime.
+- `src/engines/animation`: Timeline, tracks, keyframes, easing, and playback.
+- `src/engines/history`: Scalable delta/command-log history engine (currently `CanonicalEditorStore` + `editorReducer` manage bounded immutable snapshot history).
+- `src/engines/codegen`: Deterministic AST-to-HTML/CSS/React/JS compiler respecting Generated, Mapped, Custom, and Extension/Override code boundaries.
+
+## Core architectural flows
+
+### 1. Unidirectional tool & geometry pipeline (P0.3)
+
+```text
+Pointer / Keyboard Input
+  -> Studio Tool (src/engines/canvas/tools/*) [local gesture & preview state only]
+  -> ToolOperation v1 Envelope (src/core/tools/operationContract.ts)
+  -> Geometry Engine Gate (src/engines/canvas/geometryEngine.ts) [finite math, locks, no-op filter, sealed ValidatedToolOperation]
+  -> Tool Operation Executor (src/app/toolOperationExecutor.ts)
+  -> WorkspaceCommandClient (src/app/mainCanvasCommandClient.ts)
+  -> Native Command Executor (src/app/nativeCommandExecutor.ts)
+  -> CanonicalEditorStore (src/app/editorStore.ts) [revision++, NativeChangeEvent]
+```
+
+### 2. Native Command Engine & dual-workspace isolation (P1.1)
+
+- **29 typed commands (`ALL_NATIVE_COMMAND_REGISTRY`):**
+  - **14 frozen Phase 2 commands (`NATIVE_COMMAND_REGISTRY`):** `node.create`, `node.update`, `node.move`, `node.resize`, `node.rotate`, `node.delete`, `node.duplicate`, `node.reorder`, `node.group`, `node.ungroup`, `node.set-visibility`, `node.set-lock`, `document.update`, `page.update`.
+  - **15 P1.1 commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`):** `project.replace`, `page.create`, `page.set-active`, `component.create`, `component.sync-document`, `component.rename`, `component.delete`, `node.replace-many`, `node.split`, `node.update-many`, `node.edit`, `selection.set`, `history.commit-edit`, `history.undo`, `history.redo`.
+- **Workspace isolation & concurrency:** Main Canvas (`workspace: 'main'`) and Component Canvas (`workspace: 'component'`) run independent `CanonicalEditorStore` instances. Master component sync uses expected revision / CAS checks (`COMPONENT_CONFLICT`), atomic transactions collapse multi-step operations into a single Undo entry, and failed transactions roll back completely.
+- **Event & revision semantics:** Project-mutating commands increment `projectRevision` monotonically and emit immutable `NativeChangeEvent` payloads. Editor-only commands (`selection.set`, `history.commit-edit`) update editor state without bumping `projectRevision` or emitting project change events.
+
+### 3. Native `.flop` v2 format, migration & persistence
+
+```json
 {
   "format": "folio-project",
   "formatVersion": 2,
@@ -67,75 +150,36 @@ Version 2 is UTF-8 JSON. The project is the aggregate root; it contains the acti
   "logicGraphs": [],
   "assets": []
 }
-\`\`\`
+```
 
-### Project aggregate contracts
+- **Migration & validation:** Version 1 files and IndexedDB records migrate via `migrateProjectV1ToV2` (wrapping the legacy document in `Main Page` at route `/` while retaining IDs and unknown extension fields). Version 2 validation verifies metadata, page/route uniqueness, active page, node hierarchy/styles, component documents, logic graphs, and assets.
+- **Atomic IndexedDB & File Menu workflow:** `File -> Open Project` (`src/app/projectFileActions.ts`) validates/migrates the file and writes the project record plus the `app-state` active-project pointer in one IndexedDB read-write transaction before dispatching `project.replace`. The reserved `folio-component-canvas` workspace ID is never treated as a root project.
+- **Immutable export:** `File -> Export Project` (`src/app/projectExport.ts`) overlays the live Component Canvas buffer onto the matching component definition in an immutable snapshot before validating and serializing `.flop` v2 JSON.
 
-- \`metadata\` identifies and versions the whole project.
-- \`activePageId\` must resolve to a page in \`pages\`. Restore falls back to the first page if an imported v2 project has a stale active-page reference.
-- Each \`FolioPage\` owns a unique route and a \`FolioDocument\`.
-- Each \`ComponentDefinition\` owns a document and stable identity within the project.
-- \`logicGraphs\` reserves typed nodes, connections and scope for the Node Logic milestone.
-- \`assets\` reserves project-scoped references. Embedded/binary asset packaging is a future extension.
+### 4. Workspace layering, preferences & shared SVG artwork
 
-## Migration and persistence
+- **Z-index bands (`src/app/windowManager.ts`, `src/app/FloatingWindow.tsx`):** Workspace windows (`main-canvas`, `component-canvas`, `node-logic`) stay in `120..125`; overlay racks (`pages-rack-panel`, `component-rack-panel`) at `300`; toolbar/tool rail at `1200`; dropdown menus at `1400`; toast at `1500`; root-mounted layer popovers at `1600`; hydration overlay at `2000`; modal hosts at `10000`.
+- **Local UI preferences (`src/app/workspacePreferences.ts`, `src/app/panelResize.ts`):** Window geometry, docked/floating mode, panel visibility, and resizable panel widths persist outside `.flop` files with schema validation, corrupt-storage recovery, and viewport clamping.
+- **Shared SVG renderer (`src/engines/canvas/artwork.tsx`, `src/app/ComponentThumbnail.tsx`):** Single kebab-case SVG rendering pipeline with scoped `<mask id>` prefixes (`buildMaskElementId`) preventing DOM ID collisions across nested instances and thumbnails.
 
-- Version 1 files and IndexedDB records are accepted at migration boundaries.
-- \`migrateProjectV1ToV2\` wraps the legacy single document in \`Main Page\` at route \`/\`, preserving document ID, dimensions, background and all nodes.
-- Version 2 validation checks page/route identity, active page, component documents, graph references and asset references.
-- IndexedDB keeps the existing project-store key path \`metadata.id\`; database version 2 adds a separate \`app-state\` store without rebuilding project records.
-- The active root project ID is persisted separately from project metadata and .flop files. Saving an imported project and updating this pointer happen in one read-write transaction, so the pointer cannot commit without the project record.
-- A missing or invalid active-project pointer falls back to the prior root-project selection by \`metadata.updatedAt\`. The reserved \`folio-component-canvas\` workspace is never considered a root project.
-- The active document is always resolved explicitly from \`pages\` using \`activePageId\`, falling back to \`pages[0]\` when recovering a stale v2 reference.
-- Autosave persists the canonical project aggregate. Native export validates and serializes an immutable snapshot, including the current Component Canvas buffer when a master component is open.
+## Build, dependency & quality foundation (P1.2)
 
-## Acceptance criteria for the unified project foundation
+- **Reproducible dependency graph:** Direct runtime and dev dependencies in `package.json` are pinned to exact versions and locked by a canonical `lockfileVersion: 3` `package-lock.json` with SHA-512 integrity hashes (`packageManager: "npm@10.9.8"`, `engines.node: ">=22.12.0 <27"`). `.nvmrc`, GitHub Actions (`ci.yml`, `deploy.yml`), and `.devcontainer/devcontainer.json` are aligned on `npm ci`.
+- **Verification commands:**
+  - `npm run check`: Strict TypeScript check (`tsc --noEmit`) across `src`, `tests`, `scripts`, and `vite.config.ts`.
+  - `npm run test:unit`: Fast Vitest unit/integration suite.
+  - `npm run test:browser`: Chromium browser acceptance suites (`tests/*.browser.test.mjs`).
+  - `npm test`: Complete Vitest suite (unit + browser).
+  - `npm run benchmark`: Reproducible large-project rendering & interaction benchmark (`--scale=small|medium|large`, `--json`).
+  - `npm run build`: Production Vite bundle (`dist/`).
 
-- A new project starts with \`Main Page\` at route \`/\`.
-- Every page and component definition is stored inside the project aggregate.
-- Switching pages changes \`activePageId\` without swapping project identity.
-- Undoable page/component mutations update the aggregate.
-- Version 1 project data migrates without losing document content.
-- Version 2 import validates before replacing editor state.
-- IndexedDB hydration completes before workspace controls can mutate project state.
-- Type checking, unit tests and production build pass.
+## Roadmap stages & current status
 
-## Native .flop File Menu Workflow
-
-- File → Open Project uses src/app/projectFileActions.ts and the existing readProjectFile adapter. After validation, the imported project and its active-project pointer are persisted atomically before editor replacement. Cancellation, failed import and failed persistence leave the previous active project untouched.
-- The active-project pointer is held in IndexedDB app-state rather than project metadata or native files. Invalid pointers use the legacy updatedAt-based root-project fallback.
-- The existing migration and validation functions remain the source of truth for supported v1/v2 formats. The v1 wrapper carries unknown top-level extension fields forward; document and node extension fields are retained by the existing migration copies.
-- File → Export Project validates and serializes an immutable aggregate snapshot. While editing a master, the current Component Canvas document buffer is overlaid into the matching component definition before serialization; the canonical project is not mutated and the .flop v2 format is unchanged.
-- replace-project creates a fresh editor state, clearing undo/redo and selection while retaining imported project metadata and stable IDs.
-
-## Native Command Core Phase 2 & P1.1 Full Project Mutation Migration
-
-- **Typed command contracts & runtime validation (`src/core/commands/types.ts`, `src/core/commands/validation.ts`):** Maintains the 14 frozen Phase 2 commands (`NATIVE_COMMAND_REGISTRY`) and extends the engine with 15 P1.1 commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`, 29 total in `ALL_NATIVE_COMMAND_REGISTRY`): `project.replace`, `page.create`, `page.set-active`, `component.create`, `component.sync-document`, `component.rename`, `component.delete`, `node.replace-many`, `node.split`, `node.update-many`, `node.edit`, `selection.set`, `history.commit-edit`, `history.undo`, and `history.redo` — each with strict own-key allowlists and finite runtime validation budgets.
-- **Closed static registry, atomic transactions & dual-workspace executor (`src/app/nativeCommandRegistry.ts`, `src/app/nativeCommandExecutor.ts`, `src/app/editorStore.ts`):** Resolves targets (`project`, `document`, `node`) through `createDocumentAstView` (`src/core/document/ast.ts`), enforces workspace isolation (`'main'` vs `'component'` `CanonicalEditorStore`), component CAS guards (`COMPONENT_CONFLICT`), effective lock/hierarchy preconditions, atomic multi-command transactions (`executeNativeCommandTransaction`) with single-step Undo collapse and full rollback on failure, and executor-authenticated rollbacks (`executeNativeSnapshotRollback`). Every project mutation increments `projectRevision` monotonically and publishes an immutable `NativeChangeEvent` across pages, components, and metadata; non-project commands (`selection.set`, `history.commit-edit`) update editor state without spurious revision bumps or project events.
-- **Zero-bypass workspace clients (`src/app/mainCanvasCommandClient.ts`, `src/app/App.tsx`, `src/app/componentDeletion.ts`, `src/app/toolOperationExecutor.ts`):** Both Main Canvas (`createMainCanvasCommandClient`) and Component Canvas (`createComponentCanvasCommandClient`) route 100% of canvas, tool, Inspector, Layers, Page, Project, Component/Instance, durable deletion/rollback, and Undo/Redo operations through the Native Command Engine. Static enforcement in `tests/p11NativeCommandMigration.test.ts` guarantees zero `dispatchLegacyAction()`, `useReducer(editorReducer, ...)`, direct `editorReducer()`, or raw `commitEditorTransition()` bypasses anywhere in production `src/`.
-
-## Workspace Window Management, Preferences & Shared SVG Artwork
-
-- **Workspace layering & window management (`src/app/windowManager.ts`, `src/app/FloatingWindow.tsx`):** Workspace windows (`main-canvas`, `component-canvas`, `node-logic`) share a bounded z-index band (`120..125`), while overlay racks (`pages-rack-panel`, `component-rack-panel` at `300`), application toolbar / tool rail (`1200`), dropdown menus (`1400`), toast (`1500`), root-mounted layer popovers (`1600`), hydration overlay (`2000`), and modal hosts (`10000`) occupy strictly separated layers.
-- **Local workspace preferences (`src/app/workspacePreferences.ts`):** Window geometry, docked/floating mode, and panel visibility persist in versioned local UI preference storage (outside `.flop` project files) with schema validation, legacy migration, corrupt-storage recovery, and small-viewport clamping.
-- **Shared SVG artwork & mask pipeline (`src/engines/canvas/artwork.tsx`, `src/app/ComponentThumbnail.tsx`):** Main Canvas, Component Canvas, linked Component Instances, and Component Rack live SVG thumbnails share one Preact-safe kebab-case SVG renderer with scoped `<mask id>` prefixes (`buildMaskElementId`) so clipping masks render inside component instances and thumbnails without DOM ID collisions.
-
-## Dual-Mode Studio Tool System & Native Vector Engine
-
-- **Native Document Primitives (`src/core/document/types.ts`, `src/core/document/vector.ts`, `src/core/document/factory.ts`, `src/core/document/validation.ts`, `src/core/commands/validation.ts`):** Extended the unified `.flop` v2 document model with `FrameNode` (`type: 'frame'`, `clipContent`, `isSection`) and cubic Bezier `PathNode` (`type: 'path'`, anchor points with optional `handleIn`/`handleOut`, `pointType`, open/closed contours, compound `subpaths`, arrowheads, dash/cap/join styles) with full runtime validation and Native Command v1 compatibility.
-- **Framework-Independent Vector Math & Pathfinder (`src/core/document/vector.ts`):** Implements deterministic SVG cubic Bezier serialization, bounding-box normalization, anchor/handle scaling, polygon/star/line generators, Catmull-Rom curvature fitting, Ramer-Douglas-Peucker freehand simplification, smooth brush relaxation, segment insertion, corner/smooth toggling, scissors path splitting, shape-to-path conversion (`rect`, rounded `rect`, `ellipse`, `frame`), horizontal/vertical flipping, and Illustrator-style Pathfinder booleans (`unite`, `subtract`, `intersect`, `exclude`).
-- **Workspace-Aware Studio Tool Registry (`src/engines/canvas/tools/studioRegistry.ts`, `draw-tools.ts`, `vector-tools.ts`, `utility-tools.ts`, `select.ts`):** Registers 26 studio tools while keeping the Wave 1 `canvasToolRegistry` (`registry.ts`) intact for contract compatibility. Main Canvas operates in Studio Indigo **`PAGE`** mode (Figma-grade Selection `V`, Direct Selection `A`, Scale `K`, Lasso `Q`, Magic Wand `Y`, Frame `F`, Section `Shift+S`, Rectangle `R`, Ellipse `O`, Line `L`, Arrow `Shift+L`, Polygon `G`, Star `Shift+G`, Pen `P`, Pencil `N`, Text `T`, Eyedropper `I`, Precision Measure `M`, Hand `H`, Scrubby Zoom `Z`, corner rotation, and double-click inline text editing). Component Canvas shifts into Warm Craft Amber **`VECTOR`** mode (Adobe Illustrator Vector Craft Studio surfacing Pen `P`, Curvature `U`, Anchor Point `Shift+C`, Pencil `N`, Smooth `Shift+N`, Scissors `C`, Rotate `Shift+R`, Scale `K`, live anchor/Bezier handle overlays, and the dedicated Pathfinder & Vector Craft bar via `src/app/ToolOptionsBar.tsx`).
-- **Strict Unidirectional Subsystem Boundary (`src/core/tools/operationContract.ts`, `src/engines/canvas/geometryEngine.ts`, `src/app/toolOperationExecutor.ts`):** Studio Tools own pointer/keyboard gestures and local preview state only, emitting versioned `folio.tool-operation` v1 envelopes (`ToolOperation`). Every commit flows one-way through the Geometry Engine validation gate (`evaluateToolOperation` / `evaluateToolOperationBatch`)—which validates finite geometry, locks, ID uniqueness, zero-delta no-ops, inline text, and eyedropper color updates and seals outputs with a runtime-private symbol (`ValidatedToolOperation`)—before reaching the Native Command Engine adapter (`createToolOperationExecutor` -> `WorkspaceCommandClient` for both Main Canvas and Component Canvas). UI panels (`ToolOptionsBar.tsx`, `InspectorPanel.tsx`) import only contract types from `src/core/tools/operationContract.ts`, and static import-graph tests (`tests/p03SubsystemBoundaries.test.ts`) enforce zero direct coupling between Studio Tools, UI panels, legacy reducers, and Native Engine internals.
-
-## Planned stages
-
-1. **Foundation:** application shell, AST, SVG canvas, local persistence and native file I/O.
-2. **Canvas & layout:** pointer selection, drag, eight resize handles, multi-selection, snapping, alignment, distribution, pan, zoom and interaction hardening.
-3. **Unified project v2:** multi-page project aggregate, component definitions, migrations, deterministic hydration and consolidated persistence.
-4. **Reusable component system:** master definitions, linked instances, properties and overrides.
-5. **Prototype / Node Logic:** typed graph nodes, ports, connections, events and runtime preview.
-6. **Animation:** timeline, tracks, keyframes, easing and playback.
-7. **Visual-to-Code:** deterministic HTML/CSS/React generation and route/logic compilation.
-8. **Professional workflows:** accessibility, performance profiling, plugins, collaboration and version history.
-
-Each stage must pass its acceptance tests before the next stage is considered complete.
+1. **Foundation (Implemented & Verified):** Application shell, AST, SVG canvas, IndexedDB persistence, and `.flop` v2 file I/O.
+2. **Canvas & studio tools (Implemented & Verified):** Dual-mode `PAGE` / `VECTOR` 26-tool registry, native cubic Bezier vector math, planar Pathfinder booleans, selection, resize, rotation, snapping, alignment, distribution, pan, zoom, and strict P0.3 unidirectional tool boundaries.
+3. **Unified project v2 & Native Command Engine (Implemented & Verified):** Multi-page project aggregate, migrations, deterministic hydration, reusable master components/instances/overrides, dual-workspace sync, durable deletion, and 29-command zero-bypass Native Command Engine (P1.1).
+4. **Long-term quality foundation (Implemented — P1.2):** Reproducible npm lockfile/CI configuration, automated rendering/interaction benchmark suite, and synchronized architecture documentation.
+5. **Prototype / Node Logic (Planned):** Typed graph nodes, ports, connections, events, state, API requests, and runtime preview.
+6. **Layout & Animation (Planned):** Auto-layout constraints engine, timeline, tracks, keyframes, easing, and playback.
+7. **Visual-to-Code (Planned):** Deterministic HTML/CSS/React generation preserving Generated/Mapped/Custom/Extension code categories.
+8. **Professional workflows (Planned):** Accessibility audits, profiling, plugins, collaboration, and scalable command history.

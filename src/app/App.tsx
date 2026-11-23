@@ -1322,8 +1322,10 @@ export function App() {
     );
     if (!component) return;
     mainCommandClient.createComponent(component, 'Create master component');
-    componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
-    setEditingComponentId(component.id);
+    const committedMaster = canonicalStore.getSnapshot().editorState.project.components
+      .find((item) => item.id === component.id) ?? component;
+    componentSyncSessionRef.current = createComponentCanvasSyncSession(committedMaster);
+    setEditingComponentId(committedMaster.id);
     setComponentRecoveryStatus('none');
     closePagesRack();
     setComponentRackOpen(true);
@@ -1419,7 +1421,9 @@ export function App() {
       updatedAt: now,
     };
     mainCommandClient.createComponent(component, 'Create new master component');
-    openMasterComponent(component);
+    const committedMaster = canonicalStore.getSnapshot().editorState.project.components
+      .find((item) => item.id === component.id) ?? component;
+    openMasterComponent(committedMaster);
   };
 
   const renameComponent = (componentId: string) => {
