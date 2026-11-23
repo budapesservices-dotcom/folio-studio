@@ -502,7 +502,7 @@ export function createWorkspaceCommandClient(
       // Single-node updates route through node.replace; multi-node updates route
       // through node.update-many while preserving atomic single-step undo history.
       const hasExtendedGeometryOrStyleChange = nodes.some((node) =>
-        hasExtendedNodeChange(astView.getNode(node.id), node),
+        hasExtendedNodeChange(astView.getNode(node.id) ?? undefined, node),
       );
       if (hasExtendedGeometryOrStyleChange) {
         if (nodes.length === 1) {

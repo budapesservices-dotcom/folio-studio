@@ -752,7 +752,7 @@ export function createToolOperationExecutor(options: ToolOperationExecutorOption
     const batchTransactionId = createBatchTransactionId();
     const astView = options.commandClient.getActiveAstView();
     const projectedNodesById = new Map<string, DesignNode>(
-      astView.document.nodes.map((node) => [node.id, node]),
+      astView.getPaintOrder().map((node) => [node.id, node]),
     );
 
     const commandEnvelopes: NativeCommandEnvelope<string, unknown>[] = [];

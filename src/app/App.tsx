@@ -93,6 +93,8 @@ import {
   type TemplateInsertMode,
 } from '../core/document/templates';
 import { TemplateLibraryPopover } from './TemplateLibraryPopover';
+import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
+import { isShortcutHelpTrigger } from './keyboardShortcuts';
 
 function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
@@ -151,6 +153,7 @@ function Icon({ name }: { name: string }) {
     eyedropper: 'm19 5-4 4m-1-5 6 6m-7-4-8.5 8.5a2 2 0 0 0-.5 1.1L3 21l5.4-1a2 2 0 0 0 1.1-.5L18 11',
     measure: 'M3 16 16 3l5 5L8 21 3 16zM8 11l2 2M11 8l2 2M14 5l2 2',
     templates: 'M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z',
+    keyboard: 'M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm3 4h1m3 0h1m3 0h1m3 0h1M6 13h1m3 0h4m3 0h1M7 16h10',
   };
 
   return (
@@ -300,6 +303,10 @@ export function App() {
   const deletionModalHostRef = useRef<HTMLDivElement | null>(null);
   const deletionDialogRef = useRef<HTMLElement | null>(null);
   const deletionFocusReturnRef = useRef<HTMLElement | null>(null);
+  const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
+  const shortcutsModalHostRef = useRef<HTMLDivElement | null>(null);
+  const shortcutsDialogRef = useRef<HTMLElement | null>(null);
+  const shortcutsFocusReturnRef = useRef<HTMLElement | null>(null);
   const [componentSaveStatus, setComponentSaveStatus] = useState<'saving' | 'saved' | 'error'>('saving');
   const [componentSaveError, setComponentSaveError] = useState<string | null>(null);
   const componentAutosave = useMemo(() => createDebouncedAutosave<FolioProject>(
@@ -428,6 +435,19 @@ export function App() {
   );
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [helpMenuOpen, setHelpMenuOpen] = useState(false);
+  const openShortcutsModal = useCallback(() => {
+    shortcutsFocusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setFileMenuOpen(false);
+    setViewMenuOpen(false);
+    setHelpMenuOpen(false);
+    setToolRackOpen(null);
+    setLayerContextMenu(null);
+    setShortcutsModalOpen(true);
+  }, []);
+  const closeShortcutsModal = useCallback(() => {
+    setShortcutsModalOpen(false);
+  }, []);
   const menuBarRef = useRef<HTMLDivElement | null>(null);
   const toolRailRef = useRef<HTMLElement | null>(null);
   const [panelWidths, setPanelWidths] = useState<PanelWidths>(() => loadPanelWidths());
@@ -536,10 +556,11 @@ export function App() {
   }));
 
   useLayoutEffect(() => {
-    if (!fileMenuOpen && !viewMenuOpen) return;
+    if (!fileMenuOpen && !viewMenuOpen && !helpMenuOpen) return;
     const closeMenus = () => {
       setFileMenuOpen(false);
       setViewMenuOpen(false);
+      setHelpMenuOpen(false);
     };
     const handlePointerDown = (event: PointerEvent) => {
       if (event.target instanceof Node && menuBarRef.current?.contains(event.target)) return;
@@ -555,7 +576,7 @@ export function App() {
     document.addEventListener('pointerdown', handlePointerDown, { capture: true, signal: controller.signal });
     window.addEventListener('keydown', handleKeyDown, { capture: true, signal: controller.signal });
     return () => controller.abort();
-  }, [fileMenuOpen, viewMenuOpen]);
+  }, [fileMenuOpen, viewMenuOpen, helpMenuOpen]);
 
   useLayoutEffect(() => {
     if (!toolRackOpen) return;
@@ -2663,9 +2684,14 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (isHydrating || componentDeletionDialogOpen) return;
+      if (isHydrating || componentDeletionDialogOpen || shortcutsModalOpen) return;
       const target = event.target instanceof Element ? event.target : null;
       if ((target instanceof HTMLElement && target.isContentEditable) || target?.matches('input, textarea, select, [contenteditable="true"]')) return;
+      if (isShortcutHelpTrigger(event)) {
+        event.preventDefault();
+        openShortcutsModal();
+        return;
+      }
       const context = getActiveEditorContext(activeEditorId, state, componentState);
       const activeClient = getCommandClient(activeEditorId);
       const layerStates = getEffectiveLayerStates(context.document.nodes);
@@ -2793,7 +2819,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeEditorId, editingComponentId, state, componentState, isHydrating, componentDeletionDialogOpen, getCommandClient]);
+  }, [activeEditorId, editingComponentId, state, componentState, isHydrating, componentDeletionDialogOpen, shortcutsModalOpen, openShortcutsModal, getCommandClient]);
 
 
   useEffect(() => {
@@ -2810,6 +2836,29 @@ export function App() {
       restoreFocus();
     };
   }, [componentDeletionDialogOpen, pendingComponentDeletion, componentCleanupPending, componentDeletionMode]);
+
+  useEffect(() => {
+    if (!shortcutsModalOpen || componentDeletionDialogOpen) return;
+    const shell = appShellRef.current;
+    const host = shortcutsModalHostRef.current;
+    const dialog = shortcutsDialogRef.current;
+    if (!shell || !host || !dialog) return;
+    const restoreFocus = activateModalDialog(shell, host, dialog, shortcutsFocusReturnRef.current);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key === '/') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeShortcutsModal();
+        return;
+      }
+      trapModalDialogKeydown(dialog, event, closeShortcutsModal);
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      restoreFocus();
+    };
+  }, [shortcutsModalOpen, componentDeletionDialogOpen, closeShortcutsModal]);
 
   const statusLabel = saveStatus === 'loading'
     ? 'LOADING'
@@ -2839,12 +2888,12 @@ export function App() {
         }
       }}
     >
-      <header class={`global-toolbar-slot ${fileMenuOpen || viewMenuOpen ? 'has-open-menu' : ''}`} aria-label="FOLIO application toolbar">
+      <header class={`global-toolbar-slot ${fileMenuOpen || viewMenuOpen || helpMenuOpen ? 'has-open-menu' : ''}`} aria-label="FOLIO application toolbar">
         <nav class="global-menu-bar" aria-label="Application menus">
           <div class="global-toolbar-left">
           <div class="global-menu-items" ref={menuBarRef}>
             <div class="global-menu-entry">
-              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={fileMenuOpen} onClick={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); setToolRackOpen(null); }} onMouseEnter={() => updateToolbarHint('FILE', 'Open or export the current native .flop project.')}>File</button>
+              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={fileMenuOpen} onClick={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); setHelpMenuOpen(false); setToolRackOpen(null); }} onMouseEnter={() => updateToolbarHint('FILE', 'Open or export the current native .flop project.')}>File</button>
               {fileMenuOpen && <div class="global-menu-dropdown" role="menu" aria-label="File menu">
                 <button type="button" role="menuitem" onClick={openProjectPicker} disabled={isHydrating}>Open Project…</button>
                 <button type="button" role="menuitem" onClick={exportCurrentProject} disabled={isHydrating}>Export Project (.flop)</button>
@@ -2888,7 +2937,7 @@ export function App() {
             <span class="global-menu-item is-disabled" aria-disabled="true" title="Edit menu (planned)" onMouseEnter={() => updateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}>Edit</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <div class="global-menu-entry">
-              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={viewMenuOpen} onClick={() => { setViewMenuOpen((open) => !open); setFileMenuOpen(false); setToolRackOpen(null); }} onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}>View</button>
+              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={viewMenuOpen} onClick={() => { setViewMenuOpen((open) => !open); setFileMenuOpen(false); setHelpMenuOpen(false); setToolRackOpen(null); }} onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}>View</button>
               {viewMenuOpen && <div class="global-menu-dropdown" role="menu" aria-label="View menu"><button type="button" role="menuitem" onClick={resetWindowLayout}>Reset Window Layout</button></div>}
             </div>
             <span class="global-menu-separator" aria-hidden="true">|</span>
@@ -2896,7 +2945,32 @@ export function App() {
             <span class="global-menu-separator" aria-hidden="true">|</span>
             <span class="global-menu-item is-disabled" aria-disabled="true" title="Option menu (planned)" onMouseEnter={() => updateToolbarHint('OPTION', 'Application and workspace preferences will be organized here.')}>Option</span>
             <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span class="global-menu-item is-disabled" aria-disabled="true" title="Help menu (planned)" onMouseEnter={() => updateToolbarHint('HELP', 'Keyboard reference, documentation and support will be organized here.')}>Help</span>
+            <div class="global-menu-entry">
+              <button
+                type="button"
+                class="global-menu-item menu-trigger"
+                aria-haspopup="menu"
+                aria-expanded={helpMenuOpen}
+                onClick={() => { setHelpMenuOpen((open) => !open); setFileMenuOpen(false); setViewMenuOpen(false); setToolRackOpen(null); }}
+                onMouseEnter={() => updateToolbarHint('HELP', 'Open the categorized Keyboard Shortcuts cheat sheet.', ['KEY: ?', 'CTRL/CMD + /'])}
+              >
+                Help
+              </button>
+              {helpMenuOpen && (
+                <div class="global-menu-dropdown" role="menu" aria-label="Help menu">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="global-menu-item-with-shortcut"
+                    onClick={openShortcutsModal}
+                    disabled={isHydrating}
+                  >
+                    <span>Keyboard Shortcuts</span>
+                    <kbd class="global-menu-shortcut">?</kbd>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           </div>
@@ -2963,7 +3037,22 @@ export function App() {
               <button class={`global-panel-toggle node-logic-header-toggle ${nodeLogicOpen ? 'active' : ''}`} type="button" title={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-label={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-pressed={nodeLogicOpen} onClick={() => { if (nodeLogicClosed || nodeLogicMinimized) openNodeLogic(); else { setNodeLogicClosed(true); setNodeLogicMinimized(false); } }} onMouseEnter={() => updateToolbarHint('NODE LOGIC', nodeLogicClosed || nodeLogicMinimized ? 'Open the Node Logic workspace.' : 'Close the Node Logic workspace.')}><Icon name="logicNodes" /></button>
             </div>
             <span class="global-panel-group-divider" aria-hidden="true" />
-            <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
+            <div class="global-panel-group" role="group" aria-label="Utilities">
+              <button
+                class={`global-panel-toggle shortcuts-header-toggle ${shortcutsModalOpen ? 'active' : ''}`}
+                type="button"
+                title="Keyboard Shortcuts (?)"
+                aria-label="Keyboard Shortcuts"
+                aria-haspopup="dialog"
+                aria-expanded={shortcutsModalOpen}
+                onClick={openShortcutsModal}
+                disabled={isHydrating}
+                onMouseEnter={() => updateToolbarHint('KEYBOARD SHORTCUTS', 'View all available keyboard shortcuts grouped by workspace and action.', ['KEY: ?', 'CTRL/CMD + /'])}
+              >
+                <Icon name="keyboard" />
+              </button>
+              <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
+            </div>
           </div>
         </nav>
         <ToolbarHintBar store={toolbarHintStore} />
@@ -3036,6 +3125,7 @@ export function App() {
                 onClick={() => {
                   setFileMenuOpen(false);
                   setViewMenuOpen(false);
+                  setHelpMenuOpen(false);
                   if (isSingleTool) {
                     chooseCanvasTool(group.tools[0], activeEditorId);
                   } else {
@@ -3093,6 +3183,7 @@ export function App() {
             onClick={() => {
               setFileMenuOpen(false);
               setViewMenuOpen(false);
+              setHelpMenuOpen(false);
               setToolRackOpen((current) => current === 'templates' ? null : 'templates');
             }}
             onMouseEnter={() => updateToolbarHint(
@@ -3850,6 +3941,14 @@ export function App() {
           </section>
         </div>
       )}
+
+      <KeyboardShortcutsModal
+        open={shortcutsModalOpen && !componentDeletionDialogOpen}
+        activeWorkspace={activeEditorId}
+        onClose={closeShortcutsModal}
+        hostRef={shortcutsModalHostRef}
+        dialogRef={shortcutsDialogRef}
+      />
 
       {isHydrating && (
         <div class="project-hydration-overlay" role="status" aria-live="polite">
