@@ -362,7 +362,21 @@ export interface DesignTokenCollection {
   tokens: DesignTokenDefinition[];
 }
 
-/** Reserved, versioned node graph contract for the upcoming Node Logic engine. */
+/** Typed primitive values supported by Node Logic v1 variables and data ports. */
+export type LogicValueType = 'string' | 'number' | 'boolean';
+export type LogicVariableValue = string | number | boolean;
+
+/** Declared graph-scoped or project-scoped variable for Node Logic v1. */
+export interface LogicVariableDefinition {
+  /** Stable internal variable ID independent of editable display name. */
+  id: string;
+  name: string;
+  valueType: LogicValueType;
+  initialValue: LogicVariableValue;
+  description?: string;
+}
+
+/** Versioned node graph contract for the Folio Node Logic engine (.flop v2 compatible). */
 export interface LogicNode {
   id: string;
   type: string;
@@ -384,6 +398,8 @@ export interface LogicGraph {
   name: string;
   scope: 'project' | 'page' | 'component';
   targetId: string | null;
+  /** Optional typed variables declared for this graph (omitted in legacy .flop v2 files). */
+  variables?: LogicVariableDefinition[];
   nodes: LogicNode[];
   connections: LogicConnection[];
   createdAt: string;

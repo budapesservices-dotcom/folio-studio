@@ -13,6 +13,7 @@ import type {
   FolioDocument,
   FolioPage,
   FolioProject,
+  LogicGraph,
 } from '../core/document/types';
 import type {
   NativeCommandContext,
@@ -44,6 +45,7 @@ export const WORKSPACE_USER_CAPABILITIES: readonly NativePermission[] = Object.f
   'component.delete',
   'tokens.update',
   'code.update',
+  'logic.update',
   'selection.update',
   'history.execute',
 ]);
@@ -180,6 +182,9 @@ export interface MainCanvasCommandClient {
     codeModules: readonly CodeModuleRecord[],
     description?: string,
   ): NativeCommandResult;
+  createLogicGraph(graph: LogicGraph, description?: string): NativeCommandResult;
+  updateLogicGraph(graph: LogicGraph, description?: string): NativeCommandResult;
+  deleteLogicGraph(graphId: string, description?: string): NativeCommandResult;
   createNodes(nodes: readonly DesignNode[], description?: string): NativeCommandResult;
   replaceNode(node: DesignNode, description?: string): NativeCommandResult;
   replaceNodes(
@@ -481,6 +486,36 @@ export function createWorkspaceCommandClient(
         stripUndefinedEntries({
           codeModules,
         }),
+        description,
+      );
+    },
+
+    createLogicGraph(graph, description = 'Create logic graph') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'logic.create-graph',
+        { kind: 'project', projectId },
+        stripUndefinedEntries({ graph }),
+        description,
+      );
+    },
+
+    updateLogicGraph(graph, description = 'Update logic graph') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'logic.update-graph',
+        { kind: 'project', projectId },
+        stripUndefinedEntries({ graph }),
+        description,
+      );
+    },
+
+    deleteLogicGraph(graphId, description = 'Delete logic graph') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'logic.delete-graph',
+        { kind: 'project', projectId },
+        { graphId },
         description,
       );
     },

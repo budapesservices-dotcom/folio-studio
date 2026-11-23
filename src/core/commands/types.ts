@@ -10,6 +10,7 @@ import type {
   FolioDocument,
   FolioPage,
   FolioProject,
+  LogicGraph,
 } from '../document/types';
 
 export type NativeWorkspace =
@@ -52,6 +53,7 @@ export type NativePermission =
   | 'component.delete'
   | 'tokens.update'
   | 'code.update'
+  | 'logic.update'
   | 'selection.update'
   | 'history.execute';
 
@@ -151,6 +153,18 @@ export interface TokensUpdatePayload {
 
 export interface CodeUpdateModulesPayload {
   codeModules: CodeModuleRecord[];
+}
+
+export interface LogicCreateGraphPayload {
+  graph: LogicGraph;
+}
+
+export interface LogicUpdateGraphPayload {
+  graph: LogicGraph;
+}
+
+export interface LogicDeleteGraphPayload {
+  graphId: string;
 }
 
 export interface NodeCreatePayload {
@@ -266,6 +280,9 @@ export type ComponentDeleteCommand = NativeCommandEnvelope<'component.delete', C
 export type ComponentUpdateContractCommand = NativeCommandEnvelope<'component.update-contract', ComponentUpdateContractPayload>;
 export type TokensUpdateCommand = NativeCommandEnvelope<'tokens.update', TokensUpdatePayload>;
 export type CodeUpdateModulesCommand = NativeCommandEnvelope<'code.update-modules', CodeUpdateModulesPayload>;
+export type LogicCreateGraphCommand = NativeCommandEnvelope<'logic.create-graph', LogicCreateGraphPayload>;
+export type LogicUpdateGraphCommand = NativeCommandEnvelope<'logic.update-graph', LogicUpdateGraphPayload>;
+export type LogicDeleteGraphCommand = NativeCommandEnvelope<'logic.delete-graph', LogicDeleteGraphPayload>;
 export type NodeCreateCommand = NativeCommandEnvelope<'node.create', NodeCreatePayload>;
 export type NodeReplaceCommand = NativeCommandEnvelope<'node.replace', NodeReplacePayload>;
 export type NodeReplaceManyCommand = NativeCommandEnvelope<'node.replace-many', NodeReplaceManyPayload>;
@@ -315,6 +332,9 @@ export type ExtendedNativeCommand =
   | ComponentUpdateContractCommand
   | TokensUpdateCommand
   | CodeUpdateModulesCommand
+  | LogicCreateGraphCommand
+  | LogicUpdateGraphCommand
+  | LogicDeleteGraphCommand
   | NodeReplaceManyCommand
   | NodeSplitCommand
   | NodeUpdateManyCommand
@@ -336,6 +356,9 @@ export type NativeCommandPayload =
   | ComponentUpdateContractPayload
   | TokensUpdatePayload
   | CodeUpdateModulesPayload
+  | LogicCreateGraphPayload
+  | LogicUpdateGraphPayload
+  | LogicDeleteGraphPayload
   | NodeCreatePayload
   | NodeReplacePayload
   | NodeReplaceManyPayload

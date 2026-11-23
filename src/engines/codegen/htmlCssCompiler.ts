@@ -30,6 +30,7 @@ import {
   toPageFileSlug,
 } from './sanitize';
 import type { CodeMappingEntry, CompiledCodeFile } from './types';
+import { buildLivePreviewLogicScript } from '../prototype/codegen';
 
 export function roundCss(value: number): number {
   return Math.round(value * 100) / 100;
@@ -709,6 +710,7 @@ export interface LivePreviewOptions {
   pageId?: string;
   themeId?: string;
   includeCustomScripts?: boolean;
+  includeLogicRuntime?: boolean;
 }
 
 /**
@@ -748,11 +750,21 @@ export function buildLivePreviewHtml(
     .filter((mod) => mod.language === 'css' && mod.mapping === 'extension' && (!mod.targetPageId || mod.targetPageId === page.id))
     .map((mod) => `/* Node Extension: ${mod.path} */\n${sanitizeCssText(mod.content)}`);
 
+  const logicScript =
+    options.includeLogicRuntime !== false
+      ? buildLivePreviewLogicScript(project, page)
+      : null;
+
   const customJsBlocks = options.includeCustomScripts
     ? modules
         .filter((mod) => mod.language === 'js' && (!mod.targetPageId || mod.targetPageId === page.id))
         .map((mod) => `/* Custom Script: ${mod.path} */\n${sanitizeJsText(mod.content)}`)
     : [];
+
+  const allScriptBlocks = [
+    ...(logicScript ? [logicScript] : []),
+    ...customJsBlocks,
+  ];
 
   const baseResetCss = [
     '*, *::before, *::after { box-sizing: border-box; }',
@@ -769,8 +781,8 @@ export function buildLivePreviewHtml(
     ...extensionCssBlocks,
   ].join('\n\n');
 
-  const scriptTag = customJsBlocks.length > 0
-    ? `\n  <script>\n${customJsBlocks.join('\n\n')}\n  </script>`
+  const scriptTag = allScriptBlocks.length > 0
+    ? `\n  <script>\n${allScriptBlocks.join('\n\n')}\n  </script>`
     : '';
 
   return [

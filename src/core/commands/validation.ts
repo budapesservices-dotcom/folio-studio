@@ -16,6 +16,7 @@ import {
   isComponentSlotsList,
   isComponentVariantsList,
   isDesignTokenCollection,
+  isLogicGraph,
   isNodeLayoutChildConfig,
   isNodeLayoutConfig,
   isNodeTokenBindings,
@@ -37,6 +38,9 @@ import type {
   LayerMoveManyPayload,
   LayerMovePayload,
   LayerUngroupPayload,
+  LogicCreateGraphPayload,
+  LogicDeleteGraphPayload,
+  LogicUpdateGraphPayload,
   NativeCommandEnvelope,
   NativeCommandSource,
   NativeCommandTarget,
@@ -1235,6 +1239,57 @@ export function validateCodeUpdateModulesPayload(
     ok: true,
     value: {
       codeModules: data.codeModules,
+    },
+  };
+}
+
+export function validateLogicCreateGraphPayload(
+  value: unknown,
+): ValidationOutcome<LogicCreateGraphPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['graph']) || !isLogicGraph(data.graph)) {
+    return invalid('INVALID_PAYLOAD', 'Creating a logic graph requires a valid Folio LogicGraph object.');
+  }
+  return {
+    ok: true,
+    value: {
+      graph: data.graph,
+    },
+  };
+}
+
+export function validateLogicUpdateGraphPayload(
+  value: unknown,
+): ValidationOutcome<LogicUpdateGraphPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['graph']) || !isLogicGraph(data.graph)) {
+    return invalid('INVALID_PAYLOAD', 'Updating a logic graph requires a valid Folio LogicGraph object.');
+  }
+  return {
+    ok: true,
+    value: {
+      graph: data.graph,
+    },
+  };
+}
+
+export function validateLogicDeleteGraphPayload(
+  value: unknown,
+): ValidationOutcome<LogicDeleteGraphPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['graphId']) || !isNonEmptyString(data.graphId, 128)) {
+    return invalid('INVALID_PAYLOAD', 'Deleting a logic graph requires a valid non-empty graphId.');
+  }
+  return {
+    ok: true,
+    value: {
+      graphId: data.graphId,
     },
   };
 }

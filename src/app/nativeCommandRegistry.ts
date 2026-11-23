@@ -13,6 +13,9 @@ import {
   validateLayerMoveManyPayload,
   validateLayerMovePayload,
   validateLayerUngroupPayload,
+  validateLogicCreateGraphPayload,
+  validateLogicDeleteGraphPayload,
+  validateLogicUpdateGraphPayload,
   validateNodeCreatePayload,
   validateNodeDeletePayload,
   validateNodeEditPayload,
@@ -402,6 +405,48 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
       return [{
         type: 'update-code-modules',
         codeModules: [...command.payload.codeModules],
+      }];
+    },
+  }),
+  'logic.create-graph': Object.freeze({
+    type: 'logic.create-graph' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'logic.update',
+    validatePayload: validateLogicCreateGraphPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'logic.create-graph') return [];
+      return [{
+        type: 'create-logic-graph',
+        graph: command.payload.graph,
+      }];
+    },
+  }),
+  'logic.update-graph': Object.freeze({
+    type: 'logic.update-graph' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'logic.update',
+    validatePayload: validateLogicUpdateGraphPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'logic.update-graph') return [];
+      return [{
+        type: 'update-logic-graph',
+        graph: command.payload.graph,
+      }];
+    },
+  }),
+  'logic.delete-graph': Object.freeze({
+    type: 'logic.delete-graph' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'logic.update',
+    validatePayload: validateLogicDeleteGraphPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'logic.delete-graph') return [];
+      return [{
+        type: 'delete-logic-graph',
+        graphId: command.payload.graphId,
       }];
     },
   }),

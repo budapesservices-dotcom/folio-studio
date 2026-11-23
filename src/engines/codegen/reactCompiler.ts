@@ -27,6 +27,7 @@ import {
   toPascalCase,
 } from './sanitize';
 import type { CodeMappingEntry, CompiledCodeFile } from './types';
+import { buildReactPageLogicPlan } from '../prototype/codegen';
 
 function escapeJsxText(value: string): string {
   return value
@@ -581,9 +582,14 @@ function buildPageReactFile(
     }
   }
 
+  const logicPlan = buildReactPageLogicPlan(project, page);
+  const reactImport = logicPlan.hasLogic
+    ? `import React, { useState${logicPlan.needsUseEffect ? ', useEffect' : ''} } from 'react';`
+    : "import React from 'react';";
+
   const lines: string[] = [
     `// Mapped by FOLIO Code Engine — Page "${page.name}" (${page.route})`,
-    "import React from 'react';",
+    reactImport,
   ];
 
   // Import Master Components before the page stylesheet so page layout rules (`.f-*`)
@@ -604,6 +610,9 @@ function buildPageReactFile(
 
   lines.push('');
   lines.push(`export function ${pageComponentName}() {`);
+  if (logicPlan.hasLogic) {
+    lines.push(...logicPlan.hookLines);
+  }
   lines.push('  return (');
   lines.push(`    <main className=${escapeTsString(`folio-page-${slug}`)} data-folio-page=${escapeTsString(page.id)}>`);
 
@@ -677,11 +686,27 @@ function buildPageReactFile(
           instanceProps.push(`overrides={${JSON.stringify(cleanedOverrides)}}`);
         }
 
-        if (needsScale) {
-          lines.push(
-            `${indent}<div className=${escapeTsString(cls)} data-folio-id=${escapeTsString(node.id)} data-folio-component=${escapeTsString(node.componentId)}>`,
-          );
-          lines.push(`${indent}  <${compName} ${instanceProps.join(' ')} />`);
+        const instanceEventAttrs = logicPlan.getNodeEventAttrs(node.id);
+        const instanceDynamicVisible = logicPlan.hasDynamicVisible(node.id);
+        const needsInteractiveWrapper = needsScale || instanceEventAttrs.length > 0 || instanceDynamicVisible;
+
+        if (needsInteractiveWrapper) {
+          const wrapperAttrs: string[] = [
+            `className=${escapeTsString(cls)}`,
+            `data-folio-id=${escapeTsString(node.id)}`,
+            `data-folio-component=${escapeTsString(node.componentId)}`,
+            ...instanceEventAttrs,
+          ];
+          if (instanceDynamicVisible) {
+            wrapperAttrs.push(
+              `style={{ ...(logicOverrides[${escapeTsString(node.id)}]?.visible === false ? { display: "none" } : logicOverrides[${escapeTsString(node.id)}]?.visible === true ? { display: "block" } : {}) }}`,
+            );
+          }
+          const innerProps = needsScale
+            ? instanceProps
+            : instanceProps.filter((prop) => !prop.startsWith('className='));
+          lines.push(`${indent}<div ${wrapperAttrs.join(' ')}>`);
+          lines.push(`${indent}  <${compName}${innerProps.length > 0 ? ` ${innerProps.join(' ')}` : ''} />`);
           lines.push(`${indent}</div>`);
         } else {
           lines.push(`${indent}<${compName} ${instanceProps.join(' ')} />`);
@@ -713,12 +738,38 @@ function buildPageReactFile(
     if (tag === 'button') {
       attrs.push('type="button"');
     }
+    attrs.push(...logicPlan.getNodeEventAttrs(node.id));
+
+    const logicStyleParts: string[] = [];
+    if (logicPlan.hasDynamicVisible(node.id)) {
+      const shownDisplay = node.layout?.mode === 'flex' ? 'flex' : node.layout?.mode === 'grid' ? 'grid' : 'block';
+      logicStyleParts.push(
+        `...(logicOverrides[${escapeTsString(node.id)}]?.visible === false ? { display: "none" } : logicOverrides[${escapeTsString(node.id)}]?.visible === true ? { display: ${escapeTsString(shownDisplay)} } : {})`,
+      );
+    }
+    const hasBoundFill = Boolean(resolveTokenCssVar(tokens, node.tokenBindings?.fill));
+    if (logicPlan.hasDynamicFill(node.id) && !hasBoundFill) {
+      if (node.type === 'text') {
+        logicStyleParts.push(`...(logicOverrides[${escapeTsString(node.id)}]?.fill ? { color: logicOverrides[${escapeTsString(node.id)}]?.fill } : {})`);
+      } else if (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') {
+        logicStyleParts.push(`...(logicOverrides[${escapeTsString(node.id)}]?.fill ? { background: logicOverrides[${escapeTsString(node.id)}]?.fill } : {})`);
+      }
+    }
+    if (logicStyleParts.length > 0) {
+      attrs.push(`style={{ ${logicStyleParts.join(', ')} }}`);
+    }
 
     if (node.type === 'text') {
-      lines.push(`${indent}<${tag} ${attrs.join(' ')}>${escapeJsxText(node.text)}</${tag}>`);
+      const textBody = logicPlan.hasDynamicText(node.id)
+        ? `{logicOverrides[${escapeTsString(node.id)}]?.text ?? ${escapeTsString(node.text)}}`
+        : escapeJsxText(node.text);
+      lines.push(`${indent}<${tag} ${attrs.join(' ')}>${textBody}</${tag}>`);
     } else if (node.type === 'path') {
+      const dynamicPathFill = logicPlan.hasDynamicFill(node.id)
+        ? `logicOverrides[${escapeTsString(node.id)}]?.fill`
+        : undefined;
       lines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
-      lines.push(...buildInlineJsxSvgLines(node, tokens, `${indent}  `));
+      lines.push(...buildInlineJsxSvgLines(node, tokens, `${indent}  `, dynamicPathFill));
       lines.push(`${indent}</${tag}>`);
     } else {
       const children = childrenByParent.get(node.id) ?? [];

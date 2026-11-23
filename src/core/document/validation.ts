@@ -35,7 +35,7 @@ const validatedFrozenNodes = new WeakSet<object>();
 const validatedFrozenDocuments = new WeakSet<object>();
 const validatedFrozenTokens = new WeakSet<object>();
 const validatedFrozenCodeModules = new WeakSet<object>();
-const validatedFrozenLogicGraphs = new WeakSet<object>();
+const validatedFrozenLogicGraphsContext = new WeakMap<object, { pages: unknown; components: unknown }>();
 const validatedFrozenAssets = new WeakSet<object>();
 const validatedFrozenComponentsContext = new WeakMap<object, unknown>();
 const validatedFrozenPagesContext = new WeakMap<object, { tokens: unknown; components: unknown }>();
@@ -572,27 +572,69 @@ export function validateProjectV1(input: unknown): LegacyValidationResult {
   return { ok: true, project: input as unknown as FolioProjectV1 };
 }
 
-function isLogicGraph(value: unknown): boolean {
-  if (!isRecord(value) || !isString(value.id) || !isString(value.name)) return false;
+const LOGIC_VALUE_TYPES = new Set(['string', 'number', 'boolean']);
+
+export function isLogicVariableDefinition(value: unknown): value is import('./types').LogicVariableDefinition {
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.trim().length === 0 || value.id.length > 128 ||
+    !isString(value.name) || value.name.trim().length === 0 || value.name.length > 128 ||
+    !isString(value.valueType) || !LOGIC_VALUE_TYPES.has(value.valueType)
+  ) {
+    return false;
+  }
+  if (value.description !== undefined && (!isString(value.description) || value.description.length > 512)) {
+    return false;
+  }
+  if (value.valueType === 'string') return typeof value.initialValue === 'string';
+  if (value.valueType === 'number') return isFiniteNumber(value.initialValue);
+  return typeof value.initialValue === 'boolean';
+}
+
+export function isLogicGraph(value: unknown): value is import('./types').LogicGraph {
+  if (!isRecord(value) || !isString(value.id) || value.id.trim().length === 0 || !isString(value.name) || value.name.trim().length === 0) return false;
   if (!['project', 'page', 'component'].includes(String(value.scope))) return false;
-  if (value.targetId !== null && !isString(value.targetId)) return false;
+  if (value.scope === 'project') {
+    if (value.targetId !== null) return false;
+  } else if (!isString(value.targetId) || value.targetId.trim().length === 0) {
+    return false;
+  }
   if (!isString(value.createdAt) || !isString(value.updatedAt)) return false;
   if (!Array.isArray(value.nodes) || !Array.isArray(value.connections)) return false;
 
+  if (value.variables !== undefined) {
+    if (!Array.isArray(value.variables)) return false;
+    const variableIds = new Set<string>();
+    const variableNames = new Set<string>();
+    for (const variable of value.variables) {
+      if (!isLogicVariableDefinition(variable)) return false;
+      const normalizedName = variable.name.trim().toLowerCase();
+      if (variableIds.has(variable.id) || variableNames.has(normalizedName)) return false;
+      variableIds.add(variable.id);
+      variableNames.add(normalizedName);
+    }
+  }
+
   const nodeIds = new Set<string>();
   for (const node of value.nodes) {
-    if (!isRecord(node) || !isString(node.id) || !isString(node.type) ||
+    if (!isRecord(node) || !isString(node.id) || node.id.trim().length === 0 ||
+        !isString(node.type) || node.type.trim().length === 0 ||
         !isFiniteNumber(node.x) || !isFiniteNumber(node.y) || !isRecord(node.data)) return false;
     if (nodeIds.has(node.id)) return false;
     nodeIds.add(node.id);
-    if (!Object.values(node.data).every((item) => item === null || ['string', 'number', 'boolean'].includes(typeof item))) return false;
+    if (!Object.values(node.data).every((item) =>
+      item === null ||
+      typeof item === 'string' ||
+      typeof item === 'boolean' ||
+      isFiniteNumber(item),
+    )) return false;
   }
 
   const connectionIds = new Set<string>();
   for (const connection of value.connections) {
-    if (!isRecord(connection) || !isString(connection.id) ||
-        !isString(connection.sourceNodeId) || !isString(connection.sourcePortId) ||
-        !isString(connection.targetNodeId) || !isString(connection.targetPortId) ||
+    if (!isRecord(connection) || !isString(connection.id) || connection.id.trim().length === 0 ||
+        !isString(connection.sourceNodeId) || !isString(connection.sourcePortId) || connection.sourcePortId.trim().length === 0 ||
+        !isString(connection.targetNodeId) || !isString(connection.targetPortId) || connection.targetPortId.trim().length === 0 ||
         !nodeIds.has(connection.sourceNodeId) || !nodeIds.has(connection.targetNodeId)) return false;
     if (connectionIds.has(connection.id)) return false;
     connectionIds.add(connection.id);
@@ -882,11 +924,42 @@ export function validateProject(input: unknown): ValidationResult {
   }
 
   const logicFrozen = deeplyFrozenObjects.has(input.logicGraphs as object);
-  if (!(logicFrozen && validatedFrozenLogicGraphs.has(input.logicGraphs as object))) {
-    if (!input.logicGraphs.every(isLogicGraph)) {
-      return { ok: false, error: 'One or more logic graphs contain invalid nodes or connections.' };
+  const pagesFrozen = deeplyFrozenObjects.has(input.pages as object);
+  const componentsFrozenForLogic = deeplyFrozenObjects.has(input.components as object);
+  const cachedLogicCtx = logicFrozen
+    ? validatedFrozenLogicGraphsContext.get(input.logicGraphs as object)
+    : undefined;
+  const logicContextValid = Boolean(
+    logicFrozen &&
+    pagesFrozen &&
+    componentsFrozenForLogic &&
+    cachedLogicCtx &&
+    cachedLogicCtx.pages === input.pages &&
+    cachedLogicCtx.components === input.components,
+  );
+  if (!logicContextValid) {
+    const graphIds = new Set<string>();
+    for (const graph of input.logicGraphs) {
+      if (!isLogicGraph(graph)) {
+        return { ok: false, error: 'One or more logic graphs contain invalid variables, nodes, or connections.' };
+      }
+      if (graphIds.has(graph.id)) {
+        return { ok: false, error: 'Logic graph IDs must be unique within a project.' };
+      }
+      graphIds.add(graph.id);
+      if (graph.scope === 'page' && (!graph.targetId || !pageIds.has(graph.targetId))) {
+        return { ok: false, error: `Logic graph "${graph.name}" references missing page "${String(graph.targetId)}".` };
+      }
+      if (graph.scope === 'component' && (!graph.targetId || !componentIds.has(graph.targetId))) {
+        return { ok: false, error: `Logic graph "${graph.name}" references missing component "${String(graph.targetId)}".` };
+      }
     }
-    if (logicFrozen) validatedFrozenLogicGraphs.add(input.logicGraphs as object);
+    if (logicFrozen && pagesFrozen && componentsFrozenForLogic) {
+      validatedFrozenLogicGraphsContext.set(input.logicGraphs as object, {
+        pages: input.pages,
+        components: input.components,
+      });
+    }
   }
 
   const assetsFrozen = deeplyFrozenObjects.has(input.assets as object);

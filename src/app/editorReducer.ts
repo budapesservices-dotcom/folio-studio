@@ -8,8 +8,10 @@ import type {
   FolioDocument,
   FolioPage,
   FolioProject,
+  LogicGraph,
   NodeTokenBindings,
 } from '../core/document/types';
+import { pruneLogicGraphsForDeletedComponent } from '../engines/prototype/validator';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { areDocumentsStructurallyEqual } from '../core/document/equality';
 import { classifyNodeChange } from '../core/document/nodeChanges';
@@ -63,6 +65,9 @@ export type EditorAction =
   | { type: 'update-component-contract'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[] }
   | { type: 'update-design-tokens'; designTokens: DesignTokenCollection; unbindTokenIds?: string[] }
   | { type: 'update-code-modules'; codeModules: CodeModuleRecord[] }
+  | { type: 'create-logic-graph'; graph: LogicGraph }
+  | { type: 'update-logic-graph'; graph: LogicGraph }
+  | { type: 'delete-logic-graph'; graphId: string }
   | { type: 'replace-project'; project: FolioProject }
   | { type: 'undo' }
   | { type: 'redo' };
@@ -477,7 +482,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ...page, document: replaceComponentInstancesInDocument(page.document, target, state.project.designTokens),
       }));
       const components = state.project.components.filter((component) => component.id !== action.componentId);
-      const next = touch({ ...state.project, pages, components });
+      const logicGraphs = pruneLogicGraphsForDeletedComponent(state.project.logicGraphs, action.componentId);
+      const next = touch({ ...state.project, pages, components, logicGraphs });
       const selected = existingSelection(next, state.selectedNodeIds);
       return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
     }
@@ -556,6 +562,49 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         delete nextProject.codeModules;
       }
       return withSnapshot(state, touch(nextProject));
+    }
+
+    case 'create-logic-graph': {
+      if (state.project.logicGraphs.some((graph) => graph.id === action.graph.id)) {
+        return state;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          logicGraphs: [...state.project.logicGraphs, action.graph],
+        }),
+      );
+    }
+
+    case 'update-logic-graph': {
+      const existing = state.project.logicGraphs.find((graph) => graph.id === action.graph.id);
+      if (!existing) return state;
+      if (JSON.stringify(existing) === JSON.stringify(action.graph)) {
+        return state;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          logicGraphs: state.project.logicGraphs.map((graph) =>
+            graph.id === action.graph.id ? action.graph : graph,
+          ),
+        }),
+      );
+    }
+
+    case 'delete-logic-graph': {
+      if (!state.project.logicGraphs.some((graph) => graph.id === action.graphId)) {
+        return state;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          logicGraphs: state.project.logicGraphs.filter((graph) => graph.id !== action.graphId),
+        }),
+      );
     }
 
     case 'replace-project':

@@ -53,6 +53,7 @@ const KNOWN_NATIVE_PERMISSIONS = new Set([
   'component.delete',
   'tokens.update',
   'code.update',
+  'logic.update',
   'selection.update',
   'history.execute',
 ]);
@@ -286,6 +287,9 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'component.update-contract':
     case 'tokens.update':
     case 'code.update-modules':
+    case 'logic.create-graph':
+    case 'logic.update-graph':
+    case 'logic.delete-graph':
     case 'node.create':
     case 'node.replace-many':
     case 'node.split':
@@ -331,6 +335,9 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'component.update-contract':
     case 'tokens.update':
     case 'code.update-modules':
+    case 'logic.create-graph':
+    case 'logic.update-graph':
+    case 'logic.delete-graph':
     case 'node.create':
     case 'node.set-properties':
     case 'selection.set':
@@ -895,6 +902,53 @@ function prepareCommandStep(
         expectedMasterDocument: current.document,
         expectedUpdatedAt: current.updatedAt,
       };
+    } else if (command.type === 'logic.create-graph') {
+      const graph = command.payload.graph;
+      if (project.logicGraphs.some((item) => item.id === graph.id)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'PRECONDITION_FAILED', `A logic graph with ID "${graph.id}" already exists.`),
+        };
+      }
+      if (graph.scope === 'page' && !project.pages.some((page) => page.id === graph.targetId)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', 'The target page for this logic graph does not exist.'),
+        };
+      }
+      if (graph.scope === 'component' && !project.components.some((comp) => comp.id === graph.targetId)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', 'The target component for this logic graph does not exist.'),
+        };
+      }
+    } else if (command.type === 'logic.update-graph') {
+      const graph = command.payload.graph;
+      if (!project.logicGraphs.some((item) => item.id === graph.id)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', `Logic graph "${graph.id}" does not exist in this project.`),
+        };
+      }
+      if (graph.scope === 'page' && !project.pages.some((page) => page.id === graph.targetId)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', 'The target page for this logic graph does not exist.'),
+        };
+      }
+      if (graph.scope === 'component' && !project.components.some((comp) => comp.id === graph.targetId)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', 'The target component for this logic graph does not exist.'),
+        };
+      }
+    } else if (command.type === 'logic.delete-graph') {
+      if (!project.logicGraphs.some((item) => item.id === command.payload.graphId)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', `Logic graph "${command.payload.graphId}" does not exist in this project.`),
+        };
+      }
     }
   }
 

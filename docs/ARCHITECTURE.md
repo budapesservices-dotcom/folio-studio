@@ -37,7 +37,7 @@ Folio is a browser-based, visual-first full-stack web development studio designe
 - **`src/core/kernels/`**
   - `types.ts`, `spatialIndex.ts`, `index.ts`: Pluggable, WASM-ready Compute Kernel Ports (`SpatialIndexKernel`, `VectorGeometryKernel`, `LayoutComputeKernel`, `getComputeKernels`, `registerComputeKernel`, `resetComputeKernels`) backed by optimized pure-TypeScript defaults including `FlatGridSpatialIndex` (flat `Float64Array` AABB buffer + cell grid hash + oversized fallback) for viewport culling and snap-candidate queries.
 - **`src/core/commands/`**
-  - `types.ts`: Native Command v1 envelope, 14 frozen Phase 2 commands (`NATIVE_COMMAND_REGISTRY`), 18 P1.1+ extended commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`, including `tokens.update`, `component.update-contract`, and `code.update-modules`, 32 total in `ALL_NATIVE_COMMAND_REGISTRY`), target descriptors, result/error unions, and `NativeChangeEvent` contracts.
+  - `types.ts`: Native Command v1 envelope, 14 frozen Phase 2 commands (`NATIVE_COMMAND_REGISTRY`), 21 P1.1+ extended commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`, including `tokens.update`, `component.update-contract`, `code.update-modules`, and `logic.create-graph` / `logic.update-graph` / `logic.delete-graph`, 35 total in `ALL_NATIVE_COMMAND_REGISTRY`), target descriptors, result/error unions, and `NativeChangeEvent` contracts.
   - `validation.ts`: Closed own-key allowlist and finite-budget runtime validation for all Native Commands.
 - **`src/core/tools/`**
   - `operationContract.ts`: Versioned `folio.tool-operation` v1 `ToolOperation` contract, `ToolOperationBatch`, `ToolOptionsChange`, `ToolFeedbackMessage`, `ValidatedToolOperation` sealed boundary types, and `extractToolOperationsFromTransition`.
@@ -80,6 +80,13 @@ Folio is a browser-based, visual-first full-stack web development studio designe
 
 - `deltaHistory.ts`, `index.ts`: O(changed nodes) structural diff/apply history engine (`computeProjectDelta`, `applyProjectDelta`, `createDeltaHistoryTimeline`, `pushProjectDelta`, `commitDeltaCoalesceGroup`, `undoProjectDelta`, `redoProjectDelta`, `countDeltaTouchedNodes`) supporting 200-step Undo/Redo timelines (`DEFAULT_DELTA_HISTORY_LIMIT = 200`) and coalescing without duplicating untouched pages/components.
 
+### `src/engines/prototype` — Node Logic v1 Core Engine & Contracts (Implemented)
+
+- `catalog.ts`: Framework-independent 17-node v1 catalog (`event.on-click`, `event.on-hover`, `event.on-page-load`, `event.on-state-change`, `state.get`, `state.set`, `state.toggle`, `state.increment`, `logic.branch`, `logic.compare`, `logic.template`, `action.set-visible`, `action.set-text`, `action.set-fill`, `action.set-variant`, `action.navigate`, `action.set-theme`), typed port compatibility rules (`exec` vs data ports), and typed graph/variable/node/connection factories serializing directly into `.flop` v2 `LogicGraph`.
+- `validator.ts`: Semantic graph validator (`validateLogicGraphSemantics`, `validateProjectLogicGraphs`, `auditOrphanLogicReferences`, `pruneLogicGraphsForDeletedComponent`) enforcing port compatibility, acyclic dataflow DAGs, AST/variant/theme/route cross-checks, CSS/URL injection guards, and non-fatal `UNSUPPORTED_NODE_TYPE` warnings preserving legacy/reserved `.flop` v2 nodes.
+- `runtime.ts`: Deterministic, zero-DOM, zero-`eval` headless `PrototypeRuntime` (`createPrototypeRuntime`, `interpolateLogicTemplate`) with finite step budgets (`MAX_LOGIC_EXECUTION_STEPS = 256`), typed state transitions, visual overrides, route/theme state, and execution traces.
+- `codegen.ts`, `index.ts`: Live Preview sandbox-safe micro-runtime compiler (`buildLivePreviewLogicScript` — zero `eval`, zero `innerHTML`, `</script` escape) and React Compiler hook/handler planner (`buildReactPageLogicPlan`).
+
 ### `src/app` — Application shell, command orchestration & workspace UI (Implemented)
 
 - **State & Native Command Engine:**
@@ -108,11 +115,11 @@ Folio is a browser-based, visual-first full-stack web development studio designe
 - `scripts/studioBenchmark.ts` & `scripts/run-benchmark.mjs` (`npm run benchmark`): Reproducible performance benchmark measuring full scene render (`AST + Layers + SVG`), Hand pan (60 frames), Scrubby zoom (40 frames), single-node & 25-node drag (30 snap frames + Native Command commit/undo), Pathfinder boolean operations (`unite`, `subtract`, `intersect`, `exclude`, compound 4-shape union), spatial viewport-culling + snap queries, and structural Delta History round-trips on multi-page realistic projects (`small`, `medium`, `large`, `xlarge` up to 5 pages / 1,500 active-page nodes / 16 master components).
 - `tests/`: Unit and integration Vitest suites (`npm run test:unit`) covering AST, document validation/migrations, incremental validation equivalence (`tests/incrementalValidation.test.ts`), Delta History timelines (`tests/deltaHistory.test.ts`), Compute Kernel Ports & spatial culling (`tests/computeKernels.test.ts`), layers, vector/planar boolean math, components/overrides/variants/slots/sync/deletion, web semantics/Auto-Layout/responsive breakpoints (`tests/webSemanticsAndLayout.test.ts`), design tokens & themes (`tests/designTokensAndComponentContract.test.ts`), workspace module pure logic & modularity boundaries (`tests/workspaceModules.test.ts`), P0.1–P0.3 tool & subsystem boundary contracts, P1.1 Native Command zero-bypass enforcement, P1.2 lockfile & benchmark checks, plus headless Chromium browser acceptance tests (`npm run test:browser`).
 
-### Planned engines (Not yet implemented on disk)
+### Planned engines & workspaces (Not yet implemented on disk)
 
-The following engine directories from the target blueprint do **not** exist in `src/engines/` yet and remain planned for later milestones:
+The following capabilities from the target blueprint are not yet implemented and remain planned for later milestones:
 
-- `src/engines/prototype`: Node Logic authoring graph, ports, connections, state/API execution, and preview runtime.
+- Visual Node Logic Graph Editor UI (v1.1 — drag-and-drop node canvas, wire editing, port inspector over `src/engines/prototype`).
 - `src/engines/animation`: Timeline, tracks, keyframes, easing, and playback.
 
 ## Core architectural flows
@@ -132,9 +139,9 @@ Pointer / Keyboard Input
 
 ### 2. Native Command Engine & dual-workspace isolation (P1.1)
 
-- **32 typed commands (`ALL_NATIVE_COMMAND_REGISTRY`):**
+- **35 typed commands (`ALL_NATIVE_COMMAND_REGISTRY`):**
   - **14 frozen Phase 2 commands (`NATIVE_COMMAND_REGISTRY`):** `project.rename`, `node.create`, `node.replace`, `node.transform`, `node.set-properties`, `node.rename`, `node.delete`, `node.set-canvas-state`, `layer.move`, `layer.move-many`, `layer.group`, `layer.ungroup`, `layer.create-clipping-mask`, `layer.remove-clipping-mask`.
-  - **18 extended P1.1+ commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`):** `project.replace`, `page.create`, `page.set-active`, `component.create`, `component.sync-document`, `component.rename`, `component.delete`, `component.update-contract`, `tokens.update`, `code.update-modules`, `node.replace-many`, `node.split`, `node.update-many`, `node.edit`, `selection.set`, `history.commit-edit`, `history.undo`, `history.redo`.
+  - **21 extended P1.1+ commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`):** `project.replace`, `page.create`, `page.set-active`, `component.create`, `component.sync-document`, `component.rename`, `component.delete`, `component.update-contract`, `tokens.update`, `code.update-modules`, `logic.create-graph`, `logic.update-graph`, `logic.delete-graph`, `node.replace-many`, `node.split`, `node.update-many`, `node.edit`, `selection.set`, `history.commit-edit`, `history.undo`, `history.redo`.
 - **Workspace isolation & concurrency:** Main Canvas (`workspace: 'main'`) and Component Canvas (`workspace: 'component'`) run independent `CanonicalEditorStore` instances. Master component sync uses expected revision / CAS checks (`COMPONENT_CONFLICT`), atomic transactions collapse multi-step operations into a single Undo entry, and failed transactions roll back completely.
 - **Event & revision semantics:** Project-mutating commands increment `projectRevision` monotonically and emit immutable `NativeChangeEvent` payloads. Editor-only commands (`selection.set`, `history.commit-edit`) update editor state without bumping `projectRevision` or emitting project change events.
 
@@ -201,7 +208,7 @@ Pointer / Keyboard Input
 3. **Unified project v2 & Native Command Engine (Implemented & Verified):** Multi-page project aggregate, migrations, deterministic hydration, reusable master components/instances/overrides, dual-workspace sync, durable deletion, and 32-command zero-bypass Native Command Engine (P1.1+).
 4. **Long-term quality foundation (Implemented & Verified — P1.2):** Reproducible npm `lockfileVersion: 3` `package-lock.json`, CI configuration, automated rendering/interaction benchmark suite, and synchronized architecture documentation.
 5. **Web Layout, Design Tokens, Component Contract & Code Engine Stabilization (Implemented & Verified locally):** Auto-Layout Flex/Grid & responsive breakpoints (`Desktop`/`Tablet`/`Mobile`), hardened Design Tokens with CSS injection protection and node binding validation, unified Component Contract precedence (`Master -> Variants -> Slots -> Local Overrides -> Tokens`) across Canvas/HTML/CSS/React, and complete React TSX + CSS compilation with Live Preview.
-6. **Engine Performance, Scalability & Architectural Hygiene (Implemented):** Incremental project validation, O(changed nodes) Delta History Engine (`src/engines/history`), WASM-ready Compute Kernel Ports (`src/core/kernels`) with `FlatGridSpatialIndex` viewport culling, modular `App.tsx` & `Canvas.tsx` decomposition, and Vite code-splitting.
-7. **Prototype / Node Logic (Planned):** Typed graph nodes, ports, connections, events, state, API requests, and runtime preview.
+6. **Engine Performance, Scalability & Architectural Hygiene (Implemented & Verified locally):** Incremental project validation, O(changed nodes) Delta History Engine (`src/engines/history`), WASM-ready Compute Kernel Ports (`src/core/kernels`) with `FlatGridSpatialIndex` viewport culling, modular `App.tsx` & `Canvas.tsx` decomposition, and Vite code-splitting.
+7. **Prototype / Node Logic v1 — Core Engine & Data Contracts (Implemented):** `.flop` v2-compatible `LogicGraph` + typed `variables`, 17-node typed catalog, semantic DAG/AST/security validator, zero-bypass Native Commands (`logic.create-graph`, `logic.update-graph`, `logic.delete-graph`), deterministic headless `PrototypeRuntime`, and Live Preview / React codegen integration. *(Visual Node Graph Editor UI remains Planned v1.1.)*
 8. **Animation (Planned):** Timeline, tracks, keyframes, easing, and playback.
 9. **Professional workflows (Planned):** Accessibility audits, profiling, plugins, and real-time collaboration.
