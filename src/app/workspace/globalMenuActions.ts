@@ -28,6 +28,7 @@ export interface BuildGlobalToolbarMenuActionsArgs {
   onConvertToPath: (target: EditorTarget) => void;
   onRotate90: (target: EditorTarget) => void;
   onUpdateDesignTokens: (next: DesignTokenCollection, unbindTokenIds?: string[], description?: string) => void;
+  onDeleteSelected?: (target: EditorTarget, nodeIds: string[]) => void;
   onNotice: (message: string) => void;
 }
 
@@ -52,6 +53,7 @@ export function buildGlobalToolbarMenuActions({
   onConvertToPath,
   onRotate90,
   onUpdateDesignTokens,
+  onDeleteSelected,
   onNotice,
 }: BuildGlobalToolbarMenuActionsArgs): GlobalToolbarMenuActions {
   const layerCapabilities = getLayerContextMenuCapabilities(focusedDocument.nodes, focusedSelectedNodeIds);
@@ -96,7 +98,10 @@ export function buildGlobalToolbarMenuActions({
     onRemoveMask: () => {
       if (layerCapabilities.rootIds[0]) focusedCommandClient.removeClippingMask(layerCapabilities.rootIds[0]);
     },
-    onDelete: () => focusedCommandClient.deleteNodes(focusedSelectedNodeIds),
+    onDelete: () => {
+      if (onDeleteSelected) onDeleteSelected(activeEditorId, focusedSelectedNodeIds);
+      else focusedCommandClient.deleteNodes(focusedSelectedNodeIds);
+    },
     onZoomIn: () => setActiveZoom((current) => stepCanvasZoom(current, 'in')),
     onZoomOut: () => setActiveZoom((current) => stepCanvasZoom(current, 'out')),
     onZoomReset: () => setActiveZoom(1),

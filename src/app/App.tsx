@@ -3,6 +3,7 @@ import { lazy, Suspense } from 'preact/compat';
 import type { JSX } from 'preact';
 import { createInitialProject } from '../core/document/factory';
 import { getComponentOverrideTargets } from '../core/document/components';
+import { findCrossStudioNodeReferences, formatLayerDeletionCleanupNotice } from '../core/document/nodeReferenceCleanup';
 import { getActiveDocument, getActivePage } from '../core/document/project';
 import {
   getStudioTool,
@@ -562,6 +563,22 @@ export function App() {
     ? (state.project.components.find((item) => item.id === componentMaster.pendingComponentOpenId)?.name ?? 'another master')
     : null;
 
+  const activePage = getActivePage(state.project);
+  const deleteLayersSafely = useCallback((editorId: EditorTarget, nodeIds: string[]) => {
+    const refs = editorId === 'main' ? findCrossStudioNodeReferences(state.project, nodeIds, activePage.id) : null;
+    const names = editorId === 'main'
+      ? activePage.document.nodes.filter((n) => nodeIds.includes(n.id)).map((n) => n.name)
+      : [];
+    const result = getCommandClient(editorId).deleteNodes(nodeIds);
+    if (result.status === 'applied' && refs && refs.totalCount > 0) {
+      const msg = formatLayerDeletionCleanupNotice(names, {
+        logicCount: refs.logicBindings.length,
+        motionCount: refs.animationTracks.length,
+      });
+      if (msg) setNotice(msg);
+    }
+  }, [state.project, activePage, getCommandClient]);
+
   const globalMenuActions = buildGlobalToolbarMenuActions({
     activeEditorId,
     focusedDocument,
@@ -583,11 +600,12 @@ export function App() {
     onConvertToPath: selectionActions.handleConvertToPath,
     onRotate90: selectionActions.handleRotate90,
     onUpdateDesignTokens: designSystem.updateDesignTokens,
+    onDeleteSelected: deleteLayersSafely,
     onNotice: setNotice,
   });
-  const activePage = getActivePage(state.project);
   const motion = useMotionPlayback({ project: state.project, activePage, selectedNodeIds: state.selectedNodeIds, mainCommandClient, onNotice: setNotice });
   const openLivePreviewForPage = useCallback((pageId?: string) => {
+    setActiveEditorId('main');
     setCodeWorkspaceLaunch((current) => ({ viewMode: 'preview', pageId, nonce: current.nonce + 1 }));
     setCodeWorkspaceOpen(true);
   }, []);
@@ -698,8 +716,8 @@ export function App() {
           if (windows.nodeLogicClosed || windows.nodeLogicMinimized) windows.openNodeLogic();
           else { windows.setNodeLogicClosed(true); windows.setNodeLogicMinimized(false); }
         }}
-        onToggleCodeWorkspace={() => setCodeWorkspaceOpen((open) => !open)}
-        onToggleMotionTimeline={motion.toggleMotionOpen}
+        onToggleCodeWorkspace={() => setCodeWorkspaceOpen((open) => { if (!open) setActiveEditorId('main'); return !open; })}
+        onToggleMotionTimeline={() => { if (!motion.motionOpen) setActiveEditorId('main'); motion.toggleMotionOpen(); }}
         onEnterFullscreen={enterFullscreen}
         onUpdateToolbarHint={updateToolbarHint}
       />
@@ -896,10 +914,10 @@ export function App() {
         onOpenLivePreview={openLivePreviewForPage}
         onPositionChange={windows.setNodeLogicPosition}
         onSizeChange={windows.setNodeLogicSize}
-        onFocus={() => windows.focusWindow('node-logic')}
+        onFocus={() => { windows.focusWindow('node-logic'); setActiveEditorId('main'); }}
         onHoverHint={() => updateToolbarHint('NODE LOGIC', 'Build interactive event, state, logic, and action flows connected to Live Preview.')}
         onMinimize={() => windows.setNodeLogicMinimized(true)}
-        onRestore={() => windows.setNodeLogicMinimized(false)}
+        onRestore={() => { windows.setNodeLogicMinimized(false); setActiveEditorId('main'); windows.focusWindow('node-logic'); }}
         onToggleFloating={() => windows.setNodeLogicWindowMode(windows.nodeLogicFloating ? 'docked' : 'floating')}
         onClose={() => {
           windows.setNodeLogicClosed(true);
@@ -1065,12 +1083,22 @@ export function App() {
             : 'layer'
         }
         capabilities={layers.contextMenuCapabilities}
+        referenceWarning={
+          layers.layerContextMenu?.editorId === 'main'
+            ? (() => {
+              const refs = findCrossStudioNodeReferences(state.project, layers.layerContextMenu.nodeIds, activePage.id);
+              return refs.totalCount > 0
+                ? { logicCount: refs.logicBindings.length, motionCount: refs.animationTracks.length }
+                : null;
+            })()
+            : null
+        }
         onRename={(nodeId) => { layers.setLayerContextMenu(null); layers.beginLayerRename(nodeId, false); }}
         onGroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).groupLayers(rootIds); }}
         onUngroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).ungroupLayers(rootIds); }}
         onCreateClippingMask={(editorId, rootId) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).createClippingMask(rootId); }}
         onRemoveClippingMask={(editorId, rootId) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).removeClippingMask(rootId); }}
-        onDelete={(editorId, nodeIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).deleteNodes(nodeIds); }}
+        onDelete={(editorId, nodeIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; deleteLayersSafely(editorId, nodeIds); }}
       />
 
       {motion.motionOpen && (
@@ -1094,6 +1122,7 @@ export function App() {
             onKeyframeSelected={() => motion.keyframeSelectedLayers()}
             onOpenLivePreview={openLivePreviewForPage}
             onSelectCanvasNode={(nodeId) => { setActiveEditorId('main'); mainCommandClient.selectNodes([nodeId], 'Select animated layer'); }}
+            onFocusStudio={() => setActiveEditorId('main')}
             onClose={motion.closeMotion}
           />
         </Suspense>

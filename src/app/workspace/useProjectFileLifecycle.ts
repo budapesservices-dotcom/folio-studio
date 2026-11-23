@@ -75,13 +75,18 @@ export function useProjectFileLifecycle({
     return () => { active = false; };
   }, [mainCommandClient]);
 
-  // Revision-fenced debounced autosave for primary project
+  // Revision-fenced debounced autosave for primary project with pagehide/visibility flush
   useEffect(() => {
     if (!isProjectLoaded) return;
     setSaveStatus('saving');
     const projectRevision = getCanonicalRevision();
     const canonicalProject = getCanonicalProject();
-    const timer = window.setTimeout(() => {
+    let flushed = false;
+
+    const persistNow = () => {
+      if (flushed) return;
+      flushed = true;
+      window.clearTimeout(timer);
       saveProjectIfRevisionCurrent(
         canonicalProject,
         projectRevision,
@@ -97,8 +102,19 @@ export function useProjectFileLifecycle({
           console.error('Folio autosave failed:', error);
           setRevisionFencedAutosaveStatus(projectRevision, getCanonicalRevision, 'error', setSaveStatus);
         });
-    }, 450);
-    return () => window.clearTimeout(timer);
+    };
+
+    const timer = window.setTimeout(persistNow, 450);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') persistNow();
+    };
+    window.addEventListener('pagehide', persistNow);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('pagehide', persistNow);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [project, isProjectLoaded, getCanonicalRevision, getCanonicalProject, subscribeCanonicalStore]);
 
   const handleProjectFileSelected = async (file: File) => {

@@ -437,8 +437,9 @@ export function useWorkspaceWindows({
     recoverWindow('node-logic');
     setNodeLogicClosed(false);
     setNodeLogicMinimized(false);
+    setActiveEditorId('main');
     focusWindow('node-logic');
-  }, [recoverWindow, focusWindow]);
+  }, [recoverWindow, setActiveEditorId, focusWindow]);
 
   const approveWorkspacePreferencesReview = useCallback(() => {
     setWorkspacePreferencesReviewRequired(false);

@@ -81,6 +81,7 @@ export interface LayerContextMenuProps {
   menuRef: RefObject<HTMLDivElement>;
   targetNodeName: string;
   capabilities: LayerContextMenuCapabilities;
+  referenceWarning?: { logicCount: number; motionCount: number } | null;
   onRename: (nodeId: string) => void;
   onGroup: (editorId: EditorTarget, rootIds: string[]) => void;
   onUngroup: (editorId: EditorTarget, rootIds: string[]) => void;
@@ -99,6 +100,7 @@ export function LayerContextMenu({
   menuRef,
   targetNodeName,
   capabilities,
+  referenceWarning,
   onRename,
   onGroup,
   onUngroup,
@@ -107,6 +109,20 @@ export function LayerContextMenu({
   onDelete,
 }: LayerContextMenuProps) {
   if (!menu) return null;
+
+  const hasRefWarning = Boolean(
+    referenceWarning && (referenceWarning.logicCount > 0 || referenceWarning.motionCount > 0),
+  );
+  const refBadgeParts: string[] = [];
+  if (referenceWarning && referenceWarning.logicCount > 0) {
+    refBadgeParts.push(`${referenceWarning.logicCount} Logic`);
+  }
+  if (referenceWarning && referenceWarning.motionCount > 0) {
+    refBadgeParts.push(`${referenceWarning.motionCount} Motion`);
+  }
+  const deleteTitle = hasRefWarning
+    ? `Used in ${refBadgeParts.join(' and ')}. Deleting will safely unbind Node Logic nodes and remove Motion tracks (Undo restores everything).`
+    : undefined;
 
   return (
     <div
@@ -144,10 +160,17 @@ export function LayerContextMenu({
       <button
         type="button"
         role="menuitem"
-        class="layer-context-menu-danger"
+        class={`layer-context-menu-danger${hasRefWarning ? ' has-ref-warning' : ''}`}
+        title={deleteTitle}
         onClick={() => onDelete(menu.editorId, menu.nodeIds)}
       >
-        <StudioIcon name="trash" /> Delete{menu.nodeIds.length > 1 ? ` (${menu.nodeIds.length})` : ''}
+        <StudioIcon name="trash" />
+        <span>Delete{menu.nodeIds.length > 1 ? ` (${menu.nodeIds.length})` : ''}</span>
+        {hasRefWarning && (
+          <span class="layer-context-ref-badge" aria-label={`Referenced by ${refBadgeParts.join(' and ')}`}>
+            {refBadgeParts.join(' · ')}
+          </span>
+        )}
       </button>
     </div>
   );

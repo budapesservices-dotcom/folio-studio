@@ -46,6 +46,7 @@ export interface MotionTimelinePanelProps {
   onKeyframeSelected: () => void;
   onOpenLivePreview: (pageId?: string) => void;
   onSelectCanvasNode: (nodeId: string) => void;
+  onFocusStudio?: () => void;
   onClose: () => void;
 }
 
@@ -82,6 +83,7 @@ export function MotionTimelinePanel({
   onKeyframeSelected,
   onOpenLivePreview,
   onSelectCanvasNode,
+  onFocusStudio,
   onClose,
 }: MotionTimelinePanelProps) {
   const nodes = activePage.document.nodes;
@@ -300,6 +302,8 @@ export function MotionTimelinePanel({
       class="motion-timeline-dock"
       aria-label="Motion Timeline Studio"
       data-testid="motion-timeline"
+      onPointerDown={() => onFocusStudio?.()}
+      onFocus={() => onFocusStudio?.()}
     >
       <header class="mt-header">
         <div class="mt-header-group mt-clip-controls">

@@ -22,6 +22,7 @@ import {
   replaceComponentInstancesInDocument,
 } from '../core/document/components';
 import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, collapseLegacyCanvasInstances, type LayerDropPosition } from '../core/document/layers';
+import { cleanupDeletedNodeReferences } from '../core/document/nodeReferenceCleanup';
 
 const HISTORY_LIMIT = 60;
 
@@ -383,8 +384,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const ids = new Set(action.nodeIds);
       const nodes = removeNodesFromLayers(document.nodes, ids);
       if (nodes.length === document.nodes.length) return state;
-      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       const remainingIds = new Set(nodes.map((node) => node.id));
+      const actuallyRemovedIds = new Set(
+        document.nodes.filter((node) => !remainingIds.has(node.id)).map((node) => node.id),
+      );
+      const cleanedProject = cleanupDeletedNodeReferences(
+        updateActiveDocument(state.project, { ...document, nodes }),
+        actuallyRemovedIds,
+        state.project.activePageId,
+      ).project;
+      const next = touch(cleanedProject);
       const selected = state.selectedNodeIds.filter((id) => remainingIds.has(id));
       return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
     }
@@ -392,8 +401,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'delete-node': {
       const nodes = removeNodesFromLayers(document.nodes, [action.nodeId]);
       if (nodes.length === document.nodes.length) return state;
-      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
       const remainingIds = new Set(nodes.map((node) => node.id));
+      const actuallyRemovedIds = new Set(
+        document.nodes.filter((node) => !remainingIds.has(node.id)).map((node) => node.id),
+      );
+      const cleanedProject = cleanupDeletedNodeReferences(
+        updateActiveDocument(state.project, { ...document, nodes }),
+        actuallyRemovedIds,
+        state.project.activePageId,
+      ).project;
+      const next = touch(cleanedProject);
       const selected = state.selectedNodeIds.filter((id) => remainingIds.has(id));
       return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
     }

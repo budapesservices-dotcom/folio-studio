@@ -1275,6 +1275,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .layer-context-menu button:hover{background:#ffffff12;color:#fff}
 .layer-context-menu .layer-context-menu-danger{color:#ff8585}
 .layer-context-menu .layer-context-menu-danger:hover{background:#5a292f;color:#ffaaaa}
+.layer-context-menu .layer-context-ref-badge{margin-left:auto;padding:1px 5px;border:1px solid rgba(245,158,11,0.45);border-radius:4px;background:rgba(245,158,11,0.14);color:#fbbf24;font-size:9px;font-weight:600;letter-spacing:0.01em;white-space:nowrap}
 .layer-context-menu .icon-svg{width:14px;height:14px}
 .layer-context-menu-separator{height:1px;margin:4px 5px;background:#3a4353}
 
@@ -4046,6 +4047,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   padding: 16px;
   display: flex;
   justify-content: center;

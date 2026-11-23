@@ -209,6 +209,7 @@ export function saveProjectAndActivate(input: FolioProject): Promise<void> {
   const project = requireValidProject(input);
   return enqueueProjectWrite(async () => {
     await persistProjectUnlocked(project, true);
+    persistedProjectRevisions.delete(project.metadata.id);
   });
 }
 
@@ -468,29 +469,37 @@ export async function loadMostRecentProject(): Promise<FolioProject | null> {
     ? rootRecords.find((stored) => (stored as { metadata: { id: string } }).metadata.id === activeProjectId)
     : undefined;
 
-  // Ignore dangling, malformed and reserved-workspace pointers. The legacy
-  // updatedAt ordering remains the fallback when no valid root record matches.
+  // Ignore dangling, malformed and reserved-workspace pointers. Fall back across
+  // candidates in newest-first order so a single corrupted record never blocks
+  // recovery of an older valid autosave.
   let baseStored: unknown | undefined;
-  if (pointedProject) {
+  let project: FolioProject | null = null;
+  const orderedCandidates = pointedProject
+    ? [pointedProject, ...candidates.filter((item) => item !== pointedProject)]
+    : candidates;
+  for (const candidate of orderedCandidates) {
     try {
-      migrateProjectToV2(pointedProject);
-      baseStored = pointedProject;
+      project = migrateProjectToV2(candidate);
+      baseStored = candidate;
+      break;
     } catch {
-      baseStored = undefined;
+      continue;
     }
   }
-  baseStored ??= candidates[0];
-  if (!baseStored) return null;
+  if (!baseStored || !project) return null;
 
-  let project = migrateProjectToV2(baseStored);
   const legacyPageRecords = records
     .filter((stored) => {
       const id = (stored as { metadata: { id: string } }).metadata.id;
-      return id.startsWith('folio-page-') && id !== project.metadata.id;
+      return id.startsWith('folio-page-') && id !== project!.metadata.id;
     })
-    .map((stored) => {
+    .flatMap((stored) => {
       const id = (stored as { metadata: { id: string } }).metadata.id;
-      return { id, metadata: (stored as { metadata: { id: string } }).metadata, project: migrateProjectToV2(stored) };
+      try {
+        return [{ id, metadata: (stored as { metadata: { id: string } }).metadata, project: migrateProjectToV2(stored) }];
+      } catch {
+        return [];
+      }
     });
 
   const isLegacyProject = (baseStored as { formatVersion?: unknown }).formatVersion !== 2;

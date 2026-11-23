@@ -47,15 +47,56 @@ export function LivePreviewPane({
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
-    const measure = () => {
-      const next = el.clientWidth;
-      if (next > 0) setStageWidth(next);
+
+    let rafId: number | null = null;
+    let disposed = false;
+
+    const commitWidth = () => {
+      if (disposed) return;
+      const measured = el.getBoundingClientRect().width;
+      if (!Number.isFinite(measured) || measured <= 0) return;
+      const rounded = Math.round(measured);
+      setStageWidth((prev) => (Math.abs(prev - rounded) >= 1 ? rounded : prev));
     };
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
+
+    const scheduleMeasure = () => {
+      if (disposed) return;
+      if (typeof requestAnimationFrame !== 'function') {
+        commitWidth();
+        return;
+      }
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        commitWidth();
+      });
+    };
+
+    commitWidth();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', scheduleMeasure);
+      return () => {
+        disposed = true;
+        if (rafId !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        window.removeEventListener('resize', scheduleMeasure);
+      };
+    }
+
+    const observer = new ResizeObserver(() => {
+      scheduleMeasure();
+    });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      disposed = true;
+      if (rafId !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      observer.disconnect();
+    };
   }, []);
 
   const currentPage = pages.find((page) => page.id === activePageId) ?? pages[0];

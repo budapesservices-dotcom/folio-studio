@@ -84,6 +84,31 @@ export function useWorkspaceShortcuts({
       const ids = context.state.selectedNodeIds;
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
+      const inSecondaryStudioSurface = Boolean(
+        target?.closest('.node-logic-window, .code-workspace-overlay, .motion-timeline-dock'),
+      );
+
+      // Undo / Redo always work across every studio window (Main Canvas, Component Canvas,
+      // Node Logic, Motion Timeline, and Code & Preview Studio).
+      if (modifier && key === 'z') {
+        event.preventDefault();
+        const historyClient = inSecondaryStudioSurface ? getCommandClient('main') : activeClient;
+        if (event.shiftKey) historyClient.redo();
+        else historyClient.undo();
+        return;
+      }
+      if (modifier && key === 'y') {
+        event.preventDefault();
+        const historyClient = inSecondaryStudioSurface ? getCommandClient('main') : activeClient;
+        historyClient.redo();
+        return;
+      }
+
+      // Do not bleed canvas-only shortcuts (Select All, Group, Mask, Delete layer,
+      // alignment, or single-key canvas tools) into Node Logic, Code, or Motion Timeline.
+      if (inSecondaryStudioSurface) {
+        return;
+      }
 
       if (modifier && !event.shiftKey && key === 'a') {
         event.preventDefault();
@@ -132,17 +157,6 @@ export function useWorkspaceShortcuts({
           return;
         }
         activeClient.createClippingMask(roots[0]);
-        return;
-      }
-      if (modifier && key === 'z') {
-        event.preventDefault();
-        if (event.shiftKey) activeClient.redo();
-        else activeClient.undo();
-        return;
-      }
-      if (modifier && key === 'y') {
-        event.preventDefault();
-        activeClient.redo();
         return;
       }
       if (modifier && !event.shiftKey && key === 'c' && ids.length > 0) {

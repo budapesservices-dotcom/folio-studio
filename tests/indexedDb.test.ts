@@ -483,6 +483,25 @@ describe('persistent active-project selection', () => {
     expect((await loadMostRecentProject())?.metadata.id).toBe(active.metadata.id);
     expect(replacement).not.toHaveBeenCalled();
   });
+
+  it('recovers from an older valid project when the pointed or newest record is corrupted', async () => {
+    const olderValid = projectWithId('project-valid-older', 'Older Valid Backup', '2026-09-01T08:30:00.000Z');
+    await saveProject(olderValid);
+
+    fakeIndexedDB.database?.stores.get('projects')?.set('project-corrupted-newer', {
+      id: 'project-corrupted-newer',
+      updatedAt: '2026-11-22T12:00:00.000Z',
+      project: { broken: true, pages: 'not-an-array' },
+    });
+    fakeIndexedDB.database?.stores.get('app-state')?.set('active-project', {
+      key: 'active-project',
+      projectId: 'project-corrupted-newer',
+    });
+
+    const recovered = await loadMostRecentProject();
+    expect(recovered?.metadata.id).toBe('project-valid-older');
+    expect(recovered?.metadata.name).toBe('Older Valid Backup');
+  });
 });
 
 
