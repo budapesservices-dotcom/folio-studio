@@ -519,14 +519,14 @@ export function computeFitViewTransform(
     maxX = Math.max(maxX, node.x + LOGIC_NODE_WIDTH);
     maxY = Math.max(maxY, node.y + h);
   }
-  const padding = 56;
+  const padding = Math.min(48, Math.max(20, Math.round(Math.min(viewportWidth, viewportHeight) * 0.08)));
   const contentW = Math.max(120, maxX - minX);
   const contentH = Math.max(100, maxY - minY);
   const rawZoom = Math.min(
     (viewportWidth - padding * 2) / contentW,
     (viewportHeight - padding * 2) / contentH,
   );
-  const zoom = Math.max(0.25, Math.min(1.15, Math.round(rawZoom * 100) / 100));
+  const zoom = Math.max(0.15, Math.min(1.15, Math.round(rawZoom * 100) / 100));
   const panX = Math.round((viewportWidth - contentW * zoom) / 2 - minX * zoom);
   const panY = Math.round((viewportHeight - contentH * zoom) / 2 - minY * zoom);
   return { panX, panY, zoom };
@@ -987,6 +987,354 @@ export function createLogicPresetGraph(
       }),
     ],
   });
+}
+
+const AUTO_ARRANGE_CATEGORY_ORDER: Record<LogicNodeCategory | 'custom', number> = {
+  event: 0,
+  state: 1,
+  logic: 2,
+  action: 3,
+  custom: 4,
+};
+
+const AUTO_ARRANGE_START_X = 64;
+const AUTO_ARRANGE_START_Y = 56;
+const AUTO_ARRANGE_COL_GAP = 60;
+const AUTO_ARRANGE_ROW_GAP = 28;
+const AUTO_ARRANGE_COMPONENT_GAP = 52;
+const AUTO_ARRANGE_ISOLATED_COLS = 3;
+
+function compareNodesForLayout(a: LogicNode, b: LogicNode): number {
+  const catDiff =
+    AUTO_ARRANGE_CATEGORY_ORDER[getLogicNodeCategory(a.type)]
+    - AUTO_ARRANGE_CATEGORY_ORDER[getLogicNodeCategory(b.type)];
+  if (catDiff !== 0) return catDiff;
+  if (a.y !== b.y) return a.y - b.y;
+  if (a.x !== b.x) return a.x - b.x;
+  return a.id.localeCompare(b.id);
+}
+
+function getSourcePortSortIndex(node: LogicNode, portId: string): number {
+  const { outputs } = getLogicNodePorts(node.type);
+  const idx = outputs.findIndex((p) => p.id === portId);
+  return idx >= 0 ? idx : outputs.length;
+}
+
+/**
+ * Organizes messy, overlapping, or disconnected nodes in a LogicGraph into a
+ * clean, deterministic, left-to-right layered flow layout with zero node overlaps:
+ * - Connected subgraphs are layered topologically (safely breaking cycles) with
+ *   upstream pure-data providers right-aligned next to their consumers and
+ *   barycenter vertical sorting to minimize wire crossings.
+ * - Multiple connected components stack cleanly with clear vertical separation.
+ * - Disconnected / isolated nodes are neatly arranged in a structured grid below
+ *   connected flows.
+ * - Returns the exact original graph reference if no node position changes.
+ */
+export function autoArrangeLogicGraph(graph: LogicGraph): LogicGraph {
+  if (graph.nodes.length === 0) return graph;
+
+  const nodeById = new Map<string, LogicNode>();
+  const originalOrder = new Map<string, number>();
+  graph.nodes.forEach((node, index) => {
+    nodeById.set(node.id, node);
+    originalOrder.set(node.id, index);
+  });
+
+  // Keep only valid edges between distinct existing nodes
+  const validConnections = graph.connections.filter(
+    (conn) =>
+      conn.sourceNodeId !== conn.targetNodeId
+      && nodeById.has(conn.sourceNodeId)
+      && nodeById.has(conn.targetNodeId),
+  );
+
+  // Build undirected adjacency for connected-component partitioning
+  const undirected = new Map<string, Set<string>>();
+  for (const node of graph.nodes) {
+    undirected.set(node.id, new Set());
+  }
+  for (const conn of validConnections) {
+    undirected.get(conn.sourceNodeId)!.add(conn.targetNodeId);
+    undirected.get(conn.targetNodeId)!.add(conn.sourceNodeId);
+  }
+
+  const visitedGlobal = new Set<string>();
+  const connectedComponents: LogicNode[][] = [];
+  const isolatedNodes: LogicNode[] = [];
+
+  for (const node of graph.nodes) {
+    if (visitedGlobal.has(node.id)) continue;
+    const queue = [node.id];
+    visitedGlobal.add(node.id);
+    const component: LogicNode[] = [];
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      component.push(nodeById.get(currentId)!);
+      for (const neighborId of undirected.get(currentId) ?? []) {
+        if (!visitedGlobal.has(neighborId)) {
+          visitedGlobal.add(neighborId);
+          queue.push(neighborId);
+        }
+      }
+    }
+    if (component.length === 1) {
+      isolatedNodes.push(component[0]);
+    } else {
+      connectedComponents.push(component);
+    }
+  }
+
+  // Sort connected components: event-driven flows first, then larger flows, then top-most
+  connectedComponents.sort((compA, compB) => {
+    const aHasEvent = compA.some((n) => getLogicNodeCategory(n.type) === 'event') ? 0 : 1;
+    const bHasEvent = compB.some((n) => getLogicNodeCategory(n.type) === 'event') ? 0 : 1;
+    if (aHasEvent !== bHasEvent) return aHasEvent - bHasEvent;
+    if (compB.length !== compA.length) return compB.length - compA.length;
+    const aMinY = Math.min(...compA.map((n) => n.y));
+    const bMinY = Math.min(...compB.map((n) => n.y));
+    if (aMinY !== bMinY) return aMinY - bMinY;
+    const aMinIdx = Math.min(...compA.map((n) => originalOrder.get(n.id) ?? 0));
+    const bMinIdx = Math.min(...compB.map((n) => originalOrder.get(n.id) ?? 0));
+    return aMinIdx - bMinIdx;
+  });
+
+  const colStep = LOGIC_NODE_WIDTH + AUTO_ARRANGE_COL_GAP;
+  const placedPositions = new Map<string, LogicPoint>();
+  let cursorY = AUTO_ARRANGE_START_Y;
+
+  for (const component of connectedComponents) {
+    const compIds = new Set(component.map((n) => n.id));
+    const compConns = validConnections.filter(
+      (c) => compIds.has(c.sourceNodeId) && compIds.has(c.targetNodeId),
+    );
+
+    // Directed adjacency (deduplicated pairs for topological layering)
+    const rawOut = new Map<string, string[]>();
+    const rawInCount = new Map<string, number>();
+    for (const node of component) {
+      rawOut.set(node.id, []);
+      rawInCount.set(node.id, 0);
+    }
+    const seenPairs = new Set<string>();
+    for (const conn of compConns) {
+      const key = `${conn.sourceNodeId}->${conn.targetNodeId}`;
+      if (seenPairs.has(key)) continue;
+      seenPairs.add(key);
+      rawOut.get(conn.sourceNodeId)!.push(conn.targetNodeId);
+      rawInCount.set(conn.targetNodeId, (rawInCount.get(conn.targetNodeId) ?? 0) + 1);
+    }
+
+    // Order roots deterministically so cycle breaking prefers natural event/leftmost roots
+    const orderedNodes = [...component].sort((a, b) => {
+      const aRoot = (rawInCount.get(a.id) ?? 0) === 0 ? 0 : 1;
+      const bRoot = (rawInCount.get(b.id) ?? 0) === 0 ? 0 : 1;
+      if (aRoot !== bRoot) return aRoot - bRoot;
+      return compareNodesForLayout(a, b);
+    });
+
+    // Break cycles via DFS back-edge detection to obtain a clean DAG
+    const dfsVisited = new Set<string>();
+    const dfsOnStack = new Set<string>();
+    const dagOut = new Map<string, string[]>();
+    const dagIn = new Map<string, string[]>();
+    for (const node of component) {
+      dagOut.set(node.id, []);
+      dagIn.set(node.id, []);
+    }
+
+    const dfs = (u: string) => {
+      dfsVisited.add(u);
+      dfsOnStack.add(u);
+      const targets = [...(rawOut.get(u) ?? [])].sort((aId, bId) =>
+        compareNodesForLayout(nodeById.get(aId)!, nodeById.get(bId)!),
+      );
+      for (const v of targets) {
+        if (dfsOnStack.has(v)) {
+          // Back-edge creates a cycle; omit from DAG ranking while preserving connection
+          continue;
+        }
+        dagOut.get(u)!.push(v);
+        dagIn.get(v)!.push(u);
+        if (!dfsVisited.has(v)) {
+          dfs(v);
+        }
+      }
+      dfsOnStack.delete(u);
+    };
+
+    for (const node of orderedNodes) {
+      if (!dfsVisited.has(node.id)) {
+        dfs(node.id);
+      }
+    }
+
+    // Kahn topological sort + longest-path column assignment
+    const inDeg = new Map<string, number>();
+    const colOf = new Map<string, number>();
+    const queue: string[] = [];
+    for (const node of orderedNodes) {
+      const deg = dagIn.get(node.id)!.length;
+      inDeg.set(node.id, deg);
+      colOf.set(node.id, 0);
+      if (deg === 0) queue.push(node.id);
+    }
+
+    const topoOrder: string[] = [];
+    while (queue.length > 0) {
+      const u = queue.shift()!;
+      topoOrder.push(u);
+      const nextCol = (colOf.get(u) ?? 0) + 1;
+      for (const v of dagOut.get(u) ?? []) {
+        if (nextCol > (colOf.get(v) ?? 0)) {
+          colOf.set(v, nextCol);
+        }
+        const rem = (inDeg.get(v) ?? 1) - 1;
+        inDeg.set(v, rem);
+        if (rem === 0) {
+          queue.push(v);
+        }
+      }
+    }
+
+    // Identify nodes reachable from event roots so pure upstream data chains can
+    // sit directly to the left of their consumers instead of stranded at col 0.
+    const eventReachable = new Set<string>();
+    const evQueue: string[] = [];
+    for (const node of component) {
+      if (getLogicNodeCategory(node.type) === 'event') {
+        eventReachable.add(node.id);
+        evQueue.push(node.id);
+      }
+    }
+    while (evQueue.length > 0) {
+      const u = evQueue.shift()!;
+      for (const v of dagOut.get(u) ?? []) {
+        if (!eventReachable.has(v)) {
+          eventReachable.add(v);
+          evQueue.push(v);
+        }
+      }
+    }
+
+    if (eventReachable.size > 0) {
+      for (let i = topoOrder.length - 1; i >= 0; i -= 1) {
+        const u = topoOrder[i];
+        if (eventReachable.has(u)) continue;
+        const consumers = dagOut.get(u) ?? [];
+        if (consumers.length === 0) continue;
+        const minConsumerCol = Math.min(...consumers.map((v) => colOf.get(v) ?? 0));
+        colOf.set(u, minConsumerCol - 1);
+      }
+      const minCol = Math.min(...component.map((n) => colOf.get(n.id) ?? 0));
+      if (minCol < 0) {
+        for (const node of component) {
+          colOf.set(node.id, (colOf.get(node.id) ?? 0) - minCol);
+        }
+      }
+    }
+
+    // Group nodes into columns
+    const maxCol = Math.max(...component.map((n) => colOf.get(n.id) ?? 0));
+    const columns: LogicNode[][] = Array.from({ length: maxCol + 1 }, () => []);
+    for (const node of component) {
+      columns[colOf.get(node.id) ?? 0].push(node);
+    }
+
+    // Index incoming connections per node for barycenter crossing reduction
+    const incomingConns = new Map<string, LogicConnection[]>();
+    for (const node of component) {
+      incomingConns.set(node.id, []);
+    }
+    for (const conn of compConns) {
+      if ((colOf.get(conn.sourceNodeId) ?? 0) < (colOf.get(conn.targetNodeId) ?? 0)) {
+        incomingConns.get(conn.targetNodeId)!.push(conn);
+      }
+    }
+
+    // Sort column 0 naturally, then sort each subsequent column by predecessor barycenter
+    const rowIndexOf = new Map<string, number>();
+    columns[0].sort(compareNodesForLayout);
+    columns[0].forEach((n, idx) => rowIndexOf.set(n.id, idx));
+
+    for (let c = 1; c <= maxCol; c += 1) {
+      const scoreOf = new Map<string, number>();
+      for (const node of columns[c]) {
+        const inList = incomingConns.get(node.id) ?? [];
+        if (inList.length === 0) {
+          // Pure upstream data providers placed neatly below the main execution spine
+          const catScore = AUTO_ARRANGE_CATEGORY_ORDER[getLogicNodeCategory(node.type)];
+          scoreOf.set(node.id, 1000 + catScore * 10 + (originalOrder.get(node.id) ?? 0) * 0.01);
+        } else {
+          let sum = 0;
+          for (const conn of inList) {
+            const srcNode = nodeById.get(conn.sourceNodeId)!;
+            const srcRow = rowIndexOf.get(conn.sourceNodeId) ?? 0;
+            const portOffset = getSourcePortSortIndex(srcNode, conn.sourcePortId) * 0.15;
+            sum += srcRow + portOffset;
+          }
+          scoreOf.set(node.id, sum / inList.length);
+        }
+      }
+      columns[c].sort((a, b) => {
+        const diff = (scoreOf.get(a.id) ?? 0) - (scoreOf.get(b.id) ?? 0);
+        if (Math.abs(diff) > 1e-6) return diff;
+        return compareNodesForLayout(a, b);
+      });
+      columns[c].forEach((n, idx) => rowIndexOf.set(n.id, idx));
+    }
+
+    // Compute exact column heights and vertically center shorter columns within the component
+    const columnHeights = columns.map((colNodes) => {
+      if (colNodes.length === 0) return 0;
+      const sumH = colNodes.reduce((acc, n) => acc + getLogicNodeHeight(n), 0);
+      return sumH + (colNodes.length - 1) * AUTO_ARRANGE_ROW_GAP;
+    });
+    const componentHeight = Math.max(...columnHeights, 0);
+
+    for (let c = 0; c <= maxCol; c += 1) {
+      const colNodes = columns[c];
+      if (colNodes.length === 0) continue;
+      let y = cursorY + Math.round((componentHeight - columnHeights[c]) / 2);
+      const x = AUTO_ARRANGE_START_X + c * colStep;
+      for (const node of colNodes) {
+        placedPositions.set(node.id, { x: Math.round(x), y: Math.round(y) });
+        y += getLogicNodeHeight(node) + AUTO_ARRANGE_ROW_GAP;
+      }
+    }
+
+    cursorY += componentHeight + AUTO_ARRANGE_COMPONENT_GAP;
+  }
+
+  // Place disconnected / isolated nodes in a clean multi-column grid below connected flows
+  if (isolatedNodes.length > 0) {
+    const sortedIsolated = [...isolatedNodes].sort(compareNodesForLayout);
+    for (let i = 0; i < sortedIsolated.length; i += AUTO_ARRANGE_ISOLATED_COLS) {
+      const rowNodes = sortedIsolated.slice(i, i + AUTO_ARRANGE_ISOLATED_COLS);
+      let maxRowHeight = 0;
+      rowNodes.forEach((node, colIdx) => {
+        const x = AUTO_ARRANGE_START_X + colIdx * colStep;
+        placedPositions.set(node.id, { x: Math.round(x), y: Math.round(cursorY) });
+        maxRowHeight = Math.max(maxRowHeight, getLogicNodeHeight(node));
+      });
+      cursorY += maxRowHeight + AUTO_ARRANGE_ROW_GAP;
+    }
+  }
+
+  // Only mutate / bump updatedAt if at least one node actually moved
+  let changed = false;
+  const nextNodes = graph.nodes.map((node) => {
+    const nextPos = placedPositions.get(node.id);
+    if (!nextPos) return node;
+    if (node.x !== nextPos.x || node.y !== nextPos.y) {
+      changed = true;
+      return { ...node, x: nextPos.x, y: nextPos.y };
+    }
+    return node;
+  });
+
+  if (!changed) return graph;
+  return touchLogicGraph({ ...graph, nodes: nextNodes });
 }
 
 export const LOGIC_CATALOG_LIST = Object.freeze(Object.values(LOGIC_NODE_CATALOG));

@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'preact/compat';
+import { useState } from 'preact/hooks';
 import type { BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument, FolioProject } from '../../core/document/types';
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { CanvasToolId, CanvasToolOptions } from '../../core/tools/operationContract';
@@ -643,6 +644,10 @@ export function NodeLogicWindow({
   onClose,
   onCloseMinimized,
 }: NodeLogicWindowProps) {
+  const [autoArrangeRequestNonce, setAutoArrangeRequestNonce] = useState(0);
+  const [activeGraphNodeCount, setActiveGraphNodeCount] = useState<number | null>(null);
+  const effectiveNodeCount = activeGraphNodeCount ?? (project.logicGraphs[0]?.nodes.length ?? 0);
+
   return (
     <>
       {visible && (
@@ -666,6 +671,17 @@ export function NodeLogicWindow({
               <strong>Node Logic</strong>
             </div>
             <div class="canvas-window-tools">
+              <button
+                type="button"
+                class="node-logic-header-action"
+                title="Auto-arrange logic nodes into a clean flow layout"
+                aria-label="Auto-Arrange"
+                disabled={effectiveNodeCount === 0}
+                onClick={() => setAutoArrangeRequestNonce((current) => current + 1)}
+              >
+                <StudioIcon name="autoArrange" />
+                <span>Auto-Arrange</span>
+              </button>
               <div class="workspace-window-controls" aria-label="Node Logic window controls">
                 <button type="button" class="window-control window-control-minimize" title="Minimize Node Logic" aria-label="Minimize Node Logic" onClick={onMinimize} />
                 <button
@@ -700,6 +716,8 @@ export function NodeLogicWindow({
                 mainCommandClient={mainCommandClient}
                 onNotice={onNotice}
                 onOpenLivePreview={onOpenLivePreview}
+                autoArrangeRequestNonce={autoArrangeRequestNonce}
+                onActiveGraphNodeCountChange={setActiveGraphNodeCount}
               />
             </Suspense>
           </div>

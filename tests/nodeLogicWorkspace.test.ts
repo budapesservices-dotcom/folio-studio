@@ -2,20 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { createInitialProject } from '../src/core/document/factory';
 import { validateProject } from '../src/core/document/validation';
 import {
+  createLogicConnection,
   createLogicGraph,
   createPrototypeRuntime,
   validateLogicGraphSemantics,
 } from '../src/engines/prototype';
 import {
+  LOGIC_NODE_WIDTH,
   LOGIC_PRESETS,
   addConnectionToGraph,
   addNodeToGraph,
   addVariableToGraph,
+  autoArrangeLogicGraph,
   buildLogicWirePath,
   canConnectLogicPorts,
   computeFitViewTransform,
   createInteractiveStarterProject,
   createLogicPresetGraph,
+  getLogicNodeHeight,
   getLogicPortWorldPosition,
   moveNodeInGraph,
   removeConnectionFromGraph,
@@ -201,6 +205,147 @@ describe('Node Logic Workspace Helpers & Starter Experience', () => {
         ?? page.document.nodes[0];
       const snap = runtime.dispatchNodeEvent(firstInteractive.id, 'click');
       expect(snap.trace.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('auto-arranges messy connected, branching, and data-provider graphs without overlaps', () => {
+    const starter = createInteractiveStarterProject('Arrange Starter');
+    const baseGraph = starter.logicGraphs![0];
+
+    // Scramble every node into a messy overlapping pile in reverse order
+    const messyGraph = {
+      ...baseGraph,
+      nodes: baseGraph.nodes.map((node, index) => ({
+        ...node,
+        x: 500 - index * 12,
+        y: 300 + (index % 2) * 8,
+      })),
+    };
+
+    const arranged = autoArrangeLogicGraph(messyGraph);
+    expect(arranged).not.toBe(messyGraph);
+    expect(arranged.nodes).toHaveLength(messyGraph.nodes.length);
+    expect(arranged.connections).toEqual(messyGraph.connections);
+
+    // Verify zero AABB overlaps between any pair of nodes
+    for (let i = 0; i < arranged.nodes.length; i += 1) {
+      const a = arranged.nodes[i];
+      const aH = getLogicNodeHeight(a);
+      for (let j = i + 1; j < arranged.nodes.length; j += 1) {
+        const b = arranged.nodes[j];
+        const bH = getLogicNodeHeight(b);
+        const overlaps =
+          a.x < b.x + LOGIC_NODE_WIDTH
+          && a.x + LOGIC_NODE_WIDTH > b.x
+          && a.y < b.y + bH
+          && a.y + aH > b.y;
+        expect(overlaps).toBe(false);
+      }
+    }
+
+    // Verify strictly left-to-right flow for every connection in this DAG
+    const nodeMap = new Map(arranged.nodes.map((n) => [n.id, n]));
+    for (const conn of arranged.connections) {
+      const src = nodeMap.get(conn.sourceNodeId)!;
+      const tgt = nodeMap.get(conn.targetNodeId)!;
+      expect(src.x + LOGIC_NODE_WIDTH).toBeLessThan(tgt.x);
+    }
+
+    // Verify upstream data provider (logic.template) is aligned right before action.set-text
+    const tpl = arranged.nodes.find((n) => n.type === 'logic.template')!;
+    const setText = arranged.nodes.find((n) => n.type === 'action.set-text')!;
+    const evt = arranged.nodes.find((n) => n.type === 'event.on-click')!;
+    expect(tpl.x).toBeGreaterThan(evt.x);
+    expect(tpl.x).toBeLessThan(setText.x);
+
+    // Verify semantic validity is preserved and second run is idempotent (same reference)
+    const arrangedProject = { ...starter, logicGraphs: [arranged] };
+    expect(validateLogicGraphSemantics(arranged, arrangedProject).ok).toBe(true);
+    expect(autoArrangeLogicGraph(arranged)).toBe(arranged);
+  });
+
+  it('auto-arranges disconnected nodes into a non-overlapping grid below connected flows', () => {
+    let graph = createLogicGraph({ id: 'g-disc', name: 'Disconnected', scope: 'page', targetId: 'page-1' });
+    const nEvt = addNodeToGraph(graph, 'event.on-click', { x: 400, y: 400 });
+    const nAct = addNodeToGraph(nEvt.graph, 'action.set-text', { x: 100, y: 400 });
+    const wired = addConnectionToGraph(nAct.graph, nEvt.node.id, 'exec', nAct.node.id, 'exec');
+    expect(wired.ok).toBe(true);
+    if (!wired.ok) return;
+    graph = wired.graph;
+
+    // Add 4 disconnected nodes stacked right on top of each other
+    const disc1 = addNodeToGraph(graph, 'state.get', { x: 0, y: 0 });
+    const disc2 = addNodeToGraph(disc1.graph, 'logic.compare', { x: 0, y: 0 });
+    const disc3 = addNodeToGraph(disc2.graph, 'action.set-fill', { x: 0, y: 0 });
+    const disc4 = addNodeToGraph(disc3.graph, 'event.on-page-load', { x: 0, y: 0 });
+    graph = disc4.graph;
+
+    const arranged = autoArrangeLogicGraph(graph);
+    const byId = new Map(arranged.nodes.map((n) => [n.id, n]));
+    const connectedBottom = Math.max(
+      byId.get(nEvt.node.id)!.y + getLogicNodeHeight(byId.get(nEvt.node.id)!),
+      byId.get(nAct.node.id)!.y + getLogicNodeHeight(byId.get(nAct.node.id)!),
+    );
+
+    const isolatedIds = [disc1.node.id, disc2.node.id, disc3.node.id, disc4.node.id];
+    for (const id of isolatedIds) {
+      expect(byId.get(id)!.y).toBeGreaterThan(connectedBottom);
+    }
+
+    // Zero overlaps across all 6 nodes
+    for (let i = 0; i < arranged.nodes.length; i += 1) {
+      const a = arranged.nodes[i];
+      const aH = getLogicNodeHeight(a);
+      for (let j = i + 1; j < arranged.nodes.length; j += 1) {
+        const b = arranged.nodes[j];
+        const bH = getLogicNodeHeight(b);
+        const overlaps =
+          a.x < b.x + LOGIC_NODE_WIDTH
+          && a.x + LOGIC_NODE_WIDTH > b.x
+          && a.y < b.y + bH
+          && a.y + aH > b.y;
+        expect(overlaps).toBe(false);
+      }
+    }
+  });
+
+  it('handles cyclic graphs and empty graphs safely during auto-arrange', () => {
+    const empty = createLogicGraph({ id: 'g-empty', name: 'Empty', scope: 'page', targetId: 'page-1' });
+    expect(autoArrangeLogicGraph(empty)).toBe(empty);
+
+    let cyclic = createLogicGraph({ id: 'g-cyc', name: 'Cyclic', scope: 'page', targetId: 'page-1' });
+    const a = addNodeToGraph(cyclic, 'state.increment', { x: 10, y: 10 });
+    const b = addNodeToGraph(a.graph, 'state.toggle', { x: 10, y: 10 });
+    const c = addNodeToGraph(b.graph, 'action.set-text', { x: 10, y: 10 });
+    cyclic = {
+      ...c.graph,
+      connections: [
+        createLogicConnection({ id: 'c1', sourceNodeId: a.node.id, sourcePortId: 'next', targetNodeId: b.node.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c2', sourceNodeId: b.node.id, sourcePortId: 'next', targetNodeId: c.node.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c3', sourceNodeId: c.node.id, sourcePortId: 'next', targetNodeId: a.node.id, targetPortId: 'exec' }),
+      ],
+    };
+
+    const arranged = autoArrangeLogicGraph(cyclic);
+    expect(arranged.connections).toHaveLength(3);
+    for (const node of arranged.nodes) {
+      expect(Number.isFinite(node.x)).toBe(true);
+      expect(Number.isFinite(node.y)).toBe(true);
+    }
+    // All 3 nodes occupy distinct non-overlapping positions
+    for (let i = 0; i < arranged.nodes.length; i += 1) {
+      const n1 = arranged.nodes[i];
+      const h1 = getLogicNodeHeight(n1);
+      for (let j = i + 1; j < arranged.nodes.length; j += 1) {
+        const n2 = arranged.nodes[j];
+        const h2 = getLogicNodeHeight(n2);
+        const overlaps =
+          n1.x < n2.x + LOGIC_NODE_WIDTH
+          && n1.x + LOGIC_NODE_WIDTH > n2.x
+          && n1.y < n2.y + h2
+          && n1.y + h1 > n2.y;
+        expect(overlaps).toBe(false);
+      }
     }
   });
 });

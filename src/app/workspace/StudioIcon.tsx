@@ -68,6 +68,7 @@ export const STUDIO_ICON_PATHS: Record<string, string> = {
   pause: 'M7 5h3v14H7V5zm7 0h3v14h-3V5z',
   stop: 'M6 6h12v12H6V6z',
   loop: 'M17 2l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3',
+  autoArrange: 'M3 9h5v6H3zM16 4h5v5h-5zM16 15h5v5h-5zM8 12h4m0-5.5h4M12 6.5v11h4',
 };
 
 export function StudioIcon({ name }: { name: string }) {

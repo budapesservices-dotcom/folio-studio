@@ -28,6 +28,7 @@ import {
   addConnectionToGraph,
   addNodeToGraph,
   addVariableToGraph,
+  autoArrangeLogicGraph,
   buildLogicWirePath,
   canConnectLogicPorts,
   computeFitViewTransform,
@@ -60,6 +61,8 @@ export interface NodeLogicWorkspaceProps {
   mainCommandClient: MainCanvasCommandClient;
   onNotice: (message: string) => void;
   onOpenLivePreview: (pageId?: string) => void;
+  autoArrangeRequestNonce?: number;
+  onActiveGraphNodeCountChange?: (nodeCount: number) => void;
 }
 
 interface PendingWireState {
@@ -110,8 +113,11 @@ export default function NodeLogicWorkspace({
   mainCommandClient,
   onNotice,
   onOpenLivePreview,
+  autoArrangeRequestNonce = 0,
+  onActiveGraphNodeCountChange,
 }: NodeLogicWorkspaceProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const lastHandledArrangeNonceRef = useRef<number>(0);
   const [activeGraphId, setActiveGraphId] = useState<string | null>(
     () => project.logicGraphs[0]?.id ?? null,
   );
@@ -371,6 +377,38 @@ export default function NodeLogicWorkspace({
     const rect = stageRef.current.getBoundingClientRect();
     setViewport(computeFitViewTransform(activeGraph.nodes, rect.width, rect.height));
   };
+
+  const handleAutoArrange = useCallback(() => {
+    if (!activeGraph || activeGraph.nodes.length === 0) {
+      onNotice('No logic nodes to arrange.');
+      return;
+    }
+    const arranged = autoArrangeLogicGraph(activeGraph);
+    const rect = stageRef.current?.getBoundingClientRect();
+    if (arranged === activeGraph) {
+      if (rect && rect.width > 0 && rect.height > 0) {
+        setViewport(computeFitViewTransform(arranged.nodes, rect.width, rect.height));
+      }
+      onNotice('Logic graph is already neatly arranged.');
+      return;
+    }
+    commitGraphUpdate(arranged, 'Auto-arrange logic graph');
+    if (rect && rect.width > 0 && rect.height > 0) {
+      setViewport(computeFitViewTransform(arranged.nodes, rect.width, rect.height));
+    }
+    const count = arranged.nodes.length;
+    onNotice(`Auto-arranged ${count} logic ${count === 1 ? 'node' : 'nodes'}.`);
+  }, [activeGraph, commitGraphUpdate, onNotice]);
+
+  useEffect(() => {
+    onActiveGraphNodeCountChange?.(activeGraph?.nodes.length ?? 0);
+  }, [activeGraph?.nodes.length, onActiveGraphNodeCountChange]);
+
+  useEffect(() => {
+    if (autoArrangeRequestNonce <= lastHandledArrangeNonceRef.current) return;
+    lastHandledArrangeNonceRef.current = autoArrangeRequestNonce;
+    handleAutoArrange();
+  }, [autoArrangeRequestNonce, handleAutoArrange]);
 
   const stepZoom = (direction: 'in' | 'out') => {
     setViewport((current) => {
