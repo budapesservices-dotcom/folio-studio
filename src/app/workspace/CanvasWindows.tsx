@@ -270,6 +270,12 @@ export function MainCanvasWindow({
   );
 }
 
+export function normalizeCanvasDocument(document: FolioDocument | null | undefined): FolioDocument | null {
+  if (!document) return null;
+  if (Array.isArray(document.nodes)) return document;
+  return { ...document, nodes: [] };
+}
+
 export interface ComponentCanvasWindowProps {
   visible: boolean;
   minimized: boolean;
@@ -278,7 +284,7 @@ export interface ComponentCanvasWindowProps {
   position: { x: number; y: number };
   size: { width: number; height: number };
   zIndex: number;
-  document: FolioDocument;
+  document: FolioDocument | null;
   components: ComponentDefinition[];
   designTokens: DesignTokenCollection;
   editingComponent: ComponentDefinition | null;
@@ -385,6 +391,11 @@ export function ComponentCanvasWindow({
   onToolOperationBatch,
   onLayerDrop,
 }: ComponentCanvasWindowProps) {
+  const safeDocument = normalizeCanvasDocument(document);
+  const safeNodes = safeDocument?.nodes ?? [];
+  const safeSelectedNodeIds = Array.isArray(selectedNodeIds) ? selectedNodeIds : [];
+  const safeSelectedComponentNodes = Array.isArray(selectedComponentNodes) ? selectedComponentNodes : [];
+
   return (
     <>
       {visible && (
@@ -447,7 +458,7 @@ export function ComponentCanvasWindow({
                   class="component-master-save-button"
                   title={editingComponent ? `Update master “${editingComponent.name}”` : 'Save Component Canvas as new component'}
                   aria-label={editingComponent ? `Update master ${editingComponent.name}` : 'Save Component Canvas as new component'}
-                  disabled={!editingComponent && document.nodes.length === 0}
+                  disabled={!safeDocument || (!editingComponent && safeNodes.length === 0)}
                   onClick={onSaveMaster}
                 >
                   <StudioIcon name="save" />
@@ -457,14 +468,14 @@ export function ComponentCanvasWindow({
                   class="component-save-new-button"
                   title="Save selected layers as a new component"
                   aria-label="Save selected layers as a new component"
-                  disabled={selectedComponentNodes.length === 0}
+                  disabled={!safeDocument || safeSelectedComponentNodes.length === 0}
                   onClick={onSaveSelectionAsNew}
                 >
                   <StudioIcon name="copyPlus" />
                 </button>
               </div>
               <AlignmentTools
-                selectedCount={selectedNodeIds.length}
+                selectedCount={safeSelectedNodeIds.length}
                 onAlign={onAlign}
                 onDistribute={onDistribute}
               />
@@ -521,7 +532,7 @@ export function ComponentCanvasWindow({
               workspace="component"
               toolId={toolId}
               toolOptions={toolOptions}
-              selectedNodes={selectedComponentNodes}
+              selectedNodes={safeSelectedComponentNodes}
               onChangeOptions={onChangeToolOptions}
               onPathfinder={onPathfinder}
               onConvertToPath={onConvertToPath}
@@ -531,20 +542,26 @@ export function ComponentCanvasWindow({
               onTogglePathClosed={onTogglePathClosed}
               onSelectTool={onSelectTool}
             />
-            <Canvas
-              document={document}
-              components={components}
-              designTokens={designTokens}
-              selectedNodeIds={selectedNodeIds as string[]}
-              toolId={toolId}
-              workspace="component"
-              toolOptions={toolOptions}
-              zoom={zoom}
-              pan={pan}
-              onToolOperation={onToolOperation}
-              onToolOperationBatch={onToolOperationBatch}
-              onLayerDrop={onLayerDrop}
-            />
+            {safeDocument ? (
+              <Canvas
+                document={safeDocument}
+                components={components}
+                designTokens={designTokens}
+                selectedNodeIds={safeSelectedNodeIds}
+                toolId={toolId}
+                workspace="component"
+                toolOptions={toolOptions}
+                zoom={zoom}
+                pan={pan}
+                onToolOperation={onToolOperation}
+                onToolOperationBatch={onToolOperationBatch}
+                onLayerDrop={onLayerDrop}
+              />
+            ) : (
+              <div class="component-canvas-empty" role="status">
+                No active component document.
+              </div>
+            )}
           </div>
         </FloatingWindow>
       )}

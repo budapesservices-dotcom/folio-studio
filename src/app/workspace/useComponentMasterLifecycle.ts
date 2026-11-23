@@ -109,7 +109,7 @@ export function useComponentMasterLifecycle({
   const editingComponent = ownedComponents.find((component) => component.id === editingComponentId) ?? null;
   const activeDocument = getActiveDocument(state.project);
   const componentDocument = getActiveDocument(componentState.project);
-  const selectedComponentNodes = componentDocument.nodes.filter(
+  const selectedComponentNodes = (Array.isArray(componentDocument?.nodes) ? componentDocument.nodes : []).filter(
     (node) => componentState.selectedNodeIds.includes(node.id),
   );
 

@@ -36,4 +36,36 @@ describe('Context-aware editor panels', () => {
     expect(context.state.selectedNodeIds).toEqual([movable.id, locked.id]);
     expect(getTransformableNodes(context.selectedNodes).map((node) => node.id)).toEqual([movable.id]);
   });
+
+  it('safely normalizes nullish or empty Component Canvas document nodes without throwing', () => {
+    const mainState = createEditorState(createInitialProject('Main'));
+    const emptyComponentProject = createInitialProject('Component');
+    emptyComponentProject.pages[0].document.nodes = [];
+    const emptyState = {
+      ...createEditorState(emptyComponentProject),
+      selectedNodeId: 'stale-id',
+      selectedNodeIds: ['stale-id-1', 'stale-id-2'],
+    };
+
+    const emptyContext = getActiveEditorContext('component', mainState, emptyState);
+    expect(emptyContext.document.nodes).toEqual([]);
+    expect(emptyContext.selectedNode).toBeNull();
+    expect(emptyContext.selectedNodes).toEqual([]);
+
+    const nullNodesProject = createInitialProject('Component');
+    (nullNodesProject.pages[0].document as unknown as { nodes: null }).nodes = null;
+    const nullNodesState = {
+      project: nullNodesProject,
+      past: [],
+      future: [],
+      selectedNodeId: 'stale-id',
+      selectedNodeIds: ['stale-id-1', 'stale-id-2'],
+      historyGroup: null,
+    };
+
+    const nullNodesContext = getActiveEditorContext('component', mainState, nullNodesState);
+    expect(nullNodesContext.document.nodes).toEqual([]);
+    expect(nullNodesContext.selectedNode).toBeNull();
+    expect(nullNodesContext.selectedNodes).toEqual([]);
+  });
 });

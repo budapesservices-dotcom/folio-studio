@@ -22,11 +22,13 @@ export function getActiveEditorContext(
   componentState: EditorState,
 ): ActiveEditorContext {
   const state = target === 'component' ? componentState : mainState;
-  const document = getActiveDocument(state.project);
-  const selectedNodes = document.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
+  const rawDocument = getActiveDocument(state.project);
+  const nodes = Array.isArray(rawDocument?.nodes) ? rawDocument.nodes : [];
+  const document = rawDocument && Array.isArray(rawDocument.nodes) ? rawDocument : { ...rawDocument, nodes };
+  const selectedNodes = nodes.filter((node) => state.selectedNodeIds.includes(node.id));
   const selectedNode = selectedNodes.length === 1
     ? selectedNodes[0]
-    : document.nodes.find((node) => node.id === state.selectedNodeId) ?? null;
+    : nodes.find((node) => node.id === state.selectedNodeId) ?? null;
 
   return { target, state, document, selectedNode, selectedNodes };
 }

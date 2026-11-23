@@ -748,7 +748,7 @@ export function App() {
 
   // Document, Page, Template & Export actions
   const addNode = (type: 'rect' | 'ellipse' | 'text') => {
-    if (isHydrating) return;
+    if (isHydrating || !focusedDocument) return;
     const node = createNodeForDocument(type, focusedDocument);
     focusedCommandClient.createNodes([node], `Create ${type} node`);
     windows.setInspectorVisible(true);
@@ -1373,9 +1373,14 @@ export function App() {
     && !(windows.componentCanvasOpen && !windows.componentCanvasFloating && !windows.canvasFloating)
     && !(windows.nodeLogicOpen && !windows.nodeLogicFloating && !windows.canvasFloating);
 
+  const nodeLogicCoversDockedComponent = windows.nodeLogicOpen
+    && !windows.nodeLogicFloating
+    && !windows.componentCanvasFloating
+    && getWindowZIndex(windows.windowOrder, 'node-logic') > getWindowZIndex(windows.windowOrder, 'component-canvas');
+
   const componentCanvasVisible = !windows.componentCanvasClosed
     && !windows.componentCanvasMinimized
-    && !(windows.nodeLogicOpen && !windows.nodeLogicFloating && !windows.componentCanvasFloating);
+    && !nodeLogicCoversDockedComponent;
 
   const pendingOpenComponentName = componentMaster.pendingComponentOpenId
     ? (state.project.components.find((item) => item.id === componentMaster.pendingComponentOpenId)?.name ?? 'another master')
@@ -1710,7 +1715,7 @@ export function App() {
         onDiscardAndOpenPending={componentMaster.discardBufferAndOpenPendingMaster}
         onOpenCleanupDialog={() => componentMaster.setComponentDeletionDialogOpen(true)}
         onSaveMaster={componentMaster.saveComponentCanvasMaster}
-        onSaveSelectionAsNew={() => componentMaster.saveNodesAsComponent(componentMaster.selectedComponentNodes, componentDocument.nodes)}
+        onSaveSelectionAsNew={() => componentMaster.saveNodesAsComponent(componentMaster.selectedComponentNodes, componentDocument?.nodes ?? [])}
         onAlign={(alignment) => alignSelection(alignment, 'component')}
         onDistribute={(axis) => distributeSelection(axis, 'component')}
         onUndo={() => componentCommandClient.undo()}
@@ -1721,7 +1726,11 @@ export function App() {
           setActiveEditorId('main');
           if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas');
         }}
-        onRestore={() => windows.setComponentCanvasMinimized(false)}
+        onRestore={() => {
+          windows.setComponentCanvasMinimized(false);
+          setActiveEditorId('component');
+          windows.focusWindow('component-canvas');
+        }}
         onToggleFloating={() => windows.setComponentCanvasWindowMode(windows.componentCanvasFloating ? 'docked' : 'floating')}
         onClose={() => {
           windows.setComponentCanvasClosed(true);
@@ -1781,7 +1790,7 @@ export function App() {
         activeEditorId={activeEditorId}
         selectedNode={selectedNode}
         selectedNodes={focusedEditor.selectedNodes}
-        selectedCount={focusedEditor.state.selectedNodeIds.length}
+        selectedCount={focusedEditor.selectedNodes.length}
         canRemoveFromCanvas={selectionSourceRef.current !== 'layers'}
         selectedInstanceComponent={selectedInstanceComponent}
         editingMasterComponent={componentMaster.editingComponent}

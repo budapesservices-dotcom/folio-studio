@@ -123,12 +123,14 @@ export function InspectorPanel({
   onDuplicateSelection,
   onCopySelection,
 }: InspectorPanelProps) {
-  const hasConvertibleInMulti = selectedNodes.some(
+  const safeSelectedNodes = Array.isArray(selectedNodes) ? selectedNodes : [];
+  const effectiveSelectedCount = Math.min(selectedCount, safeSelectedNodes.length);
+  const hasConvertibleInMulti = safeSelectedNodes.some(
     (node) => node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame',
   );
-  const hasPathsInMulti = selectedNodes.some((node) => node.type === 'path');
-  const selectedIdsSet = new Set(selectedNodes.map((n) => n.id));
-  const selectedRootNodes = selectedNodes.filter((n) => !n.parentId || !selectedIdsSet.has(n.parentId));
+  const hasPathsInMulti = safeSelectedNodes.some((node) => node.type === 'path');
+  const selectedIdsSet = new Set(safeSelectedNodes.map((n) => n.id));
+  const selectedRootNodes = safeSelectedNodes.filter((n) => !n.parentId || !selectedIdsSet.has(n.parentId));
   const singleRootContainer =
     !selectedNode &&
     selectedRootNodes.length === 1 &&
@@ -673,13 +675,13 @@ export function InspectorPanel({
             </label>
           </section>
         </div>
-      ) : selectedCount > 1 ? (
+      ) : effectiveSelectedCount > 1 ? (
         singleRootContainer ? (
           <div class="inspector-content">
             <section class="property-section">
               <div class="section-title-row">
                 <span class="section-title">{singleRootContainer.name}</span>
-                <span class="contract-card-meta">{selectedCount} layers</span>
+                <span class="contract-card-meta">{effectiveSelectedCount} layers</span>
               </div>
               <div class="inspector-multi-actions">
                 <button type="button" onClick={onDuplicateSelection}>
@@ -701,7 +703,7 @@ export function InspectorPanel({
         ) : (
           <div class="inspector-empty multi-inspector">
             <div class="empty-icon">{renderIcon('layers')}</div>
-            <strong>{selectedCount} layers selected</strong>
+            <strong>{effectiveSelectedCount} layers selected</strong>
             <p>Drag to move, use the resize handles, align above the canvas, or run a batch action below.</p>
             <div class="inspector-multi-actions">
               <button type="button" onClick={onDuplicateSelection}>

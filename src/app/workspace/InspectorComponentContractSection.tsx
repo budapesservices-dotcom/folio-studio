@@ -118,7 +118,9 @@ export function InspectorComponentContractSection({
 
   // Mode 2: Component Canvas Master — Author Variant Axes & Named Slots
   if (editingMasterComponent) {
-    const masterNodes = editingMasterComponent.document.nodes;
+    const masterNodes = Array.isArray(editingMasterComponent.document?.nodes)
+      ? editingMasterComponent.document.nodes
+      : [];
     const variants = editingMasterComponent.variants ?? [];
     const slots = editingMasterComponent.slots ?? [];
     const primaryStylableNode = masterNodes.find(

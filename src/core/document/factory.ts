@@ -221,7 +221,7 @@ export function createNodeForDocument(
   type: 'rect' | 'ellipse' | 'text',
   document: Pick<FolioDocument, 'width' | 'height' | 'nodes'> & Partial<Pick<FolioDocument, 'background'>>,
 ): Exclude<DesignNode, { type: 'component-instance' }> {
-  const index = document.nodes.length;
+  const index = Array.isArray(document?.nodes) ? document.nodes.length : 0;
   const node = createNode(type, index);
   const docWidth = Math.max(1, document.width);
   const docHeight = Math.max(1, document.height);
