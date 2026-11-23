@@ -1,27 +1,25 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createEmptyDocument, createInitialProject, createNodeForDocument } from '../core/document/factory';
-import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument, FolioPage, FolioProject } from '../core/document/types';
-import { expandSelectedLayerIds, getLayerAncestorIds, getEffectiveLayerStates, getLayerPanelRows, getSelectedLayerRootIds, getClippingMaskBaseId, type LayerDropPosition } from '../core/document/layers';
-import { buildComponentDefinitionFromNodes, createComponentInstance, detachComponentInstance, getComponentOverrideTargets } from '../core/document/components';
+import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioPage } from '../core/document/types';
+import {
+  expandSelectedLayerIds,
+  getEffectiveLayerStates,
+  getLayerPanelRows,
+  type LayerDropPosition,
+} from '../core/document/layers';
+import {
+  createComponentInstance,
+  detachComponentInstance,
+  getComponentOverrideTargets,
+} from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
-import { loadMostRecentProject, loadProjectById, saveProject, saveProjectIfRevisionCurrent, saveProjectAndActivate, withProjectWriteLock } from '../core/persistence/indexedDb';
+import {
+  loadMostRecentProject,
+  saveProjectAndActivate,
+  saveProjectIfRevisionCurrent,
+} from '../core/persistence/indexedDb';
 import { downloadProject } from '../core/persistence/projectFile';
-import { createProjectExportSnapshot } from './projectExport';
-import { openProjectFile } from './projectFileActions';
-import { Canvas } from '../engines/canvas/Canvas';
-import {
-  findStudioToolByShortcut,
-  getStudioTool,
-  getStudioToolGroupsForWorkspace,
-  isToolAvailableInWorkspace,
-} from '../engines/canvas/tools/studioRegistry';
-import {
-  DEFAULT_CANVAS_TOOL_OPTIONS,
-  type CanvasToolGroupId,
-  type CanvasToolId,
-  type CanvasToolOptions,
-} from '../engines/canvas/tools/types';
 import {
   applyPathfinderOperation,
   convertShapeToPathNode,
@@ -31,8 +29,26 @@ import {
   simplifyPathNode,
   type PathfinderOperation,
 } from '../core/document/vector';
+import {
+  buildTemplateComponentAndInstance,
+  computeTemplateInsertionOrigin,
+  instantiateTemplateNodes,
+  type StudioTemplateDefinition,
+  type TemplateInsertMode,
+} from '../core/document/templates';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../engines/canvas/geometry';
-import { ToolOptionsBar } from './ToolOptionsBar';
+import {
+  getStudioTool,
+  getStudioToolGroupsForWorkspace,
+  isToolAvailableInWorkspace,
+} from '../engines/canvas/tools/studioRegistry';
+import {
+  DEFAULT_CANVAS_TOOL_OPTIONS,
+  type CanvasToolId,
+  type CanvasToolOptions,
+} from '../engines/canvas/tools/types';
+import { createProjectExportSnapshot } from './projectExport';
+import { openProjectFile } from './projectFileActions';
 import { InspectorPanel } from './InspectorPanel';
 import {
   cloneNodesSubtree,
@@ -45,207 +61,46 @@ import { createEditorState, normalizePositiveDimension } from './editorReducer';
 import { createCanonicalEditorStore } from './editorStore';
 import { createComponentCanvasCommandClient, createMainCanvasCommandClient } from './mainCanvasCommandClient';
 import { createToolOperationExecutor } from './toolOperationExecutor';
-import {
-  advanceComponentCanvasSyncSession,
-  createComponentCanvasBufferProject,
-  createComponentCanvasSyncAction,
-  createComponentCanvasSyncSession,
-  reconcileComponentCanvasSyncSession,
-  markComponentCanvasMasterMissing,
-  shouldProtectComponentCanvasBuffer,
-  type ComponentCanvasSyncSession,
-} from './componentCanvasSync';
-import {
-  deleteComponentAfterDurableRecovery,
-  deleteComponentDurably,
-  recoverAndDeleteComponentDurably,
-  requestComponentDeletion,
-} from './componentDeletion';
-import { FloatingWindow } from './FloatingWindow';
-import { ComponentThumbnail } from './ComponentThumbnail';
-import {
-  DEFAULT_RESIZE_THROTTLE_MS,
-  PANEL_RESIZE_CONSTRAINTS,
-  attachPanelResizeListeners,
-  clampPanelWidth,
-  computeResizedPanelWidth,
-  createThrottledMouseMove,
-  getDefaultPanelWidths,
-  getPanelWidthBounds,
-  loadPanelWidths,
-  savePanelWidths,
-  type ActivePanelResizeSession,
-  type PanelWidths,
-  type ResizablePanelId,
-  type ThrottledMouseMoveController,
-} from './panelResize';
-import { createDebouncedAutosave, setRevisionFencedAutosaveStatus } from './debouncedAutosave';
+import { setRevisionFencedAutosaveStatus } from './debouncedAutosave';
 import { activateModalDialog, trapModalDialogKeydown } from './modalFocus';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from './editorContext';
-import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
-import { loadWorkspacePreferences, saveWorkspacePreferences, type WorkspaceKind, type WorkspaceLayoutV1, type WorkspacePreferencesLoadResult } from './workspacePreferences';
-import { createToolbarHintStore, DEFAULT_TOOLBAR_HINT, ToolbarHintBar } from './ToolbarHintBar';
-import {
-  buildTemplateComponentAndInstance,
-  computeTemplateInsertionOrigin,
-  instantiateTemplateNodes,
-  type StudioTemplateDefinition,
-  type TemplateInsertMode,
-} from '../core/document/templates';
-import { TemplateLibraryPopover } from './TemplateLibraryPopover';
+import { getWindowZIndex } from './windowManager';
+import { createToolbarHintStore, DEFAULT_TOOLBAR_HINT } from './ToolbarHintBar';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
-import { isShortcutHelpTrigger } from './keyboardShortcuts';
-
-function Icon({ name }: { name: string }) {
-  const paths: Record<string, string> = {
-    cursor: 'M5 3l14 9-6 1.5L10 20 5 3z',
-    directSelection: 'M4 3l15 10-6 1 4 7-3 1-4-7-4 5z',
-    lasso: 'M12 3c5 0 9 3 9 7s-4 8-9 8-9-3-9-7 4-8 9-8zM5 19l-1 2m6-1-1 2m7-3 1 2',
-    magicWand: 'm4 20 12-12m-9 9 3 3m5-17v4m-2-2h4m5 7v4m-2-2h4m-9 5v3m-2-1h4',
-    hand: 'M8 11V5a2 2 0 0 1 4 0v5-6a2 2 0 0 1 4 0v7-4a2 2 0 0 1 4 0v7c0 4-2 7-6 7h-2c-2 0-3-1-4-3l-3-4a2 2 0 0 1 3-3z',
-    scrubbyZoom: 'M5 12h14m-5-5 5 5-5 5M9 7 4 12l5 5',
-    shapes: 'M4 5h8v8H4zM15 6a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 17h16',
-    rect: 'M4 5h16v14H4z',
-    ellipse: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z',
-    text: 'M4 5h16M12 5v14M8 19h8',
-    layers: 'M12 3 3 8l9 5 9-5-9-5zM3 12l9 5 9-5M3 16l9 5 9-5',
-    export: 'M12 3v12m0-12 4 4m-4-4-4 4M5 14v6h14v-6',
-    import: 'M12 15V3m0 12 4-4m-4 4-4-4M5 14v6h14v-6',
-    undo: 'M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-2',
-    redo: 'm15 14 5-5-5-5m5 5H10a6 6 0 0 0 0 12h2',
-    trash: 'M4 7h16M10 11v6m4-6v6M6 7l1 14h10l1-14M9 7V4h6v3',
-    eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
-    eyeOff: 'M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A10 10 0 0 1 12 5c6.5 0 10 7 10 7a15 15 0 0 1-3.1 3.9M6.6 6.6C3.6 8.5 2 12 2 12s3.5 7 10 7a9 9 0 0 0 3.2-.6',
-    lock: 'M5 10h14v11H5zM8 10V7a4 4 0 1 1 8 0v3',
-    unlock: 'M5 10h14v11H5zM8 10V7a4 4 0 0 1 7.5-2',
-    chevronDown: 'm6 9 6 6 6-6',
-    chevronRight: 'm9 18 6-6-6-6',
-    plus: 'M12 5v14M5 12h14',
-    minus: 'M5 12h14',
-    chevron: 'm9 18 6-6-6-6',
-    clipArrow: 'M20 4H8V16m-4-4 4 4 4-4',
-    save: 'M5 4h12l3 3v13H4V4h1zm2 0v6h10V4M8 20v-7h8v7',
-    fullscreen: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5',
-    sidebar: 'M4 4h16v16H4zM9 4v16',
-    canvas: 'M3 4h18v16H3zM7 8h10v8H7z',
-    componentCanvas: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
-    logicNodes: 'M4 4h6v6H4zM14 14h6v6h-6zM10 7h3a3 3 0 0 1 3 3v4',
-    inspector: 'M4 4h16v16H4zM15 4v16',
-    rack: 'M3 5h18v14H3zM7 9h4v6H7zM14 9h3M14 12h3M14 15h3',
-    pages: 'M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h8',
-    edit: 'M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3zM13.5 6.5l4 4',
-    copyPlus: 'M8 8h11v11H8zM5 16H4V4h12v1M13.5 11v5M11 13.5h5',
-    scale: 'M4 15v5h5M20 9V4h-5M4 20l6-6M20 4l-6 6',
-    frame: 'M7 3v18M17 3v18M3 7h18M3 17h18',
-    section: 'M4 6h7l2 2h7v10H4V6z',
-    line: 'M5 19 19 5',
-    arrow: 'M5 19 19 5M11 5h8v8',
-    polygon: 'M12 3l8 5v8l-8 5-8-5V8l8-5z',
-    star: 'm12 3 2.7 5.6 6.2.9-4.5 4.4 1.1 6.1L12 17l-5.5 3 1.1-6.1-4.5-4.4 6.2-.9L12 3z',
-    pen: 'm12 19 7-7 3 3-7 7-3-3zM18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5zM2 2l7.5 7.5M11 11a1.5 1.5 0 1 0 0 .01',
-    curvature: 'M4 18C4 10 10 6 20 6M4 18a1.5 1.5 0 1 0 0 .01M20 6a1.5 1.5 0 1 0 0 .01M10 9a1.5 1.5 0 1 0 0 .01',
-    anchorPoint: 'M4 17 12 6l8 11M10 17h4',
-    pencil: 'M4 20l3.5-1 11-11a2 2 0 0 0-2.8-2.8l-11 11L4 20zM13.5 6.5l4 4',
-    smooth: 'M3 16c3-7 6-7 9 0s6 7 9 0',
-    scissors: 'M6 7a2.5 2.5 0 1 0 0 .01M6 17a2.5 2.5 0 1 0 0 .01M8.2 8.4 20 17M8.2 15.6 20 7',
-    shapeBuilder: 'M9 9a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm6-4a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM16 17h4m-2-2v4',
-    rotate: 'M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5',
-    eyedropper: 'm19 5-4 4m-1-5 6 6m-7-4-8.5 8.5a2 2 0 0 0-.5 1.1L3 21l5.4-1a2 2 0 0 0 1.1-.5L18 11',
-    measure: 'M3 16 16 3l5 5L8 21 3 16zM8 11l2 2M11 8l2 2M14 5l2 2',
-    templates: 'M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z',
-    keyboard: 'M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm3 4h1m3 0h1m3 0h1m3 0h1M6 13h1m3 0h4m3 0h1M7 16h10',
-  };
-
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" class="icon-svg">
-      <path d={paths[name] ?? paths.layers} />
-    </svg>
-  );
-}
-
-function LayerIcon({ type }: { type: DesignNode['type'] }) {
-  const glyph =
-    type === 'group' ? '▣'
-      : type === 'frame' ? '⊞'
-      : type === 'path' ? '∿'
-      : type === 'text' ? 'T'
-      : type === 'ellipse' ? '○'
-      : type === 'component-instance' ? '◇'
-      : '□';
-  return <span class={`layer-type layer-type-${type}`}>{glyph}</span>;
-}
-
-type ToolRackGroupId = CanvasToolGroupId | 'templates';
-
-type CanvasViewState = { zoom: number; pan: { x: number; y: number } };
-type LayerRenameSession = {
-  anchorId: string;
-  nodeIds: string[];
-  value: string;
-  batch: boolean;
-  editorId: EditorTarget;
-  existingNames: string[];
-};
-type LayerContextMenuState = {
-  nodeId: string;
-  nodeIds: string[];
-  editorId: EditorTarget;
-  x: number;
-  y: number;
-};
-const LAYER_COLOR_PRESETS = [
-  '#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e',
-  '#14b8a6', '#06b6d4', '#3b82f6', '#6366f1', '#a855f7',
-  '#ec4899', '#94a3b8',
-];
-function readCanvasViewState(key: string): CanvasViewState {
-  try {
-    const value = JSON.parse(window.localStorage.getItem(key) ?? 'null');
-    return {
-      zoom: Number.isFinite(value?.zoom) ? Math.min(8, Math.max(0.15, value.zoom)) : 0.82,
-      pan: { x: Number.isFinite(value?.pan?.x) ? value.pan.x : 0, y: Number.isFinite(value?.pan?.y) ? value.pan.y : 0 },
-    };
-  } catch { return { zoom: 0.82, pan: { x: 0, y: 0 } }; }
-}
+import { StudioIcon } from './workspace/StudioIcon';
+import {
+  computeClampedContextMenuPosition,
+  computeClampedPopoverPosition,
+  computeLayerRenameUpdates,
+  computeLayerSelection,
+  getLayerContextMenuCapabilities,
+  getLayerDropPosition,
+  type LayerContextMenuState,
+  type LayerRenameSession,
+} from './workspace/layerOperations';
+import { resolveActiveExportTarget } from './workspace/canvasViewState';
+import { useWorkspaceWindows } from './workspace/useWorkspaceWindows';
+import { usePanelResizeController } from './workspace/usePanelResizeController';
+import { useComponentMasterLifecycle } from './workspace/useComponentMasterLifecycle';
+import { useWorkspaceShortcuts } from './workspace/useWorkspaceShortcuts';
+import { GlobalToolbar, WorkspacePreferencesRecoveryBanner } from './workspace/GlobalToolbar';
+import { ToolRail } from './workspace/ToolRail';
+import { LayersPanel } from './workspace/LayersPanel';
+import { LayerColorPalette, LayerContextMenu } from './workspace/LayerPopovers';
+import { ComponentCanvasWindow, MainCanvasWindow, NodeLogicWindow } from './workspace/CanvasWindows';
+import { PagesRackPanel } from './workspace/PagesRackPanel';
+import { ComponentRackPanel } from './workspace/ComponentRackPanel';
+import { StatusBar } from './workspace/StatusBar';
+import { ComponentDeletionDialog, ProjectHydrationOverlay } from './workspace/ComponentDeletionDialog';
 
 export function App() {
-  const workspacePreferencesLoadRef = useRef<WorkspacePreferencesLoadResult | null>(null);
-  if (workspacePreferencesLoadRef.current === null) {
-    workspacePreferencesLoadRef.current = loadWorkspacePreferences({
-      viewport: {
-        width: document.documentElement.clientWidth || window.innerWidth,
-        height: document.documentElement.clientHeight || window.innerHeight,
-      },
-    });
-  }
-  const initialWorkspacePreferences = workspacePreferencesLoadRef.current!;
-  const initialWorkspaceLayout = initialWorkspacePreferences.layout;
-  const initialWorkspaceWindow = (workspace: WorkspaceKind) =>
-    initialWorkspaceLayout.windows.find((record) => record.workspace === workspace)!;
-  const initialMainWindow = initialWorkspaceWindow('main-canvas');
-  const initialComponentWindow = initialWorkspaceWindow('component-canvas');
-  const initialNodeLogicWindow = initialWorkspaceWindow('node-logic');
-  const initialWorkspaceOrder = initialWorkspaceLayout.stackOrder.flatMap((instanceId) => {
-    const record = initialWorkspaceLayout.windows.find((candidate) =>
-      candidate.windowInstanceId === instanceId,
-    );
-    return record ? [record.workspace] : [];
-  });
-  const initialPreferencesNeedReview =
-    initialWorkspacePreferences.status === 'migrated' ||
-    initialWorkspacePreferences.status === 'recovered' ||
-    initialWorkspacePreferences.status === 'malformed';
-  const workspacePreferencesReplaceMalformedRef = useRef(
-    initialWorkspacePreferences.status === 'malformed',
-  );
-  const [workspacePreferencesPersistenceEnabled, setWorkspacePreferencesPersistenceEnabled] =
-    useState(
-      initialWorkspacePreferences.status === 'valid' ||
-      initialWorkspacePreferences.status === 'missing',
-    );
-  const [workspacePreferencesReviewRequired, setWorkspacePreferencesReviewRequired] =
-    useState(initialPreferencesNeedReview);
+  const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
+  const [notice, setNotice] = useState('');
+  const appShellRef = useRef<HTMLDivElement | null>(null);
+  const commandRejectNoticeRef = useRef<(message: string) => void>(() => {});
+  commandRejectNoticeRef.current = setNotice;
 
+  // Canonical stores & Native Command Engine clients
   const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
   const canonicalStore = useMemo(() => createCanonicalEditorStore(initialEditorState), []);
   const [state, setState] = useState(() => canonicalStore.getSnapshot().editorState);
@@ -254,10 +109,10 @@ export function App() {
     setState((current) => (current === next ? current : next));
   }, [canonicalStore]);
   useEffect(() => canonicalStore.subscribe(syncStateFromStore), [canonicalStore, syncStateFromStore]);
-  const commandRejectNoticeRef = useRef<(message: string) => void>(() => {});
   const mainCommandClient = useMemo(() => createMainCanvasCommandClient(canonicalStore, {
     onRejected: (result) => commandRejectNoticeRef.current(result.message),
   }), [canonicalStore]);
+
   const componentInitialState = useMemo(() => {
     const project = createInitialProject('Component Canvas');
     project.metadata.id = 'folio-component-canvas';
@@ -283,70 +138,155 @@ export function App() {
   const componentCommandClient = useMemo(() => createComponentCanvasCommandClient(componentStore, {
     onRejected: (result) => commandRejectNoticeRef.current(result.message),
   }), [componentStore]);
+
   const getCommandClient = useCallback(
     (target: EditorTarget) => (target === 'main' ? mainCommandClient : componentCommandClient),
     [mainCommandClient, componentCommandClient],
   );
-  const [componentReady, setComponentReady] = useState(false);
-  const componentSyncSessionRef = useRef<ComponentCanvasSyncSession | null>(null);
-  const [componentRecoveryStatus, setComponentRecoveryStatus] = useState<'none' | 'missing' | 'returned' | 'conflict' | 'switch-pending'>('none');
-  const [pendingComponentOpenId, setPendingComponentOpenId] = useState<string | null>(null);
-  const [pendingComponentDeletion, setPendingComponentDeletion] = useState<ComponentDefinition | null>(null);
-  const [componentDeletionDialogOpen, setComponentDeletionDialogOpen] = useState(false);
-  const [componentDeletionMode, setComponentDeletionMode] = useState<'recovery' | 'clean' | 'cleanup'>('recovery');
-  const [componentDeletionBusy, setComponentDeletionBusy] = useState(false);
-  const [componentCleanupPending, setComponentCleanupPending] = useState(false);
-  const [durableRecoveryComponentId, setDurableRecoveryComponentId] = useState<string | null>(null);
-  const pendingComponentDeletionRef = useRef(false);
-  const componentSyncPauseAfterCancelRef = useRef<FolioDocument | null>(null);
-  const appShellRef = useRef<HTMLDivElement | null>(null);
-  const deletionModalHostRef = useRef<HTMLDivElement | null>(null);
-  const deletionDialogRef = useRef<HTMLElement | null>(null);
-  const deletionFocusReturnRef = useRef<HTMLElement | null>(null);
-  const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
-  const shortcutsModalHostRef = useRef<HTMLDivElement | null>(null);
-  const shortcutsDialogRef = useRef<HTMLElement | null>(null);
-  const shortcutsFocusReturnRef = useRef<HTMLElement | null>(null);
-  const [componentSaveStatus, setComponentSaveStatus] = useState<'saving' | 'saved' | 'error'>('saving');
-  const [componentSaveError, setComponentSaveError] = useState<string | null>(null);
-  const componentAutosave = useMemo(() => createDebouncedAutosave<FolioProject>(
-    (project) => saveProject(project),
-    (status, error) => {
-      setComponentSaveStatus(status);
-      setComponentSaveError(status === 'error'
-        ? (error instanceof Error ? error.message : 'The Component Canvas buffer could not be saved.')
-        : null);
-    },
-    450,
-  ), []);
+
+  // Workspace windows, layout preferences & view persistence
+  const windows = useWorkspaceWindows({ setActiveEditorId, setNotice });
+
+  // Panel resize controller (Layers & Inspector)
+  const panelResize = usePanelResizeController({
+    appShellRef,
+    layersVisible: windows.layersVisible,
+    inspectorVisible: windows.inspectorVisible,
+  });
+
+  // Racks focus-return helpers
+  const pagesRackRef = useRef<HTMLElement | null>(null);
+  const componentRackRef = useRef<HTMLElement | null>(null);
+  const pagesRackToggleRef = useRef<HTMLButtonElement | null>(null);
+  const componentRackToggleRef = useRef<HTMLButtonElement | null>(null);
+
+  const closePagesRack = useCallback(() => {
+    if (pagesRackRef.current?.contains(document.activeElement)) {
+      pagesRackToggleRef.current?.focus({ preventScroll: true });
+    }
+    windows.setPagesRackOpen(false);
+  }, [windows.setPagesRackOpen]);
+
+  const closeComponentRack = useCallback(() => {
+    if (componentRackRef.current?.contains(document.activeElement)) {
+      componentRackToggleRef.current?.focus({ preventScroll: true });
+    }
+    windows.setComponentRackOpen(false);
+  }, [windows.setComponentRackOpen]);
+
+  // Project hydration & IndexedDB autosave
   const [isProjectLoaded, setIsProjectLoaded] = useState(false);
-  const isHydrating = !isProjectLoaded || !componentReady;
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
-  const [notice, setNotice] = useState('');
-  commandRejectNoticeRef.current = setNotice;
-  const projectFileInputRef = useRef<HTMLInputElement>(null);
-  const [mainView, setMainView] = useState<CanvasViewState>(() => readCanvasViewState('folio.main-canvas-view'));
-  const [componentView, setComponentView] = useState<CanvasViewState>(() => readCanvasViewState('folio.component-canvas-view'));
-  const zoom = mainView.zoom;
-  const setZoom = (next: number | ((current: number) => number)) => setMainView((view) => ({ ...view, zoom: typeof next === 'function' ? next(view.zoom) : next }));
-  const componentCanvasZoom = componentView.zoom;
-  const setComponentCanvasZoom = (next: number | ((current: number) => number)) => setComponentView((view) => ({ ...view, zoom: typeof next === 'function' ? next(view.zoom) : next }));
-  const setMainPan = (pan: { x: number; y: number }) => setMainView((view) => ({ ...view, pan }));
-  const setComponentCanvasPan = (pan: { x: number; y: number }) => setComponentView((view) => ({ ...view, pan }));
+
+  // Component Canvas master sync, buffer protection & durable deletion lifecycle
+  const componentMaster = useComponentMasterLifecycle({
+    canonicalStore,
+    mainCommandClient,
+    componentCommandClient,
+    state,
+    componentState,
+    componentInitialProject: componentInitialState.project,
+    isProjectLoaded,
+    appShellRef,
+    focusWindow: windows.focusWindow,
+    setActiveEditorId,
+    setComponentCanvasClosed: windows.setComponentCanvasClosed,
+    setComponentCanvasMinimized: windows.setComponentCanvasMinimized,
+    setInspectorVisible: windows.setInspectorVisible,
+    setComponentRackOpen: windows.setComponentRackOpen,
+    closePagesRack,
+    closeComponentRack,
+    setNotice,
+  });
+
+  const isHydrating = !isProjectLoaded || !componentMaster.componentReady;
+
+  // Hydrate primary project from IndexedDB
+  useEffect(() => {
+    let active = true;
+    loadMostRecentProject()
+      .then((loadedProject) => {
+        if (!active || !loadedProject) return;
+        const activePage = loadedProject.pages.find((page) => page.id === loadedProject.activePageId)
+          ?? loadedProject.pages[0];
+        if (!activePage) throw new Error('The saved project does not contain a page.');
+        mainCommandClient.replaceProject(
+          { ...loadedProject, activePageId: activePage.id },
+          'Restore project from IndexedDB',
+        );
+      })
+      .catch((error: unknown) => {
+        console.error('Folio could not restore the project from IndexedDB:', error);
+        if (active) setNotice('The saved project could not be restored. A new project is available.');
+      })
+      .finally(() => {
+        if (active) setIsProjectLoaded(true);
+      });
+    return () => { active = false; };
+  }, [mainCommandClient]);
+
+  // Revision-fenced debounced autosave for primary project
+  useEffect(() => {
+    if (!isProjectLoaded) return;
+    setSaveStatus('saving');
+    const canonicalSnapshot = canonicalStore.getSnapshot();
+    const projectRevision = canonicalSnapshot.projectRevision;
+    const getCanonicalRevision = () => canonicalStore.getSnapshot().projectRevision;
+    const timer = window.setTimeout(() => {
+      saveProjectIfRevisionCurrent(
+        canonicalSnapshot.editorState.project,
+        projectRevision,
+        getCanonicalRevision,
+        (listener) => canonicalStore.subscribe(listener),
+      )
+        .then((result) => {
+          if (result.status === 'saved') {
+            setRevisionFencedAutosaveStatus(projectRevision, getCanonicalRevision, 'saved', setSaveStatus);
+          }
+        })
+        .catch((error: unknown) => {
+          console.error('Folio autosave failed:', error);
+          setRevisionFencedAutosaveStatus(projectRevision, getCanonicalRevision, 'error', setSaveStatus);
+        });
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [state.project, isProjectLoaded, canonicalStore]);
+
+  // Auto-dismiss transient status toast
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 4200);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  // Menus, tool rack, shortcuts modal, and project/page drafts
   const toolbarHintStore = useMemo(() => createToolbarHintStore(), []);
+  const projectFileInputRef = useRef<HTMLInputElement>(null);
+  const menuBarRef = useRef<HTMLDivElement | null>(null);
+  const toolRailRef = useRef<HTMLElement | null>(null);
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const [helpMenuOpen, setHelpMenuOpen] = useState(false);
+  const [toolRackOpen, setToolRackOpen] = useState<string | null>(null);
   const [workspaceTools, setWorkspaceTools] = useState<Record<EditorTarget, CanvasToolId>>({
     main: 'select',
     component: 'select',
   });
   const [toolOptions, setToolOptions] = useState<CanvasToolOptions>(DEFAULT_CANVAS_TOOL_OPTIONS);
-  const [toolRackOpen, setToolRackOpen] = useState<ToolRackGroupId | null>(null);
   const [templateInsertMode, setTemplateInsertMode] = useState<TemplateInsertMode>('nodes');
   const templateInsertCountRef = useRef(0);
   const [projectNameEditing, setProjectNameEditing] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState('');
   const projectNameCancelRef = useRef(false);
-  const [layersVisible, setLayersVisible] = useState(() => initialWorkspaceLayout.panelVisibility.layers);
-  const [inspectorVisible, setInspectorVisible] = useState(true);
+  const [pageNameDraft, setPageNameDraft] = useState('');
+  const [componentRackSearch, setComponentRackSearch] = useState('');
+
+  const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
+  const shortcutsModalHostRef = useRef<HTMLDivElement | null>(null);
+  const shortcutsDialogRef = useRef<HTMLElement | null>(null);
+  const shortcutsFocusReturnRef = useRef<HTMLElement | null>(null);
+
+  // Layers interaction state (collapse, drag/drop, context menu, inline rename, color picker)
   const [collapsedLayers, setCollapsedLayers] = useState<Record<EditorTarget, string[]>>({ main: [], component: [] });
   const [layerDropTarget, setLayerDropTarget] = useState<{ nodeId: string; position: LayerDropPosition } | null>(null);
   const [layerContextMenu, setLayerContextMenu] = useState<LayerContextMenuState | null>(null);
@@ -364,78 +304,6 @@ export function App() {
   const layerColorPaletteRef = useRef<HTMLDivElement | null>(null);
   const [layerColorPickerPosition, setLayerColorPickerPosition] = useState<{ top: number; left: number } | null>(null);
 
-  useEffect(() => {
-    if (!layerColorPickerKey) return;
-
-    const updatePalettePosition = () => {
-      const anchor = layerColorAnchorRef.current;
-      const palette = layerColorPaletteRef.current;
-      if (!anchor || !palette) return;
-
-      const anchorRect = anchor.getBoundingClientRect();
-      const paletteRect = palette.getBoundingClientRect();
-      const margin = 8;
-      const gap = 6;
-      const left = Math.max(
-        margin,
-        Math.min(window.innerWidth - paletteRect.width - margin, anchorRect.right - paletteRect.width),
-      );
-      const belowTop = anchorRect.bottom + gap;
-      const top = belowTop + paletteRect.height <= window.innerHeight - margin
-        ? belowTop
-        : Math.max(margin, anchorRect.top - paletteRect.height - gap);
-
-      setLayerColorPickerPosition((current) => (
-        current && Math.abs(current.top - top) < 0.5 && Math.abs(current.left - left) < 0.5
-          ? current
-          : { top, left }
-      ));
-    };
-
-    const closePalette = () => {
-      setLayerColorPickerKey(null);
-      setLayerColorPickerPosition(null);
-      layerColorAnchorRef.current = null;
-    };
-
-    const handleOutsidePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (layerColorPaletteRef.current?.contains(target)) return;
-      if (layerColorAnchorRef.current?.contains(target)) return;
-      // Like committing a layer rename with Enter: keep the applied color and dismiss.
-      closePalette();
-    };
-
-    const handlePaletteKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Enter' && event.key !== 'Escape') return;
-      if (event.target instanceof Node && layerColorPaletteRef.current?.contains(event.target)) {
-        if (event.key === 'Enter' && event.target instanceof HTMLButtonElement) return;
-        event.preventDefault();
-        closePalette();
-      }
-    };
-
-    updatePalettePosition();
-    const controller = new AbortController();
-    const { signal } = controller;
-    document.addEventListener('pointerdown', handleOutsidePointerDown, { capture: true, signal });
-    document.addEventListener('keydown', handlePaletteKeyDown, { capture: true, signal });
-    window.addEventListener('resize', updatePalettePosition, { signal });
-    window.addEventListener('scroll', updatePalettePosition, { capture: true, signal });
-    return () => controller.abort();
-  }, [layerColorPickerKey]);
-  const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
-  const [windowOrder, setWindowOrder] = useState<WindowId[]>(() => [
-    ...initialWorkspaceOrder,
-    ...(initialWorkspaceLayout.panelVisibility['pages-rack'] ? ['pages' as const] : []),
-  ]);
-  const [activeWindowId, setActiveWindowId] = useState<WindowId>(
-    () => initialWorkspaceLayout.activeWorkspace,
-  );
-  const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const [fileMenuOpen, setFileMenuOpen] = useState(false);
-  const [helpMenuOpen, setHelpMenuOpen] = useState(false);
   const openShortcutsModal = useCallback(() => {
     shortcutsFocusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setFileMenuOpen(false);
@@ -448,113 +316,8 @@ export function App() {
   const closeShortcutsModal = useCallback(() => {
     setShortcutsModalOpen(false);
   }, []);
-  const menuBarRef = useRef<HTMLDivElement | null>(null);
-  const toolRailRef = useRef<HTMLElement | null>(null);
-  const [panelWidths, setPanelWidths] = useState<PanelWidths>(() => loadPanelWidths());
-  const [resizingPanel, setResizingPanel] = useState<ResizablePanelId | null>(null);
-  const panelWidthsRef = useRef<PanelWidths>(panelWidths);
-  const resizingPanelRef = useRef<ResizablePanelId | null>(null);
-  const panelVisibilityRef = useRef({ layersVisible, inspectorVisible });
-  panelVisibilityRef.current = { layersVisible, inspectorVisible };
-  const activePanelResizeSessionRef = useRef<ActivePanelResizeSession | null>(null);
-  const panelResizeSessionSeqRef = useRef(0);
-  const throttledPanelMoveRef = useRef<ThrottledMouseMoveController<{ sessionId: number; clientX: number }> | null>(null);
-  const layersResizeHandleRef = useRef<HTMLDivElement | null>(null);
-  const inspectorResizeHandleRef = useRef<HTMLDivElement | null>(null);
-  if (resizingPanelRef.current === null) {
-    panelWidthsRef.current = panelWidths;
-  }
-  const panelResizeCleanupRef = useRef<(() => void) | null>(null);
-  const [componentRackOpen, setComponentRackOpen] = useState(
-    () => initialWorkspaceLayout.panelVisibility['component-rack'],
-  );
-  const [pagesRackOpen, setPagesRackOpen] = useState(
-    () => initialWorkspaceLayout.panelVisibility['pages-rack'],
-  );
-  const pagesRackRef = useRef<HTMLElement | null>(null);
-  const componentRackRef = useRef<HTMLElement | null>(null);
-  const pagesRackToggleRef = useRef<HTMLButtonElement | null>(null);
-  const componentRackToggleRef = useRef<HTMLButtonElement | null>(null);
-  const closePagesRack = () => {
-    if (pagesRackRef.current?.contains(document.activeElement)) {
-      pagesRackToggleRef.current?.focus({ preventScroll: true });
-    }
-    setPagesRackOpen(false);
-  };
-  const closeComponentRack = () => {
-    if (componentRackRef.current?.contains(document.activeElement)) {
-      componentRackToggleRef.current?.focus({ preventScroll: true });
-    }
-    setComponentRackOpen(false);
-  };
-  const [pageNameDraft, setPageNameDraft] = useState('');
-  const pages = state.project.pages;
-  const activePageId = state.project.activePageId;
 
-  const [componentRackSearch, setComponentRackSearch] = useState('');
-  const [editingComponentId, setEditingComponentId] = useState<string | null>(null);
-  const [renamingComponentId, setRenamingComponentId] = useState<string | null>(null);
-  const [componentNameDraft, setComponentNameDraft] = useState('');
-  const ownedComponents = state.project.components;
-  const editingComponent = ownedComponents.find((component) => component.id === editingComponentId) ?? null;
-  const [canvasMinimized, setCanvasMinimized] = useState(
-    () => initialMainWindow.visibility === 'minimized',
-  );
-  const [canvasClosed, setCanvasClosed] = useState(
-    () => initialMainWindow.visibility === 'closed',
-  );
-  const [canvasWindowMode, setCanvasWindowMode] = useState<'docked' | 'floating'>(
-    () => initialMainWindow.presentation,
-  );
-  const canvasFloating = canvasWindowMode === 'floating';
-  const [canvasSize, setCanvasSize] = useState(() => ({
-    width: initialMainWindow.geometry.width,
-    height: initialMainWindow.geometry.height,
-  }));
-
-  const [componentCanvasClosed, setComponentCanvasClosed] = useState(
-    () => initialComponentWindow.visibility === 'closed',
-  );
-  const [componentCanvasMinimized, setComponentCanvasMinimized] = useState(
-    () => initialComponentWindow.visibility === 'minimized',
-  );
-  const [componentCanvasWindowMode, setComponentCanvasWindowMode] =
-    useState<'docked' | 'floating'>(() => initialComponentWindow.presentation);
-  const componentCanvasFloating = componentCanvasWindowMode === 'floating';
-  const componentCanvasOpen = !componentCanvasClosed && !componentCanvasMinimized;
-  const [componentCanvasSize, setComponentCanvasSize] = useState(() => ({
-    width: initialComponentWindow.geometry.width,
-    height: initialComponentWindow.geometry.height,
-  }));
-  const [componentCanvasPosition, setComponentCanvasPosition] = useState(() => ({
-    x: initialComponentWindow.geometry.x,
-    y: initialComponentWindow.geometry.y,
-  }));
-
-  const [nodeLogicClosed, setNodeLogicClosed] = useState(
-    () => initialNodeLogicWindow.visibility === 'closed',
-  );
-  const [nodeLogicMinimized, setNodeLogicMinimized] = useState(
-    () => initialNodeLogicWindow.visibility === 'minimized',
-  );
-  const [nodeLogicWindowMode, setNodeLogicWindowMode] =
-    useState<'docked' | 'floating'>(() => initialNodeLogicWindow.presentation);
-  const nodeLogicFloating = nodeLogicWindowMode === 'floating';
-  const nodeLogicOpen = !nodeLogicClosed && !nodeLogicMinimized;
-  const [nodeLogicSize, setNodeLogicSize] = useState(() => ({
-    width: initialNodeLogicWindow.geometry.width,
-    height: initialNodeLogicWindow.geometry.height,
-  }));
-  const [nodeLogicPosition, setNodeLogicPosition] = useState(() => ({
-    x: initialNodeLogicWindow.geometry.x,
-    y: initialNodeLogicWindow.geometry.y,
-  }));
-
-  const [canvasPosition, setCanvasPosition] = useState(() => ({
-    x: initialMainWindow.geometry.x,
-    y: initialMainWindow.geometry.y,
-  }));
-
+  // Dismiss menus on outside pointerdown or Escape
   useLayoutEffect(() => {
     if (!fileMenuOpen && !viewMenuOpen && !helpMenuOpen) return;
     const closeMenus = () => {
@@ -578,6 +341,7 @@ export function App() {
     return () => controller.abort();
   }, [fileMenuOpen, viewMenuOpen, helpMenuOpen]);
 
+  // Dismiss tool rack flyouts on outside pointerdown or Escape
   useLayoutEffect(() => {
     if (!toolRackOpen) return;
     const handlePointerDown = (event: PointerEvent) => {
@@ -603,316 +367,130 @@ export function App() {
     return () => controller.abort();
   }, [toolRackOpen]);
 
-  const latestMainViewRef = useRef(mainView);
-  latestMainViewRef.current = mainView;
-  const mainViewDirtyRef = useRef(false);
-  const mainViewTimerRef = useRef<number | null>(null);
-  const flushMainView = useCallback(() => {
-    if (mainViewTimerRef.current !== null) {
-      window.clearTimeout(mainViewTimerRef.current);
-      mainViewTimerRef.current = null;
-    }
-    if (!mainViewDirtyRef.current) return;
-    mainViewDirtyRef.current = false;
-    try { window.localStorage.setItem('folio.main-canvas-view', JSON.stringify(latestMainViewRef.current)); }
-    catch (error) { console.warn('Folio could not persist Main Canvas view:', error); }
-  }, []);
+  // Keep root-mounted Layer Color Palette positioned and dismissible
   useEffect(() => {
-    mainViewDirtyRef.current = true;
-    if (mainViewTimerRef.current !== null) window.clearTimeout(mainViewTimerRef.current);
-    mainViewTimerRef.current = window.setTimeout(flushMainView, 160);
-  }, [mainView, flushMainView]);
-
-  const latestComponentViewRef = useRef(componentView);
-  latestComponentViewRef.current = componentView;
-  const componentViewDirtyRef = useRef(false);
-  const componentViewTimerRef = useRef<number | null>(null);
-  const flushComponentView = useCallback(() => {
-    if (componentViewTimerRef.current !== null) {
-      window.clearTimeout(componentViewTimerRef.current);
-      componentViewTimerRef.current = null;
-    }
-    if (!componentViewDirtyRef.current) return;
-    componentViewDirtyRef.current = false;
-    try { window.localStorage.setItem('folio.component-canvas-view', JSON.stringify(latestComponentViewRef.current)); }
-    catch (error) { console.warn('Folio could not persist Component Canvas view:', error); }
-  }, []);
-  useEffect(() => {
-    componentViewDirtyRef.current = true;
-    if (componentViewTimerRef.current !== null) window.clearTimeout(componentViewTimerRef.current);
-    componentViewTimerRef.current = window.setTimeout(flushComponentView, 160);
-  }, [componentView, flushComponentView]);
-
-  const workspacePreferencesSnapshot = useMemo<WorkspaceLayoutV1>(() => {
-    const currentWindows: WorkspaceLayoutV1['windows'] = [
-      {
-        ...initialMainWindow,
-        visibility: canvasClosed ? 'closed' : canvasMinimized ? 'minimized' : 'open',
-        presentation: canvasWindowMode,
-        geometry: {
-          x: canvasPosition.x,
-          y: canvasPosition.y,
-          width: canvasSize.width,
-          height: canvasSize.height,
-        },
-      },
-      {
-        ...initialComponentWindow,
-        visibility: componentCanvasClosed
-          ? 'closed'
-          : componentCanvasMinimized ? 'minimized' : 'open',
-        presentation: componentCanvasWindowMode,
-        geometry: {
-          x: componentCanvasPosition.x,
-          y: componentCanvasPosition.y,
-          width: componentCanvasSize.width,
-          height: componentCanvasSize.height,
-        },
-      },
-      {
-        ...initialNodeLogicWindow,
-        visibility: nodeLogicClosed ? 'closed' : nodeLogicMinimized ? 'minimized' : 'open',
-        presentation: nodeLogicWindowMode,
-        geometry: {
-          x: nodeLogicPosition.x,
-          y: nodeLogicPosition.y,
-          width: nodeLogicSize.width,
-          height: nodeLogicSize.height,
-        },
-      },
-    ];
-
-    const stackOrder = windowOrder.flatMap((id) => {
-      if (id !== 'main-canvas' && id !== 'component-canvas' && id !== 'node-logic') {
-        return [];
-      }
-      const record = currentWindows.find((candidate) => candidate.workspace === id);
-      return record?.visibility === 'open' ? [record.windowInstanceId] : [];
-    });
-    for (const record of currentWindows) {
-      if (record.visibility === 'open' && !stackOrder.includes(record.windowInstanceId)) {
-        stackOrder.push(record.windowInstanceId);
-      }
-    }
-
-    const activeRecord =
-      currentWindows.find((record) =>
-        record.workspace === activeWindowId && record.visibility === 'open',
-      ) ??
-      currentWindows.find((record) =>
-        record.windowInstanceId === stackOrder.at(-1),
+    if (!layerColorPickerKey) return;
+    const updatePalettePosition = () => {
+      const anchor = layerColorAnchorRef.current;
+      const palette = layerColorPaletteRef.current;
+      if (!anchor || !palette) return;
+      const next = computeClampedPopoverPosition(
+        anchor.getBoundingClientRect(),
+        palette.getBoundingClientRect(),
+        { width: window.innerWidth, height: window.innerHeight },
       );
-    const stackPositions = new Map(stackOrder.map((id, index) => [id, index]));
-
-    return {
-      ...initialWorkspaceLayout,
-      windows: currentWindows.map((record) => ({
-        ...record,
-        stackOrder: stackPositions.get(record.windowInstanceId) ?? 0,
-      })),
-      stackOrder,
-      activeWindowInstanceId: activeRecord?.windowInstanceId ?? null,
-      activeWorkspace: activeRecord?.workspace ?? 'main-canvas',
-      panelVisibility: {
-        'pages-rack': pagesRackOpen,
-        'component-rack': componentRackOpen,
-        layers: layersVisible,
-      },
-      updatedAt: new Date().toISOString(),
+      setLayerColorPickerPosition((current) => (
+        current && Math.abs(current.top - next.top) < 0.5 && Math.abs(current.left - next.left) < 0.5
+          ? current
+          : next
+      ));
     };
-  }, [
-    initialWorkspaceLayout,
-    initialMainWindow,
-    initialComponentWindow,
-    initialNodeLogicWindow,
-    canvasClosed,
-    canvasMinimized,
-    canvasWindowMode,
-    canvasPosition,
-    canvasSize,
-    componentCanvasClosed,
-    componentCanvasMinimized,
-    componentCanvasWindowMode,
-    componentCanvasPosition,
-    componentCanvasSize,
-    nodeLogicClosed,
-    nodeLogicMinimized,
-    nodeLogicWindowMode,
-    nodeLogicPosition,
-    nodeLogicSize,
-    windowOrder,
-    activeWindowId,
-    pagesRackOpen,
-    componentRackOpen,
-    layersVisible,
-  ]);
-
-  const workspacePreferencesPersistedOnceRef = useRef(false);
-  const workspacePreferencesEnabledRef = useRef(workspacePreferencesPersistenceEnabled);
-  workspacePreferencesEnabledRef.current = workspacePreferencesPersistenceEnabled;
-  const latestWorkspaceSnapshotRef = useRef(workspacePreferencesSnapshot);
-  latestWorkspaceSnapshotRef.current = workspacePreferencesSnapshot;
-  const workspacePreferencesDirtyRef = useRef(false);
-  const workspacePreferencesTimerRef = useRef<number | null>(null);
-
-  const flushWorkspacePreferences = useCallback((fromPageHide = false) => {
-    if (workspacePreferencesTimerRef.current !== null) {
-      window.clearTimeout(workspacePreferencesTimerRef.current);
-      workspacePreferencesTimerRef.current = null;
-    }
-    if (!workspacePreferencesDirtyRef.current || !workspacePreferencesEnabledRef.current) return;
-    workspacePreferencesDirtyRef.current = false;
-    if (fromPageHide && workspacePreferencesPersistedOnceRef.current) {
-      try {
-        if (window.localStorage.getItem('folio.workspace-layout.v1') === null) {
-          return;
-        }
-      } catch {
-        // Proceed to normal persistence error handling if storage access fails.
+    const closePalette = () => {
+      setLayerColorPickerKey(null);
+      setLayerColorPickerPosition(null);
+      layerColorAnchorRef.current = null;
+    };
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (layerColorPaletteRef.current?.contains(target)) return;
+      if (layerColorAnchorRef.current?.contains(target)) return;
+      closePalette();
+    };
+    const handlePaletteKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' && event.key !== 'Escape') return;
+      if (event.target instanceof Node && layerColorPaletteRef.current?.contains(event.target)) {
+        if (event.key === 'Enter' && event.target instanceof HTMLButtonElement) return;
+        event.preventDefault();
+        closePalette();
       }
-    }
-    const saved = saveWorkspacePreferences(latestWorkspaceSnapshotRef.current, {
-      reconciliationComplete: true,
-      replaceUnsupportedVersion: workspacePreferencesReplaceMalformedRef.current,
-      viewport: {
-        width: document.documentElement.clientWidth || window.innerWidth,
-        height: document.documentElement.clientHeight || window.innerHeight,
-      },
-    });
-    if (!saved.ok) {
-      console.warn('Folio could not persist its workspace layout:', saved.reason);
-      setNotice('Workspace layout could not be saved: ' + saved.reason + '.');
-      return;
-    }
-    workspacePreferencesReplaceMalformedRef.current = false;
-    workspacePreferencesPersistedOnceRef.current = true;
+    };
+    updatePalettePosition();
+    const controller = new AbortController();
+    const { signal } = controller;
+    document.addEventListener('pointerdown', handleOutsidePointerDown, { capture: true, signal });
+    document.addEventListener('keydown', handlePaletteKeyDown, { capture: true, signal });
+    window.addEventListener('resize', updatePalettePosition, { signal });
+    window.addEventListener('scroll', updatePalettePosition, { capture: true, signal });
+    return () => controller.abort();
+  }, [layerColorPickerKey]);
+
+  // Dismiss Layer Context Menu on outside pointerdown, Escape, resize, or scroll
+  useEffect(() => {
+    if (!layerContextMenu) return;
+    const dismiss = () => setLayerContextMenu(null);
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && layerContextMenuRef.current?.contains(target)) return;
+      dismiss();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        dismiss();
+      }
+    };
+    const controller = new AbortController();
+    const { signal } = controller;
+    document.addEventListener('pointerdown', handlePointerDown, { capture: true, signal });
+    document.addEventListener('keydown', handleKeyDown, { capture: true, signal });
+    window.addEventListener('resize', dismiss, { signal });
+    window.addEventListener('scroll', dismiss, { capture: true, signal });
+    return () => controller.abort();
+  }, [layerContextMenu]);
+
+  // Window viewport recovery on mount & resize
+  useEffect(() => {
+    const onResize = () => {
+      windows.recoverWindow('main-canvas');
+      windows.recoverWindow('component-canvas');
+      windows.recoverWindow('node-logic');
+      panelResize.clampCurrentPanelWidths();
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [windows.recoverWindow, panelResize.clampCurrentPanelWidths]);
+
+  useEffect(() => {
+    windows.recoverWindow('main-canvas');
+    windows.recoverWindow('component-canvas');
+    windows.recoverWindow('node-logic');
   }, []);
 
+  // Keyboard Shortcuts modal focus trap
   useEffect(() => {
-    if (!workspacePreferencesPersistenceEnabled) return;
-    workspacePreferencesDirtyRef.current = true;
-    // Persist immediately on first reconciliation/migration approval; debounce subsequent
-    // high-frequency window drags/resizes to avoid synchronous localStorage jank.
-    if (!workspacePreferencesPersistedOnceRef.current || workspacePreferencesReplaceMalformedRef.current) {
-      flushWorkspacePreferences(false);
-      return;
-    }
-    if (workspacePreferencesTimerRef.current !== null) {
-      window.clearTimeout(workspacePreferencesTimerRef.current);
-    }
-    workspacePreferencesTimerRef.current = window.setTimeout(() => flushWorkspacePreferences(false), 120);
-  }, [workspacePreferencesSnapshot, workspacePreferencesPersistenceEnabled, flushWorkspacePreferences]);
-
-  useEffect(() => {
-    const flushAllPendingStorage = (fromPageHide: boolean) => {
-      flushMainView();
-      flushComponentView();
-      flushWorkspacePreferences(fromPageHide);
+    if (!shortcutsModalOpen || componentMaster.componentDeletionDialogOpen) return;
+    const shell = appShellRef.current;
+    const host = shortcutsModalHostRef.current;
+    const dialog = shortcutsDialogRef.current;
+    if (!shell || !host || !dialog) return;
+    const restoreFocus = activateModalDialog(shell, host, dialog, shortcutsFocusReturnRef.current);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key === '/') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeShortcutsModal();
+        return;
+      }
+      trapModalDialogKeydown(dialog, event, closeShortcutsModal);
     };
-    const onPageHide = () => flushAllPendingStorage(true);
-    const controller = new AbortController();
-    window.addEventListener('pagehide', onPageHide, { signal: controller.signal });
+    document.addEventListener('keydown', onKeyDown, true);
     return () => {
-      controller.abort();
-      flushAllPendingStorage(false);
+      document.removeEventListener('keydown', onKeyDown, true);
+      restoreFocus();
     };
-  }, [flushMainView, flushComponentView, flushWorkspacePreferences]);
+  }, [shortcutsModalOpen, componentMaster.componentDeletionDialogOpen, closeShortcutsModal]);
 
-  useEffect(() => {
-    let active = true;
-    loadMostRecentProject()
-      .then((loadedProject) => {
-        if (!active || !loadedProject) return;
-
-        // Restore explicitly from the project's activePageId. If an older or
-        // malformed v2 record points nowhere, use the first persisted page.
-        const activePage = loadedProject.pages.find((page) => page.id === loadedProject.activePageId)
-          ?? loadedProject.pages[0];
-        if (!activePage) throw new Error('The saved project does not contain a page.');
-        mainCommandClient.replaceProject(
-          { ...loadedProject, activePageId: activePage.id },
-          'Restore project from IndexedDB',
-        );
-      })
-      .catch((error: unknown) => {
-        console.error('Folio could not restore the project from IndexedDB:', error);
-        if (active) setNotice('The saved project could not be restored. A new project is available.');
-      })
-      .finally(() => {
-        if (active) setIsProjectLoaded(true);
-      });
-
-    return () => { active = false; };
-  }, [mainCommandClient]);
-
-  useEffect(() => {
-    let active = true;
-    loadProjectById('folio-component-canvas')
-      .then((project) => {
-        if (active && project) {
-          componentCommandClient.replaceProject(project, 'Restore Component Canvas buffer');
-        }
-      })
-      .catch((error: unknown) => {
-        console.warn('Folio could not read Component Canvas autosave:', error);
-      })
-      .finally(() => {
-        if (active) setComponentReady(true);
-      });
-    return () => { active = false; };
-  }, [componentCommandClient]);
-
-  useEffect(() => {
-    if (!componentReady) return;
-    componentAutosave.schedule(componentState.project);
-    return () => componentAutosave.cancel();
-  }, [componentState.project, componentReady, componentAutosave]);
-
-  useEffect(() => {
-    if (!isProjectLoaded) return;
-    setSaveStatus('saving');
-    const canonicalSnapshot = canonicalStore.getSnapshot();
-    const projectRevision = canonicalSnapshot.projectRevision;
-    const getCanonicalRevision = () => canonicalStore.getSnapshot().projectRevision;
-    const timer = window.setTimeout(() => {
-      saveProjectIfRevisionCurrent(
-        canonicalSnapshot.editorState.project,
-        projectRevision,
-        getCanonicalRevision,
-        (listener) => canonicalStore.subscribe(listener),
-      )
-        .then((result) => {
-          // A queued or in-flight candidate may be invalidated by a newer
-          // canonical revision. Never let its Promise callback overwrite the
-          // newer revision's "saving" state.
-          if (result.status === 'saved') {
-            setRevisionFencedAutosaveStatus(
-              projectRevision, getCanonicalRevision, 'saved', setSaveStatus,
-            );
-          }
-        })
-        .catch((error: unknown) => {
-          console.error('Folio autosave failed:', error);
-          setRevisionFencedAutosaveStatus(
-            projectRevision, getCanonicalRevision, 'error', setSaveStatus,
-          );
-        });
-    }, 450);
-    return () => window.clearTimeout(timer);
-  }, [state.project, isProjectLoaded]);
-
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 4200);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-
+  // Derived active workspace context
+  const pages = state.project.pages;
+  const activePageId = state.project.activePageId;
+  const ownedComponents = state.project.components;
   const activeDocument = getActiveDocument(state.project);
   const componentDocument = getActiveDocument(componentState.project);
   const focusedEditor = getActiveEditorContext(activeEditorId, state, componentState);
   const focusedDocument = focusedEditor.document;
   const focusedPage = activeEditorId === 'main' ? getActivePage(state.project) : null;
-  const layerContextName = focusedPage?.name ?? editingComponent?.name ?? componentDocument.name;
+  const layerContextName = focusedPage?.name ?? componentMaster.editingComponent?.name ?? componentDocument.name;
   const layerContextLabel = focusedPage ? `EDITING: ${focusedPage.name}` : `COMPONENT: ${layerContextName}`;
   const layerContextTitle = focusedPage
     ? `Editing page ${focusedPage.name} (${focusedPage.route})`
@@ -923,7 +501,9 @@ export function App() {
   const selectedInstanceComponent = selectedInstance
     ? state.project.components.find((component) => component.id === selectedInstance.componentId) ?? null
     : null;
-  const instanceOverrideTargets = selectedInstanceComponent ? getComponentOverrideTargets(selectedInstanceComponent) : null;
+  const instanceOverrideTargets = selectedInstanceComponent
+    ? getComponentOverrideTargets(selectedInstanceComponent)
+    : null;
   const focusedCommandClient = getCommandClient(activeEditorId);
   const layerSourceNodes = focusedDocument.nodes;
   const activeCollapsedLayers = collapsedLayers[activeEditorId];
@@ -943,24 +523,12 @@ export function App() {
     ? getActiveEditorContext(layerContextMenu.editorId, state, componentState)
     : null;
   const contextMenuNodes = contextMenuEditor?.document.nodes ?? [];
-  const contextMenuRootIds = layerContextMenu
-    ? getSelectedLayerRootIds(contextMenuNodes, layerContextMenu.nodeIds)
-    : [];
-  const contextMenuRootNodes = contextMenuRootIds
-    .map((id) => contextMenuNodes.find((node) => node.id === id))
-    .filter((node): node is DesignNode => node !== undefined);
-  const contextMenuCanGroup = contextMenuRootNodes.length > 1
-    || (contextMenuRootNodes.length === 1 && (
-      contextMenuRootNodes[0].type === 'group'
-      || contextMenuNodes.some((node) => node.parentId === contextMenuRootNodes[0].id)
-    ));
-  const contextMenuCanUngroup = contextMenuRootNodes.some((root) =>
-    contextMenuNodes.some((node) => node.parentId === root.id)
+  const contextMenuCapabilities = useMemo(
+    () => getLayerContextMenuCapabilities(contextMenuNodes, layerContextMenu?.nodeIds ?? []),
+    [contextMenuNodes, layerContextMenu],
   );
-  const contextMenuCanMask = contextMenuRootIds.length === 1
-    && Boolean(getClippingMaskBaseId(contextMenuNodes, contextMenuRootIds[0]));
-  const contextMenuCanUnmask = contextMenuRootIds.length === 1
-    && Boolean(contextMenuRootNodes[0]?.clipMaskBaseId);
+
+  // Layer rename lifecycle
   const beginLayerRename = (nodeId: string, batch: boolean) => {
     const selectedIds = focusedEditor.state.selectedNodeIds;
     const nodeIds = batch
@@ -998,22 +566,10 @@ export function App() {
     // Clear the ref first: Enter followed by an ensuing blur must never commit twice.
     layerRenameRef.current = null;
     setLayerRename(null);
-    const baseName = session.value.trim();
-    if (!save || !baseName) return;
+    if (!save) return;
 
-    const updates = session.batch
-      ? (() => {
-          const occupied = new Set(session.existingNames);
-          let suffix = 1;
-          return session.nodeIds.map((nodeId) => {
-            let name = '';
-            do { name = `${baseName} ${suffix++}`; } while (occupied.has(name));
-            occupied.add(name);
-            return { nodeId, name };
-          });
-        })()
-      : [{ nodeId: session.nodeIds[0], name: baseName }];
-
+    const updates = computeLayerRenameUpdates(session);
+    if (updates.length === 0) return;
     getCommandClient(session.editorId).renameNodes(
       updates,
       session.batch ? 'Batch rename layers' : 'Rename layer',
@@ -1021,39 +577,12 @@ export function App() {
   };
 
   useEffect(() => {
-    if (!layerContextMenu) return;
-    const dismiss = () => setLayerContextMenu(null);
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && layerContextMenuRef.current?.contains(target)) return;
-      dismiss();
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        dismiss();
-      }
-    };
-    const controller = new AbortController();
-    const { signal } = controller;
-    document.addEventListener('pointerdown', handlePointerDown, { capture: true, signal });
-    document.addEventListener('keydown', handleKeyDown, { capture: true, signal });
-    window.addEventListener('resize', dismiss, { signal });
-    window.addEventListener('scroll', dismiss, { capture: true, signal });
-    return () => controller.abort();
-  }, [layerContextMenu]);
-
-  useEffect(() => {
     if (!layerRename) return;
-
-    // autoFocus is unreliable when a conditional input is mounted in a keyed tree.
-    // Focus only after Preact has committed the input to the DOM.
     const input = layerRenameInputRef.current;
     if (input) {
       input.focus({ preventScroll: true });
       input.setSelectionRange(0, input.value.length);
     }
-
     const handleOutsidePointerDown = (event: PointerEvent) => {
       const activeInput = layerRenameInputRef.current;
       if (!activeInput) {
@@ -1061,16 +590,14 @@ export function App() {
         return;
       }
       if (event.target instanceof Node && activeInput.contains(event.target)) return;
-      // Capture-phase pointerdown closes the editor before another layer/action
-      // receives its click, including clicks on empty workspace areas.
       finishLayerRename(true);
     };
-
     const controller = new AbortController();
     document.addEventListener('pointerdown', handleOutsidePointerDown, { capture: true, signal: controller.signal });
     return () => controller.abort();
   }, [layerRename?.anchorId]);
 
+  // Layer actions
   const setLayerColorFromRow = (nodeId: string, color: string) => {
     const selectedIds = focusedEditor.state.selectedNodeIds;
     const targetIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId];
@@ -1095,98 +622,58 @@ export function App() {
 
   const selectLayerFromPanel = (nodeId: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
     selectionSourceRef.current = 'layers';
-    const selected = focusedEditor.state.selectedNodeIds;
-    const additive = Boolean(modifiers.ctrlKey || modifiers.metaKey);
-    const subtreeIds = expandSelectedLayerIds(layerSourceNodes, [nodeId]);
-    const subtreeIsSelected = subtreeIds.length === selected.length
-      && subtreeIds.every((id) => selected.includes(id));
-
-    if (modifiers.shiftKey && selected.length > 1 && selected.includes(nodeId) && !subtreeIsSelected && getLayerAncestorIds(layerSourceNodes, nodeId).size === 0) {
+    const result = computeLayerSelection({
+      nodeId,
+      modifiers,
+      nodes: layerSourceNodes,
+      rows: layerRows,
+      selectedNodeIds: focusedEditor.state.selectedNodeIds,
+      currentAnchorId: layerSelectionAnchorRef.current[activeEditorId],
+    });
+    if (result.action === 'rename-batch') {
       beginLayerRename(nodeId, true);
       return;
     }
-    if (!modifiers.shiftKey && !additive && subtreeIsSelected) {
+    if (result.action === 'rename-single') {
       beginLayerRename(nodeId, false);
       return;
     }
-
-    const orderedIds = layerRows.map((row) => row.node.id);
-    if (modifiers.shiftKey) {
-      const anchor = layerSelectionAnchorRef.current[activeEditorId];
-      const anchorId = anchor && selected.includes(anchor) ? anchor : (selected[0] ?? nodeId);
-      const start = orderedIds.indexOf(anchorId);
-      const end = orderedIds.indexOf(nodeId);
-      if (start >= 0 && end >= 0) {
-        const range = orderedIds.slice(Math.min(start, end), Math.max(start, end) + 1);
-        const requested = additive ? [...new Set([...selected, ...range])] : range;
-        focusedCommandClient.selectNodes(
-          expandSelectedLayerIds(layerSourceNodes, requested),
-          'Select layer range',
-        );
-        setInspectorVisible(true);
-        return;
-      }
+    if (result.nextAnchorId !== undefined) {
+      layerSelectionAnchorRef.current[activeEditorId] = result.nextAnchorId;
     }
-
-    if (additive) {
-      const groupIsSelected = subtreeIds.every((id) => selected.includes(id));
-      let next: string[];
-      if (groupIsSelected) {
-        // A child cannot stay implicitly selected through an ancestor after
-        // its own subtree is toggled off.
-        const removed = new Set([...subtreeIds, ...getLayerAncestorIds(layerSourceNodes, nodeId)]);
-        next = selected.filter((id) => !removed.has(id));
-      } else {
-        next = expandSelectedLayerIds(layerSourceNodes, [...selected, ...subtreeIds]);
-      }
-      const anchor = layerSelectionAnchorRef.current[activeEditorId];
-      if (!anchor || !selected.includes(anchor)) layerSelectionAnchorRef.current[activeEditorId] = nodeId;
-      focusedCommandClient.selectNodes(next, 'Toggle layer selection');
-    } else {
-      layerSelectionAnchorRef.current[activeEditorId] = nodeId;
-      focusedCommandClient.selectNodes(subtreeIds, 'Select layer');
-    }
-    setInspectorVisible(true);
+    focusedCommandClient.selectNodes(result.nodeIds ?? [], result.description ?? 'Select layer');
+    windows.setInspectorVisible(true);
   };
 
   const openLayerContextMenu = (nodeId: string, event: JSX.TargetedMouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
     selectionSourceRef.current = 'layers';
-
-    // Right-clicking a selected member preserves the current multi-selection.
-    // Otherwise, behave like a normal Layers-panel selection and include its subtree.
     const currentSelection = focusedEditor.state.selectedNodeIds.filter((id) => layerSourceIds.has(id));
     const menuNodeIds = currentSelection.includes(nodeId)
       ? currentSelection
       : expandSelectedLayerIds(layerSourceNodes, [nodeId]);
-
     if (!currentSelection.includes(nodeId)) {
       layerSelectionAnchorRef.current[activeEditorId] = nodeId;
       focusedCommandClient.selectNodes(menuNodeIds, 'Select layer for context menu');
-      setInspectorVisible(true);
+      windows.setInspectorVisible(true);
     }
-
-    setLayerContextMenu({
-      nodeId,
-      nodeIds: menuNodeIds,
-      editorId: activeEditorId,
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 216)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 248)),
-    });
+    const pos = computeClampedContextMenuPosition(
+      event.clientX,
+      event.clientY,
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    setLayerContextMenu({ nodeId, nodeIds: menuNodeIds, editorId: activeEditorId, x: pos.x, y: pos.y });
   };
 
   const toggleLayerCollapsed = (nodeId: string) => {
     setCollapsedLayers((current) => {
       const ids = current[activeEditorId] ?? [];
-      return { ...current, [activeEditorId]: ids.includes(nodeId) ? ids.filter((id) => id !== nodeId) : [...ids, nodeId] };
+      return {
+        ...current,
+        [activeEditorId]: ids.includes(nodeId) ? ids.filter((id) => id !== nodeId) : [...ids, nodeId],
+      };
     });
-  };
-
-  const getLayerDropPosition = (event: { currentTarget: HTMLElement; clientY: number }): LayerDropPosition => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const relativeY = (event.clientY - rect.top) / Math.max(1, rect.height);
-    return relativeY < 0.25 ? 'before' : relativeY > 0.75 ? 'after' : 'inside';
   };
 
   const startLayerDrag = (nodeId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
@@ -1207,7 +694,10 @@ export function App() {
     if (!layerDragSourceRef.current?.length) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-    setLayerDropTarget({ nodeId, position: getLayerDropPosition(event) });
+    setLayerDropTarget({
+      nodeId,
+      position: getLayerDropPosition(event.currentTarget.getBoundingClientRect(), event.clientY),
+    });
   };
 
   const dropLayer = (targetId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
@@ -1222,11 +712,10 @@ export function App() {
     } else if (!draggedIds.length) {
       draggedIds = (event.dataTransfer?.getData('text/plain') ?? '').split(',').map((id) => id.trim()).filter(Boolean);
     }
-    const position = getLayerDropPosition(event);
+    const position = getLayerDropPosition(event.currentTarget.getBoundingClientRect(), event.clientY);
     if (draggedIds.length > 0) {
       const result = focusedCommandClient.moveLayers(draggedIds, targetId, position);
-      const moved = result.status === 'applied';
-      if (moved && position === 'inside') {
+      if (result.status === 'applied' && position === 'inside') {
         setCollapsedLayers((current) => ({
           ...current,
           [activeEditorId]: (current[activeEditorId] ?? []).filter((id) => id !== targetId),
@@ -1250,7 +739,6 @@ export function App() {
       clearDrag();
       return;
     }
-
     const targetDocument = target === 'main' ? activeDocument : componentDocument;
     const targetClient = getCommandClient(target);
     const requested = new Set(nodeIds);
@@ -1259,22 +747,17 @@ export function App() {
       clearDrag();
       return;
     }
-
     const ids = droppedNodes.map((node) => node.id);
     const existing = droppedNodes.find((node) => node.onCanvas !== false);
     selectionSourceRef.current = 'canvas';
     setActiveEditorId(target);
-    setInspectorVisible(true);
+    windows.setInspectorVisible(true);
     targetClient.selectNodes(ids, 'Select dropped layers');
-
     if (existing) {
       setNotice(`“${existing.name}” is already on the Canvas. Duplicate objects are not allowed.`);
       clearDrag();
       return;
     }
-
-    // Re-show the exact same nodes. The saved position, size, style and
-    // rotation remain on the original layer records; dropping never resets them.
     const result = targetClient.setNodesCanvasState(ids, true, 'Restore layers to canvas');
     if (result.status === 'applied') {
       setNotice(`“${droppedNodes[0].name}” has been restored to the Canvas with its previous properties.`);
@@ -1282,11 +765,12 @@ export function App() {
     clearDrag();
   };
 
+  // Document, Page, Template & Export actions
   const addNode = (type: 'rect' | 'ellipse' | 'text') => {
     if (isHydrating) return;
     const node = createNodeForDocument(type, focusedDocument);
     focusedCommandClient.createNodes([node], `Create ${type} node`);
-    setInspectorVisible(true);
+    windows.setInspectorVisible(true);
   };
 
   const insertTemplate = (template: StudioTemplateDefinition, requestedMode: TemplateInsertMode) => {
@@ -1308,7 +792,7 @@ export function App() {
         mainCommandClient.selectNodes([instance.id], `Select inserted ${component.name} instance`);
         setWorkspaceTools((current) => ({ ...current, main: 'select' }));
         setToolRackOpen(null);
-        setInspectorVisible(true);
+        windows.setInspectorVisible(true);
         setNotice(`Inserted “${component.name}” as Master Component + linked Instance.`);
       }
       return;
@@ -1318,592 +802,12 @@ export function App() {
     const result = focusedCommandClient.createNodes(nodes, `Insert "${template.name}" template`);
     if (result.status === 'applied') {
       const rootIds = nodes.filter((node) => !node.parentId).map((node) => node.id);
-      const selectionTarget = rootIds.length > 0 ? rootIds : [nodes[0].id];
-      focusedCommandClient.selectNodes(selectionTarget, `Select inserted ${template.name}`);
+      focusedCommandClient.selectNodes(rootIds.length > 0 ? rootIds : [nodes[0].id], `Select inserted ${template.name}`);
       setWorkspaceTools((current) => ({ ...current, [activeEditorId]: 'select' }));
       setToolRackOpen(null);
-      setInspectorVisible(true);
+      windows.setInspectorVisible(true);
       setNotice(`Inserted “${template.name}” (${nodes.length} layers).`);
     }
-  };
-  const saveNodesAsComponent = (nodes: DesignNode[], sourceNodes: readonly DesignNode[] = activeDocument.nodes) => {
-    if (isHydrating || nodes.length === 0) return;
-    const component = buildComponentDefinitionFromNodes(
-      sourceNodes,
-      nodes.map((node) => node.id),
-      `Component ${ownedComponents.length + 1}`,
-    );
-    if (!component) return;
-    mainCommandClient.createComponent(component, 'Save selection as component');
-    closePagesRack();
-    setComponentRackOpen(true);
-    setNotice(`“${component.name}” saved to this project’s Component Rack.`);
-  };
-
-  /**
-   * Explicit Component Canvas save/update action (WEB-09):
-   * - When editing an existing master, updates/syncs that master in place
-   *   without ever creating accidental duplicates.
-   * - When working in a scratch Component Canvas with no active master, creates
-   *   one new master component and attaches the buffer to it.
-   */
-  const saveComponentCanvasMaster = () => {
-    if (isHydrating || pendingComponentDeletionRef.current) return;
-    const bufferDocument = getActiveDocument(componentState.project);
-
-    if (editingComponent) {
-      const session = componentSyncSessionRef.current;
-      if (componentRecoveryStatus !== 'none' || !session || session.conflicted || session.masterStatus !== 'present') {
-        setNotice('Resolve the active Component Canvas recovery state before updating this master.');
-        return;
-      }
-      const syncAction = createComponentCanvasSyncAction(editingComponent, bufferDocument, session);
-      if (!syncAction) {
-        void componentAutosave.flush(componentState.project);
-        setNotice(`“${editingComponent.name}” master is up to date.`);
-        return;
-      }
-      const syncResult = mainCommandClient.syncComponentDocument(
-        {
-          componentId: syncAction.componentId,
-          document: syncAction.document,
-          updatedAt: syncAction.updatedAt,
-          expectedUpdatedAt: syncAction.expectedUpdatedAt,
-          expectedMasterDocument: syncAction.expectedMasterDocument,
-        },
-        'Update component master',
-      );
-      if (syncResult.status === 'applied' || syncResult.status === 'no-op') {
-        const committedMaster = canonicalStore.getSnapshot().editorState.project.components
-          .find((component) => component.id === editingComponent.id);
-        if (committedMaster) {
-          componentSyncSessionRef.current = advanceComponentCanvasSyncSession(session, committedMaster);
-        }
-        void componentAutosave.flush(componentState.project);
-        setNotice(`Updated master “${editingComponent.name}”.`);
-      } else {
-        componentSyncSessionRef.current = { ...session, conflicted: true };
-        setComponentRecoveryStatus('conflict');
-        setNotice('The master changed before this update could be applied. Review the latest master before saving.');
-      }
-      return;
-    }
-
-    const sourceIds = selectedComponentNodes.length > 0
-      ? selectedComponentNodes.map((node) => node.id)
-      : bufferDocument.nodes.map((node) => node.id);
-    const component = buildComponentDefinitionFromNodes(
-      bufferDocument.nodes,
-      sourceIds,
-      `Component ${ownedComponents.length + 1}`,
-    );
-    if (!component) return;
-    mainCommandClient.createComponent(component, 'Create master component');
-    const committedMaster = canonicalStore.getSnapshot().editorState.project.components
-      .find((item) => item.id === component.id) ?? component;
-    componentSyncSessionRef.current = createComponentCanvasSyncSession(committedMaster);
-    setEditingComponentId(committedMaster.id);
-    setComponentRecoveryStatus('none');
-    closePagesRack();
-    setComponentRackOpen(true);
-    setNotice(`Created master “${component.name}” in Component Rack.`);
-  };
-
-  const loadMasterComponent = (component: ComponentDefinition) => {
-    if (pendingComponentDeletionRef.current) {
-      setNotice('Resolve the active component deletion recovery decision before replacing the Component Canvas buffer.');
-      return;
-    }
-    componentSyncPauseAfterCancelRef.current = null;
-    componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
-    setPendingComponentOpenId(null);
-    setComponentRecoveryStatus('none');
-    componentCommandClient.replaceProject(
-      createComponentCanvasBufferProject(component),
-      'Load master component into Component Canvas',
-    );
-    setEditingComponentId(component.id);
-    setComponentCanvasClosed(false);
-    setComponentCanvasMinimized(false);
-    setActiveEditorId('component');
-    focusWindow('component-canvas');
-    setInspectorVisible(true);
-    closeComponentRack();
-    setNotice(`Editing master: ${component.name}.`);
-  };
-
-  const openMasterComponent = (component: ComponentDefinition) => {
-    if (pendingComponentDeletionRef.current) {
-      setNotice('Resolve the active component deletion recovery decision before opening another master.');
-      return;
-    }
-    const session = componentSyncSessionRef.current;
-    const bufferDocument = getActiveDocument(componentState.project);
-    const hasActiveBuffer = editingComponentId !== null;
-    const mustProtectBuffer = hasActiveBuffer && (
-      !session || shouldProtectComponentCanvasBuffer(session, bufferDocument)
-    );
-    if (mustProtectBuffer) {
-      setPendingComponentOpenId(component.id);
-      setComponentCanvasClosed(false);
-      setComponentCanvasMinimized(false);
-      setActiveEditorId('component');
-      focusWindow('component-canvas');
-      setComponentRecoveryStatus('switch-pending');
-      setNotice(
-        'The current Component Canvas has local edits or a recovery conflict. Keep editing, or explicitly discard its buffer before opening another master.',
-      );
-      return;
-    }
-    loadMasterComponent(component);
-  };
-
-  const keepCurrentComponentBuffer = () => {
-    setPendingComponentOpenId(null);
-    const session = componentSyncSessionRef.current;
-    if (!session) {
-      setComponentRecoveryStatus('none');
-    } else if (session.masterStatus === 'missing') {
-      setComponentRecoveryStatus('missing');
-    } else if (session.masterStatus === 'returned') {
-      setComponentRecoveryStatus('returned');
-    } else if (session.conflicted) {
-      setComponentRecoveryStatus('conflict');
-    } else {
-      setComponentRecoveryStatus('none');
-    }
-  };
-
-  const discardBufferAndOpenPendingMaster = () => {
-    const pending = pendingComponentOpenId
-      ? state.project.components.find((item) => item.id === pendingComponentOpenId)
-      : undefined;
-    if (!pending) {
-      setPendingComponentOpenId(null);
-      setNotice('The requested master is no longer available. The current Component Canvas buffer was kept.');
-      return;
-    }
-    loadMasterComponent(pending);
-  };
-
-  const createNewMasterComponent = () => {
-    if (isHydrating) return;
-    const now = new Date().toISOString();
-    const name = `Component ${ownedComponents.length + 1}`;
-    const component: ComponentDefinition = {
-      id: globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`,
-      name,
-      document: { ...createEmptyDocument(name, 420, 280), background: '#00000000' },
-      createdAt: now,
-      updatedAt: now,
-    };
-    mainCommandClient.createComponent(component, 'Create new master component');
-    const committedMaster = canonicalStore.getSnapshot().editorState.project.components
-      .find((item) => item.id === component.id) ?? component;
-    openMasterComponent(committedMaster);
-  };
-
-  const renameComponent = (componentId: string) => {
-    const name = componentNameDraft.trim();
-    if (!name) return;
-    const current = state.project.components.find((item) => item.id === componentId);
-    if (!current) {
-      setNotice('This component is no longer available in the current project.');
-      return;
-    }
-    const renameResult = mainCommandClient.renameComponent(
-      {
-        componentId,
-        expectedMasterDocument: current.document,
-        expectedUpdatedAt: current.updatedAt,
-        name,
-      },
-      'Rename component',
-    );
-    if (renameResult.status === 'rejected') {
-      setNotice('The component changed before the rename could be applied. Review the latest master and retry.');
-      return;
-    }
-    setRenamingComponentId(null);
-    setNotice(`Component renamed to “${name}”.`);
-  };
-
-  const duplicateComponent = (component: ComponentDefinition) => {
-    const now = new Date().toISOString();
-    const copy: ComponentDefinition = {
-      ...component,
-      id: globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`,
-      name: `${component.name} copy`,
-      document: {
-        ...component.document,
-        id: globalThis.crypto?.randomUUID?.() ?? `document-${Date.now()}`,
-        name: `${component.name} copy`,
-        nodes: component.document.nodes.map((node) => ({ ...node })),
-      },
-      createdAt: now,
-      updatedAt: now,
-    };
-    mainCommandClient.createComponent(copy, 'Duplicate component');
-    setNotice(`“${component.name}” duplicated.`);
-  };
-
-  const componentDeletionTarget = (component: ComponentDefinition) => ({
-    componentId: component.id,
-    expectedMasterDocument: component.document,
-    expectedUpdatedAt: component.updatedAt,
-  });
-
-  const clearPendingComponentDeletion = () => {
-    pendingComponentDeletionRef.current = false;
-    setPendingComponentDeletion(null);
-    setComponentDeletionDialogOpen(false);
-    setComponentDeletionBusy(false);
-    setComponentCleanupPending(false);
-    setDurableRecoveryComponentId(null);
-  };
-
-  const keepComponentAfterStaleDeletion = (message: string) => {
-    clearPendingComponentDeletion();
-    const session = componentSyncSessionRef.current;
-    if (session) componentSyncSessionRef.current = { ...session, conflicted: true };
-    setComponentRecoveryStatus('conflict');
-    setNotice(message);
-  };
-
-  const finishDeletedActiveComponent = (component: ComponentDefinition) => {
-    if (editingComponentId !== component.id) return;
-    setEditingComponentId(null);
-    componentSyncSessionRef.current = null;
-    componentSyncPauseAfterCancelRef.current = null;
-    setPendingComponentOpenId(null);
-    setComponentRecoveryStatus('none');
-    componentCommandClient.replaceProject(
-      componentInitialState.project,
-      'Reset Component Canvas buffer',
-    );
-    setComponentCanvasClosed(true);
-    setComponentCanvasMinimized(false);
-    setActiveEditorId('main');
-  };
-
-  const openComponentDeletionDialog = (component: ComponentDefinition, mode: 'recovery' | 'clean' = 'recovery') => {
-    pendingComponentDeletionRef.current = true;
-    setPendingComponentDeletion(component);
-    setComponentDeletionMode(mode);
-    setComponentDeletionDialogOpen(true);
-    setComponentCanvasClosed(false);
-    setComponentCanvasMinimized(false);
-    setActiveEditorId('component');
-    focusWindow('component-canvas');
-    setInspectorVisible(true);
-  };
-
-  const showComponentCleanupPending = (component: ComponentDefinition) => {
-    pendingComponentDeletionRef.current = true;
-    setPendingComponentDeletion(component);
-    setComponentCleanupPending(true);
-    setComponentDeletionMode('cleanup');
-    setComponentDeletionDialogOpen(true);
-    setComponentCanvasClosed(false);
-    setComponentCanvasMinimized(false);
-    setActiveEditorId('component');
-    focusWindow('component-canvas');
-    setInspectorVisible(true);
-  };
-
-  const completeDurableComponentDeletion = (component: ComponentDefinition, message: string) => {
-    clearPendingComponentDeletion();
-    finishDeletedActiveComponent(component);
-    setNotice(message);
-  };
-
-  const deleteComponent = async (component: ComponentDefinition) => {
-    if (pendingComponentDeletionRef.current || componentCleanupPending) return;
-    const isActiveMaster = editingComponentId === component.id;
-    const trigger = document.activeElement;
-    deletionFocusReturnRef.current = trigger instanceof HTMLElement ? trigger : null;
-    const protection = {
-      activeMaster: isActiveMaster,
-      bufferDocument: isActiveMaster ? getActiveDocument(componentState.project) : null,
-      session: isActiveMaster ? componentSyncSessionRef.current : null,
-      recoveryPending: isActiveMaster && (
-        componentRecoveryStatus !== 'none' || pendingComponentOpenId !== null
-      ),
-    };
-    const result = requestComponentDeletion(
-      canonicalStore, componentDeletionTarget(component), protection, isActiveMaster,
-    );
-
-    if (result.status === 'recovery-required') {
-      openComponentDeletionDialog(component);
-      return;
-    }
-    if (result.status === 'stale-master') {
-      if (isActiveMaster) {
-        const session = componentSyncSessionRef.current;
-        if (session) componentSyncSessionRef.current = { ...session, conflicted: true };
-        setComponentRecoveryStatus('conflict');
-      }
-      setNotice('The master changed before deletion could be applied. Review the latest master and retry; the Component Canvas buffer was kept.');
-      return;
-    }
-
-    if (result.status === 'ready' && isActiveMaster) {
-      openComponentDeletionDialog(component, 'clean');
-      setComponentDeletionBusy(true);
-      const bufferSaved = await componentAutosave.flush(componentState.project);
-      if (!bufferSaved) {
-        setComponentDeletionBusy(false);
-        clearPendingComponentDeletion();
-        setNotice('Component Canvas buffer could not be saved durably. The master and buffer are unchanged; retry the buffer save before deleting.');
-        return;
-      }
-      const deletion = await deleteComponentDurably(
-        canonicalStore, componentDeletionTarget(component), componentInitialState.project, withProjectWriteLock,
-      );
-      setComponentDeletionBusy(false);
-      if (deletion.status === 'deleted') {
-        completeDurableComponentDeletion(component, `“${component.name}” deleted; linked instances were detached and Component Canvas cleanup is durable.`);
-      } else if (deletion.status === 'cleanup-persist-failed') {
-        showComponentCleanupPending(component);
-        componentAutosave.schedule(componentState.project);
-        setNotice('The master deletion is durable, but Component Canvas cleanup failed. Your local buffer is preserved; retry cleanup before discarding it.');
-      } else {
-        clearPendingComponentDeletion();
-        componentAutosave.schedule(componentState.project);
-        setNotice('The master deletion could not be made durable. The canonical master and Component Canvas buffer were preserved; retry is safe.');
-      }
-      return;
-    }
-
-    if (result.status !== 'deleted') {
-      setNotice('The master could not be deleted. The Component Canvas buffer was kept; review the latest master and retry.');
-      return;
-    }
-    setNotice(`“${component.name}” deleted; any linked instances were detached.`);
-  };
-
-  const cancelComponentDeletion = () => {
-    if (!pendingComponentDeletion || componentDeletionBusy) return;
-    if (componentCleanupPending) {
-      setNotice('The master deletion is already durable. Keep this recovery dialog open and retry the buffer cleanup; the protected buffer has not been discarded.');
-      return;
-    }
-    componentSyncPauseAfterCancelRef.current = getActiveDocument(componentState.project);
-    clearPendingComponentDeletion();
-    setNotice('Deletion cancelled. The master, local Component Canvas buffer, and recovery session were kept.');
-  };
-
-  const saveBufferAsNewAndDelete = async () => {
-    const pending = pendingComponentDeletion;
-    if (!pending || componentDeletionBusy || componentCleanupPending) return;
-    setComponentDeletionBusy(true);
-    const bufferSaved = await componentAutosave.flush(componentState.project);
-    if (!bufferSaved) {
-      setComponentDeletionBusy(false);
-      setNotice('Component Canvas buffer could not be saved durably. No recovery or deletion commit was attempted; retry the buffer save.');
-      return;
-    }
-    const target = componentDeletionTarget(pending);
-    const bufferDocument = getActiveDocument(componentState.project);
-    const protection = {
-      activeMaster: editingComponentId === pending.id,
-      bufferDocument,
-      session: componentSyncSessionRef.current,
-      recoveryPending: true,
-    };
-    const result = durableRecoveryComponentId
-      ? await deleteComponentAfterDurableRecovery(
-          canonicalStore, target, durableRecoveryComponentId, componentInitialState.project, withProjectWriteLock,
-        )
-      : await recoverAndDeleteComponentDurably(
-          canonicalStore, target, protection, bufferDocument, componentInitialState.project, withProjectWriteLock,
-        );
-    setComponentDeletionBusy(false);
-
-    if (result.status === 'deleted') {
-      const savedName = result.recoveryComponent?.name ?? 'Recovered component';
-      completeDurableComponentDeletion(pending, `“${savedName}” was saved durably and “${pending.name}” was deleted. Component Canvas cleanup is durable.`);
-    } else if (result.status === 'stale-master') {
-      const message = result.recoveryComponent
-        ? `“${result.recoveryComponent.name}” is durably saved; the original master changed, so it and the local buffer were kept.`
-        : 'The master changed before recovery could be applied. The master and local buffer were kept.';
-      keepComponentAfterStaleDeletion(message);
-      componentAutosave.schedule(componentState.project);
-    } else if (result.status === 'recovery-persist-failed') {
-      componentAutosave.schedule(componentState.project);
-      setNotice('Recovery-copy persistence failed. No deletion was attempted; the master and local buffer remain. Retry is safe.');
-    } else if (result.status === 'deletion-persist-failed') {
-      if (result.recoveryComponent) setDurableRecoveryComponentId(result.recoveryComponent.id);
-      componentAutosave.schedule(componentState.project);
-      setNotice('The recovery copy is durable, but deletion persistence failed. The master and buffer remain in memory; retry deletion without creating another recovery copy.');
-    } else if (result.status === 'cleanup-persist-failed') {
-      showComponentCleanupPending(pending);
-      if (result.recoveryComponent) setDurableRecoveryComponentId(result.recoveryComponent.id);
-      componentAutosave.schedule(componentState.project);
-      setNotice('The recovered component and master deletion are durable, but buffer cleanup failed. The local buffer remains preserved; retry cleanup.');
-    } else {
-      componentAutosave.schedule(componentState.project);
-      setNotice('The durable recovery operation failed. The local buffer remains protected; retry or cancel safely.');
-    }
-  };
-
-  const discardBufferAndDelete = async () => {
-    const pending = pendingComponentDeletion;
-    if (!pending || componentDeletionBusy || componentCleanupPending) return;
-    setComponentDeletionBusy(true);
-    const bufferSaved = await componentAutosave.flush(componentState.project);
-    if (!bufferSaved) {
-      setComponentDeletionBusy(false);
-      setNotice('Component Canvas buffer could not be saved durably. No deletion was attempted; retry the buffer save.');
-      return;
-    }
-    const deletion = await deleteComponentDurably(
-      canonicalStore, componentDeletionTarget(pending), componentInitialState.project, withProjectWriteLock,
-    );
-    setComponentDeletionBusy(false);
-    if (deletion.status === 'deleted') {
-      completeDurableComponentDeletion(pending, `“${pending.name}” was deleted durably after discarding the protected local buffer; linked instances were detached.`);
-    } else if (deletion.status === 'cleanup-persist-failed') {
-      showComponentCleanupPending(pending);
-      setNotice('The master deletion is durable, but buffer cleanup failed. The local buffer remains preserved; retry cleanup.');
-    } else if (deletion.status === 'stale-master') {
-      keepComponentAfterStaleDeletion('The master changed while the recovery choice was open. Deletion was cancelled; the local buffer was kept. Review the latest master.');
-    } else {
-      componentAutosave.schedule(componentState.project);
-      setNotice('The master deletion could not be made durable. The original master and local buffer remain; retry or cancel safely.');
-    }
-  };
-
-  const retryComponentBufferCleanup = async () => {
-    const pending = pendingComponentDeletion;
-    if (!pending || componentDeletionBusy || !componentCleanupPending) return;
-    setComponentDeletionBusy(true);
-    await componentAutosave.cancelAndWait();
-    try {
-      await withProjectWriteLock((persist) => persist(componentInitialState.project));
-      setComponentDeletionBusy(false);
-      completeDurableComponentDeletion(pending, 'Component Canvas cleanup is now durable. The recovered component and master deletion remain saved.');
-    } catch {
-      setComponentDeletionBusy(false);
-      setNotice('Component Canvas cleanup is still failing. The local buffer remains intact; retry is safe.');
-    }
-  };
-
-  const retryComponentCanvasSave = () => {
-    void componentAutosave.flush(componentState.project);
-  };
-
-  useEffect(() => {
-    if (!componentReady || !editingComponentId || pendingComponentDeletionRef.current) return;
-    const editedDocument = getActiveDocument(componentState.project);
-    const pausedAfterCancel = componentSyncPauseAfterCancelRef.current;
-    if (pausedAfterCancel) {
-      if (pausedAfterCancel === editedDocument) return;
-      componentSyncPauseAfterCancelRef.current = null;
-    }
-    const master = state.project.components.find((component) => component.id === editingComponentId);
-    if (!master) {
-      const session = componentSyncSessionRef.current;
-      if (session && session.masterStatus !== 'missing') {
-        componentSyncSessionRef.current = markComponentCanvasMasterMissing(session);
-        setComponentRecoveryStatus('missing');
-        setNotice('The master is temporarily missing from Main Canvas history. The Component Canvas buffer and local edits are preserved; synchronization is paused.');
-      }
-      return;
-    }
-
-    let session = componentSyncSessionRef.current;
-    if (!session || session.componentId !== master.id) {
-      session = createComponentCanvasSyncSession(master);
-      componentSyncSessionRef.current = session;
-      componentCommandClient.replaceProject(
-        createComponentCanvasBufferProject(master),
-        'Initialize Component Canvas buffer',
-      );
-      return;
-    }
-
-    const reconciliation = reconcileComponentCanvasSyncSession(session, master, editedDocument);
-    if (reconciliation.status === 'orphaned-master-returned') {
-      componentSyncSessionRef.current = reconciliation.session;
-      setComponentRecoveryStatus('returned');
-      setNotice('The master has returned, but the previous Component Canvas buffer remains untouched. Reloading it would discard local edits; use the explicit recovery action only when ready.');
-      return;
-    }
-    if (reconciliation.status === 'orphaned') {
-      componentSyncSessionRef.current = reconciliation.session;
-      return;
-    }
-    if (reconciliation.status === 'reload-buffer') {
-      componentSyncSessionRef.current = reconciliation.session;
-      setComponentRecoveryStatus('none');
-      componentCommandClient.replaceProject(
-        createComponentCanvasBufferProject(master),
-        'Reload Component Canvas buffer from canonical master',
-      );
-      return;
-    }
-    if (reconciliation.status === 'conflict') {
-      componentSyncSessionRef.current = reconciliation.session;
-      setComponentRecoveryStatus('conflict');
-      if (!session.conflicted) {
-        setNotice(
-          'The master changed in Main Canvas while this buffer had unsynchronized edits. ' +
-          'Local edits were kept and synchronization is paused. Reopen the master to discard this buffer and load the canonical version.',
-        );
-      }
-      return;
-    }
-    if (reconciliation.status === 'master-mismatch') return;
-
-    componentSyncSessionRef.current = reconciliation.session;
-    const syncAction = createComponentCanvasSyncAction(master, editedDocument, session);
-    if (!syncAction) return;
-
-    const syncResult = mainCommandClient.syncComponentDocument(
-      {
-        componentId: syncAction.componentId,
-        document: syncAction.document,
-        updatedAt: syncAction.updatedAt,
-        expectedUpdatedAt: syncAction.expectedUpdatedAt,
-        expectedMasterDocument: syncAction.expectedMasterDocument,
-      },
-      'Sync Component Canvas to master',
-    );
-    if (syncResult.status === 'applied' || syncResult.status === 'no-op') {
-      const committedMaster = canonicalStore.getSnapshot().editorState.project.components
-        .find((component) => component.id === master.id);
-      if (committedMaster) {
-        componentSyncSessionRef.current = advanceComponentCanvasSyncSession(session, committedMaster);
-      }
-    } else {
-      componentSyncSessionRef.current = { ...session, conflicted: true };
-      setComponentRecoveryStatus('conflict');
-      setNotice(
-        'The component master changed before this edit could synchronize. ' +
-        'Local edits were kept and synchronization is paused; reopen the master to reload the canonical version.',
-      );
-    }
-  }, [componentState.project.pages, editingComponentId, componentReady, state.project.components, pendingComponentDeletion, canonicalStore, mainCommandClient, componentCommandClient]);
-
-  const reloadRecoveredComponentMaster = () => {
-    if (!editingComponentId || pendingComponentDeletionRef.current) return;
-    componentSyncPauseAfterCancelRef.current = null;
-    const master = state.project.components.find((component) => component.id === editingComponentId);
-    if (!master) {
-      setComponentRecoveryStatus('missing');
-      setNotice('The canonical master is still missing. The local Component Canvas buffer remains preserved.');
-      return;
-    }
-    componentSyncSessionRef.current = createComponentCanvasSyncSession(master);
-    componentCommandClient.replaceProject(
-      createComponentCanvasBufferProject(master),
-      'Reload recovered canonical component master',
-    );
-    setPendingComponentOpenId(null);
-    setComponentRecoveryStatus('none');
-    setNotice('The latest canonical master was reloaded. The previous local Component Canvas edits were discarded by explicit request.');
   };
 
   const switchPage = (page: FolioPage) => {
@@ -1911,7 +815,7 @@ export function App() {
     setActiveEditorId('main');
     mainCommandClient.setActivePage(page.id, 'Switch active page');
     closePagesRack();
-    setInspectorVisible(true);
+    windows.setInspectorVisible(true);
     setNotice(`Switched to ${page.name}.`);
   };
 
@@ -1933,11 +837,9 @@ export function App() {
     mainCommandClient.createPage({ id, name, route, document }, 'Create page');
     setPageNameDraft('');
     closePagesRack();
-    setInspectorVisible(true);
+    windows.setInspectorVisible(true);
     setNotice(`Created ${name}.`);
   };
-
-  const saveSelectionAsComponent = () => saveNodesAsComponent(focusedEditor.selectedNodes, focusedDocument.nodes);
 
   const commitProjectName = (value: string) => {
     if (isHydrating) return;
@@ -1947,10 +849,23 @@ export function App() {
     }
   };
 
-  const openProjectPicker = () => {
-    if (isHydrating) return;
-    setFileMenuOpen(false);
-    projectFileInputRef.current?.click();
+  const handleProjectFileSelected = async (file: File) => {
+    try {
+      const project = await openProjectFile(file, async (loadedProject) => {
+        await saveProjectAndActivate(loadedProject);
+        mainCommandClient.replaceProject(loadedProject, 'Open .flop project');
+      });
+      if (!project) return;
+      setActiveEditorId('main');
+      componentMaster.setEditingComponentId(null);
+      windows.setComponentCanvasClosed(true);
+      windows.setComponentCanvasMinimized(false);
+      setNotice('Opened "' + project.metadata.name + '".');
+    } catch (error) {
+      console.error('Folio could not open the selected project file:', error);
+      const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
+      setNotice('Unable to open project: ' + detail);
+    }
   };
 
   const exportCurrentProject = () => {
@@ -1959,7 +874,7 @@ export function App() {
     try {
       const exportSnapshot = createProjectExportSnapshot(
         state.project,
-        editingComponentId,
+        componentMaster.editingComponentId,
         componentState.project,
       );
       downloadProject(exportSnapshot);
@@ -1971,28 +886,16 @@ export function App() {
     }
   };
 
-  const getActiveExportTarget = () => {
-    if (activeEditorId === 'component') {
-      const activeComp = editingComponentId
-        ? state.project.components.find((component) => component.id === editingComponentId)
-        : null;
-      return {
-        document: componentDocument,
-        name: activeComp?.name ?? `${state.project.metadata.name}-component`,
-      };
-    }
-    const activePage = getActivePage(state.project);
-    return {
-      document: activePage.document,
-      name: `${state.project.metadata.name}-${activePage.name}`,
-    };
-  };
-
   const exportActiveCanvasSvg = () => {
     setFileMenuOpen(false);
     if (isHydrating) return;
     try {
-      const target = getActiveExportTarget();
+      const target = resolveActiveExportTarget(
+        activeEditorId,
+        state.project,
+        componentDocument,
+        componentMaster.editingComponentId,
+      );
       downloadSvgDocument(target.document, state.project.components, target.name);
       setNotice(`Exported "${target.name}" as standalone SVG.`);
     } catch (error) {
@@ -2006,7 +909,12 @@ export function App() {
     setFileMenuOpen(false);
     if (isHydrating) return;
     try {
-      const target = getActiveExportTarget();
+      const target = resolveActiveExportTarget(
+        activeEditorId,
+        state.project,
+        componentDocument,
+        componentMaster.editingComponentId,
+      );
       const result = await downloadPngDocument(target.document, state.project.components, target.name, 2);
       setNotice(`Exported "${target.name}" as PNG (${result.width}×${result.height}px @2×).`);
     } catch (error) {
@@ -2016,18 +924,18 @@ export function App() {
     }
   };
 
-  const selectedComponentNodes = componentDocument.nodes.filter((node) => componentState.selectedNodeIds.includes(node.id));
   const insertOwnedComponent = (component: ComponentDefinition) => {
     if (isHydrating) return;
     const offset = state.project.pages.find((page) => page.id === state.project.activePageId)?.document.nodes.length ?? 0;
     const instance = createComponentInstance(component, 150 + (offset % 4) * 28, 130 + (offset % 4) * 28);
     const result = mainCommandClient.createNodes([instance], 'Insert component instance');
     if (result.status !== 'applied') return;
-    openMainCanvas();
-    setInspectorVisible(true);
+    windows.openMainCanvas();
+    windows.setInspectorVisible(true);
     setNotice(`Linked instance of “${component.name}” added to Main Canvas.`);
   };
 
+  // Inspector & vector/transform operations
   const updateSelected = (patch: Partial<DesignNode>) => {
     if (!selectedNode) return;
     const safePatch = { ...patch };
@@ -2049,7 +957,6 @@ export function App() {
     } else {
       nextNode = { ...selectedNode, ...safePatch } as DesignNode;
     }
-
     focusedCommandClient.editNode(nextNode, 'inspector:' + selectedNode.id, 'Edit layer properties');
   };
 
@@ -2088,7 +995,10 @@ export function App() {
   const detachSelectedInstance = () => {
     if (!selectedNode || selectedNode.type !== 'component-instance') return;
     const master = state.project.components.find((component) => component.id === selectedNode.componentId);
-    if (!master) { setNotice('The linked master component could not be found.'); return; }
+    if (!master) {
+      setNotice('The linked master component could not be found.');
+      return;
+    }
     const detached = detachComponentInstance(selectedNode, master);
     focusedCommandClient.replaceNodeWithNodes(selectedNode.id, detached, 'Detach component instance');
     setNotice('Instance detached. Its nodes can now be edited independently.');
@@ -2097,30 +1007,34 @@ export function App() {
   const alignSelection = (alignment: Alignment, target: EditorTarget = activeEditorId) => {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
-    const document = getActiveDocument(editor.project);
-    const layerStates = getEffectiveLayerStates(document.nodes);
-    const selected = getTransformableNodes(document.nodes.filter((node) => editor.selectedNodeIds.includes(node.id)).filter((node) => {
-      const effective = layerStates.get(node.id);
-      return effective?.visible && !effective.locked;
-    }));
+    const doc = getActiveDocument(editor.project);
+    const layerStates = getEffectiveLayerStates(doc.nodes);
+    const selected = getTransformableNodes(
+      doc.nodes
+        .filter((node) => editor.selectedNodeIds.includes(node.id))
+        .filter((node) => {
+          const effective = layerStates.get(node.id);
+          return effective?.visible && !effective.locked;
+        }),
+    );
     if (selected.length < 2) return;
-    const nextNodes = alignNodes(selected, alignment);
-    getCommandClient(target).transformNodes(nextNodes, `Align layers ${alignment}`);
+    getCommandClient(target).transformNodes(alignNodes(selected, alignment), `Align layers ${alignment}`);
   };
 
   const distributeSelection = (axis: DistributionAxis, target: EditorTarget = activeEditorId) => {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
-    const selected = getTransformableNodes(getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
+    const selected = getTransformableNodes(
+      getActiveDocument(editor.project).nodes.filter((node) => editor.selectedNodeIds.includes(node.id)),
+    );
     if (selected.length < 3) return;
-    const nextNodes = distributeNodes(selected, axis);
-    getCommandClient(target).transformNodes(nextNodes, `Distribute layers ${axis}`);
+    getCommandClient(target).transformNodes(distributeNodes(selected, axis), `Distribute layers ${axis}`);
   };
 
   const updateToolbarHint = useCallback((panel: string, description: string, shortcuts: string[] = []) => {
-    if (resizingPanelRef.current !== null) return;
+    if (panelResize.resizingPanelRef.current !== null) return;
     toolbarHintStore.setHint({ panel, description, shortcuts });
-  }, [toolbarHintStore]);
+  }, [toolbarHintStore, panelResize.resizingPanelRef]);
 
   const activeCanvasToolId = workspaceTools[activeEditorId];
   const activeToolGroups = getStudioToolGroupsForWorkspace(activeEditorId);
@@ -2156,10 +1070,10 @@ export function App() {
       onSelectionChange: (nodeIds) => {
         selectionSourceRef.current = 'canvas';
         mainCommandClient.selectNodes(nodeIds, 'Select layers on canvas');
-        if (nodeIds.length > 0) setInspectorVisible(true);
+        if (nodeIds.length > 0) windows.setInspectorVisible(true);
       },
-      onPanChange: setMainPan,
-      onZoomChange: setZoom,
+      onPanChange: windows.setMainPan,
+      onZoomChange: windows.setZoom,
       onToolChange: (nextTool) => chooseCanvasTool(nextTool, 'main'),
       onNotice: setNotice,
       onSampledColorOptionChange: (color, colorTarget) => {
@@ -2169,7 +1083,7 @@ export function App() {
       },
       onCanvasMutationCommitted: (kind) => {
         selectionSourceRef.current = 'canvas';
-        if (kind === 'create') setInspectorVisible(true);
+        if (kind === 'create') windows.setInspectorVisible(true);
       },
     },
   });
@@ -2183,8 +1097,8 @@ export function App() {
         selectionSourceRef.current = 'canvas';
         componentCommandClient.selectNodes(nodeIds, 'Select layers on component canvas');
       },
-      onPanChange: setComponentCanvasPan,
-      onZoomChange: setComponentCanvasZoom,
+      onPanChange: windows.setComponentCanvasPan,
+      onZoomChange: windows.setComponentCanvasZoom,
       onToolChange: (nextTool) => chooseCanvasTool(nextTool, 'component'),
       onNotice: setNotice,
       onSampledColorOptionChange: (color, colorTarget) => {
@@ -2198,20 +1112,14 @@ export function App() {
     },
   });
 
-  const handleCanvasReplaceNodes = (target: EditorTarget, removeIds: string[], insertNodes: DesignNode[]) => {
-    if (isHydrating || removeIds.length === 0) return;
-    selectionSourceRef.current = 'canvas';
-    getCommandClient(target).replaceNodes(removeIds, insertNodes, 'Replace vector nodes');
-  };
-
   const handlePathfinder = (target: EditorTarget, operation: PathfinderOperation) => {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
     const doc = getActiveDocument(editor.project);
     const candidates = doc.nodes.filter(
       (node) =>
-        editor.selectedNodeIds.includes(node.id) &&
-        (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path'),
+        editor.selectedNodeIds.includes(node.id)
+        && (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path'),
     );
     if (candidates.length < 2) {
       setNotice('Select at least 2 shapes or vector paths for Pathfinder.');
@@ -2223,8 +1131,8 @@ export function App() {
       setNotice(`Pathfinder ${operation} produced an empty region. Make sure shapes overlap.`);
       return;
     }
-    const removeIds = candidates.map((node) => node.id);
-    handleCanvasReplaceNodes(target, removeIds, [result]);
+    selectionSourceRef.current = 'canvas';
+    getCommandClient(target).replaceNodes(candidates.map((node) => node.id), [result], 'Replace vector nodes');
     setNotice(`Pathfinder ${operation} created “${result.name}”.`);
   };
 
@@ -2234,15 +1142,14 @@ export function App() {
     const doc = getActiveDocument(editor.project);
     const convertible = doc.nodes.filter(
       (node): node is Extract<DesignNode, { type: 'rect' | 'ellipse' | 'frame' }> =>
-        editor.selectedNodeIds.includes(node.id) &&
-        (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame'),
+        editor.selectedNodeIds.includes(node.id)
+        && (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame'),
     );
     if (convertible.length === 0) return;
     const convertedPaths = convertible
       .map((node) => convertShapeToPathNode(node))
       .filter((pathNode): pathNode is NonNullable<typeof pathNode> => pathNode !== null);
     if (convertedPaths.length === 0) return;
-
     const removeIds = convertedPaths.map((node) => node.id);
     const convertResult = getCommandClient(target).replaceNodes(
       removeIds,
@@ -2288,20 +1195,17 @@ export function App() {
     const doc = getActiveDocument(editor.project);
     const selected = getTransformableNodes(doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
     if (selected.length === 0) return;
-    const nextNodes = selected.map((node) => ({
-      ...node,
-      rotation: ((node.rotation || 0) + 90) % 360,
-    }));
-    getCommandClient(target).transformNodes(nextNodes, 'Rotate +90°');
+    getCommandClient(target).transformNodes(
+      selected.map((node) => ({ ...node, rotation: ((node.rotation || 0) + 90) % 360 })),
+      'Rotate +90°',
+    );
   };
 
   const handleSimplifyPath = (target: EditorTarget) => {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
     const doc = getActiveDocument(editor.project);
-    const paths = doc.nodes.filter(
-      (node) => editor.selectedNodeIds.includes(node.id) && node.type === 'path',
-    );
+    const paths = doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id) && node.type === 'path');
     if (paths.length === 0) return;
     let totalBefore = 0;
     let totalAfter = 0;
@@ -2322,9 +1226,7 @@ export function App() {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
     const doc = getActiveDocument(editor.project);
-    const paths = doc.nodes.filter(
-      (node) => editor.selectedNodeIds.includes(node.id) && node.type === 'path',
-    );
+    const paths = doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id) && node.type === 'path');
     if (paths.length === 0) return;
     const updatedNodes: DesignNode[] = [];
     for (const node of paths) {
@@ -2346,6 +1248,7 @@ export function App() {
     getCommandClient(target).transformNodes(updatedNodes, 'Toggle closed vector contour');
   };
 
+  // Clipboard & duplication
   const duplicateSelection = (target: EditorTarget = activeEditorId) => {
     if (isHydrating) return;
     const context = getActiveEditorContext(target, state, componentState);
@@ -2372,7 +1275,7 @@ export function App() {
     const payload = createClipboardPayload(context.document.nodes, context.state.selectedNodeIds, {
       target,
       pageId: target === 'main' ? state.project.activePageId : null,
-      componentId: target === 'component' ? editingComponentId : null,
+      componentId: target === 'component' ? componentMaster.editingComponentId : null,
     });
     if (!payload) return false;
     clipboardRef.current = payload;
@@ -2385,8 +1288,7 @@ export function App() {
     if (isHydrating) return;
     const context = getActiveEditorContext(target, state, componentState);
     if (context.state.selectedNodeIds.length === 0) return;
-    const copied = copySelection(target);
-    if (!copied) return;
+    if (!copySelection(target)) return;
     const ids = expandSelectedLayerIds(context.document.nodes, context.state.selectedNodeIds);
     getCommandClient(target).setNodesCanvasState(ids, false, 'Cut layers');
     setNotice(`Cut ${ids.length} layer${ids.length === 1 ? '' : 's'} to studio clipboard.`);
@@ -2397,17 +1299,14 @@ export function App() {
     const prepared = prepareNodesForPaste(clipboardRef.current, {
       target,
       pageId: target === 'main' ? state.project.activePageId : null,
-      componentId: target === 'component' ? editingComponentId : null,
+      componentId: target === 'component' ? componentMaster.editingComponentId : null,
       components: state.project.components,
     });
     if (prepared.nodes.length === 0) return;
-    clipboardRef.current = {
-      ...clipboardRef.current,
-      pasteCount: prepared.nextPasteCount,
-    };
+    clipboardRef.current = { ...clipboardRef.current, pasteCount: prepared.nextPasteCount };
     selectionSourceRef.current = 'canvas';
     getCommandClient(target).createNodes(prepared.nodes, 'Paste layers');
-    setInspectorVisible(true);
+    windows.setInspectorVisible(true);
     if (prepared.detachedCircularCount > 0) {
       setNotice(
         `Pasted ${prepared.nodes.length} layer${prepared.nodes.length === 1 ? '' : 's'} (${prepared.detachedCircularCount} self-referencing component instance detached to prevent recursion).`,
@@ -2419,467 +1318,66 @@ export function App() {
 
   const enterFullscreen = () => {
     const root = document.querySelector('.app-shell') as HTMLElement | null;
-    if (!document.fullscreenElement) root?.requestFullscreen?.().catch(() => setNotice('Fullscreen is unavailable in this browser.'));
-    else document.exitFullscreen?.();
-  };
-
-  const focusWindow = (id: WindowId) => {
-    setWindowOrder((current) => bringWindowToFront(current, id));
-    setActiveWindowId(id);
-  };
-
-  const getViewport = () => ({
-    width: document.documentElement.clientWidth || window.innerWidth,
-    height: document.documentElement.clientHeight || window.innerHeight,
-  });
-
-  const recoverWindow = (id: 'main-canvas' | 'component-canvas' | 'node-logic') => {
-    const viewport = getViewport();
-    if (id === 'main-canvas') {
-      const layout = recoverWindowLayout({ position: canvasPosition, size: canvasSize }, viewport);
-      setCanvasPosition(layout.position); setCanvasSize(layout.size);
-    } else if (id === 'component-canvas') {
-      const layout = recoverWindowLayout({ position: componentCanvasPosition, size: componentCanvasSize }, viewport);
-      setComponentCanvasPosition(layout.position); setComponentCanvasSize(layout.size);
+    if (!document.fullscreenElement) {
+      root?.requestFullscreen?.().catch(() => setNotice('Fullscreen is unavailable in this browser.'));
     } else {
-      const layout = recoverWindowLayout({ position: nodeLogicPosition, size: nodeLogicSize }, viewport);
-      setNodeLogicPosition(layout.position); setNodeLogicSize(layout.size);
+      document.exitFullscreen?.();
     }
   };
-
-  const openMainCanvas = () => { recoverWindow('main-canvas'); setCanvasClosed(false); setCanvasMinimized(false); setActiveEditorId('main'); focusWindow('main-canvas'); };
-  const openComponentCanvas = () => { recoverWindow('component-canvas'); setComponentCanvasClosed(false); setComponentCanvasMinimized(false); setActiveEditorId('component'); focusWindow('component-canvas'); };
-  const openNodeLogic = () => { recoverWindow('node-logic'); setNodeLogicClosed(false); setNodeLogicMinimized(false); focusWindow('node-logic'); };
-
-  const getPanelClampContext = useCallback((panel: ResizablePanelId, widths: PanelWidths = panelWidthsRef.current) => ({
-    viewportWidth: appShellRef.current?.clientWidth || window.innerWidth,
-    layersVisible: panelVisibilityRef.current.layersVisible,
-    inspectorVisible: panelVisibilityRef.current.inspectorVisible,
-    otherPanelWidth: panel === 'layers' ? widths.inspector : widths.layers,
-  }), []);
-
-  const applyPanelWidth = useCallback(
-    (panel: ResizablePanelId, nextWidth: number, options: { persist?: boolean; syncState?: boolean } = {}) => {
-      const { persist = false, syncState = true } = options;
-      const cssVar = panel === 'layers' ? '--layers-panel-width' : '--inspector-panel-width';
-      appShellRef.current?.style.setProperty(cssVar, `${nextWidth}px`);
-      const handleEl = panel === 'layers' ? layersResizeHandleRef.current : inspectorResizeHandleRef.current;
-      handleEl?.setAttribute('aria-valuenow', String(nextWidth));
-      const nextWidths: PanelWidths = { ...panelWidthsRef.current, [panel]: nextWidth };
-      panelWidthsRef.current = nextWidths;
-      if (syncState) {
-        setPanelWidths((current) => (current[panel] === nextWidth ? current : { ...current, [panel]: nextWidth }));
-      }
-      if (persist) savePanelWidths(nextWidths);
-    },
-    [],
-  );
-
-  const handleThrottledPanelMove = useCallback(
-    ({ sessionId, clientX }: { sessionId: number; clientX: number }) => {
-      const session = activePanelResizeSessionRef.current;
-      if (!session || session.sessionId !== sessionId) return;
-      const nextWidth = computeResizedPanelWidth(
-        session.panel,
-        session.startWidth,
-        session.startClientX,
-        clientX,
-        getPanelClampContext(session.panel, panelWidthsRef.current),
-      );
-      applyPanelWidth(session.panel, nextWidth, { persist: false, syncState: false });
-    },
-    [applyPanelWidth, getPanelClampContext],
-  );
-
-  const getThrottledPanelMove = useCallback(() => {
-    if (!throttledPanelMoveRef.current) {
-      throttledPanelMoveRef.current = createThrottledMouseMove<{ sessionId: number; clientX: number }>(
-        handleThrottledPanelMove,
-        { intervalMs: DEFAULT_RESIZE_THROTTLE_MS },
-      );
-    }
-    return throttledPanelMoveRef.current;
-  }, [handleThrottledPanelMove]);
-
-  const startPanelResize = useCallback((panel: ResizablePanelId, event: MouseEvent) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-
-    panelResizeCleanupRef.current?.();
-    if (event.detail >= 2) return;
-
-    const throttledMove = getThrottledPanelMove();
-    throttledMove.reset();
-
-    const initialWidths: PanelWidths = { ...panelWidthsRef.current };
-    const session: ActivePanelResizeSession = {
-      sessionId: ++panelResizeSessionSeqRef.current,
-      panel,
-      startClientX: event.clientX,
-      startWidth: initialWidths[panel],
-      initialWidths,
-    };
-
-    const abortController = new AbortController();
-    const handleElement =
-      (event.currentTarget instanceof Element ? event.currentTarget : null) ??
-      (panel === 'layers' ? layersResizeHandleRef.current : inspectorResizeHandleRef.current);
-
-    activePanelResizeSessionRef.current = session;
-    resizingPanelRef.current = panel;
-    appShellRef.current?.classList.add('is-resizing-panel');
-    setResizingPanel(panel);
-
-    const isCurrentSession = () => activePanelResizeSessionRef.current?.sessionId === session.sessionId;
-
-    const endResize = (mode: 'commit' | 'cancel' | 'abort') => {
-      if (!isCurrentSession()) {
-        abortController.abort();
-        return;
-      }
-      try {
-        if (mode === 'commit') {
-          throttledMove.flush();
-        }
-        throttledMove.cancel();
-      } finally {
-        abortController.abort();
-        appShellRef.current?.classList.remove('is-resizing-panel');
-        if (isCurrentSession()) {
-          activePanelResizeSessionRef.current = null;
-        }
-        if (resizingPanelRef.current === panel) {
-          resizingPanelRef.current = null;
-        }
-        if (panelResizeCleanupRef.current === abortResize) {
-          panelResizeCleanupRef.current = null;
-        }
-      }
-
-      if (mode === 'commit') {
-        const committed: PanelWidths = { ...panelWidthsRef.current };
-        setPanelWidths(committed);
-        savePanelWidths(committed);
-      } else if (mode === 'cancel') {
-        applyPanelWidth(panel, session.initialWidths[panel], { persist: false, syncState: true });
-      }
-      setResizingPanel(null);
-    };
-
-    const abortResize = () => endResize('abort');
-    panelResizeCleanupRef.current = abortResize;
-
-    try {
-      attachPanelResizeListeners(
-        {
-          onMouseMove: (moveEvent) => {
-            if (!isCurrentSession()) return;
-            throttledMove({ sessionId: session.sessionId, clientX: moveEvent.clientX });
-          },
-          onFinish: () => endResize('commit'),
-          onCancel: () => endResize('cancel'),
-          onAbort: abortResize,
-        },
-        {
-          controller: abortController,
-          handleElement,
-          observeContainer: appShellRef.current,
-        },
-      );
-    } catch (error) {
-      abortResize();
-      throw error;
-    }
-  }, [applyPanelWidth, getThrottledPanelMove]);
-
-  const resetPanelWidth = useCallback((panel: ResizablePanelId) => {
-    panelResizeCleanupRef.current?.();
-    const nextWidth = clampPanelWidth(
-      panel,
-      PANEL_RESIZE_CONSTRAINTS[panel].defaultWidth,
-      getPanelClampContext(panel),
-    );
-    applyPanelWidth(panel, nextWidth, { persist: true, syncState: true });
-  }, [applyPanelWidth, getPanelClampContext]);
-
-  const handlePanelResizeDoubleClick = useCallback((panel: ResizablePanelId, event: MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    resetPanelWidth(panel);
-  }, [resetPanelWidth]);
-
-  const handlePanelResizeKeyDown = useCallback((panel: ResizablePanelId, event: KeyboardEvent) => {
-    const step = event.shiftKey ? 32 : 16;
-    const context = getPanelClampContext(panel);
-    const bounds = getPanelWidthBounds(panel, context);
-    const current = panelWidthsRef.current[panel];
-    let target: number | null = null;
-
-    if (event.key === 'ArrowLeft') {
-      target = panel === 'layers' ? current - step : current + step;
-    } else if (event.key === 'ArrowRight') {
-      target = panel === 'layers' ? current + step : current - step;
-    } else if (event.key === 'Home') {
-      target = bounds.minWidth;
-    } else if (event.key === 'End') {
-      target = bounds.maxWidth;
-    }
-
-    if (target === null) return;
-    event.preventDefault();
-    applyPanelWidth(panel, clampPanelWidth(panel, target, context), { persist: true, syncState: true });
-  }, [applyPanelWidth, getPanelClampContext]);
-
-  useEffect(() => {
-    if (
-      (resizingPanelRef.current === 'layers' && !layersVisible) ||
-      (resizingPanelRef.current === 'inspector' && !inspectorVisible)
-    ) {
-      panelResizeCleanupRef.current?.();
-    }
-  }, [layersVisible, inspectorVisible]);
-
-  useEffect(() => () => {
-    panelResizeCleanupRef.current?.();
-    throttledPanelMoveRef.current?.cancel();
-  }, []);
 
   const resetWindowLayout = () => {
-    const layouts = getDefaultWindowLayouts(getViewport());
-    setCanvasPosition(layouts['main-canvas'].position); setCanvasSize(layouts['main-canvas'].size);
-    setComponentCanvasPosition(layouts['component-canvas'].position); setComponentCanvasSize(layouts['component-canvas'].size);
-    setNodeLogicPosition(layouts['node-logic'].position); setNodeLogicSize(layouts['node-logic'].size);
-    const defaultWidths = getDefaultPanelWidths();
-    setPanelWidths(defaultWidths);
-    panelWidthsRef.current = defaultWidths;
-    savePanelWidths(defaultWidths);
-    setWindowOrder(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
-    setActiveWindowId('main-canvas'); setViewMenuOpen(false); setNotice('Window layout has been reset.');
+    windows.resetAllWindowLayouts();
+    panelResize.resetAllPanelWidths();
+    setViewMenuOpen(false);
+    setNotice('Window layout has been reset.');
   };
 
-  useEffect(() => {
-    const onResize = () => {
-      recoverWindow('main-canvas');
-      recoverWindow('component-canvas');
-      recoverWindow('node-logic');
-      const current = panelWidthsRef.current;
-      const clampedLayers = clampPanelWidth('layers', current.layers, getPanelClampContext('layers', current));
-      const clampedInspector = clampPanelWidth('inspector', current.inspector, getPanelClampContext('inspector', { ...current, layers: clampedLayers }));
-      if (clampedLayers !== current.layers || clampedInspector !== current.inspector) {
-        const nextWidths = { layers: clampedLayers, inspector: clampedInspector };
-        panelWidthsRef.current = nextWidths;
-        setPanelWidths(nextWidths);
-      }
-    };
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [canvasPosition, canvasSize, componentCanvasPosition, componentCanvasSize, nodeLogicPosition, nodeLogicSize, getPanelClampContext]);
+  // Global keyboard shortcuts
+  useWorkspaceShortcuts({
+    activeEditorId,
+    editingComponentId: componentMaster.editingComponentId,
+    state,
+    componentState,
+    isHydrating,
+    componentDeletionDialogOpen: componentMaster.componentDeletionDialogOpen,
+    shortcutsModalOpen,
+    selectionSourceRef,
+    clipboardRef,
+    getCommandClient,
+    openShortcutsModal,
+    copySelection,
+    cutSelection,
+    pasteSelection,
+    duplicateSelection,
+    chooseCanvasTool,
+    setNotice,
+  });
 
-  useEffect(() => {
-    recoverWindow('main-canvas');
-    recoverWindow('component-canvas');
-    recoverWindow('node-logic');
-  }, []);
+  const mainCanvasVisible = !windows.canvasClosed
+    && !windows.canvasMinimized
+    && !(windows.componentCanvasOpen && !windows.componentCanvasFloating && !windows.canvasFloating)
+    && !(windows.nodeLogicOpen && !windows.nodeLogicFloating && !windows.canvasFloating);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (isHydrating || componentDeletionDialogOpen || shortcutsModalOpen) return;
-      const target = event.target instanceof Element ? event.target : null;
-      if ((target instanceof HTMLElement && target.isContentEditable) || target?.matches('input, textarea, select, [contenteditable="true"]')) return;
-      if (isShortcutHelpTrigger(event)) {
-        event.preventDefault();
-        openShortcutsModal();
-        return;
-      }
-      const context = getActiveEditorContext(activeEditorId, state, componentState);
-      const activeClient = getCommandClient(activeEditorId);
-      const layerStates = getEffectiveLayerStates(context.document.nodes);
-      const nodes = getTransformableNodes(context.document.nodes.filter((node) => context.state.selectedNodeIds.includes(node.id)).filter((node) => {
-        const effective = layerStates.get(node.id);
-        return effective?.visible && !effective.locked;
-      }));
-      const ids = context.state.selectedNodeIds;
-      const modifier = event.ctrlKey || event.metaKey;
-      const key = event.key.toLowerCase();
-      if (modifier && !event.shiftKey && key === 'a') {
-        // Select every layer in the active document, just like a standard
-        // design-editor Select All command. Keep it scoped to the active
-        // canvas/component editor and never hijack text-field selection.
-        event.preventDefault();
-        activeClient.selectNodes(context.document.nodes.map((node) => node.id), 'Select all layers');
-        return;
-      }
-      if (modifier && event.shiftKey && key === 'g') {
-        if (ids.length > 0) {
-          event.preventDefault();
-          activeClient.ungroupLayers(ids);
-        }
-        return;
-      }
-      if (modifier && !event.shiftKey && key === 'g') {
-        // Let the document operation decide whether this selection can be
-        // grouped: a single Group or a parent with descendants can be wrapped.
-        if (ids.length > 0) {
-          event.preventDefault();
-          activeClient.groupLayers(ids);
-        }
-        return;
-      }
-      if (modifier && event.shiftKey && key === 'm') {
-        event.preventDefault();
-        const roots = getSelectedLayerRootIds(context.document.nodes, ids);
-        if (roots.length !== 1) {
-          setNotice('Select one layer or Group to unmask.');
-          return;
-        }
-        const target = context.document.nodes.find((node) => node.id === roots[0]);
-        if (!target?.clipMaskBaseId) {
-          setNotice('The selected layer is not masked.');
-          return;
-        }
-        activeClient.removeClippingMask(target.id);
-        return;
-      }
-      if (modifier && !event.shiftKey && key === 'm') {
-        event.preventDefault();
-        const roots = getSelectedLayerRootIds(context.document.nodes, ids);
-        if (roots.length !== 1) {
-          setNotice('Multiple layers cannot be masked. Group them first.');
-          return;
-        }
-        const baseId = getClippingMaskBaseId(context.document.nodes, roots[0]);
-        if (!baseId) {
-          setNotice('No layer directly below to use as a clipping mask.');
-          return;
-        }
-        activeClient.createClippingMask(roots[0]);
-        return;
-      }
-      if (modifier && key === 'z') {
-        event.preventDefault();
-        if (event.shiftKey) activeClient.redo();
-        else activeClient.undo();
-        return;
-      }
-      if (modifier && key === 'y') { event.preventDefault(); activeClient.redo(); return; }
-      if (modifier && !event.shiftKey && key === 'c' && ids.length > 0) {
-        event.preventDefault();
-        copySelection(activeEditorId);
-        return;
-      }
-      if (modifier && !event.shiftKey && key === 'x' && ids.length > 0) {
-        event.preventDefault();
-        cutSelection(activeEditorId);
-        return;
-      }
-      if (modifier && !event.shiftKey && key === 'v' && clipboardRef.current) {
-        event.preventDefault();
-        pasteSelection(activeEditorId);
-        return;
-      }
-      if (modifier && key === 'd' && ids.length > 0) {
-        event.preventDefault();
-        duplicateSelection(activeEditorId);
-        return;
-      }
-      if ((event.key === 'Delete' || event.key === 'Backspace') && ids.length > 0) {
-        if (event.defaultPrevented) return;
-        if (selectionSourceRef.current === 'layers') {
-          // Master/source layers can only be deleted deliberately from the
-          // Layers context menu, never through an easy-to-hit keyboard key.
-          event.preventDefault();
-          setNotice('Right-click a layer and choose Delete to remove it from Layers and Canvas.');
-        } else {
-          event.preventDefault();
-          activeClient.setNodesCanvasState(ids, false, 'Remove from canvas');
-        }
-        return;
-      }
-      if (event.altKey && !event.shiftKey) {
-        const alignmentByKey: Record<string, Alignment> = { arrowleft: 'left', arrowright: 'right', arrowup: 'top', arrowdown: 'bottom' };
-        const alignment = alignmentByKey[key];
-        if (alignment && nodes.length > 1) {
-          event.preventDefault();
-          const aligned = alignNodes(nodes, alignment);
-          activeClient.transformNodes(aligned, `Align layers ${alignment}`);
-        }
-      } else if (event.altKey && event.shiftKey && (key === 'h' || key === 'v') && nodes.length > 2) {
-        event.preventDefault();
-        const axis = key === 'h' ? 'horizontal' : 'vertical';
-        const distributed = distributeNodes(nodes, axis);
-        activeClient.transformNodes(distributed, `Distribute layers ${axis}`);
-      } else if (!modifier && !event.altKey && !event.repeat && event.key.length === 1) {
-        const matchedTool = findStudioToolByShortcut(event.key, event.shiftKey, activeEditorId);
-        if (matchedTool) {
-          event.preventDefault();
-          chooseCanvasTool(matchedTool, activeEditorId);
-        }
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeEditorId, editingComponentId, state, componentState, isHydrating, componentDeletionDialogOpen, shortcutsModalOpen, openShortcutsModal, getCommandClient]);
+  const componentCanvasVisible = !windows.componentCanvasClosed
+    && !windows.componentCanvasMinimized
+    && !(windows.nodeLogicOpen && !windows.nodeLogicFloating && !windows.componentCanvasFloating);
 
-
-  useEffect(() => {
-    if (!componentDeletionDialogOpen) return;
-    const shell = appShellRef.current;
-    const host = deletionModalHostRef.current;
-    const dialog = deletionDialogRef.current;
-    if (!shell || !host || !dialog) return;
-    const restoreFocus = activateModalDialog(shell, host, dialog, deletionFocusReturnRef.current);
-    const onKeyDown = (event: KeyboardEvent) => trapModalDialogKeydown(dialog, event, cancelComponentDeletion);
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown, true);
-      restoreFocus();
-    };
-  }, [componentDeletionDialogOpen, pendingComponentDeletion, componentCleanupPending, componentDeletionMode]);
-
-  useEffect(() => {
-    if (!shortcutsModalOpen || componentDeletionDialogOpen) return;
-    const shell = appShellRef.current;
-    const host = shortcutsModalHostRef.current;
-    const dialog = shortcutsDialogRef.current;
-    if (!shell || !host || !dialog) return;
-    const restoreFocus = activateModalDialog(shell, host, dialog, shortcutsFocusReturnRef.current);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key === '/') {
-        event.preventDefault();
-        event.stopPropagation();
-        closeShortcutsModal();
-        return;
-      }
-      trapModalDialogKeydown(dialog, event, closeShortcutsModal);
-    };
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown, true);
-      restoreFocus();
-    };
-  }, [shortcutsModalOpen, componentDeletionDialogOpen, closeShortcutsModal]);
-
-  const statusLabel = saveStatus === 'loading'
-    ? 'LOADING'
-    : saveStatus === 'saving'
-      ? 'SAVING…'
-      : saveStatus === 'error'
-        ? 'SAVE ERROR'
-        : 'ALL CHANGES SAVED';
+  const pendingOpenComponentName = componentMaster.pendingComponentOpenId
+    ? (state.project.components.find((item) => item.id === componentMaster.pendingComponentOpenId)?.name ?? 'another master')
+    : null;
 
   return (
     <div
       ref={appShellRef}
-      class={`app-shell ${layersVisible ? "" : "layers-hidden"} ${inspectorVisible ? "" : "inspector-hidden"} ${isHydrating ? "is-hydrating" : ""} ${resizingPanel ? "is-resizing-panel" : ""}`}
+      class={`app-shell ${windows.layersVisible ? '' : 'layers-hidden'} ${windows.inspectorVisible ? '' : 'inspector-hidden'} ${isHydrating ? 'is-hydrating' : ''} ${panelResize.resizingPanel ? 'is-resizing-panel' : ''}`}
       style={{
-        '--layers-panel-width': `${panelWidthsRef.current.layers}px`,
-        '--inspector-panel-width': `${panelWidthsRef.current.inspector}px`,
+        '--layers-panel-width': `${panelResize.panelWidthsRef.current.layers}px`,
+        '--inspector-panel-width': `${panelResize.panelWidthsRef.current.inspector}px`,
       } as JSX.CSSProperties}
-      data-active-window={activeWindowId}
+      data-active-window={windows.activeWindowId}
       aria-busy={isHydrating}
       onMouseLeave={() => {
-        if (resizingPanelRef.current === null) toolbarHintStore.setHint(DEFAULT_TOOLBAR_HINT);
+        if (panelResize.resizingPanelRef.current === null) toolbarHintStore.setHint(DEFAULT_TOOLBAR_HINT);
       }}
       onKeyDown={(event) => {
         if (isHydrating) {
@@ -2888,786 +1386,364 @@ export function App() {
         }
       }}
     >
-      <header class={`global-toolbar-slot ${fileMenuOpen || viewMenuOpen || helpMenuOpen ? 'has-open-menu' : ''}`} aria-label="FOLIO application toolbar">
-        <nav class="global-menu-bar" aria-label="Application menus">
-          <div class="global-toolbar-left">
-          <div class="global-menu-items" ref={menuBarRef}>
-            <div class="global-menu-entry">
-              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={fileMenuOpen} onClick={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); setHelpMenuOpen(false); setToolRackOpen(null); }} onMouseEnter={() => updateToolbarHint('FILE', 'Open or export the current native .flop project.')}>File</button>
-              {fileMenuOpen && <div class="global-menu-dropdown" role="menu" aria-label="File menu">
-                <button type="button" role="menuitem" onClick={openProjectPicker} disabled={isHydrating}>Open Project…</button>
-                <button type="button" role="menuitem" onClick={exportCurrentProject} disabled={isHydrating}>Export Project (.flop)</button>
-                <div class="global-menu-divider" role="separator" />
-                <button type="button" role="menuitem" onClick={exportActiveCanvasSvg} disabled={isHydrating}>Export SVG</button>
-                <button type="button" role="menuitem" onClick={exportActiveCanvasPng} disabled={isHydrating}>Export PNG (2×)</button>
-              </div>}
-              <input
-                ref={projectFileInputRef}
-                type="file"
-                accept=".flop,application/vnd.folio.project+json"
-                aria-label="Choose a FOLIO project file"
-                hidden
-                onChange={async (event) => {
-                  const input = event.currentTarget;
-                  const file = input.files?.[0];
-                  // Clear the native input so the same file can be selected again after failure.
-                  input.value = '';
-                  if (!file) return;
+      <GlobalToolbar
+        projectName={state.project.metadata.name}
+        isHydrating={isHydrating}
+        fileMenuOpen={fileMenuOpen}
+        viewMenuOpen={viewMenuOpen}
+        helpMenuOpen={helpMenuOpen}
+        menuBarRef={menuBarRef}
+        projectFileInputRef={projectFileInputRef}
+        pagesRackToggleRef={pagesRackToggleRef}
+        componentRackToggleRef={componentRackToggleRef}
+        projectNameEditing={projectNameEditing}
+        projectNameDraft={projectNameDraft}
+        pagesRackOpen={windows.pagesRackOpen}
+        componentRackOpen={windows.componentRackOpen}
+        layersVisible={windows.layersVisible}
+        inspectorVisible={windows.inspectorVisible}
+        canvasClosed={windows.canvasClosed}
+        canvasMinimized={windows.canvasMinimized}
+        componentCanvasOpen={windows.componentCanvasOpen}
+        componentCanvasClosed={windows.componentCanvasClosed}
+        componentCanvasMinimized={windows.componentCanvasMinimized}
+        nodeLogicOpen={windows.nodeLogicOpen}
+        nodeLogicClosed={windows.nodeLogicClosed}
+        nodeLogicMinimized={windows.nodeLogicMinimized}
+        shortcutsModalOpen={shortcutsModalOpen}
+        toolbarHintStore={toolbarHintStore}
+        onToggleFileMenu={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); setHelpMenuOpen(false); setToolRackOpen(null); }}
+        onToggleViewMenu={() => { setViewMenuOpen((open) => !open); setFileMenuOpen(false); setHelpMenuOpen(false); setToolRackOpen(null); }}
+        onToggleHelpMenu={() => { setHelpMenuOpen((open) => !open); setFileMenuOpen(false); setViewMenuOpen(false); setToolRackOpen(null); }}
+        onOpenProjectPicker={() => { if (isHydrating) return; setFileMenuOpen(false); projectFileInputRef.current?.click(); }}
+        onProjectFileSelected={handleProjectFileSelected}
+        onExportCurrentProject={exportCurrentProject}
+        onExportActiveCanvasSvg={exportActiveCanvasSvg}
+        onExportActiveCanvasPng={exportActiveCanvasPng}
+        onResetWindowLayout={resetWindowLayout}
+        onOpenShortcutsModal={openShortcutsModal}
+        onStartProjectRename={() => {
+          setProjectNameDraft(state.project.metadata.name);
+          projectNameCancelRef.current = false;
+          setProjectNameEditing(true);
+        }}
+        onProjectNameDraftChange={setProjectNameDraft}
+        onCommitProjectRename={() => {
+          if (!projectNameCancelRef.current) commitProjectName(projectNameDraft);
+          projectNameCancelRef.current = false;
+          setProjectNameEditing(false);
+        }}
+        onCancelProjectRename={() => {
+          projectNameCancelRef.current = true;
+          setProjectNameDraft(state.project.metadata.name);
+          setProjectNameEditing(false);
+        }}
+        onTogglePagesRack={() => {
+          setToolRackOpen(null);
+          if (windows.pagesRackOpen) closePagesRack();
+          else {
+            windows.focusWindow('pages');
+            windows.setPagesRackOpen(true);
+            closeComponentRack();
+          }
+        }}
+        onToggleComponentRack={() => {
+          setToolRackOpen(null);
+          if (windows.componentRackOpen) closeComponentRack();
+          else {
+            windows.setComponentRackOpen(true);
+            closePagesRack();
+          }
+        }}
+        onToggleLayersVisible={() => windows.setLayersVisible((value) => !value)}
+        onToggleInspectorVisible={() => windows.setInspectorVisible((value) => !value)}
+        onToggleMainCanvas={() => {
+          if (windows.canvasClosed || windows.canvasMinimized) windows.openMainCanvas();
+          else { windows.setCanvasClosed(true); windows.setCanvasMinimized(false); }
+        }}
+        onToggleComponentCanvas={() => {
+          if (windows.componentCanvasClosed || windows.componentCanvasMinimized) windows.openComponentCanvas();
+          else {
+            windows.setComponentCanvasClosed(true);
+            windows.setComponentCanvasMinimized(false);
+            setActiveEditorId('main');
+            if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas');
+          }
+        }}
+        onToggleNodeLogic={() => {
+          if (windows.nodeLogicClosed || windows.nodeLogicMinimized) windows.openNodeLogic();
+          else { windows.setNodeLogicClosed(true); windows.setNodeLogicMinimized(false); }
+        }}
+        onEnterFullscreen={enterFullscreen}
+        onUpdateToolbarHint={updateToolbarHint}
+      />
 
-                  try {
-                    const project = await openProjectFile(file, async (loadedProject) => {
-                      await saveProjectAndActivate(loadedProject);
-                      mainCommandClient.replaceProject(loadedProject, 'Open .flop project');
-                    });
-                    if (!project) return;
-                    setActiveEditorId('main');
-                    setEditingComponentId(null);
-                    setComponentCanvasClosed(true);
-                    setComponentCanvasMinimized(false);
-                    setNotice('Opened "' + project.metadata.name + '".');
-                  } catch (error) {
-                    console.error('Folio could not open the selected project file:', error);
-                    const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
-                    setNotice('Unable to open project: ' + detail);
-                  }
-                }}
-              />
-            </div>
-            <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span class="global-menu-item is-disabled" aria-disabled="true" title="Edit menu (planned)" onMouseEnter={() => updateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}>Edit</span>
-            <span class="global-menu-separator" aria-hidden="true">|</span>
-            <div class="global-menu-entry">
-              <button type="button" class="global-menu-item menu-trigger" aria-haspopup="menu" aria-expanded={viewMenuOpen} onClick={() => { setViewMenuOpen((open) => !open); setFileMenuOpen(false); setHelpMenuOpen(false); setToolRackOpen(null); }} onMouseEnter={() => updateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}>View</button>
-              {viewMenuOpen && <div class="global-menu-dropdown" role="menu" aria-label="View menu"><button type="button" role="menuitem" onClick={resetWindowLayout}>Reset Window Layout</button></div>}
-            </div>
-            <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span class="global-menu-item is-disabled" aria-disabled="true" title="Tools menu (planned)" onMouseEnter={() => updateToolbarHint('TOOLS', 'Design tools and tool-specific settings will be organized here.')}>Tools</span>
-            <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span class="global-menu-item is-disabled" aria-disabled="true" title="Option menu (planned)" onMouseEnter={() => updateToolbarHint('OPTION', 'Application and workspace preferences will be organized here.')}>Option</span>
-            <span class="global-menu-separator" aria-hidden="true">|</span>
-            <div class="global-menu-entry">
-              <button
-                type="button"
-                class="global-menu-item menu-trigger"
-                aria-haspopup="menu"
-                aria-expanded={helpMenuOpen}
-                onClick={() => { setHelpMenuOpen((open) => !open); setFileMenuOpen(false); setViewMenuOpen(false); setToolRackOpen(null); }}
-                onMouseEnter={() => updateToolbarHint('HELP', 'Open the categorized Keyboard Shortcuts cheat sheet.', ['KEY: ?', 'CTRL/CMD + /'])}
-              >
-                Help
-              </button>
-              {helpMenuOpen && (
-                <div class="global-menu-dropdown" role="menu" aria-label="Help menu">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="global-menu-item-with-shortcut"
-                    onClick={openShortcutsModal}
-                    disabled={isHydrating}
-                  >
-                    <span>Keyboard Shortcuts</span>
-                    <kbd class="global-menu-shortcut">?</kbd>
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
+      <WorkspacePreferencesRecoveryBanner
+        status={windows.initialWorkspacePreferences.status}
+        reviewRequired={windows.workspacePreferencesReviewRequired}
+        onApprove={windows.approveWorkspacePreferencesReview}
+      />
 
-          </div>
-                  <div class="global-project-name" title={`${state.project.metadata.name}.flop`}>
-          {projectNameEditing ? (
-            <input
-              class="global-project-rename-input"
-              autoFocus
-              value={projectNameDraft}
-              aria-label="Project name"
-              onInput={(event) => setProjectNameDraft(event.currentTarget.value)}
-              onBlur={() => {
-                if (!projectNameCancelRef.current) commitProjectName(projectNameDraft);
-                projectNameCancelRef.current = false;
-                setProjectNameEditing(false);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') (event.currentTarget as HTMLInputElement).blur();
-                if (event.key === 'Escape') {
-                  event.preventDefault();
-                  projectNameCancelRef.current = true;
-                  setProjectNameDraft(state.project.metadata.name);
-                  setProjectNameEditing(false);
-                }
-              }}
-            />
-          ) : (
-            <button type="button" class="global-project-rename-button" title="Rename project" onClick={() => { setProjectNameDraft(state.project.metadata.name); projectNameCancelRef.current = false; setProjectNameEditing(true); }}>
-              <span class="global-project-label">{state.project.metadata.name}</span>
-              <span class="global-project-extension">.flop</span>
-              <Icon name="edit" />
-            </button>
-          )}
-        </div>
-          <div class="global-panel-toggles" aria-label="Workspace panels">
-            <div class="global-panel-group" role="group" aria-label="Racks">
-              <button ref={pagesRackToggleRef} class={`global-panel-toggle pages-rack-header-toggle ${pagesRackOpen ? 'active' : ''}`} type="button" title={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-label={pagesRackOpen ? 'Close Pages Rack' : 'Open Pages Rack'} aria-pressed={pagesRackOpen} onClick={() => {
-                setToolRackOpen(null);
-                if (pagesRackOpen) closePagesRack();
-                else {
-                  focusWindow('pages');
-                  setPagesRackOpen(true);
-                  closeComponentRack();
-                }
-              }} onMouseEnter={() => updateToolbarHint('PAGES RACK', 'Manage the pages in this project.')}><Icon name="pages" /></button>
-              <button ref={componentRackToggleRef} class={`global-panel-toggle component-rack-header-toggle ${componentRackOpen ? 'active' : ''}`} type="button" title={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-label={componentRackOpen ? "Close Component Rack" : "Open Component Rack"} aria-pressed={componentRackOpen} onClick={() => {
-                setToolRackOpen(null);
-                if (componentRackOpen) closeComponentRack();
-                else {
-                  setComponentRackOpen(true);
-                  closePagesRack();
-                }
-              }} onMouseEnter={() => updateToolbarHint('COMPONENT RACK', 'Browse and reuse components saved to your personal library.')}><Icon name="rack" /></button>
-            </div>
-            <span class="global-panel-group-divider" aria-hidden="true" />
-            <div class="global-panel-group" role="group" aria-label="Side panels">
-              <button class={`global-panel-toggle ${layersVisible ? 'active' : ''}`} type="button" title="Show / hide Layers sidebar" aria-label="Show or hide Layers sidebar" aria-pressed={layersVisible} onClick={() => setLayersVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('LAYERS SIDEBAR', 'Show or hide the document Layers dock.')}><Icon name="sidebar" /></button>
-              <button class={`global-panel-toggle inspector-header-toggle ${inspectorVisible ? 'active' : ''}`} type="button" title={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-label={inspectorVisible ? "Hide Inspector" : "Show Inspector"} aria-pressed={inspectorVisible} onClick={() => setInspectorVisible((value) => !value)} onMouseEnter={() => updateToolbarHint('INSPECTOR', inspectorVisible ? 'Hide the properties Inspector. Selecting an object opens it automatically.' : 'Show the properties Inspector. Selecting an object also opens it automatically.')}><Icon name="inspector" /></button>
-            </div>
-            <span class="global-panel-group-divider" aria-hidden="true" />
-            <div class="global-panel-group" role="group" aria-label="Workspace windows">
-              <button class={`global-panel-toggle canvas-header-toggle ${!canvasClosed && !canvasMinimized ? "active" : ""}`} type="button" title={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-label={canvasClosed || canvasMinimized ? "Open Canvas" : "Close Canvas"} aria-pressed={!canvasClosed && !canvasMinimized} onClick={() => { if (canvasClosed || canvasMinimized) openMainCanvas(); else { setCanvasClosed(true); setCanvasMinimized(false); } }} onMouseEnter={() => updateToolbarHint('CANVAS WINDOW', canvasClosed || canvasMinimized ? 'Open the Canvas dock.' : 'Close the Canvas workspace.')}><Icon name="canvas" /></button>
-              <button class={`global-panel-toggle component-canvas-header-toggle ${componentCanvasOpen ? 'active' : ''}`} type="button" title={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-label={componentCanvasClosed || componentCanvasMinimized ? "Open Component Canvas" : "Close Component Canvas"} aria-pressed={componentCanvasOpen} onClick={() => { if (componentCanvasClosed || componentCanvasMinimized) openComponentCanvas(); else { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); setActiveEditorId('main'); if (!canvasClosed && !canvasMinimized) focusWindow('main-canvas'); } }} onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', componentCanvasClosed || componentCanvasMinimized ? 'Open the Component Canvas window.' : 'Close the Component Canvas window.')}><Icon name="componentCanvas" /></button>
-              <button class={`global-panel-toggle node-logic-header-toggle ${nodeLogicOpen ? 'active' : ''}`} type="button" title={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-label={nodeLogicClosed || nodeLogicMinimized ? "Open Node Logic" : "Close Node Logic"} aria-pressed={nodeLogicOpen} onClick={() => { if (nodeLogicClosed || nodeLogicMinimized) openNodeLogic(); else { setNodeLogicClosed(true); setNodeLogicMinimized(false); } }} onMouseEnter={() => updateToolbarHint('NODE LOGIC', nodeLogicClosed || nodeLogicMinimized ? 'Open the Node Logic workspace.' : 'Close the Node Logic workspace.')}><Icon name="logicNodes" /></button>
-            </div>
-            <span class="global-panel-group-divider" aria-hidden="true" />
-            <div class="global-panel-group" role="group" aria-label="Utilities">
-              <button
-                class={`global-panel-toggle shortcuts-header-toggle ${shortcutsModalOpen ? 'active' : ''}`}
-                type="button"
-                title="Keyboard Shortcuts (?)"
-                aria-label="Keyboard Shortcuts"
-                aria-haspopup="dialog"
-                aria-expanded={shortcutsModalOpen}
-                onClick={openShortcutsModal}
-                disabled={isHydrating}
-                onMouseEnter={() => updateToolbarHint('KEYBOARD SHORTCUTS', 'View all available keyboard shortcuts grouped by workspace and action.', ['KEY: ?', 'CTRL/CMD + /'])}
-              >
-                <Icon name="keyboard" />
-              </button>
-              <button class="global-panel-toggle fullscreen-toggle" type="button" title="Toggle fullscreen" aria-label="Toggle fullscreen" onClick={enterFullscreen} onMouseEnter={() => updateToolbarHint('FULLSCREEN', 'Enter or exit browser fullscreen mode.')}><Icon name="fullscreen" /></button>
-            </div>
-          </div>
-        </nav>
-        <ToolbarHintBar store={toolbarHintStore} />
-      </header>
-      {(workspacePreferencesReviewRequired ||
-        initialWorkspacePreferences.status === 'unsupported-newer-schema' ||
-        initialWorkspacePreferences.status === 'storage-unavailable') && (
-        <div class="workspace-preferences-recovery" role="status" aria-live="polite">
-          <div class="workspace-preferences-recovery-copy">
-            <strong>Workspace layout preferences</strong>
-            <span>
-              {initialWorkspacePreferences.status === 'migrated'
-                ? 'Legacy window settings were found. Review the restored layout before converting them to Workspace Preferences V1.'
-                : initialWorkspacePreferences.status === 'recovered'
-                  ? 'Some saved layout values needed safe recovery. Review the restored layout before saving it.'
-                  : initialWorkspacePreferences.status === 'malformed'
-                    ? 'The saved workspace layout is unreadable. The app loaded safe defaults; replacing the damaged record requires your approval.'
-                    : initialWorkspacePreferences.status === 'unsupported-newer-schema'
-                      ? 'This layout was saved by a newer Folio version. Safe defaults are active and the newer record will not be overwritten.'
-                      : 'Browser storage is unavailable. Workspace layout changes cannot be saved in this session.'}
-            </span>
-          </div>
-          {workspacePreferencesReviewRequired && (
-            <button type="button" onClick={() => {
-              setWorkspacePreferencesReviewRequired(false);
-              setWorkspacePreferencesPersistenceEnabled(true);
-              setNotice(
-                initialWorkspacePreferences.status === 'migrated'
-                  ? 'Workspace Preferences V1 migration enabled.'
-                  : 'Recovered workspace layout accepted and saving enabled.',
-              );
-            }}>
-              {initialWorkspacePreferences.status === 'migrated'
-                ? 'Migrate saved layout'
-                : initialWorkspacePreferences.status === 'malformed'
-                  ? 'Replace damaged layout'
-                  : 'Use recovered layout'}
-            </button>
-          )}
-        </div>
-      )}
-      <nav
-        ref={toolRailRef}
-        class={'tool-rail' + (activeEditorId === 'component' ? ' is-component-studio' : '')}
-        data-workspace={activeEditorId}
-        aria-label="Tool Rack"
-        onMouseEnter={() => updateToolbarHint(
-          activeEditorId === 'component' ? 'VECTOR STUDIO' : 'TOOL RACK',
-          activeEditorId === 'component'
-            ? 'Adobe Illustrator-grade Vector Craft Studio for Component Canvas: Pen, Curvature, Anchor Point, Pencil, Smooth, Scissors, Shapes, and Pathfinder.'
-            : 'Figma-grade Layout & Design Studio for Main Canvas: Selection, Frame, Shapes, Pen, Text, Eyedropper, Measure, and Navigation.',
+      <ToolRail
+        toolRailRef={toolRailRef}
+        activeEditorId={activeEditorId}
+        activeCanvasToolId={activeCanvasToolId}
+        toolGroups={activeToolGroups}
+        resolveTool={getStudioTool}
+        toolRackOpen={toolRackOpen}
+        templateInsertMode={templateInsertMode}
+        canUndo={focusedEditor.state.past.length > 0}
+        canRedo={focusedEditor.state.future.length > 0}
+        onCloseTopMenus={() => { setFileMenuOpen(false); setViewMenuOpen(false); setHelpMenuOpen(false); }}
+        onToggleToolRack={setToolRackOpen}
+        onChooseTool={(toolId) => chooseCanvasTool(toolId, activeEditorId)}
+        onTemplateInsertModeChange={setTemplateInsertMode}
+        onInsertTemplate={insertTemplate}
+        onUndo={() => focusedCommandClient.undo()}
+        onRedo={() => focusedCommandClient.redo()}
+        onUpdateToolbarHint={updateToolbarHint}
+      />
+
+      <LayersPanel
+        visible={windows.layersVisible}
+        width={panelResize.panelWidths.layers}
+        isResizing={panelResize.resizingPanel === 'layers'}
+        resizeHandleRef={panelResize.layersResizeHandleRef}
+        activeEditorId={activeEditorId}
+        focusedPageId={focusedPage?.id ?? undefined}
+        layerContextLabel={layerContextLabel}
+        layerContextTitle={layerContextTitle}
+        layerSourceNodes={layerSourceNodes}
+        layerRows={layerRows}
+        layerEffectiveStates={layerEffectiveStates}
+        selectedNodeIds={focusedEditor.state.selectedNodeIds}
+        collapsedLayerIds={activeCollapsedLayers ?? []}
+        layerDropTarget={layerDropTarget}
+        layerRename={layerRename}
+        layerRenameInputRef={layerRenameInputRef}
+        layerColorPickerKey={layerColorPickerKey}
+        onStartResize={panelResize.startPanelResize}
+        onResizeDoubleClick={panelResize.handlePanelResizeDoubleClick}
+        onResizeKeyDown={panelResize.handlePanelResizeKeyDown}
+        onHoverHint={() => updateToolbarHint(
+          'LAYERS',
+          'Each Layer is one object. Drag an object that is off Canvas to restore it; an object already on Canvas cannot be duplicated by dragging.',
+          ['CTRL/CMD + M: MASK', 'CTRL/CMD + SHIFT + M: UNMASK'],
         )}
-      >
-        <div class={'tool-rack-caption' + (activeEditorId === 'component' ? ' is-component' : '')}>
-          {activeEditorId === 'component' ? 'VECTOR' : 'PAGE'}
-        </div>
-        {activeToolGroups.map((group) => {
-          const activeInGroup = group.tools.includes(activeCanvasToolId);
-          const activeTool = activeInGroup ? getStudioTool(activeCanvasToolId) : null;
-          const isSingleTool = group.tools.length === 1;
-          const primaryTool = getStudioTool(group.tools[0]);
-          return (
-            <div class="tool-rack-group" key={group.id}>
-              <button
-                type="button"
-                class={'tool-rack-group-trigger ' + (activeInGroup ? 'active' : '') + (toolRackOpen === group.id ? ' open' : '')}
-                title={isSingleTool ? `${primaryTool.label}${primaryTool.shortcut ? ` (${primaryTool.shortcut})` : ''}` : group.label + ' tools'}
-                aria-label={group.label + ' tools'}
-                aria-expanded={isSingleTool ? undefined : toolRackOpen === group.id}
-                onClick={() => {
-                  setFileMenuOpen(false);
-                  setViewMenuOpen(false);
-                  setHelpMenuOpen(false);
-                  if (isSingleTool) {
-                    chooseCanvasTool(group.tools[0], activeEditorId);
-                  } else {
-                    setToolRackOpen((current) => current === group.id ? null : group.id);
-                  }
-                }}
-                onMouseEnter={() => updateToolbarHint(
-                  (activeTool ?? group).label.toUpperCase(),
-                  activeTool ? activeTool.description : group.description,
-                  activeTool?.shortcut ? [`KEY: ${activeTool.shortcut.toUpperCase()}`] : [],
-                )}
-              >
-                <Icon name={activeTool?.icon ?? group.icon} />
-                <span>{group.label}</span>
-                {!isSingleTool && <span class="tool-rack-corner-tick" aria-hidden="true" />}
-              </button>
-              {!isSingleTool && toolRackOpen === group.id && (
-                <div class="tool-rack-menu" role="menu" aria-label={group.label + ' tools'}>
-                  {group.tools.map((id) => {
-                    const tool = getStudioTool(id);
-                    return (
-                      <button
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={activeCanvasToolId === id}
-                        class={'tool-rack-item ' + (activeCanvasToolId === id ? 'active' : '')}
-                        key={id}
-                        onClick={() => chooseCanvasTool(id, activeEditorId)}
-                        onMouseEnter={() => updateToolbarHint(
-                          tool.label.toUpperCase(),
-                          tool.description,
-                          tool.shortcut ? [`KEY: ${tool.shortcut.toUpperCase()}`] : [],
-                        )}
-                      >
-                        <span class="tool-rack-item-icon"><Icon name={tool.icon} /></span>
-                        <span class="tool-rack-item-name">{tool.label}</span>
-                        {tool.shortcut && <kbd class="tool-rack-shortcut">{tool.shortcut}</kbd>}
-                        {activeCanvasToolId === id && <span class="tool-rack-active-mark">●</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+        onSelectLayer={selectLayerFromPanel}
+        onOpenContextMenu={openLayerContextMenu}
+        onStartDrag={startLayerDrag}
+        onDragOver={updateLayerDropTarget}
+        onDrop={dropLayer}
+        onDragEnd={() => {
+          layerDragSourceRef.current = null;
+          layerDragEditorRef.current = null;
+          setLayerDropTarget(null);
+        }}
+        onDragLeave={(nodeId) => setLayerDropTarget((current) => current?.nodeId === nodeId ? null : current)}
+        onToggleCollapsed={toggleLayerCollapsed}
+        onUpdateRenameDraft={updateLayerRenameDraft}
+        onFinishRename={finishLayerRename}
+        onToggleColorPicker={(nodeId, anchor) => {
+          const key = `${activeEditorId}:${nodeId}`;
+          if (layerColorPickerKey === key) {
+            setLayerColorPickerKey(null);
+            setLayerColorPickerPosition(null);
+            layerColorAnchorRef.current = null;
+            return;
+          }
+          layerColorAnchorRef.current = anchor;
+          const pos = computeClampedPopoverPosition(
+            anchor.getBoundingClientRect(),
+            { width: 170, height: 160 },
+            { width: window.innerWidth, height: window.innerHeight },
           );
-        })}
-        <div class="rail-separator" />
-        <div class="tool-rack-group">
-          <button
-            type="button"
-            class={'tool-rack-group-trigger ' + (toolRackOpen === 'templates' ? 'active open' : '')}
-            title="Templates — Component & Section Library"
-            aria-label="Template library"
-            aria-expanded={toolRackOpen === 'templates'}
-            onClick={() => {
-              setFileMenuOpen(false);
-              setViewMenuOpen(false);
-              setHelpMenuOpen(false);
-              setToolRackOpen((current) => current === 'templates' ? null : 'templates');
-            }}
-            onMouseEnter={() => updateToolbarHint(
-              'TEMPLATES',
-              activeEditorId === 'component'
-                ? 'Browse Vector Starter Kits and UI presets to insert directly as editable layers inside the active Master Component.'
-                : 'Browse ready-to-edit UI Components, Page Sections, and Vector Kits — insert as editable Nodes or reusable Master Components.',
-            )}
-          >
-            <Icon name="templates" />
-            <span>Templates</span>
-            <span class="tool-rack-corner-tick" aria-hidden="true" />
-          </button>
-          {toolRackOpen === 'templates' && (
-            <TemplateLibraryPopover
-              workspace={activeEditorId}
-              insertMode={templateInsertMode}
-              onInsertModeChange={setTemplateInsertMode}
-              onInsertTemplate={insertTemplate}
-              onHoverHint={updateToolbarHint}
-              onClose={() => setToolRackOpen(null)}
-            />
-          )}
-        </div>
-        <div class="rail-bottom">
-          <button class="tool-button" title="Undo" aria-label="Undo" disabled={focusedEditor.state.past.length === 0} onClick={() => focusedCommandClient.undo()}>
-            <Icon name="undo" />
-          </button>
-          <button class="tool-button" title="Redo" aria-label="Redo" disabled={focusedEditor.state.future.length === 0} onClick={() => focusedCommandClient.redo()}>
-            <Icon name="redo" />
-          </button>
-        </div>
-      </nav>
+          setLayerColorPickerPosition(pos);
+          setLayerColorPickerKey(key);
+        }}
+        onToggleLayerProperty={toggleLayerPropertyFromRow}
+      />
 
-      <aside class={`layers-panel ${layersVisible ? "" : "is-hidden"}`} onMouseEnter={() => updateToolbarHint('LAYERS', 'Each Layer is one object. Drag an object that is off Canvas to restore it; an object already on Canvas cannot be duplicated by dragging.', ['CTRL/CMD + M: MASK', 'CTRL/CMD + SHIFT + M: UNMASK'])}>
-        <div
-          ref={layersResizeHandleRef}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize Layers sidebar"
-          aria-valuenow={panelWidths.layers}
-          aria-valuemin={PANEL_RESIZE_CONSTRAINTS.layers.minWidth}
-          aria-valuemax={PANEL_RESIZE_CONSTRAINTS.layers.maxWidth}
-          tabIndex={layersVisible ? 0 : -1}
-          data-resize-panel="layers"
-          class={`panel-resize-handle panel-resize-handle-right ${resizingPanel === 'layers' ? 'is-active' : ''}`}
-          title="Drag to resize Layers sidebar (double-click to reset)"
-          onPointerDown={(event) => event.stopPropagation()}
-          onMouseDown={(event) => startPanelResize('layers', event)}
-          onDblClick={(event) => handlePanelResizeDoubleClick('layers', event)}
-          onKeyDown={(event) => handlePanelResizeKeyDown('layers', event)}
-        />
-        <div class="panel-heading">
-          <h2>Layers</h2>
-        </div>
-        <div class="layer-list-heading" data-page-id={focusedPage?.id ?? undefined}>
-          <span>LAYERS · {layerSourceNodes.length}</span>
-          <span class="layer-page-context" title={layerContextTitle}>{layerContextLabel}</span>
-        </div>
-        <div class="layer-list" role="tree" aria-label="Document layers">
-          {layerRows.map(({ node, depth, hasChildren }) => {
-            const selected = focusedEditor.state.selectedNodeIds.includes(node.id);
-            const effective = layerEffectiveStates.get(node.id);
-            const clipBaseName = node.clipMaskBaseId
-              ? layerSourceNodes.find((item) => item.id === node.clipMaskBaseId)?.name ?? 'another layer'
-              : '';
-            const isMaskBase = layerSourceNodes.some((item) => item.clipMaskBaseId === node.id);
-            const collapsed = (collapsedLayers[activeEditorId] ?? []).includes(node.id);
-            const dropClass = layerDropTarget?.nodeId === node.id ? ('drop-' + layerDropTarget.position) : '';
-            return (
-              <div
-                key={node.id}
-                role="treeitem"
-                aria-level={depth + 1}
-                aria-selected={selected}
-                aria-expanded={hasChildren ? !collapsed : undefined}
-                tabIndex={0}
-                draggable={true}
-                class={'layer-row ' + (selected ? 'selected ' : '') + (node.onCanvas === false ? 'layer-not-on-canvas ' : '') + (!effective?.visible ? 'layer-hidden ' : '') + (effective?.locked ? 'layer-inherited-locked ' : '') + (node.clipMaskBaseId ? 'layer-row-clipped ' : '') + (isMaskBase ? 'layer-row-mask-base ' : '') + dropClass}
-                style={{ paddingLeft: (8 + depth * 15 + (node.clipMaskBaseId ? 14 : 0)) + 'px' }}
-                onClick={(event) => selectLayerFromPanel(node.id, event)}
-                onContextMenu={(event) => openLayerContextMenu(node.id, event)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    selectLayerFromPanel(node.id, event);
-                  }
-                }}
-                onDragStart={(event) => startLayerDrag(node.id, event)}
-                onDragOver={(event) => updateLayerDropTarget(node.id, event)}
-                onDrop={(event) => dropLayer(node.id, event)}
-                onDragEnd={() => { layerDragSourceRef.current = null; layerDragEditorRef.current = null; setLayerDropTarget(null); }}
-                onDragLeave={() => setLayerDropTarget((current) => current?.nodeId === node.id ? null : current)}
-                title={node.onCanvas === false ? 'Restore ' + node.name + ' to Canvas. Its last position, size and appearance will be kept.' : 'Select ' + node.name + '. It is already on Canvas; dragging it there again will not create a duplicate.'}
-              >
-                {hasChildren ? (
-                  <button
-                    type="button"
-                    class="layer-disclosure"
-                    title={collapsed ? 'Expand sub-layers' : 'Collapse sub-layers'}
-                    aria-label={collapsed ? ('Expand ' + node.name) : ('Collapse ' + node.name)}
-                    onClick={(event) => { event.stopPropagation(); toggleLayerCollapsed(node.id); }}
-                  >
-                    <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} />
-                  </button>
-                ) : <span class="layer-disclosure-spacer" />}
-                {node.clipMaskBaseId && <span class="layer-clip-indicator" title={`Clipped to ${clipBaseName}`} aria-label={`Clipped to ${clipBaseName}`}><Icon name="clipArrow" /></span>}
-                <LayerIcon type={node.type} />
-                {layerRename?.anchorId === node.id ? (
-                  <input
-                    ref={layerRenameInputRef}
-                    class="layer-name-editor"
-                    type="text"
-                    value={layerRename.value}
-                    aria-label={layerRename.batch ? `Rename ${layerRename.nodeIds.length} selected layers` : `Rename ${node.name}`}
-                    title={layerRename.batch ? `Batch rename ${layerRename.nodeIds.length} layers (numbered)` : 'Rename layer'}
-                    onClick={(event) => event.stopPropagation()}
-                    onInput={(event) => updateLayerRenameDraft(event.currentTarget.value)}
-                    onKeyDown={(event) => {
-                      event.stopPropagation();
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        finishLayerRename(true);
-                      }
-                      if (event.key === 'Escape') {
-                        event.preventDefault();
-                        finishLayerRename(false);
-                      }
-                    }}
-                    onBlur={() => finishLayerRename(true)}
-                  />
-                ) : (
-                  <span class={'layer-name ' + (isMaskBase ? 'layer-mask-base-name' : '')}>{node.name}</span>
-                )}
-                <div class="layer-actions">
-                  <button
-                    type="button"
-                    class="layer-color-control"
-                    style={{ backgroundColor: node.layerColor ?? '#7f8797' }}
-                    title={node.layerColor ? `Layer color ${node.layerColor}` : 'Set layer color'}
-                    aria-label={`Choose color for ${node.name}`}
-                    aria-expanded={layerColorPickerKey === `${activeEditorId}:${node.id}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      const key = `${activeEditorId}:${node.id}`;
-                      if (layerColorPickerKey === key) {
-                        setLayerColorPickerKey(null);
-                        setLayerColorPickerPosition(null);
-                        layerColorAnchorRef.current = null;
-                        return;
-                      }
+      <MainCanvasWindow
+        visible={mainCanvasVisible}
+        minimized={windows.canvasMinimized}
+        closed={windows.canvasClosed}
+        floating={windows.canvasFloating}
+        position={windows.canvasPosition}
+        size={windows.canvasSize}
+        zIndex={getWindowZIndex(windows.windowOrder, 'main-canvas')}
+        document={activeDocument}
+        components={state.project.components}
+        selectedNodeIds={state.selectedNodeIds}
+        selectedNodes={selectedNodes}
+        toolId={workspaceTools.main}
+        toolOptions={toolOptions}
+        zoom={windows.zoom}
+        pan={windows.mainView.pan}
+        canUndo={focusedEditor.state.past.length > 0}
+        canRedo={focusedEditor.state.future.length > 0}
+        onPositionChange={windows.setCanvasPosition}
+        onSizeChange={windows.setCanvasSize}
+        onFocus={() => {
+          windows.focusWindow('main-canvas');
+          setActiveEditorId('main');
+          selectionSourceRef.current = 'canvas';
+        }}
+        onFocusMinimized={() => {
+          windows.focusWindow('main-canvas');
+          setActiveEditorId('main');
+        }}
+        onHoverHint={() => updateToolbarHint(
+          'CANVAS',
+          'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.',
+          ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'],
+        )}
+        onAlign={(alignment) => alignSelection(alignment, 'main')}
+        onDistribute={(axis) => distributeSelection(axis, 'main')}
+        onUndo={() => focusedCommandClient.undo()}
+        onRedo={() => focusedCommandClient.redo()}
+        onZoomChange={windows.setZoom}
+        onMinimize={() => windows.setCanvasMinimized(true)}
+        onRestore={() => windows.setCanvasMinimized(false)}
+        onToggleFloating={() => windows.setCanvasWindowMode(windows.canvasFloating ? 'docked' : 'floating')}
+        onClose={() => {
+          windows.setCanvasClosed(true);
+          windows.setCanvasMinimized(false);
+          windows.setCanvasWindowMode('docked');
+        }}
+        onCloseMinimized={() => {
+          windows.setCanvasClosed(true);
+          windows.setCanvasMinimized(false);
+        }}
+        onChangeToolOptions={updateToolOptions}
+        onPathfinder={(op) => handlePathfinder('main', op)}
+        onConvertToPath={() => handleConvertToPath('main')}
+        onFlip={(axis) => handleFlipSelection('main', axis)}
+        onRotate90={() => handleRotate90('main')}
+        onSimplifyPath={() => handleSimplifyPath('main')}
+        onTogglePathClosed={() => handleTogglePathClosed('main')}
+        onSelectTool={(nextTool) => chooseCanvasTool(nextTool, 'main')}
+        onToolOperation={(operation) => mainToolOperationExecutor.execute(operation)}
+        onToolOperationBatch={(operations) => mainToolOperationExecutor.executeBatch(operations)}
+        onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'main')}
+      />
 
-                      const anchor = event.currentTarget as HTMLButtonElement;
-                      layerColorAnchorRef.current = anchor;
-                      const anchorRect = anchor.getBoundingClientRect();
-                      const estimatedWidth = 170;
-                      const estimatedHeight = 160;
-                      const margin = 8;
-                      const left = Math.max(
-                        margin,
-                        Math.min(window.innerWidth - estimatedWidth - margin, anchorRect.right - estimatedWidth),
-                      );
-                      const belowTop = anchorRect.bottom + 6;
-                      const top = belowTop + estimatedHeight <= window.innerHeight - margin
-                        ? belowTop
-                        : Math.max(margin, anchorRect.top - estimatedHeight - 6);
-                      setLayerColorPickerPosition({ top, left });
-                      setLayerColorPickerKey(key);
-                    }}
-                  />
-                  <button
-                    type="button"
-                    class={'layer-control ' + (node.visible ? 'active' : '')}
-                    title={node.visible ? 'Hide layer' : 'Show layer'}
-                    aria-label={node.visible ? ('Hide ' + node.name) : ('Show ' + node.name)}
-                    aria-pressed={node.visible}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      toggleLayerPropertyFromRow(node.id, 'visible');
-                    }}
-                  ><Icon name={node.visible ? 'eye' : 'eyeOff'} /></button>
-                  <button
-                    type="button"
-                    class={'layer-control ' + (node.locked ? 'active' : '')}
-                    title={node.locked ? 'Unlock layer' : 'Lock layer'}
-                    aria-label={node.locked ? ('Unlock ' + node.name) : ('Lock ' + node.name)}
-                    aria-pressed={node.locked}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      toggleLayerPropertyFromRow(node.id, 'locked');
-                    }}
-                  ><Icon name={node.locked ? 'lock' : 'unlock'} /></button>
-                </div>
-                <span class="layer-color-rail" style={{ backgroundColor: node.layerColor ?? 'transparent' }} aria-hidden="true" />
-              </div>
-            );
-          })}
-          {layerSourceNodes.length === 0 && (
-            <div class="empty-layers">Your layers will appear here.</div>
-          )}
-        </div>
-      </aside>
+      <ComponentCanvasWindow
+        visible={componentCanvasVisible}
+        minimized={windows.componentCanvasMinimized}
+        closed={windows.componentCanvasClosed}
+        floating={windows.componentCanvasFloating}
+        position={windows.componentCanvasPosition}
+        size={windows.componentCanvasSize}
+        zIndex={getWindowZIndex(windows.windowOrder, 'component-canvas')}
+        document={componentDocument}
+        components={state.project.components}
+        editingComponent={componentMaster.editingComponent}
+        selectedNodeIds={componentState.selectedNodeIds}
+        selectedComponentNodes={componentMaster.selectedComponentNodes}
+        toolId={workspaceTools.component}
+        toolOptions={toolOptions}
+        zoom={windows.componentCanvasZoom}
+        pan={windows.componentView.pan}
+        canUndo={componentState.past.length > 0}
+        canRedo={componentState.future.length > 0}
+        recoveryStatus={componentMaster.componentRecoveryStatus}
+        pendingOpenComponentName={pendingOpenComponentName}
+        hasPendingDeletion={Boolean(componentMaster.pendingComponentDeletion)}
+        showRetryCleanupButton={Boolean(
+          componentMaster.pendingComponentDeletion
+          && componentMaster.componentCleanupPending
+          && !componentMaster.componentDeletionDialogOpen,
+        )}
+        onPositionChange={windows.setComponentCanvasPosition}
+        onSizeChange={windows.setComponentCanvasSize}
+        onFocus={() => {
+          windows.focusWindow('component-canvas');
+          setActiveEditorId('component');
+          selectionSourceRef.current = 'canvas';
+        }}
+        onFocusMinimized={() => {
+          windows.focusWindow('component-canvas');
+          setActiveEditorId('component');
+        }}
+        onHoverHint={() => updateToolbarHint(
+          'COMPONENT CANVAS',
+          'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.',
+          ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'],
+        )}
+        onReloadRecoveredMaster={componentMaster.reloadRecoveredComponentMaster}
+        onKeepCurrentBuffer={componentMaster.keepCurrentComponentBuffer}
+        onDiscardAndOpenPending={componentMaster.discardBufferAndOpenPendingMaster}
+        onOpenCleanupDialog={() => componentMaster.setComponentDeletionDialogOpen(true)}
+        onSaveMaster={componentMaster.saveComponentCanvasMaster}
+        onSaveSelectionAsNew={() => componentMaster.saveNodesAsComponent(componentMaster.selectedComponentNodes, componentDocument.nodes)}
+        onAlign={(alignment) => alignSelection(alignment, 'component')}
+        onDistribute={(axis) => distributeSelection(axis, 'component')}
+        onUndo={() => componentCommandClient.undo()}
+        onRedo={() => componentCommandClient.redo()}
+        onZoomChange={windows.setComponentCanvasZoom}
+        onMinimize={() => {
+          windows.setComponentCanvasMinimized(true);
+          setActiveEditorId('main');
+          if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas');
+        }}
+        onRestore={() => windows.setComponentCanvasMinimized(false)}
+        onToggleFloating={() => windows.setComponentCanvasWindowMode(windows.componentCanvasFloating ? 'docked' : 'floating')}
+        onClose={() => {
+          windows.setComponentCanvasClosed(true);
+          windows.setComponentCanvasMinimized(false);
+          windows.setComponentCanvasWindowMode('docked');
+          setActiveEditorId('main');
+          if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas');
+        }}
+        onCloseMinimized={() => {
+          windows.setComponentCanvasClosed(true);
+          windows.setComponentCanvasMinimized(false);
+        }}
+        onChangeToolOptions={updateToolOptions}
+        onPathfinder={(op) => handlePathfinder('component', op)}
+        onConvertToPath={() => handleConvertToPath('component')}
+        onFlip={(axis) => handleFlipSelection('component', axis)}
+        onRotate90={() => handleRotate90('component')}
+        onSimplifyPath={() => handleSimplifyPath('component')}
+        onTogglePathClosed={() => handleTogglePathClosed('component')}
+        onSelectTool={(nextTool) => chooseCanvasTool(nextTool, 'component')}
+        onToolOperation={(operation) => componentToolOperationExecutor.execute(operation)}
+        onToolOperationBatch={(operations) => componentToolOperationExecutor.executeBatch(operations)}
+        onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'component')}
+      />
 
-      {!canvasClosed && !canvasMinimized && !(componentCanvasOpen && !componentCanvasFloating && !canvasFloating) && !(nodeLogicOpen && !nodeLogicFloating && !canvasFloating) && <FloatingWindow
-        as="main"
-        id="main-canvas"
-        className={`workspace${canvasFloating ? " canvas-floating" : ""}`}
-        floating={canvasFloating}
-        draggable={canvasFloating}
-        position={canvasPosition}
-        size={canvasSize}
-        zIndex={getWindowZIndex(windowOrder, 'main-canvas')}
-        onPositionChange={setCanvasPosition}
-        onSizeChange={setCanvasSize}
-        onFocus={() => { focusWindow('main-canvas'); setActiveEditorId('main'); selectionSourceRef.current = 'canvas'; }}
-        onMouseEnter={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
-      >        <div
-          class={`workspace-toolbar${canvasFloating ? " workspace-toolbar-draggable" : ""}`}
-        >
-          <div class="breadcrumb">
-            <strong>{activeDocument.name}</strong>
-          </div>
-          <div class="canvas-window-tools">
-            {state.selectedNodeIds.length > 1 && (
-              <div class="alignment-tools" aria-label="Align selected layers">
-                <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
-                <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
-                <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
-                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal')}>⇌</button>
-                <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
-                <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
-                <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
-                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={state.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical')}>⇅</button>
-              </div>
-            )}
-            <div class="workspace-tools">
-              <button class="history-button" title="Undo" disabled={focusedEditor.state.past.length === 0} onClick={() => focusedCommandClient.undo()}><Icon name="undo" /></button>
-              <button class="history-button" title="Redo" disabled={focusedEditor.state.future.length === 0} onClick={() => focusedCommandClient.redo()}><Icon name="redo" /></button>
-              <span class="workspace-divider" />
-              <button class="zoom-button" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.15, Number((value / 1.2).toFixed(2))))}><Icon name="minus" /></button>
-              <span class="zoom-value">{Math.round(zoom * 100)}%</span>
-              <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(8, Number((value * 1.2).toFixed(2))))}><Icon name="plus" /></button>
-            </div>
-            <div class="workspace-window-controls" aria-label="Canvas window controls">
-              <button type="button" class="window-control window-control-minimize" title="Minimize canvas" aria-label="Minimize canvas" onClick={() => setCanvasMinimized(true)}></button>
-              <button type="button" class="window-control" title={canvasFloating ? "Dock Canvas" : "Float Canvas"} aria-label={canvasFloating ? "Dock Canvas" : "Float Canvas"} aria-pressed={canvasFloating} onClick={() => setCanvasWindowMode(canvasFloating ? 'docked' : 'floating')}>{canvasFloating ? "▣" : "□"}</button>
-              <button type="button" class="window-control window-control-close" title="Close Canvas window" aria-label="Close Canvas window" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); setCanvasWindowMode('docked'); }}>×</button>
-            </div>
-          </div>
-        </div>
-        <div class="canvas-workspace">
-          <ToolOptionsBar
-            workspace="main"
-            toolId={workspaceTools.main}
-            toolOptions={toolOptions}
-            selectedNodes={selectedNodes}
-            onChangeOptions={updateToolOptions}
-            onPathfinder={(op) => handlePathfinder('main', op)}
-            onConvertToPath={() => handleConvertToPath('main')}
-            onFlip={(axis) => handleFlipSelection('main', axis)}
-            onRotate90={() => handleRotate90('main')}
-            onSimplifyPath={() => handleSimplifyPath('main')}
-            onTogglePathClosed={() => handleTogglePathClosed('main')}
-            onSelectTool={(nextTool) => chooseCanvasTool(nextTool, 'main')}
-          />
-          <Canvas
-            document={activeDocument}
-            components={state.project.components}
-            selectedNodeIds={state.selectedNodeIds}
-            toolId={workspaceTools.main}
-            workspace="main"
-            toolOptions={toolOptions}
-            zoom={zoom}
-            pan={mainView.pan}
-            onToolOperation={(operation) => mainToolOperationExecutor.execute(operation)}
-            onToolOperationBatch={(operations) => mainToolOperationExecutor.executeBatch(operations)}
-            onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'main')}
-          />
-        </div>
-
-      </FloatingWindow>}
-
-      {!componentCanvasClosed && !componentCanvasMinimized && !(nodeLogicOpen && !nodeLogicFloating && !componentCanvasFloating) && <FloatingWindow
-        as="main"
-        id="component-canvas"
-        className={`workspace component-canvas-window${componentCanvasFloating ? " canvas-floating" : " component-canvas-docked"}`}
-        floating={componentCanvasFloating}
-        draggable={componentCanvasFloating}
-        position={componentCanvasPosition}
-        size={componentCanvasSize}
-        zIndex={getWindowZIndex(windowOrder, 'component-canvas')}
-        onPositionChange={setComponentCanvasPosition}
-        onSizeChange={setComponentCanvasSize}
-        onFocus={() => { focusWindow('component-canvas'); setActiveEditorId('component'); selectionSourceRef.current = 'canvas'; }}
-        onMouseEnter={() => updateToolbarHint('COMPONENT CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
-      >        <div
-          class={`workspace-toolbar${componentCanvasFloating ? " workspace-toolbar-draggable" : ""}`}
-        >
-          <div class="breadcrumb">
-            <Icon name="componentCanvas" />
-            <strong>{editingComponent ? editingComponent.name + ' · Master' : 'Component Canvas'}</strong>
-          </div>
-          {componentRecoveryStatus === 'missing' && (
-            <span class="component-recovery-status" role="status">Master temporarily missing · local buffer preserved</span>
-          )}
-          {(componentRecoveryStatus === 'returned' || componentRecoveryStatus === 'conflict') && (
-            <button type="button" class="component-recovery-action" disabled={Boolean(pendingComponentDeletion)} onClick={reloadRecoveredComponentMaster}>
-              Discard local edits and reload current master
-            </button>
-          )}
-          {pendingComponentOpenId && (
-            <div class="component-recovery-panel" role="alert">
-              <span>
-                Opening {state.project.components.find((item) => item.id === pendingComponentOpenId)?.name ?? 'another master'} would replace the current local buffer.
-              </span>
-              <button type="button" class="component-recovery-action" onClick={keepCurrentComponentBuffer}>
-                Keep current buffer
-              </button>
-              <button type="button" class="component-recovery-action" onClick={discardBufferAndOpenPendingMaster}>
-                Discard local edits and open requested master
-              </button>
-            </div>
-          )}
-          {pendingComponentDeletion && componentCleanupPending && !componentDeletionDialogOpen && (
-            <button type="button" class="component-recovery-action" onClick={() => setComponentDeletionDialogOpen(true)}>
-              Retry durable Component Canvas cleanup
-            </button>
-          )}
-          <div class="canvas-window-tools">
-            <div class="workspace-tools component-canvas-create-tools" aria-label="Component actions">
-              <button
-                type="button"
-                class="component-master-save-button"
-                title={editingComponent ? `Update master “${editingComponent.name}”` : 'Save Component Canvas as new component'}
-                aria-label={editingComponent ? `Update master ${editingComponent.name}` : 'Save Component Canvas as new component'}
-                disabled={!editingComponent && componentDocument.nodes.length === 0}
-                onClick={saveComponentCanvasMaster}
-              ><Icon name="save" /></button>
-              <button
-                type="button"
-                class="component-save-new-button"
-                title="Save selected layers as a new component"
-                aria-label="Save selected layers as a new component"
-                disabled={selectedComponentNodes.length === 0}
-                onClick={() => saveNodesAsComponent(selectedComponentNodes, componentDocument.nodes)}
-              ><Icon name="copyPlus" /></button>
-            </div>
-            {componentState.selectedNodeIds.length > 1 && (
-              <div class="alignment-tools" aria-label="Align selected layers">
-                <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left', 'component')}>⇤</button>
-                <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center', 'component')}>↔</button>
-                <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right', 'component')}>⇥</button>
-                <button title="Distribute horizontally" aria-label="Distribute horizontally" disabled={componentState.selectedNodeIds.length < 3} onClick={() => distributeSelection('horizontal', 'component')}>⇌</button>
-                <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top', 'component')}>⇡</button>
-                <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center', 'component')}>↕</button>
-                <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom', 'component')}>⇣</button>
-                <button title="Distribute vertically" aria-label="Distribute vertically" disabled={componentState.selectedNodeIds.length < 3} onClick={() => distributeSelection('vertical', 'component')}>⇅</button>
-              </div>
-            )}
-            <div class="workspace-tools">
-              <button class="history-button" title="Undo" disabled={componentState.past.length === 0} onClick={() => componentCommandClient.undo()}><Icon name="undo" /></button>
-              <button class="history-button" title="Redo" disabled={componentState.future.length === 0} onClick={() => componentCommandClient.redo()}><Icon name="redo" /></button>
-              <span class="workspace-divider" />
-              <button class="zoom-button" title="Zoom out" onClick={() => setComponentCanvasZoom((value) => Math.max(0.15, Number((value / 1.2).toFixed(2))))}><Icon name="minus" /></button>
-              <span class="zoom-value">{Math.round(componentCanvasZoom * 100)}%</span>
-              <button class="zoom-button" title="Zoom in" onClick={() => setComponentCanvasZoom((value) => Math.min(8, Number((value * 1.2).toFixed(2))))}><Icon name="plus" /></button>
-            </div>
-            <div class="workspace-window-controls" aria-label="Component Canvas window controls">
-              <button type="button" class="window-control window-control-minimize" title="Minimize Component Canvas" aria-label="Minimize Component Canvas" disabled={Boolean(pendingComponentDeletion)} onClick={() => { setComponentCanvasMinimized(true); setActiveEditorId('main'); if (!canvasClosed && !canvasMinimized) focusWindow('main-canvas'); }}></button>
-              <button type="button" class="window-control" title={componentCanvasFloating ? "Dock Component Canvas" : "Float Component Canvas"} aria-label={componentCanvasFloating ? "Dock Component Canvas" : "Float Component Canvas"} aria-pressed={componentCanvasFloating} onClick={() => setComponentCanvasWindowMode(componentCanvasFloating ? 'docked' : 'floating')}>{componentCanvasFloating ? "▣" : "□"}</button>
-              <button type="button" class="window-control window-control-close" title="Close Component Canvas window" aria-label="Close Component Canvas window" disabled={Boolean(pendingComponentDeletion)} onClick={() => { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); setComponentCanvasWindowMode('docked'); setActiveEditorId('main'); if (!canvasClosed && !canvasMinimized) focusWindow('main-canvas'); }}>×</button>
-            </div>
-          </div>
-        </div>
-        <div class="canvas-workspace">
-          <ToolOptionsBar
-            workspace="component"
-            toolId={workspaceTools.component}
-            toolOptions={toolOptions}
-            selectedNodes={selectedComponentNodes}
-            onChangeOptions={updateToolOptions}
-            onPathfinder={(op) => handlePathfinder('component', op)}
-            onConvertToPath={() => handleConvertToPath('component')}
-            onFlip={(axis) => handleFlipSelection('component', axis)}
-            onRotate90={() => handleRotate90('component')}
-            onSimplifyPath={() => handleSimplifyPath('component')}
-            onTogglePathClosed={() => handleTogglePathClosed('component')}
-            onSelectTool={(nextTool) => chooseCanvasTool(nextTool, 'component')}
-          />
-          <Canvas
-            document={componentDocument}
-            components={state.project.components}
-            selectedNodeIds={componentState.selectedNodeIds}
-            toolId={workspaceTools.component}
-            workspace="component"
-            toolOptions={toolOptions}
-            zoom={componentCanvasZoom}
-            pan={componentView.pan}
-            onToolOperation={(operation) => componentToolOperationExecutor.execute(operation)}
-            onToolOperationBatch={(operations) => componentToolOperationExecutor.executeBatch(operations)}
-            onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'component')}
-          />
-        </div>
-
-      </FloatingWindow>}
-
-      {canvasMinimized && !canvasClosed && (
-        <FloatingWindow as="div" id="main-canvas" className="canvas-minimized-window" minimized draggable position={canvasPosition} size={canvasSize} zIndex={getWindowZIndex(windowOrder, 'main-canvas')} onPositionChange={setCanvasPosition} onSizeChange={setCanvasSize} onFocus={() => { focusWindow('main-canvas'); setActiveEditorId('main'); }}>
-          <div class="canvas-minimized-titlebar">
-            <Icon name="canvas" />
-            <strong>{activeDocument.name}</strong>
-            <button type="button" class="minimized-restore-control" title="Restore Canvas" aria-label="Restore Canvas" onClick={() => setCanvasMinimized(false)}></button>
-            <button type="button" title="Close Canvas" aria-label="Close Canvas" onClick={() => { setCanvasClosed(true); setCanvasMinimized(false); }}>×</button>
-          </div>
-        </FloatingWindow>
-      )}
-
-      {componentCanvasMinimized && !componentCanvasClosed && (
-        <FloatingWindow as="div" id="component-canvas" className="canvas-minimized-window component-canvas-minimized" minimized draggable position={componentCanvasPosition} size={componentCanvasSize} zIndex={getWindowZIndex(windowOrder, 'component-canvas')} onPositionChange={setComponentCanvasPosition} onSizeChange={setComponentCanvasSize} onFocus={() => { focusWindow('component-canvas'); setActiveEditorId('component'); }}>
-          <div class="canvas-minimized-titlebar">
-            <Icon name="componentCanvas" />
-            <strong>Component Canvas</strong>
-            <button type="button" class="minimized-restore-control" title="Restore Component Canvas" aria-label="Restore Component Canvas" onClick={() => setComponentCanvasMinimized(false)}></button>
-            <button type="button" title="Close Component Canvas" aria-label="Close Component Canvas" onClick={() => { setComponentCanvasClosed(true); setComponentCanvasMinimized(false); }}>×</button>
-          </div>
-        </FloatingWindow>
-      )}
-
-      {!nodeLogicClosed && !nodeLogicMinimized && <FloatingWindow
-        as="main"
-        id="node-logic"
-        className={`workspace node-logic-window${nodeLogicFloating ? " canvas-floating" : " node-logic-docked"}`}
-        floating={nodeLogicFloating}
-        draggable={nodeLogicFloating}
-        position={nodeLogicPosition}
-        size={nodeLogicSize}
-        zIndex={getWindowZIndex(windowOrder, 'node-logic')}
-        onPositionChange={setNodeLogicPosition}
-        onSizeChange={setNodeLogicSize}
-        onFocus={() => focusWindow('node-logic')}
-        onMouseEnter={() => updateToolbarHint('NODE LOGIC', 'Node Logic workspace for building visual logic flows.')}
-      >        <div
-          class={`workspace-toolbar${nodeLogicFloating ? " workspace-toolbar-draggable" : ""}`}
-        >
-          <div class="breadcrumb">
-            <Icon name="logicNodes" />
-            <strong>Node Logic</strong>
-          </div>
-          <div class="canvas-window-tools">
-            <div class="workspace-window-controls" aria-label="Node Logic window controls">
-              <button type="button" class="window-control window-control-minimize" title="Minimize Node Logic" aria-label="Minimize Node Logic" onClick={() => setNodeLogicMinimized(true)}></button>
-              <button type="button" class="window-control" title={nodeLogicFloating ? "Dock Node Logic" : "Float Node Logic"} aria-label={nodeLogicFloating ? "Dock Node Logic" : "Float Node Logic"} aria-pressed={nodeLogicFloating} onClick={() => setNodeLogicWindowMode(nodeLogicFloating ? 'docked' : 'floating')}>{nodeLogicFloating ? "▣" : "□"}</button>
-              <button type="button" class="window-control window-control-close" title="Close Node Logic window" aria-label="Close Node Logic window" onClick={() => { setNodeLogicClosed(true); setNodeLogicMinimized(false); setNodeLogicWindowMode('docked'); }}>×</button>
-            </div>
-          </div>
-        </div>
-        <div class="node-logic-workspace">
-          <div class="node-logic-empty">
-            <div class="node-logic-empty-icon"><Icon name="logicNodes" /></div>
-            <span class="panel-kicker">VISUAL LOGIC</span>
-            <strong>Node Logic</strong>
-            <p>Build and connect logic nodes in this independent workspace.</p>
-            <span class="node-logic-empty-note">NODE EDITOR · SEPARATE FROM DESIGN CANVAS</span>
-          </div>
-        </div>
-
-      </FloatingWindow>}
-
-      {nodeLogicMinimized && !nodeLogicClosed && (
-        <FloatingWindow as="div" id="node-logic" className="canvas-minimized-window node-logic-minimized" minimized draggable={nodeLogicFloating} position={nodeLogicPosition} size={nodeLogicSize} zIndex={getWindowZIndex(windowOrder, 'node-logic')} onPositionChange={setNodeLogicPosition} onSizeChange={setNodeLogicSize} onFocus={() => focusWindow('node-logic')}>
-          <div class="canvas-minimized-titlebar">
-            <Icon name="logicNodes" />
-            <strong>Node Logic</strong>
-            <button type="button" class="minimized-restore-control" title="Restore Node Logic" aria-label="Restore Node Logic" onClick={() => setNodeLogicMinimized(false)}></button>
-            <button type="button" title="Close Node Logic" aria-label="Close Node Logic" onClick={() => { setNodeLogicClosed(true); setNodeLogicMinimized(false); }}>×</button>
-          </div>
-        </FloatingWindow>
-      )}
+      <NodeLogicWindow
+        visible={!windows.nodeLogicClosed && !windows.nodeLogicMinimized}
+        minimized={windows.nodeLogicMinimized}
+        closed={windows.nodeLogicClosed}
+        floating={windows.nodeLogicFloating}
+        position={windows.nodeLogicPosition}
+        size={windows.nodeLogicSize}
+        zIndex={getWindowZIndex(windows.windowOrder, 'node-logic')}
+        onPositionChange={windows.setNodeLogicPosition}
+        onSizeChange={windows.setNodeLogicSize}
+        onFocus={() => windows.focusWindow('node-logic')}
+        onHoverHint={() => updateToolbarHint('NODE LOGIC', 'Node Logic workspace for building visual logic flows.')}
+        onMinimize={() => windows.setNodeLogicMinimized(true)}
+        onRestore={() => windows.setNodeLogicMinimized(false)}
+        onToggleFloating={() => windows.setNodeLogicWindowMode(windows.nodeLogicFloating ? 'docked' : 'floating')}
+        onClose={() => {
+          windows.setNodeLogicClosed(true);
+          windows.setNodeLogicMinimized(false);
+          windows.setNodeLogicWindowMode('docked');
+        }}
+        onCloseMinimized={() => {
+          windows.setNodeLogicClosed(true);
+          windows.setNodeLogicMinimized(false);
+        }}
+      />
 
       <InspectorPanel
-        visible={inspectorVisible}
-        width={panelWidths.inspector}
-        isResizing={resizingPanel === 'inspector'}
-        resizeHandleRef={inspectorResizeHandleRef}
+        visible={windows.inspectorVisible}
+        width={panelResize.panelWidths.inspector}
+        isResizing={panelResize.resizingPanel === 'inspector'}
+        resizeHandleRef={panelResize.inspectorResizeHandleRef}
         activeEditorId={activeEditorId}
         selectedNode={selectedNode}
         selectedNodes={focusedEditor.selectedNodes}
@@ -3676,10 +1752,10 @@ export function App() {
         selectedInstanceComponent={selectedInstanceComponent}
         instanceOverrideTargets={instanceOverrideTargets}
         defaultFillColor={toolOptions.fillColor}
-        renderIcon={(name) => <Icon name={name} />}
-        onStartResize={startPanelResize}
-        onResizeDoubleClick={handlePanelResizeDoubleClick}
-        onResizeKeyDown={handlePanelResizeKeyDown}
+        renderIcon={(name) => <StudioIcon name={name} />}
+        onStartResize={panelResize.startPanelResize}
+        onResizeDoubleClick={panelResize.handlePanelResizeDoubleClick}
+        onResizeKeyDown={panelResize.handlePanelResizeKeyDown}
         onCommitEdit={() => {
           mainCommandClient.commitEdit();
           componentCommandClient.commitEdit();
@@ -3704,259 +1780,138 @@ export function App() {
         onCopySelection={() => copySelection(activeEditorId)}
       />
 
+      <PagesRackPanel
+        panelRef={pagesRackRef}
+        open={windows.pagesRackOpen}
+        pages={pages}
+        activePageId={activePageId}
+        pageNameDraft={pageNameDraft}
+        onFocus={() => windows.focusWindow('pages')}
+        onPageNameDraftChange={setPageNameDraft}
+        onAddPage={addPage}
+        onSwitchPage={switchPage}
+        onClose={closePagesRack}
+      />
 
-      <section ref={pagesRackRef} class={`pages-rack-panel ${pagesRackOpen ? 'is-open' : ''}`} onPointerDown={() => focusWindow('pages')} aria-label="Pages Rack" aria-hidden={!pagesRackOpen} inert={!pagesRackOpen}>
-        <div class="pages-rack-heading">
-          <div class="pages-rack-title"><span class="panel-kicker">PROJECT STRUCTURE</span><strong>Pages</strong><span class="pages-rack-count">{pages.length}</span></div>
-          <div class="pages-rack-actions">
-            <input class="pages-rack-name-input" type="text" placeholder="New page name..." value={pageNameDraft} onInput={(event) => setPageNameDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') addPage(); }} aria-label="New page name" />
-            <button type="button" class="pages-rack-add" onClick={addPage} disabled={!pageNameDraft.trim()}>＋ Add page</button>
-            <button type="button" class="component-rack-close" title="Close Pages Rack" aria-label="Close Pages Rack" onClick={closePagesRack}>×</button>
-          </div>
-        </div>
-        <div class="pages-rack-list">
-          {pages.map((page) => (
-            <button type="button" key={page.id} class={`pages-rack-card ${activePageId === page.id ? 'is-active' : ''}`} onClick={() => switchPage(page)} aria-current={activePageId === page.id ? 'page' : undefined}>
-              <span class="pages-rack-card-icon"><Icon name="pages" /></span>
-              <span class="pages-rack-card-copy"><strong>{page.name}</strong><small>{page.route}</small></span>
-              <span class="pages-rack-card-kind">{page.route === '/' ? 'HOME' : page.route === '/404' ? '404' : 'PAGE'}</span>
-            </button>
-          ))}
-        </div>
-      </section>
+      <ComponentRackPanel
+        panelRef={componentRackRef}
+        open={windows.componentRackOpen}
+        components={ownedComponents}
+        searchQuery={componentRackSearch}
+        canSaveSelection={selectedNodes.length > 0}
+        renamingComponentId={componentMaster.renamingComponentId}
+        componentNameDraft={componentMaster.componentNameDraft}
+        onSearchChange={setComponentRackSearch}
+        onCreateNewMaster={componentMaster.createNewMasterComponent}
+        onSaveSelection={() => componentMaster.saveNodesAsComponent(focusedEditor.selectedNodes, focusedDocument.nodes)}
+        onClose={closeComponentRack}
+        onInsertComponent={insertOwnedComponent}
+        onEditMaster={componentMaster.openMasterComponent}
+        onStartRename={(component) => {
+          componentMaster.setRenamingComponentId(component.id);
+          componentMaster.setComponentNameDraft(component.name);
+        }}
+        onRenameDraftChange={componentMaster.setComponentNameDraft}
+        onCommitRename={componentMaster.renameComponent}
+        onCancelRename={() => componentMaster.setRenamingComponentId(null)}
+        onDuplicateComponent={componentMaster.duplicateComponent}
+        onDeleteComponent={(component) => { void componentMaster.deleteComponent(component); }}
+      />
 
-      <section ref={componentRackRef} class={`component-rack-panel ${componentRackOpen ? 'is-open' : ''}`} aria-label="Component Rack" aria-hidden={!componentRackOpen} inert={!componentRackOpen}>
-        <div class="component-rack-heading">
-          <div class="component-rack-title">
-            <span class="panel-kicker">YOUR LIBRARY</span>
-            <strong>Component Rack</strong>
-            <span class="component-rack-count">{ownedComponents.length}</span>
-          </div>
-          <div class="component-rack-actions">
-            <input class="component-rack-search" type="search" placeholder="Search components..." value={componentRackSearch} onInput={(event) => setComponentRackSearch(event.currentTarget.value)} />
-            <button type="button" class="component-rack-save" onClick={createNewMasterComponent} title="Create a new master component">＋ New component</button>
-            <button type="button" class="component-rack-save" disabled={selectedNodes.length === 0} onClick={saveSelectionAsComponent} title="Save selected layers as a reusable component">Save selection</button>
-            <button type="button" class="component-rack-close" title="Close Component Rack" aria-label="Close Component Rack" onClick={closeComponentRack}>×</button>
-          </div>
-        </div>
-        <div class="component-rack-list">
-          {ownedComponents.filter((component) => component.name.toLowerCase().includes(componentRackSearch.toLowerCase())).map((component) => (
-            <article class="component-rack-card" key={component.id}>
-              <button type="button" class="component-rack-preview" title={`Insert linked ${component.name} into Main Canvas`} onClick={() => insertOwnedComponent(component)}>
-                <ComponentThumbnail component={component} components={ownedComponents} />
-                <span class="component-rack-card-name">{component.name}</span>
-                <span class="component-rack-card-meta">{component.document.nodes.length} master layer{component.document.nodes.length === 1 ? '' : 's'}</span>
-              </button>
-              <div class="component-rack-card-actions">
-                <button type="button" title={`Edit ${component.name} master`} onClick={() => openMasterComponent(component)}>Edit Master</button>
-                {renamingComponentId === component.id ? (
-                  <form onSubmit={(event) => { event.preventDefault(); renameComponent(component.id); }}>
-                    <input aria-label={`Rename ${component.name}`} value={componentNameDraft} onInput={(event) => setComponentNameDraft(event.currentTarget.value)} />
-                    <button type="submit">Save</button>
-                    <button type="button" onClick={() => setRenamingComponentId(null)}>Cancel</button>
-                  </form>
-                ) : (
-                  <button type="button" title={`Rename ${component.name}`} onClick={() => { setRenamingComponentId(component.id); setComponentNameDraft(component.name); }}>Rename</button>
-                )}
-                <button type="button" title={`Duplicate ${component.name}`} onClick={() => duplicateComponent(component)}>Duplicate</button>
-                <button type="button" class="component-rack-delete" title={`Delete ${component.name}`} aria-label={`Delete ${component.name}`} onClick={() => deleteComponent(component)}>Delete</button>
-              </div>
-            </article>
-          ))}
-          {ownedComponents.length === 0 && <div class="component-rack-empty"><Icon name="rack" /><strong>Your component library is empty</strong><span>Select layers on the canvas and choose “Save selection” to keep reusable components here.</span></div>}
-          {ownedComponents.length > 0 && ownedComponents.every((component) => !component.name.toLowerCase().includes(componentRackSearch.toLowerCase())) && <div class="component-rack-empty">No components match “{componentRackSearch}”.</div>}
-        </div>
-      </section>
+      <LayerColorPalette
+        pickerKey={layerColorPickerKey}
+        activeEditorId={activeEditorId}
+        layerSourceNodes={layerSourceNodes}
+        position={layerColorPickerPosition}
+        paletteRef={layerColorPaletteRef}
+        onSelectPresetColor={(nodeId, color) => {
+          setLayerColorFromRow(nodeId, color);
+          setLayerColorPickerKey(null);
+          setLayerColorPickerPosition(null);
+          layerColorAnchorRef.current = null;
+        }}
+        onSelectCustomColor={setLayerColorFromRow}
+      />
 
-      {(() => {
-        if (!layerColorPickerKey) return null;
-        const prefix = `${activeEditorId}:`;
-        if (!layerColorPickerKey.startsWith(prefix)) return null;
-        const targetNodeId = layerColorPickerKey.slice(prefix.length);
-        const colorNode = layerSourceNodes.find((item) => item.id === targetNodeId);
-        if (!colorNode) return null;
-        return (
-          <div
-            ref={layerColorPaletteRef}
-            class="layer-color-palette"
-            style={layerColorPickerPosition ? { top: `${layerColorPickerPosition.top}px`, left: `${layerColorPickerPosition.left}px` } : undefined}
-            role="group"
-            aria-label={`Color tags for ${colorNode.name}`}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <span>Layer color</span>
-            <div class="layer-color-swatches">
-              {LAYER_COLOR_PRESETS.map((color) => (
-                <button
-                  type="button"
-                  key={color}
-                  class={'layer-color-swatch ' + (colorNode.layerColor === color ? 'active' : '')}
-                  style={{ backgroundColor: color }}
-                  title={color}
-                  aria-label={`Apply ${color} to selected layers`}
-                  onClick={() => {
-                    setLayerColorFromRow(colorNode.id, color);
-                    setLayerColorPickerKey(null);
-                    setLayerColorPickerPosition(null);
-                    layerColorAnchorRef.current = null;
-                  }}
-                />
-              ))}
-            </div>
-            <label class="layer-color-custom">
-              <span>Custom</span>
-              <input
-                type="color"
-                value={colorNode.layerColor ?? '#7f8797'}
-                aria-label="Custom layer color"
-                onClick={(event) => event.stopPropagation()}
-                onChange={(event) => setLayerColorFromRow(colorNode.id, event.currentTarget.value)}
-              />
-            </label>
-          </div>
-        );
-      })()}
+      <LayerContextMenu
+        menu={layerContextMenu}
+        menuRef={layerContextMenuRef}
+        targetNodeName={
+          layerContextMenu
+            ? (contextMenuNodes.find((node) => node.id === layerContextMenu.nodeId)?.name ?? 'layer')
+            : 'layer'
+        }
+        capabilities={contextMenuCapabilities}
+        onRename={(nodeId) => {
+          setLayerContextMenu(null);
+          beginLayerRename(nodeId, false);
+        }}
+        onGroup={(editorId, rootIds) => {
+          setLayerContextMenu(null);
+          selectionSourceRef.current = 'layers';
+          getCommandClient(editorId).groupLayers(rootIds);
+        }}
+        onUngroup={(editorId, rootIds) => {
+          setLayerContextMenu(null);
+          selectionSourceRef.current = 'layers';
+          getCommandClient(editorId).ungroupLayers(rootIds);
+        }}
+        onCreateClippingMask={(editorId, rootId) => {
+          setLayerContextMenu(null);
+          selectionSourceRef.current = 'layers';
+          getCommandClient(editorId).createClippingMask(rootId);
+        }}
+        onRemoveClippingMask={(editorId, rootId) => {
+          setLayerContextMenu(null);
+          selectionSourceRef.current = 'layers';
+          getCommandClient(editorId).removeClippingMask(rootId);
+        }}
+        onDelete={(editorId, nodeIds) => {
+          setLayerContextMenu(null);
+          selectionSourceRef.current = 'layers';
+          getCommandClient(editorId).deleteNodes(nodeIds);
+        }}
+      />
 
-      {layerContextMenu && (
-        <div
-          ref={layerContextMenuRef}
-          class="layer-context-menu"
-          role="menu"
-          aria-label={`Actions for ${contextMenuNodes.find((node) => node.id === layerContextMenu.nodeId)?.name ?? 'layer'}`}
-          style={{ position: 'fixed', left: layerContextMenu.x + 'px', top: layerContextMenu.y + 'px' }}
-          onContextMenu={(event) => event.preventDefault()}
-        >
-          <button type="button" role="menuitem" onClick={() => {
-            const menu = layerContextMenu;
-            setLayerContextMenu(null);
-            beginLayerRename(menu.nodeId, false);
-          }}>Rename</button>
-          {contextMenuCanGroup && <button type="button" role="menuitem" onClick={() => {
-            const menu = layerContextMenu;
-            setLayerContextMenu(null);
-            selectionSourceRef.current = 'layers';
-            getCommandClient(menu.editorId).groupLayers(contextMenuRootIds);
-          }}>Group</button>}
-          {contextMenuCanUngroup && <button type="button" role="menuitem" onClick={() => {
-            const menu = layerContextMenu;
-            setLayerContextMenu(null);
-            selectionSourceRef.current = 'layers';
-            getCommandClient(menu.editorId).ungroupLayers(contextMenuRootIds);
-          }}>Ungroup</button>}
-          {contextMenuCanMask && <button type="button" role="menuitem" onClick={() => {
-            const menu = layerContextMenu;
-            setLayerContextMenu(null);
-            selectionSourceRef.current = 'layers';
-            getCommandClient(menu.editorId).createClippingMask(contextMenuRootIds[0]);
-          }}>Create Clipping Mask</button>}
-          {contextMenuCanUnmask && <button type="button" role="menuitem" onClick={() => {
-            const menu = layerContextMenu;
-            setLayerContextMenu(null);
-            selectionSourceRef.current = 'layers';
-            getCommandClient(menu.editorId).removeClippingMask(contextMenuRootIds[0]);
-          }}>Release Clipping Mask</button>}
-          <div class="layer-context-menu-separator" role="separator" />
-          <button type="button" role="menuitem" class="layer-context-menu-danger" onClick={() => {
-            const menu = layerContextMenu;
-            setLayerContextMenu(null);
-            selectionSourceRef.current = 'layers';
-            getCommandClient(menu.editorId).deleteNodes(menu.nodeIds);
-          }}><Icon name="trash" /> Delete{layerContextMenu.nodeIds.length > 1 ? ` (${layerContextMenu.nodeIds.length})` : ''}</button>
-        </div>
-      )}
+      <StatusBar
+        layerCount={activeDocument.nodes.length}
+        documentWidth={activeDocument.width}
+        documentHeight={activeDocument.height}
+        isHydrating={isHydrating}
+        saveStatus={saveStatus}
+        componentSaveStatus={componentMaster.componentSaveStatus}
+        componentSaveError={componentMaster.componentSaveError}
+        componentCleanupPending={componentMaster.componentCleanupPending}
+        onRetryComponentSave={componentMaster.retryComponentCanvasSave}
+        onRetryComponentCleanup={() => { void componentMaster.retryComponentBufferCleanup(); }}
+      />
 
-      <footer class="statusbar">
-        <div><span class="status-brand">F</span><span>Folio Studio <b>0.1.0</b></span></div>
-        <div class="status-center">{activeDocument.nodes.length} LAYERS <span>·</span> {activeDocument.width} × {activeDocument.height} PX</div>
-        <div class={`status-right save-${saveStatus}`} role="status" aria-live="polite"><span class="status-ready-dot" /> {isHydrating ? 'RESTORING PROJECT…' : statusLabel}</div>
-        <div class={`component-buffer-save component-save-${componentSaveStatus}`}>
-          <span role="status" aria-live="polite" aria-atomic="true">
-            Component Canvas: {componentSaveStatus === 'saving' ? 'Saving…' : componentSaveStatus === 'saved' ? 'Saved' : 'Save error'}
-            {componentSaveError && <span class="component-buffer-save-error"> — {componentSaveError}</span>}
-          </span>
-          {componentSaveStatus === 'error' && <button type="button" onClick={retryComponentCanvasSave}>Retry buffer save</button>}
-          {componentCleanupPending && <button type="button" onClick={retryComponentBufferCleanup}>Retry buffer cleanup</button>}
-        </div>
-      </footer>
-
-      {componentDeletionDialogOpen && pendingComponentDeletion && (
-        <div class="component-deletion-modal-host" ref={deletionModalHostRef}>
-          <div class="component-deletion-backdrop" aria-hidden="true" />
-          <section
-            class="component-deletion-dialog"
-            key={componentDeletionMode}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="component-delete-recovery-title"
-            aria-describedby="component-delete-recovery-description"
-            tabIndex={-1}
-            ref={deletionDialogRef}
-          >
-            {componentDeletionMode === 'clean' ? (
-              <>
-                <h2 id="component-delete-recovery-title">Deleting “{pendingComponentDeletion.name}”</h2>
-                <p id="component-delete-recovery-description">The clean master deletion is being committed and saved to IndexedDB. The Component Canvas buffer will only be cleared after both the project and buffer cleanup transactions complete.</p>
-                <div class="component-deletion-progress" role="status" aria-live="polite">Saving canonical project and buffer cleanup…</div>
-              </>
-            ) : componentCleanupPending ? (
-              <>
-                <h2 id="component-delete-recovery-title">Deletion saved; buffer cleanup pending</h2>
-                <p id="component-delete-recovery-description">The master deletion and any recovery copy are durable. The local Component Canvas buffer has not been cleared because its cleanup transaction failed. Your buffer remains preserved.</p>
-                <button type="button" class="component-recovery-action" data-dialog-initial-focus onClick={retryComponentBufferCleanup} disabled={componentDeletionBusy}>
-                  {componentDeletionBusy ? 'Saving cleanup…' : 'Retry durable cleanup'}
-                </button>
-                <p>Keep this dialog open until cleanup succeeds. Your protected buffer remains durable and will not be removed on failure.</p>
-              </>
-            ) : componentDeletionMode === 'recovery' && durableRecoveryComponentId ? (
-              <>
-                <h2 id="component-delete-recovery-title">Recovery copy saved; deletion needs retry</h2>
-                <p id="component-delete-recovery-description">The recovery copy is already durable. The original master and local buffer were preserved after deletion persistence failed. Retry the second canonical commit without creating another recovery copy.</p>
-                <button type="button" class="component-recovery-action" data-dialog-initial-focus onClick={saveBufferAsNewAndDelete} disabled={componentDeletionBusy}>
-                  {componentDeletionBusy ? 'Retrying deletion…' : 'Retry deletion using saved recovery'}
-                </button>
-                <button type="button" class="component-recovery-action" onClick={cancelComponentDeletion} disabled={componentDeletionBusy}>
-                  Cancel and keep both
-                </button>
-              </>
-            ) : (
-              <>
-                <h2 id="component-delete-recovery-title">Delete “{pendingComponentDeletion.name}” master?</h2>
-                <p id="component-delete-recovery-description">The active Component Canvas buffer is protected by local edits or recovery state. Choose how to continue. No deletion happens until you choose an action.</p>
-                <button type="button" class="component-recovery-action" data-dialog-initial-focus onClick={cancelComponentDeletion} disabled={componentDeletionBusy}>
-                  Cancel
-                </button>
-                <button type="button" class="component-recovery-action" onClick={saveBufferAsNewAndDelete} disabled={componentDeletionBusy}>
-                  {componentDeletionBusy ? 'Saving recovery…' : 'Save buffer as a new component'}
-                </button>
-                <button type="button" class="component-recovery-action" onClick={discardBufferAndDelete} disabled={componentDeletionBusy}>
-                  {componentDeletionBusy ? 'Deleting…' : 'Discard buffer and delete'}
-                </button>
-              </>
-            )}
-            {componentSaveStatus === 'error' && !componentCleanupPending && componentDeletionMode !== 'clean' && (
-              <button type="button" class="component-recovery-action" onClick={retryComponentCanvasSave}>
-                Retry Component Canvas buffer save
-              </button>
-            )}
-          </section>
-        </div>
-      )}
+      <ComponentDeletionDialog
+        open={componentMaster.componentDeletionDialogOpen}
+        pendingComponent={componentMaster.pendingComponentDeletion}
+        mode={componentMaster.componentDeletionMode}
+        busy={componentMaster.componentDeletionBusy}
+        cleanupPending={componentMaster.componentCleanupPending}
+        durableRecoveryComponentId={componentMaster.durableRecoveryComponentId}
+        componentSaveStatus={componentMaster.componentSaveStatus}
+        hostRef={componentMaster.deletionModalHostRef}
+        dialogRef={componentMaster.deletionDialogRef}
+        onCancel={componentMaster.cancelComponentDeletion}
+        onSaveBufferAsNewAndDelete={() => { void componentMaster.saveBufferAsNewAndDelete(); }}
+        onDiscardBufferAndDelete={() => { void componentMaster.discardBufferAndDelete(); }}
+        onRetryCleanup={() => { void componentMaster.retryComponentBufferCleanup(); }}
+        onRetryComponentSave={componentMaster.retryComponentCanvasSave}
+      />
 
       <KeyboardShortcutsModal
-        open={shortcutsModalOpen && !componentDeletionDialogOpen}
+        open={shortcutsModalOpen && !componentMaster.componentDeletionDialogOpen}
         activeWorkspace={activeEditorId}
         onClose={closeShortcutsModal}
         hostRef={shortcutsModalHostRef}
         dialogRef={shortcutsDialogRef}
       />
 
-      {isHydrating && (
-        <div class="project-hydration-overlay" role="status" aria-live="polite">
-          <div class="project-hydration-indicator" />
-          <strong>RESTORING PROJECT</strong>
-          <span>Loading your pages and component library from local storage</span>
-        </div>
-      )}
+      <ProjectHydrationOverlay visible={isHydrating} />
       {notice && <div class="toast" role="status">{notice}</div>}
     </div>
   );

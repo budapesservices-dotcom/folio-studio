@@ -278,7 +278,9 @@ export function getDefaultWindowLayouts(
     'component-canvas': recoverWindowLayout(
       {
         position: {
-          x: Math.max(24, safeViewport.width - componentSize.width - 48),
+          x: safeViewport.width >= 1120
+            ? Math.max(24, Math.min(safeViewport.width - componentSize.width - 298, Math.round((298 + (safeViewport.width - 292) - componentSize.width) / 2)))
+            : Math.max(24, safeViewport.width - componentSize.width - 48),
           y: 112,
         },
         size: componentSize,

@@ -145,7 +145,7 @@ export function InspectorPanel({
         <div>
           <span class="panel-kicker">PROPERTIES</span>
           <h2>Inspector</h2>
-          <span class="panel-context-indicator">
+          <span class={`panel-context-indicator${activeEditorId === 'component' ? ' is-component' : ''}`}>
             {activeEditorId === 'component' ? 'COMPONENT CANVAS' : 'MAIN PAGE'}
           </span>
         </div>

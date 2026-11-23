@@ -244,10 +244,10 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(baseline.viewRect).toBeTruthy();
         expect(Math.abs(baseline.fileRect.top - baseline.viewRect.top)).toBeLessThanOrEqual(1);
         expect(Math.abs(baseline.fileRect.height - baseline.viewRect.height)).toBeLessThanOrEqual(1);
-        expect(baseline.disabledPlaceholders.length).toBeGreaterThanOrEqual(4);
+        expect(baseline.disabledPlaceholders.map((p) => p.text)).toEqual(['Edit', 'Tools', 'Option']);
         expect(baseline.disabledPlaceholders.every((p) => p.ariaDisabled === 'true')).toBe(true);
-        expect(baseline.panelGroups).toEqual(['Racks', 'Side panels', 'Workspace windows']);
-        expect(baseline.panelDividers).toBe(3);
+        expect(baseline.panelGroups).toEqual(['Racks', 'Side panels', 'Workspace windows', 'Utilities']);
+        expect(baseline.panelDividers).toBe(4);
 
         // 2. WEB-02 Menu open, above-tool-rail stacking, & Escape / outside-click dismissal
         const menuDismissal = await browser.evalJs(`
