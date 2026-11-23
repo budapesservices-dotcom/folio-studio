@@ -1,10 +1,12 @@
 import type { EditorAction } from './editorReducer';
 import type { DesignNode, FolioDocument } from '../core/document/types';
 import {
+  validateCodeUpdateModulesPayload,
   validateComponentCreatePayload,
   validateComponentDeletePayload,
   validateComponentRenamePayload,
   validateComponentSyncDocumentPayload,
+  validateComponentUpdateContractPayload,
   validateEmptyCommandPayload,
   validateLayerClippingMaskPayload,
   validateLayerGroupPayload,
@@ -27,6 +29,7 @@ import {
   validateProjectRenamePayload,
   validateProjectReplacePayload,
   validateSelectionSetPayload,
+  validateTokensUpdatePayload,
   type ValidationOutcome,
 } from '../core/commands/validation';
 import type {
@@ -352,6 +355,53 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
         componentId: command.payload.componentId,
         expectedUpdatedAt: command.payload.expectedUpdatedAt,
         expectedMasterDocument: context.liveComponentMasterDocument,
+      }];
+    },
+  }),
+  'component.update-contract': Object.freeze({
+    type: 'component.update-contract' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'component.update',
+    validatePayload: validateComponentUpdateContractPayload,
+    toEditorActions(command: NativeCommand, context: NativeCommandAdapterContext): readonly EditorAction[] {
+      if (command.type !== 'component.update-contract' || !context.liveComponentMasterDocument) return [];
+      return [{
+        type: 'update-component-contract',
+        componentId: command.payload.componentId,
+        ...(command.payload.variants !== undefined ? { variants: command.payload.variants } : {}),
+        ...(command.payload.slots !== undefined ? { slots: command.payload.slots } : {}),
+        expectedUpdatedAt: command.payload.expectedUpdatedAt,
+        expectedMasterDocument: context.liveComponentMasterDocument,
+      }];
+    },
+  }),
+  'tokens.update': Object.freeze({
+    type: 'tokens.update' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'tokens.update',
+    validatePayload: validateTokensUpdatePayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'tokens.update') return [];
+      return [{
+        type: 'update-design-tokens',
+        designTokens: command.payload.designTokens,
+        ...(command.payload.unbindTokenIds !== undefined ? { unbindTokenIds: [...command.payload.unbindTokenIds] } : {}),
+      }];
+    },
+  }),
+  'code.update-modules': Object.freeze({
+    type: 'code.update-modules' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'code.update',
+    validatePayload: validateCodeUpdateModulesPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'code.update-modules') return [];
+      return [{
+        type: 'update-code-modules',
+        codeModules: [...command.payload.codeModules],
       }];
     },
   }),

@@ -202,7 +202,9 @@ function hasTypeSpecificExtendedChange(before: DesignNode, after: DesignNode): b
       if (before.type !== 'component-instance') return true;
       return (
         before.componentId !== after.componentId ||
-        componentOverridesChanged(before.overrides, after.overrides)
+        componentOverridesChanged(before.overrides, after.overrides) ||
+        JSON.stringify(before.variantSelection ?? null) !== JSON.stringify(after.variantSelection ?? null) ||
+        JSON.stringify(before.slotAssignments ?? null) !== JSON.stringify(after.slotAssignments ?? null)
       );
     }
 
@@ -219,9 +221,10 @@ function hasTypeSpecificExtendedChange(before: DesignNode, after: DesignNode): b
  *
  * Guarantees that every valid change to affine transform, structure
  * (`parentId`, `clipMaskBaseId`, `onCanvas`), identity/metadata (`name`,
- * `opacity`, `visible`, `locked`, `layerColor`), `text`, `frame`, `rect`,
- * `ellipse`, `path`, or `component-instance` is classified identically and
- * never silently dropped during Native Command translation.
+ * `opacity`, `visible`, `locked`, `layerColor`), web semantics, Auto-Layout,
+ * responsive overrides, token bindings, `text`, `frame`, `rect`, `ellipse`,
+ * `path`, or `component-instance` is classified identically and never
+ * silently dropped during Native Command translation.
  */
 export function classifyNodeChange(
   before: DesignNode | null | undefined,
@@ -262,6 +265,13 @@ export function classifyNodeChange(
     (before.layerColor ?? undefined) !== (after.layerColor ?? undefined) ||
     (before.parentId ?? null) !== (after.parentId ?? null) ||
     (before.clipMaskBaseId ?? undefined) !== (after.clipMaskBaseId ?? undefined) ||
+    (before.semanticTag ?? undefined) !== (after.semanticTag ?? undefined) ||
+    (before.ariaLabel ?? undefined) !== (after.ariaLabel ?? undefined) ||
+    (before.href ?? undefined) !== (after.href ?? undefined) ||
+    JSON.stringify(before.layout ?? null) !== JSON.stringify(after.layout ?? null) ||
+    JSON.stringify(before.layoutChild ?? null) !== JSON.stringify(after.layoutChild ?? null) ||
+    JSON.stringify(before.responsive ?? null) !== JSON.stringify(after.responsive ?? null) ||
+    JSON.stringify(before.tokenBindings ?? null) !== JSON.stringify(after.tokenBindings ?? null) ||
     zeroDimensionTransition ||
     unsetsOnCanvas;
 

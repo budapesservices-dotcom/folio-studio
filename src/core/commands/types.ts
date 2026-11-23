@@ -1,8 +1,12 @@
 import type { DocumentAddress, NativeNodeRef } from '../document/ast';
 import type { LayerDropPosition } from '../document/layers';
 import type {
+  CodeModuleRecord,
   ComponentDefinition,
+  ComponentSlotDefinition,
+  ComponentVariantAxis,
   DesignNode,
+  DesignTokenCollection,
   FolioDocument,
   FolioPage,
   FolioProject,
@@ -46,6 +50,8 @@ export type NativePermission =
   | 'component.create'
   | 'component.update'
   | 'component.delete'
+  | 'tokens.update'
+  | 'code.update'
   | 'selection.update'
   | 'history.execute';
 
@@ -128,6 +134,23 @@ export interface ComponentDeletePayload {
   componentId: string;
   expectedUpdatedAt: string;
   expectedMasterDocument: FolioDocument;
+}
+
+export interface ComponentUpdateContractPayload {
+  componentId: string;
+  variants?: ComponentVariantAxis[];
+  slots?: ComponentSlotDefinition[];
+  expectedUpdatedAt: string;
+  expectedMasterDocument: FolioDocument;
+}
+
+export interface TokensUpdatePayload {
+  designTokens: DesignTokenCollection;
+  unbindTokenIds?: string[];
+}
+
+export interface CodeUpdateModulesPayload {
+  codeModules: CodeModuleRecord[];
 }
 
 export interface NodeCreatePayload {
@@ -240,6 +263,9 @@ export type ComponentCreateCommand = NativeCommandEnvelope<'component.create', C
 export type ComponentSyncDocumentCommand = NativeCommandEnvelope<'component.sync-document', ComponentSyncDocumentPayload>;
 export type ComponentRenameCommand = NativeCommandEnvelope<'component.rename', ComponentRenamePayload>;
 export type ComponentDeleteCommand = NativeCommandEnvelope<'component.delete', ComponentDeletePayload>;
+export type ComponentUpdateContractCommand = NativeCommandEnvelope<'component.update-contract', ComponentUpdateContractPayload>;
+export type TokensUpdateCommand = NativeCommandEnvelope<'tokens.update', TokensUpdatePayload>;
+export type CodeUpdateModulesCommand = NativeCommandEnvelope<'code.update-modules', CodeUpdateModulesPayload>;
 export type NodeCreateCommand = NativeCommandEnvelope<'node.create', NodeCreatePayload>;
 export type NodeReplaceCommand = NativeCommandEnvelope<'node.replace', NodeReplacePayload>;
 export type NodeReplaceManyCommand = NativeCommandEnvelope<'node.replace-many', NodeReplaceManyPayload>;
@@ -286,6 +312,9 @@ export type ExtendedNativeCommand =
   | ComponentSyncDocumentCommand
   | ComponentRenameCommand
   | ComponentDeleteCommand
+  | ComponentUpdateContractCommand
+  | TokensUpdateCommand
+  | CodeUpdateModulesCommand
   | NodeReplaceManyCommand
   | NodeSplitCommand
   | NodeUpdateManyCommand
@@ -304,6 +333,9 @@ export type NativeCommandPayload =
   | ComponentSyncDocumentPayload
   | ComponentRenamePayload
   | ComponentDeletePayload
+  | ComponentUpdateContractPayload
+  | TokensUpdatePayload
+  | CodeUpdateModulesPayload
   | NodeCreatePayload
   | NodeReplacePayload
   | NodeReplaceManyPayload

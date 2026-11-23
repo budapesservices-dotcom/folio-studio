@@ -18,6 +18,7 @@ import {
   createStarPathPoints,
   normalizePathNode,
 } from './vector';
+import { createDefaultDesignTokens } from './tokens';
 
 function createId(prefix: string): string {
   const randomId = globalThis.crypto?.randomUUID?.();
@@ -411,5 +412,6 @@ export function createInitialProject(name = 'Untitled project'): FolioProject {
     components: [],
     logicGraphs: [],
     assets: [],
+    designTokens: createDefaultDesignTokens(),
   };
 }

@@ -22,20 +22,21 @@ Folio is a browser-based, visual-first full-stack web development studio designe
 ### `src/core` — Framework-independent domain & contracts (Implemented)
 
 - **`src/core/document/`**
-  - `types.ts`: Canonical `.flop` v2 project, page, document, layer, `FrameNode`, `RectNode`, `EllipseNode`, `PathNode` (cubic Bezier anchors, handles, compound subpaths, shape metadata), `TextNode`, `GroupNode`, `ComponentInstanceNode`, `ComponentDefinition`, logic graph, and asset types.
+  - `types.ts`: Canonical `.flop` v2 project, page, document, layer, `FrameNode`, `RectNode`, `EllipseNode`, `PathNode` (cubic Bezier anchors, handles, compound subpaths, shape metadata), `TextNode`, `GroupNode`, `ComponentInstanceNode`, `ComponentDefinition` (with named Variant Axes & Slots), web semantic attributes (`semanticTag`, `ariaLabel`, `href`), Auto-Layout (`layout`, `layoutChild`), per-breakpoint responsive overrides (`responsive`), node `tokenBindings`, project `designTokens`, logic graph, and asset types.
   - `ast.ts`: Read-only `NativeAstDocumentView` facade with deterministic node lookup, parent/child traversal, and descendant queries.
-  - `factory.ts`: Project, page, document, and typed node factories.
+  - `factory.ts`: Project, page, document, and typed node factories (attaching default Light/Dark `designTokens` to new projects).
   - `project.ts`: Active-page / active-document resolution helpers with stale-reference fallback.
   - `layers.ts`: Layer hierarchy traversal, effective lock/visibility state computation, render ordering, clipping mask base resolution, and layer panel row derivation.
-  - `components.ts`: Master component extraction (`buildComponentDefinitionFromNodes`), linked instance creation (`createComponentInstance`), instance detaching (`detachComponentInstance`), and override target resolution.
+  - `components.ts`: Master component extraction (`buildComponentDefinitionFromNodes`), linked instance creation (`createComponentInstance`), instance detaching (`detachComponentInstance`), Variant Axes & Named Slots factories/pruning (`createComponentVariantAxis`, `createComponentSlot`, `pruneComponentContractForDocument`), and deterministic override resolution (`Master -> Variants -> Slots -> Local Overrides -> Design Tokens`).
+  - `tokens.ts`: Project-level Design Tokens & Themes (`createDefaultDesignTokens`, `resolveDesignTokenValue` with cycle/type-mismatch detection, `resolveNodeWithTokens`, `findTokenUsages`, `generateDesignTokensCss`).
   - `vector.ts`: Deterministic SVG cubic Bezier serialization, bounding-box normalization, anchor/handle scaling, polygon/star/line generators, Catmull-Rom curvature fitting, Ramer-Douglas-Peucker simplification, smooth brush relaxation, segment insertion, corner/smooth toggling, scissors splitting, shape-to-path conversion, flipping, and Pathfinder entry points (`applyPathfinderOperation`).
   - `src/core/document/planarBoolean.ts`: Planar polygon/curve subdivision and boolean solver backing Illustrator-style Pathfinder operations (`unite`, `subtract`, `intersect`, `exclude`) and Shape Builder regions.
-  - `validation.ts`: Runtime `.flop` v1 and v2 schema, hierarchy, node, component, logic graph, and asset validation.
+  - `validation.ts`: Runtime `.flop` v1 and v2 schema, hierarchy, node, web layout/semantics, design tokens, component variants/slots, logic graph, and asset validation.
   - `migrations.ts`: Deterministic `migrateProjectV1ToV2` upgrade path preserving IDs, document content, and unknown extension fields.
   - `equality.ts`: Structural equality checks for documents and projects.
 - **`src/core/commands/`**
-  - `types.ts`: Native Command v1 envelope, 14 frozen Phase 2 commands (`NATIVE_COMMAND_REGISTRY`), 15 P1.1 extended commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`, 29 total in `ALL_NATIVE_COMMAND_REGISTRY`), target descriptors, result/error unions, and `NativeChangeEvent` contracts.
-  - `validation.ts`: Closed own-key allowlist and finite-budget runtime validation for all 29 Native Commands.
+  - `types.ts`: Native Command v1 envelope, 14 frozen Phase 2 commands (`NATIVE_COMMAND_REGISTRY`), 18 P1.1+ extended commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`, including `tokens.update`, `component.update-contract`, and `code.update-modules`, 32 total in `ALL_NATIVE_COMMAND_REGISTRY`), target descriptors, result/error unions, and `NativeChangeEvent` contracts.
+  - `validation.ts`: Closed own-key allowlist and finite-budget runtime validation for all Native Commands.
 - **`src/core/tools/`**
   - `operationContract.ts`: Versioned `folio.tool-operation` v1 `ToolOperation` contract, `ToolOperationBatch`, `ToolOptionsChange`, `ToolFeedbackMessage`, `ValidatedToolOperation` sealed boundary types, and `extractToolOperationsFromTransition`.
 - **`src/core/persistence/`**
@@ -59,20 +60,31 @@ Folio is a browser-based, visual-first full-stack web development studio designe
   - `utility-tools.ts`: Scale (`K`), Rotate (`Shift+R`), Eyedropper (`I`), and Precision Measure (`M`).
   - `hand.ts`, `scrubby-zoom.ts`, `lasso-selection.ts`, `magic-wand.ts`, `shape-builder.ts`, and `geometry.ts` (tool-local geometry helpers).
 
+### `src/engines/layout` — Deterministic Auto-Layout & Responsive Solver (Implemented)
+
+- `autoLayout.ts`: Pure framework-independent Flex (`row`/`column`, `wrap`, `justifyContent`, `alignItems`, `gap`, `padding`, `fixed`/`hug`/`fill` child sizing) and Grid (`gridColumns`, `columnGap`, `rowGap`) solver, Desktop -> Tablet (`768px`) -> Mobile (`390px`) responsive override inheritance (`resolveEffectiveNodeForBreakpoint`), non-destructive preview computation (`computeAutoLayoutNodes`), and canonical AST commit helper (`applyAutoLayoutToNodes`).
+
+### `src/engines/codegen` — Deterministic Code Engine & Live Preview (Implemented)
+
+- `types.ts`, `sanitize.ts`: Strict HTML/attribute escaping, URL protocol allowlist (`http:`, `https:`, `mailto:`, `/`, `#` — rejecting `javascript:`/`data:`/`vbscript:`), CSS/JS breakout neutralization, and traceable `CodeMappingEntry` contracts.
+- `htmlCssCompiler.ts`: Deterministic AST-to-Semantic HTML5, Auto-Layout Flex/Grid CSS, Design Token `var(--token)` bindings, `@media (max-width: 768px)` / `(max-width: 390px)` responsive rules, inline vector `<svg>`, and sandboxed Live Preview document assembly (`buildLivePreviewHtml`).
+- `reactCompiler.ts`: Compiles Master Components (Variants & Slots) into typed React + TypeScript JSX (`src/components/*.tsx`) and Pages (`src/pages/*.tsx`, `src/App.tsx`).
+- `mappedSync.ts`, `index.ts`: Explicit 4-category code classification (`generated`, `mapped`, `custom`, `extension`), safe Code → AST mapped synchronization (`applyMappedNodeEdit`) with honest capability reporting, and Custom/Extension module preservation inside `.flop` v2 `codeModules`.
+
 ### `src/app` — Application shell, command orchestration & workspace UI (Implemented)
 
 - **State & Native Command Engine:**
   - `editorStore.ts`: `CanonicalEditorStore` for `'main'` and `'component'` workspaces with deep-frozen state snapshots, monotonic `projectRevision`, history bounds, and `NativeChangeEvent` publication.
   - `editorReducer.ts`: Internal pure state transition implementation invoked exclusively by `nativeCommandExecutor.ts` (no direct production bypasses).
-  - `nativeCommandRegistry.ts`: Closed static handler registry mapping all 29 commands across project, page, document, node, component, selection, and history scopes.
+  - `nativeCommandRegistry.ts`: Closed static handler registry mapping all 32 commands across project, page, document, node, component, design token, code module, selection, and history scopes.
   - `nativeCommandExecutor.ts`: Validates commands, resolves targets through `createDocumentAstView`, enforces workspace isolation, component CAS guards (`COMPONENT_CONFLICT`), lock/hierarchy preconditions, atomic multi-command transactions (`executeNativeCommandTransaction`) with single-step Undo collapse and rollback, and executor-authenticated rollbacks (`executeNativeSnapshotRollback`).
   - `mainCanvasCommandClient.ts`: Typed `WorkspaceCommandClient` adapters (`createMainCanvasCommandClient`, `createComponentCanvasCommandClient`) exposing 100% Native Command Engine dispatch for both workspaces.
   - `toolOperationExecutor.ts`: Consumes sealed `ValidatedToolOperation` items from `geometryEngine.ts` and dispatches them through `WorkspaceCommandClient`.
 - **Workspace shell, hooks & modular panels (`src/app/workspace/`):**
   - `App.tsx`: Lean top-level workspace orchestrator composing hooks, Native Command clients, and modular workspace UI components.
   - `workspace/layerOperations.ts`, `workspace/canvasViewState.ts`: Pure domain-adjacent helpers for layer rename/collision rules, drag-drop hit placement, context-menu capability derivation, subtree multi-selection, clamped popover coordinates, canvas zoom/view state parsing, and active export target resolution.
-  - `workspace/useWorkspaceWindows.ts`, `workspace/usePanelResizeController.ts`, `workspace/useComponentMasterLifecycle.ts`, `workspace/useWorkspaceShortcuts.ts`: Cohesive workspace hooks managing floating/docked window layout & persistence, throttled side-panel resizing, Component Canvas bidirectional sync & durable deletion/recovery, and global keyboard shortcuts.
-  - `workspace/GlobalToolbar.tsx`, `workspace/ToolRail.tsx`, `workspace/LayersPanel.tsx`, `workspace/LayerPopovers.tsx`, `workspace/CanvasWindows.tsx`, `workspace/PagesRackPanel.tsx`, `workspace/ComponentRackPanel.tsx`, `workspace/StatusBar.tsx`, `workspace/ComponentDeletionDialog.tsx`, `workspace/StudioIcon.tsx`: Focused, presentation-first workspace components keeping pure panels decoupled from canvas engine and store internals.
+  - `workspace/useWorkspaceWindows.ts`, `workspace/usePanelResizeController.ts`, `workspace/useComponentMasterLifecycle.ts`, `workspace/useWorkspaceShortcuts.ts`, `workspace/useDesignSystemActions.ts`, `workspace/useCodeWorkspace.ts`: Cohesive workspace hooks managing floating/docked window layout & persistence, throttled side-panel resizing, Component Canvas bidirectional sync & durable deletion/recovery, global keyboard shortcuts, Design Tokens / Auto-Layout / Component Contract actions, and Code Engine & Live Preview studio state.
+  - `workspace/GlobalToolbar.tsx`, `workspace/ToolRail.tsx`, `workspace/LayersPanel.tsx`, `workspace/LayerPopovers.tsx`, `workspace/CanvasWindows.tsx`, `workspace/PagesRackPanel.tsx`, `workspace/ComponentRackPanel.tsx`, `workspace/TokensPanel.tsx`, `workspace/InspectorWebLayoutSection.tsx`, `workspace/InspectorComponentContractSection.tsx`, `workspace/CodeWorkspacePanel.tsx`, `workspace/LivePreviewPane.tsx`, `workspace/StatusBar.tsx`, `workspace/ComponentDeletionDialog.tsx`, `workspace/StudioIcon.tsx`: Focused, presentation-first workspace components keeping pure panels decoupled from canvas engine and store internals.
   - `InspectorPanel.tsx`, `ToolOptionsBar.tsx`, `ToolbarHintBar.tsx`, `TemplateLibraryPopover.tsx`, `KeyboardShortcutsModal.tsx`: Property inspector, context-sensitive tool/Pathfinder options bar, shortcut hint bar, template library popover, and searchable keyboard shortcuts cheat sheet modal.
   - `FloatingWindow.tsx`, `windowManager.ts`, `panelResize.ts`, `workspacePreferences.ts`, `modalFocus.ts`, `editorContext.ts`, `keyboardShortcuts.ts`: Window z-index layering, docked/floating geometry persistence, throttled resizable panels, focus trapping, shortcut catalog/filtering, and active workspace resolution.
   - `ComponentThumbnail.tsx`: Live SVG component thumbnails backed by `src/engines/canvas/artwork.tsx`.
@@ -85,17 +97,15 @@ Folio is a browser-based, visual-first full-stack web development studio designe
 ### `scripts/` & `tests/` — Quality, benchmarks & verification (Implemented)
 
 - `scripts/studioBenchmark.ts` & `scripts/run-benchmark.mjs` (`npm run benchmark`): Reproducible performance benchmark measuring full scene render (`AST + Layers + SVG`), Hand pan (60 frames), Scrubby zoom (40 frames), single-node & 25-node drag (30 snap frames + Native Command commit/undo), and Pathfinder boolean operations (`unite`, `subtract`, `intersect`, `exclude`, compound 4-shape union) on multi-page realistic projects (`small`, `medium`, `large` up to 5 pages / 650 active-page nodes / 1,738 total nodes / 16 master components).
-- `tests/`: Unit and integration Vitest suites (`npm run test:unit`) covering AST, document validation/migrations, layers, vector/planar boolean math, components/overrides/sync/deletion, workspace module pure logic & modularity boundaries (`tests/workspaceModules.test.ts`), P0.1–P0.3 tool & subsystem boundary contracts, P1.1 Native Command zero-bypass enforcement, P1.2 lockfile & benchmark checks, plus headless Chromium browser acceptance tests (`npm run test:browser`).
+- `tests/`: Unit and integration Vitest suites (`npm run test:unit`) covering AST, document validation/migrations, layers, vector/planar boolean math, components/overrides/variants/slots/sync/deletion, web semantics/Auto-Layout/responsive breakpoints (`tests/webSemanticsAndLayout.test.ts`), design tokens & themes (`tests/designTokensAndComponentContract.test.ts`), workspace module pure logic & modularity boundaries (`tests/workspaceModules.test.ts`), P0.1–P0.3 tool & subsystem boundary contracts, P1.1 Native Command zero-bypass enforcement, P1.2 lockfile & benchmark checks, plus headless Chromium browser acceptance tests (`npm run test:browser`).
 
 ### Planned engines (Not yet implemented on disk)
 
 The following engine directories from the target blueprint do **not** exist in `src/engines/` yet and remain planned for later milestones:
 
-- `src/engines/layout`: Auto-layout calculation, responsive frames, and constraints.
 - `src/engines/prototype`: Node Logic authoring graph, ports, connections, state/API execution, and preview runtime.
 - `src/engines/animation`: Timeline, tracks, keyframes, easing, and playback.
 - `src/engines/history`: Scalable delta/command-log history engine (currently `CanonicalEditorStore` + `editorReducer` manage bounded immutable snapshot history).
-- `src/engines/codegen`: Deterministic AST-to-HTML/CSS/React/JS compiler respecting Generated, Mapped, Custom, and Extension/Override code boundaries.
 
 ## Core architectural flows
 

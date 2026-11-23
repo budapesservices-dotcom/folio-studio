@@ -1,6 +1,15 @@
-import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument, FrameNode, PathNode } from '../../core/document/types';
+import type {
+  ComponentDefinition,
+  ComponentInstanceNode,
+  DesignNode,
+  DesignTokenCollection,
+  FolioDocument,
+  FrameNode,
+  PathNode,
+} from '../../core/document/types';
 import { resolveComponentInstanceNodes } from '../../core/document/components';
 import { serializePathPointsToSvgD } from '../../core/document/vector';
+import { computeAutoLayoutNodes } from '../layout/autoLayout';
 import {
   buildFrameClipAncestorMap,
   buildLayerClipMaskMap,
@@ -104,6 +113,10 @@ export function NodeShape({ node, mask = false }: { node: PrimitiveNode; mask?: 
               pointer-events="none"
             >
               {node.name}
+              {node.semanticTag ? ` · <${node.semanticTag}>` : ''}
+              {node.layout && node.layout.mode !== 'none'
+                ? ` · ${node.layout.mode === 'grid' ? `grid(${node.layout.gridColumns ?? 2})` : `flex-${node.layout.direction === 'column' ? 'col' : 'row'}`}`
+                : ''}
             </text>
           )}
           <rect
@@ -205,6 +218,7 @@ export function ClipMaskArtwork({
   maskPrefix,
   nodeById,
   componentById,
+  tokens,
 }: {
   node: DesignNode;
   nodes: DesignNode[];
@@ -212,6 +226,7 @@ export function ClipMaskArtwork({
   maskPrefix: string;
   nodeById?: ReadonlyMap<string, DesignNode>;
   componentById?: ReadonlyMap<string, ComponentDefinition>;
+  tokens?: DesignTokenCollection;
 }) {
   if (node.type === 'group') {
     const resolvedNodeById = nodeById ?? new Map(nodes.map((item) => [item.id, item]));
@@ -233,6 +248,7 @@ export function ClipMaskArtwork({
             maskPrefix={maskPrefix}
             nodeById={resolvedNodeById}
             componentById={componentById}
+            tokens={tokens}
           />
         ))}
       </g>
@@ -253,7 +269,7 @@ export function ClipMaskArtwork({
     const transform = node.rotation
       ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
       : undefined;
-    const resolved = resolveComponentInstanceNodes(node, component);
+    const resolved = resolveComponentInstanceNodes(node, component, tokens);
     const visibleChildren = resolved.filter((child) => child.onCanvas !== false);
     const childNodeById = new Map(visibleChildren.map((child) => [child.id, child]));
     const childClipMaskMap = buildLayerClipMaskMap(visibleChildren, childNodeById);
@@ -274,6 +290,7 @@ export function ClipMaskArtwork({
               clipMaskMap={childClipMaskMap}
               frameClipMap={childFrameClipMap}
               componentById={resolvedComponents}
+              tokens={tokens}
             />
           </defs>
           {getLayerRenderOrder(visibleChildren)
@@ -315,6 +332,7 @@ export function DocumentMaskDefs({
   clipMaskMap,
   frameClipMap,
   componentById,
+  tokens,
 }: {
   nodes: DesignNode[];
   width: number;
@@ -325,6 +343,7 @@ export function DocumentMaskDefs({
   clipMaskMap?: ReadonlyMap<string, string[]>;
   frameClipMap?: ReadonlyMap<string, string[]>;
   componentById?: ReadonlyMap<string, ComponentDefinition>;
+  tokens?: DesignTokenCollection;
 }) {
   const resolvedNodeById = nodeById ?? new Map(nodes.map((node) => [node.id, node]));
   const resolvedClipMaskMap = clipMaskMap ?? buildLayerClipMaskMap(nodes, resolvedNodeById);
@@ -370,6 +389,7 @@ export function DocumentMaskDefs({
               maskPrefix={maskPrefix}
               nodeById={resolvedNodeById}
               componentById={resolvedComponents}
+              tokens={tokens}
             />
           </mask>
         );
@@ -408,12 +428,14 @@ export function NodeArtwork({
   maskPrefix,
   emitNodeId = true,
   componentById,
+  tokens,
 }: {
   node: DesignNode;
   components?: ComponentDefinition[];
   maskPrefix: string;
   emitNodeId?: boolean;
   componentById?: ReadonlyMap<string, ComponentDefinition>;
+  tokens?: DesignTokenCollection;
 }) {
   if (node.type === 'component-instance') {
     const resolvedComponents = getComponentById(components, componentById);
@@ -424,7 +446,7 @@ export function NodeArtwork({
       ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
       : undefined;
     const resolvedChildren = component
-      ? resolveComponentInstanceNodes(node, component).filter((child) => child.onCanvas !== false)
+      ? resolveComponentInstanceNodes(node, component, tokens).filter((child) => child.onCanvas !== false)
       : [];
     const childNodeById = new Map(resolvedChildren.map((child) => [child.id, child]));
     const childClipMaskMap = buildLayerClipMaskMap(resolvedChildren, childNodeById);
@@ -451,6 +473,7 @@ export function NodeArtwork({
                 clipMaskMap={childClipMaskMap}
                 frameClipMap={childFrameClipMap}
                 componentById={resolvedComponents}
+                tokens={tokens}
               />
             </defs>
             <rect
@@ -481,6 +504,7 @@ export function NodeArtwork({
                       clipMaskMap={childClipMaskMap}
                       frameClipMap={childFrameClipMap}
                       componentById={resolvedComponents}
+                      tokens={tokens}
                     />
                   )
               ))}
@@ -514,6 +538,7 @@ export function MaskedNodeArtwork({
   clipMaskMap,
   frameClipMap,
   componentById,
+  tokens,
 }: {
   node: DesignNode;
   nodes: DesignNode[];
@@ -523,6 +548,7 @@ export function MaskedNodeArtwork({
   clipMaskMap?: ReadonlyMap<string, string[]>;
   frameClipMap?: ReadonlyMap<string, string[]>;
   componentById?: ReadonlyMap<string, ComponentDefinition>;
+  tokens?: DesignTokenCollection;
 }) {
   const maskIds = clipMaskMap ? (clipMaskMap.get(node.id) ?? []) : getLayerClipMaskBaseIds(nodes, node.id);
   const frameIds = frameClipMap ? (frameClipMap.get(node.id) ?? []) : getLayerFrameClipAncestorIds(nodes, node.id);
@@ -533,6 +559,7 @@ export function MaskedNodeArtwork({
       maskPrefix={maskPrefix}
       emitNodeId={emitNodeId}
       componentById={componentById}
+      tokens={tokens}
     />
   );
   const frameClipped = frameIds.reduceRight(
@@ -549,12 +576,19 @@ export function DocumentArtworkContent({
   document,
   components = [],
   maskPrefix,
+  tokens,
 }: {
   document: FolioDocument;
   components?: ComponentDefinition[];
   maskPrefix: string;
+  tokens?: DesignTokenCollection;
 }) {
-  const canvasNodes = document.nodes.filter((node) => node.onCanvas !== false);
+  const resolvedNodes = computeAutoLayoutNodes(document.nodes, {
+    breakpoint: 'desktop',
+    tokens,
+    canvasWidth: document.width,
+  });
+  const canvasNodes = resolvedNodes.filter((node) => node.onCanvas !== false);
   const nodeById = new Map(canvasNodes.map((node) => [node.id, node]));
   const clipMaskMap = buildLayerClipMaskMap(canvasNodes, nodeById);
   const frameClipMap = buildFrameClipAncestorMap(canvasNodes, nodeById);
@@ -573,6 +607,7 @@ export function DocumentArtworkContent({
           clipMaskMap={clipMaskMap}
           frameClipMap={frameClipMap}
           componentById={componentById}
+          tokens={tokens}
         />
       </defs>
       {document.background !== '#00000000' && document.background !== 'transparent' && (
@@ -595,6 +630,7 @@ export function DocumentArtworkContent({
             clipMaskMap={clipMaskMap}
             frameClipMap={frameClipMap}
             componentById={componentById}
+            tokens={tokens}
           />
         ))}
     </>

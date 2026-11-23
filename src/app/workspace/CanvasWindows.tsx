@@ -1,4 +1,4 @@
-import type { ComponentDefinition, DesignNode, FolioDocument } from '../../core/document/types';
+import type { BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument } from '../../core/document/types';
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { CanvasToolId, CanvasToolOptions } from '../../core/tools/operationContract';
 import { Canvas } from '../../engines/canvas/Canvas';
@@ -42,6 +42,8 @@ export interface MainCanvasWindowProps {
   zIndex: number;
   document: FolioDocument;
   components: ComponentDefinition[];
+  designTokens: DesignTokenCollection;
+  activeBreakpoint: BreakpointId;
   selectedNodeIds: string[];
   selectedNodes: DesignNode[];
   toolId: CanvasToolId;
@@ -50,6 +52,7 @@ export interface MainCanvasWindowProps {
   pan: { x: number; y: number };
   canUndo: boolean;
   canRedo: boolean;
+  onChangeBreakpoint: (bp: BreakpointId) => void;
   onPositionChange: (position: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
   onFocus: () => void;
@@ -88,6 +91,8 @@ export function MainCanvasWindow({
   zIndex,
   document,
   components,
+  designTokens,
+  activeBreakpoint,
   selectedNodeIds,
   selectedNodes,
   toolId,
@@ -96,6 +101,7 @@ export function MainCanvasWindow({
   pan,
   canUndo,
   canRedo,
+  onChangeBreakpoint,
   onPositionChange,
   onSizeChange,
   onFocus,
@@ -143,6 +149,26 @@ export function MainCanvasWindow({
           <div class={`workspace-toolbar${floating ? ' workspace-toolbar-draggable' : ''}`}>
             <div class="breadcrumb">
               <strong>{document.name}</strong>
+              <div class="breakpoint-switcher" role="group" aria-label="Responsive breakpoint preview">
+                {([
+                  { id: 'desktop', label: 'Desktop', icon: 'desktop', width: '1440' },
+                  { id: 'tablet', label: 'Tablet', icon: 'tablet', width: '768' },
+                  { id: 'mobile', label: 'Mobile', icon: 'mobile', width: '390' },
+                ] as const).map((bp) => (
+                  <button
+                    key={bp.id}
+                    type="button"
+                    class={`breakpoint-btn ${activeBreakpoint === bp.id ? 'is-active' : ''}`}
+                    title={`${bp.label} (${bp.width}px)`}
+                    aria-label={`${bp.label} breakpoint (${bp.width}px)`}
+                    aria-pressed={activeBreakpoint === bp.id}
+                    onClick={() => onChangeBreakpoint(bp.id)}
+                  >
+                    <StudioIcon name={bp.icon} />
+                    <span>{bp.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
             <div class="canvas-window-tools">
               <AlignmentTools
@@ -202,6 +228,8 @@ export function MainCanvasWindow({
             <Canvas
               document={document}
               components={components}
+              designTokens={designTokens}
+              activeBreakpoint={activeBreakpoint}
               selectedNodeIds={selectedNodeIds as string[]}
               toolId={toolId}
               workspace="main"
@@ -252,6 +280,7 @@ export interface ComponentCanvasWindowProps {
   zIndex: number;
   document: FolioDocument;
   components: ComponentDefinition[];
+  designTokens: DesignTokenCollection;
   editingComponent: ComponentDefinition | null;
   selectedNodeIds: string[];
   selectedComponentNodes: DesignNode[];
@@ -309,6 +338,7 @@ export function ComponentCanvasWindow({
   zIndex,
   document,
   components,
+  designTokens,
   editingComponent,
   selectedNodeIds,
   selectedComponentNodes,
@@ -504,6 +534,7 @@ export function ComponentCanvasWindow({
             <Canvas
               document={document}
               components={components}
+              designTokens={designTokens}
               selectedNodeIds={selectedNodeIds as string[]}
               toolId={toolId}
               workspace="component"

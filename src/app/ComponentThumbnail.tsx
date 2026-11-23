@@ -1,5 +1,5 @@
 import { useMemo } from 'preact/hooks';
-import type { ComponentDefinition } from '../core/document/types';
+import type { ComponentDefinition, DesignTokenCollection } from '../core/document/types';
 import { getEffectiveLayerStates } from '../core/document/layers';
 import { DocumentArtworkContent, sanitizeMaskIdSegment } from '../engines/canvas/artwork';
 
@@ -11,9 +11,11 @@ import { DocumentArtworkContent, sanitizeMaskIdSegment } from '../engines/canvas
 export function ComponentThumbnail({
   component,
   components = [],
+  designTokens,
 }: {
   component: ComponentDefinition;
   components?: ComponentDefinition[];
+  designTokens?: DesignTokenCollection;
 }) {
   const doc = component.document;
 
@@ -69,6 +71,7 @@ export function ComponentThumbnail({
           document={doc}
           components={components}
           maskPrefix={thumbnailGeometry.maskPrefix}
+          tokens={designTokens}
         />
       </svg>
     </span>

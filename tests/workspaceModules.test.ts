@@ -313,6 +313,11 @@ describe('workspace modularity & architectural boundary regressions', () => {
       'LayerPopovers.tsx',
       'PagesRackPanel.tsx',
       'ComponentRackPanel.tsx',
+      'TokensPanel.tsx',
+      'InspectorWebLayoutSection.tsx',
+      'InspectorComponentContractSection.tsx',
+      'CodeWorkspacePanel.tsx',
+      'LivePreviewPane.tsx',
       'StatusBar.tsx',
       'ComponentDeletionDialog.tsx',
     ];

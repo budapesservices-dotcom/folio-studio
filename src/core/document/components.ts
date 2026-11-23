@@ -1,10 +1,73 @@
-import type { ComponentDefinition, ComponentInstanceNode, DesignNode, FolioDocument, PathNode } from './types';
+import type {
+  ComponentDefinition,
+  ComponentInstanceNode,
+  ComponentSlotDefinition,
+  ComponentVariantAxis,
+  ComponentVariantOverride,
+  DesignNode,
+  DesignTokenCollection,
+  FolioDocument,
+  PathNode,
+} from './types';
 import { createEmptyDocument } from './factory';
 import { expandSelectedLayerIds } from './layers';
+import { resolveNodeWithTokens } from './tokens';
 import { scalePathNodeGeometry } from './vector';
 
 function createNodeId(instanceId: string, childId: string): string {
   return `${instanceId}__${childId}`;
+}
+
+export function getEffectiveVariantSelection(
+  instance: ComponentInstanceNode,
+  component: ComponentDefinition,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const axis of component.variants ?? []) {
+    const chosen = instance.variantSelection?.[axis.id];
+    const valid = chosen && axis.options.some((opt) => opt.id === chosen);
+    result[axis.id] = valid ? chosen : axis.defaultOptionId;
+  }
+  return result;
+}
+
+export function createComponentSlot(
+  name: string,
+  targetNodeId: string,
+  options: { id?: string; description?: string; defaultText?: string } = {},
+): ComponentSlotDefinition {
+  const id = options.id ?? `slot-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
+  return {
+    id,
+    name: name.trim() || 'Slot',
+    targetNodeId,
+    ...(options.description?.trim() ? { description: options.description.trim() } : {}),
+    ...(options.defaultText !== undefined ? { defaultText: options.defaultText } : {}),
+  };
+}
+
+export function createComponentVariantAxis(
+  name: string,
+  options?: {
+    id?: string;
+    optionLabels?: readonly string[];
+  },
+): ComponentVariantAxis {
+  const axisId = options?.id ?? `axis-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
+  const labels = options?.optionLabels && options.optionLabels.length > 0
+    ? options.optionLabels
+    : ['Default', 'Secondary'];
+  const builtOptions = labels.map((label, index) => ({
+    id: `${axisId}-opt-${index + 1}`,
+    label: label.trim() || `Option ${index + 1}`,
+    overrides: {},
+  }));
+  return {
+    id: axisId,
+    name: name.trim() || 'Variant',
+    defaultOptionId: builtOptions[0].id,
+    options: builtOptions,
+  };
 }
 
 export function createComponentInstance(
@@ -13,11 +76,61 @@ export function createComponentInstance(
   y: number,
   id: string = globalThis.crypto?.randomUUID?.() ?? `instance-${Date.now()}`,
 ): ComponentInstanceNode {
+  const defaultVariantSelection: Record<string, string> = {};
+  for (const axis of component.variants ?? []) {
+    defaultVariantSelection[axis.id] = axis.defaultOptionId;
+  }
   return {
-    id, type: 'component-instance', componentId: component.id, name: component.name,
-    x, y, width: Math.max(1, component.document.width), height: Math.max(1, component.document.height),
-    rotation: 0, opacity: 1, visible: true, locked: false, onCanvas: true, overrides: {},
+    id,
+    type: 'component-instance',
+    componentId: component.id,
+    name: component.name,
+    x,
+    y,
+    width: Math.max(1, component.document.width),
+    height: Math.max(1, component.document.height),
+    rotation: 0,
+    opacity: 1,
+    visible: true,
+    locked: false,
+    onCanvas: true,
+    overrides: {},
+    ...(Object.keys(defaultVariantSelection).length > 0 ? { variantSelection: defaultVariantSelection } : {}),
   };
+}
+
+function applyNodeOverrideFields(node: DesignNode, override: ComponentVariantOverride): DesignNode {
+  let next: DesignNode = node;
+  if (override.visible !== undefined) {
+    next = { ...next, visible: override.visible };
+  }
+  if (next.type === 'text') {
+    if (override.text !== undefined || override.fill !== undefined) {
+      next = {
+        ...next,
+        ...(override.text !== undefined ? { text: override.text } : {}),
+        style: {
+          ...next.style,
+          ...(override.fill !== undefined ? { fill: override.fill } : {}),
+        },
+      };
+    }
+    return next;
+  }
+  if (next.type === 'rect' || next.type === 'ellipse' || next.type === 'frame' || next.type === 'path') {
+    if (override.fill !== undefined || override.stroke !== undefined) {
+      next = {
+        ...next,
+        style: {
+          ...next.style,
+          ...(override.fill !== undefined ? { fill: override.fill } : {}),
+          ...(override.stroke !== undefined ? { stroke: override.stroke } : {}),
+        },
+      };
+    }
+    return next;
+  }
+  return next;
 }
 
 export function applyComponentOverrides(
@@ -26,23 +139,68 @@ export function applyComponentOverrides(
 ): DesignNode {
   const override = overrides[node.id];
   if (!override) return node;
-  if (node.type === 'text') return {
-    ...node,
-    ...(override.text !== undefined ? { text: override.text } : {}),
-    style: { ...node.style, ...(override.fill !== undefined ? { fill: override.fill } : {}) },
-  };
-  if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path') return {
-    ...node, style: { ...node.style, ...(override.fill !== undefined ? { fill: override.fill } : {}) },
-  };
-  return node;
+  return applyNodeOverrideFields(node, override);
 }
 
+/**
+ * Deterministically resolves a component instance's internal master nodes with precedence:
+ * Master -> Active Variants -> Slot Assignments -> Direct Instance Overrides -> Design Tokens.
+ */
 export function resolveComponentInstanceNodes(
   instance: ComponentInstanceNode,
   component: ComponentDefinition,
+  tokens?: DesignTokenCollection,
 ): DesignNode[] {
   if (instance.componentId !== component.id) return [];
-  return component.document.nodes.map((node) => applyComponentOverrides(node, instance.overrides));
+
+  // 1. Collect active variant overrides keyed by master node ID
+  const variantOverrideByNodeId = new Map<string, ComponentVariantOverride>();
+  const effectiveSelection = getEffectiveVariantSelection(instance, component);
+  for (const axis of component.variants ?? []) {
+    const selectedOptionId = effectiveSelection[axis.id];
+    const option = axis.options.find((opt) => opt.id === selectedOptionId) ?? axis.options[0];
+    if (!option) continue;
+    for (const [targetId, patch] of Object.entries(option.overrides)) {
+      const existing = variantOverrideByNodeId.get(targetId) ?? {};
+      variantOverrideByNodeId.set(targetId, { ...existing, ...patch });
+    }
+  }
+
+  // 2. Collect slot assignments keyed by master node ID
+  const slotOverrideByNodeId = new Map<string, ComponentVariantOverride>();
+  for (const slot of component.slots ?? []) {
+    const assignment = instance.slotAssignments?.[slot.id];
+    if (assignment) {
+      const existing = slotOverrideByNodeId.get(slot.targetNodeId) ?? {};
+      slotOverrideByNodeId.set(slot.targetNodeId, {
+        ...existing,
+        ...(assignment.text !== undefined ? { text: assignment.text } : {}),
+        ...(assignment.fill !== undefined ? { fill: assignment.fill } : {}),
+        ...(assignment.visible !== undefined ? { visible: assignment.visible } : {}),
+      });
+    } else if (slot.defaultText !== undefined) {
+      const variantPatch = variantOverrideByNodeId.get(slot.targetNodeId);
+      const existing = slotOverrideByNodeId.get(slot.targetNodeId) ?? {};
+      if (existing.text === undefined && variantPatch?.text === undefined) {
+        slotOverrideByNodeId.set(slot.targetNodeId, { ...existing, text: slot.defaultText });
+      }
+    }
+  }
+
+  // 3. Apply in deterministic precedence order
+  return component.document.nodes.map((masterNode) => {
+    let resolved = tokens ? resolveNodeWithTokens(masterNode, tokens) : masterNode;
+    const variantPatch = variantOverrideByNodeId.get(masterNode.id);
+    if (variantPatch) {
+      resolved = applyNodeOverrideFields(resolved, variantPatch);
+    }
+    const slotPatch = slotOverrideByNodeId.get(masterNode.id);
+    if (slotPatch) {
+      resolved = applyNodeOverrideFields(resolved, slotPatch);
+    }
+    resolved = applyComponentOverrides(resolved, instance.overrides);
+    return resolved;
+  });
 }
 
 export function getComponentOverrideTargets(component: ComponentDefinition): {
@@ -57,8 +215,12 @@ export function getComponentOverrideTargets(component: ComponentDefinition): {
   };
 }
 
-/** Converts a linked instance into ordinary page nodes, preserving effective geometry and overrides. */
-export function detachComponentInstance(instance: ComponentInstanceNode, component: ComponentDefinition): DesignNode[] {
+/** Converts a linked instance into ordinary page nodes, baking effective variants, slots, and overrides. */
+export function detachComponentInstance(
+  instance: ComponentInstanceNode,
+  component: ComponentDefinition,
+  tokens?: DesignTokenCollection,
+): DesignNode[] {
   const source = component.document;
   const scaleX = instance.width / Math.max(1, source.width);
   const scaleY = instance.height / Math.max(1, source.height);
@@ -68,14 +230,16 @@ export function detachComponentInstance(instance: ComponentInstanceNode, compone
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
 
+  const resolvedNodes = resolveComponentInstanceNodes(instance, component, tokens);
+  const resolvedById = new Map(resolvedNodes.map((node) => [node.id, node]));
   const detachedIds = new Map(source.nodes.map((node) => [node.id, createNodeId(instance.id, node.id)]));
 
   return source.nodes.map((sourceNode) => {
-    const effective = applyComponentOverrides(sourceNode, instance.overrides);
-    const width = sourceNode.width * scaleX;
-    const height = sourceNode.height * scaleY;
-    const localCenterX = instance.x + sourceNode.x * scaleX + width / 2;
-    const localCenterY = instance.y + sourceNode.y * scaleY + height / 2;
+    const effective = resolvedById.get(sourceNode.id) ?? applyComponentOverrides(sourceNode, instance.overrides);
+    const width = effective.width * scaleX;
+    const height = effective.height * scaleY;
+    const localCenterX = instance.x + effective.x * scaleX + width / 2;
+    const localCenterY = instance.y + effective.y * scaleY + height / 2;
     const dx = localCenterX - centerX;
     const dy = localCenterY - centerY;
     const rotatedX = centerX + dx * cos - dy * sin;
@@ -88,12 +252,13 @@ export function detachComponentInstance(instance: ComponentInstanceNode, compone
       name: sourceNode.name,
       x: rotatedX - width / 2,
       y: rotatedY - height / 2,
-      width, height,
-      rotation: sourceNode.rotation + instance.rotation,
-      opacity: sourceNode.opacity * instance.opacity,
-      visible: sourceNode.visible && instance.visible,
-      locked: sourceNode.locked || instance.locked,
-      onCanvas: instance.onCanvas !== false && sourceNode.onCanvas !== false,
+      width,
+      height,
+      rotation: effective.rotation + instance.rotation,
+      opacity: effective.opacity * instance.opacity,
+      visible: effective.visible && instance.visible,
+      locked: effective.locked || instance.locked,
+      onCanvas: instance.onCanvas !== false && effective.onCanvas !== false,
     };
     if (effective.type === 'path') {
       const pathCandidate: PathNode = {
@@ -190,7 +355,6 @@ export function replaceComponentInstancesInDocument(document: FolioDocument, com
   return changed ? { ...document, nodes } : document;
 }
 
-
 /** Prunes only override keys whose master nodes were removed; surviving keys remain. */
 export function pruneComponentInstanceOverridesInDocument(
   document: FolioDocument,
@@ -214,4 +378,54 @@ export function pruneComponentInstanceOverridesInDocument(
     return { ...node, overrides };
   });
   return changed ? { ...document, nodes } : document;
+}
+
+/** Prunes variant overrides and slots on a ComponentDefinition whose master layers were deleted. */
+export function pruneComponentContractForDocument(
+  component: ComponentDefinition,
+  nextDocument: FolioDocument,
+): ComponentDefinition {
+  const validNodeIds = new Set(nextDocument.nodes.map((node) => node.id));
+  let changed = false;
+
+  let nextSlots = component.slots;
+  if (component.slots) {
+    const filtered = component.slots.filter((slot) => validNodeIds.has(slot.targetNodeId));
+    if (filtered.length !== component.slots.length) {
+      nextSlots = filtered;
+      changed = true;
+    }
+  }
+
+  let nextVariants = component.variants;
+  if (component.variants) {
+    nextVariants = component.variants.map((axis) => {
+      let axisChanged = false;
+      const options = axis.options.map((option) => {
+        const cleanedOverrides: Record<string, ComponentVariantOverride> = {};
+        let optChanged = false;
+        for (const [nodeId, patch] of Object.entries(option.overrides)) {
+          if (validNodeIds.has(nodeId)) cleanedOverrides[nodeId] = patch;
+          else optChanged = true;
+        }
+        if (optChanged) {
+          axisChanged = true;
+          return { ...option, overrides: cleanedOverrides };
+        }
+        return option;
+      });
+      if (axisChanged) {
+        changed = true;
+        return { ...axis, options };
+      }
+      return axis;
+    });
+  }
+
+  if (!changed) return component;
+  return {
+    ...component,
+    ...(nextSlots !== undefined ? { slots: nextSlots } : {}),
+    ...(nextVariants !== undefined ? { variants: nextVariants } : {}),
+  };
 }

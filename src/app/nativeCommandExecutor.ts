@@ -51,6 +51,8 @@ const KNOWN_NATIVE_PERMISSIONS = new Set([
   'component.create',
   'component.update',
   'component.delete',
+  'tokens.update',
+  'code.update',
   'selection.update',
   'history.execute',
 ]);
@@ -286,6 +288,9 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'component.sync-document':
     case 'component.rename':
     case 'component.delete':
+    case 'component.update-contract':
+    case 'tokens.update':
+    case 'code.update-modules':
     case 'node.create':
     case 'node.replace-many':
     case 'node.split':
@@ -328,6 +333,9 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'component.sync-document':
     case 'component.rename':
     case 'component.delete':
+    case 'component.update-contract':
+    case 'tokens.update':
+    case 'code.update-modules':
     case 'node.create':
     case 'node.set-properties':
     case 'selection.set':
@@ -481,7 +489,10 @@ function computeProjectChangeDraft(
         documentContentChanged: true,
       });
     } else {
-      const metadataChanged = beforeComponent.name !== afterComponent.name;
+      const metadataChanged =
+        beforeComponent.name !== afterComponent.name ||
+        JSON.stringify(beforeComponent.variants ?? []) !== JSON.stringify(afterComponent.variants ?? []) ||
+        JSON.stringify(beforeComponent.slots ?? []) !== JSON.stringify(afterComponent.slots ?? []);
       const documentContentChanged = !areDocumentsStructurallyEqual(
         beforeComponent.document,
         afterComponent.document,
@@ -511,7 +522,9 @@ function computeProjectChangeDraft(
     beforeProject.metadata.name !== afterProject.metadata.name ||
     beforeProject.activePageId !== afterProject.activePageId ||
     beforeProject.pages.length !== afterProject.pages.length ||
-    beforeProject.pages.some((page, idx) => afterProject.pages[idx]?.id !== page.id);
+    beforeProject.pages.some((page, idx) => afterProject.pages[idx]?.id !== page.id) ||
+    JSON.stringify(beforeProject.designTokens ?? null) !== JSON.stringify(afterProject.designTokens ?? null) ||
+    JSON.stringify(beforeProject.codeModules ?? []) !== JSON.stringify(afterProject.codeModules ?? []);
 
   const changeDraft: NativeChangeSetDraft = {
     projectId,
@@ -824,7 +837,8 @@ function prepareCommandStep(
     } else if (
       command.type === 'component.sync-document' ||
       command.type === 'component.rename' ||
-      command.type === 'component.delete'
+      command.type === 'component.delete' ||
+      command.type === 'component.update-contract'
     ) {
       const current = project.components.find((component) => component.id === command.payload.componentId);
       if (!current) {

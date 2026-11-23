@@ -57,6 +57,12 @@ export const STUDIO_ICON_PATHS: Record<string, string> = {
   measure: 'M3 16 16 3l5 5L8 21 3 16zM8 11l2 2M11 8l2 2M14 5l2 2',
   templates: 'M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z',
   keyboard: 'M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm3 4h1m3 0h1m3 0h1m3 0h1M6 13h1m3 0h4m3 0h1M7 16h10',
+  tokens: 'M12 3 4 9l8 6 8-6-8-6zM4 15l8 6 8-6',
+  desktop: 'M3 4h18v12H3zM8 20h8M12 16v4',
+  tablet: 'M6 3h12v18H6zM11 18h2',
+  mobile: 'M8 3h8v18H8zM11 18h2',
+  code: 'm8 8-4 4 4 4m8-8 4 4-4 4m-5-11-2 14',
+  preview: 'M4 5h16v14H4zM4 9h16M10 14l4-2-4-2v4z',
 };
 
 export function StudioIcon({ name }: { name: string }) {

@@ -3,9 +3,13 @@ import { classifyNodeChange, hasExtendedNodeChange } from '../core/document/node
 import { getActivePage } from '../core/document/project';
 import type { LayerDropPosition } from '../core/document/layers';
 import type {
+  CodeModuleRecord,
   ComponentDefinition,
   ComponentInstanceNode,
+  ComponentSlotDefinition,
+  ComponentVariantAxis,
   DesignNode,
+  DesignTokenCollection,
   FolioDocument,
   FolioPage,
   FolioProject,
@@ -38,6 +42,8 @@ export const WORKSPACE_USER_CAPABILITIES: readonly NativePermission[] = Object.f
   'component.create',
   'component.update',
   'component.delete',
+  'tokens.update',
+  'code.update',
   'selection.update',
   'history.execute',
 ]);
@@ -154,6 +160,25 @@ export interface MainCanvasCommandClient {
     },
     description?: string,
     mutationLease?: object,
+  ): NativeCommandResult;
+  updateComponentContract(
+    args: {
+      componentId: string;
+      variants?: ComponentVariantAxis[];
+      slots?: ComponentSlotDefinition[];
+      expectedUpdatedAt: string;
+      expectedMasterDocument: FolioDocument;
+    },
+    description?: string,
+  ): NativeCommandResult;
+  updateDesignTokens(
+    designTokens: DesignTokenCollection,
+    unbindTokenIds?: readonly string[],
+    description?: string,
+  ): NativeCommandResult;
+  updateCodeModules(
+    codeModules: readonly CodeModuleRecord[],
+    description?: string,
   ): NativeCommandResult;
   createNodes(nodes: readonly DesignNode[], description?: string): NativeCommandResult;
   replaceNode(node: DesignNode, description?: string): NativeCommandResult;
@@ -416,6 +441,47 @@ export function createWorkspaceCommandClient(
         },
         description,
         mutationLease,
+      );
+    },
+
+    updateComponentContract(args, description = 'Update component contract') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'component.update-contract',
+        { kind: 'project', projectId },
+        stripUndefinedEntries({
+          componentId: args.componentId,
+          ...(args.variants !== undefined ? { variants: args.variants } : {}),
+          ...(args.slots !== undefined ? { slots: args.slots } : {}),
+          expectedUpdatedAt: args.expectedUpdatedAt,
+          expectedMasterDocument: args.expectedMasterDocument,
+        }),
+        description,
+      );
+    },
+
+    updateDesignTokens(designTokens, unbindTokenIds, description = 'Update design tokens') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'tokens.update',
+        { kind: 'project', projectId },
+        stripUndefinedEntries({
+          designTokens,
+          ...(unbindTokenIds !== undefined ? { unbindTokenIds: [...unbindTokenIds] } : {}),
+        }),
+        description,
+      );
+    },
+
+    updateCodeModules(codeModules, description = 'Update code modules') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'code.update-modules',
+        { kind: 'project', projectId },
+        stripUndefinedEntries({
+          codeModules,
+        }),
+        description,
       );
     },
 

@@ -13,10 +13,12 @@ export interface GlobalToolbarProps {
   projectFileInputRef: RefObject<HTMLInputElement>;
   pagesRackToggleRef: RefObject<HTMLButtonElement>;
   componentRackToggleRef: RefObject<HTMLButtonElement>;
+  tokensRackToggleRef: RefObject<HTMLButtonElement>;
   projectNameEditing: boolean;
   projectNameDraft: string;
   pagesRackOpen: boolean;
   componentRackOpen: boolean;
+  tokensRackOpen: boolean;
   layersVisible: boolean;
   inspectorVisible: boolean;
   canvasClosed: boolean;
@@ -27,6 +29,7 @@ export interface GlobalToolbarProps {
   nodeLogicOpen: boolean;
   nodeLogicClosed: boolean;
   nodeLogicMinimized: boolean;
+  codeWorkspaceOpen: boolean;
   shortcutsModalOpen: boolean;
   toolbarHintStore: ToolbarHintStore;
   onToggleFileMenu: () => void;
@@ -45,11 +48,13 @@ export interface GlobalToolbarProps {
   onCancelProjectRename: () => void;
   onTogglePagesRack: () => void;
   onToggleComponentRack: () => void;
+  onToggleTokensRack: () => void;
   onToggleLayersVisible: () => void;
   onToggleInspectorVisible: () => void;
   onToggleMainCanvas: () => void;
   onToggleComponentCanvas: () => void;
   onToggleNodeLogic: () => void;
+  onToggleCodeWorkspace: () => void;
   onEnterFullscreen: () => void;
   onUpdateToolbarHint: (panel: string, description: string, shortcuts?: string[]) => void;
 }
@@ -64,10 +69,12 @@ export function GlobalToolbar({
   projectFileInputRef,
   pagesRackToggleRef,
   componentRackToggleRef,
+  tokensRackToggleRef,
   projectNameEditing,
   projectNameDraft,
   pagesRackOpen,
   componentRackOpen,
+  tokensRackOpen,
   layersVisible,
   inspectorVisible,
   canvasClosed,
@@ -78,6 +85,7 @@ export function GlobalToolbar({
   nodeLogicOpen,
   nodeLogicClosed,
   nodeLogicMinimized,
+  codeWorkspaceOpen,
   shortcutsModalOpen,
   toolbarHintStore,
   onToggleFileMenu,
@@ -96,11 +104,13 @@ export function GlobalToolbar({
   onCancelProjectRename,
   onTogglePagesRack,
   onToggleComponentRack,
+  onToggleTokensRack,
   onToggleLayersVisible,
   onToggleInspectorVisible,
   onToggleMainCanvas,
   onToggleComponentCanvas,
   onToggleNodeLogic,
+  onToggleCodeWorkspace,
   onEnterFullscreen,
   onUpdateToolbarHint,
 }: GlobalToolbarProps) {
@@ -292,6 +302,18 @@ export function GlobalToolbar({
             >
               <StudioIcon name="rack" />
             </button>
+            <button
+              ref={tokensRackToggleRef}
+              class={`global-panel-toggle tokens-rack-header-toggle ${tokensRackOpen ? 'active' : ''}`}
+              type="button"
+              title={tokensRackOpen ? 'Close Design Tokens' : 'Open Design Tokens'}
+              aria-label={tokensRackOpen ? 'Close Design Tokens' : 'Open Design Tokens'}
+              aria-pressed={tokensRackOpen}
+              onClick={onToggleTokensRack}
+              onMouseEnter={() => onUpdateToolbarHint('DESIGN TOKENS', 'Manage semantic tokens, Light/Dark themes, and CSS custom properties.')}
+            >
+              <StudioIcon name="tokens" />
+            </button>
           </div>
           <span class="global-panel-group-divider" aria-hidden="true" />
           <div class="global-panel-group" role="group" aria-label="Side panels">
@@ -357,6 +379,17 @@ export function GlobalToolbar({
               onMouseEnter={() => onUpdateToolbarHint('NODE LOGIC', nodeLogicClosed || nodeLogicMinimized ? 'Open the Node Logic workspace.' : 'Close the Node Logic workspace.')}
             >
               <StudioIcon name="logicNodes" />
+            </button>
+            <button
+              class={`global-panel-toggle code-studio-header-toggle ${codeWorkspaceOpen ? 'active' : ''}`}
+              type="button"
+              title={codeWorkspaceOpen ? 'Close Code & Preview Studio' : 'Open Code & Preview Studio'}
+              aria-label={codeWorkspaceOpen ? 'Close Code & Preview Studio' : 'Open Code & Preview Studio'}
+              aria-pressed={codeWorkspaceOpen}
+              onClick={onToggleCodeWorkspace}
+              onMouseEnter={() => onUpdateToolbarHint('CODE & PREVIEW', 'Inspect compiled HTML/CSS & React TSX, sync mapped AST changes, author Custom/Extension code, and test Live Preview.')}
+            >
+              <StudioIcon name="code" />
             </button>
           </div>
           <span class="global-panel-group-divider" aria-hidden="true" />

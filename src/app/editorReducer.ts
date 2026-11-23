@@ -1,8 +1,23 @@
-import type { ComponentDefinition, DesignNode, FolioDocument, FolioPage, FolioProject } from '../core/document/types';
+import type {
+  CodeModuleRecord,
+  ComponentDefinition,
+  ComponentSlotDefinition,
+  ComponentVariantAxis,
+  DesignNode,
+  DesignTokenCollection,
+  FolioDocument,
+  FolioPage,
+  FolioProject,
+  NodeTokenBindings,
+} from '../core/document/types';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { areDocumentsStructurallyEqual } from '../core/document/equality';
 import { classifyNodeChange } from '../core/document/nodeChanges';
-import { pruneComponentInstanceOverridesInDocument, replaceComponentInstancesInDocument } from '../core/document/components';
+import {
+  pruneComponentContractForDocument,
+  pruneComponentInstanceOverridesInDocument,
+  replaceComponentInstancesInDocument,
+} from '../core/document/components';
 import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, collapseLegacyCanvasInstances, type LayerDropPosition } from '../core/document/layers';
 
 const HISTORY_LIMIT = 60;
@@ -45,6 +60,9 @@ export type EditorAction =
   | { type: 'sync-component-document'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; document: FolioDocument; updatedAt: string }
   | { type: 'rename-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; name: string }
   | { type: 'delete-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string }
+  | { type: 'update-component-contract'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[] }
+  | { type: 'update-design-tokens'; designTokens: DesignTokenCollection; unbindTokenIds?: string[] }
+  | { type: 'update-code-modules'; codeModules: CodeModuleRecord[] }
   | { type: 'replace-project'; project: FolioProject }
   | { type: 'undo' }
   | { type: 'redo' };
@@ -96,6 +114,34 @@ function removeNodesFromLayers(nodes: DesignNode[], requestedIds: Iterable<strin
   return remaining.map((node) => node.clipMaskBaseId && !remainingIds.has(node.clipMaskBaseId)
     ? { ...node, clipMaskBaseId: undefined }
     : node);
+}
+
+function unbindTokenIdsFromNodes(nodes: DesignNode[], removeSet: ReadonlySet<string>): DesignNode[] {
+  if (removeSet.size === 0) return nodes;
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (!node.tokenBindings) return node;
+    let nodeChanged = false;
+    const cleaned: NodeTokenBindings = {};
+    for (const [key, tokenId] of Object.entries(node.tokenBindings) as Array<[keyof NodeTokenBindings, string | undefined]>) {
+      if (!tokenId) continue;
+      if (removeSet.has(tokenId)) {
+        nodeChanged = true;
+      } else {
+        cleaned[key] = tokenId;
+      }
+    }
+    if (!nodeChanged) return node;
+    changed = true;
+    const nextNode = { ...node };
+    if (Object.keys(cleaned).length > 0) {
+      nextNode.tokenBindings = cleaned;
+    } else {
+      delete nextNode.tokenBindings;
+    }
+    return nextNode;
+  });
+  return changed ? next : nodes;
 }
 
 function existingSelection(project: FolioProject, ids: string[]): string[] {
@@ -405,10 +451,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         const document = pruneComponentInstanceOverridesInDocument(page.document, action.componentId, removedNodeIds);
         return document === page.document ? page : { ...page, document };
       });
-      const components = state.project.components.map((component) =>
-        component.id === action.componentId
-          ? { ...component, document: action.document, updatedAt: action.updatedAt }
-          : component);
+      const components = state.project.components.map((component) => {
+        if (component.id !== action.componentId) return component;
+        const pruned = pruneComponentContractForDocument(component, action.document);
+        return { ...pruned, document: action.document, updatedAt: action.updatedAt };
+      });
       return withSnapshot(state, touch({ ...state.project, pages, components }));
     }
 
@@ -435,6 +482,73 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const next = touch({ ...state.project, pages, components });
       const selected = existingSelection(next, state.selectedNodeIds);
       return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
+    }
+
+    case 'update-component-contract': {
+      const target = state.project.components.find((component) => component.id === action.componentId);
+      if (!target || target.document !== action.expectedMasterDocument ||
+          target.updatedAt !== action.expectedUpdatedAt) return state;
+      const nextVariants = action.variants !== undefined ? action.variants : target.variants;
+      const nextSlots = action.slots !== undefined ? action.slots : target.slots;
+      if (
+        JSON.stringify(target.variants ?? []) === JSON.stringify(nextVariants ?? []) &&
+        JSON.stringify(target.slots ?? []) === JSON.stringify(nextSlots ?? [])
+      ) {
+        return state;
+      }
+      const now = new Date().toISOString();
+      const components = state.project.components.map((component) => {
+        if (component.id !== action.componentId) return component;
+        const updated: ComponentDefinition = { ...component, updatedAt: now };
+        if (nextVariants && nextVariants.length > 0) updated.variants = nextVariants;
+        else delete updated.variants;
+        if (nextSlots && nextSlots.length > 0) updated.slots = nextSlots;
+        else delete updated.slots;
+        return updated;
+      });
+      return withSnapshot(state, touch({ ...state.project, components }));
+    }
+
+    case 'update-design-tokens': {
+      const removeSet = new Set(action.unbindTokenIds ?? []);
+      const tokensChanged = JSON.stringify(state.project.designTokens ?? null) !== JSON.stringify(action.designTokens);
+      const pages = removeSet.size === 0
+        ? state.project.pages
+        : state.project.pages.map((page) => {
+            const nodes = unbindTokenIdsFromNodes(page.document.nodes, removeSet);
+            return nodes === page.document.nodes ? page : { ...page, document: { ...page.document, nodes } };
+          });
+      const components = removeSet.size === 0
+        ? state.project.components
+        : state.project.components.map((component) => {
+            const nodes = unbindTokenIdsFromNodes(component.document.nodes, removeSet);
+            return nodes === component.document.nodes ? component : { ...component, document: { ...component.document, nodes } };
+          });
+      const bindingsChanged = pages !== state.project.pages || components !== state.project.components;
+      if (!tokensChanged && !bindingsChanged) return state;
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          pages,
+          components,
+          designTokens: action.designTokens,
+        }),
+      );
+    }
+
+    case 'update-code-modules': {
+      const currentModules = state.project.codeModules ?? [];
+      if (JSON.stringify(currentModules) === JSON.stringify(action.codeModules)) {
+        return state;
+      }
+      const nextProject: FolioProject = { ...state.project };
+      if (action.codeModules.length > 0) {
+        nextProject.codeModules = action.codeModules;
+      } else {
+        delete nextProject.codeModules;
+      }
+      return withSnapshot(state, touch(nextProject));
     }
 
     case 'replace-project':

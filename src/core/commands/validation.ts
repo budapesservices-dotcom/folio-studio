@@ -10,12 +10,25 @@ import type {
   FolioPage,
   FolioProject,
 } from '../document/types';
-import { validateProject } from '../document/validation';
+import {
+  SEMANTIC_HTML_TAGS,
+  isCodeModuleList,
+  isComponentSlotsList,
+  isComponentVariantsList,
+  isDesignTokenCollection,
+  isNodeLayoutChildConfig,
+  isNodeLayoutConfig,
+  isNodeTokenBindings,
+  isResponsiveOverrides,
+  validateProject,
+} from '../document/validation';
 import type {
+  CodeUpdateModulesPayload,
   ComponentCreatePayload,
   ComponentDeletePayload,
   ComponentRenamePayload,
   ComponentSyncDocumentPayload,
+  ComponentUpdateContractPayload,
   HistoryCommitEditPayload,
   HistoryRedoPayload,
   HistoryUndoPayload,
@@ -43,6 +56,7 @@ import type {
   ProjectRenamePayload,
   ProjectReplacePayload,
   SelectionSetPayload,
+  TokensUpdatePayload,
 } from './types';
 
 export type ValidationOutcome<T> =
@@ -335,6 +349,7 @@ function isLayerDropPosition(value: unknown): value is LayerDropPosition {
 const COMMON_NODE_KEYS = [
   'id', 'name', 'type', 'x', 'y', 'width', 'height', 'rotation',
   'opacity', 'visible', 'locked', 'layerColor', 'parentId', 'onCanvas', 'clipMaskBaseId',
+  'semanticTag', 'ariaLabel', 'href', 'layout', 'layoutChild', 'responsive', 'tokenBindings',
 ] as const;
 
 function isDesignNodeData(value: unknown): value is DesignNode {
@@ -353,7 +368,14 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     (value.layerColor !== undefined && (typeof value.layerColor !== 'string' || value.layerColor.length > 128)) ||
     (value.onCanvas !== undefined && typeof value.onCanvas !== 'boolean') ||
     (value.parentId !== undefined && value.parentId !== null && !isNonEmptyString(value.parentId)) ||
-    (value.clipMaskBaseId !== undefined && !isNonEmptyString(value.clipMaskBaseId))
+    (value.clipMaskBaseId !== undefined && !isNonEmptyString(value.clipMaskBaseId)) ||
+    (value.semanticTag !== undefined && !SEMANTIC_HTML_TAGS.has(String(value.semanticTag))) ||
+    (value.ariaLabel !== undefined && (typeof value.ariaLabel !== 'string' || value.ariaLabel.length > 512)) ||
+    (value.href !== undefined && (typeof value.href !== 'string' || value.href.length > 2048)) ||
+    (value.layout !== undefined && !isNodeLayoutConfig(value.layout)) ||
+    (value.layoutChild !== undefined && !isNodeLayoutChildConfig(value.layoutChild)) ||
+    (value.responsive !== undefined && !isResponsiveOverrides(value.responsive)) ||
+    (value.tokenBindings !== undefined && !isNodeTokenBindings(value.tokenBindings))
   ) {
     return false;
   }
@@ -487,16 +509,36 @@ function isDesignNodeData(value: unknown): value is DesignNode {
   }
 
   if (value.type === 'component-instance') {
-    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'componentId', 'overrides'])) return false;
+    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'componentId', 'overrides', 'variantSelection', 'slotAssignments'])) return false;
     if (!isNonEmptyString(value.componentId) || !isRecord(value.overrides)) return false;
     if (value.width <= 0 || value.height <= 0) return false;
-    return Object.entries(value.overrides).every(([childId, override]) =>
+    const validOverrides = Object.entries(value.overrides).every(([childId, override]) =>
       isNonEmptyString(childId) &&
       isRecord(override) &&
       hasOnlyKeys(override, ['fill', 'text']) &&
       (override.fill === undefined || (typeof override.fill === 'string' && override.fill.length <= 128)) &&
       (override.text === undefined || (typeof override.text === 'string' && override.text.length <= 10000)),
     );
+    if (!validOverrides) return false;
+    if (value.variantSelection !== undefined) {
+      if (!isRecord(value.variantSelection)) return false;
+      const validSelection = Object.entries(value.variantSelection).every(([axisId, optionId]) =>
+        isNonEmptyString(axisId) && isNonEmptyString(optionId),
+      );
+      if (!validSelection) return false;
+    }
+    if (value.slotAssignments !== undefined) {
+      if (!isRecord(value.slotAssignments)) return false;
+      const validSlots = Object.entries(value.slotAssignments).every(([slotId, assignment]) =>
+        isNonEmptyString(slotId) &&
+        isRecord(assignment) &&
+        hasOnlyKeys(assignment, ['text', 'visible']) &&
+        (assignment.text === undefined || (typeof assignment.text === 'string' && assignment.text.length <= 10000)) &&
+        (assignment.visible === undefined || typeof assignment.visible === 'boolean'),
+      );
+      if (!validSlots) return false;
+    }
+    return true;
   }
 
   return false;
@@ -809,16 +851,22 @@ function isFolioPageData(value: unknown): value is FolioPage {
 }
 
 function isComponentDefinitionData(value: unknown): value is ComponentDefinition {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'document', 'createdAt', 'updatedAt'])) {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'document', 'createdAt', 'updatedAt', 'variants', 'slots'])) {
     return false;
   }
-  return (
-    isNonEmptyString(value.id) &&
-    isNonEmptyString(value.name, 512) &&
-    isFolioDocumentData(value.document) &&
-    isIsoTimestamp(value.createdAt) &&
-    isIsoTimestamp(value.updatedAt)
-  );
+  if (
+    !isNonEmptyString(value.id) ||
+    !isNonEmptyString(value.name, 512) ||
+    !isFolioDocumentData(value.document) ||
+    !isIsoTimestamp(value.createdAt) ||
+    !isIsoTimestamp(value.updatedAt)
+  ) {
+    return false;
+  }
+  const nodeIds = new Set(value.document.nodes.map((node) => node.id));
+  if (value.variants !== undefined && !isComponentVariantsList(value.variants, nodeIds)) return false;
+  if (value.slots !== undefined && !isComponentSlotsList(value.slots, nodeIds)) return false;
+  return true;
 }
 
 export function validateProjectReplacePayload(
@@ -1103,4 +1151,89 @@ export function validateEmptyCommandPayload(
     return invalid('INVALID_PAYLOAD', 'This command requires an empty payload object.');
   }
   return { ok: true, value: {} };
+}
+
+export function validateTokensUpdatePayload(
+  value: unknown,
+): ValidationOutcome<TokensUpdatePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['designTokens', 'unbindTokenIds']) ||
+    !isDesignTokenCollection(data.designTokens)
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Updating design tokens requires a valid token collection.');
+  }
+  let unbindTokenIds: string[] | undefined;
+  if (data.unbindTokenIds !== undefined) {
+    if (!Array.isArray(data.unbindTokenIds) || data.unbindTokenIds.length > 500) {
+      return invalid('INVALID_PAYLOAD', 'unbindTokenIds must be an array of token IDs.');
+    }
+    unbindTokenIds = [];
+    for (const id of data.unbindTokenIds) {
+      if (!isNonEmptyString(id)) return invalid('INVALID_REFERENCE', 'Every unbound token ID must be a non-empty string.');
+      unbindTokenIds.push(id);
+    }
+  }
+  return {
+    ok: true,
+    value: {
+      designTokens: data.designTokens,
+      ...(unbindTokenIds !== undefined ? { unbindTokenIds } : {}),
+    },
+  };
+}
+
+export function validateComponentUpdateContractPayload(
+  value: unknown,
+): ValidationOutcome<ComponentUpdateContractPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['componentId', 'variants', 'slots', 'expectedUpdatedAt', 'expectedMasterDocument']) ||
+    !isNonEmptyString(data.componentId) ||
+    !isIsoTimestamp(data.expectedUpdatedAt) ||
+    !isFolioDocumentData(data.expectedMasterDocument) ||
+    (data.variants === undefined && data.slots === undefined)
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Component contract update requires a component ID, contract changes, and concurrency guard.');
+  }
+  const masterNodeIds = new Set(data.expectedMasterDocument.nodes.map((node) => node.id));
+  if (data.variants !== undefined && !isComponentVariantsList(data.variants, masterNodeIds)) {
+    return invalid('INVALID_PAYLOAD', 'Component variants must be valid and reference existing master nodes.');
+  }
+  if (data.slots !== undefined && !isComponentSlotsList(data.slots, masterNodeIds)) {
+    return invalid('INVALID_PAYLOAD', 'Component slots must be valid and reference existing master nodes.');
+  }
+  return {
+    ok: true,
+    value: {
+      componentId: data.componentId,
+      ...(data.variants !== undefined ? { variants: data.variants as ComponentUpdateContractPayload['variants'] } : {}),
+      ...(data.slots !== undefined ? { slots: data.slots as ComponentUpdateContractPayload['slots'] } : {}),
+      expectedUpdatedAt: data.expectedUpdatedAt,
+      expectedMasterDocument: data.expectedMasterDocument,
+    },
+  };
+}
+
+export function validateCodeUpdateModulesPayload(
+  value: unknown,
+): ValidationOutcome<CodeUpdateModulesPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['codeModules']) || !isCodeModuleList(data.codeModules)) {
+    return invalid('INVALID_PAYLOAD', 'Updating code modules requires a valid list of custom or extension code modules.');
+  }
+  return {
+    ok: true,
+    value: {
+      codeModules: data.codeModules,
+    },
+  };
 }

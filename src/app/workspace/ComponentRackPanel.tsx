@@ -1,5 +1,5 @@
 import type { RefObject } from 'preact';
-import type { ComponentDefinition } from '../../core/document/types';
+import type { ComponentDefinition, DesignTokenCollection } from '../../core/document/types';
 import { ComponentThumbnail } from '../ComponentThumbnail';
 import { StudioIcon } from './StudioIcon';
 
@@ -7,6 +7,7 @@ export interface ComponentRackPanelProps {
   panelRef: RefObject<HTMLElement>;
   open: boolean;
   components: ComponentDefinition[];
+  designTokens?: DesignTokenCollection;
   searchQuery: string;
   canSaveSelection: boolean;
   renamingComponentId: string | null;
@@ -29,6 +30,7 @@ export function ComponentRackPanel({
   panelRef,
   open,
   components,
+  designTokens,
   searchQuery,
   canSaveSelection,
   renamingComponentId,
@@ -124,10 +126,12 @@ export function ComponentRackPanel({
               title={`Insert linked ${component.name} into Main Canvas`}
               onClick={() => onInsertComponent(component)}
             >
-              <ComponentThumbnail component={component} components={components} />
+              <ComponentThumbnail component={component} components={components} designTokens={designTokens} />
               <span class="component-rack-card-name">{component.name}</span>
               <span class="component-rack-card-meta">
-                {component.document.nodes.length} master layer{component.document.nodes.length === 1 ? '' : 's'}
+                {component.document.nodes.length} layer{component.document.nodes.length === 1 ? '' : 's'}
+                {(component.variants?.length ?? 0) > 0 ? ` · ${component.variants!.length} var` : ''}
+                {(component.slots?.length ?? 0) > 0 ? ` · ${component.slots!.length} slot` : ''}
               </span>
             </button>
             <div class="component-rack-card-actions">

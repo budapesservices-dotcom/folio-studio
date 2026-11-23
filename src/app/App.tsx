@@ -90,6 +90,10 @@ import { LayerColorPalette, LayerContextMenu } from './workspace/LayerPopovers';
 import { ComponentCanvasWindow, MainCanvasWindow, NodeLogicWindow } from './workspace/CanvasWindows';
 import { PagesRackPanel } from './workspace/PagesRackPanel';
 import { ComponentRackPanel } from './workspace/ComponentRackPanel';
+import { TokensPanel } from './workspace/TokensPanel';
+import { useDesignSystemActions } from './workspace/useDesignSystemActions';
+import { CodeWorkspaceView } from './workspace/CodeWorkspacePanel';
+import { useCodeWorkspace } from './workspace/useCodeWorkspace';
 import { StatusBar } from './workspace/StatusBar';
 import { ComponentDeletionDialog, ProjectHydrationOverlay } from './workspace/ComponentDeletionDialog';
 
@@ -937,27 +941,38 @@ export function App() {
 
   // Inspector & vector/transform operations
   const updateSelected = (patch: Partial<DesignNode>) => {
-    if (!selectedNode) return;
+    const selectedIds = new Set(selectedNodes.map((n) => n.id));
+    const singleRootContainer =
+      !selectedNode && selectedNodes.length > 1
+        ? (() => {
+            const roots = selectedNodes.filter((n) => !n.parentId || !selectedIds.has(n.parentId));
+            return roots.length === 1 && (roots[0].type === 'frame' || roots[0].type === 'group')
+              ? roots[0]
+              : null;
+          })()
+        : null;
+    const targetNode = selectedNode ?? singleRootContainer;
+    if (!targetNode) return;
     const safePatch = { ...patch };
-    if ('width' in patch) safePatch.width = normalizePositiveDimension(Number(patch.width), selectedNode.width);
-    if ('height' in patch) safePatch.height = normalizePositiveDimension(Number(patch.height), selectedNode.height);
+    if ('width' in patch) safePatch.width = normalizePositiveDimension(Number(patch.width), targetNode.width);
+    if ('height' in patch) safePatch.height = normalizePositiveDimension(Number(patch.height), targetNode.height);
     if ('opacity' in patch) {
       const rawOpacity = Number(patch.opacity);
-      safePatch.opacity = Number.isFinite(rawOpacity) ? Math.min(1, Math.max(0, rawOpacity)) : selectedNode.opacity;
+      safePatch.opacity = Number.isFinite(rawOpacity) ? Math.min(1, Math.max(0, rawOpacity)) : targetNode.opacity;
     }
 
     let nextNode: DesignNode;
-    if (selectedNode.type === 'path' && ('width' in safePatch || 'height' in safePatch)) {
-      const nextX = 'x' in safePatch && typeof safePatch.x === 'number' ? safePatch.x : selectedNode.x;
-      const nextY = 'y' in safePatch && typeof safePatch.y === 'number' ? safePatch.y : selectedNode.y;
-      const nextW = typeof safePatch.width === 'number' ? safePatch.width : selectedNode.width;
-      const nextH = typeof safePatch.height === 'number' ? safePatch.height : selectedNode.height;
-      const scaled = scalePathNodeGeometry(selectedNode, nextX, nextY, nextW, nextH);
+    if (targetNode.type === 'path' && ('width' in safePatch || 'height' in safePatch)) {
+      const nextX = 'x' in safePatch && typeof safePatch.x === 'number' ? safePatch.x : targetNode.x;
+      const nextY = 'y' in safePatch && typeof safePatch.y === 'number' ? safePatch.y : targetNode.y;
+      const nextW = typeof safePatch.width === 'number' ? safePatch.width : targetNode.width;
+      const nextH = typeof safePatch.height === 'number' ? safePatch.height : targetNode.height;
+      const scaled = scalePathNodeGeometry(targetNode, nextX, nextY, nextW, nextH);
       nextNode = { ...scaled, ...safePatch, points: scaled.points, subpaths: scaled.subpaths } as DesignNode;
     } else {
-      nextNode = { ...selectedNode, ...safePatch } as DesignNode;
+      nextNode = { ...targetNode, ...safePatch } as DesignNode;
     }
-    focusedCommandClient.editNode(nextNode, 'inspector:' + selectedNode.id, 'Edit layer properties');
+    focusedCommandClient.editNode(nextNode, 'inspector:' + targetNode.id, 'Edit layer properties');
   };
 
   const updateSelectedStyle = (patch: Record<string, string | number>) => {
@@ -1353,6 +1368,27 @@ export function App() {
     setNotice,
   });
 
+  const designSystem = useDesignSystemActions({
+    project: state.project,
+    focusedDocument,
+    selectedNode,
+    mainCommandClient,
+    focusedCommandClient,
+    setNotice,
+  });
+
+  const codeWorkspace = useCodeWorkspace({
+    project: state.project,
+    selectedNodeId: state.selectedNodeId,
+    activeBreakpoint: designSystem.activeBreakpoint,
+    mainCommandClient,
+    onNotice: setNotice,
+    onJumpToCanvasNode: () => {
+      setActiveEditorId('main');
+      windows.openMainCanvas();
+    },
+  });
+
   const mainCanvasVisible = !windows.canvasClosed
     && !windows.canvasMinimized
     && !(windows.componentCanvasOpen && !windows.componentCanvasFloating && !windows.canvasFloating)
@@ -1396,10 +1432,12 @@ export function App() {
         projectFileInputRef={projectFileInputRef}
         pagesRackToggleRef={pagesRackToggleRef}
         componentRackToggleRef={componentRackToggleRef}
+        tokensRackToggleRef={designSystem.tokensRackToggleRef}
         projectNameEditing={projectNameEditing}
         projectNameDraft={projectNameDraft}
         pagesRackOpen={windows.pagesRackOpen}
         componentRackOpen={windows.componentRackOpen}
+        tokensRackOpen={designSystem.tokensRackOpen}
         layersVisible={windows.layersVisible}
         inspectorVisible={windows.inspectorVisible}
         canvasClosed={windows.canvasClosed}
@@ -1410,6 +1448,7 @@ export function App() {
         nodeLogicOpen={windows.nodeLogicOpen}
         nodeLogicClosed={windows.nodeLogicClosed}
         nodeLogicMinimized={windows.nodeLogicMinimized}
+        codeWorkspaceOpen={codeWorkspace.open}
         shortcutsModalOpen={shortcutsModalOpen}
         toolbarHintStore={toolbarHintStore}
         onToggleFileMenu={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); setHelpMenuOpen(false); setToolRackOpen(null); }}
@@ -1445,6 +1484,7 @@ export function App() {
             windows.focusWindow('pages');
             windows.setPagesRackOpen(true);
             closeComponentRack();
+            designSystem.closeTokensRack();
           }
         }}
         onToggleComponentRack={() => {
@@ -1453,6 +1493,16 @@ export function App() {
           else {
             windows.setComponentRackOpen(true);
             closePagesRack();
+            designSystem.closeTokensRack();
+          }
+        }}
+        onToggleTokensRack={() => {
+          setToolRackOpen(null);
+          if (designSystem.tokensRackOpen) designSystem.closeTokensRack();
+          else {
+            designSystem.setTokensRackOpen(true);
+            closePagesRack();
+            closeComponentRack();
           }
         }}
         onToggleLayersVisible={() => windows.setLayersVisible((value) => !value)}
@@ -1474,6 +1524,7 @@ export function App() {
           if (windows.nodeLogicClosed || windows.nodeLogicMinimized) windows.openNodeLogic();
           else { windows.setNodeLogicClosed(true); windows.setNodeLogicMinimized(false); }
         }}
+        onToggleCodeWorkspace={codeWorkspace.toggleOpen}
         onEnterFullscreen={enterFullscreen}
         onUpdateToolbarHint={updateToolbarHint}
       />
@@ -1574,6 +1625,9 @@ export function App() {
         zIndex={getWindowZIndex(windows.windowOrder, 'main-canvas')}
         document={activeDocument}
         components={state.project.components}
+        designTokens={designSystem.designTokens}
+        activeBreakpoint={designSystem.activeBreakpoint}
+        onChangeBreakpoint={designSystem.setActiveBreakpoint}
         selectedNodeIds={state.selectedNodeIds}
         selectedNodes={selectedNodes}
         toolId={workspaceTools.main}
@@ -1638,6 +1692,7 @@ export function App() {
         zIndex={getWindowZIndex(windows.windowOrder, 'component-canvas')}
         document={componentDocument}
         components={state.project.components}
+        designTokens={designSystem.designTokens}
         editingComponent={componentMaster.editingComponent}
         selectedNodeIds={componentState.selectedNodeIds}
         selectedComponentNodes={componentMaster.selectedComponentNodes}
@@ -1750,7 +1805,10 @@ export function App() {
         selectedCount={focusedEditor.state.selectedNodeIds.length}
         canRemoveFromCanvas={selectionSourceRef.current !== 'layers'}
         selectedInstanceComponent={selectedInstanceComponent}
+        editingMasterComponent={componentMaster.editingComponent}
         instanceOverrideTargets={instanceOverrideTargets}
+        activeBreakpoint={designSystem.activeBreakpoint}
+        designTokens={designSystem.designTokens}
         defaultFillColor={toolOptions.fillColor}
         renderIcon={(name) => <StudioIcon name={name} />}
         onStartResize={panelResize.startPanelResize}
@@ -1761,14 +1819,18 @@ export function App() {
           componentCommandClient.commitEdit();
         }}
         onHoverHint={() =>
-          updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, appearance and options.')
+          updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, semantics, Auto-Layout, tokens and contract.')
         }
         onRemoveFromCanvas={(nodeId) => {
           focusedCommandClient.setNodesCanvasState([nodeId], false, 'Remove from canvas');
         }}
         onUpdateSelected={updateSelected}
         onUpdateSelectedStyle={updateSelectedStyle}
+        onApplyAutoLayout={designSystem.applyAutoLayout}
         onUpdateInstanceOverride={updateInstanceOverride}
+        onUpdateInstanceVariant={designSystem.updateInstanceVariant}
+        onUpdateInstanceSlot={designSystem.updateInstanceSlot}
+        onUpdateMasterContract={designSystem.updateMasterContract}
         onResetInstanceOverrides={resetInstanceOverrides}
         onDetachInstance={detachSelectedInstance}
         onConvertToPath={handleConvertToPath}
@@ -1797,6 +1859,7 @@ export function App() {
         panelRef={componentRackRef}
         open={windows.componentRackOpen}
         components={ownedComponents}
+        designTokens={designSystem.designTokens}
         searchQuery={componentRackSearch}
         canSaveSelection={selectedNodes.length > 0}
         renamingComponentId={componentMaster.renamingComponentId}
@@ -1816,6 +1879,23 @@ export function App() {
         onCancelRename={() => componentMaster.setRenamingComponentId(null)}
         onDuplicateComponent={componentMaster.duplicateComponent}
         onDeleteComponent={(component) => { void componentMaster.deleteComponent(component); }}
+      />
+
+      <TokensPanel
+        panelRef={designSystem.tokensRackRef}
+        open={designSystem.tokensRackOpen}
+        project={state.project}
+        tokens={designSystem.designTokens}
+        onUpdateTokens={designSystem.updateDesignTokens}
+        onCopyNotice={setNotice}
+        onClose={designSystem.closeTokensRack}
+      />
+
+      <CodeWorkspaceView
+        projectName={state.project.metadata.name}
+        pages={pages}
+        themes={designSystem.designTokens.themes}
+        workspace={codeWorkspace}
       />
 
       <LayerColorPalette

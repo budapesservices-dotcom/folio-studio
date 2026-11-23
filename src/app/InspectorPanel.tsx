@@ -1,7 +1,11 @@
 import type { JSX, RefObject } from 'preact';
 import type {
+  BreakpointId,
   ComponentDefinition,
+  ComponentSlotDefinition,
+  ComponentVariantAxis,
   DesignNode,
+  DesignTokenCollection,
   EllipseNode,
   FrameNode,
   PathNode,
@@ -12,6 +16,8 @@ import { PANEL_RESIZE_CONSTRAINTS, type ResizablePanelId } from './panelResize';
 import { normalizePositiveDimension } from './editorReducer';
 import type { EditorTarget } from './editorContext';
 import type { CanvasToolId } from '../core/tools/operationContract';
+import { InspectorWebLayoutSection } from './workspace/InspectorWebLayoutSection';
+import { InspectorComponentContractSection } from './workspace/InspectorComponentContractSection';
 
 export const INSPECTOR_FONT_FAMILIES = [
   { label: 'Inter (UI Sans)', value: 'Inter, system-ui, sans-serif' },
@@ -37,7 +43,10 @@ export interface InspectorPanelProps {
   selectedCount: number;
   canRemoveFromCanvas: boolean;
   selectedInstanceComponent: ComponentDefinition | null;
+  editingMasterComponent?: ComponentDefinition | null;
   instanceOverrideTargets: InspectorOverrideTargets | null;
+  activeBreakpoint: BreakpointId;
+  designTokens: DesignTokenCollection;
   defaultFillColor: string;
   renderIcon: (name: 'trash' | 'layers' | 'cursor') => JSX.Element;
   onStartResize: (panel: ResizablePanelId, event: JSX.TargetedMouseEvent<HTMLDivElement>) => void;
@@ -48,7 +57,14 @@ export interface InspectorPanelProps {
   onRemoveFromCanvas: (nodeId: string) => void;
   onUpdateSelected: (patch: Partial<DesignNode>) => void;
   onUpdateSelectedStyle: (patch: Record<string, string | number>) => void;
+  onApplyAutoLayout: (containerId: string) => void;
   onUpdateInstanceOverride: (childNodeId: string, patch: { fill?: string; text?: string }) => void;
+  onUpdateInstanceVariant: (axisId: string, optionId: string) => void;
+  onUpdateInstanceSlot: (slotId: string, patch: { text?: string; visible?: boolean }) => void;
+  onUpdateMasterContract: (
+    component: ComponentDefinition,
+    patch: { variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[] },
+  ) => void;
   onResetInstanceOverrides: () => void;
   onDetachInstance: () => void;
   onConvertToPath: (target: EditorTarget) => void;
@@ -78,7 +94,10 @@ export function InspectorPanel({
   selectedCount,
   canRemoveFromCanvas,
   selectedInstanceComponent,
+  editingMasterComponent = null,
   instanceOverrideTargets,
+  activeBreakpoint,
+  designTokens,
   defaultFillColor,
   renderIcon,
   onStartResize,
@@ -89,7 +108,11 @@ export function InspectorPanel({
   onRemoveFromCanvas,
   onUpdateSelected,
   onUpdateSelectedStyle,
+  onApplyAutoLayout,
   onUpdateInstanceOverride,
+  onUpdateInstanceVariant,
+  onUpdateInstanceSlot,
+  onUpdateMasterContract,
   onResetInstanceOverrides,
   onDetachInstance,
   onConvertToPath,
@@ -104,6 +127,14 @@ export function InspectorPanel({
     (node) => node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame',
   );
   const hasPathsInMulti = selectedNodes.some((node) => node.type === 'path');
+  const selectedIdsSet = new Set(selectedNodes.map((n) => n.id));
+  const selectedRootNodes = selectedNodes.filter((n) => !n.parentId || !selectedIdsSet.has(n.parentId));
+  const singleRootContainer =
+    !selectedNode &&
+    selectedRootNodes.length === 1 &&
+    (selectedRootNodes[0].type === 'frame' || selectedRootNodes[0].type === 'group')
+      ? selectedRootNodes[0]
+      : null;
 
   return (
     <aside
@@ -605,6 +636,23 @@ export function InspectorPanel({
             )}
           </section>
 
+          <InspectorWebLayoutSection
+            selectedNode={selectedNode}
+            activeBreakpoint={activeBreakpoint}
+            designTokens={designTokens}
+            onUpdateSelected={onUpdateSelected}
+            onApplyAutoLayout={onApplyAutoLayout}
+          />
+
+          <InspectorComponentContractSection
+            instanceNode={selectedNode.type === 'component-instance' ? selectedNode : null}
+            instanceComponent={selectedNode.type === 'component-instance' ? selectedInstanceComponent : null}
+            editingMasterComponent={activeEditorId === 'component' ? editingMasterComponent : null}
+            onUpdateInstanceVariant={onUpdateInstanceVariant}
+            onUpdateInstanceSlot={onUpdateInstanceSlot}
+            onUpdateMasterContract={onUpdateMasterContract}
+          />
+
           <section class="property-section last-section">
             <div class="section-title">Layer options</div>
             <label class="toggle-row">
@@ -626,27 +674,69 @@ export function InspectorPanel({
           </section>
         </div>
       ) : selectedCount > 1 ? (
-        <div class="inspector-empty multi-inspector">
-          <div class="empty-icon">{renderIcon('layers')}</div>
-          <strong>{selectedCount} layers selected</strong>
-          <p>Drag to move, use the resize handles, align above the canvas, or run a batch action below.</p>
-          <div class="inspector-multi-actions">
-            <button type="button" onClick={onDuplicateSelection}>
-              Duplicate (Ctrl+D)
-            </button>
-            <button type="button" onClick={onCopySelection}>
-              Copy (Ctrl+C)
-            </button>
-            {hasConvertibleInMulti && (
-              <button type="button" onClick={() => onConvertToPath(activeEditorId)}>
-                Convert to Vector Path
+        singleRootContainer ? (
+          <div class="inspector-content">
+            <section class="property-section">
+              <div class="section-title-row">
+                <span class="section-title">{singleRootContainer.name}</span>
+                <span class="contract-card-meta">{selectedCount} layers</span>
+              </div>
+              <div class="inspector-multi-actions">
+                <button type="button" onClick={onDuplicateSelection}>
+                  Duplicate (Ctrl+D)
+                </button>
+                <button type="button" onClick={onCopySelection}>
+                  Copy (Ctrl+C)
+                </button>
+              </div>
+            </section>
+            <InspectorWebLayoutSection
+              selectedNode={singleRootContainer}
+              activeBreakpoint={activeBreakpoint}
+              designTokens={designTokens}
+              onUpdateSelected={onUpdateSelected}
+              onApplyAutoLayout={onApplyAutoLayout}
+            />
+          </div>
+        ) : (
+          <div class="inspector-empty multi-inspector">
+            <div class="empty-icon">{renderIcon('layers')}</div>
+            <strong>{selectedCount} layers selected</strong>
+            <p>Drag to move, use the resize handles, align above the canvas, or run a batch action below.</p>
+            <div class="inspector-multi-actions">
+              <button type="button" onClick={onDuplicateSelection}>
+                Duplicate (Ctrl+D)
               </button>
-            )}
-            {hasPathsInMulti && (
-              <button type="button" onClick={() => onSimplifyPath(activeEditorId)}>
-                Simplify Paths
+              <button type="button" onClick={onCopySelection}>
+                Copy (Ctrl+C)
               </button>
-            )}
+              {hasConvertibleInMulti && (
+                <button type="button" onClick={() => onConvertToPath(activeEditorId)}>
+                  Convert to Vector Path
+                </button>
+              )}
+              {hasPathsInMulti && (
+                <button type="button" onClick={() => onSimplifyPath(activeEditorId)}>
+                  Simplify Paths
+                </button>
+              )}
+            </div>
+          </div>
+        )
+      ) : activeEditorId === 'component' && editingMasterComponent ? (
+        <div class="inspector-content">
+          <InspectorComponentContractSection
+            instanceNode={null}
+            instanceComponent={null}
+            editingMasterComponent={editingMasterComponent}
+            onUpdateInstanceVariant={onUpdateInstanceVariant}
+            onUpdateInstanceSlot={onUpdateInstanceSlot}
+            onUpdateMasterContract={onUpdateMasterContract}
+          />
+          <div class="inspector-empty">
+            <div class="empty-icon">{renderIcon('cursor')}</div>
+            <strong>Master: {editingMasterComponent.name}</strong>
+            <p>Select a layer inside Component Canvas to edit its styles, semantics, or layout.</p>
           </div>
         </div>
       ) : (

@@ -2,11 +2,14 @@ import {
   FOLIO_FORMAT,
   FOLIO_FORMAT_VERSION,
   FOLIO_LEGACY_FORMAT_VERSION,
+  type ComponentDefinition,
   type DesignNode,
+  type DesignTokenCollection,
   type FolioDocument,
   type FolioProject,
   type FolioProjectV1,
 } from './types';
+import { validateDesignTokenCollection } from './tokens';
 
 export interface ValidationResult {
   ok: boolean;
@@ -20,6 +23,25 @@ export interface LegacyValidationResult {
   error?: string;
 }
 
+export const SEMANTIC_HTML_TAGS = new Set([
+  'div', 'section', 'header', 'footer', 'nav', 'main', 'article', 'aside',
+  'button', 'a', 'h1', 'h2', 'h3', 'p', 'span', 'ul', 'li', 'form', 'input',
+]);
+
+const BREAKPOINT_IDS = new Set(['desktop', 'tablet', 'mobile']);
+const LAYOUT_MODES = new Set(['none', 'flex', 'grid']);
+const LAYOUT_DIRECTIONS = new Set(['row', 'column']);
+const LAYOUT_WRAPS = new Set(['nowrap', 'wrap']);
+const LAYOUT_JUSTIFY = new Set(['start', 'center', 'end', 'space-between', 'space-around']);
+const LAYOUT_ALIGN = new Set(['start', 'center', 'end', 'stretch']);
+const LAYOUT_SIZING_MODES = new Set(['fixed', 'hug', 'fill']);
+const ALIGN_SELF_VALUES = new Set(['auto', 'start', 'center', 'end', 'stretch']);
+const HORIZONTAL_CONSTRAINTS = new Set(['left', 'right', 'left-right', 'center', 'scale']);
+const VERTICAL_CONSTRAINTS = new Set(['top', 'bottom', 'top-bottom', 'center', 'scale']);
+const TOKEN_LAYERS = new Set(['primitive', 'semantic']);
+const TOKEN_CATEGORIES = new Set(['color', 'spacing', 'radius', 'typography']);
+const TOKEN_UNITS = new Set(['px', 'rem', '%', 'em']);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -30,6 +52,193 @@ function isString(value: unknown): value is string {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNodePadding(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.top) && value.top >= 0 &&
+    isFiniteNumber(value.right) && value.right >= 0 &&
+    isFiniteNumber(value.bottom) && value.bottom >= 0 &&
+    isFiniteNumber(value.left) && value.left >= 0
+  );
+}
+
+export function isNodeLayoutConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    LAYOUT_MODES.has(String(value.mode)) &&
+    LAYOUT_DIRECTIONS.has(String(value.direction)) &&
+    (value.wrap === undefined || LAYOUT_WRAPS.has(String(value.wrap))) &&
+    (value.justifyContent === undefined || LAYOUT_JUSTIFY.has(String(value.justifyContent))) &&
+    (value.alignItems === undefined || LAYOUT_ALIGN.has(String(value.alignItems))) &&
+    isFiniteNumber(value.gap) && value.gap >= 0 &&
+    (value.columnGap === undefined || (isFiniteNumber(value.columnGap) && value.columnGap >= 0)) &&
+    (value.rowGap === undefined || (isFiniteNumber(value.rowGap) && value.rowGap >= 0)) &&
+    (value.gridColumns === undefined || (isFiniteNumber(value.gridColumns) && value.gridColumns >= 1 && value.gridColumns <= 24)) &&
+    isNodePadding(value.padding)
+  );
+}
+
+export function isNodeLayoutChildConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value.widthMode === undefined || LAYOUT_SIZING_MODES.has(String(value.widthMode))) &&
+    (value.heightMode === undefined || LAYOUT_SIZING_MODES.has(String(value.heightMode))) &&
+    (value.alignSelf === undefined || ALIGN_SELF_VALUES.has(String(value.alignSelf))) &&
+    (value.flexGrow === undefined || (isFiniteNumber(value.flexGrow) && value.flexGrow >= 0)) &&
+    (value.minWidth === undefined || (isFiniteNumber(value.minWidth) && value.minWidth >= 0)) &&
+    (value.maxWidth === undefined || (isFiniteNumber(value.maxWidth) && value.maxWidth >= 0)) &&
+    (value.minHeight === undefined || (isFiniteNumber(value.minHeight) && value.minHeight >= 0)) &&
+    (value.maxHeight === undefined || (isFiniteNumber(value.maxHeight) && value.maxHeight >= 0)) &&
+    (value.constraints === undefined || (
+      isRecord(value.constraints) &&
+      HORIZONTAL_CONSTRAINTS.has(String(value.constraints.horizontal)) &&
+      VERTICAL_CONSTRAINTS.has(String(value.constraints.vertical))
+    ))
+  );
+}
+
+export function isResponsiveOverrides(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(([bp, override]) => {
+    if (!BREAKPOINT_IDS.has(bp) || !isRecord(override)) return false;
+    return (
+      (override.visible === undefined || typeof override.visible === 'boolean') &&
+      (override.width === undefined || (isFiniteNumber(override.width) && override.width > 0)) &&
+      (override.height === undefined || (isFiniteNumber(override.height) && override.height > 0)) &&
+      (override.layoutDirection === undefined || LAYOUT_DIRECTIONS.has(String(override.layoutDirection))) &&
+      (override.gridColumns === undefined || (isFiniteNumber(override.gridColumns) && override.gridColumns >= 1 && override.gridColumns <= 24)) &&
+      (override.gap === undefined || (isFiniteNumber(override.gap) && override.gap >= 0)) &&
+      (override.padding === undefined || isNodePadding(override.padding))
+    );
+  });
+}
+
+export function isNodeTokenBindings(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const allowed = new Set(['fill', 'stroke', 'radius', 'gap', 'padding', 'fontSize']);
+  return Object.entries(value).every(([key, tokenId]) =>
+    allowed.has(key) && (tokenId === undefined || (isString(tokenId) && tokenId.length > 0)),
+  );
+}
+
+function isDesignTokenValue(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.kind === 'alias') {
+    return isString(value.tokenId) && value.tokenId.trim().length > 0;
+  }
+  if (value.kind === 'literal') {
+    const validRaw = isString(value.value) || isFiniteNumber(value.value);
+    const validUnit = value.unit === undefined || TOKEN_UNITS.has(String(value.unit));
+    return validRaw && validUnit;
+  }
+  return false;
+}
+
+export function isDesignTokenCollection(value: unknown): value is DesignTokenCollection {
+  if (!isRecord(value)) return false;
+  if (!isString(value.activeThemeId) || !value.activeThemeId.trim()) return false;
+  if (!Array.isArray(value.themes) || value.themes.length === 0) return false;
+  if (!Array.isArray(value.tokens)) return false;
+
+  for (const theme of value.themes) {
+    if (!isRecord(theme) || !isString(theme.id) || !theme.id.trim() || !isString(theme.name) || !theme.name.trim()) {
+      return false;
+    }
+  }
+
+  for (const token of value.tokens) {
+    if (
+      !isRecord(token) ||
+      !isString(token.id) || !token.id.trim() ||
+      !isString(token.name) || !token.name.trim() ||
+      !TOKEN_LAYERS.has(String(token.layer)) ||
+      !TOKEN_CATEGORIES.has(String(token.category)) ||
+      !isDesignTokenValue(token.value) ||
+      (token.description !== undefined && !isString(token.description))
+    ) {
+      return false;
+    }
+    if (token.themeValues !== undefined) {
+      if (!isRecord(token.themeValues)) return false;
+      for (const themeVal of Object.values(token.themeValues)) {
+        if (!isDesignTokenValue(themeVal)) return false;
+      }
+    }
+  }
+
+  return validateDesignTokenCollection(value as unknown as DesignTokenCollection).ok;
+}
+
+function isComponentVariantOverride(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value.fill === undefined || isString(value.fill)) &&
+    (value.stroke === undefined || isString(value.stroke)) &&
+    (value.text === undefined || isString(value.text)) &&
+    (value.visible === undefined || typeof value.visible === 'boolean')
+  );
+}
+
+export function isComponentVariantsList(value: unknown, validNodeIds?: ReadonlySet<string>): boolean {
+  if (!Array.isArray(value)) return false;
+  const axisIds = new Set<string>();
+  for (const axis of value) {
+    if (
+      !isRecord(axis) ||
+      !isString(axis.id) || !axis.id.trim() ||
+      !isString(axis.name) || !axis.name.trim() ||
+      !isString(axis.defaultOptionId) || !axis.defaultOptionId.trim() ||
+      !Array.isArray(axis.options) || axis.options.length === 0
+    ) {
+      return false;
+    }
+    if (axisIds.has(axis.id)) return false;
+    axisIds.add(axis.id);
+
+    const optionIds = new Set<string>();
+    for (const option of axis.options) {
+      if (
+        !isRecord(option) ||
+        !isString(option.id) || !option.id.trim() ||
+        !isString(option.label) || !option.label.trim() ||
+        !isRecord(option.overrides)
+      ) {
+        return false;
+      }
+      if (optionIds.has(option.id)) return false;
+      optionIds.add(option.id);
+
+      for (const [nodeId, patch] of Object.entries(option.overrides)) {
+        if (!isString(nodeId) || !nodeId.trim() || !isComponentVariantOverride(patch)) return false;
+        if (validNodeIds && !validNodeIds.has(nodeId)) return false;
+      }
+    }
+    if (!optionIds.has(axis.defaultOptionId)) return false;
+  }
+  return true;
+}
+
+export function isComponentSlotsList(value: unknown, validNodeIds?: ReadonlySet<string>): boolean {
+  if (!Array.isArray(value)) return false;
+  const slotIds = new Set<string>();
+  for (const slot of value) {
+    if (
+      !isRecord(slot) ||
+      !isString(slot.id) || !slot.id.trim() ||
+      !isString(slot.name) || !slot.name.trim() ||
+      !isString(slot.targetNodeId) || !slot.targetNodeId.trim() ||
+      (slot.description !== undefined && !isString(slot.description)) ||
+      (slot.defaultText !== undefined && !isString(slot.defaultText))
+    ) {
+      return false;
+    }
+    if (slotIds.has(slot.id)) return false;
+    slotIds.add(slot.id);
+    if (validNodeIds && !validNodeIds.has(slot.targetNodeId)) return false;
+  }
+  return true;
 }
 
 function isCommonNode(value: Record<string, unknown>): boolean {
@@ -47,7 +256,14 @@ function isCommonNode(value: Record<string, unknown>): boolean {
     (value.layerColor === undefined || isString(value.layerColor)) &&
     (value.onCanvas === undefined || typeof value.onCanvas === 'boolean') &&
     (value.parentId === undefined || value.parentId === null || (isString(value.parentId) && value.parentId.length > 0)) &&
-    (value.clipMaskBaseId === undefined || (isString(value.clipMaskBaseId) && value.clipMaskBaseId.length > 0))
+    (value.clipMaskBaseId === undefined || (isString(value.clipMaskBaseId) && value.clipMaskBaseId.length > 0)) &&
+    (value.semanticTag === undefined || SEMANTIC_HTML_TAGS.has(String(value.semanticTag))) &&
+    (value.ariaLabel === undefined || isString(value.ariaLabel)) &&
+    (value.href === undefined || isString(value.href)) &&
+    (value.layout === undefined || isNodeLayoutConfig(value.layout)) &&
+    (value.layoutChild === undefined || isNodeLayoutChildConfig(value.layoutChild)) &&
+    (value.responsive === undefined || isResponsiveOverrides(value.responsive)) &&
+    (value.tokenBindings === undefined || isNodeTokenBindings(value.tokenBindings))
   );
 }
 
@@ -164,11 +380,31 @@ function isDesignNode(value: unknown): value is DesignNode {
     if (!isString(value.componentId) || !value.componentId || !isRecord(value.overrides) ||
         !isFiniteNumber(value.width) || value.width <= 0 ||
         !isFiniteNumber(value.height) || value.height <= 0) return false;
-    return Object.values(value.overrides).every((override) =>
+    const validOverrides = Object.values(value.overrides).every((override) =>
       isRecord(override) &&
       (override.fill === undefined || isString(override.fill)) &&
       (override.text === undefined || isString(override.text)),
     );
+    if (!validOverrides) return false;
+    if (value.variantSelection !== undefined) {
+      if (!isRecord(value.variantSelection)) return false;
+      const validSelection = Object.entries(value.variantSelection).every(([axisId, optionId]) =>
+        isString(axisId) && axisId.length > 0 && isString(optionId) && optionId.length > 0,
+      );
+      if (!validSelection) return false;
+    }
+    if (value.slotAssignments !== undefined) {
+      if (!isRecord(value.slotAssignments)) return false;
+      const validSlots = Object.entries(value.slotAssignments).every(([slotId, assignment]) =>
+        isString(slotId) && slotId.length > 0 &&
+        isRecord(assignment) &&
+        (assignment.text === undefined || isString(assignment.text)) &&
+        (assignment.fill === undefined || isString(assignment.fill)) &&
+        (assignment.visible === undefined || typeof assignment.visible === 'boolean'),
+      );
+      if (!validSlots) return false;
+    }
+    return true;
   }
 
   return false;
@@ -273,6 +509,47 @@ function isAssetReference(value: unknown): boolean {
     isString(value.createdAt);
 }
 
+const CODE_MODULE_LANGUAGES = new Set(['html', 'css', 'tsx', 'ts', 'js']);
+const CODE_MODULE_PATH_PATTERN = /^[a-zA-Z0-9._/-]+$/;
+
+export function isCodeModuleRecord(value: unknown): value is import('./types').CodeModuleRecord {
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.trim().length === 0 || value.id.length > 128 ||
+    !isString(value.path) || value.path.trim().length === 0 || value.path.length > 240 ||
+    value.path.includes('..') || value.path.startsWith('/') || !CODE_MODULE_PATH_PATTERN.test(value.path) ||
+    !isString(value.language) || !CODE_MODULE_LANGUAGES.has(value.language) ||
+    (value.mapping !== 'custom' && value.mapping !== 'extension') ||
+    !isString(value.content) || value.content.length > 200_000 ||
+    !isString(value.updatedAt) || value.updatedAt.trim().length === 0
+  ) {
+    return false;
+  }
+  if (value.targetNodeId !== undefined && (!isString(value.targetNodeId) || value.targetNodeId.trim().length === 0)) {
+    return false;
+  }
+  if (value.targetPageId !== undefined && (!isString(value.targetPageId) || value.targetPageId.trim().length === 0)) {
+    return false;
+  }
+  if (value.description !== undefined && (!isString(value.description) || value.description.length > 512)) {
+    return false;
+  }
+  return true;
+}
+
+export function isCodeModuleList(value: unknown): value is import('./types').CodeModuleRecord[] {
+  if (!Array.isArray(value) || value.length > 100) return false;
+  const ids = new Set<string>();
+  const paths = new Set<string>();
+  for (const item of value) {
+    if (!isCodeModuleRecord(item)) return false;
+    if (ids.has(item.id) || paths.has(item.path)) return false;
+    ids.add(item.id);
+    paths.add(item.path);
+  }
+  return true;
+}
+
 export function validateProject(input: unknown): ValidationResult {
   const envelopeError = validateEnvelope(input);
   if (envelopeError) return { ok: false, error: envelopeError };
@@ -290,6 +567,14 @@ export function validateProject(input: unknown): ValidationResult {
       !Array.isArray(input.logicGraphs) ||
       !Array.isArray(input.assets)) {
     return { ok: false, error: 'Project pages, components, logic graphs or assets are missing.' };
+  }
+
+  if (input.designTokens !== undefined && !isDesignTokenCollection(input.designTokens)) {
+    return { ok: false, error: 'Project design tokens contain invalid values, missing themes, or cyclic/incompatible aliases.' };
+  }
+
+  if (input.codeModules !== undefined && !isCodeModuleList(input.codeModules)) {
+    return { ok: false, error: 'Project code modules contain invalid paths, duplicate IDs, or unsupported mappings.' };
   }
 
   const pageIds = new Set<string>();
@@ -320,6 +605,13 @@ export function validateProject(input: unknown): ValidationResult {
       return { ok: false, error: 'One or more component definitions are invalid.' };
     }
     if (componentIds.has(component.id)) return { ok: false, error: 'Component IDs must be unique within a project.' };
+    const masterNodeIds = new Set((component.document as FolioDocument).nodes.map((node) => node.id));
+    if (component.variants !== undefined && !isComponentVariantsList(component.variants, masterNodeIds)) {
+      return { ok: false, error: `Component "${component.name}" contains invalid variant definitions.` };
+    }
+    if (component.slots !== undefined && !isComponentSlotsList(component.slots, masterNodeIds)) {
+      return { ok: false, error: `Component "${component.name}" contains invalid slot definitions.` };
+    }
     componentIds.add(component.id);
   }
 
@@ -330,14 +622,14 @@ export function validateProject(input: unknown): ValidationResult {
     }
   }
 
-  const knownComponentIds = new Set((input.components as Array<{ id: string }>).map((component) => component.id));
+  const componentsById = new Map((input.components as unknown as ComponentDefinition[]).map((component) => [component.id, component]));
   for (const page of input.pages as Array<{ document: FolioDocument }>) {
     for (const node of page.document.nodes) {
       if (node.type === 'component-instance') {
-        if (!knownComponentIds.has(node.componentId)) {
+        const master = componentsById.get(node.componentId);
+        if (!master) {
           return { ok: false, error: `A page references missing component: ${node.componentId}.` };
         }
-        const master = (input.components as Array<{ id: string; document: FolioDocument }>).find((item) => item.id === node.componentId)!;
         const childIds = new Set(master.document.nodes.map((child) => child.id));
         if (Object.keys(node.overrides).some((childId) => !childIds.has(childId))) {
           return { ok: false, error: `An instance of ${node.componentId} contains an override for a missing master layer.` };

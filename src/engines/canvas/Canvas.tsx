@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
-import type { ComponentDefinition, DesignNode, FolioDocument, PathNode, TextNode } from '../../core/document/types';
+import type {
+  BreakpointId,
+  ComponentDefinition,
+  DesignNode,
+  DesignTokenCollection,
+  FolioDocument,
+  PathNode,
+  TextNode,
+} from '../../core/document/types';
 import { buildFrameClipAncestorMap, buildLayerClipMaskMap, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
+import { computeAutoLayoutNodes, getBreakpointCanvasWidth } from '../layout/autoLayout';
 import {
   decomposeNodesForShapeBuilder,
   findNearestSegmentHit,
@@ -42,6 +51,8 @@ import './canvas.css';
 interface CanvasProps {
   document: FolioDocument;
   components?: ComponentDefinition[];
+  designTokens?: DesignTokenCollection;
+  activeBreakpoint?: BreakpointId;
   selectedNodeIds: string[];
   toolId: CanvasToolId;
   workspace?: ToolWorkspaceScope;
@@ -339,6 +350,8 @@ function HudBadge({
 export function Canvas({
   document,
   components = [],
+  designTokens,
+  activeBreakpoint = 'desktop',
   selectedNodeIds,
   toolId,
   workspace = 'main',
@@ -565,11 +578,25 @@ export function Canvas({
     setPreviewNodes(nodes);
   };
 
+  const effectiveDocWidth = useMemo(
+    () => (workspace === 'main' ? getBreakpointCanvasWidth(document.width, activeBreakpoint) : document.width),
+    [workspace, document.width, activeBreakpoint],
+  );
+
+  const resolvedLayoutNodes = useMemo(
+    () => computeAutoLayoutNodes(document.nodes, {
+      breakpoint: activeBreakpoint,
+      tokens: designTokens,
+      canvasWidth: effectiveDocWidth,
+    }),
+    [document.nodes, activeBreakpoint, designTokens, effectiveDocWidth],
+  );
+
   const displayedNodes = useMemo(() => {
-    if (!previewNodes || previewNodes.length === 0) return document.nodes;
+    if (!previewNodes || previewNodes.length === 0) return resolvedLayoutNodes;
     const previewById = new Map(previewNodes.map((node) => [node.id, node]));
-    return document.nodes.map((node) => previewById.get(node.id) ?? node);
-  }, [document.nodes, previewNodes]);
+    return resolvedLayoutNodes.map((node) => previewById.get(node.id) ?? node);
+  }, [resolvedLayoutNodes, previewNodes]);
 
   const canvasNodes = useMemo(
     () => displayedNodes.filter((node) => node.onCanvas !== false),
@@ -1278,16 +1305,22 @@ export function Canvas({
         }}
       >
         <div class="artboard-label">
-          <span>{document.name}</span>
-          <span>{document.width} × {document.height}</span>
+          <span>
+            {document.name}
+            {workspace === 'main' && activeBreakpoint !== 'desktop'
+              ? ` · ${activeBreakpoint === 'tablet' ? 'Tablet' : 'Mobile'}`
+              : ''}
+          </span>
+          <span>{effectiveDocWidth} × {document.height}</span>
         </div>
         <svg
           ref={svgRef}
           class="artboard"
           data-tool={toolId}
           data-workspace={workspace}
+          data-breakpoint={activeBreakpoint}
           style={{ cursor: toolCursor }}
-          viewBox={'0 0 ' + document.width + ' ' + document.height}
+          viewBox={'0 0 ' + effectiveDocWidth + ' ' + document.height}
           role="application"
           aria-label="Folio design artboard. Use the active Tool Rack tool to select, draw, edit vector paths, navigate, or inspect artwork."
           onPointerDown={handlePointerDown}
@@ -1300,7 +1333,7 @@ export function Canvas({
           <defs>
             <DocumentMaskDefs
               nodes={canvasNodes}
-              width={document.width}
+              width={effectiveDocWidth}
               height={document.height}
               components={components}
               maskPrefix={maskPrefix}
@@ -1308,6 +1341,7 @@ export function Canvas({
               clipMaskMap={clipMaskMap}
               frameClipMap={frameClipMap}
               componentById={componentById}
+              tokens={designTokens}
             />
             <pattern
               id={`${maskPrefix}-sb-merge`}
@@ -1344,7 +1378,7 @@ export function Canvas({
               />
             </pattern>
           </defs>
-          <rect x="0" y="0" width={document.width} height={document.height} fill={document.background} />
+          <rect x="0" y="0" width={effectiveDocWidth} height={document.height} fill={document.background} />
           {visibleRenderNodes.map((node) => (
             inlineEditNode?.id === node.id ? null : (
               <MaskedNodeArtwork
@@ -1356,9 +1390,38 @@ export function Canvas({
                 clipMaskMap={clipMaskMap}
                 frameClipMap={frameClipMap}
                 componentById={componentById}
+                tokens={designTokens}
               />
             )
           ))}
+
+          {/* Auto-Layout Inner Padding Guide on Selected Container */}
+          {selectedNodes.length === 1 &&
+            selectedNodes[0].layout &&
+            selectedNodes[0].layout.mode !== 'none' && (() => {
+              const container = selectedNodes[0];
+              const containerLayout = container.layout;
+              if (!containerLayout || containerLayout.mode === 'none') return null;
+              const pad = containerLayout.padding;
+              const innerW = Math.max(0, container.width - pad.left - pad.right);
+              const innerH = Math.max(0, container.height - pad.top - pad.bottom);
+              if (innerW <= 0 || innerH <= 0) return null;
+              return (
+                <rect
+                  class="canvas-autolayout-padding-guide"
+                  x={container.x + pad.left}
+                  y={container.y + pad.top}
+                  width={innerW}
+                  height={innerH}
+                  fill="none"
+                  stroke="#38BDF8"
+                  stroke-opacity="0.55"
+                  stroke-width={1 * invZoom}
+                  stroke-dasharray={`${4 * invZoom} ${3 * invZoom}`}
+                  pointer-events="none"
+                />
+              );
+            })()}
 
           {/* Live Alt+Drag Clone Ghost Preview */}
           {previewCreateNodes && previewCreateNodes.length > 0 && (
@@ -1373,6 +1436,7 @@ export function Canvas({
                   clipMaskMap={clipMaskMap}
                   frameClipMap={frameClipMap}
                   componentById={componentById}
+                  tokens={designTokens}
                 />
               ))}
             </g>
