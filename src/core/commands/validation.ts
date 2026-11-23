@@ -12,6 +12,7 @@ import type {
 } from '../document/types';
 import {
   SEMANTIC_HTML_TAGS,
+  isAnimationClip,
   isCodeModuleList,
   isComponentSlotsList,
   isComponentVariantsList,
@@ -24,6 +25,9 @@ import {
   validateProject,
 } from '../document/validation';
 import type {
+  AnimationCreateClipPayload,
+  AnimationDeleteClipPayload,
+  AnimationUpdateClipPayload,
   CodeUpdateModulesPayload,
   ComponentCreatePayload,
   ComponentDeletePayload,
@@ -1290,6 +1294,57 @@ export function validateLogicDeleteGraphPayload(
     ok: true,
     value: {
       graphId: data.graphId,
+    },
+  };
+}
+
+export function validateAnimationCreateClipPayload(
+  value: unknown,
+): ValidationOutcome<AnimationCreateClipPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['clip']) || !isAnimationClip(data.clip)) {
+    return invalid('INVALID_PAYLOAD', 'Creating an animation clip requires a valid Folio AnimationClip object.');
+  }
+  return {
+    ok: true,
+    value: {
+      clip: data.clip,
+    },
+  };
+}
+
+export function validateAnimationUpdateClipPayload(
+  value: unknown,
+): ValidationOutcome<AnimationUpdateClipPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['clip']) || !isAnimationClip(data.clip)) {
+    return invalid('INVALID_PAYLOAD', 'Updating an animation clip requires a valid Folio AnimationClip object.');
+  }
+  return {
+    ok: true,
+    value: {
+      clip: data.clip,
+    },
+  };
+}
+
+export function validateAnimationDeleteClipPayload(
+  value: unknown,
+): ValidationOutcome<AnimationDeleteClipPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['clipId']) || !isNonEmptyString(data.clipId, 128)) {
+    return invalid('INVALID_PAYLOAD', 'Deleting an animation clip requires a valid non-empty clipId.');
+  }
+  return {
+    ok: true,
+    value: {
+      clipId: data.clipId,
     },
   };
 }

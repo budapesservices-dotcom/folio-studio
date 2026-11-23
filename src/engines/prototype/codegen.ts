@@ -16,6 +16,7 @@ import type {
   LogicVariableValue,
 } from '../../core/document/types';
 import { sanitizeJsText, toKebabCase } from '../codegen/sanitize';
+import { buildLivePreviewAnimationPayload } from '../animation/codegen';
 import { isBuiltInLogicNodeType } from './catalog';
 import { getApplicableGraphsForPage, MAX_LOGIC_EXECUTION_STEPS } from './runtime';
 
@@ -129,6 +130,11 @@ export function buildLivePreviewLogicScript(
     })),
   }));
 
+  const animationClassById: Record<string, string> = {};
+  for (const desc of buildLivePreviewAnimationPayload(project, page)) {
+    animationClassById[desc.id] = desc.className;
+  }
+
   const payload = {
     maxSteps: MAX_LOGIC_EXECUTION_STEPS,
     variables: initialVariables,
@@ -137,6 +143,7 @@ export function buildLivePreviewLogicScript(
     nodeMeta,
     themeSlugById,
     componentVariants,
+    animationClassById,
     graphs: compiledGraphs,
   };
 
@@ -346,6 +353,15 @@ export function buildLivePreviewLogicScript(
     '          document.documentElement.setAttribute("data-folio-route", route);',
     '          pushOut(g, n.id, "next");',
     '        }',
+    '      } else if (n.type === "action.play-animation") {',
+    '        var clipId = String(n.data.clipId || "").trim();',
+    '        var animClass = CONFIG.animationClassById && CONFIG.animationClassById[clipId];',
+    '        if (animClass) {',
+    '          document.documentElement.classList.remove(animClass);',
+    '          void document.documentElement.offsetWidth;',
+    '          document.documentElement.classList.add(animClass);',
+    '          pushOut(g, n.id, "next");',
+    '        }',
     '      }',
     '    }',
     '  }',
@@ -371,7 +387,11 @@ export function buildLivePreviewLogicScript(
     '        if (n.type === "event.on-click" && !bound["click:" + tid]) {',
     '          bound["click:" + tid] = true;',
     '          var el = findEl(tid);',
-    '          if (el) el.addEventListener("click", function () { triggerNode(tid, "click"); });',
+    '          if (el) {',
+    '            el.setAttribute("data-folio-interactive", "true");',
+    '            el.style.cursor = "pointer";',
+    '            el.addEventListener("click", function () { triggerNode(tid, "click"); });',
+    '          }',
     '        } else if (n.type === "event.on-hover") {',
     '          var phase = n.data.phase === "leave" ? "hover-leave" : "hover-enter";',
     '          if (!bound[phase + ":" + tid]) {',

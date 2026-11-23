@@ -3,6 +3,7 @@ import { classifyNodeChange, hasExtendedNodeChange } from '../core/document/node
 import { getActivePage } from '../core/document/project';
 import type { LayerDropPosition } from '../core/document/layers';
 import type {
+  AnimationClip,
   CodeModuleRecord,
   ComponentDefinition,
   ComponentInstanceNode,
@@ -46,6 +47,7 @@ export const WORKSPACE_USER_CAPABILITIES: readonly NativePermission[] = Object.f
   'tokens.update',
   'code.update',
   'logic.update',
+  'animation.update',
   'selection.update',
   'history.execute',
 ]);
@@ -185,6 +187,9 @@ export interface MainCanvasCommandClient {
   createLogicGraph(graph: LogicGraph, description?: string): NativeCommandResult;
   updateLogicGraph(graph: LogicGraph, description?: string): NativeCommandResult;
   deleteLogicGraph(graphId: string, description?: string): NativeCommandResult;
+  createAnimationClip(clip: AnimationClip, description?: string): NativeCommandResult;
+  updateAnimationClip(clip: AnimationClip, description?: string): NativeCommandResult;
+  deleteAnimationClip(clipId: string, description?: string): NativeCommandResult;
   createNodes(nodes: readonly DesignNode[], description?: string): NativeCommandResult;
   replaceNode(node: DesignNode, description?: string): NativeCommandResult;
   replaceNodes(
@@ -516,6 +521,36 @@ export function createWorkspaceCommandClient(
         'logic.delete-graph',
         { kind: 'project', projectId },
         { graphId },
+        description,
+      );
+    },
+
+    createAnimationClip(clip, description = 'Create animation clip') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'animation.create-clip',
+        { kind: 'project', projectId },
+        stripUndefinedEntries({ clip }),
+        description,
+      );
+    },
+
+    updateAnimationClip(clip, description = 'Update animation clip') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'animation.update-clip',
+        { kind: 'project', projectId },
+        stripUndefinedEntries({ clip }),
+        description,
+      );
+    },
+
+    deleteAnimationClip(clipId, description = 'Delete animation clip') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'animation.delete-clip',
+        { kind: 'project', projectId },
+        { clipId },
         description,
       );
     },

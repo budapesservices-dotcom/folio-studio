@@ -133,6 +133,7 @@ export function validateLogicGraphSemantics(
   const variablesById = collectAvailableVariables(graph, project);
   const pageRoutes = new Set(project.pages.map((page) => page.route));
   const themeIds = new Set((project.designTokens?.themes ?? []).map((theme) => theme.id));
+  const animationClipIds = new Set((project.animations ?? []).map((clip) => clip.id));
   const logicNodesById = new Map(graph.nodes.map((node) => [node.id, node]));
 
   // Track incoming connections per (nodeId, portId) so nodes with wired inputs
@@ -529,6 +530,19 @@ export function validateLogicGraphSemantics(
         break;
       }
 
+      case 'action.play-animation': {
+        const clipId = typeof node.data.clipId === 'string' ? node.data.clipId.trim() : '';
+        if (!clipId || !animationClipIds.has(clipId)) {
+          push(
+            'error',
+            'MISSING_ANIMATION_CLIP',
+            `Play Animation node "${node.id}" references missing animation clip "${clipId}".`,
+            { nodeId: node.id },
+          );
+        }
+        break;
+      }
+
       case 'event.on-page-load':
       case 'logic.branch':
       case 'logic.template':
@@ -587,6 +601,7 @@ export function auditOrphanLogicReferences(project: FolioProject): readonly Logi
     'MISSING_VARIABLE',
     'INVALID_VARIANT_REFERENCE',
     'MISSING_THEME',
+    'MISSING_ANIMATION_CLIP',
     'UNKNOWN_PAGE_ROUTE',
   ]);
   return validateProjectLogicGraphs(project).diagnostics.filter((item) => orphanCodes.has(item.code));

@@ -252,8 +252,8 @@ describe('Node Logic v1 — .flop v2 Backward Compatibility & Schema Validation'
 });
 
 describe('Node Logic v1 — Typed Catalog & Semantic Graph Validator', () => {
-  it('registers all 17 v1 node types and enforces strict port type compatibility', () => {
-    expect(BUILT_IN_LOGIC_NODE_TYPES).toHaveLength(17);
+  it('registers all 18 v1 node types and enforces strict port type compatibility', () => {
+    expect(BUILT_IN_LOGIC_NODE_TYPES).toHaveLength(18);
     for (const type of BUILT_IN_LOGIC_NODE_TYPES) {
       expect(LOGIC_NODE_CATALOG[type].type).toBe(type);
       expect(LOGIC_NODE_CATALOG[type].ports.length).toBeGreaterThan(0);

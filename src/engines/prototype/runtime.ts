@@ -51,6 +51,7 @@ export interface PrototypeRuntimeSnapshot {
   readonly stepCount: number;
   readonly variables: Readonly<Record<string, LogicVariableValue>>;
   readonly nodeOverrides: Readonly<Record<string, PrototypeNodeOverride>>;
+  readonly playedAnimations: readonly string[];
   readonly trace: readonly LogicExecutionTraceEntry[];
   readonly warnings: readonly string[];
 }
@@ -204,6 +205,7 @@ export function createPrototypeRuntime(
     project.pages.map((page) => [page.route, page]),
   );
   const themeIds = new Set(tokens.themes.map((theme) => theme.id));
+  const animationsById = new Map((project.animations ?? []).map((clip) => [clip.id, clip]));
 
   let activePageId = initialPage.id;
   let activeRoute = initialPage.route;
@@ -217,6 +219,7 @@ export function createPrototypeRuntime(
   let variableNameToId = new Map<string, string>();
   let variables: Record<string, LogicVariableValue> = {};
   let nodeOverrides: Record<string, PrototypeNodeOverride> = {};
+  let playedAnimations: string[] = [];
   let trace: LogicExecutionTraceEntry[] = [];
   let warnings: string[] = [];
 
@@ -253,6 +256,7 @@ export function createPrototypeRuntime(
     mounted = false;
     totalSteps = 0;
     nodeOverrides = {};
+    playedAnimations = [];
     trace = [];
     warnings = [];
     ephemeralNodeOutputs = new Map();
@@ -637,6 +641,25 @@ export function createPrototypeRuntime(
           break;
         }
 
+        case 'action.play-animation': {
+          const clipId = typeof node.data.clipId === 'string' ? node.data.clipId.trim() : '';
+          const clip = clipId ? animationsById.get(clipId) : undefined;
+          if (!clip) {
+            warnings.push(`Play Animation "${node.id}" references unknown clip "${clipId}".`);
+            break;
+          }
+          playedAnimations.push(clip.id);
+          trace.push({
+            step: totalSteps,
+            graphId: next.indexed.graph.id,
+            nodeId: node.id,
+            nodeType: node.type,
+            detail: `Play animation -> ${clip.name} (${clip.durationMs}ms)`,
+          });
+          enqueueOutgoing(next.indexed, node.id, 'next');
+          break;
+        }
+
         case 'state.get':
         case 'logic.compare':
         case 'logic.template':
@@ -662,6 +685,7 @@ export function createPrototypeRuntime(
       stepCount: totalSteps,
       variables: { ...variables },
       nodeOverrides: clonedOverrides,
+      playedAnimations: [...playedAnimations],
       trace: trace.map((entry) => ({ ...entry })),
       warnings: [...warnings],
     };

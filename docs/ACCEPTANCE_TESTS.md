@@ -187,5 +187,46 @@ The actual modal is also browser-tested: initial focus enters the safe dialog ac
 - **Pending / Not Claimed:**
   - External GitHub Actions CI run on a pushed branch and human manual browser acceptance remain **pending** outside this local workspace.
 
+### Visual Node Logic Graph Editor (v1.1), Complete Application Menu Bar & Interactive Starter Experience
+
+- **Implementation status:** **Implemented** and **Verified locally** (2026-11-23).
+- **Implemented scope:**
+  1. **Visual Node Logic Graph Editor (`src/app/workspace/nodeLogicGraphHelpers.ts`, `NodeLogicWorkspace.tsx`, `NodeLogicInspector.tsx`, `CanvasWindows.tsx`):** Lazy-loaded pan/zoom spatial node-wire editor inside `NodeLogicWindow` over Folio's 17-node `src/engines/prototype` engine (`Event`, `State`, `Logic`, `Action`). Supports searchable/filterable 17-node catalog, node dragging, typed Bezier port wiring with direction normalization, type compatibility, duplicate/cycle rejection, 3-tab inspector (`Node`, `Variables`, `Simulate`) with clickable diagnostics and headless `PrototypeRuntime` trigger simulation, 3 one-click presets (`Click Counter`, `Toggle Visibility`, `Theme Switcher`), and direct **`Test in Live Preview`** launch targeting `useCodeWorkspace` / `LazyCodeWorkspace`. All graph mutations dispatch through Native Commands (`logic.create-graph`, `logic.update-graph`, `logic.delete-graph`) with Undo/Redo support.
+  2. **Complete 6-Menu Application Menu Bar (`src/app/workspace/GlobalToolbar.tsx`, `globalMenuActions.ts`, `App.tsx`):** Activated `Edit`, `Tools`, and `Option` menus alongside `File`, `View`, and `Help` with canonical commands, active checkmarks, keyboard shortcut badges, honest disabled states, and outside-click / `Escape` dismissal.
+  3. **Interactive Starter Experience (`createInteractiveStarterProject` in `nodeLogicGraphHelpers.ts`, `src/engines/prototype/codegen.ts`):** Preserves the starter artboard visually while attaching a valid default `Main Page Interactions` graph (9 nodes, 8 wires: `Visual card` click -> increment `clickCount`, toggle `accentActive`, update `Card caption` to `INTERACTIONS · {{clickCount}}`, branch to alternate `Sun` fill color) and enhancing Live Preview interactive layers with `data-folio-interactive="true"` + pointer cursor. Keeps `createInitialProject()` untouched for unit contract stability.
+  4. **Template insertion sync caching (`src/app/workspace/usePageAndTemplateActions.ts`):** Caches the lazy-loaded `templates.ts` module after first load so subsequent template insertions execute synchronously inside Native Command and IndexedDB revision fences without sacrificing Vite code-splitting.
+- **Local Automated Gate (2026-11-23):**
+  - `npm run check` (`tsc --noEmit`): **PASS** (0 errors).
+  - `npm run test:unit`: **510 / 511 PASSED** across 43 test files (including new `tests/nodeLogicWorkspace.test.ts` 6/6, `tests/nodeLogicEngine.test.ts` 9/9, `tests/workspaceModules.test.ts` 11/11, `tests/p03SubsystemBoundaries.test.ts` 23/23, `tests/p11NativeCommandMigration.test.ts` 9/9, `tests/document.test.ts` 33/33). The single failure is the pre-existing `tests/p12QualityFoundation.test.ts` check for `../package-lock.json` which is absent in this container environment.
+  - Real Chromium browser suites (`CHROMIUM_BIN=... npx vitest run --fileParallelism=false ...`):
+    - `tests/mergeReadiness.browser.test.mjs`: **PASS (3/3)** — verifies all 6 active application menus (0 disabled placeholders), Visual Node Logic starter graph rendering, inline Simulate execution, and interactive Live Preview HTML click execution (`INTERACTIONS · 1` -> `INTERACTIONS · 2`).
+    - `tests/nativePersistence.browser.test.mjs`: **PASS (1/1)**.
+    - `tests/componentRecovery.browser.test.mjs`: **PASS (5/5)**.
+    - `tests/workspaceGeometry.browser.test.mjs`: Passed earlier (1/1); encountered the known headless-shell CDP `Runtime.evaluate` reload timeout on retry while direct Playwright verification confirmed legacy layout banner restoration in <1.5s with 0 console errors.
+  - Live headless Chromium visual QA (`playwright-cli` at `1440×900`): **PASS** — verified `Edit` dropdown alignment, floating and docked `Node Logic` 3-pane workspace with framed 9-node Bezier graph (`Fit`), category icon badges, `Simulate` live state/overrides/trace, and **0 console errors / 0 warnings**.
+  - Production build (`npm run build`): **PASS** (`dist/` built cleanly with lazy chunks).
+- **Pending / Not Claimed:**
+  - External GitHub Actions CI run on a pushed branch, `package-lock.json` lockfile restoration in git, and human manual browser acceptance remain **pending** outside this local workspace.
+
+### Stage 8 — Motion & Animation Engine (`src/engines/animation`) & Interactive Motion Timeline Studio
+
+- **Implementation status:** **Implemented** and **Verified locally** (2026-11-23).
+- **Implemented scope:**
+  1. **`.flop` v2 Motion Schema & Validation (`src/core/document/types.ts`, `validation.ts`):** Added backward-compatible optional `animations?: AnimationClip[]` with strict duration bounds, keyframe time bounds, duplicate `(targetNodeId, property)` track rejection, page reference checks, CSS injection-safe color validation, and frozen incremental validation caching.
+  2. **Pure Motion Engine (`src/engines/animation/easing.ts`, `evaluator.ts`, `codegen.ts`, `index.ts`):** Implemented cubic-Bezier & normalized spring easing curves (`linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `spring`), numeric & hex-color keyframe interpolation (`x`, `y`, `opacity`, `rotation`, `scale`, `fill`), non-destructive Main Canvas pose evaluation (`applyAnimatedPosesToDocument` using `NodeBase.opacity`), 3 built-in presets (`Hero Entrance`, `Orbit Float`, `Pulse Glow`), starter page `Hero Entrance` clip, and deterministic CSS `@keyframes` compilation with `@media (prefers-reduced-motion: reduce)` guards wired into `htmlCssCompiler.ts` and Live Preview.
+  3. **Zero-Bypass Native Command Engine & Node Logic Bridge:** Added `animation.create-clip`, `animation.update-clip`, `animation.delete-clip` with `animation.update` permission (total **38** registered commands in `ALL_NATIVE_COMMAND_REGISTRY`) and Undo/Redo support. Added the 18th Node Logic catalog node `action.play-animation` across `catalog.ts`, `validator.ts` (`MISSING_ANIMATION_CLIP`), `runtime.ts` (`playedAnimations`), `codegen.ts`, and `NodeLogicInspector.tsx`.
+  4. **Dockable Motion Timeline Studio (`src/app/workspace/useMotionPlayback.ts`, `MotionTimelinePanel.tsx`, `GlobalToolbar.tsx`, `App.tsx`, `global.css`):** Added lazy-loaded bottom drawer docked above `.statusbar` (keeping `App.tsx` under 1,200 lines and `GlobalToolbar` at 3 dividers) with Play/Pause/Stop/Loop/Autoplay transport, scrubbable ruler with 12px edge-safe insets, draggable diamond keyframes, presets popover, keyframe value/easing inspector strip, and direct **`Test in Live Preview`** CTA.
+- **Local Automated Gate (2026-11-23):**
+  - `npm run check` (`tsc --noEmit`): **PASS** (0 errors).
+  - `npm run build` / `compile_applet`: **PASS** (`dist/` compiled cleanly).
+  - `npm run test:unit`: **515 / 516 PASSED** across 44 test files (including new `tests/motionEngine.test.ts` 5/5, `tests/codeEngineAndMapping.test.ts` 9/9, `tests/nodeLogicEngine.test.ts` 9/9, `tests/workspaceModules.test.ts` 11/11). Only pre-existing failure is `tests/p12QualityFoundation.test.ts` checking for absent `package-lock.json` in this sandbox.
+  - Real Chromium browser suites (`CHROMIUM_BIN=... npx vitest run ...`):
+    - `tests/mergeReadiness.browser.test.mjs`: **PASS (4/4)** — includes Stage 8 Motion Timeline docking, starter `Hero Entrance` tracks, playhead scrubbing, keyframe inspector, and compiled `@keyframes` + `prefers-reduced-motion` in Live Preview with 0 console/page errors.
+    - `tests/nativePersistence.browser.test.mjs`: **PASS (1/1)**.
+    - `tests/componentRecovery.browser.test.mjs`: **PASS (5/5)**.
+  - Live headless Chromium visual QA (`playwright-cli` at `1440×900`, 2 rounds): **PASS** — verified docked Motion Timeline above StatusBar, unclipped 12px-inset `0.0s`..`1.2s` keyframe diamonds & ticks, live non-destructive Canvas pose fade/shift at `0.24s / 1.20s`, Presets dropdown z-index layering, Live Preview handoff, and **0 console errors / 0 warnings**.
+- **Pending / Not Claimed:**
+  - External GitHub Actions CI run, `package-lock.json` lockfile restoration, and human manual browser acceptance remain **pending** outside this local workspace.
+
 
 

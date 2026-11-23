@@ -35,7 +35,11 @@ import { useSelectionAndVectorActions } from './workspace/useSelectionAndVectorA
 import { useProjectFileLifecycle } from './workspace/useProjectFileLifecycle';
 import { usePageAndTemplateActions } from './workspace/usePageAndTemplateActions';
 import { useDesignSystemActions } from './workspace/useDesignSystemActions';
-import { GlobalToolbar, WorkspacePreferencesRecoveryBanner } from './workspace/GlobalToolbar';
+import { useMotionPlayback } from './workspace/useMotionPlayback';
+import { GlobalToolbar, WorkspacePreferencesRecoveryBanner, type TopMenuId } from './workspace/GlobalToolbar';
+import { buildGlobalToolbarMenuActions } from './workspace/globalMenuActions';
+import { createInteractiveStarterProject } from './workspace/nodeLogicGraphHelpers';
+import type { CodeWorkspaceViewMode } from './workspace/useCodeWorkspace';
 import { ToolRail } from './workspace/ToolRail';
 import { LayersPanel } from './workspace/LayersPanel';
 import { LayerColorPalette, LayerContextMenu } from './workspace/LayerPopovers';
@@ -47,9 +51,8 @@ import { ComponentDeletionDialog, ProjectHydrationOverlay } from './workspace/Co
 
 // Lazy-loaded feature bundles kept outside Folio's critical startup chunk.
 const LazyCodeWorkspace = lazy(() => import('./workspace/LazyCodeWorkspace'));
-const LazyTokensPanel = lazy(() =>
-  import('./workspace/TokensPanel').then((module) => ({ default: module.TokensPanel })),
-);
+const LazyTokensPanel = lazy(() => import('./workspace/TokensPanel').then((m) => ({ default: m.TokensPanel })));
+const LazyMotionTimelinePanel = lazy(() => import('./workspace/MotionTimelinePanel').then((m) => ({ default: m.MotionTimelinePanel })));
 const LazyKeyboardShortcutsModal = lazy(async () => {
   const module = await import('./KeyboardShortcutsModal');
   return {
@@ -71,7 +74,7 @@ export function App() {
   commandRejectNoticeRef.current = setNotice;
 
   // Canonical stores & Native Command Engine clients
-  const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
+  const initialEditorState = useMemo(() => createEditorState(createInteractiveStarterProject('First canvas')), []);
   const canonicalStore = useMemo(() => createCanonicalEditorStore(initialEditorState), []);
   const [state, setState] = useState(() => canonicalStore.getSnapshot().editorState);
   const syncStateFromStore = useCallback(() => {
@@ -131,16 +134,12 @@ export function App() {
   const componentRackToggleRef = useRef<HTMLButtonElement | null>(null);
 
   const closePagesRack = useCallback(() => {
-    if (pagesRackRef.current?.contains(document.activeElement)) {
-      pagesRackToggleRef.current?.focus({ preventScroll: true });
-    }
+    if (pagesRackRef.current?.contains(document.activeElement)) pagesRackToggleRef.current?.focus({ preventScroll: true });
     windows.setPagesRackOpen(false);
   }, [windows.setPagesRackOpen]);
 
   const closeComponentRack = useCallback(() => {
-    if (componentRackRef.current?.contains(document.activeElement)) {
-      componentRackToggleRef.current?.focus({ preventScroll: true });
-    }
+    if (componentRackRef.current?.contains(document.activeElement)) componentRackToggleRef.current?.focus({ preventScroll: true });
     windows.setComponentRackOpen(false);
   }, [windows.setComponentRackOpen]);
 
@@ -149,15 +148,11 @@ export function App() {
   const projectFileInputRef = useRef<HTMLInputElement>(null);
   const menuBarRef = useRef<HTMLDivElement | null>(null);
   const toolRailRef = useRef<HTMLElement | null>(null);
-  const [fileMenuOpen, setFileMenuOpen] = useState(false);
-  const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const [helpMenuOpen, setHelpMenuOpen] = useState(false);
+  const [openMenu, setOpenMenu] = useState<TopMenuId | null>(null);
   const [toolRackOpen, setToolRackOpen] = useState<string | null>(null);
   const [codeWorkspaceOpen, setCodeWorkspaceOpen] = useState(false);
-  const [workspaceTools, setWorkspaceTools] = useState<Record<EditorTarget, CanvasToolId>>({
-    main: 'select',
-    component: 'select',
-  });
+  const [codeWorkspaceLaunch, setCodeWorkspaceLaunch] = useState<{ viewMode: CodeWorkspaceViewMode; pageId?: string; nonce: number }>({ viewMode: 'code', nonce: 0 });
+  const [workspaceTools, setWorkspaceTools] = useState<Record<EditorTarget, CanvasToolId>>({ main: 'select', component: 'select' });
   const [toolOptions, setToolOptions] = useState<CanvasToolOptions>(DEFAULT_CANVAS_TOOL_OPTIONS);
   const [projectNameEditing, setProjectNameEditing] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState('');
@@ -203,7 +198,7 @@ export function App() {
     setActiveEditorId,
     setComponentCanvasClosed: windows.setComponentCanvasClosed,
     setComponentCanvasMinimized: windows.setComponentCanvasMinimized,
-    setFileMenuOpen,
+    setFileMenuOpen: (open) => setOpenMenu(open ? 'file' : null),
     setNotice,
   });
 
@@ -282,9 +277,7 @@ export function App() {
 
   const openShortcutsModal = useCallback(() => {
     shortcutsFocusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setFileMenuOpen(false);
-    setViewMenuOpen(false);
-    setHelpMenuOpen(false);
+    setOpenMenu(null);
     setToolRackOpen(null);
     layers.setLayerContextMenu(null);
     setShortcutsModalOpen(true);
@@ -300,27 +293,22 @@ export function App() {
 
   // Dismiss menus on outside pointerdown or Escape
   useLayoutEffect(() => {
-    if (!fileMenuOpen && !viewMenuOpen && !helpMenuOpen) return;
-    const closeMenus = () => {
-      setFileMenuOpen(false);
-      setViewMenuOpen(false);
-      setHelpMenuOpen(false);
-    };
+    if (!openMenu) return;
     const handlePointerDown = (event: PointerEvent) => {
       if (event.target instanceof Node && menuBarRef.current?.contains(event.target)) return;
-      closeMenus();
+      setOpenMenu(null);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        closeMenus();
+        setOpenMenu(null);
       }
     };
     const controller = new AbortController();
     document.addEventListener('pointerdown', handlePointerDown, { capture: true, signal: controller.signal });
     window.addEventListener('keydown', handleKeyDown, { capture: true, signal: controller.signal });
     return () => controller.abort();
-  }, [fileMenuOpen, viewMenuOpen, helpMenuOpen]);
+  }, [openMenu]);
 
   // Dismiss tool rack flyouts on outside pointerdown or Escape
   useLayoutEffect(() => {
@@ -520,7 +508,7 @@ export function App() {
   const resetWindowLayout = () => {
     windows.resetAllWindowLayouts();
     panelResize.resetAllPanelWidths();
-    setViewMenuOpen(false);
+    setOpenMenu(null);
     setNotice('Window layout has been reset.');
   };
 
@@ -574,10 +562,40 @@ export function App() {
     ? (state.project.components.find((item) => item.id === componentMaster.pendingComponentOpenId)?.name ?? 'another master')
     : null;
 
+  const globalMenuActions = buildGlobalToolbarMenuActions({
+    activeEditorId,
+    focusedDocument,
+    focusedSelectedNodeIds: focusedEditor.state.selectedNodeIds,
+    focusedSelectedNodes: focusedEditor.selectedNodes,
+    canUndo: focusedEditor.state.past.length > 0,
+    canRedo: focusedEditor.state.future.length > 0,
+    hasClipboard: clipboardRef.current !== null,
+    activeToolId: activeCanvasToolId,
+    designTokens: designSystem.designTokens,
+    focusedCommandClient,
+    setActiveZoom: activeEditorId === 'main' ? windows.setZoom : windows.setComponentCanvasZoom,
+    onCut: selectionActions.cutSelection,
+    onCopy: selectionActions.copySelection,
+    onPaste: selectionActions.pasteSelection,
+    onDuplicate: selectionActions.duplicateSelection,
+    onSelectTool: chooseCanvasTool,
+    onPathfinder: selectionActions.handlePathfinder,
+    onConvertToPath: selectionActions.handleConvertToPath,
+    onRotate90: selectionActions.handleRotate90,
+    onUpdateDesignTokens: designSystem.updateDesignTokens,
+    onNotice: setNotice,
+  });
+  const activePage = getActivePage(state.project);
+  const motion = useMotionPlayback({ project: state.project, activePage, selectedNodeIds: state.selectedNodeIds, mainCommandClient, onNotice: setNotice });
+  const openLivePreviewForPage = useCallback((pageId?: string) => {
+    setCodeWorkspaceLaunch((current) => ({ viewMode: 'preview', pageId, nonce: current.nonce + 1 }));
+    setCodeWorkspaceOpen(true);
+  }, []);
+
   return (
     <div
       ref={appShellRef}
-      class={`app-shell ${windows.layersVisible ? '' : 'layers-hidden'} ${windows.inspectorVisible ? '' : 'inspector-hidden'} ${isHydrating ? 'is-hydrating' : ''} ${panelResize.resizingPanel ? 'is-resizing-panel' : ''}`}
+      class={`app-shell ${windows.layersVisible ? '' : 'layers-hidden'} ${windows.inspectorVisible ? '' : 'inspector-hidden'} ${motion.motionOpen ? 'has-motion-timeline' : ''} ${isHydrating ? 'is-hydrating' : ''} ${panelResize.resizingPanel ? 'is-resizing-panel' : ''}`}
       style={{
         '--layers-panel-width': `${panelResize.panelWidthsRef.current.layers}px`,
         '--inspector-panel-width': `${panelResize.panelWidthsRef.current.inspector}px`,
@@ -597,9 +615,8 @@ export function App() {
       <GlobalToolbar
         projectName={state.project.metadata.name}
         isHydrating={isHydrating}
-        fileMenuOpen={fileMenuOpen}
-        viewMenuOpen={viewMenuOpen}
-        helpMenuOpen={helpMenuOpen}
+        openMenu={openMenu}
+        menuActions={globalMenuActions}
         menuBarRef={menuBarRef}
         projectFileInputRef={projectFileInputRef}
         pagesRackToggleRef={pagesRackToggleRef}
@@ -621,12 +638,12 @@ export function App() {
         nodeLogicClosed={windows.nodeLogicClosed}
         nodeLogicMinimized={windows.nodeLogicMinimized}
         codeWorkspaceOpen={codeWorkspaceOpen}
+        motionTimelineOpen={motion.motionOpen}
         shortcutsModalOpen={shortcutsModalOpen}
         toolbarHintStore={toolbarHintStore}
-        onToggleFileMenu={() => { setFileMenuOpen((open) => !open); setViewMenuOpen(false); setHelpMenuOpen(false); setToolRackOpen(null); }}
-        onToggleViewMenu={() => { setViewMenuOpen((open) => !open); setFileMenuOpen(false); setHelpMenuOpen(false); setToolRackOpen(null); }}
-        onToggleHelpMenu={() => { setHelpMenuOpen((open) => !open); setFileMenuOpen(false); setViewMenuOpen(false); setToolRackOpen(null); }}
-        onOpenProjectPicker={() => { if (isHydrating) return; setFileMenuOpen(false); projectFileInputRef.current?.click(); }}
+        onToggleMenu={(menu) => { setOpenMenu((current) => (current === menu ? null : menu)); setToolRackOpen(null); }}
+        onCloseMenus={() => setOpenMenu(null)}
+        onOpenProjectPicker={() => { if (isHydrating) return; setOpenMenu(null); projectFileInputRef.current?.click(); }}
         onProjectFileSelected={fileLifecycle.handleProjectFileSelected}
         onExportCurrentProject={() => fileLifecycle.exportCurrentProject(isHydrating)}
         onExportActiveCanvasSvg={() => { void fileLifecycle.exportActiveCanvasSvg(isHydrating); }}
@@ -652,30 +669,17 @@ export function App() {
         onTogglePagesRack={() => {
           setToolRackOpen(null);
           if (windows.pagesRackOpen) closePagesRack();
-          else {
-            windows.focusWindow('pages');
-            windows.setPagesRackOpen(true);
-            closeComponentRack();
-            designSystem.closeTokensRack();
-          }
+          else { windows.focusWindow('pages'); windows.setPagesRackOpen(true); closeComponentRack(); designSystem.closeTokensRack(); }
         }}
         onToggleComponentRack={() => {
           setToolRackOpen(null);
           if (windows.componentRackOpen) closeComponentRack();
-          else {
-            windows.setComponentRackOpen(true);
-            closePagesRack();
-            designSystem.closeTokensRack();
-          }
+          else { windows.setComponentRackOpen(true); closePagesRack(); designSystem.closeTokensRack(); }
         }}
         onToggleTokensRack={() => {
           setToolRackOpen(null);
           if (designSystem.tokensRackOpen) designSystem.closeTokensRack();
-          else {
-            designSystem.setTokensRackOpen(true);
-            closePagesRack();
-            closeComponentRack();
-          }
+          else { designSystem.setTokensRackOpen(true); closePagesRack(); closeComponentRack(); }
         }}
         onToggleLayersVisible={() => windows.setLayersVisible((value) => !value)}
         onToggleInspectorVisible={() => windows.setInspectorVisible((value) => !value)}
@@ -686,9 +690,7 @@ export function App() {
         onToggleComponentCanvas={() => {
           if (windows.componentCanvasClosed || windows.componentCanvasMinimized) windows.openComponentCanvas();
           else {
-            windows.setComponentCanvasClosed(true);
-            windows.setComponentCanvasMinimized(false);
-            setActiveEditorId('main');
+            windows.setComponentCanvasClosed(true); windows.setComponentCanvasMinimized(false); setActiveEditorId('main');
             if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas');
           }
         }}
@@ -697,6 +699,7 @@ export function App() {
           else { windows.setNodeLogicClosed(true); windows.setNodeLogicMinimized(false); }
         }}
         onToggleCodeWorkspace={() => setCodeWorkspaceOpen((open) => !open)}
+        onToggleMotionTimeline={motion.toggleMotionOpen}
         onEnterFullscreen={enterFullscreen}
         onUpdateToolbarHint={updateToolbarHint}
       />
@@ -717,7 +720,7 @@ export function App() {
         templateInsertMode={pageActions.templateInsertMode}
         canUndo={focusedEditor.state.past.length > 0}
         canRedo={focusedEditor.state.future.length > 0}
-        onCloseTopMenus={() => { setFileMenuOpen(false); setViewMenuOpen(false); setHelpMenuOpen(false); }}
+        onCloseTopMenus={() => setOpenMenu(null)}
         onToggleToolRack={setToolRackOpen}
         onChooseTool={(toolId) => chooseCanvasTool(toolId, activeEditorId)}
         onTemplateInsertModeChange={pageActions.setTemplateInsertMode}
@@ -775,7 +778,7 @@ export function App() {
         position={windows.canvasPosition}
         size={windows.canvasSize}
         zIndex={getWindowZIndex(windows.windowOrder, 'main-canvas')}
-        document={activeDocument}
+        document={motion.animatedMainDocument}
         components={state.project.components}
         designTokens={designSystem.designTokens}
         activeBreakpoint={designSystem.activeBreakpoint}
@@ -790,20 +793,9 @@ export function App() {
         canRedo={focusedEditor.state.future.length > 0}
         onPositionChange={windows.setCanvasPosition}
         onSizeChange={windows.setCanvasSize}
-        onFocus={() => {
-          windows.focusWindow('main-canvas');
-          setActiveEditorId('main');
-          selectionSourceRef.current = 'canvas';
-        }}
-        onFocusMinimized={() => {
-          windows.focusWindow('main-canvas');
-          setActiveEditorId('main');
-        }}
-        onHoverHint={() => updateToolbarHint(
-          'CANVAS',
-          'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.',
-          ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'],
-        )}
+        onFocus={() => { windows.focusWindow('main-canvas'); setActiveEditorId('main'); selectionSourceRef.current = 'canvas'; }}
+        onFocusMinimized={() => { windows.focusWindow('main-canvas'); setActiveEditorId('main'); }}
+        onHoverHint={() => updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
         onAlign={(alignment) => selectionActions.alignSelection(alignment, 'main')}
         onDistribute={(axis) => selectionActions.distributeSelection(axis, 'main')}
         onUndo={() => focusedCommandClient.undo()}
@@ -812,15 +804,8 @@ export function App() {
         onMinimize={() => windows.setCanvasMinimized(true)}
         onRestore={() => windows.setCanvasMinimized(false)}
         onToggleFloating={() => windows.setCanvasWindowMode(windows.canvasFloating ? 'docked' : 'floating')}
-        onClose={() => {
-          windows.setCanvasClosed(true);
-          windows.setCanvasMinimized(false);
-          windows.setCanvasWindowMode('docked');
-        }}
-        onCloseMinimized={() => {
-          windows.setCanvasClosed(true);
-          windows.setCanvasMinimized(false);
-        }}
+        onClose={() => { windows.setCanvasClosed(true); windows.setCanvasMinimized(false); windows.setCanvasWindowMode('docked'); }}
+        onCloseMinimized={() => { windows.setCanvasClosed(true); windows.setCanvasMinimized(false); }}
         onChangeToolOptions={updateToolOptions}
         onPathfinder={(op) => selectionActions.handlePathfinder('main', op)}
         onConvertToPath={() => selectionActions.handleConvertToPath('main')}
@@ -864,20 +849,9 @@ export function App() {
         )}
         onPositionChange={windows.setComponentCanvasPosition}
         onSizeChange={windows.setComponentCanvasSize}
-        onFocus={() => {
-          windows.focusWindow('component-canvas');
-          setActiveEditorId('component');
-          selectionSourceRef.current = 'canvas';
-        }}
-        onFocusMinimized={() => {
-          windows.focusWindow('component-canvas');
-          setActiveEditorId('component');
-        }}
-        onHoverHint={() => updateToolbarHint(
-          'COMPONENT CANVAS',
-          'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.',
-          ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'],
-        )}
+        onFocus={() => { windows.focusWindow('component-canvas'); setActiveEditorId('component'); selectionSourceRef.current = 'canvas'; }}
+        onFocusMinimized={() => { windows.focusWindow('component-canvas'); setActiveEditorId('component'); }}
+        onHoverHint={() => updateToolbarHint('COMPONENT CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
         onReloadRecoveredMaster={componentMaster.reloadRecoveredComponentMaster}
         onKeepCurrentBuffer={componentMaster.keepCurrentComponentBuffer}
         onDiscardAndOpenPending={componentMaster.discardBufferAndOpenPendingMaster}
@@ -889,28 +863,11 @@ export function App() {
         onUndo={() => componentCommandClient.undo()}
         onRedo={() => componentCommandClient.redo()}
         onZoomChange={windows.setComponentCanvasZoom}
-        onMinimize={() => {
-          windows.setComponentCanvasMinimized(true);
-          setActiveEditorId('main');
-          if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas');
-        }}
-        onRestore={() => {
-          windows.setComponentCanvasMinimized(false);
-          setActiveEditorId('component');
-          windows.focusWindow('component-canvas');
-        }}
+        onMinimize={() => { windows.setComponentCanvasMinimized(true); setActiveEditorId('main'); if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas'); }}
+        onRestore={() => { windows.setComponentCanvasMinimized(false); setActiveEditorId('component'); windows.focusWindow('component-canvas'); }}
         onToggleFloating={() => windows.setComponentCanvasWindowMode(windows.componentCanvasFloating ? 'docked' : 'floating')}
-        onClose={() => {
-          windows.setComponentCanvasClosed(true);
-          windows.setComponentCanvasMinimized(false);
-          windows.setComponentCanvasWindowMode('docked');
-          setActiveEditorId('main');
-          if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas');
-        }}
-        onCloseMinimized={() => {
-          windows.setComponentCanvasClosed(true);
-          windows.setComponentCanvasMinimized(false);
-        }}
+        onClose={() => { windows.setComponentCanvasClosed(true); windows.setComponentCanvasMinimized(false); windows.setComponentCanvasWindowMode('docked'); setActiveEditorId('main'); if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas'); }}
+        onCloseMinimized={() => { windows.setComponentCanvasClosed(true); windows.setComponentCanvasMinimized(false); }}
         onChangeToolOptions={updateToolOptions}
         onPathfinder={(op) => selectionActions.handlePathfinder('component', op)}
         onConvertToPath={() => selectionActions.handleConvertToPath('component')}
@@ -932,10 +889,15 @@ export function App() {
         position={windows.nodeLogicPosition}
         size={windows.nodeLogicSize}
         zIndex={getWindowZIndex(windows.windowOrder, 'node-logic')}
+        project={state.project}
+        activePageId={activePageId}
+        mainCommandClient={mainCommandClient}
+        onNotice={setNotice}
+        onOpenLivePreview={openLivePreviewForPage}
         onPositionChange={windows.setNodeLogicPosition}
         onSizeChange={windows.setNodeLogicSize}
         onFocus={() => windows.focusWindow('node-logic')}
-        onHoverHint={() => updateToolbarHint('NODE LOGIC', 'Node Logic workspace for building visual logic flows.')}
+        onHoverHint={() => updateToolbarHint('NODE LOGIC', 'Build interactive event, state, logic, and action flows connected to Live Preview.')}
         onMinimize={() => windows.setNodeLogicMinimized(true)}
         onRestore={() => windows.setNodeLogicMinimized(false)}
         onToggleFloating={() => windows.setNodeLogicWindowMode(windows.nodeLogicFloating ? 'docked' : 'floating')}
@@ -1062,11 +1024,14 @@ export function App() {
           )}
         >
           <LazyCodeWorkspace
+            key={codeWorkspaceLaunch.nonce}
             project={state.project}
             pages={pages}
             themes={designSystem.designTokens.themes}
             selectedNodeId={state.selectedNodeId}
             activeBreakpoint={designSystem.activeBreakpoint}
+            initialViewMode={codeWorkspaceLaunch.viewMode}
+            initialPageId={codeWorkspaceLaunch.pageId}
             mainCommandClient={mainCommandClient}
             onNotice={setNotice}
             onJumpToCanvasNode={() => {
@@ -1100,36 +1065,39 @@ export function App() {
             : 'layer'
         }
         capabilities={layers.contextMenuCapabilities}
-        onRename={(nodeId) => {
-          layers.setLayerContextMenu(null);
-          layers.beginLayerRename(nodeId, false);
-        }}
-        onGroup={(editorId, rootIds) => {
-          layers.setLayerContextMenu(null);
-          selectionSourceRef.current = 'layers';
-          getCommandClient(editorId).groupLayers(rootIds);
-        }}
-        onUngroup={(editorId, rootIds) => {
-          layers.setLayerContextMenu(null);
-          selectionSourceRef.current = 'layers';
-          getCommandClient(editorId).ungroupLayers(rootIds);
-        }}
-        onCreateClippingMask={(editorId, rootId) => {
-          layers.setLayerContextMenu(null);
-          selectionSourceRef.current = 'layers';
-          getCommandClient(editorId).createClippingMask(rootId);
-        }}
-        onRemoveClippingMask={(editorId, rootId) => {
-          layers.setLayerContextMenu(null);
-          selectionSourceRef.current = 'layers';
-          getCommandClient(editorId).removeClippingMask(rootId);
-        }}
-        onDelete={(editorId, nodeIds) => {
-          layers.setLayerContextMenu(null);
-          selectionSourceRef.current = 'layers';
-          getCommandClient(editorId).deleteNodes(nodeIds);
-        }}
+        onRename={(nodeId) => { layers.setLayerContextMenu(null); layers.beginLayerRename(nodeId, false); }}
+        onGroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).groupLayers(rootIds); }}
+        onUngroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).ungroupLayers(rootIds); }}
+        onCreateClippingMask={(editorId, rootId) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).createClippingMask(rootId); }}
+        onRemoveClippingMask={(editorId, rootId) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).removeClippingMask(rootId); }}
+        onDelete={(editorId, nodeIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).deleteNodes(nodeIds); }}
       />
+
+      {motion.motionOpen && (
+        <Suspense fallback={null}>
+          <LazyMotionTimelinePanel
+            activePage={activePage}
+            pageClips={motion.pageClips}
+            activeClip={motion.activeClip}
+            selectedNodeIds={state.selectedNodeIds}
+            playheadMs={motion.playheadMs}
+            isPlaying={motion.isPlaying}
+            previewActive={motion.previewActive}
+            onSelectClip={motion.selectClip}
+            onCreateClip={motion.createNewClip}
+            onApplyPreset={motion.applyPreset}
+            onDeleteClip={motion.deleteActiveClip}
+            onUpdateClip={motion.updateClip}
+            onTogglePlay={motion.togglePlay}
+            onStop={motion.stop}
+            onSeek={motion.seek}
+            onKeyframeSelected={() => motion.keyframeSelectedLayers()}
+            onOpenLivePreview={openLivePreviewForPage}
+            onSelectCanvasNode={(nodeId) => { setActiveEditorId('main'); mainCommandClient.selectNodes([nodeId], 'Select animated layer'); }}
+            onClose={motion.closeMotion}
+          />
+        </Suspense>
+      )}
 
       <StatusBar
         layerCount={activeDocument.nodes.length}

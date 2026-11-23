@@ -1,7 +1,7 @@
 import type { BreakpointId, DesignThemeDefinition, FolioPage, FolioProject } from '../../core/document/types';
 import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
 import { CodeWorkspaceView } from './CodeWorkspacePanel';
-import { useCodeWorkspace } from './useCodeWorkspace';
+import { useCodeWorkspace, type CodeWorkspaceViewMode } from './useCodeWorkspace';
 
 export interface LazyCodeWorkspaceProps {
   project: FolioProject;
@@ -10,6 +10,8 @@ export interface LazyCodeWorkspaceProps {
   selectedNodeId: string | null;
   activeBreakpoint: BreakpointId;
   mainCommandClient: MainCanvasCommandClient;
+  initialViewMode?: CodeWorkspaceViewMode;
+  initialPageId?: string;
   onNotice: (message: string) => void;
   onJumpToCanvasNode: (nodeId: string) => void;
   onClose: () => void;
@@ -26,6 +28,8 @@ export default function LazyCodeWorkspace({
   selectedNodeId,
   activeBreakpoint,
   mainCommandClient,
+  initialViewMode,
+  initialPageId,
   onNotice,
   onJumpToCanvasNode,
   onClose,
@@ -39,6 +43,8 @@ export default function LazyCodeWorkspace({
     onJumpToCanvasNode,
     controlledOpen: true,
     onControlledClose: onClose,
+    initialViewMode,
+    initialPageId,
   });
 
   return (

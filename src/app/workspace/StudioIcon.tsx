@@ -63,6 +63,11 @@ export const STUDIO_ICON_PATHS: Record<string, string> = {
   mobile: 'M8 3h8v18H8zM11 18h2',
   code: 'm8 8-4 4 4 4m8-8 4 4-4 4m-5-11-2 14',
   preview: 'M4 5h16v14H4zM4 9h16M10 14l4-2-4-2v4z',
+  motion: 'M3 7h18M3 12h18M3 17h18M9 7l2-2 2 2-2 2-2-2zm6 5l2-2 2 2-2 2-2-2zm-8 5l2-2 2 2-2 2-2-2z',
+  play: 'M7 5l12 7-12 7V5z',
+  pause: 'M7 5h3v14H7V5zm7 0h3v14h-3V5z',
+  stop: 'M6 6h12v12H6V6z',
+  loop: 'M17 2l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3',
 };
 
 export function StudioIcon({ name }: { name: string }) {

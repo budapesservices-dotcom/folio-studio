@@ -1,14 +1,18 @@
-import type { BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument } from '../../core/document/types';
+import { lazy, Suspense } from 'preact/compat';
+import type { BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument, FolioProject } from '../../core/document/types';
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { CanvasToolId, CanvasToolOptions } from '../../core/tools/operationContract';
 import { Canvas } from '../../engines/canvas/Canvas';
 import type { Alignment, DistributionAxis } from '../../engines/canvas/geometry';
 import type { ValidatedToolOperation } from '../../engines/canvas/geometryEngine';
 import { FloatingWindow } from '../FloatingWindow';
+import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
 import { ToolOptionsBar } from '../ToolOptionsBar';
 import { stepCanvasZoom } from './canvasViewState';
 import { StudioIcon } from './StudioIcon';
 import type { ComponentRecoveryStatus } from './useComponentMasterLifecycle';
+
+const LazyNodeLogicWorkspace = lazy(() => import('./NodeLogicWorkspace'));
 
 interface AlignmentToolsProps {
   selectedCount: number;
@@ -600,6 +604,11 @@ export interface NodeLogicWindowProps {
   position: { x: number; y: number };
   size: { width: number; height: number };
   zIndex: number;
+  project: FolioProject;
+  activePageId: string;
+  mainCommandClient: MainCanvasCommandClient;
+  onNotice: (message: string) => void;
+  onOpenLivePreview: (pageId?: string) => void;
   onPositionChange: (position: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
   onFocus: () => void;
@@ -619,6 +628,11 @@ export function NodeLogicWindow({
   position,
   size,
   zIndex,
+  project,
+  activePageId,
+  mainCommandClient,
+  onNotice,
+  onOpenLivePreview,
   onPositionChange,
   onSizeChange,
   onFocus,
@@ -671,13 +685,23 @@ export function NodeLogicWindow({
             </div>
           </div>
           <div class="node-logic-workspace">
-            <div class="node-logic-empty">
-              <div class="node-logic-empty-icon"><StudioIcon name="logicNodes" /></div>
-              <span class="panel-kicker">VISUAL LOGIC</span>
-              <strong>Node Logic</strong>
-              <p>Build and connect logic nodes in this independent workspace.</p>
-              <span class="node-logic-empty-note">NODE EDITOR · SEPARATE FROM DESIGN CANVAS</span>
-            </div>
+            <Suspense
+              fallback={(
+                <div class="node-logic-empty" role="status" aria-live="polite">
+                  <div class="node-logic-empty-icon"><StudioIcon name="logicNodes" /></div>
+                  <span class="panel-kicker">VISUAL LOGIC</span>
+                  <strong>Loading Node Logic…</strong>
+                </div>
+              )}
+            >
+              <LazyNodeLogicWorkspace
+                project={project}
+                activePageId={activePageId}
+                mainCommandClient={mainCommandClient}
+                onNotice={onNotice}
+                onOpenLivePreview={onOpenLivePreview}
+              />
+            </Suspense>
           </div>
         </FloatingWindow>
       )}

@@ -1,6 +1,7 @@
 import type { DocumentAddress, NativeNodeRef } from '../document/ast';
 import type { LayerDropPosition } from '../document/layers';
 import type {
+  AnimationClip,
   CodeModuleRecord,
   ComponentDefinition,
   ComponentSlotDefinition,
@@ -54,6 +55,7 @@ export type NativePermission =
   | 'tokens.update'
   | 'code.update'
   | 'logic.update'
+  | 'animation.update'
   | 'selection.update'
   | 'history.execute';
 
@@ -165,6 +167,18 @@ export interface LogicUpdateGraphPayload {
 
 export interface LogicDeleteGraphPayload {
   graphId: string;
+}
+
+export interface AnimationCreateClipPayload {
+  clip: AnimationClip;
+}
+
+export interface AnimationUpdateClipPayload {
+  clip: AnimationClip;
+}
+
+export interface AnimationDeleteClipPayload {
+  clipId: string;
 }
 
 export interface NodeCreatePayload {
@@ -283,6 +297,9 @@ export type CodeUpdateModulesCommand = NativeCommandEnvelope<'code.update-module
 export type LogicCreateGraphCommand = NativeCommandEnvelope<'logic.create-graph', LogicCreateGraphPayload>;
 export type LogicUpdateGraphCommand = NativeCommandEnvelope<'logic.update-graph', LogicUpdateGraphPayload>;
 export type LogicDeleteGraphCommand = NativeCommandEnvelope<'logic.delete-graph', LogicDeleteGraphPayload>;
+export type AnimationCreateClipCommand = NativeCommandEnvelope<'animation.create-clip', AnimationCreateClipPayload>;
+export type AnimationUpdateClipCommand = NativeCommandEnvelope<'animation.update-clip', AnimationUpdateClipPayload>;
+export type AnimationDeleteClipCommand = NativeCommandEnvelope<'animation.delete-clip', AnimationDeleteClipPayload>;
 export type NodeCreateCommand = NativeCommandEnvelope<'node.create', NodeCreatePayload>;
 export type NodeReplaceCommand = NativeCommandEnvelope<'node.replace', NodeReplacePayload>;
 export type NodeReplaceManyCommand = NativeCommandEnvelope<'node.replace-many', NodeReplaceManyPayload>;
@@ -335,6 +352,9 @@ export type ExtendedNativeCommand =
   | LogicCreateGraphCommand
   | LogicUpdateGraphCommand
   | LogicDeleteGraphCommand
+  | AnimationCreateClipCommand
+  | AnimationUpdateClipCommand
+  | AnimationDeleteClipCommand
   | NodeReplaceManyCommand
   | NodeSplitCommand
   | NodeUpdateManyCommand
@@ -359,6 +379,9 @@ export type NativeCommandPayload =
   | LogicCreateGraphPayload
   | LogicUpdateGraphPayload
   | LogicDeleteGraphPayload
+  | AnimationCreateClipPayload
+  | AnimationUpdateClipPayload
+  | AnimationDeleteClipPayload
   | NodeCreatePayload
   | NodeReplacePayload
   | NodeReplaceManyPayload

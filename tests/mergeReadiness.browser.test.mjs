@@ -223,11 +223,13 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
 
           const hints = document.querySelectorAll('.canvas-hint').length;
 
-          // WEB-02: File & View button vertical alignment + placeholder menus disabled
-          const fileBtn = Array.from(document.querySelectorAll('.global-menu-item.menu-trigger')).find((b) => b.textContent?.trim() === 'File');
-          const viewBtn = Array.from(document.querySelectorAll('.global-menu-item.menu-trigger')).find((b) => b.textContent?.trim() === 'View');
-          const fileRect = fileBtn?.getBoundingClientRect();
-          const viewRect = viewBtn?.getBoundingClientRect();
+          // WEB-02: All 6 top-bar menus (File, Edit, View, Tools, Option, Help) active & aligned
+          const menuButtons = Array.from(document.querySelectorAll('.global-menu-item.menu-trigger'));
+          const menuLabels = menuButtons.map((b) => b.textContent?.trim());
+          const menuRects = menuButtons.map((b) => {
+            const r = b.getBoundingClientRect();
+            return { top: r.top, height: r.height };
+          });
           const disabledPlaceholders = Array.from(document.querySelectorAll('.global-menu-item.is-disabled'))
             .map((el) => ({ text: el.textContent?.trim(), ariaDisabled: el.getAttribute('aria-disabled') }));
 
@@ -242,8 +244,8 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
             heroTspans,
             canvasBg,
             hints,
-            fileRect: fileRect ? { top: fileRect.top, height: fileRect.height } : null,
-            viewRect: viewRect ? { top: viewRect.top, height: viewRect.height } : null,
+            menuLabels,
+            menuRects,
             disabledPlaceholders,
             panelGroups,
             panelDividers,
@@ -255,12 +257,12 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(baseline.heroTspans).toEqual(['Ideas become', 'interfaces.']);
         expect(baseline.canvasBg).not.toBe('rgb(255, 255, 255)');
         expect(baseline.hints).toBe(0);
-        expect(baseline.fileRect).toBeTruthy();
-        expect(baseline.viewRect).toBeTruthy();
-        expect(Math.abs(baseline.fileRect.top - baseline.viewRect.top)).toBeLessThanOrEqual(1);
-        expect(Math.abs(baseline.fileRect.height - baseline.viewRect.height)).toBeLessThanOrEqual(1);
-        expect(baseline.disabledPlaceholders.map((p) => p.text)).toEqual(['Edit', 'Tools', 'Option']);
-        expect(baseline.disabledPlaceholders.every((p) => p.ariaDisabled === 'true')).toBe(true);
+        expect(baseline.menuLabels).toEqual(['File', 'Edit', 'View', 'Tools', 'Option', 'Help']);
+        for (const rect of baseline.menuRects) {
+          expect(Math.abs(rect.top - baseline.menuRects[0].top)).toBeLessThanOrEqual(1);
+          expect(Math.abs(rect.height - baseline.menuRects[0].height)).toBeLessThanOrEqual(1);
+        }
+        expect(baseline.disabledPlaceholders).toEqual([]);
         expect(baseline.panelGroups).toEqual(['Racks', 'Side panels', 'Workspace windows', 'Utilities']);
         expect(baseline.panelDividers).toBe(3);
 
@@ -1143,6 +1145,253 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(browser.pageErrors).toEqual([]);
       } finally {
         await browser.cleanup();
+      }
+    },
+    30000,
+  );
+
+  it(
+    'Visual Node Logic Editor renders starter graph, simulates interactions, and launches interactive Live Preview',
+    async () => {
+      expect(chromium, 'Chromium binary is required to run browser acceptance tests').toBeTruthy();
+
+      const server = await createViteServer({
+        logLevel: 'silent',
+        server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false },
+      });
+      await server.listen();
+      const address = server.httpServer?.address();
+      if (!address || typeof address === 'string') {
+        await server.close();
+        throw new Error('Failed to bind Vite test server');
+      }
+      const url = `http://127.0.0.1:${address.port}/folio-studio/`;
+      const browser = await launchChromium(url);
+      try {
+        const mountDeadline = Date.now() + 15000;
+        while (Date.now() < mountDeadline) {
+          try {
+            const ready = await browser.evalJs(`
+              return Boolean(document.querySelector('.app-shell') && !document.querySelector('.project-hydration-overlay'));
+            `);
+            if (ready) break;
+          } catch (err) {
+            if (!String(err).includes('Execution context was destroyed')) throw err;
+          }
+          await new Promise((r) => setTimeout(r, 80));
+        }
+
+        const result = await browser.evalJs(`
+          // 1. Open Edit, Tools, and Option menus to verify live interactive dropdowns
+          const openMenuItems = async (label) => {
+            const btn = Array.from(document.querySelectorAll('.global-menu-item.menu-trigger')).find((b) => b.textContent?.trim() === label);
+            btn?.click();
+            await new Promise((r) => setTimeout(r, 40));
+            return Array.from(document.querySelectorAll('.global-menu-dropdown [role="menuitem"]')).map((el) => el.textContent?.trim());
+          };
+          const editItems = await openMenuItems('Edit');
+          const toolsItems = await openMenuItems('Tools');
+          const optionItems = await openMenuItems('Option');
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          await new Promise((r) => setTimeout(r, 40));
+
+          // 2. Open Node Logic Workspace
+          document.querySelector('.node-logic-header-toggle')?.click();
+          const deadline = Date.now() + 5000;
+          while (Date.now() < deadline && !document.querySelector('.nl-studio')) {
+            await new Promise((r) => setTimeout(r, 40));
+          }
+
+          const initialNodeCount = document.querySelectorAll('.nl-node-card').length;
+          const initialWireCount = document.querySelectorAll('.nl-wire-group').length;
+
+          // 3. Add a node from the categorized palette
+          const firstPaletteItem = document.querySelector('.nl-palette-item');
+          firstPaletteItem?.click();
+          await new Promise((r) => setTimeout(r, 60));
+          const afterAddNodeCount = document.querySelectorAll('.nl-node-card').length;
+
+          // 4. Switch to Simulate tab and trigger starter Visual card click
+          const simTab = Array.from(document.querySelectorAll('.nl-tab-btn')).find((b) => b.textContent?.trim() === 'Simulate');
+          simTab?.click();
+          await new Promise((r) => setTimeout(r, 50));
+          const triggerBtn = document.querySelector('.nl-trigger-btn');
+          triggerBtn?.click();
+          await new Promise((r) => setTimeout(r, 60));
+          const simValues = Array.from(document.querySelectorAll('.nl-sim-kv')).map((row) => row.textContent?.trim());
+          const traceCount = document.querySelectorAll('.nl-trace-row').length;
+
+          // 5. Launch Live Preview directly from Node Logic CTA and verify real DOM interaction
+          document.querySelector('.nl-preview-cta')?.click();
+          const previewDeadline = Date.now() + 5000;
+          while (Date.now() < previewDeadline && !document.querySelector('.live-preview-iframe')) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          const iframe = document.querySelector('.live-preview-iframe');
+          const previewOpen = Boolean(iframe);
+          const previewSrcdoc = iframe?.getAttribute('srcdoc') ?? '';
+
+          return {
+            editCount: editItems.length,
+            toolsCount: toolsItems.length,
+            optionCount: optionItems.length,
+            initialNodeCount,
+            initialWireCount,
+            afterAddNodeCount,
+            simValues,
+            traceCount,
+            previewOpen,
+            previewSrcdoc,
+          };
+        `);
+
+        expect(result.editCount).toBeGreaterThanOrEqual(10);
+        expect(result.toolsCount).toBeGreaterThanOrEqual(14);
+        expect(result.optionCount).toBeGreaterThanOrEqual(5);
+        expect(result.initialNodeCount).toBe(9);
+        expect(result.initialWireCount).toBe(8);
+        expect(result.afterAddNodeCount).toBe(10);
+        expect(result.simValues.some((v) => v.includes('clickCount') && v.includes('1'))).toBe(true);
+        expect(result.simValues.some((v) => v.includes('accentActive') && v.includes('true'))).toBe(true);
+        expect(result.traceCount).toBeGreaterThan(0);
+        expect(result.previewOpen).toBe(true);
+        expect(result.previewSrcdoc).toContain('INTERACTIONS');
+        expect(browser.consoleErrors).toEqual([]);
+        expect(browser.pageErrors).toEqual([]);
+
+        // 6. Execute the exact Live Preview HTML in Chromium and click Visual card
+        const previewUrl = `data:text/html;charset=utf-8,${encodeURIComponent(result.previewSrcdoc)}`;
+        const previewBrowser = await launchChromium(previewUrl);
+        try {
+          const domInteraction = await previewBrowser.evalJs(`
+            const visibleText = () => Array.from(document.querySelectorAll('[data-folio-id]')).map((el) => el.textContent ?? '').join(' | ');
+            const clickable = document.querySelector('[data-folio-interactive="true"]');
+            const beforeText = visibleText();
+            clickable?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise((r) => setTimeout(r, 40));
+            const afterText1 = visibleText();
+            clickable?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise((r) => setTimeout(r, 40));
+            const afterText2 = visibleText();
+            return {
+              hasClickable: Boolean(clickable),
+              updated1: !beforeText.includes('INTERACTIONS') && afterText1.includes('INTERACTIONS') && afterText1.includes('1'),
+              updated2: afterText2.includes('INTERACTIONS') && afterText2.includes('2'),
+            };
+          `);
+          expect(domInteraction).toEqual({
+            hasClickable: true,
+            updated1: true,
+            updated2: true,
+          });
+          expect(previewBrowser.consoleErrors).toEqual([]);
+          expect(previewBrowser.pageErrors).toEqual([]);
+        } finally {
+          await previewBrowser.cleanup();
+        }
+      } finally {
+        await browser.cleanup();
+        await server.close();
+      }
+    },
+    30000,
+  );
+
+  it(
+    'docks Stage 8 Motion Timeline Studio, scrubs live canvas poses, inspects keyframes, and compiles @keyframes into Live Preview',
+    async () => {
+      expect(chromium, 'Chromium binary is required to run browser acceptance tests').toBeTruthy();
+
+      const server = await createViteServer({
+        logLevel: 'silent',
+        server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false },
+      });
+      await server.listen();
+      const address = server.httpServer?.address();
+      if (!address || typeof address === 'string') {
+        await server.close();
+        throw new Error('Failed to bind Vite test server');
+      }
+      const url = `http://127.0.0.1:${address.port}/folio-studio/`;
+      const browser = await launchChromium(url);
+      try {
+        const mountDeadline = Date.now() + 15000;
+        while (Date.now() < mountDeadline) {
+          try {
+            const ready = await browser.evalJs(`
+              return Boolean(document.querySelector('.motion-timeline-header-toggle') && !document.querySelector('.project-hydration-overlay'));
+            `);
+            if (ready) break;
+          } catch (err) {
+            if (!String(err).includes('Execution context was destroyed')) throw err;
+          }
+          await new Promise((r) => setTimeout(r, 80));
+        }
+        const motionResult = await browser.evalJs(`
+          const toggleBtn = document.querySelector('.motion-timeline-header-toggle');
+          toggleBtn.click();
+          const dockDeadline = Date.now() + 5000;
+          while (Date.now() < dockDeadline && !document.querySelector('[data-testid="motion-timeline"]')) {
+            await new Promise((r) => setTimeout(r, 40));
+          }
+          const dock = document.querySelector('[data-testid="motion-timeline"]');
+          const shellHasClass = document.querySelector('.app-shell')?.classList.contains('has-motion-timeline');
+          const trackCount = document.querySelectorAll('.mt-track-grid-row').length;
+          const initialKeyframes = document.querySelectorAll('.mt-keyframe').length;
+          const clipLabel = document.querySelector('.mt-clip-select')?.selectedOptions?.[0]?.textContent?.trim() ?? '';
+
+          // Scrub ruler to midpoint via keyboard ArrowRight (Shift+ArrowRight = +100ms)
+          const ruler = document.querySelector('.mt-ruler');
+          ruler.focus();
+          for (let i = 0; i < 4; i += 1) {
+            ruler.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }));
+            await new Promise((r) => setTimeout(r, 25));
+          }
+          await new Promise((r) => setTimeout(r, 60));
+          const timecodeAfterScrub = document.querySelector('[data-testid="motion-timecode"]')?.textContent?.trim() ?? '';
+
+          // Select first keyframe to open inspector strip
+          const firstKf = document.querySelector('.mt-keyframe');
+          firstKf?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 400, clientY: 720, pointerId: 1 }));
+          window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 }));
+          await new Promise((r) => setTimeout(r, 40));
+          const hasEasingSelect = Boolean(document.querySelector('[aria-label="Keyframe easing curve"]'));
+
+          // Launch Live Preview from Motion Timeline CTA and confirm @keyframes CSS
+          document.querySelector('.mt-cta-btn')?.click();
+          const previewDeadline = Date.now() + 5000;
+          while (Date.now() < previewDeadline && !document.querySelector('.live-preview-iframe')) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          const srcdoc = document.querySelector('.live-preview-iframe')?.getAttribute('srcdoc') ?? '';
+
+          return {
+            docked: Boolean(dock),
+            shellHasClass,
+            trackCount,
+            initialKeyframes,
+            clipLabel,
+            timecodeAfterScrub,
+            hasEasingSelect,
+            hasKeyframesCss: srcdoc.includes('@keyframes folio-kf-'),
+            hasReducedMotionGuard: srcdoc.includes('prefers-reduced-motion: reduce'),
+          };
+        `);
+
+        expect(motionResult.docked).toBe(true);
+        expect(motionResult.shellHasClass).toBe(true);
+        expect(motionResult.trackCount).toBeGreaterThanOrEqual(4);
+        expect(motionResult.initialKeyframes).toBeGreaterThanOrEqual(8);
+        expect(motionResult.clipLabel).toContain('Hero Entrance');
+        expect(motionResult.timecodeAfterScrub).toContain('0.40s');
+        expect(motionResult.hasEasingSelect).toBe(true);
+        expect(motionResult.hasKeyframesCss).toBe(true);
+        expect(motionResult.hasReducedMotionGuard).toBe(true);
+        expect(browser.consoleErrors).toEqual([]);
+        expect(browser.pageErrors).toEqual([]);
+      } finally {
+        await browser.cleanup();
+        await server.close();
       }
     },
     30000,

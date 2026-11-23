@@ -1,14 +1,53 @@
 import type { JSX, RefObject } from 'preact';
+import type { PathfinderOperation } from '../../core/document/vector';
+import type { CanvasToolId } from '../../core/tools/operationContract';
 import { ToolbarHintBar, type ToolbarHintStore } from '../ToolbarHintBar';
 import type { WorkspacePreferencesLoadResult } from '../workspacePreferences';
 import { StudioIcon } from './StudioIcon';
 
+export type TopMenuId = 'file' | 'edit' | 'view' | 'tools' | 'option' | 'help';
+
+export interface GlobalToolbarMenuActions {
+  canUndo: boolean;
+  canRedo: boolean;
+  hasSelection: boolean;
+  hasClipboard: boolean;
+  canGroup: boolean;
+  canUngroup: boolean;
+  canMask: boolean;
+  canUnmask: boolean;
+  canPathfinder: boolean;
+  canConvertToPath: boolean;
+  activeToolId: CanvasToolId;
+  activeThemeId: string;
+  themes: ReadonlyArray<{ id: string; name: string }>;
+  onUndo: () => void;
+  onRedo: () => void;
+  onCut: () => void;
+  onCopy: () => void;
+  onPaste: () => void;
+  onDuplicate: () => void;
+  onSelectAll: () => void;
+  onGroup: () => void;
+  onUngroup: () => void;
+  onCreateMask: () => void;
+  onRemoveMask: () => void;
+  onDelete: () => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onZoomReset: () => void;
+  onSelectTool: (toolId: CanvasToolId) => void;
+  onPathfinder: (operation: PathfinderOperation) => void;
+  onConvertToPath: () => void;
+  onRotate90: () => void;
+  onSelectTheme: (themeId: string) => void;
+}
+
 export interface GlobalToolbarProps {
   projectName: string;
   isHydrating: boolean;
-  fileMenuOpen: boolean;
-  viewMenuOpen: boolean;
-  helpMenuOpen: boolean;
+  openMenu: TopMenuId | null;
+  menuActions: GlobalToolbarMenuActions;
   menuBarRef: RefObject<HTMLDivElement>;
   projectFileInputRef: RefObject<HTMLInputElement>;
   pagesRackToggleRef: RefObject<HTMLButtonElement>;
@@ -30,11 +69,11 @@ export interface GlobalToolbarProps {
   nodeLogicClosed: boolean;
   nodeLogicMinimized: boolean;
   codeWorkspaceOpen: boolean;
+  motionTimelineOpen: boolean;
   shortcutsModalOpen: boolean;
   toolbarHintStore: ToolbarHintStore;
-  onToggleFileMenu: () => void;
-  onToggleViewMenu: () => void;
-  onToggleHelpMenu: () => void;
+  onToggleMenu: (menu: TopMenuId) => void;
+  onCloseMenus: () => void;
   onOpenProjectPicker: () => void;
   onProjectFileSelected: (file: File) => void | Promise<void>;
   onExportCurrentProject: () => void;
@@ -55,16 +94,29 @@ export interface GlobalToolbarProps {
   onToggleComponentCanvas: () => void;
   onToggleNodeLogic: () => void;
   onToggleCodeWorkspace: () => void;
+  onToggleMotionTimeline: () => void;
   onEnterFullscreen: () => void;
   onUpdateToolbarHint: (panel: string, description: string, shortcuts?: string[]) => void;
 }
 
+const TOOLS_MENU_ITEMS: ReadonlyArray<{ id: CanvasToolId; label: string; shortcut: string }> = [
+  { id: 'select', label: 'Select', shortcut: 'V' },
+  { id: 'direct-selection', label: 'Direct Selection', shortcut: 'A' },
+  { id: 'frame', label: 'Frame', shortcut: 'F' },
+  { id: 'draw-rect', label: 'Rectangle', shortcut: 'R' },
+  { id: 'draw-ellipse', label: 'Ellipse', shortcut: 'O' },
+  { id: 'draw-text', label: 'Text', shortcut: 'T' },
+  { id: 'pen', label: 'Pen', shortcut: 'P' },
+  { id: 'curvature', label: 'Curvature', shortcut: 'U' },
+  { id: 'shape-builder', label: 'Shape Builder', shortcut: 'Shift+M' },
+  { id: 'hand', label: 'Hand', shortcut: 'H' },
+];
+
 export function GlobalToolbar({
   projectName,
   isHydrating,
-  fileMenuOpen,
-  viewMenuOpen,
-  helpMenuOpen,
+  openMenu,
+  menuActions,
   menuBarRef,
   projectFileInputRef,
   pagesRackToggleRef,
@@ -86,11 +138,11 @@ export function GlobalToolbar({
   nodeLogicClosed,
   nodeLogicMinimized,
   codeWorkspaceOpen,
+  motionTimelineOpen,
   shortcutsModalOpen,
   toolbarHintStore,
-  onToggleFileMenu,
-  onToggleViewMenu,
-  onToggleHelpMenu,
+  onToggleMenu,
+  onCloseMenus,
   onOpenProjectPicker,
   onProjectFileSelected,
   onExportCurrentProject,
@@ -111,6 +163,7 @@ export function GlobalToolbar({
   onToggleComponentCanvas,
   onToggleNodeLogic,
   onToggleCodeWorkspace,
+  onToggleMotionTimeline,
   onEnterFullscreen,
   onUpdateToolbarHint,
 }: GlobalToolbarProps) {
@@ -123,9 +176,14 @@ export function GlobalToolbar({
     void onProjectFileSelected(file);
   };
 
+  const runMenuAction = (action: () => void) => {
+    onCloseMenus();
+    action();
+  };
+
   return (
     <header
-      class={`global-toolbar-slot ${fileMenuOpen || viewMenuOpen || helpMenuOpen ? 'has-open-menu' : ''}`}
+      class={`global-toolbar-slot ${openMenu !== null ? 'has-open-menu' : ''}`}
       aria-label="FOLIO application toolbar"
     >
       <nav class="global-menu-bar" aria-label="Application menus">
@@ -136,25 +194,25 @@ export function GlobalToolbar({
                 type="button"
                 class="global-menu-item menu-trigger"
                 aria-haspopup="menu"
-                aria-expanded={fileMenuOpen}
-                onClick={onToggleFileMenu}
+                aria-expanded={openMenu === 'file'}
+                onClick={() => onToggleMenu('file')}
                 onMouseEnter={() => onUpdateToolbarHint('FILE', 'Open or export the current native .flop project.')}
               >
                 File
               </button>
-              {fileMenuOpen && (
+              {openMenu === 'file' && (
                 <div class="global-menu-dropdown" role="menu" aria-label="File menu">
                   <button type="button" role="menuitem" onClick={onOpenProjectPicker} disabled={isHydrating}>
                     Open Project…
                   </button>
-                  <button type="button" role="menuitem" onClick={onExportCurrentProject} disabled={isHydrating}>
+                  <button type="button" role="menuitem" onClick={() => runMenuAction(onExportCurrentProject)} disabled={isHydrating}>
                     Export Project (.flop)
                   </button>
                   <div class="global-menu-divider" role="separator" />
-                  <button type="button" role="menuitem" onClick={onExportActiveCanvasSvg} disabled={isHydrating}>
+                  <button type="button" role="menuitem" onClick={() => runMenuAction(onExportActiveCanvasSvg)} disabled={isHydrating}>
                     Export SVG
                   </button>
-                  <button type="button" role="menuitem" onClick={onExportActiveCanvasPng} disabled={isHydrating}>
+                  <button type="button" role="menuitem" onClick={() => runMenuAction(onExportActiveCanvasPng)} disabled={isHydrating}>
                     Export PNG (2×)
                   </button>
                 </div>
@@ -168,66 +226,246 @@ export function GlobalToolbar({
                 onChange={handleFileInputChange}
               />
             </div>
+
             <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span
-              class="global-menu-item is-disabled"
-              aria-disabled="true"
-              title="Edit menu (planned)"
-              onMouseEnter={() => onUpdateToolbarHint('EDIT', 'Editing, history and selection commands will be organized here.')}
-            >
-              Edit
-            </span>
-            <span class="global-menu-separator" aria-hidden="true">|</span>
+
             <div class="global-menu-entry">
               <button
                 type="button"
                 class="global-menu-item menu-trigger"
                 aria-haspopup="menu"
-                aria-expanded={viewMenuOpen}
-                onClick={onToggleViewMenu}
+                aria-expanded={openMenu === 'edit'}
+                onClick={() => onToggleMenu('edit')}
+                onMouseEnter={() => onUpdateToolbarHint('EDIT', 'History, clipboard, grouping, masking, and selection commands.')}
+              >
+                Edit
+              </button>
+              {openMenu === 'edit' && (
+                <div class="global-menu-dropdown" role="menu" aria-label="Edit menu">
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.canUndo} onClick={() => runMenuAction(menuActions.onUndo)}>
+                    <span>Undo</span>
+                    <kbd class="global-menu-shortcut">Ctrl+Z</kbd>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.canRedo} onClick={() => runMenuAction(menuActions.onRedo)}>
+                    <span>Redo</span>
+                    <kbd class="global-menu-shortcut">Ctrl+Shift+Z</kbd>
+                  </button>
+                  <div class="global-menu-divider" role="separator" />
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.hasSelection} onClick={() => runMenuAction(menuActions.onCut)}>
+                    <span>Cut</span>
+                    <kbd class="global-menu-shortcut">Ctrl+X</kbd>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.hasSelection} onClick={() => runMenuAction(menuActions.onCopy)}>
+                    <span>Copy</span>
+                    <kbd class="global-menu-shortcut">Ctrl+C</kbd>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.hasClipboard} onClick={() => runMenuAction(menuActions.onPaste)}>
+                    <span>Paste</span>
+                    <kbd class="global-menu-shortcut">Ctrl+V</kbd>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.hasSelection} onClick={() => runMenuAction(menuActions.onDuplicate)}>
+                    <span>Duplicate</span>
+                    <kbd class="global-menu-shortcut">Ctrl+D</kbd>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating} onClick={() => runMenuAction(menuActions.onSelectAll)}>
+                    <span>Select All</span>
+                    <kbd class="global-menu-shortcut">Ctrl+A</kbd>
+                  </button>
+                  <div class="global-menu-divider" role="separator" />
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.canGroup} onClick={() => runMenuAction(menuActions.onGroup)}>
+                    <span>Group Layers</span>
+                    <kbd class="global-menu-shortcut">Ctrl+G</kbd>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.canUngroup} onClick={() => runMenuAction(menuActions.onUngroup)}>
+                    <span>Ungroup Layers</span>
+                    <kbd class="global-menu-shortcut">Ctrl+Shift+G</kbd>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.canMask} onClick={() => runMenuAction(menuActions.onCreateMask)}>
+                    <span>Create Clipping Mask</span>
+                    <kbd class="global-menu-shortcut">Ctrl+M</kbd>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.canUnmask} onClick={() => runMenuAction(menuActions.onRemoveMask)}>
+                    <span>Remove Clipping Mask</span>
+                    <kbd class="global-menu-shortcut">Ctrl+Shift+M</kbd>
+                  </button>
+                  <div class="global-menu-divider" role="separator" />
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.hasSelection} onClick={() => runMenuAction(menuActions.onDelete)}>
+                    <span>Delete</span>
+                    <kbd class="global-menu-shortcut">Del</kbd>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <span class="global-menu-separator" aria-hidden="true">|</span>
+
+            <div class="global-menu-entry">
+              <button
+                type="button"
+                class="global-menu-item menu-trigger"
+                aria-haspopup="menu"
+                aria-expanded={openMenu === 'view'}
+                onClick={() => onToggleMenu('view')}
                 onMouseEnter={() => onUpdateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}
               >
                 View
               </button>
-              {viewMenuOpen && (
+              {openMenu === 'view' && (
                 <div class="global-menu-dropdown" role="menu" aria-label="View menu">
-                  <button type="button" role="menuitem" onClick={onResetWindowLayout}>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" onClick={() => runMenuAction(menuActions.onZoomIn)}>
+                    <span>Zoom In</span>
+                    <kbd class="global-menu-shortcut">+</kbd>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" onClick={() => runMenuAction(menuActions.onZoomOut)}>
+                    <span>Zoom Out</span>
+                    <kbd class="global-menu-shortcut">−</kbd>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" onClick={() => runMenuAction(menuActions.onZoomReset)}>
+                    <span>Reset Zoom (100%)</span>
+                    <kbd class="global-menu-shortcut">100%</kbd>
+                  </button>
+                  <div class="global-menu-divider" role="separator" />
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" onClick={() => runMenuAction(onToggleLayersVisible)}>
+                    <span><span class="global-menu-check">{layersVisible ? '✓' : ''}</span>Layers Sidebar</span>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" onClick={() => runMenuAction(onToggleInspectorVisible)}>
+                    <span><span class="global-menu-check">{inspectorVisible ? '✓' : ''}</span>Inspector Panel</span>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" onClick={() => runMenuAction(onToggleNodeLogic)}>
+                    <span><span class="global-menu-check">{nodeLogicOpen ? '✓' : ''}</span>Node Logic Workspace</span>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" onClick={() => runMenuAction(onToggleCodeWorkspace)}>
+                    <span><span class="global-menu-check">{codeWorkspaceOpen ? '✓' : ''}</span>Code &amp; Preview Studio</span>
+                  </button>
+                  <button type="button" role="menuitem" class="global-menu-item-with-shortcut" onClick={() => runMenuAction(onToggleMotionTimeline)}>
+                    <span><span class="global-menu-check">{motionTimelineOpen ? '✓' : ''}</span>Motion Timeline</span>
+                  </button>
+                  <div class="global-menu-divider" role="separator" />
+                  <button type="button" role="menuitem" onClick={() => runMenuAction(onResetWindowLayout)}>
                     Reset Window Layout
                   </button>
                 </div>
               )}
             </div>
+
             <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span
-              class="global-menu-item is-disabled"
-              aria-disabled="true"
-              title="Tools menu (planned)"
-              onMouseEnter={() => onUpdateToolbarHint('TOOLS', 'Design tools and tool-specific settings will be organized here.')}
-            >
-              Tools
-            </span>
-            <span class="global-menu-separator" aria-hidden="true">|</span>
-            <span
-              class="global-menu-item is-disabled"
-              aria-disabled="true"
-              title="Option menu (planned)"
-              onMouseEnter={() => onUpdateToolbarHint('OPTION', 'Application and workspace preferences will be organized here.')}
-            >
-              Option
-            </span>
-            <span class="global-menu-separator" aria-hidden="true">|</span>
+
             <div class="global-menu-entry">
               <button
                 type="button"
                 class="global-menu-item menu-trigger"
                 aria-haspopup="menu"
-                aria-expanded={helpMenuOpen}
-                onClick={onToggleHelpMenu}
+                aria-expanded={openMenu === 'tools'}
+                onClick={() => onToggleMenu('tools')}
+                onMouseEnter={() => onUpdateToolbarHint('TOOLS', 'Switch canvas tools and invoke vector pathfinder or transform operations.')}
+              >
+                Tools
+              </button>
+              {openMenu === 'tools' && (
+                <div class="global-menu-dropdown" role="menu" aria-label="Tools menu">
+                  {TOOLS_MENU_ITEMS.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="menuitem"
+                      class="global-menu-item-with-shortcut"
+                      disabled={isHydrating}
+                      onClick={() => runMenuAction(() => menuActions.onSelectTool(item.id))}
+                    >
+                      <span>
+                        <span class="global-menu-check">{menuActions.activeToolId === item.id ? '✓' : ''}</span>
+                        {item.label}
+                      </span>
+                      <kbd class="global-menu-shortcut">{item.shortcut}</kbd>
+                    </button>
+                  ))}
+                  <div class="global-menu-divider" role="separator" />
+                  <button type="button" role="menuitem" disabled={isHydrating || !menuActions.canPathfinder} onClick={() => runMenuAction(() => menuActions.onPathfinder('unite'))}>
+                    Pathfinder: Unite
+                  </button>
+                  <button type="button" role="menuitem" disabled={isHydrating || !menuActions.canPathfinder} onClick={() => runMenuAction(() => menuActions.onPathfinder('subtract'))}>
+                    Pathfinder: Subtract
+                  </button>
+                  <button type="button" role="menuitem" disabled={isHydrating || !menuActions.canPathfinder} onClick={() => runMenuAction(() => menuActions.onPathfinder('intersect'))}>
+                    Pathfinder: Intersect
+                  </button>
+                  <button type="button" role="menuitem" disabled={isHydrating || !menuActions.canPathfinder} onClick={() => runMenuAction(() => menuActions.onPathfinder('exclude'))}>
+                    Pathfinder: Exclude
+                  </button>
+                  <div class="global-menu-divider" role="separator" />
+                  <button type="button" role="menuitem" disabled={isHydrating || !menuActions.canConvertToPath} onClick={() => runMenuAction(menuActions.onConvertToPath)}>
+                    Convert to Path
+                  </button>
+                  <button type="button" role="menuitem" disabled={isHydrating || !menuActions.hasSelection} onClick={() => runMenuAction(menuActions.onRotate90)}>
+                    Rotate +90°
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <span class="global-menu-separator" aria-hidden="true">|</span>
+
+            <div class="global-menu-entry">
+              <button
+                type="button"
+                class="global-menu-item menu-trigger"
+                aria-haspopup="menu"
+                aria-expanded={openMenu === 'option'}
+                onClick={() => onToggleMenu('option')}
+                onMouseEnter={() => onUpdateToolbarHint('OPTION', 'Design token themes, workspace racks, and layout preferences.')}
+              >
+                Option
+              </button>
+              {openMenu === 'option' && (
+                <div class="global-menu-dropdown" role="menu" aria-label="Option menu">
+                  <div class="global-menu-section-label">Design Token Theme</div>
+                  {menuActions.themes.map((theme) => (
+                    <button
+                      key={theme.id}
+                      type="button"
+                      role="menuitem"
+                      disabled={isHydrating}
+                      onClick={() => runMenuAction(() => menuActions.onSelectTheme(theme.id))}
+                    >
+                      <span class="global-menu-check">{menuActions.activeThemeId === theme.id ? '✓' : ''}</span>
+                      {theme.name}
+                    </button>
+                  ))}
+                  <div class="global-menu-divider" role="separator" />
+                  <button type="button" role="menuitem" onClick={() => runMenuAction(onToggleTokensRack)}>
+                    <span class="global-menu-check">{tokensRackOpen ? '✓' : ''}</span>
+                    Design Tokens Rack
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => runMenuAction(onTogglePagesRack)}>
+                    <span class="global-menu-check">{pagesRackOpen ? '✓' : ''}</span>
+                    Pages Rack
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => runMenuAction(onToggleComponentRack)}>
+                    <span class="global-menu-check">{componentRackOpen ? '✓' : ''}</span>
+                    Component Rack
+                  </button>
+                  <div class="global-menu-divider" role="separator" />
+                  <button type="button" role="menuitem" onClick={() => runMenuAction(onResetWindowLayout)}>
+                    Reset Window Layout
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <span class="global-menu-separator" aria-hidden="true">|</span>
+
+            <div class="global-menu-entry">
+              <button
+                type="button"
+                class="global-menu-item menu-trigger"
+                aria-haspopup="menu"
+                aria-expanded={openMenu === 'help'}
+                onClick={() => onToggleMenu('help')}
                 onMouseEnter={() => onUpdateToolbarHint('HELP', 'Open the categorized Keyboard Shortcuts cheat sheet.', ['KEY: ?', 'CTRL/CMD + /'])}
               >
                 Help
               </button>
-              {helpMenuOpen && (
+              {openMenu === 'help' && (
                 <div class="global-menu-dropdown" role="menu" aria-label="Help menu">
                   <button
                     type="button"
@@ -390,6 +628,17 @@ export function GlobalToolbar({
               onMouseEnter={() => onUpdateToolbarHint('CODE & PREVIEW', 'Inspect compiled HTML/CSS & React TSX, sync mapped AST changes, author Custom/Extension code, and test Live Preview.')}
             >
               <StudioIcon name="code" />
+            </button>
+            <button
+              class={`global-panel-toggle motion-timeline-header-toggle ${motionTimelineOpen ? 'active' : ''}`}
+              type="button"
+              title={motionTimelineOpen ? 'Close Motion Timeline' : 'Open Motion Timeline'}
+              aria-label={motionTimelineOpen ? 'Close Motion Timeline' : 'Open Motion Timeline'}
+              aria-pressed={motionTimelineOpen}
+              onClick={onToggleMotionTimeline}
+              onMouseEnter={() => onUpdateToolbarHint('MOTION TIMELINE', 'Author keyframe animations, scrub live poses on Canvas, apply presets, and compile CSS @keyframes.')}
+            >
+              <StudioIcon name="motion" />
             </button>
           </div>
           <span class="global-panel-group-divider" aria-hidden="true" />

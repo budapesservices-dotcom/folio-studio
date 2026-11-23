@@ -1,4 +1,5 @@
 import type {
+  AnimationClip,
   CodeModuleRecord,
   ComponentDefinition,
   ComponentSlotDefinition,
@@ -68,6 +69,9 @@ export type EditorAction =
   | { type: 'create-logic-graph'; graph: LogicGraph }
   | { type: 'update-logic-graph'; graph: LogicGraph }
   | { type: 'delete-logic-graph'; graphId: string }
+  | { type: 'create-animation-clip'; clip: AnimationClip }
+  | { type: 'update-animation-clip'; clip: AnimationClip }
+  | { type: 'delete-animation-clip'; clipId: string }
   | { type: 'replace-project'; project: FolioProject }
   | { type: 'undo' }
   | { type: 'redo' };
@@ -605,6 +609,51 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           logicGraphs: state.project.logicGraphs.filter((graph) => graph.id !== action.graphId),
         }),
       );
+    }
+
+    case 'create-animation-clip': {
+      const currentClips = state.project.animations ?? [];
+      if (currentClips.some((clip) => clip.id === action.clip.id)) {
+        return state;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          animations: [...currentClips, action.clip],
+        }),
+      );
+    }
+
+    case 'update-animation-clip': {
+      const currentClips = state.project.animations ?? [];
+      const existing = currentClips.find((clip) => clip.id === action.clip.id);
+      if (!existing) return state;
+      if (JSON.stringify(existing) === JSON.stringify(action.clip)) {
+        return state;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          animations: currentClips.map((clip) => (clip.id === action.clip.id ? action.clip : clip)),
+        }),
+      );
+    }
+
+    case 'delete-animation-clip': {
+      const currentClips = state.project.animations ?? [];
+      if (!currentClips.some((clip) => clip.id === action.clipId)) {
+        return state;
+      }
+      const remaining = currentClips.filter((clip) => clip.id !== action.clipId);
+      const nextProject: FolioProject = { ...state.project };
+      if (remaining.length > 0) {
+        nextProject.animations = remaining;
+      } else {
+        delete nextProject.animations;
+      }
+      return withSnapshot(state, touch(nextProject));
     }
 
     case 'replace-project':

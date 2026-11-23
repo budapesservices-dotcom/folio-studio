@@ -46,6 +46,7 @@ export const BUILT_IN_LOGIC_NODE_TYPES = [
   'action.set-variant',
   'action.navigate',
   'action.set-theme',
+  'action.play-animation',
 ] as const;
 
 export type BuiltInLogicNodeType = (typeof BUILT_IN_LOGIC_NODE_TYPES)[number];
@@ -322,6 +323,19 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     ],
     defaultData: {
       themeId: '',
+    },
+  }),
+  'action.play-animation': defineNode({
+    type: 'action.play-animation',
+    category: 'action',
+    label: 'Play Animation',
+    description: 'Plays a Motion Timeline animation clip on the active page in runtime and Live Preview.',
+    ports: [
+      { id: 'exec', label: 'Exec', direction: 'in', dataType: 'exec' },
+      { id: 'next', label: 'Next', direction: 'out', dataType: 'exec' },
+    ],
+    defaultData: {
+      clipId: '',
     },
   }),
 });

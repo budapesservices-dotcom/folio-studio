@@ -445,6 +445,50 @@ export interface CodeModuleRecord {
   updatedAt: string;
 }
 
+export type AnimationEasing =
+  | 'linear'
+  | 'ease'
+  | 'ease-in'
+  | 'ease-out'
+  | 'ease-in-out'
+  | 'spring';
+
+export type AnimatableProperty =
+  | 'x'
+  | 'y'
+  | 'opacity'
+  | 'rotation'
+  | 'scale'
+  | 'fill';
+
+export interface AnimationKeyframe {
+  id: string;
+  /** Time offset in milliseconds within [0, clip.durationMs]. */
+  timeMs: number;
+  /** Numeric value for geometry/opacity/scale/rotation, or CSS color string for fill. */
+  value: number | string;
+  easing: AnimationEasing;
+}
+
+export interface AnimationTrack {
+  id: string;
+  targetNodeId: string;
+  property: AnimatableProperty;
+  keyframes: AnimationKeyframe[];
+}
+
+export interface AnimationClip {
+  id: string;
+  name: string;
+  pageId: string;
+  durationMs: number;
+  loop: boolean;
+  autoplay: boolean;
+  tracks: AnimationTrack[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Unified native project. All workspace content belongs to this aggregate. */
 export interface FolioProjectV2 {
   format: typeof FOLIO_FORMAT;
@@ -460,6 +504,8 @@ export interface FolioProjectV2 {
   designTokens?: DesignTokenCollection;
   /** Optional developer-authored Custom & Extension code modules. */
   codeModules?: CodeModuleRecord[];
+  /** Optional Motion & Animation timeline clips anchored to pages & stable node IDs. */
+  animations?: AnimationClip[];
 }
 
 /** Current project alias used by the editor, persistence and file I/O. */

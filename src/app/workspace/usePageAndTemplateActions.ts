@@ -7,6 +7,8 @@ import type { CanvasToolId } from '../../engines/canvas/tools/types';
 import type { EditorTarget } from '../editorContext';
 import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
 
+let cachedTemplatesModule: typeof import('../../core/document/templates') | null = null;
+
 export interface UsePageAndTemplateActionsOptions {
   project: FolioProject;
   activeEditorId: EditorTarget;
@@ -57,38 +59,52 @@ export function usePageAndTemplateActions({
     const staggerIndex = templateInsertCountRef.current;
     templateInsertCountRef.current += 1;
 
-    void import('../../core/document/templates')
-      .then(({ buildTemplateComponentAndInstance, computeTemplateInsertionOrigin, instantiateTemplateNodes }) => {
-        const origin = computeTemplateInsertionOrigin(focusedDocument, template, staggerIndex);
+    const executeInsert = ({
+      buildTemplateComponentAndInstance,
+      computeTemplateInsertionOrigin,
+      instantiateTemplateNodes,
+    }: typeof import('../../core/document/templates')) => {
+      const origin = computeTemplateInsertionOrigin(focusedDocument, template, staggerIndex);
 
-        if (effectiveMode === 'component' && activeEditorId === 'main') {
-          const existingNames = project.components.map((item) => item.name);
-          const { component, instance } = buildTemplateComponentAndInstance(template, origin, existingNames);
-          const txResult = mainCommandClient.createComponentWithInstance(
-            component,
-            instance,
-            `Insert "${template.name}" as component`,
-          );
-          if (txResult.status === 'applied') {
-            mainCommandClient.selectNodes([instance.id], `Select inserted ${component.name} instance`);
-            setWorkspaceTools((current) => ({ ...current, main: 'select' }));
-            setToolRackOpen(null);
-            setInspectorVisible(true);
-            setNotice(`Inserted “${component.name}” as Master Component + linked Instance.`);
-          }
-          return;
-        }
-
-        const nodes = instantiateTemplateNodes(template, origin);
-        const result = focusedCommandClient.createNodes(nodes, `Insert "${template.name}" template`);
-        if (result.status === 'applied') {
-          const rootIds = nodes.filter((node) => !node.parentId).map((node) => node.id);
-          focusedCommandClient.selectNodes(rootIds.length > 0 ? rootIds : [nodes[0].id], `Select inserted ${template.name}`);
-          setWorkspaceTools((current) => ({ ...current, [activeEditorId]: 'select' }));
+      if (effectiveMode === 'component' && activeEditorId === 'main') {
+        const existingNames = project.components.map((item) => item.name);
+        const { component, instance } = buildTemplateComponentAndInstance(template, origin, existingNames);
+        const txResult = mainCommandClient.createComponentWithInstance(
+          component,
+          instance,
+          `Insert "${template.name}" as component`,
+        );
+        if (txResult.status === 'applied') {
+          mainCommandClient.selectNodes([instance.id], `Select inserted ${component.name} instance`);
+          setWorkspaceTools((current) => ({ ...current, main: 'select' }));
           setToolRackOpen(null);
           setInspectorVisible(true);
-          setNotice(`Inserted “${template.name}” (${nodes.length} layers).`);
+          setNotice(`Inserted “${component.name}” as Master Component + linked Instance.`);
         }
+        return;
+      }
+
+      const nodes = instantiateTemplateNodes(template, origin);
+      const result = focusedCommandClient.createNodes(nodes, `Insert "${template.name}" template`);
+      if (result.status === 'applied') {
+        const rootIds = nodes.filter((node) => !node.parentId).map((node) => node.id);
+        focusedCommandClient.selectNodes(rootIds.length > 0 ? rootIds : [nodes[0].id], `Select inserted ${template.name}`);
+        setWorkspaceTools((current) => ({ ...current, [activeEditorId]: 'select' }));
+        setToolRackOpen(null);
+        setInspectorVisible(true);
+        setNotice(`Inserted “${template.name}” (${nodes.length} layers).`);
+      }
+    };
+
+    if (cachedTemplatesModule) {
+      executeInsert(cachedTemplatesModule);
+      return;
+    }
+
+    void import('../../core/document/templates')
+      .then((mod) => {
+        cachedTemplatesModule = mod;
+        executeInsert(mod);
       })
       .catch((error: unknown) => {
         console.error('Folio could not instantiate the selected template:', error);

@@ -54,6 +54,7 @@ const KNOWN_NATIVE_PERMISSIONS = new Set([
   'tokens.update',
   'code.update',
   'logic.update',
+  'animation.update',
   'selection.update',
   'history.execute',
 ]);
@@ -290,6 +291,9 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'logic.create-graph':
     case 'logic.update-graph':
     case 'logic.delete-graph':
+    case 'animation.create-clip':
+    case 'animation.update-clip':
+    case 'animation.delete-clip':
     case 'node.create':
     case 'node.replace-many':
     case 'node.split':
@@ -338,6 +342,9 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'logic.create-graph':
     case 'logic.update-graph':
     case 'logic.delete-graph':
+    case 'animation.create-clip':
+    case 'animation.update-clip':
+    case 'animation.delete-clip':
     case 'node.create':
     case 'node.set-properties':
     case 'selection.set':
@@ -947,6 +954,41 @@ function prepareCommandStep(
         return {
           status: 'rejected',
           result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', `Logic graph "${command.payload.graphId}" does not exist in this project.`),
+        };
+      }
+    } else if (command.type === 'animation.create-clip') {
+      const clip = command.payload.clip;
+      if ((project.animations ?? []).some((item) => item.id === clip.id)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'PRECONDITION_FAILED', `An animation clip with ID "${clip.id}" already exists.`),
+        };
+      }
+      if (!project.pages.some((page) => page.id === clip.pageId)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', 'The target page for this animation clip does not exist.'),
+        };
+      }
+    } else if (command.type === 'animation.update-clip') {
+      const clip = command.payload.clip;
+      if (!(project.animations ?? []).some((item) => item.id === clip.id)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', `Animation clip "${clip.id}" does not exist in this project.`),
+        };
+      }
+      if (!project.pages.some((page) => page.id === clip.pageId)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', 'The target page for this animation clip does not exist.'),
+        };
+      }
+    } else if (command.type === 'animation.delete-clip') {
+      if (!(project.animations ?? []).some((item) => item.id === command.payload.clipId)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', `Animation clip "${command.payload.clipId}" does not exist in this project.`),
         };
       }
     }

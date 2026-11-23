@@ -37,6 +37,8 @@ export interface UseCodeWorkspaceOptions {
   onJumpToCanvasNode?: (nodeId: string) => void;
   controlledOpen?: boolean;
   onControlledClose?: () => void;
+  initialViewMode?: CodeWorkspaceViewMode;
+  initialPageId?: string;
 }
 
 export interface UseCodeWorkspaceResult {
@@ -86,16 +88,18 @@ export function useCodeWorkspace({
   onJumpToCanvasNode,
   controlledOpen,
   onControlledClose,
+  initialViewMode = 'split',
+  initialPageId,
 }: UseCodeWorkspaceOptions): UseCodeWorkspaceResult {
   const activePage = getActivePage(project);
   const designTokens = getProjectDesignTokens(project);
 
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
-  const [viewMode, setViewMode] = useState<CodeWorkspaceViewMode>('split');
+  const [viewMode, setViewMode] = useState<CodeWorkspaceViewMode>(initialViewMode);
   const [outputTarget, setOutputTarget] = useState<CodeOutputTarget>('html-css');
   const [selectedFilePath, setSelectedFilePath] = useState<string>('');
-  const [previewPageId, setPreviewPageId] = useState<string>(activePage.id);
+  const [previewPageId, setPreviewPageId] = useState<string>(initialPageId ?? activePage.id);
   const [previewThemeId, setPreviewThemeId] = useState<string>(designTokens.activeThemeId);
   const [previewBreakpoint, setPreviewBreakpoint] = useState<BreakpointId>(activeBreakpoint);
   const [includeCustomScripts, setIncludeCustomScripts] = useState(false);

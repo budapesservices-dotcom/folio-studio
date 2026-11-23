@@ -36,6 +36,7 @@ const validatedFrozenDocuments = new WeakSet<object>();
 const validatedFrozenTokens = new WeakSet<object>();
 const validatedFrozenCodeModules = new WeakSet<object>();
 const validatedFrozenLogicGraphsContext = new WeakMap<object, { pages: unknown; components: unknown }>();
+const validatedFrozenAnimationsContext = new WeakMap<object, unknown>();
 const validatedFrozenAssets = new WeakSet<object>();
 const validatedFrozenComponentsContext = new WeakMap<object, unknown>();
 const validatedFrozenPagesContext = new WeakMap<object, { tokens: unknown; components: unknown }>();
@@ -691,6 +692,88 @@ export function isCodeModuleList(value: unknown): value is import('./types').Cod
   return true;
 }
 
+const ANIMATION_EASINGS_SET = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'spring']);
+const ANIMATABLE_PROPERTIES_SET = new Set(['x', 'y', 'opacity', 'rotation', 'scale', 'fill']);
+const SAFE_HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+const SAFE_FUNC_COLOR_PATTERN = /^(?:rgba?|hsla?)\(\s*[0-9.%\s,/+-]+\s*\)$/i;
+
+export function isSafeAnimationColorValue(value: unknown): value is string {
+  if (!isString(value)) return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 64) return false;
+  if (trimmed === 'transparent') return true;
+  return SAFE_HEX_COLOR_PATTERN.test(trimmed) || SAFE_FUNC_COLOR_PATTERN.test(trimmed);
+}
+
+export function isAnimationClip(value: unknown): value is import('./types').AnimationClip {
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.trim().length === 0 || value.id.length > 128 ||
+    !isString(value.name) || value.name.trim().length === 0 || value.name.length > 128 ||
+    !isString(value.pageId) || value.pageId.trim().length === 0 || value.pageId.length > 128 ||
+    !isFiniteNumber(value.durationMs) || value.durationMs < 100 || value.durationMs > 60_000 ||
+    typeof value.loop !== 'boolean' ||
+    typeof value.autoplay !== 'boolean' ||
+    !Array.isArray(value.tracks) || value.tracks.length > 256 ||
+    !isString(value.createdAt) || value.createdAt.trim().length === 0 ||
+    !isString(value.updatedAt) || value.updatedAt.trim().length === 0
+  ) {
+    return false;
+  }
+
+  const trackIds = new Set<string>();
+  const trackKeys = new Set<string>();
+  for (const track of value.tracks) {
+    if (
+      !isRecord(track) ||
+      !isString(track.id) || track.id.trim().length === 0 || track.id.length > 128 ||
+      !isString(track.targetNodeId) || track.targetNodeId.trim().length === 0 || track.targetNodeId.length > 128 ||
+      !isString(track.property) || !ANIMATABLE_PROPERTIES_SET.has(track.property) ||
+      !Array.isArray(track.keyframes) || track.keyframes.length > 256
+    ) {
+      return false;
+    }
+    const pairKey = `${track.targetNodeId}:${track.property}`;
+    if (trackIds.has(track.id) || trackKeys.has(pairKey)) return false;
+    trackIds.add(track.id);
+    trackKeys.add(pairKey);
+
+    const keyframeIds = new Set<string>();
+    for (const kf of track.keyframes) {
+      if (
+        !isRecord(kf) ||
+        !isString(kf.id) || kf.id.trim().length === 0 || kf.id.length > 128 ||
+        !isFiniteNumber(kf.timeMs) || kf.timeMs < 0 || kf.timeMs > value.durationMs ||
+        !isString(kf.easing) || !ANIMATION_EASINGS_SET.has(kf.easing)
+      ) {
+        return false;
+      }
+      if (keyframeIds.has(kf.id)) return false;
+      keyframeIds.add(kf.id);
+
+      if (track.property === 'fill') {
+        if (!isSafeAnimationColorValue(kf.value)) return false;
+      } else {
+        if (!isFiniteNumber(kf.value)) return false;
+        if (track.property === 'opacity' && (kf.value < 0 || kf.value > 1)) return false;
+        if (track.property === 'scale' && (kf.value < 0.05 || kf.value > 10)) return false;
+      }
+    }
+  }
+  return true;
+}
+
+export function isAnimationClipList(value: unknown): value is import('./types').AnimationClip[] {
+  if (!Array.isArray(value) || value.length > 128) return false;
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!isAnimationClip(item)) return false;
+    if (ids.has(item.id)) return false;
+    ids.add(item.id);
+  }
+  return true;
+}
+
 function validateComponentCrossChecks(
   component: ComponentDefinition,
   projectDesignTokens: DesignTokenCollection | undefined,
@@ -959,6 +1042,28 @@ export function validateProject(input: unknown): ValidationResult {
         pages: input.pages,
         components: input.components,
       });
+    }
+  }
+
+  if (input.animations !== undefined) {
+    const animFrozen = deeplyFrozenObjects.has(input.animations as object);
+    const animContextValid = Boolean(
+      animFrozen &&
+      pagesFrozen &&
+      validatedFrozenAnimationsContext.get(input.animations as object) === input.pages,
+    );
+    if (!animContextValid) {
+      if (!isAnimationClipList(input.animations)) {
+        return { ok: false, error: 'Project animations contain invalid clip timing, tracks, keyframes, or duplicate IDs.' };
+      }
+      for (const clip of input.animations) {
+        if (!pageIds.has(clip.pageId)) {
+          return { ok: false, error: `Animation clip "${clip.name}" references missing page "${clip.pageId}".` };
+        }
+      }
+      if (animFrozen && pagesFrozen) {
+        validatedFrozenAnimationsContext.set(input.animations as object, input.pages);
+      }
     }
   }
 

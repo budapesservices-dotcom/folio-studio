@@ -31,6 +31,7 @@ import {
 } from './sanitize';
 import type { CodeMappingEntry, CompiledCodeFile } from './types';
 import { buildLivePreviewLogicScript } from '../prototype/codegen';
+import { compilePageAnimationsCss } from '../animation/codegen';
 
 export function roundCss(value: number): number {
   return Math.round(value * 100) / 100;
@@ -660,6 +661,12 @@ export function compilePageHtmlCss(
     cssLines.push('@media (max-width: 390px) {');
     cssLines.push(...mobileRules);
     cssLines.push('}');
+    cssLines.push('');
+  }
+
+  const animationsCss = compilePageAnimationsCss(project, page);
+  if (animationsCss) {
+    cssLines.push(animationsCss);
     cssLines.push('');
   }
 

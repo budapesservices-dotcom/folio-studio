@@ -1,6 +1,9 @@
 import type { EditorAction } from './editorReducer';
 import type { DesignNode, FolioDocument } from '../core/document/types';
 import {
+  validateAnimationCreateClipPayload,
+  validateAnimationDeleteClipPayload,
+  validateAnimationUpdateClipPayload,
   validateCodeUpdateModulesPayload,
   validateComponentCreatePayload,
   validateComponentDeletePayload,
@@ -447,6 +450,48 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
       return [{
         type: 'delete-logic-graph',
         graphId: command.payload.graphId,
+      }];
+    },
+  }),
+  'animation.create-clip': Object.freeze({
+    type: 'animation.create-clip' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'animation.update',
+    validatePayload: validateAnimationCreateClipPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'animation.create-clip') return [];
+      return [{
+        type: 'create-animation-clip',
+        clip: command.payload.clip,
+      }];
+    },
+  }),
+  'animation.update-clip': Object.freeze({
+    type: 'animation.update-clip' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'animation.update',
+    validatePayload: validateAnimationUpdateClipPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'animation.update-clip') return [];
+      return [{
+        type: 'update-animation-clip',
+        clip: command.payload.clip,
+      }];
+    },
+  }),
+  'animation.delete-clip': Object.freeze({
+    type: 'animation.delete-clip' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'animation.update',
+    validatePayload: validateAnimationDeleteClipPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'animation.delete-clip') return [];
+      return [{
+        type: 'delete-animation-clip',
+        clipId: command.payload.clipId,
       }];
     },
   }),
