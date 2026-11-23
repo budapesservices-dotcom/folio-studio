@@ -1236,13 +1236,17 @@ export function validateCodeUpdateModulesPayload(
   const normalized = cloneRuntimeData(value);
   if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
   const data = normalized.value;
-  if (!isRecord(data) || !hasOnlyKeys(data, ['codeModules']) || !isCodeModuleList(data.codeModules)) {
+  if (!isRecord(data) || !hasOnlyKeys(data, ['codeModules', 'coalesceKey']) || !isCodeModuleList(data.codeModules)) {
     return invalid('INVALID_PAYLOAD', 'Updating code modules requires a valid list of custom or extension code modules.');
+  }
+  if (data.coalesceKey !== undefined && (typeof data.coalesceKey !== 'string' || data.coalesceKey.trim().length === 0)) {
+    return invalid('INVALID_PAYLOAD', 'Code module coalesceKey must be a non-empty string when provided.');
   }
   return {
     ok: true,
     value: {
       codeModules: data.codeModules,
+      ...(data.coalesceKey !== undefined ? { coalesceKey: data.coalesceKey } : {}),
     },
   };
 }

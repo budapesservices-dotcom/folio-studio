@@ -4,6 +4,7 @@ name: Deploy FOLIO Studio
 on:
   push:
     branches:
+      - main
       - feat/canvas-pan-distribute
   workflow_dispatch:
 

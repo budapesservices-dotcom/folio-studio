@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createEditorState } from '../src/app/editorReducer';
 import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createMainCanvasCommandClient } from '../src/app/mainCanvasCommandClient';
+import { executeNativeCommand } from '../src/app/nativeCommandExecutor';
 import { ALL_NATIVE_COMMAND_REGISTRY, NATIVE_COMMAND_REGISTRY } from '../src/app/nativeCommandRegistry';
 import {
   buildComponentDefinitionFromNodes,
@@ -514,5 +515,60 @@ describe('Tahap 3 — Mapped Round-Trip Sync & Custom Code Preservation via Nati
     project.codeModules = [badModule];
     const validation = validateProject(project);
     expect(validation.ok).toBe(false);
+  });
+
+  it('coalesces consecutive code.update-modules edits with the same coalesceKey into one Undo entry until commitEdit', () => {
+    const project = createInitialProject('Coalesce Demo');
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const client = createMainCanvasCommandClient(store);
+
+    const customCss = createCustomCodeModule([], 'css');
+    customCss.content = 'main { color: #000; }';
+    expect(client.updateCodeModules([customCss], 'Add custom stylesheet').status).toBe('applied');
+
+    const key = `code-module:${customCss.id}`;
+    expect(
+      client.updateCodeModules([{ ...customCss, content: 'main { color: #111; }' }], 'Edit code module', key).status,
+    ).toBe('applied');
+    expect(
+      client.updateCodeModules([{ ...customCss, content: 'main { color: #222; }' }], 'Edit code module', key).status,
+    ).toBe('applied');
+    expect(
+      client.updateCodeModules([{ ...customCss, content: 'main { color: #333; }' }], 'Edit code module', key).status,
+    ).toBe('applied');
+    expect(store.getSnapshot().editorState.project.codeModules?.[0]?.content).toBe('main { color: #333; }');
+
+    // Commit edit session (mirrors textarea blur / file switch / panel close)
+    expect(client.commitEdit().status).toBe('applied');
+
+    // Single Undo jumps straight back to pre-typing content instead of per-keystroke steps
+    expect(client.undo().status).toBe('applied');
+    expect(store.getSnapshot().editorState.project.codeModules?.[0]?.content).toBe('main { color: #000; }');
+
+    // Single Redo restores the final coalesced content
+    expect(client.redo().status).toBe('applied');
+    expect(store.getSnapshot().editorState.project.codeModules?.[0]?.content).toBe('main { color: #333; }');
+
+    // Next edit after commitEdit starts a separate Undo group
+    expect(
+      client.updateCodeModules([{ ...customCss, content: 'main { color: #444; }' }], 'Edit code module', key).status,
+    ).toBe('applied');
+    expect(client.undo().status).toBe('applied');
+    expect(store.getSnapshot().editorState.project.codeModules?.[0]?.content).toBe('main { color: #333; }');
+
+    // Empty coalesceKey is rejected by command payload validation
+    const invalidEnvelope = client.createEnvelope(
+      'code.update-modules',
+      { kind: 'project', projectId: project.metadata.id },
+      { codeModules: [customCss], coalesceKey: '' },
+    );
+    const rejected = executeNativeCommand(store, invalidEnvelope, {
+      projectId: project.metadata.id,
+      principal: { kind: 'user', id: 'user-local' },
+      capabilities: ['project.read', 'code.update'],
+      workspace: 'main',
+    });
+    expect(rejected.status).toBe('rejected');
+    expect(rejected.code).toBe('INVALID_PAYLOAD');
   });
 });

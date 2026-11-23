@@ -155,6 +155,7 @@ export interface TokensUpdatePayload {
 
 export interface CodeUpdateModulesPayload {
   codeModules: CodeModuleRecord[];
+  coalesceKey?: string;
 }
 
 export interface LogicCreateGraphPayload {

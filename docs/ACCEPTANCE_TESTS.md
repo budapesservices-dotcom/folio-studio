@@ -228,5 +228,22 @@ The actual modal is also browser-tested: initial focus enters the safe dialog ac
 - **Pending / Not Claimed:**
   - External GitHub Actions CI run, `package-lock.json` lockfile restoration, and human manual browser acceptance remain **pending** outside this local workspace.
 
+### Priority A (P0) Hardening Pass — Lockfile/CI Parity, Full 18-Node React Codegen, Code Editor Undo Coalescing & `codeModules` Cleanup
+
+- **Implementation status:** **Implemented** and **Verified locally** (2026-11-23).
+- **Implemented scope:**
+  1. **P0-1 Reproducible Lockfile & CI Parity (`package.json`, `package-lock.json`, `.github/workflows/deploy.yml`):** Restored `"packageManager": "npm@10.9.8"`, serialized `test:browser` (`vitest run --fileParallelism=false .browser.test.mjs`) to avoid concurrent headless Chromium CDP contention, generated canonical `lockfileVersion: 3` `package-lock.json` (146 registry-resolved external entries with SHA-512 integrity hashes, 0 missing), and added `main` branch trigger to `.github/workflows/deploy.yml`.
+  2. **P0-2 Full 18-Node Node Logic Parity in React TSX (`src/engines/prototype/codegen.ts`, `src/engines/codegen/reactCompiler.ts`):** Extended `buildReactPageLogicPlan()` and `compileReactProjectFiles()` to emit full support for `event.on-state-change`, `action.set-variant` (with strict TypeScript literal union casts on component variant props), `action.navigate` (with URL allowlist validation and `onNavigate` route state wiring in `src/App.tsx`), `action.set-theme` (`data-theme` switching), and `action.play-animation` (CSS animation class restart).
+  3. **P0-3 Coalesced Code Editor Undo History (`src/core/commands/types.ts`, `validation.ts`, `src/app/editorReducer.ts`, `nativeCommandRegistry.ts`, `mainCanvasCommandClient.ts`, `useCodeWorkspace.ts`, `CodeWorkspacePanel.tsx`):** Added optional non-empty `coalesceKey` to `code.update-modules` so consecutive keystrokes in Custom/Extension modules coalesce into one Undo group committed on textarea blur, file switch, or panel close, and removed redundant `codeDraft` local buffer lag in `CodeWorkspacePanel.tsx` so Undo/Redo and reopening reflect canonical content immediately without a 1-frame empty flash.
+  4. **P0-4 Cross-Studio Layer Deletion Cleanup for `codeModules` (`src/core/document/nodeReferenceCleanup.ts`, `src/app/workspace/LayerPopovers.tsx`, `src/app/App.tsx`):** Extended pre-delete inspection, context-menu warning badge (`N Code`), atomic deletion cleanup, and toast notice (`Code extension anchor (code preserved)`) so deleting a referenced layer detaches `targetNodeId` without deleting developer custom code and restores `targetNodeId` atomically on 1-step Undo.
+  5. **P0-5 Documentation Sync (`docs/ARCHITECTURE.md`, `docs/ACCEPTANCE_TESTS.md`):** Synchronized command counts (`38`), Node Logic catalog counts (`18`), Stage 8 status (**Implemented & Verified locally**), and P0 verification evidence.
+- **Local Automated Gate (2026-11-23):**
+  - `npm run check` (`tsc --noEmit`): **PASS** (0 errors).
+  - `npm run test:unit`: **PASS** (**45 test files / 527 tests passed**, including `tests/p12QualityFoundation.test.ts` 5/5, `tests/nodeLogicEngine.test.ts` 10/10 with strict `ts.transpileModule` TSX checks, `tests/codeEngineAndMapping.test.ts` 10/10, and `tests/crossStudioHardening.test.ts` 5/5).
+  - `npm run build` / `compile_applet`: **PASS** (`dist/` compiled cleanly).
+  - Live headless Chromium verification (`playwright-cli` against `http://localhost:3000/folio-studio/` at `1440×900`): **PASS** — verified `React TSX` output (`notifyStateChange`), `+ Ext` creation on `Sun`, 3 consecutive edits coalescing into 1 `Ctrl+Z` Undo step & `Ctrl+Shift+Z` Redo, Layers right-click cross-studio reference badge (`Logic` + `Code`), Delete cleanup toast (`Code extension anchor (code preserved)`), 1-step Undo restoring both `Sun` and its `Code` anchor badge, and **0 console errors / 0 warnings**.
+- **Pending / Not Claimed:**
+  - External Git commit/push, GitHub Actions CI run on a pushed branch, Cloudflare Pages deploy, and human manual browser acceptance remain **pending** outside this local workspace (no `.git` remote in this sandbox).
+
 
 

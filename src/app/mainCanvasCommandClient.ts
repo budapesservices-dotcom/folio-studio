@@ -183,6 +183,7 @@ export interface MainCanvasCommandClient {
   updateCodeModules(
     codeModules: readonly CodeModuleRecord[],
     description?: string,
+    coalesceKey?: string,
   ): NativeCommandResult;
   createLogicGraph(graph: LogicGraph, description?: string): NativeCommandResult;
   updateLogicGraph(graph: LogicGraph, description?: string): NativeCommandResult;
@@ -483,13 +484,14 @@ export function createWorkspaceCommandClient(
       );
     },
 
-    updateCodeModules(codeModules, description = 'Update code modules') {
+    updateCodeModules(codeModules, description = 'Update code modules', coalesceKey) {
       const projectId = store.getSnapshot().editorState.project.metadata.id;
       return submit(
         'code.update-modules',
         { kind: 'project', projectId },
         stripUndefinedEntries({
           codeModules,
+          ...(coalesceKey ? { coalesceKey } : {}),
         }),
         description,
       );

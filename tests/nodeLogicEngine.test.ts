@@ -1,3 +1,4 @@
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { createMainCanvasCommandClient } from '../src/app/mainCanvasCommandClient';
 import { createEditorState } from '../src/app/editorReducer';
@@ -23,6 +24,7 @@ import {
   validateProject,
   validateProjectIncremental,
 } from '../src/core/document/validation';
+import { buildPresetClipForPage } from '../src/engines/animation';
 import { buildLivePreviewHtml } from '../src/engines/codegen/htmlCssCompiler';
 import { compileReactProjectFiles } from '../src/engines/codegen/reactCompiler';
 import { applyProjectDelta, computeProjectDelta } from '../src/engines/history';
@@ -603,5 +605,99 @@ describe('Node Logic v1 — Live Preview & React Codegen Integration', () => {
     expect(pageTsx!.content).toContain('logicOverrides["node-label-status"]?.text ?? "Initial Label"');
     expect(pageTsx!.content).toContain('logicOverrides["node-badge-panel"]?.visible === false');
     expect(pageTsx!.content).toContain('useEffect(() => { runLogicTrigger("page-load"); }, []);');
+  });
+
+  it('compiles full 18-node Node Logic parity in React TSX (on-state-change, set-variant, navigate, set-theme, play-animation) with clean TypeScript output', () => {
+    const fixture = createInteractiveFixtureProject();
+    const page = fixture.project.pages[0];
+    const clip = buildPresetClipForPage(page, 'hero-entrance', [fixture.buttonId, fixture.labelId]);
+
+    const fullParityGraph = createLogicGraph({
+      id: 'graph-react-18',
+      name: 'React 18-Node Parity Flow',
+      scope: 'page',
+      targetId: fixture.pageId,
+      variables: [
+        createLogicVariable({ id: 'var-active', name: 'isActive', valueType: 'boolean', initialValue: false }),
+      ],
+      nodes: [
+        createLogicNode({ id: 'ev-click', type: 'event.on-click', data: { targetNodeId: fixture.buttonId } }),
+        createLogicNode({ id: 'st-toggle', type: 'state.toggle', data: { variableId: 'var-active' } }),
+        createLogicNode({
+          id: 'act-var',
+          type: 'action.set-variant',
+          data: { targetNodeId: fixture.cardInstanceId, axisId: fixture.axisId, optionId: fixture.activeOptionId },
+        }),
+        createLogicNode({ id: 'act-theme', type: 'action.set-theme', data: { themeId: fixture.darkThemeId } }),
+        createLogicNode({ id: 'act-anim', type: 'action.play-animation', data: { clipId: clip.id } }),
+        createLogicNode({ id: 'ev-state', type: 'event.on-state-change', data: { variableId: 'var-active' } }),
+        createLogicNode({ id: 'tpl-state', type: 'logic.template', data: { template: 'State: {{value}}' } }),
+        createLogicNode({ id: 'act-txt', type: 'action.set-text', data: { targetNodeId: fixture.labelId } }),
+        createLogicNode({ id: 'act-nav', type: 'action.navigate', data: { route: '/about' } }),
+      ],
+      connections: [
+        createLogicConnection({ id: 'c1', sourceNodeId: 'ev-click', sourcePortId: 'exec', targetNodeId: 'st-toggle', targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c2', sourceNodeId: 'st-toggle', sourcePortId: 'next', targetNodeId: 'act-var', targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c3', sourceNodeId: 'act-var', sourcePortId: 'next', targetNodeId: 'act-theme', targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c4', sourceNodeId: 'act-theme', sourcePortId: 'next', targetNodeId: 'act-anim', targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c5', sourceNodeId: 'ev-state', sourcePortId: 'exec', targetNodeId: 'act-txt', targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c6', sourceNodeId: 'ev-state', sourcePortId: 'value', targetNodeId: 'tpl-state', targetPortId: 'value' }),
+        createLogicConnection({ id: 'c7', sourceNodeId: 'tpl-state', sourcePortId: 'text', targetNodeId: 'act-txt', targetPortId: 'text' }),
+        createLogicConnection({ id: 'c8', sourceNodeId: 'act-txt', sourcePortId: 'next', targetNodeId: 'act-nav', targetPortId: 'exec' }),
+      ],
+    });
+
+    const projectWithAll: FolioProject = {
+      ...fixture.project,
+      animations: [clip],
+      logicGraphs: [fullParityGraph],
+    };
+
+    expect(validateProject(projectWithAll).ok).toBe(true);
+    expect(validateProjectLogicGraphs(projectWithAll).ok).toBe(true);
+
+    const reactFiles = compileReactProjectFiles(projectWithAll);
+    const pageTsx = reactFiles.find((f) => f.pageId === fixture.pageId);
+    const appTsx = reactFiles.find((f) => f.path === 'src/App.tsx');
+
+    expect(pageTsx).toBeTruthy();
+    expect(appTsx).toBeTruthy();
+
+    // 1. All 5 previously omitted nodes are wired in React TSX
+    expect(pageTsx!.content).toContain('notifyStateChange');
+    expect(pageTsx!.content).toContain('event.on-state-change');
+    expect(pageTsx!.content).toContain('logicInstanceComponentById');
+    expect(pageTsx!.content).toContain('logicVariantLabels');
+    expect(pageTsx!.content).toContain('action.set-variant');
+    expect(pageTsx!.content).toContain('logicThemeSlugById');
+    expect(pageTsx!.content).toContain('data-theme');
+    expect(pageTsx!.content).toContain('logicAnimationClassById');
+    expect(pageTsx!.content).toContain('action.play-animation');
+    expect(pageTsx!.content).toContain('onNavigate?: (route: string) => void');
+    expect(pageTsx!.content).toContain('onNavigate?.(nextRoute)');
+    expect(pageTsx!.content).toContain('/^(?:https?:\\/\\/|mailto:|\\/|#)/i.test(nextRoute)');
+    expect(pageTsx!.content).toContain('logicOverrides["node-card-inst"]?.variants?.["axis-state"]');
+
+    // 2. App.tsx manages currentRoute state when any page triggers navigation
+    expect(appTsx!.content).toContain('useState');
+    expect(appTsx!.content).toContain('onNavigate={setCurrentRoute}');
+
+    // 3. Every generated TSX file transpiles cleanly under strict TypeScript with zero syntax diagnostics
+    const tsxFiles = reactFiles.filter((f) => f.language === 'tsx');
+    expect(tsxFiles.length).toBeGreaterThanOrEqual(3);
+    for (const file of tsxFiles) {
+      const transpiled = ts.transpileModule(file.content, {
+        fileName: file.path,
+        reportDiagnostics: true,
+        compilerOptions: {
+          jsx: ts.JsxEmit.React,
+          target: ts.ScriptTarget.ES2022,
+          module: ts.ModuleKind.ESNext,
+          strict: true,
+        },
+      });
+      expect(transpiled.diagnostics ?? [], `TSX diagnostics in ${file.path}`).toEqual([]);
+      expect(transpiled.outputText.length).toBeGreaterThan(20);
+    }
   });
 });

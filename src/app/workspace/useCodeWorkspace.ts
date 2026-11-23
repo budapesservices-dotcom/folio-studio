@@ -73,6 +73,7 @@ export interface UseCodeWorkspaceResult {
   addCustomModule: (language: Extract<CodeModuleLanguage, 'css' | 'js'>) => void;
   addNodeExtension: (nodeId?: string) => void;
   updateModuleContent: (moduleId: string, content: string) => void;
+  commitModuleEdit: () => void;
   deleteModule: (moduleId: string) => void;
   focusNodeInCanvas: (nodeId: string) => void;
   copySelectedFile: () => void;
@@ -278,7 +279,15 @@ export function useCodeWorkspace({
         ? { ...mod, content, updatedAt: new Date().toISOString() }
         : mod,
     );
-    mainCommandClient.updateCodeModules(nextModules, 'Edit custom/extension code module');
+    mainCommandClient.updateCodeModules(
+      nextModules,
+      'Edit custom/extension code module',
+      `code-module:${moduleId}`,
+    );
+  };
+
+  const commitModuleEdit = () => {
+    mainCommandClient.commitEdit('Commit custom/extension code edit');
   };
 
   const deleteModule = (moduleId: string) => {
@@ -363,6 +372,7 @@ export function useCodeWorkspace({
       }
     },
     close: () => {
+      commitModuleEdit();
       if (controlledOpen !== undefined) {
         onControlledClose?.();
       } else {
@@ -371,7 +381,10 @@ export function useCodeWorkspace({
     },
     setViewMode,
     setOutputTarget,
-    setSelectedFilePath,
+    setSelectedFilePath: (path) => {
+      commitModuleEdit();
+      setSelectedFilePath(path);
+    },
     setPreviewPageId,
     setPreviewThemeId,
     setPreviewBreakpoint,
@@ -385,6 +398,7 @@ export function useCodeWorkspace({
     addCustomModule,
     addNodeExtension,
     updateModuleContent,
+    commitModuleEdit,
     deleteModule,
     focusNodeInCanvas,
     copySelectedFile,

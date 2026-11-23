@@ -51,6 +51,7 @@ export interface CodeWorkspacePanelProps {
   onAddCustomModule: (language: Extract<CodeModuleLanguage, 'css' | 'js'>) => void;
   onAddNodeExtension: (nodeId?: string) => void;
   onUpdateModuleContent: (moduleId: string, content: string) => void;
+  onCommitModuleEdit?: () => void;
   onDeleteModule: (moduleId: string) => void;
   onFocusNodeInCanvas: (nodeId: string) => void;
   onCopySelectedFile: () => void;
@@ -104,6 +105,7 @@ export function CodeWorkspacePanel({
   onAddCustomModule,
   onAddNodeExtension,
   onUpdateModuleContent,
+  onCommitModuleEdit,
   onDeleteModule,
   onFocusNodeInCanvas,
   onCopySelectedFile,
@@ -113,7 +115,6 @@ export function CodeWorkspacePanel({
   const [tagDraft, setTagDraft] = useState<SemanticHtmlTag | ''>('');
   const [ariaDraft, setAriaDraft] = useState('');
   const [hrefDraft, setHrefDraft] = useState('');
-  const [codeDraft, setCodeDraft] = useState('');
 
   // Sync mapped form fields whenever targeted AST node updates
   useEffect(() => {
@@ -129,13 +130,6 @@ export function CodeWorkspacePanel({
     setAriaDraft(mappedTargetNode.ariaLabel ?? '');
     setHrefDraft(mappedTargetNode.href ?? '');
   }, [mappedTargetNode]);
-
-  // Sync editable custom/extension code buffer when active file switches
-  useEffect(() => {
-    if (selectedFile && (selectedFile.category === 'custom' || selectedFile.category === 'extension')) {
-      setCodeDraft(selectedFile.content);
-    }
-  }, [selectedFile?.id, selectedFile?.content]);
 
   if (!open) return null;
 
@@ -483,12 +477,11 @@ export function CodeWorkspacePanel({
                       class="code-editor-textarea"
                       aria-label={`Edit ${selectedFile.path}`}
                       spellcheck={false}
-                      value={codeDraft}
+                      value={selectedFile.content}
                       onInput={(event) => {
-                        const nextVal = event.currentTarget.value;
-                        setCodeDraft(nextVal);
-                        onUpdateModuleContent(selectedFile.moduleId!, nextVal);
+                        onUpdateModuleContent(selectedFile.moduleId!, event.currentTarget.value);
                       }}
+                      onBlur={() => onCommitModuleEdit?.()}
                     />
                   </div>
                 ) : (
@@ -595,6 +588,7 @@ export function CodeWorkspaceView({
       onAddCustomModule={workspace.addCustomModule}
       onAddNodeExtension={workspace.addNodeExtension}
       onUpdateModuleContent={workspace.updateModuleContent}
+      onCommitModuleEdit={workspace.commitModuleEdit}
       onDeleteModule={workspace.deleteModule}
       onFocusNodeInCanvas={workspace.focusNodeInCanvas}
       onCopySelectedFile={workspace.copySelectedFile}

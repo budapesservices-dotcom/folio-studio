@@ -1,4 +1,4 @@
-import type { FolioProject, LogicGraph, AnimationClip } from './types';
+import type { AnimationClip, CodeModuleRecord, FolioProject, LogicGraph } from './types';
 
 export interface CrossStudioLogicReference {
   readonly graphId: string;
@@ -16,10 +16,17 @@ export interface CrossStudioMotionReference {
   readonly targetNodeId: string;
 }
 
+export interface CrossStudioCodeExtensionReference {
+  readonly moduleId: string;
+  readonly path: string;
+  readonly targetNodeId: string;
+}
+
 export interface CrossStudioReferenceSummary {
   readonly removedNodeIds: ReadonlySet<string>;
   readonly logicBindings: readonly CrossStudioLogicReference[];
   readonly animationTracks: readonly CrossStudioMotionReference[];
+  readonly codeExtensions: readonly CrossStudioCodeExtensionReference[];
   readonly totalCount: number;
 }
 
@@ -27,6 +34,7 @@ export interface CrossStudioCleanupResult {
   readonly project: FolioProject;
   readonly unboundLogicCount: number;
   readonly removedTrackCount: number;
+  readonly unboundCodeExtensionCount: number;
 }
 
 function isGraphTargetingPage(graph: LogicGraph, pageId: string): boolean {
@@ -37,8 +45,9 @@ function isGraphTargetingPage(graph: LogicGraph, pageId: string): boolean {
 }
 
 /**
- * Finds all Node Logic node bindings and Motion Timeline animation tracks that
- * reference any of `targetNodeIds` present on the specified page.
+ * Finds all Node Logic node bindings, Motion Timeline animation tracks, and
+ * anchored Code Extension modules that reference any of `targetNodeIds`
+ * present on the specified page.
  */
 export function findCrossStudioNodeReferences(
   project: FolioProject,
@@ -56,6 +65,7 @@ export function findCrossStudioNodeReferences(
       removedNodeIds: expandedIds,
       logicBindings: [],
       animationTracks: [],
+      codeExtensions: [],
       totalCount: 0,
     };
   }
@@ -93,11 +103,24 @@ export function findCrossStudioNodeReferences(
     }
   }
 
+  const codeExtensions: CrossStudioCodeExtensionReference[] = [];
+  for (const mod of project.codeModules ?? []) {
+    if (mod.targetPageId && mod.targetPageId !== pageId) continue;
+    if (mod.targetNodeId && expandedIds.has(mod.targetNodeId)) {
+      codeExtensions.push({
+        moduleId: mod.id,
+        path: mod.path,
+        targetNodeId: mod.targetNodeId,
+      });
+    }
+  }
+
   return {
     removedNodeIds: expandedIds,
     logicBindings,
     animationTracks,
-    totalCount: logicBindings.length + animationTracks.length,
+    codeExtensions,
+    totalCount: logicBindings.length + animationTracks.length + codeExtensions.length,
   };
 }
 
@@ -107,6 +130,8 @@ export function findCrossStudioNodeReferences(
  *   preserving the node and its wires so users can easily rebind or Undo.
  * - Removes affected tracks from Motion Timeline clips while preserving the
  *   clip and all remaining tracks.
+ * - Detaches `targetNodeId` from anchored Code Extension modules while
+ *   strictly preserving developer-authored CSS/JS code per Blueprint §7.
  * Returns the original `project` reference unchanged when no references exist.
  */
 export function cleanupDeletedNodeReferences(
@@ -115,7 +140,7 @@ export function cleanupDeletedNodeReferences(
   pageId: string = project.activePageId,
 ): CrossStudioCleanupResult {
   if (removedNodeIds.size === 0) {
-    return { project, unboundLogicCount: 0, removedTrackCount: 0 };
+    return { project, unboundLogicCount: 0, removedTrackCount: 0, unboundCodeExtensionCount: 0 };
   }
 
   const now = new Date().toISOString();
@@ -169,8 +194,24 @@ export function cleanupDeletedNodeReferences(
     })
     : undefined;
 
-  if (!logicChanged && !animationsChanged) {
-    return { project, unboundLogicCount: 0, removedTrackCount: 0 };
+  let unboundCodeExtensionCount = 0;
+  let codeModulesChanged = false;
+  const currentCodeModules = project.codeModules;
+
+  const nextCodeModules: CodeModuleRecord[] | undefined = currentCodeModules
+    ? currentCodeModules.map((mod) => {
+      if (mod.targetPageId && mod.targetPageId !== pageId) return mod;
+      if (!mod.targetNodeId || !removedNodeIds.has(mod.targetNodeId)) return mod;
+      unboundCodeExtensionCount += 1;
+      codeModulesChanged = true;
+      const detached: CodeModuleRecord = { ...mod, updatedAt: now };
+      delete detached.targetNodeId;
+      return detached;
+    })
+    : undefined;
+
+  if (!logicChanged && !animationsChanged && !codeModulesChanged) {
+    return { project, unboundLogicCount: 0, removedTrackCount: 0, unboundCodeExtensionCount: 0 };
   }
 
   return {
@@ -178,9 +219,11 @@ export function cleanupDeletedNodeReferences(
       ...project,
       logicGraphs: logicChanged ? nextLogicGraphs : project.logicGraphs,
       ...(animationsChanged && nextAnimations ? { animations: nextAnimations } : {}),
+      ...(codeModulesChanged && nextCodeModules ? { codeModules: nextCodeModules } : {}),
     },
     unboundLogicCount,
     removedTrackCount,
+    unboundCodeExtensionCount,
   };
 }
 
@@ -190,9 +233,10 @@ export function cleanupDeletedNodeReferences(
  */
 export function formatLayerDeletionCleanupNotice(
   deletedLayerNames: readonly string[],
-  counts: { logicCount: number; motionCount: number },
+  counts: { logicCount: number; motionCount: number; codeExtensionCount?: number },
 ): string | null {
-  if (counts.logicCount <= 0 && counts.motionCount <= 0) return null;
+  const codeCount = counts.codeExtensionCount ?? 0;
+  if (counts.logicCount <= 0 && counts.motionCount <= 0 && codeCount <= 0) return null;
 
   const subject = deletedLayerNames.length === 1
     ? `“${deletedLayerNames[0]}”`
@@ -204,6 +248,9 @@ export function formatLayerDeletionCleanupNotice(
   }
   if (counts.motionCount > 0) {
     parts.push(`${counts.motionCount} Motion ${counts.motionCount === 1 ? 'track' : 'tracks'}`);
+  }
+  if (codeCount > 0) {
+    parts.push(`${codeCount} Code ${codeCount === 1 ? 'extension anchor' : 'extension anchors'} (code preserved)`);
   }
 
   return `Deleted ${subject} and safely cleaned up ${parts.join(' & ')} (Undo to restore).`;

@@ -417,17 +417,20 @@ export function buildLivePreviewLogicScript(
 export interface ReactPageLogicPlan {
   readonly hasLogic: boolean;
   readonly needsUseEffect: boolean;
+  readonly hasNavigation: boolean;
   readonly hookLines: readonly string[];
   getNodeEventAttrs(nodeId: string): string[];
   hasDynamicOverride(nodeId: string): boolean;
   hasDynamicVisible(nodeId: string): boolean;
   hasDynamicText(nodeId: string): boolean;
   hasDynamicFill(nodeId: string): boolean;
+  hasDynamicVariant(nodeId: string, axisId?: string): boolean;
 }
 
 /**
  * Generates clean React `useState`/`useEffect` state bindings and typed event
- * handlers for pages containing active Node Logic v1 graphs.
+ * handlers for pages containing active Node Logic v1 graphs, with full 18-node
+ * parity matching Folio's headless `PrototypeRuntime` and Live Preview runtime.
  * Returns `hasLogic: false` for static pages so generated TSX stays unchanged.
  */
 export function buildReactPageLogicPlan(
@@ -439,12 +442,14 @@ export function buildReactPageLogicPlan(
     return {
       hasLogic: false,
       needsUseEffect: false,
+      hasNavigation: false,
       hookLines: [],
       getNodeEventAttrs: () => [],
       hasDynamicOverride: () => false,
       hasDynamicVisible: () => false,
       hasDynamicText: () => false,
       hasDynamicFill: () => false,
+      hasDynamicVariant: () => false,
     };
   }
 
@@ -454,7 +459,11 @@ export function buildReactPageLogicPlan(
   const visibleTargets = new Set<string>();
   const textTargets = new Set<string>();
   const fillTargets = new Set<string>();
+  const variantTargets = new Map<string, Set<string>>();
   let hasPageLoad = false;
+  let hasNavigation = false;
+  let hasThemeAction = false;
+  let hasAnimationAction = false;
 
   const initialVariables: Record<string, LogicVariableValue> = {};
   const variableTypes: Record<string, string> = {};
@@ -480,12 +489,57 @@ export function buildReactPageLogicPlan(
       if (node.type === 'action.set-visible' && targetId) visibleTargets.add(targetId);
       if (node.type === 'action.set-text' && targetId) textTargets.add(targetId);
       if (node.type === 'action.set-fill' && targetId) fillTargets.add(targetId);
+      if (node.type === 'action.set-variant' && targetId) {
+        const axisId = typeof node.data.axisId === 'string' ? node.data.axisId : '';
+        const set = variantTargets.get(targetId) ?? new Set<string>();
+        if (axisId) set.add(axisId);
+        variantTargets.set(targetId, set);
+      }
+      if (node.type === 'action.navigate') hasNavigation = true;
+      if (node.type === 'action.set-theme') hasThemeAction = true;
+      if (node.type === 'action.play-animation') hasAnimationAction = true;
     }
   }
 
   const nodeInitialVisible: Record<string, boolean> = {};
+  const instanceComponentById: Record<string, string> = {};
   for (const node of page.document.nodes) {
     nodeInitialVisible[node.id] = node.visible;
+    if (node.type === 'component-instance') {
+      instanceComponentById[node.id] = node.componentId;
+    }
+  }
+
+  const tokens = getProjectDesignTokens(project);
+  const themeSlugById: Record<string, string> = {};
+  if (hasThemeAction) {
+    const defaultThemeId = tokens.themes[0]?.id ?? '';
+    for (const theme of tokens.themes) {
+      themeSlugById[theme.id] = theme.id === defaultThemeId ? '' : toDesignTokenThemeSlug(theme.name);
+    }
+  }
+
+  const variantLabels: Record<string, Record<string, Record<string, string>>> = {};
+  if (variantTargets.size > 0) {
+    for (const comp of project.components) {
+      if (!comp.variants || comp.variants.length === 0) continue;
+      const axisMap: Record<string, Record<string, string>> = {};
+      for (const axis of comp.variants) {
+        const optMap: Record<string, string> = {};
+        for (const opt of axis.options) {
+          optMap[opt.id] = opt.label;
+        }
+        axisMap[axis.id] = optMap;
+      }
+      variantLabels[comp.id] = axisMap;
+    }
+  }
+
+  const animationClassById: Record<string, string> = {};
+  if (hasAnimationAction) {
+    for (const desc of buildLivePreviewAnimationPayload(project, page)) {
+      animationClassById[desc.id] = desc.className;
+    }
   }
 
   const compiledGraphs = graphs.map((graph) => ({
@@ -501,17 +555,32 @@ export function buildReactPageLogicPlan(
     })),
   }));
 
+  const overrideType = '{ visible?: boolean; text?: string; fill?: string; variants?: Record<string, string> }';
+
   const hookLines: string[] = [
     `  const [logicState, setLogicState] = useState<Record<string, string | number | boolean>>(${JSON.stringify(initialVariables)});`,
-    '  const [logicOverrides, setLogicOverrides] = useState<Record<string, { visible?: boolean; text?: string; fill?: string }>>({});',
+    `  const [logicOverrides, setLogicOverrides] = useState<Record<string, ${overrideType}>>({});`,
     `  const logicGraphs = ${JSON.stringify(compiledGraphs)};`,
     `  const logicVarTypes: Record<string, string> = ${JSON.stringify(variableTypes)};`,
     `  const logicVarNameToId: Record<string, string> = ${JSON.stringify(variableNameToId)};`,
     `  const logicInitialVisible: Record<string, boolean> = ${JSON.stringify(nodeInitialVisible)};`,
+    ...(variantTargets.size > 0
+      ? [
+          `  const logicInstanceComponentById: Record<string, string> = ${JSON.stringify(instanceComponentById)};`,
+          `  const logicVariantLabels: Record<string, Record<string, Record<string, string>>> = ${JSON.stringify(variantLabels)};`,
+        ]
+      : []),
+    ...(hasThemeAction
+      ? [`  const logicThemeSlugById: Record<string, string> = ${JSON.stringify(themeSlugById)};`]
+      : []),
+    ...(hasAnimationAction
+      ? [`  const logicAnimationClassById: Record<string, string> = ${JSON.stringify(animationClassById)};`]
+      : []),
     '',
     '  const runLogicTrigger = (triggerKind: "click" | "hover-enter" | "hover-leave" | "page-load", targetNodeId?: string) => {',
     '    const nextVars: Record<string, string | number | boolean> = { ...logicState };',
-    '    const nextOverrides: Record<string, { visible?: boolean; text?: string; fill?: string }> = { ...logicOverrides };',
+    `    const nextOverrides: Record<string, ${overrideType}> = { ...logicOverrides };`,
+    '    const ephemeral: Record<string, unknown> = {};',
     `    const maxSteps = ${MAX_LOGIC_EXECUTION_STEPS};`,
     '    const queue: Array<{ graph: (typeof logicGraphs)[number]; nodeId: string }> = [];',
     '    for (const graph of logicGraphs) {',
@@ -523,7 +592,19 @@ export function buildReactPageLogicPlan(
     '      }',
     '    }',
     '    let steps = 0;',
-    '    const evalData = (graph: (typeof logicGraphs)[number], nodeId: string, seen: Set<string>): unknown => {',
+    '    const notifyStateChange = (varId: string, val: string | number | boolean) => {',
+    '      for (const g of logicGraphs) {',
+    '        for (const cn of g.nodes) {',
+    '          if (cn.type === "event.on-state-change" && cn.data.variableId === varId) {',
+    '            ephemeral[`${g.id}:${cn.id}:value`] = val;',
+    '            queue.push({ graph: g, nodeId: cn.id });',
+    '          }',
+    '        }',
+    '      }',
+    '    };',
+    '    const evalData = (graph: (typeof logicGraphs)[number], nodeId: string, portId: string, seen: Set<string>): unknown => {',
+    '      const epKey = `${graph.id}:${nodeId}:${portId}`;',
+    '      if (Object.prototype.hasOwnProperty.call(ephemeral, epKey)) return ephemeral[epKey];',
     '      const key = `${graph.id}:${nodeId}`;',
     '      if (seen.has(key)) return null;',
     '      const n = graph.nodes.find((item) => item.id === nodeId);',
@@ -536,8 +617,8 @@ export function buildReactPageLogicPlan(
     '        if (n.type === "logic.compare") {',
     '          const leftConn = graph.connections.find((c) => c.targetNodeId === n.id && c.targetPortId === "left");',
     '          const rightConn = graph.connections.find((c) => c.targetNodeId === n.id && c.targetPortId === "right");',
-    '          const l = leftConn ? evalData(graph, leftConn.sourceNodeId, seen) : n.data.left;',
-    '          const r = rightConn ? evalData(graph, rightConn.sourceNodeId, seen) : n.data.right;',
+    '          const l = leftConn ? evalData(graph, leftConn.sourceNodeId, leftConn.sourcePortId, seen) : n.data.left;',
+    '          const r = rightConn ? evalData(graph, rightConn.sourceNodeId, rightConn.sourcePortId, seen) : n.data.right;',
     '          const op = String(n.data.operator ?? "==");',
     '          if (op === "==") return l === r;',
     '          if (op === "!=") return l !== r;',
@@ -549,7 +630,7 @@ export function buildReactPageLogicPlan(
     '        }',
     '        if (n.type === "logic.template") {',
     '          const valConn = graph.connections.find((c) => c.targetNodeId === n.id && c.targetPortId === "value");',
-    '          const connected = valConn ? evalData(graph, valConn.sourceNodeId, seen) : undefined;',
+    '          const connected = valConn ? evalData(graph, valConn.sourceNodeId, valConn.sourcePortId, seen) : undefined;',
     '          return String(n.data.template ?? "").replace(/\\{\\{\\s*([a-zA-Z0-9_.-]+)\\s*\\}\\}/g, (_, k: string) => {',
     '            if (k === "value" && connected !== undefined && connected !== null) return String(connected);',
     '            if (Object.prototype.hasOwnProperty.call(nextVars, k)) return String(nextVars[k]);',
@@ -562,7 +643,7 @@ export function buildReactPageLogicPlan(
     '    };',
     '    const resolveIn = (graph: (typeof logicGraphs)[number], nodeId: string, portId: string, fallback: unknown): unknown => {',
     '      const conn = graph.connections.find((c) => c.targetNodeId === nodeId && c.targetPortId === portId);',
-    '      return conn ? evalData(graph, conn.sourceNodeId, new Set<string>()) : fallback;',
+    '      return conn ? evalData(graph, conn.sourceNodeId, conn.sourcePortId, new Set<string>()) : fallback;',
     '    };',
     '    const enqueueOut = (graph: (typeof logicGraphs)[number], nodeId: string, portId: string) => {',
     '      for (const c of graph.connections) {',
@@ -578,22 +659,36 @@ export function buildReactPageLogicPlan(
     '        enqueueOut(step.graph, n.id, "exec");',
     '      } else if (n.type === "state.toggle") {',
     '        const vid = String(n.data.variableId ?? "");',
-    '        if (logicVarTypes[vid] === "boolean") { nextVars[vid] = !Boolean(nextVars[vid]); enqueueOut(step.graph, n.id, "next"); }',
+    '        if (logicVarTypes[vid] === "boolean") {',
+    '          const nextBool = !Boolean(nextVars[vid]);',
+    '          nextVars[vid] = nextBool;',
+    '          ephemeral[`${step.graph.id}:${n.id}:result`] = nextBool;',
+    '          notifyStateChange(vid, nextBool);',
+    '          enqueueOut(step.graph, n.id, "next");',
+    '        }',
     '      } else if (n.type === "state.increment") {',
     '        const vid = String(n.data.variableId ?? "");',
     '        if (logicVarTypes[vid] === "number") {',
+    '          const prevVal = nextVars[vid];',
     '          const inc = resolveIn(step.graph, n.id, "step", n.data.step ?? 1);',
-    '          let val = (typeof nextVars[vid] === "number" ? Number(nextVars[vid]) : 0) + (typeof inc === "number" && Number.isFinite(inc) ? inc : 1);',
+    '          let val = (typeof prevVal === "number" ? Number(prevVal) : 0) + (typeof inc === "number" && Number.isFinite(inc) ? inc : 1);',
     '          if (typeof n.data.min === "number") val = Math.max(n.data.min, val);',
     '          if (typeof n.data.max === "number") val = Math.min(n.data.max, val);',
-    '          nextVars[vid] = val; enqueueOut(step.graph, n.id, "next");',
+    '          nextVars[vid] = val;',
+    '          ephemeral[`${step.graph.id}:${n.id}:result`] = val;',
+    '          if (val !== prevVal) notifyStateChange(vid, val);',
+    '          enqueueOut(step.graph, n.id, "next");',
     '        }',
     '      } else if (n.type === "state.set") {',
     '        const vid = String(n.data.variableId ?? "");',
     '        const t = logicVarTypes[vid];',
     '        if (t) {',
+    '          const prevVal = nextVars[vid];',
     '          const raw = resolveIn(step.graph, n.id, "value", n.data.value);',
-    '          nextVars[vid] = t === "number" ? Number(raw ?? 0) : t === "boolean" ? Boolean(raw) : String(raw ?? "");',
+    '          const coercedVal = t === "number" ? Number(raw ?? 0) : t === "boolean" ? Boolean(raw) : String(raw ?? "");',
+    '          nextVars[vid] = coercedVal;',
+    '          ephemeral[`${step.graph.id}:${n.id}:result`] = coercedVal;',
+    '          if (coercedVal !== prevVal) notifyStateChange(vid, coercedVal);',
     '          enqueueOut(step.graph, n.id, "next");',
     '        }',
     '      } else if (n.type === "logic.branch") {',
@@ -618,6 +713,61 @@ export function buildReactPageLogicPlan(
     '          nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), fill };',
     '          enqueueOut(step.graph, n.id, "next");',
     '        }',
+    ...(variantTargets.size > 0
+      ? [
+          '      } else if (n.type === "action.set-variant") {',
+          '        const tid = String(n.data.targetNodeId ?? "");',
+          '        const axisId = String(n.data.axisId ?? "");',
+          '        const optId = String(resolveIn(step.graph, n.id, "optionId", n.data.optionId ?? "") ?? "");',
+          '        const compId = logicInstanceComponentById[tid];',
+          '        const label = compId ? logicVariantLabels[compId]?.[axisId]?.[optId] : undefined;',
+          '        if (label) {',
+          '          nextOverrides[tid] = {',
+          '            ...(nextOverrides[tid] ?? {}),',
+          '            variants: { ...(nextOverrides[tid]?.variants ?? {}), [axisId]: label },',
+          '          };',
+          '          enqueueOut(step.graph, n.id, "next");',
+          '        }',
+        ]
+      : []),
+    ...(hasThemeAction
+      ? [
+          '      } else if (n.type === "action.set-theme") {',
+          '        const themeId = String(resolveIn(step.graph, n.id, "themeId", n.data.themeId ?? "") ?? "");',
+          '        if (Object.prototype.hasOwnProperty.call(logicThemeSlugById, themeId)) {',
+          '          if (typeof document !== "undefined") {',
+          '            const slug = logicThemeSlugById[themeId];',
+          '            if (slug) document.documentElement.setAttribute("data-theme", slug);',
+          '            else document.documentElement.removeAttribute("data-theme");',
+          '          }',
+          '          enqueueOut(step.graph, n.id, "next");',
+          '        }',
+        ]
+      : []),
+    ...(hasNavigation
+      ? [
+          '      } else if (n.type === "action.navigate") {',
+          '        const nextRoute = String(n.data.route ?? "").trim();',
+          '        if (/^(?:https?:\\/\\/|mailto:|\\/|#)/i.test(nextRoute)) {',
+          '          if (typeof document !== "undefined") document.documentElement.setAttribute("data-folio-route", nextRoute);',
+          '          onNavigate?.(nextRoute);',
+          '          enqueueOut(step.graph, n.id, "next");',
+          '        }',
+        ]
+      : []),
+    ...(hasAnimationAction
+      ? [
+          '      } else if (n.type === "action.play-animation") {',
+          '        const clipId = String(n.data.clipId ?? "").trim();',
+          '        const animClass = logicAnimationClassById[clipId];',
+          '        if (animClass && typeof document !== "undefined") {',
+          '          document.documentElement.classList.remove(animClass);',
+          '          void document.documentElement.offsetWidth;',
+          '          document.documentElement.classList.add(animClass);',
+          '          enqueueOut(step.graph, n.id, "next");',
+          '        }',
+        ]
+      : []),
     '      }',
     '    }',
     '    setLogicState(nextVars);',
@@ -633,6 +783,7 @@ export function buildReactPageLogicPlan(
   return {
     hasLogic: true,
     needsUseEffect: hasPageLoad,
+    hasNavigation,
     hookLines,
     getNodeEventAttrs(nodeId: string): string[] {
       const attrs: string[] = [];
@@ -648,9 +799,17 @@ export function buildReactPageLogicPlan(
       return attrs;
     },
     hasDynamicOverride: (nodeId: string) =>
-      visibleTargets.has(nodeId) || textTargets.has(nodeId) || fillTargets.has(nodeId),
+      visibleTargets.has(nodeId)
+      || textTargets.has(nodeId)
+      || fillTargets.has(nodeId)
+      || variantTargets.has(nodeId),
     hasDynamicVisible: (nodeId: string) => visibleTargets.has(nodeId),
     hasDynamicText: (nodeId: string) => textTargets.has(nodeId),
     hasDynamicFill: (nodeId: string) => fillTargets.has(nodeId),
+    hasDynamicVariant: (nodeId: string, axisId?: string) => {
+      const axes = variantTargets.get(nodeId);
+      if (!axes) return false;
+      return axisId ? axes.has(axisId) : axes.size > 0;
+    },
   };
 }

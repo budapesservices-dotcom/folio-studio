@@ -408,6 +408,7 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
       return [{
         type: 'update-code-modules',
         codeModules: [...command.payload.codeModules],
+        ...(command.payload.coalesceKey !== undefined ? { coalesceKey: command.payload.coalesceKey } : {}),
       }];
     },
   }),

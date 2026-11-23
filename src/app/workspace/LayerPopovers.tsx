@@ -81,7 +81,7 @@ export interface LayerContextMenuProps {
   menuRef: RefObject<HTMLDivElement>;
   targetNodeName: string;
   capabilities: LayerContextMenuCapabilities;
-  referenceWarning?: { logicCount: number; motionCount: number } | null;
+  referenceWarning?: { logicCount: number; motionCount: number; codeExtensionCount?: number } | null;
   onRename: (nodeId: string) => void;
   onGroup: (editorId: EditorTarget, rootIds: string[]) => void;
   onUngroup: (editorId: EditorTarget, rootIds: string[]) => void;
@@ -110,8 +110,9 @@ export function LayerContextMenu({
 }: LayerContextMenuProps) {
   if (!menu) return null;
 
+  const codeExtCount = referenceWarning?.codeExtensionCount ?? 0;
   const hasRefWarning = Boolean(
-    referenceWarning && (referenceWarning.logicCount > 0 || referenceWarning.motionCount > 0),
+    referenceWarning && (referenceWarning.logicCount > 0 || referenceWarning.motionCount > 0 || codeExtCount > 0),
   );
   const refBadgeParts: string[] = [];
   if (referenceWarning && referenceWarning.logicCount > 0) {
@@ -120,8 +121,11 @@ export function LayerContextMenu({
   if (referenceWarning && referenceWarning.motionCount > 0) {
     refBadgeParts.push(`${referenceWarning.motionCount} Motion`);
   }
+  if (codeExtCount > 0) {
+    refBadgeParts.push(`${codeExtCount} Code`);
+  }
   const deleteTitle = hasRefWarning
-    ? `Used in ${refBadgeParts.join(' and ')}. Deleting will safely unbind Node Logic nodes and remove Motion tracks (Undo restores everything).`
+    ? `Used in ${refBadgeParts.join(', ')}. Deleting safely unbinds Logic/Code anchors (preserving custom code) and removes Motion tracks (Undo restores everything).`
     : undefined;
 
   return (

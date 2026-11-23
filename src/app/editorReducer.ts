@@ -66,7 +66,7 @@ export type EditorAction =
   | { type: 'delete-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string }
   | { type: 'update-component-contract'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[] }
   | { type: 'update-design-tokens'; designTokens: DesignTokenCollection; unbindTokenIds?: string[] }
-  | { type: 'update-code-modules'; codeModules: CodeModuleRecord[] }
+  | { type: 'update-code-modules'; codeModules: CodeModuleRecord[]; coalesceKey?: string }
   | { type: 'create-logic-graph'; graph: LogicGraph }
   | { type: 'update-logic-graph'; graph: LogicGraph }
   | { type: 'delete-logic-graph'; graphId: string }
@@ -582,7 +582,20 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       } else {
         delete nextProject.codeModules;
       }
-      return withSnapshot(state, touch(nextProject));
+      const touched = touch(nextProject);
+      if (action.coalesceKey) {
+        const past = state.historyGroup === action.coalesceKey
+          ? state.past
+          : [...state.past, state.project].slice(-HISTORY_LIMIT);
+        return {
+          ...state,
+          project: touched,
+          past,
+          future: [],
+          historyGroup: action.coalesceKey,
+        };
+      }
+      return withSnapshot(state, touched);
     }
 
     case 'create-logic-graph': {

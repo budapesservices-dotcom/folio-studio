@@ -574,6 +574,7 @@ export function App() {
       const msg = formatLayerDeletionCleanupNotice(names, {
         logicCount: refs.logicBindings.length,
         motionCount: refs.animationTracks.length,
+        codeExtensionCount: refs.codeExtensions.length,
       });
       if (msg) setNotice(msg);
     }
@@ -1088,7 +1089,11 @@ export function App() {
             ? (() => {
               const refs = findCrossStudioNodeReferences(state.project, layers.layerContextMenu.nodeIds, activePage.id);
               return refs.totalCount > 0
-                ? { logicCount: refs.logicBindings.length, motionCount: refs.animationTracks.length }
+                ? {
+                  logicCount: refs.logicBindings.length,
+                  motionCount: refs.animationTracks.length,
+                  codeExtensionCount: refs.codeExtensions.length,
+                }
                 : null;
             })()
             : null

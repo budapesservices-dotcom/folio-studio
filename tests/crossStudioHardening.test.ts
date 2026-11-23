@@ -15,6 +15,7 @@ import {
   createInteractiveStarterProject,
 } from '../src/app/workspace/nodeLogicGraphHelpers';
 import { buildPresetClipForPage } from '../src/engines/animation';
+import { createNodeExtensionModule } from '../src/engines/codegen';
 
 describe('Cross-Studio Hardening — Safe Deletion, Undo/Redo & .flop Fidelity', () => {
   it('detects and atomically cleans up Node Logic bindings and Motion tracks on layer delete, and restores all on Undo', () => {
@@ -143,5 +144,52 @@ describe('Cross-Studio Hardening — Safe Deletion, Undo/Redo & .flop Fidelity',
     expect(imported.logicGraphs).toEqual(richProject.logicGraphs);
     expect(imported.animations).toEqual(richProject.animations);
     expect(imported.pages).toEqual(richProject.pages);
+  });
+
+  it('detaches anchored codeModules extensions on layer delete without losing custom code, and restores targetNodeId on Undo', () => {
+    const starter = createInteractiveStarterProject('Code Anchor Studio');
+    const page = starter.pages[0];
+    const sun = page.document.nodes.find((n) => n.name === 'Sun')!;
+    const extensionModule = createNodeExtensionModule(sun, page.id, []);
+    const customCss = `/* Developer custom extension */\n[data-folio-id="${sun.id}"] { filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.25)); }\n`;
+    extensionModule.content = customCss;
+
+    const projectWithExt = {
+      ...starter,
+      codeModules: [extensionModule],
+    };
+
+    const store = createCanonicalEditorStore(createEditorState(projectWithExt));
+    const client = createMainCanvasCommandClient(store);
+
+    // Pre-delete inspection detects the anchored Code extension alongside Node Logic bindings
+    const preRefs = findCrossStudioNodeReferences(store.getSnapshot().editorState.project, [sun.id], page.id);
+    expect(preRefs.codeExtensions).toHaveLength(1);
+    expect(preRefs.codeExtensions[0].moduleId).toBe(extensionModule.id);
+
+    const notice = formatLayerDeletionCleanupNotice([sun.name], {
+      logicCount: preRefs.logicBindings.length,
+      motionCount: preRefs.animationTracks.length,
+      codeExtensionCount: preRefs.codeExtensions.length,
+    });
+    expect(notice).toContain('Code extension anchor (code preserved)');
+    expect(notice).toContain('Undo to restore');
+
+    // Delete Sun via Zero-Bypass Native Command Engine
+    const delResult = client.deleteNodes([sun.id]);
+    expect(delResult.status).toBe('applied');
+
+    const afterDelete = store.getSnapshot().editorState.project;
+    expect(validateProject(afterDelete).ok).toBe(true);
+    expect(afterDelete.codeModules).toHaveLength(1);
+    expect(afterDelete.codeModules![0].targetNodeId).toBeUndefined();
+    expect(afterDelete.codeModules![0].content).toBe(customCss);
+
+    // Atomic 1-step Undo restores the deleted layer AND re-attaches the Code extension anchor
+    expect(client.undo().status).toBe('applied');
+    const afterUndo = store.getSnapshot().editorState.project;
+    expect(afterUndo.pages[0].document.nodes.some((n) => n.id === sun.id)).toBe(true);
+    expect(afterUndo.codeModules![0].targetNodeId).toBe(sun.id);
+    expect(afterUndo.codeModules![0].content).toBe(customCss);
   });
 });
