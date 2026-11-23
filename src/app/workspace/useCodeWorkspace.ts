@@ -35,6 +35,8 @@ export interface UseCodeWorkspaceOptions {
   mainCommandClient: MainCanvasCommandClient;
   onNotice: (message: string) => void;
   onJumpToCanvasNode?: (nodeId: string) => void;
+  controlledOpen?: boolean;
+  onControlledClose?: () => void;
 }
 
 export interface UseCodeWorkspaceResult {
@@ -82,11 +84,14 @@ export function useCodeWorkspace({
   mainCommandClient,
   onNotice,
   onJumpToCanvasNode,
+  controlledOpen,
+  onControlledClose,
 }: UseCodeWorkspaceOptions): UseCodeWorkspaceResult {
   const activePage = getActivePage(project);
   const designTokens = getProjectDesignTokens(project);
 
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
   const [viewMode, setViewMode] = useState<CodeWorkspaceViewMode>('split');
   const [outputTarget, setOutputTarget] = useState<CodeOutputTarget>('html-css');
   const [selectedFilePath, setSelectedFilePath] = useState<string>('');
@@ -290,7 +295,11 @@ export function useCodeWorkspace({
     ensurePreviewPageActive();
     mainCommandClient.selectNodes([nodeId], 'Select mapped node from Code Studio');
     onJumpToCanvasNode?.(nodeId);
-    setOpen(false);
+    if (controlledOpen !== undefined) {
+      onControlledClose?.();
+    } else {
+      setInternalOpen(false);
+    }
     const target = previewPageNodes.find((node) => node.id === nodeId);
     onNotice(target ? `Focused "${target.name}" on Canvas.` : 'Focused node on Canvas.');
   };
@@ -342,8 +351,20 @@ export function useCodeWorkspace({
     mappedTargetNode,
     previewPageNodes,
     mappedFeedback,
-    toggleOpen: () => setOpen((current) => !current),
-    close: () => setOpen(false),
+    toggleOpen: () => {
+      if (controlledOpen !== undefined) {
+        if (controlledOpen) onControlledClose?.();
+      } else {
+        setInternalOpen((current) => !current);
+      }
+    },
+    close: () => {
+      if (controlledOpen !== undefined) {
+        onControlledClose?.();
+      } else {
+        setInternalOpen(false);
+      }
+    },
     setViewMode,
     setOutputTarget,
     setSelectedFilePath,

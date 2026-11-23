@@ -34,8 +34,10 @@ import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createMainCanvasCommandClient } from '../src/app/mainCanvasCommandClient';
 import { createToolOperationExecutor } from '../src/app/toolOperationExecutor';
 import { serializeDocumentToSvgString } from '../src/app/visualExport';
+import { buildSpatialIndexForNodes, cullVisibleRenderNodes } from '../src/engines/canvas/canvasHelpers';
+import { computeProjectDelta, applyProjectDelta } from '../src/engines/history';
 
-export type BenchmarkScale = 'small' | 'medium' | 'large';
+export type BenchmarkScale = 'small' | 'medium' | 'large' | 'xlarge';
 
 export interface BenchmarkConfig {
   scale: BenchmarkScale;
@@ -102,6 +104,14 @@ export const BENCHMARK_PRESETS: Record<BenchmarkScale, BenchmarkConfig> = {
     componentCount: 16,
     warmupRuns: 2,
     iterations: 12,
+  },
+  xlarge: {
+    scale: 'xlarge',
+    pageCount: 5,
+    nodesPerPage: 1500,
+    componentCount: 16,
+    warmupRuns: 1,
+    iterations: 8,
   },
 };
 
@@ -911,6 +921,78 @@ export function runStudioBenchmark(overrides: Partial<BenchmarkConfig> = {}): St
         if (!union || union.points.length < 3) {
           throw new Error('Compound 4-shape Pathfinder unite produced invalid geometry.');
         }
+      },
+    ),
+  );
+
+  // 6. Spatial Index Kernel: Build + 60 Viewport-Culling & Snap Queries
+  const spatialQueries = 60;
+  const activeNodeMap = new Map(activeDoc.nodes.map((node) => [node.id, node]));
+  const spatialIndex = buildSpatialIndexForNodes(activeDoc.nodes);
+  results.push(
+    measureCase(
+      {
+        id: 'spatial:viewport-cull-60',
+        category: 'render',
+        label: `Spatial viewport culling + snap (${spatialQueries} queries @ ${activeDoc.nodes.length} nodes)`,
+        unitsPerIteration: spatialQueries,
+        frameBudgetMs: 16.67,
+        details: 'FlatGridSpatialIndex queryRect + cullVisibleRenderNodes',
+      },
+      config.warmupRuns,
+      config.iterations,
+      () => {
+        for (let frame = 0; frame < spatialQueries; frame += 1) {
+          const rect = {
+            minX: (frame * 37) % 1000,
+            minY: (frame * 29) % 1200,
+            maxX: ((frame * 37) % 1000) + 960,
+            maxY: ((frame * 29) % 1200) + 640,
+          };
+          cullVisibleRenderNodes(activeDoc.nodes, spatialIndex, rect, [], activeNodeMap);
+          spatialIndex.querySnapCandidates(rect, 8);
+        }
+      },
+    ),
+  );
+
+  // 7. Delta History: Compute + Apply Backward + Apply Forward for 1-node edit
+  const sampleBeforeProject = store.getSnapshot().editorState.project;
+  const sampleBeforePage = getActivePage(sampleBeforeProject);
+  const sampleNode = sampleBeforePage.document.nodes[0];
+  const sampleAfterProject: FolioProject = {
+    ...sampleBeforeProject,
+    pages: sampleBeforeProject.pages.map((page) =>
+      page.id !== sampleBeforePage.id
+        ? page
+        : {
+            ...page,
+            document: {
+              ...page.document,
+              nodes: page.document.nodes.map((node) =>
+                node.id === sampleNode.id ? { ...node, x: node.x + 24, y: node.y + 12 } : node,
+              ),
+            },
+          },
+    ),
+  };
+  results.push(
+    measureCase(
+      {
+        id: 'history:delta-roundtrip',
+        category: 'drag',
+        label: `Delta history compute + Undo + Redo (${totalNodeCount} total project nodes)`,
+        unitsPerIteration: 1,
+        frameBudgetMs: 5,
+        details: 'O(changed nodes) structural delta diff/apply',
+      },
+      config.warmupRuns,
+      config.iterations,
+      () => {
+        const delta = computeProjectDelta(sampleBeforeProject, sampleAfterProject);
+        if (!delta) throw new Error('Expected non-null delta for benchmark edit.');
+        const undone = applyProjectDelta(sampleAfterProject, delta, 'backward');
+        applyProjectDelta(undone, delta, 'forward');
       },
     ),
   );

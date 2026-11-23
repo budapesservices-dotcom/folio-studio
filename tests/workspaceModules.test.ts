@@ -291,11 +291,11 @@ describe('workspace/canvasViewState', () => {
 });
 
 describe('workspace modularity & architectural boundary regressions', () => {
-  it('keeps App.tsx lean and modularized via src/app/workspace/*', () => {
+  it('keeps App.tsx and Canvas.tsx lean and modularized via src/app/workspace/* and canvas sub-modules', () => {
     const appSource = RAW_APP_FILES['../src/app/App.tsx'];
     expect(appSource).toBeTruthy();
     const lineCount = appSource.split('\n').length;
-    expect(lineCount).toBeLessThan(2000);
+    expect(lineCount).toBeLessThan(1200);
     expect(appSource).toContain('./workspace/GlobalToolbar');
     expect(appSource).toContain('./workspace/ToolRail');
     expect(appSource).toContain('./workspace/LayersPanel');

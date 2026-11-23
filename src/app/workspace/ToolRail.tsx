@@ -1,9 +1,13 @@
 import type { RefObject } from 'preact';
+import { lazy, Suspense } from 'preact/compat';
 import type { CanvasToolId } from '../../core/tools/operationContract';
 import type { StudioTemplateDefinition, TemplateInsertMode } from '../../core/document/templates';
 import type { EditorTarget } from '../editorContext';
-import { TemplateLibraryPopover } from '../TemplateLibraryPopover';
 import { StudioIcon } from './StudioIcon';
+
+const LazyTemplateLibraryPopover = lazy(() =>
+  import('../TemplateLibraryPopover').then((module) => ({ default: module.TemplateLibraryPopover })),
+);
 
 export interface ToolRailToolDescriptor {
   id: CanvasToolId;
@@ -161,14 +165,22 @@ export function ToolRail({
           <span class="tool-rack-corner-tick" aria-hidden="true" />
         </button>
         {toolRackOpen === 'templates' && (
-          <TemplateLibraryPopover
-            workspace={activeEditorId}
-            insertMode={templateInsertMode}
-            onInsertModeChange={onTemplateInsertModeChange}
-            onInsertTemplate={onInsertTemplate}
-            onHoverHint={onUpdateToolbarHint}
-            onClose={() => onToggleToolRack(null)}
-          />
+          <Suspense
+            fallback={(
+              <div class="tool-rack-menu template-library-popover" role="status">
+                Loading templates…
+              </div>
+            )}
+          >
+            <LazyTemplateLibraryPopover
+              workspace={activeEditorId}
+              insertMode={templateInsertMode}
+              onInsertModeChange={onTemplateInsertModeChange}
+              onInsertTemplate={onInsertTemplate}
+              onHoverHint={onUpdateToolbarHint}
+              onClose={() => onToggleToolRack(null)}
+            />
+          </Suspense>
         )}
       </div>
       <div class="rail-bottom">

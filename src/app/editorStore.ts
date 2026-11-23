@@ -1,7 +1,11 @@
 import type { NativeChangeEvent } from '../core/commands/types';
 import type { FolioDocument } from '../core/document/types';
 import { getActiveDocument } from '../core/document/project';
-import { validateProject } from '../core/document/validation';
+import {
+  freezeImmutableGraph,
+  isDeeplyFrozenGraph,
+  validateProjectIncremental,
+} from '../core/document/validation';
 import { getNativeCommandCommitAuthorization } from './nativeCommandExecutor';
 import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
 
@@ -10,7 +14,6 @@ const EDITOR_HISTORY_LIMIT = 60;
 const storeIdentities = new WeakMap<object, object>();
 const snapshotOwners = new WeakMap<object, object>();
 const snapshotWorkspaces = new WeakMap<object, CanonicalEditorStoreWorkspace>();
-const frozenGraphs = new WeakSet<object>();
 const validatedFrozenProjects = new WeakSet<object>();
 
 export type CanonicalEditorStoreWorkspace = 'main' | 'component';
@@ -55,15 +58,8 @@ export interface CanonicalEditorStore {
   withMutationLock<T>(operation: (mutationLease: object) => Promise<T>): Promise<T>;
 }
 
-function freezeGraph<T>(value: T, seen = new WeakSet<object>()): T {
-  if (value === null || typeof value !== 'object') return value;
-  const object = value as unknown as object;
-  if (frozenGraphs.has(object) || seen.has(object)) return value;
-  seen.add(object);
-  for (const child of Object.values(object)) freezeGraph(child, seen);
-  Object.freeze(object);
-  frozenGraphs.add(object);
-  return value;
+function freezeGraph<T>(value: T): T {
+  return freezeImmutableGraph(value);
 }
 
 function cloneEventGraph<T>(value: T, seen = new WeakMap<object, unknown>()): T {
@@ -86,10 +82,13 @@ function cloneEventGraph<T>(value: T, seen = new WeakMap<object, unknown>()): T 
   return output as T;
 }
 
-function isValidatedProject(project: EditorState['project']): boolean {
+function isValidatedProject(
+  project: EditorState['project'],
+  previousValidProject?: EditorState['project'],
+): boolean {
   if (validatedFrozenProjects.has(project as object)) return true;
-  if (!validateProject(project).ok) return false;
-  if (frozenGraphs.has(project as object)) {
+  if (!validateProjectIncremental(previousValidProject, project).ok) return false;
+  if (isDeeplyFrozenGraph(project)) {
     validatedFrozenProjects.add(project as object);
   }
   return true;
@@ -112,12 +111,16 @@ function isHistoricalProject(value: unknown, workspace: CanonicalEditorStoreWork
 }
 
 /** Validate the current project, every historical project, and selection against the active document. */
-function isEditorState(value: unknown, workspace: CanonicalEditorStoreWorkspace): value is EditorState {
+function isEditorState(
+  value: unknown,
+  workspace: CanonicalEditorStoreWorkspace,
+  previousValidProject?: EditorState['project'],
+): value is EditorState {
   try {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
     const candidate = value as Record<string, unknown>;
     if (typeof candidate.project !== 'object' || candidate.project === null ||
-        !isValidatedProject(candidate.project as EditorState['project']) ||
+        !isValidatedProject(candidate.project as EditorState['project'], previousValidProject) ||
         !Array.isArray(candidate.past) || !Array.isArray(candidate.future) ||
         candidate.past.length + candidate.future.length > EDITOR_HISTORY_LIMIT ||
         !candidate.past.every((entry) => isHistoricalProject(entry, workspace)) ||
@@ -219,10 +222,10 @@ class WorkspaceCanonicalEditorStore implements CanonicalEditorStore {
     if (!isCommitInput(input)) return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_COMMIT_INPUT' };
     const expectedValid =
       input.expectedEditorState === beforeSnapshot.editorState ||
-      isEditorState(input.expectedEditorState, this.workspace);
+      isEditorState(input.expectedEditorState, this.workspace, beforeSnapshot.editorState.project);
     const candidateValid =
       input.candidateState === beforeSnapshot.editorState ||
-      isEditorState(input.candidateState, this.workspace);
+      isEditorState(input.candidateState, this.workspace, beforeSnapshot.editorState.project);
     if (!expectedValid || !candidateValid) {
       return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'INVALID_EDITOR_STATE' };
     }

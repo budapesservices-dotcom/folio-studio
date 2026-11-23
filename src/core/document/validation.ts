@@ -24,6 +24,62 @@ export interface LegacyValidationResult {
   error?: string;
 }
 
+/**
+ * Shared registry of objects deeply frozen by Folio's canonical freeze helper.
+ * Only objects present in this WeakSet are trusted for O(1) incremental
+ * validation memoization — unfrozen or shallowly frozen candidates always run
+ * full structural validation.
+ */
+const deeplyFrozenObjects = new WeakSet<object>();
+const validatedFrozenNodes = new WeakSet<object>();
+const validatedFrozenDocuments = new WeakSet<object>();
+const validatedFrozenTokens = new WeakSet<object>();
+const validatedFrozenCodeModules = new WeakSet<object>();
+const validatedFrozenLogicGraphs = new WeakSet<object>();
+const validatedFrozenAssets = new WeakSet<object>();
+const validatedFrozenComponentsContext = new WeakMap<object, unknown>();
+const validatedFrozenPagesContext = new WeakMap<object, { tokens: unknown; components: unknown }>();
+
+export function isDeeplyFrozenGraph(value: unknown): boolean {
+  return value !== null && typeof value === 'object' && deeplyFrozenObjects.has(value as object);
+}
+
+/**
+ * Recursively freezes an immutable state/project graph while short-circuiting
+ * on subgraphs already registered in deeplyFrozenObjects (O(changed objects)).
+ */
+export function freezeImmutableGraph<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== 'object') return value;
+  const object = value as unknown as object;
+  if (deeplyFrozenObjects.has(object) || seen.has(object)) return value;
+  seen.add(object);
+  if (Array.isArray(object)) {
+    for (let i = 0; i < object.length; i += 1) {
+      freezeImmutableGraph(object[i], seen);
+    }
+  } else {
+    for (const key in object) {
+      if (Object.prototype.hasOwnProperty.call(object, key)) {
+        freezeImmutableGraph((object as Record<string, unknown>)[key], seen);
+      }
+    }
+  }
+  Object.freeze(object);
+  deeplyFrozenObjects.add(object);
+  return value;
+}
+
+function isValidatedDesignNode(value: unknown): value is DesignNode {
+  if (value !== null && typeof value === 'object' && deeplyFrozenObjects.has(value as object) && validatedFrozenNodes.has(value as object)) {
+    return true;
+  }
+  if (!isDesignNode(value)) return false;
+  if (value !== null && typeof value === 'object' && deeplyFrozenObjects.has(value as object)) {
+    validatedFrozenNodes.add(value as object);
+  }
+  return true;
+}
+
 export const SEMANTIC_HTML_TAGS = new Set([
   'div', 'section', 'header', 'footer', 'nav', 'main', 'article', 'aside',
   'button', 'a', 'h1', 'h2', 'h3', 'p', 'span', 'ul', 'li', 'form', 'input',
@@ -456,6 +512,9 @@ function isValidLayerHierarchy(nodes: readonly DesignNode[]): boolean {
 }
 
 function isDocument(value: unknown): value is FolioDocument {
+  if (value !== null && typeof value === 'object' && deeplyFrozenObjects.has(value as object) && validatedFrozenDocuments.has(value as object)) {
+    return true;
+  }
   if (!isRecord(value)) return false;
   if (
     !isString(value.id) || value.id.length === 0 ||
@@ -463,13 +522,25 @@ function isDocument(value: unknown): value is FolioDocument {
     !isFiniteNumber(value.width) || value.width <= 0 ||
     !isFiniteNumber(value.height) || value.height <= 0 ||
     !isString(value.background) ||
-    !Array.isArray(value.nodes) ||
-    !value.nodes.every(isDesignNode)
+    !Array.isArray(value.nodes)
   ) return false;
 
+  for (let i = 0; i < value.nodes.length; i += 1) {
+    if (!isValidatedDesignNode(value.nodes[i])) return false;
+  }
+
   const nodes = value.nodes as DesignNode[];
-  const ids = nodes.map((node) => node.id);
-  return new Set(ids).size === ids.length && isValidLayerHierarchy(nodes);
+  const ids = new Set<string>();
+  for (let i = 0; i < nodes.length; i += 1) {
+    const id = nodes[i].id;
+    if (ids.has(id)) return false;
+    ids.add(id);
+  }
+  if (!isValidLayerHierarchy(nodes)) return false;
+  if (deeplyFrozenObjects.has(value as object)) {
+    validatedFrozenDocuments.add(value as object);
+  }
+  return true;
 }
 
 function isMetadata(value: unknown): value is FolioProject['metadata'] {
@@ -578,6 +649,126 @@ export function isCodeModuleList(value: unknown): value is import('./types').Cod
   return true;
 }
 
+function validateComponentCrossChecks(
+  component: ComponentDefinition,
+  projectDesignTokens: DesignTokenCollection | undefined,
+): string | null {
+  const tokenKey = projectDesignTokens ?? null;
+  const isFrozen = deeplyFrozenObjects.has(component as unknown as object);
+  const tokensFrozen = projectDesignTokens === undefined || deeplyFrozenObjects.has(projectDesignTokens as unknown as object);
+  if (isFrozen && tokensFrozen && validatedFrozenComponentsContext.get(component as unknown as object) === tokenKey) {
+    return null;
+  }
+
+  for (let i = 0; i < component.document.nodes.length; i += 1) {
+    const node = component.document.nodes[i];
+    if (node.type === 'component-instance') {
+      return 'Nested component instances are not supported inside master definitions.';
+    }
+    const tokenCheck = validateNodeTokenBindings(node, projectDesignTokens);
+    if (!tokenCheck.ok) {
+      return `Component "${component.name}": ${tokenCheck.error}`;
+    }
+  }
+
+  if (isFrozen && tokensFrozen) {
+    validatedFrozenComponentsContext.set(component as unknown as object, tokenKey);
+  }
+  return null;
+}
+
+function validatePageCrossChecks(
+  page: { name: string; document: FolioDocument },
+  projectDesignTokens: DesignTokenCollection | undefined,
+  componentsRef: readonly ComponentDefinition[],
+  componentsById: ReadonlyMap<string, ComponentDefinition>,
+  masterNodesCache: Map<string, Map<string, DesignNode>>,
+): string | null {
+  const tokenKey = projectDesignTokens ?? null;
+  const pageFrozen = deeplyFrozenObjects.has(page as unknown as object);
+  const tokensFrozen = projectDesignTokens === undefined || deeplyFrozenObjects.has(projectDesignTokens as unknown as object);
+  const componentsFrozen = deeplyFrozenObjects.has(componentsRef as unknown as object);
+  if (pageFrozen && tokensFrozen && componentsFrozen) {
+    const cached = validatedFrozenPagesContext.get(page as unknown as object);
+    if (cached && cached.tokens === tokenKey && cached.components === componentsRef) {
+      return null;
+    }
+  }
+
+  const nodes = page.document.nodes;
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i];
+    if (node.tokenBindings !== undefined) {
+      const tokenCheck = validateNodeTokenBindings(node, projectDesignTokens);
+      if (!tokenCheck.ok) {
+        return `Page "${page.name}": ${tokenCheck.error}`;
+      }
+    }
+    if (node.type === 'component-instance') {
+      const master = componentsById.get(node.componentId);
+      if (!master) {
+        return `A page references missing component: ${node.componentId}.`;
+      }
+      let masterNodesById = masterNodesCache.get(master.id);
+      if (!masterNodesById) {
+        masterNodesById = new Map(master.document.nodes.map((child) => [child.id, child]));
+        masterNodesCache.set(master.id, masterNodesById);
+      }
+      for (const [childId, override] of Object.entries(node.overrides)) {
+        const targetNode = masterNodesById.get(childId);
+        if (!targetNode) {
+          return `An instance of ${node.componentId} contains an override for a missing master layer.`;
+        }
+        if (override.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
+          return `An instance of ${node.componentId} overrides "text" on incompatible ${targetNode.type} layer "${targetNode.name}".`;
+        }
+        if (override.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
+          return `An instance of ${node.componentId} overrides "fill" on incompatible ${targetNode.type} layer "${targetNode.name}".`;
+        }
+      }
+      if (node.variantSelection) {
+        const axisById = new Map((master.variants ?? []).map((axis) => [axis.id, axis]));
+        for (const [axisId, optionId] of Object.entries(node.variantSelection)) {
+          const axis = axisById.get(axisId);
+          if (!axis) {
+            return `An instance of ${node.componentId} selects unknown variant axis "${axisId}".`;
+          }
+          if (!axis.options.some((opt) => opt.id === optionId)) {
+            return `An instance of ${node.componentId} selects unknown option "${optionId}" for variant axis "${axis.name}".`;
+          }
+        }
+      }
+      if (node.slotAssignments) {
+        const slotById = new Map((master.slots ?? []).map((slot) => [slot.id, slot]));
+        for (const [slotId, assignment] of Object.entries(node.slotAssignments)) {
+          const slot = slotById.get(slotId);
+          if (!slot) {
+            return `An instance of ${node.componentId} assigns unknown slot "${slotId}".`;
+          }
+          const targetNode = masterNodesById.get(slot.targetNodeId);
+          if (!targetNode) {
+            return `Slot "${slot.name}" on ${node.componentId} references missing master layer "${slot.targetNodeId}".`;
+          }
+          if (assignment.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
+            return `Slot "${slot.name}" on ${node.componentId} cannot assign "text" to ${targetNode.type} layer "${targetNode.name}".`;
+          }
+          if (assignment.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
+            return `Slot "${slot.name}" on ${node.componentId} cannot assign "fill" to ${targetNode.type} layer "${targetNode.name}".`;
+          }
+        }
+      }
+    }
+  }
+
+  if (pageFrozen && tokensFrozen && componentsFrozen) {
+    validatedFrozenPagesContext.set(page as unknown as object, {
+      tokens: tokenKey,
+      components: componentsRef,
+    });
+  }
+  return null;
+}
+
 export function validateProject(input: unknown): ValidationResult {
   const envelopeError = validateEnvelope(input);
   if (envelopeError) return { ok: false, error: envelopeError };
@@ -597,17 +788,30 @@ export function validateProject(input: unknown): ValidationResult {
     return { ok: false, error: 'Project pages, components, logic graphs or assets are missing.' };
   }
 
-  if (input.designTokens !== undefined && !isDesignTokenCollection(input.designTokens)) {
-    return { ok: false, error: 'Project design tokens contain invalid values, missing themes, or cyclic/incompatible aliases.' };
+  if (input.designTokens !== undefined) {
+    const tokensFrozen = deeplyFrozenObjects.has(input.designTokens as object);
+    if (!(tokensFrozen && validatedFrozenTokens.has(input.designTokens as object))) {
+      if (!isDesignTokenCollection(input.designTokens)) {
+        return { ok: false, error: 'Project design tokens contain invalid values, missing themes, or cyclic/incompatible aliases.' };
+      }
+      if (tokensFrozen) validatedFrozenTokens.add(input.designTokens as object);
+    }
   }
 
-  if (input.codeModules !== undefined && !isCodeModuleList(input.codeModules)) {
-    return { ok: false, error: 'Project code modules contain invalid paths, duplicate IDs, or unsupported mappings.' };
+  if (input.codeModules !== undefined) {
+    const modulesFrozen = deeplyFrozenObjects.has(input.codeModules as object);
+    if (!(modulesFrozen && validatedFrozenCodeModules.has(input.codeModules as object))) {
+      if (!isCodeModuleList(input.codeModules)) {
+        return { ok: false, error: 'Project code modules contain invalid paths, duplicate IDs, or unsupported mappings.' };
+      }
+      if (modulesFrozen) validatedFrozenCodeModules.add(input.codeModules as object);
+    }
   }
 
   const pageIds = new Set<string>();
   const routes = new Set<string>();
-  for (const page of input.pages) {
+  for (let i = 0; i < input.pages.length; i += 1) {
+    const page = input.pages[i];
     if (!isRecord(page) || !isString(page.id) || !page.id ||
         !isString(page.name) || !page.name.trim() ||
         !isString(page.route) || !page.route.startsWith('/') ||
@@ -625,7 +829,12 @@ export function validateProject(input: unknown): ValidationResult {
   }
 
   const componentIds = new Set<string>();
-  for (const component of input.components) {
+  const componentsArray = input.components as unknown as ComponentDefinition[];
+  const projectDesignTokens = input.designTokens as DesignTokenCollection | undefined;
+  const masterNodesCache = new Map<string, Map<string, DesignNode>>();
+
+  for (let i = 0; i < input.components.length; i += 1) {
+    const component = input.components[i];
     if (!isRecord(component) || !isString(component.id) || !component.id ||
         !isString(component.name) || !component.name.trim() ||
         !isString(component.createdAt) || !isString(component.updatedAt) ||
@@ -633,125 +842,82 @@ export function validateProject(input: unknown): ValidationResult {
       return { ok: false, error: 'One or more component definitions are invalid.' };
     }
     if (componentIds.has(component.id)) return { ok: false, error: 'Component IDs must be unique within a project.' };
-    const masterNodesById = new Map((component.document as FolioDocument).nodes.map((node) => [node.id, node]));
-    if (component.variants !== undefined && !isComponentVariantsList(component.variants, masterNodesById)) {
-      return { ok: false, error: `Component "${component.name}" contains invalid variant definitions.` };
-    }
-    if (component.slots !== undefined && !isComponentSlotsList(component.slots, masterNodesById)) {
-      return { ok: false, error: `Component "${component.name}" contains invalid slot definitions.` };
+
+    const compFrozen = deeplyFrozenObjects.has(component as object);
+    const tokensFrozen = projectDesignTokens === undefined || deeplyFrozenObjects.has(projectDesignTokens as unknown as object);
+    const cachedCompValid =
+      compFrozen &&
+      tokensFrozen &&
+      validatedFrozenComponentsContext.get(component as object) === (projectDesignTokens ?? null);
+
+    if (!cachedCompValid) {
+      const masterNodesById = new Map((component.document as FolioDocument).nodes.map((node) => [node.id, node]));
+      masterNodesCache.set(component.id, masterNodesById);
+      if (component.variants !== undefined && !isComponentVariantsList(component.variants, masterNodesById)) {
+        return { ok: false, error: `Component "${component.name}" contains invalid variant definitions.` };
+      }
+      if (component.slots !== undefined && !isComponentSlotsList(component.slots, masterNodesById)) {
+        return { ok: false, error: `Component "${component.name}" contains invalid slot definitions.` };
+      }
     }
     componentIds.add(component.id);
   }
 
-  for (const component of input.components as Array<Record<string, unknown>>) {
-    const definitionDocument = component.document as FolioDocument;
-    if (definitionDocument.nodes.some((node) => node.type === 'component-instance')) {
-      return { ok: false, error: 'Nested component instances are not supported inside master definitions.' };
-    }
+  const componentsById = new Map(componentsArray.map((component) => [component.id, component]));
+  for (let i = 0; i < componentsArray.length; i += 1) {
+    const compErr = validateComponentCrossChecks(componentsArray[i], projectDesignTokens);
+    if (compErr) return { ok: false, error: compErr };
   }
 
-  const projectDesignTokens = input.designTokens as DesignTokenCollection | undefined;
-  const componentsById = new Map((input.components as unknown as ComponentDefinition[]).map((component) => [component.id, component]));
-  for (const component of input.components as unknown as ComponentDefinition[]) {
-    for (const node of component.document.nodes) {
-      const tokenCheck = validateNodeTokenBindings(node, projectDesignTokens);
-      if (!tokenCheck.ok) {
-        return { ok: false, error: `Component "${component.name}": ${tokenCheck.error}` };
-      }
-    }
+  const pagesArray = input.pages as Array<{ name: string; document: FolioDocument }>;
+  for (let i = 0; i < pagesArray.length; i += 1) {
+    const pageErr = validatePageCrossChecks(
+      pagesArray[i],
+      projectDesignTokens,
+      componentsArray,
+      componentsById,
+      masterNodesCache,
+    );
+    if (pageErr) return { ok: false, error: pageErr };
   }
 
-  for (const page of input.pages as Array<{ name: string; document: FolioDocument }>) {
-    for (const node of page.document.nodes) {
-      const tokenCheck = validateNodeTokenBindings(node, projectDesignTokens);
-      if (!tokenCheck.ok) {
-        return { ok: false, error: `Page "${page.name}": ${tokenCheck.error}` };
-      }
-      if (node.type === 'component-instance') {
-        const master = componentsById.get(node.componentId);
-        if (!master) {
-          return { ok: false, error: `A page references missing component: ${node.componentId}.` };
-        }
-        const masterNodesById = new Map(master.document.nodes.map((child) => [child.id, child]));
-        for (const [childId, override] of Object.entries(node.overrides)) {
-          const targetNode = masterNodesById.get(childId);
-          if (!targetNode) {
-            return { ok: false, error: `An instance of ${node.componentId} contains an override for a missing master layer.` };
-          }
-          if (override.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
-            return {
-              ok: false,
-              error: `An instance of ${node.componentId} overrides "text" on incompatible ${targetNode.type} layer "${targetNode.name}".`,
-            };
-          }
-          if (override.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
-            return {
-              ok: false,
-              error: `An instance of ${node.componentId} overrides "fill" on incompatible ${targetNode.type} layer "${targetNode.name}".`,
-            };
-          }
-        }
-        if (node.variantSelection) {
-          const axisById = new Map((master.variants ?? []).map((axis) => [axis.id, axis]));
-          for (const [axisId, optionId] of Object.entries(node.variantSelection)) {
-            const axis = axisById.get(axisId);
-            if (!axis) {
-              return {
-                ok: false,
-                error: `An instance of ${node.componentId} selects unknown variant axis "${axisId}".`,
-              };
-            }
-            if (!axis.options.some((opt) => opt.id === optionId)) {
-              return {
-                ok: false,
-                error: `An instance of ${node.componentId} selects unknown option "${optionId}" for variant axis "${axis.name}".`,
-              };
-            }
-          }
-        }
-        if (node.slotAssignments) {
-          const slotById = new Map((master.slots ?? []).map((slot) => [slot.id, slot]));
-          for (const [slotId, assignment] of Object.entries(node.slotAssignments)) {
-            const slot = slotById.get(slotId);
-            if (!slot) {
-              return {
-                ok: false,
-                error: `An instance of ${node.componentId} assigns unknown slot "${slotId}".`,
-              };
-            }
-            const targetNode = masterNodesById.get(slot.targetNodeId);
-            if (!targetNode) {
-              return {
-                ok: false,
-                error: `Slot "${slot.name}" on ${node.componentId} references missing master layer "${slot.targetNodeId}".`,
-              };
-            }
-            if (assignment.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
-              return {
-                ok: false,
-                error: `Slot "${slot.name}" on ${node.componentId} cannot assign "text" to ${targetNode.type} layer "${targetNode.name}".`,
-              };
-            }
-            if (assignment.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
-              return {
-                ok: false,
-                error: `Slot "${slot.name}" on ${node.componentId} cannot assign "fill" to ${targetNode.type} layer "${targetNode.name}".`,
-              };
-            }
-          }
-        }
-      }
+  const logicFrozen = deeplyFrozenObjects.has(input.logicGraphs as object);
+  if (!(logicFrozen && validatedFrozenLogicGraphs.has(input.logicGraphs as object))) {
+    if (!input.logicGraphs.every(isLogicGraph)) {
+      return { ok: false, error: 'One or more logic graphs contain invalid nodes or connections.' };
     }
+    if (logicFrozen) validatedFrozenLogicGraphs.add(input.logicGraphs as object);
   }
 
-  if (!input.logicGraphs.every(isLogicGraph)) {
-    return { ok: false, error: 'One or more logic graphs contain invalid nodes or connections.' };
-  }
-  if (!input.assets.every(isAssetReference)) {
-    return { ok: false, error: 'One or more asset references are invalid.' };
+  const assetsFrozen = deeplyFrozenObjects.has(input.assets as object);
+  if (!(assetsFrozen && validatedFrozenAssets.has(input.assets as object))) {
+    if (!input.assets.every(isAssetReference)) {
+      return { ok: false, error: 'One or more asset references are invalid.' };
+    }
+    if (assetsFrozen) validatedFrozenAssets.add(input.assets as object);
   }
 
   return { ok: true, project: input as unknown as FolioProject };
+}
+
+/**
+ * Incremental project validator against a previously validated, deeply frozen
+ * canonical project. Unchanged deeply frozen pages, components, tokens, code
+ * modules, and nodes bypass redundant O(N) re-validation while maintaining
+ * 100% equivalence with full validateProject().
+ */
+export function validateProjectIncremental(
+  previousValidProject: FolioProject | null | undefined,
+  candidateInput: unknown,
+): ValidationResult {
+  if (
+    previousValidProject &&
+    candidateInput === previousValidProject &&
+    deeplyFrozenObjects.has(previousValidProject as unknown as object)
+  ) {
+    return { ok: true, project: previousValidProject };
+  }
+  return validateProject(candidateInput);
 }
 
 export function requireValidProject(input: unknown): FolioProject {

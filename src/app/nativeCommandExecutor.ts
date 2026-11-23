@@ -1,6 +1,6 @@
 import { getClippingMaskBaseId, getEffectiveLayerStates } from '../core/document/layers';
 import { areDocumentsStructurallyEqual } from '../core/document/equality';
-import { validateProject } from '../core/document/validation';
+import { freezeImmutableGraph, validateProjectIncremental } from '../core/document/validation';
 import { createDocumentAstView, type DocumentAddress, type NativeAstDocumentView, type NativeNodeRef } from '../core/document/ast';
 import type { DesignNode, FolioDocument, FolioProject } from '../core/document/types';
 import {
@@ -113,13 +113,8 @@ function cloneGraph<T>(value: T): T {
   return value;
 }
 
-function freezeGraph<T>(value: T, seen = new WeakSet<object>()): T {
-  if (value === null || typeof value !== 'object') return value;
-  const object = value as unknown as object;
-  if (seen.has(object)) return value;
-  seen.add(object);
-  for (const child of Object.values(object)) freezeGraph(child, seen);
-  return Object.freeze(object) as T;
+function freezeGraph<T>(value: T): T {
+  return freezeImmutableGraph(value);
 }
 
 export type NativeCommandPreparation =
@@ -388,11 +383,21 @@ function computeDocumentNodeDiff(
   beforeDocument: FolioDocument,
   afterDocument: FolioDocument,
 ): { added: string[]; updated: string[]; removed: string[] } {
+  if (beforeDocument === afterDocument || beforeDocument.nodes === afterDocument.nodes) {
+    return { added: [], updated: [], removed: [] };
+  }
+
   const beforeById = new Map<string, { node: DesignNode; index: number }>();
-  beforeDocument.nodes.forEach((node, index) => beforeById.set(node.id, { node, index }));
+  for (let index = 0; index < beforeDocument.nodes.length; index += 1) {
+    const node = beforeDocument.nodes[index];
+    beforeById.set(node.id, { node, index });
+  }
 
   const afterById = new Map<string, { node: DesignNode; index: number }>();
-  afterDocument.nodes.forEach((node, index) => afterById.set(node.id, { node, index }));
+  for (let index = 0; index < afterDocument.nodes.length; index += 1) {
+    const node = afterDocument.nodes[index];
+    afterById.set(node.id, { node, index });
+  }
 
   const added: string[] = [];
   const updated: string[] = [];
@@ -402,8 +407,10 @@ function computeDocumentNodeDiff(
     const beforeEntry = beforeById.get(id);
     if (!beforeEntry) {
       added.push(id);
+    } else if (beforeEntry.index !== afterEntry.index) {
+      updated.push(id);
     } else if (
-      beforeEntry.index !== afterEntry.index ||
+      beforeEntry.node !== afterEntry.node &&
       JSON.stringify(beforeEntry.node) !== JSON.stringify(afterEntry.node)
     ) {
       updated.push(id);
@@ -427,6 +434,23 @@ function computeProjectChangeDraft(
   primaryTargetAddress?: DocumentAddress,
 ): { changeDraft: NativeChangeSetDraft; affectedNodes: NativeNodeRef[] } {
   const projectId = afterProject.metadata.id;
+  if (beforeProject === afterProject) {
+    const documents: NativeChangeSetDraft['documents'] = primaryTargetAddress
+      ? [{ address: primaryTargetAddress, nodeIds: { added: [], updated: [], removed: [] } }]
+      : [];
+    return {
+      changeDraft: {
+        projectId,
+        ...(transactionId ? { transactionId } : {}),
+        commandIds,
+        documents,
+        components: [],
+        projectMetadataChanged: false,
+      },
+      affectedNodes: [],
+    };
+  }
+
   const documents: NativeChangeSetDraft['documents'] = [];
   const affectedNodes: NativeNodeRef[] = [];
 
@@ -441,11 +465,15 @@ function computeProjectChangeDraft(
       owner: { kind: 'page', id: afterPage.id },
       documentId: afterPage.document.id,
     };
+    const isPrimary = primaryTargetAddress !== undefined && addressEquals(primaryTargetAddress, address);
+    if (beforePage === afterPage && !isPrimary) {
+      continue;
+    }
+
     const diff = beforePage
       ? computeDocumentNodeDiff(beforePage.document, afterPage.document)
       : { added: afterPage.document.nodes.map((node) => node.id), updated: [], removed: [] };
 
-    const isPrimary = primaryTargetAddress !== undefined && addressEquals(primaryTargetAddress, address);
     const hasChanges = diff.added.length > 0 || diff.updated.length > 0 || diff.removed.length > 0 || !beforePage;
     if (hasChanges || isPrimary) {
       const key = `${address.owner.id}:${address.documentId}`;
@@ -477,43 +505,46 @@ function computeProjectChangeDraft(
   }
 
   const components: NativeChangeSetDraft['components'] = [];
-  const beforeComponentsById = new Map(beforeProject.components.map((component) => [component.id, component]));
-  const afterComponentsById = new Map(afterProject.components.map((component) => [component.id, component]));
+  if (beforeProject.components !== afterProject.components) {
+    const beforeComponentsById = new Map(beforeProject.components.map((component) => [component.id, component]));
+    const afterComponentsById = new Map(afterProject.components.map((component) => [component.id, component]));
 
-  for (const afterComponent of afterProject.components) {
-    const beforeComponent = beforeComponentsById.get(afterComponent.id);
-    if (!beforeComponent) {
-      components.push({
-        componentId: afterComponent.id,
-        metadataChanged: true,
-        documentContentChanged: true,
-      });
-    } else {
-      const metadataChanged =
-        beforeComponent.name !== afterComponent.name ||
-        JSON.stringify(beforeComponent.variants ?? []) !== JSON.stringify(afterComponent.variants ?? []) ||
-        JSON.stringify(beforeComponent.slots ?? []) !== JSON.stringify(afterComponent.slots ?? []);
-      const documentContentChanged = !areDocumentsStructurallyEqual(
-        beforeComponent.document,
-        afterComponent.document,
-      );
-      if (metadataChanged || documentContentChanged) {
+    for (const afterComponent of afterProject.components) {
+      const beforeComponent = beforeComponentsById.get(afterComponent.id);
+      if (!beforeComponent) {
         components.push({
           componentId: afterComponent.id,
-          metadataChanged,
-          documentContentChanged,
+          metadataChanged: true,
+          documentContentChanged: true,
         });
+      } else if (beforeComponent !== afterComponent) {
+        const metadataChanged =
+          beforeComponent.name !== afterComponent.name ||
+          (beforeComponent.variants !== afterComponent.variants &&
+            JSON.stringify(beforeComponent.variants ?? []) !== JSON.stringify(afterComponent.variants ?? [])) ||
+          (beforeComponent.slots !== afterComponent.slots &&
+            JSON.stringify(beforeComponent.slots ?? []) !== JSON.stringify(afterComponent.slots ?? []));
+        const documentContentChanged =
+          beforeComponent.document !== afterComponent.document &&
+          !areDocumentsStructurallyEqual(beforeComponent.document, afterComponent.document);
+        if (metadataChanged || documentContentChanged) {
+          components.push({
+            componentId: afterComponent.id,
+            metadataChanged,
+            documentContentChanged,
+          });
+        }
       }
     }
-  }
 
-  for (const beforeComponent of beforeProject.components) {
-    if (!afterComponentsById.has(beforeComponent.id)) {
-      components.push({
-        componentId: beforeComponent.id,
-        metadataChanged: true,
-        documentContentChanged: true,
-      });
+    for (const beforeComponent of beforeProject.components) {
+      if (!afterComponentsById.has(beforeComponent.id)) {
+        components.push({
+          componentId: beforeComponent.id,
+          metadataChanged: true,
+          documentContentChanged: true,
+        });
+      }
     }
   }
 
@@ -523,8 +554,10 @@ function computeProjectChangeDraft(
     beforeProject.activePageId !== afterProject.activePageId ||
     beforeProject.pages.length !== afterProject.pages.length ||
     beforeProject.pages.some((page, idx) => afterProject.pages[idx]?.id !== page.id) ||
-    JSON.stringify(beforeProject.designTokens ?? null) !== JSON.stringify(afterProject.designTokens ?? null) ||
-    JSON.stringify(beforeProject.codeModules ?? []) !== JSON.stringify(afterProject.codeModules ?? []);
+    (beforeProject.designTokens !== afterProject.designTokens &&
+      JSON.stringify(beforeProject.designTokens ?? null) !== JSON.stringify(afterProject.designTokens ?? null)) ||
+    (beforeProject.codeModules !== afterProject.codeModules &&
+      JSON.stringify(beforeProject.codeModules ?? []) !== JSON.stringify(afterProject.codeModules ?? []));
 
   const changeDraft: NativeChangeSetDraft = {
     projectId,
@@ -895,7 +928,7 @@ function prepareCommandStep(
     );
   }
 
-  if (!validateProject(candidateState.project).ok) {
+  if (!validateProjectIncremental(snapshot.editorState.project, candidateState.project).ok) {
     return {
       status: 'rejected',
       result: createResult(snapshot, command, 'rejected', 'PROJECT_VALIDATION_FAILED', 'The prepared project violates the current Folio project schema.'),
