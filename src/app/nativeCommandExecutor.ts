@@ -731,10 +731,17 @@ function prepareCommandStep(
 
     if (command.type === 'node.update-many') {
       for (const updated of command.payload.nodes) {
-        if (!astView.getNode(updated.id)) {
+        const existing = astView.getNode(updated.id);
+        if (!existing) {
           return {
             status: 'rejected',
             result: createResult(snapshot, command, 'rejected', 'INVALID_REFERENCE', `Node "${updated.id}" does not exist in this document.`),
+          };
+        }
+        if (existing.type !== updated.type) {
+          return {
+            status: 'rejected',
+            result: createResult(snapshot, command, 'rejected', 'INVALID_PAYLOAD', `Multi-node update cannot change the type of node "${updated.id}".`),
           };
         }
       }

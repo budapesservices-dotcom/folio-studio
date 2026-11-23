@@ -1,4 +1,5 @@
 import { createDocumentAstView, type DocumentAddress, type NativeAstDocumentView, type NativeNodeRef } from '../core/document/ast';
+import { classifyNodeChange, hasExtendedNodeChange } from '../core/document/nodeChanges';
 import { getActivePage } from '../core/document/project';
 import type { LayerDropPosition } from '../core/document/layers';
 import type {
@@ -70,57 +71,27 @@ export function stripUndefinedEntries<T>(value: T): T {
   return value;
 }
 
+export { hasExtendedNodeChange };
+
 /**
- * Determines whether updating `current` -> `next` carries style, text, opacity,
- * or vector path changes beyond plain affine bounds (`x`, `y`, `width`, `height`,
- * `rotation`, `onCanvas`), requiring `node.replace` / `node.update-many` instead
- * of `node.transform`.
+ * Builds a validated `NativeNodeTransform` payload entry from `current` -> `node`,
+ * omitting zero-sized unchanged dimensions (such as horizontal/vertical line paths)
+ * and passing boolean `onCanvas` changes when representable by `node.transform`.
  */
-export function hasExtendedNodeChange(current: DesignNode | undefined, node: DesignNode): boolean {
-  if (!current) return false;
-  if (current.opacity !== node.opacity) return true;
-  if (node.type === 'text' && current.type === 'text') {
-    return (
-      current.text !== node.text ||
-      current.style.fontSize !== node.style.fontSize ||
-      current.style.fill !== node.style.fill ||
-      current.style.fontFamily !== node.style.fontFamily ||
-      current.style.fontWeight !== node.style.fontWeight ||
-      current.style.lineHeight !== node.style.lineHeight ||
-      current.style.letterSpacing !== node.style.letterSpacing
-    );
-  }
-  if (node.type === 'path' && current.type === 'path') {
-    return (
-      current.width !== node.width ||
-      current.height !== node.height ||
-      current.closed !== node.closed ||
-      current.points !== node.points ||
-      current.shapeMeta !== node.shapeMeta ||
-      current.style.fill !== node.style.fill ||
-      current.style.stroke !== node.style.stroke ||
-      current.style.strokeWidth !== node.style.strokeWidth ||
-      current.style.strokeDasharray !== node.style.strokeDasharray ||
-      current.style.arrowStart !== node.style.arrowStart ||
-      current.style.arrowEnd !== node.style.arrowEnd
-    );
-  }
-  if ((node.type === 'rect' || node.type === 'frame') && current.type === node.type) {
-    return (
-      current.style.fill !== node.style.fill ||
-      current.style.stroke !== node.style.stroke ||
-      current.style.strokeWidth !== node.style.strokeWidth ||
-      current.style.radius !== node.style.radius
-    );
-  }
-  if (node.type === 'ellipse' && current.type === 'ellipse') {
-    return (
-      current.style.fill !== node.style.fill ||
-      current.style.stroke !== node.style.stroke ||
-      current.style.strokeWidth !== node.style.strokeWidth
-    );
-  }
-  return false;
+export function buildNativeNodeTransform(
+  current: DesignNode | null | undefined,
+  node: DesignNode,
+): NativeNodeTransform {
+  return {
+    x: node.x,
+    y: node.y,
+    ...(node.width > 0 ? { width: node.width } : {}),
+    ...(node.height > 0 ? { height: node.height } : {}),
+    rotation: node.rotation,
+    ...(typeof node.onCanvas === 'boolean' && node.onCanvas !== current?.onCanvas
+      ? { onCanvas: node.onCanvas }
+      : {}),
+  };
 }
 
 export interface MainCanvasCommandClientOptions {
@@ -502,7 +473,7 @@ export function createWorkspaceCommandClient(
       // Single-node updates route through node.replace; multi-node updates route
       // through node.update-many while preserving atomic single-step undo history.
       const hasExtendedGeometryOrStyleChange = nodes.some((node) =>
-        hasExtendedNodeChange(astView.getNode(node.id) ?? undefined, node),
+        classifyNodeChange(astView.getNode(node.id), node).hasExtendedChange,
       );
       if (hasExtendedGeometryOrStyleChange) {
         if (nodes.length === 1) {
@@ -521,18 +492,10 @@ export function createWorkspaceCommandClient(
         );
       }
 
-      const entries = nodes.map((node) => {
-        const current = astView.getNode(node.id);
-        const transform: NativeNodeTransform = {
-          x: node.x,
-          y: node.y,
-          width: node.width,
-          height: node.height,
-          rotation: node.rotation,
-          ...(node.onCanvas !== undefined && node.onCanvas !== current?.onCanvas ? { onCanvas: node.onCanvas } : {}),
-        };
-        return { ref: makeNodeRef(astView, node.id), transform };
-      });
+      const entries = nodes.map((node) => ({
+        ref: makeNodeRef(astView, node.id),
+        transform: buildNativeNodeTransform(astView.getNode(node.id), node),
+      }));
       return submit('node.transform', { kind: 'document', address: astView.address }, { nodes: entries }, description);
     },
 

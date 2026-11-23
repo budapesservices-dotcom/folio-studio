@@ -1,5 +1,6 @@
 import { getEffectiveLayerStates, type EffectiveLayerState } from '../../core/document/layers';
-import type { DesignNode, FolioDocument, PathNode, TextNode, VectorAnchorPoint } from '../../core/document/types';
+import { classifyNodeListChange } from '../../core/document/nodeChanges';
+import type { DesignNode, FolioDocument, TextNode, VectorAnchorPoint } from '../../core/document/types';
 import {
   isCanvasToolId,
   TOOL_OPERATION_PROTOCOL,
@@ -24,7 +25,6 @@ import {
   type TransformNodesOperationPayload,
   type ViewportUpdateOperationPayload,
 } from '../../core/tools/operationContract';
-import { nodesGeometryChanged } from './geometry';
 
 const GEOMETRY_ENGINE_SEAL: unique symbol = Symbol('folio.geometry-engine.validated');
 
@@ -181,109 +181,6 @@ function validateNodeGeometry(node: DesignNode): string | null {
   return null;
 }
 
-function vectorPointsChanged(a: readonly VectorAnchorPoint[], b: readonly VectorAnchorPoint[]): boolean {
-  if (a === b) return false;
-  if (a.length !== b.length) return true;
-  for (let i = 0; i < a.length; i += 1) {
-    const pa = a[i];
-    const pb = b[i];
-    if (
-      pa.id !== pb.id ||
-      pa.x !== pb.x ||
-      pa.y !== pb.y ||
-      pa.pointType !== pb.pointType ||
-      pa.handleIn?.x !== pb.handleIn?.x ||
-      pa.handleIn?.y !== pb.handleIn?.y ||
-      pa.handleOut?.x !== pb.handleOut?.x ||
-      pa.handleOut?.y !== pb.handleOut?.y
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function pathSubpathsChanged(a: PathNode['subpaths'], b: PathNode['subpaths']): boolean {
-  if (a === b) return false;
-  if (!a || !b) return true;
-  if (a.length !== b.length) return true;
-  for (let i = 0; i < a.length; i += 1) {
-    if (a[i].closed !== b[i].closed || vectorPointsChanged(a[i].points, b[i].points)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function nodeContentOrStyleChanged(before: DesignNode, after: DesignNode): boolean {
-  if (before.type !== after.type) return true;
-  if (
-    before.opacity !== after.opacity ||
-    before.name !== after.name ||
-    before.onCanvas !== after.onCanvas ||
-    before.parentId !== after.parentId
-  ) {
-    return true;
-  }
-
-  if (before.type === 'text' && after.type === 'text') {
-    return (
-      before.text !== after.text ||
-      before.style.fill !== after.style.fill ||
-      before.style.fontSize !== after.style.fontSize ||
-      before.style.fontFamily !== after.style.fontFamily ||
-      before.style.fontWeight !== after.style.fontWeight ||
-      before.style.lineHeight !== after.style.lineHeight ||
-      before.style.letterSpacing !== after.style.letterSpacing
-    );
-  }
-
-  if (before.type === 'rect' && after.type === 'rect') {
-    return (
-      before.style.fill !== after.style.fill ||
-      before.style.stroke !== after.style.stroke ||
-      before.style.strokeWidth !== after.style.strokeWidth ||
-      before.style.radius !== after.style.radius
-    );
-  }
-
-  if (before.type === 'frame' && after.type === 'frame') {
-    return (
-      before.style.fill !== after.style.fill ||
-      before.style.stroke !== after.style.stroke ||
-      before.style.strokeWidth !== after.style.strokeWidth ||
-      before.style.radius !== after.style.radius ||
-      before.clipContent !== after.clipContent
-    );
-  }
-
-  if (before.type === 'ellipse' && after.type === 'ellipse') {
-    return (
-      before.style.fill !== after.style.fill ||
-      before.style.stroke !== after.style.stroke ||
-      before.style.strokeWidth !== after.style.strokeWidth
-    );
-  }
-
-  if (before.type === 'path' && after.type === 'path') {
-    if (
-      before.closed !== after.closed ||
-      before.style.fill !== after.style.fill ||
-      before.style.stroke !== after.style.stroke ||
-      before.style.strokeWidth !== after.style.strokeWidth ||
-      before.style.strokeDasharray !== after.style.strokeDasharray ||
-      before.style.arrowStart !== after.style.arrowStart ||
-      before.style.arrowEnd !== after.style.arrowEnd ||
-      JSON.stringify(before.shapeMeta) !== JSON.stringify(after.shapeMeta)
-    ) {
-      return true;
-    }
-    return vectorPointsChanged(before.points, after.points) || pathSubpathsChanged(before.subpaths, after.subpaths);
-  }
-
-  return false;
-}
-
 function sealValidatedOperation<TPayload extends ValidatedToolOperationPayload>(
   source: ToolOperation,
   payload: TPayload,
@@ -402,17 +299,33 @@ export function evaluateToolOperation(
       }
 
       const beforeList: DesignNode[] = [];
+      const seenBatchIds = new Set<string>();
       for (const node of updated) {
         const geomError = validateNodeGeometry(node);
         if (geomError) {
           return { status: 'rejected', code: 'INVALID_GEOMETRY', reason: geomError };
         }
+        if (seenBatchIds.has(node.id)) {
+          return {
+            status: 'rejected',
+            code: 'DUPLICATE_NODE_ID',
+            reason: `Transform target "${node.id}" appears more than once in the same operation.`,
+          };
+        }
+        seenBatchIds.add(node.id);
         const existing = nodeById.get(node.id);
         if (!existing) {
           return {
             status: 'rejected',
             code: 'TARGET_NOT_FOUND',
             reason: `Transform target "${node.id}" does not exist in active document.`,
+          };
+        }
+        if (existing.type !== node.type) {
+          return {
+            status: 'rejected',
+            code: 'UNSUPPORTED_TARGET_TYPE',
+            reason: `Transform target "${node.id}" cannot change type from "${existing.type}" to "${node.type}".`,
           };
         }
         if (layerStates.get(node.id)?.locked) {
@@ -425,9 +338,8 @@ export function evaluateToolOperation(
         beforeList.push(existing);
       }
 
-      const geometryChanged = nodesGeometryChanged(beforeList, updated);
-      const extendedChanged = beforeList.some((before, index) => nodeContentOrStyleChanged(before, updated[index]));
-      if (!geometryChanged && !extendedChanged) {
+      const change = classifyNodeListChange(beforeList, updated, { transformTolerance: 0.005 });
+      if (!change.hasAnyChange) {
         return {
           status: 'no-op',
           code: 'ZERO_DELTA_NO_OP',

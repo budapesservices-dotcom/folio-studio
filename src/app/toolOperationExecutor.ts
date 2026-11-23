@@ -1,8 +1,8 @@
 import type {
   NativeCommandEnvelope,
   NativeCommandResult,
-  NativeNodeTransform,
 } from '../core/commands/types';
+import { classifyNodeChange } from '../core/document/nodeChanges';
 import type { DesignNode } from '../core/document/types';
 import {
   getExpectedCategoryForKind,
@@ -37,7 +37,7 @@ import {
   type ValidatedToolOperationPayload,
 } from '../engines/canvas/geometryEngine';
 import {
-  hasExtendedNodeChange,
+  buildNativeNodeTransform,
   stripUndefinedEntries,
   type WorkspaceCommandClient,
 } from './mainCanvasCommandClient';
@@ -637,7 +637,7 @@ function buildTransformEnvelope(
 ): NativeCommandEnvelope<string, unknown> {
   const astView = commandClient.getActiveAstView();
   const makeRef = (nodeId: string) => ({ document: astView.address, nodeId });
-  const hasExtended = nodes.some((node) => hasExtendedNodeChange(projectedNodesById.get(node.id), node));
+  const hasExtended = nodes.some((node) => classifyNodeChange(projectedNodesById.get(node.id), node).hasExtendedChange);
   if (hasExtended) {
     if (nodes.length === 1) {
       return commandClient.createEnvelope(
@@ -656,18 +656,10 @@ function buildTransformEnvelope(
       transactionId,
     );
   }
-  const entries = nodes.map((node) => {
-    const current = projectedNodesById.get(node.id);
-    const transform: NativeNodeTransform = {
-      x: node.x,
-      y: node.y,
-      width: node.width,
-      height: node.height,
-      rotation: node.rotation,
-      ...(node.onCanvas !== undefined && node.onCanvas !== current?.onCanvas ? { onCanvas: node.onCanvas } : {}),
-    };
-    return { ref: makeRef(node.id), transform };
-  });
+  const entries = nodes.map((node) => ({
+    ref: makeRef(node.id),
+    transform: buildNativeNodeTransform(projectedNodesById.get(node.id), node),
+  }));
   return commandClient.createEnvelope(
     'node.transform',
     { kind: 'document', address: astView.address },
