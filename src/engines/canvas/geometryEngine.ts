@@ -299,12 +299,16 @@ function sealValidatedOperation<TPayload extends ValidatedToolOperationPayload>(
   };
 }
 
-export function isValidatedToolOperation(value: unknown): value is ValidatedToolOperation {
+export function hasGeometryEngineSeal(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const candidate = value as Record<PropertyKey, unknown>;
+  return candidate[GEOMETRY_ENGINE_SEAL] === true && candidate.validatedBy === 'geometry-engine';
+}
+
+export function isValidatedToolOperation(value: unknown): value is ValidatedToolOperation {
+  if (!hasGeometryEngineSeal(value)) return false;
+  const candidate = value as Record<PropertyKey, unknown>;
   return (
-    candidate[GEOMETRY_ENGINE_SEAL] === true &&
-    candidate.validatedBy === 'geometry-engine' &&
     candidate.protocol === TOOL_OPERATION_PROTOCOL &&
     candidate.version === TOOL_OPERATION_VERSION &&
     typeof candidate.operationId === 'string' &&

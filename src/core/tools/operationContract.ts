@@ -565,9 +565,9 @@ function validatePathStyle(
   return null;
 }
 
-function validateDesignNodePayload(
+export function validateDesignNodePayload(
   value: unknown,
-  path: string,
+  path = 'node',
 ): ToolOperationEnvelopeValidationResult | null {
   if (!isPlainRecord(value)) {
     return fail('INVALID_NODE', `${path} must be a plain DesignNode object.`, path);
@@ -937,7 +937,7 @@ export function getToolOperationCategory(payload: ToolOperationPayload): ToolOpe
   }
 }
 
-function getExpectedCategoryForKind(kind: string): ToolOperationCategory | null {
+export function getExpectedCategoryForKind(kind: string): ToolOperationCategory | null {
   switch (kind) {
     case 'create-nodes':
     case 'transform-nodes':

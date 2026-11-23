@@ -26,7 +26,12 @@ import type { CanvasToolContext, CanvasToolPointerInput, CanvasToolTransition } 
 import { createEditorState } from '../src/app/editorReducer';
 import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createMainCanvasCommandClient } from '../src/app/mainCanvasCommandClient';
-import { createToolOperationExecutor } from '../src/app/toolOperationExecutor';
+import {
+  createToolOperationExecutor,
+  isValidatedToolOperationEnvelope,
+  ToolOperationEnvelopeError,
+  validateToolOperationEnvelope as validateExecutorEnvelope,
+} from '../src/app/toolOperationExecutor';
 
 const RAW_SRC_FILES = import.meta.glob<string>('../src/**/*.{ts,tsx}', {
   query: '?raw',
@@ -734,6 +739,349 @@ describe('P0.3 Subsystem Boundaries — End-to-End Unidirectional Pipeline', () 
       expect(mismatch.status).toBe('rejected');
       expect(mismatch.reason).toContain('Workspace mismatch');
     }
+  });
+});
+
+describe('P0.3 Subsystem Boundaries — Executor Envelope Type-Guard Chain', () => {
+  function sealOrThrow(
+    op: ToolOperation,
+    doc: ReturnType<typeof getActiveDocument>,
+    selectedNodeIds: string[] = [],
+  ): ValidatedToolOperation {
+    const res = evaluateToolOperation(op, { document: doc, selectedNodeIds });
+    if (res.status !== 'ready') {
+      throw new Error(`Expected operation "${op.payload.kind}" to evaluate as ready, got ${res.status}`);
+    }
+    return res.operation;
+  }
+
+  it('validates all 10 Geometry-Engine-sealed operation types cleanly through the strict type-guard chain', () => {
+    const project = createInitialProject('Executor Envelope All Kinds');
+    const baseDoc = getActiveDocument(project);
+    const existingRect: RectNode = { ...(createNodeForDocument('rect', baseDoc) as RectNode), id: 'rect-existing' };
+    const newRect: RectNode = { ...(createNodeForDocument('rect', baseDoc) as RectNode), id: 'rect-new' };
+    const existingText: TextNode = {
+      ...(createNodeForDocument('text', baseDoc) as TextNode),
+      id: 'text-existing',
+      text: 'Before',
+    };
+    const existingPath: PathNode = {
+      id: 'path-existing',
+      type: 'path',
+      name: 'Existing Path',
+      x: 40,
+      y: 40,
+      width: 100,
+      height: 60,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      closed: true,
+      points: [
+        { id: 'pt-a', x: 0, y: 0, pointType: 'corner' },
+        { id: 'pt-b', x: 100, y: 0, pointType: 'corner' },
+        { id: 'pt-c', x: 50, y: 60, pointType: 'corner' },
+      ],
+      style: { fill: '#6366f1', stroke: '#111827', strokeWidth: 2 },
+    };
+    const splitPath: PathNode = { ...existingPath, id: 'path-split-1' };
+    const mergedPath: PathNode = { ...existingPath, id: 'path-merged-1' };
+    const doc = { ...baseDoc, nodes: [existingRect, existingText, existingPath] };
+
+    const sealedOps: ValidatedToolOperation[] = [
+      sealOrThrow(createToolOperation('draw-rect', 'main', { kind: 'create-nodes', nodes: [newRect] }), doc),
+      sealOrThrow(
+        createToolOperation('select', 'main', {
+          kind: 'transform-nodes',
+          nodes: [{ ...existingRect, x: existingRect.x + 24 }],
+        }),
+        doc,
+        [existingRect.id],
+      ),
+      sealOrThrow(
+        createToolOperation('scissors', 'main', {
+          kind: 'replace-node-with-nodes',
+          nodeId: existingPath.id,
+          nodes: [splitPath],
+        }),
+        doc,
+      ),
+      sealOrThrow(
+        createToolOperation('shape-builder', 'main', {
+          kind: 'replace-nodes',
+          removeIds: [existingRect.id, existingPath.id],
+          insertNodes: [mergedPath],
+          selectIds: [mergedPath.id],
+        }),
+        doc,
+      ),
+      sealOrThrow(
+        createToolOperation('eyedropper', 'main', {
+          kind: 'sample-color',
+          color: '#10b981',
+          sourceName: 'Accent Card',
+          target: 'fill',
+        }),
+        doc,
+        [existingRect.id],
+      ),
+      sealOrThrow(
+        createToolOperation('draw-text', 'main', {
+          kind: 'commit-inline-text',
+          nodeId: existingText.id,
+          text: 'After',
+        }),
+        doc,
+        [existingText.id],
+      ),
+      sealOrThrow(
+        createToolOperation('select', 'main', {
+          kind: 'select-nodes',
+          nodeIds: [existingRect.id],
+        }),
+        doc,
+      ),
+      sealOrThrow(
+        createToolOperation('scrubby-zoom', 'main', {
+          kind: 'viewport-update',
+          zoom: 1.5,
+          pan: { x: 12, y: -8 },
+        }),
+        doc,
+      ),
+      sealOrThrow(
+        createToolOperation('draw-rect', 'main', {
+          kind: 'switch-tool',
+          nextToolId: 'select',
+        }),
+        doc,
+      ),
+      sealOrThrow(
+        createToolOperation('measure', 'main', {
+          kind: 'notify',
+          message: 'Measured 120 × 80 px',
+        }),
+        doc,
+      ),
+    ];
+
+    expect(sealedOps).toHaveLength(10);
+    for (const op of sealedOps) {
+      expect(validateExecutorEnvelope(op)).toBe(op);
+      expect(isValidatedToolOperationEnvelope(op)).toBe(true);
+    }
+  });
+
+  it('throws descriptive ToolOperationEnvelopeError for unsealed, malformed, or mismatched envelopes', () => {
+    const project = createInitialProject('Executor Envelope Errors');
+    const doc = getActiveDocument(project);
+    const rawOp = createToolOperation('select', 'main', { kind: 'select-nodes', nodeIds: [] });
+    const sealedSelect = sealOrThrow(rawOp, doc);
+
+    const expectEnvelopeError = (
+      input: unknown,
+      expectedCode: ToolOperationEnvelopeError['code'],
+      messageSubstring?: string,
+    ) => {
+      let caught: unknown;
+      try {
+        validateExecutorEnvelope(input);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ToolOperationEnvelopeError);
+      const envelopeErr = caught as ToolOperationEnvelopeError;
+      expect(envelopeErr.code).toBe(expectedCode);
+      if (messageSubstring) {
+        expect(envelopeErr.message).toContain(messageSubstring);
+      }
+      expect(isValidatedToolOperationEnvelope(input)).toBe(false);
+    };
+
+    // Non-object & unsealed envelopes
+    expectEnvelopeError(null, 'INVALID_ENVELOPE', 'plain non-null object');
+    expectEnvelopeError('not-an-object', 'INVALID_ENVELOPE');
+    expectEnvelopeError(rawOp, 'UNSEALED_OPERATION', 'Geometry Engine');
+
+    // Top-level envelope invariants on a sealed object
+    expectEnvelopeError({ ...sealedSelect, rogue: 1 }, 'INVALID_ENVELOPE', 'Unexpected property "rogue"');
+    expectEnvelopeError({ ...sealedSelect, protocol: 'bad.proto' }, 'UNSUPPORTED_PROTOCOL', 'protocol');
+    expectEnvelopeError({ ...sealedSelect, version: 99 }, 'UNSUPPORTED_VERSION', 'version');
+    expectEnvelopeError({ ...sealedSelect, operationId: '   ' }, 'INVALID_ENVELOPE', 'operationId');
+    expectEnvelopeError({ ...sealedSelect, toolId: 'unknown-tool' }, 'INVALID_TOOL', 'unknown-tool');
+    expectEnvelopeError({ ...sealedSelect, workspace: 'devtools' }, 'INVALID_ENVELOPE', 'workspace');
+    expectEnvelopeError(
+      { ...sealedSelect, metadata: { atomicHistoryStep: 'yes' } },
+      'INVALID_METADATA',
+      'atomicHistoryStep',
+    );
+    expectEnvelopeError(
+      { ...sealedSelect, metadata: { atomicHistoryStep: false, extra: true } },
+      'INVALID_METADATA',
+      'Unexpected property "extra"',
+    );
+
+    // Unsupported operation type & category/type mismatch
+    expectEnvelopeError(
+      { ...sealedSelect, payload: { kind: 'delete-world' } },
+      'INVALID_PAYLOAD',
+      'Unsupported tool operation type',
+    );
+    expectEnvelopeError(
+      { ...sealedSelect, category: 'viewport' },
+      'INVALID_CATEGORY',
+      'does not match operation type "select-nodes"',
+    );
+  });
+
+  it('throws descriptive errors for tampered internal payloads across supported operation types and rejects via executor', () => {
+    const project = createInitialProject('Executor Payload Tamper');
+    const baseDoc = getActiveDocument(project);
+    const rect: RectNode = { ...(createNodeForDocument('rect', baseDoc) as RectNode), id: 'rect-1' };
+    const textNode: TextNode = {
+      ...(createNodeForDocument('text', baseDoc) as TextNode),
+      id: 'text-1',
+      text: 'Hello',
+    };
+    const doc = { ...baseDoc, nodes: [rect, textNode] };
+
+    const sealedSample = sealOrThrow(
+      createToolOperation('eyedropper', 'main', {
+        kind: 'sample-color',
+        color: '#22c55e',
+        sourceName: 'Card',
+        target: 'fill',
+      }),
+      doc,
+      [rect.id],
+    );
+    const sealedText = sealOrThrow(
+      createToolOperation('draw-text', 'main', {
+        kind: 'commit-inline-text',
+        nodeId: textNode.id,
+        text: 'Updated',
+      }),
+      doc,
+      [textNode.id],
+    );
+    const sealedViewport = sealOrThrow(
+      createToolOperation('scrubby-zoom', 'main', {
+        kind: 'viewport-update',
+        zoom: 2,
+      }),
+      doc,
+    );
+    const sealedCreate = sealOrThrow(
+      createToolOperation('draw-rect', 'main', {
+        kind: 'create-nodes',
+        nodes: [{ ...rect, id: 'rect-created' }],
+      }),
+      doc,
+    );
+    const sealedSwitch = sealOrThrow(
+      createToolOperation('draw-rect', 'main', {
+        kind: 'switch-tool',
+        nextToolId: 'select',
+      }),
+      doc,
+    );
+    const sealedNotify = sealOrThrow(
+      createToolOperation('measure', 'main', {
+        kind: 'notify',
+        message: 'Done',
+      }),
+      doc,
+    );
+
+    // Tampered sample-color payloads
+    expect(() =>
+      validateExecutorEnvelope({
+        ...sealedSample,
+        payload: { ...sealedSample.payload, noticeMessage: '   ' },
+      }),
+    ).toThrow(ToolOperationEnvelopeError);
+
+    expect(() =>
+      validateExecutorEnvelope({
+        ...sealedSample,
+        payload: { ...sealedSample.payload, resolvedNodesToUpdate: [rect, rect] },
+      }),
+    ).toThrow(/Duplicate node id/);
+
+    expect(() =>
+      validateExecutorEnvelope({
+        ...sealedSample,
+        payload: { ...sealedSample.payload, resolvedNodesToUpdate: 'invalid' },
+      }),
+    ).toThrow(/resolvedNodesToUpdate array/);
+
+    // Tampered commit-inline-text payloads
+    expect(() =>
+      validateExecutorEnvelope({
+        ...sealedText,
+        payload: { ...sealedText.payload, resolvedNode: rect },
+      }),
+    ).toThrow(/must have type "text"/);
+
+    expect(() =>
+      validateExecutorEnvelope({
+        ...sealedText,
+        payload: { ...sealedText.payload, resolvedNode: { ...textNode, id: 'other-id', text: 'Updated' } },
+      }),
+    ).toThrow(/does not match payload\.nodeId/);
+
+    expect(() =>
+      validateExecutorEnvelope({
+        ...sealedText,
+        payload: { ...sealedText.payload, resolvedNode: { ...textNode, text: 'Different' } },
+      }),
+    ).toThrow(/resolvedNode\.text must match payload\.text/);
+
+    // Tampered viewport-update (out-of-range zoom)
+    expect(() =>
+      validateExecutorEnvelope({
+        ...sealedViewport,
+        payload: { kind: 'viewport-update', zoom: 99 },
+      }),
+    ).toThrow(/must be within/);
+
+    // Tampered create-nodes, switch-tool, notify
+    const tamperedCreate = {
+      ...sealedCreate,
+      payload: { kind: 'create-nodes', nodes: [{ ...rect, id: 'bad-node', width: -5 }] },
+    };
+    expect(() => validateExecutorEnvelope(tamperedCreate)).toThrow(ToolOperationEnvelopeError);
+    expect(() =>
+      validateExecutorEnvelope({
+        ...sealedSwitch,
+        payload: { kind: 'switch-tool', nextToolId: 'ghost-tool' },
+      }),
+    ).toThrow(ToolOperationEnvelopeError);
+    expect(() =>
+      validateExecutorEnvelope({
+        ...sealedNotify,
+        payload: { kind: 'notify', message: '' },
+      }),
+    ).toThrow(ToolOperationEnvelopeError);
+
+    // Executor catches thrown ToolOperationEnvelopeError and returns rejected report without mutating store
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const commandClient = createMainCanvasCommandClient(store);
+    const executor = createToolOperationExecutor({
+      workspace: 'main',
+      commandClient,
+      shell: {
+        onSelectionChange: () => {},
+        onPanChange: () => {},
+        onZoomChange: () => {},
+      },
+    });
+    const revBefore = store.getSnapshot().projectRevision;
+    const report = executor.execute(tamperedCreate as unknown as ValidatedToolOperation);
+    expect(report.status).toBe('rejected');
+    expect(report.reason).toBeTruthy();
+    expect(store.getSnapshot().projectRevision).toBe(revBefore);
   });
 });
 
