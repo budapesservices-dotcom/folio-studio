@@ -1,3 +1,4 @@
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { createEditorState } from '../src/app/editorReducer';
 import { createCanonicalEditorStore } from '../src/app/editorStore';
@@ -189,44 +190,234 @@ describe('Tahap 3 — Deterministic AST to HTML5/CSS & React TSX Compilation', (
     expect(cssFile!.mappings.some((m) => m.nodeId === 'hero-sec')).toBe(true);
   });
 
-  it('compiles Master Components with Variants & Slots into typed React TSX props and Page JSX', () => {
+  it('compiles Master Components with Variants, Slots, Direct Overrides, nested Frames, and PathNode SVG into complete React TSX + CSS bundles', () => {
     const project = createInitialProject('React App');
+    project.designTokens = createDefaultDesignTokens();
     const page = getActivePage(project);
-    const bg = { ...createRectNode(0), id: 'btn-bg', name: 'Background' };
-    const label: TextNode = { ...createTextNode(1), id: 'btn-label', name: 'Label', text: 'Click me' };
+    const secondPage = {
+      ...structuredClone(page),
+      id: 'page-pricing',
+      name: 'Pricing',
+      route: '/pricing',
+      document: { ...structuredClone(page.document), nodes: [] },
+    };
+    project.pages.push(secondPage);
 
-    const master = buildComponentDefinitionFromNodes([bg, label], [bg.id, label.id], 'Action Button');
+    const frame: FrameNode = {
+      ...createFrameNode(0),
+      id: 'btn-frame',
+      name: 'Action Button',
+      semanticTag: 'button',
+      ariaLabel: 'Launch Action',
+      x: 0,
+      y: 0,
+      width: 180,
+      height: 48,
+      layout: {
+        mode: 'flex',
+        direction: 'row',
+        wrap: 'nowrap',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 8,
+        padding: { top: 8, right: 16, bottom: 8, left: 16 },
+      },
+      // Bind radius to token while leaving fill unbound so Variant/Slot/Override fill precedence applies
+      tokenBindings: { radius: 'tok-radius-md' },
+    };
+    const baseLabel = createTextNode(1);
+    const label: TextNode = {
+      ...baseLabel,
+      id: 'btn-label',
+      parentId: 'btn-frame',
+      name: 'Label',
+      semanticTag: 'span',
+      x: 16,
+      y: 12,
+      width: 120,
+      height: 24,
+      text: 'Click me',
+      style: { ...baseLabel.style, fontSize: 16 },
+    };
+    const arrowIcon: PathNode = {
+      id: 'btn-icon',
+      parentId: 'btn-frame',
+      type: 'path',
+      name: 'Arrow',
+      x: 140,
+      y: 14,
+      width: 16,
+      height: 16,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      onCanvas: true,
+      points: [
+        { id: 'p1', x: 0, y: 8, pointType: 'corner' },
+        { id: 'p2', x: 16, y: 8, pointType: 'corner' },
+      ],
+      closed: false,
+      style: {
+        fill: 'none',
+        stroke: '#ffffff',
+        strokeWidth: 2,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        arrowEnd: true,
+      },
+    };
+
+    const master = buildComponentDefinitionFromNodes(
+      [frame, label, arrowIcon],
+      [frame.id, label.id, arrowIcon.id],
+      'Action Button',
+    );
     expect(master).not.toBeNull();
     if (!master) return;
     const toneAxis = createComponentVariantAxis('Tone', { optionLabels: ['Primary', 'Ghost'] });
-    const textSlot = createComponentSlot('Label', master.document.nodes[1].id, {
+    toneAxis.options[1].overrides[frame.id] = { fill: '#111827' };
+    toneAxis.options[1].overrides[label.id] = { text: 'Ghost Action' };
+    const textSlot = createComponentSlot('Label', label.id, {
       defaultText: 'Get Started',
     });
+    const bgSlot = createComponentSlot('Surface', frame.id);
     master.variants = [toneAxis];
-    master.slots = [textSlot];
-    project.components = [master];
+    master.slots = [textSlot, bgSlot];
+
+    // Second master with colliding PascalCase name to verify deterministic deduplication
+    const collidingMaster = buildComponentDefinitionFromNodes(
+      [{ ...createRectNode(0), id: 'dup-bg', name: 'Action-Button' }],
+      ['dup-bg'],
+      'Action-Button',
+    )!;
+    project.components = [master, collidingMaster];
 
     const instance = createComponentInstance(master, 40, 40, 'inst-cta');
+    instance.width = master.document.width * 2;
+    instance.height = master.document.height * 2;
     instance.variantSelection = { [toneAxis.id]: toneAxis.options[1].id };
-    instance.slotAssignments = { [textSlot.id]: { text: 'Launch Studio' } };
-    page.document.nodes = [instance];
+    instance.slotAssignments = {
+      [textSlot.id]: { text: 'Launch Studio', visible: true },
+      [bgSlot.id]: { fill: '#059669' },
+    };
+    instance.overrides = {
+      [label.id]: { text: 'Override Final' },
+    };
 
+    const pageVector: PathNode = {
+      ...arrowIcon,
+      id: 'page-vec',
+      parentId: undefined,
+      x: 20,
+      y: 120,
+    };
+    page.document.nodes = [instance, pageVector];
+
+    const customCss = createCustomCodeModule([], 'css');
+    customCss.content = '.accent { opacity: 0.9; }';
+    project.codeModules = [customCss];
+
+    // 1. HTML/CSS compiler preserves nested component-instance children, arrowheads, and proportional scaling wrapper
+    const htmlCompiled = compileFolioProject(project, { target: 'html-css' });
+    const htmlContent = htmlCompiled.files.find((f) => f.path === 'pages/index.html')?.content ?? '';
+    const cssContent = htmlCompiled.files.find((f) => f.path === 'styles/index.css')?.content ?? '';
+    expect(htmlContent).toContain('data-folio-id="inst-cta"');
+    expect(htmlContent).toContain('Override Final');
+    expect(htmlContent).toContain('__inner');
+    expect(htmlContent).toContain('overflow="visible"');
+    expect(htmlContent).toContain('<polygon points=');
+    expect(cssContent).toContain('transform: scale(2, 2);');
+
+    // 2. React compiler emits complete, self-contained bundle with component CSS, multi-page CSS, tokens, SVG, scaling, and precedence
     const compiled = compileFolioProject(project, { target: 'react' });
     const appFile = compiled.files.find((f) => f.path === 'src/App.tsx');
+    const tokensFile = compiled.files.find((f) => f.path === 'src/styles/tokens.css');
+    const mainCssFile = compiled.files.find((f) => f.path === 'src/styles/index.css');
+    const pricingCssFile = compiled.files.find((f) => f.path === 'src/styles/pricing.css');
     const compFile = compiled.files.find((f) => f.path === 'src/components/ActionButton.tsx');
+    const compCssFile = compiled.files.find((f) => f.path === 'src/components/ActionButton.css');
+    const collidingCompFile = compiled.files.find((f) => f.path === 'src/components/ActionButton2.tsx');
     const pageFile = compiled.files.find((f) => f.path === 'src/pages/MainPagePage.tsx');
 
     expect(appFile?.category).toBe('generated');
+    expect(tokensFile?.category).toBe('generated');
+    expect(mainCssFile?.category).toBe('mapped');
+    expect(pricingCssFile?.category).toBe('mapped');
     expect(compFile?.category).toBe('generated');
+    expect(compCssFile?.category).toBe('generated');
+    expect(collidingCompFile?.category).toBe('generated');
     expect(pageFile?.category).toBe('mapped');
 
-    expect(compFile?.content).toContain('export interface ActionButtonProps');
-    expect(compFile?.content).toContain('tone?: "Primary" | "Ghost";');
-    expect(compFile?.content).toContain('label?: React.ReactNode;');
-    expect(pageFile?.content).toContain("import { ActionButton } from '../components/ActionButton';");
+    // Parse & transpile EVERY generated TSX file using TypeScript's real TSX compiler to prove valid AST & zero syntax errors
+    const tsxFiles = compiled.files.filter((file) => file.language === 'tsx');
+    expect(tsxFiles.length).toBeGreaterThanOrEqual(4);
+    for (const file of tsxFiles) {
+      const transpiled = ts.transpileModule(file.content, {
+        fileName: file.path,
+        reportDiagnostics: true,
+        compilerOptions: {
+          jsx: ts.JsxEmit.React,
+          target: ts.ScriptTarget.ES2022,
+          module: ts.ModuleKind.ESNext,
+          strict: true,
+        },
+      });
+      expect(transpiled.diagnostics ?? [], `TSX syntax diagnostics in ${file.path}`).toEqual([]);
+      expect(transpiled.outputText.length).toBeGreaterThan(20);
+    }
+
+    // Structurally inspect ActionButton.tsx AST (interface props, exported function, SVG path + arrowhead polygon)
+    const compSource = ts.createSourceFile(compFile!.path, compFile!.content, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
+    let foundPropsInterface = false;
+    let foundExportedFunction = false;
+    const jsxTagNames = new Set<string>();
+    const visit = (astNode: ts.Node) => {
+      if (ts.isInterfaceDeclaration(astNode) && astNode.name.text === 'ActionButtonProps') {
+        foundPropsInterface = true;
+        const memberNames = astNode.members
+          .filter(ts.isPropertySignature)
+          .map((m) => m.name.getText(compSource));
+        expect(memberNames).toEqual(
+          expect.arrayContaining(['tone', 'label', 'labelVisible', 'surfaceFill', 'overrides', 'className', 'style']),
+        );
+      }
+      if (ts.isFunctionDeclaration(astNode) && astNode.name?.text === 'ActionButton') {
+        foundExportedFunction = true;
+      }
+      if (ts.isJsxOpeningElement(astNode) || ts.isJsxSelfClosingElement(astNode)) {
+        jsxTagNames.add(astNode.tagName.getText(compSource));
+      }
+      ts.forEachChild(astNode, visit);
+    };
+    visit(compSource);
+    expect(foundPropsInterface).toBe(true);
+    expect(foundExportedFunction).toBe(true);
+    expect([...jsxTagNames]).toEqual(expect.arrayContaining(['div', 'button', 'span', 'svg', 'path', 'polygon']));
+
+    // Tokens imported by App.tsx
+    expect(appFile?.content).toContain("import './styles/tokens.css';");
+
+    // Component CSS contains layout, token var(), and variant selector override
+    expect(compCssFile?.content).toContain('display: flex;');
+    expect(compCssFile?.content).toContain('border-radius: var(--radius-md);');
+    expect(compCssFile?.content).toContain('[data-variant-tone="Ghost"]');
+    expect(compCssFile?.content).toContain('background: #111827;');
+
+    // Page TSX imports component BEFORE page stylesheet, scales resized instance proportionally, renders SVG arrowheads, and passes contract props
+    const compImportIdx = pageFile!.content.indexOf("import { ActionButton } from '../components/ActionButton';");
+    const pageCssImportIdx = pageFile!.content.indexOf("import '../styles/index.css';");
+    expect(compImportIdx).toBeGreaterThan(-1);
+    expect(pageCssImportIdx).toBeGreaterThan(compImportIdx);
+    expect(pageFile?.content).toContain(`import '../../${customCss.path}';`);
     expect(pageFile?.content).toContain('<ActionButton ');
+    expect(pageFile?.content).toContain('transform: "scale(2, 2)"');
+    expect(pageFile?.content).toContain('transformOrigin: "top left"');
     expect(pageFile?.content).toContain('tone="Ghost"');
     expect(pageFile?.content).toContain('label="Launch Studio"');
+    expect(pageFile?.content).toContain('surfaceFill="#059669"');
+    expect(pageFile?.content).toContain('overrides={{"btn-label":{"text":"Override Final"}}}');
+    expect(pageFile?.content).toContain('<polygon points=');
   });
 
   it('builds self-contained Live Preview HTML with theme attribute, Custom CSS, and Extension CSS', () => {

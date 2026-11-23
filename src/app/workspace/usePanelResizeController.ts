@@ -235,17 +235,26 @@ export function usePanelResizeController({
     );
     if (clampedLayers !== current.layers || clampedInspector !== current.inspector) {
       const nextWidths = { layers: clampedLayers, inspector: clampedInspector };
+      appShellRef.current?.style.setProperty('--layers-panel-width', `${clampedLayers}px`);
+      appShellRef.current?.style.setProperty('--inspector-panel-width', `${clampedInspector}px`);
+      layersResizeHandleRef.current?.setAttribute('aria-valuenow', String(clampedLayers));
+      inspectorResizeHandleRef.current?.setAttribute('aria-valuenow', String(clampedInspector));
       panelWidthsRef.current = nextWidths;
       setPanelWidths(nextWidths);
     }
-  }, [getPanelClampContext]);
+  }, [appShellRef, getPanelClampContext]);
 
   const resetAllPanelWidths = useCallback(() => {
+    panelResizeCleanupRef.current?.();
     const defaultWidths = getDefaultPanelWidths();
+    appShellRef.current?.style.setProperty('--layers-panel-width', `${defaultWidths.layers}px`);
+    appShellRef.current?.style.setProperty('--inspector-panel-width', `${defaultWidths.inspector}px`);
+    layersResizeHandleRef.current?.setAttribute('aria-valuenow', String(defaultWidths.layers));
+    inspectorResizeHandleRef.current?.setAttribute('aria-valuenow', String(defaultWidths.inspector));
     setPanelWidths(defaultWidths);
     panelWidthsRef.current = defaultWidths;
     savePanelWidths(defaultWidths);
-  }, []);
+  }, [appShellRef]);
 
   useEffect(() => {
     if (

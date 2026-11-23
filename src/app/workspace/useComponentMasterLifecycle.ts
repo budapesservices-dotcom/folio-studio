@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { RefObject } from 'preact';
 import { createEmptyDocument } from '../../core/document/factory';
 import { buildComponentDefinitionFromNodes } from '../../core/document/components';
@@ -13,6 +13,7 @@ import type { MainCanvasCommandClient, WorkspaceCommandClient } from '../mainCan
 import type { EditorTarget } from '../editorContext';
 import type { WindowId } from '../windowManager';
 import {
+  acknowledgeComponentCanvasMetadataUpdate,
   advanceComponentCanvasSyncSession,
   createComponentCanvasBufferProject,
   createComponentCanvasSyncAction,
@@ -226,7 +227,7 @@ export function useComponentMasterLifecycle({
     setPendingComponentOpenId(null);
     setComponentRecoveryStatus('none');
     componentCommandClient.replaceProject(
-      createComponentCanvasBufferProject(component),
+      createComponentCanvasBufferProject(component, state.project.designTokens),
       'Load master component into Component Canvas',
     );
     setEditingComponentId(component.id);
@@ -612,13 +613,29 @@ export function useComponentMasterLifecycle({
     }
     componentSyncSessionRef.current = createComponentCanvasSyncSession(master);
     componentCommandClient.replaceProject(
-      createComponentCanvasBufferProject(master),
+      createComponentCanvasBufferProject(master, state.project.designTokens),
       'Reload recovered canonical component master',
     );
     setPendingComponentOpenId(null);
     setComponentRecoveryStatus('none');
     setNotice('The latest canonical master was reloaded. The previous local Component Canvas edits were discarded by explicit request.');
   };
+
+  const acknowledgeMasterMetadataUpdate = useCallback(
+    (componentId: string, previousUpdatedAt: string) => {
+      const session = componentSyncSessionRef.current;
+      if (!session || session.componentId !== componentId) return;
+      const committedMaster = canonicalStore.getSnapshot().editorState.project.components
+        .find((component) => component.id === componentId);
+      if (!committedMaster) return;
+      componentSyncSessionRef.current = acknowledgeComponentCanvasMetadataUpdate(
+        session,
+        previousUpdatedAt,
+        committedMaster,
+      );
+    },
+    [canonicalStore],
+  );
 
   // Continuous reconciliation between Component Canvas buffer and canonical master
   useEffect(() => {
@@ -645,7 +662,7 @@ export function useComponentMasterLifecycle({
       session = createComponentCanvasSyncSession(master);
       componentSyncSessionRef.current = session;
       componentCommandClient.replaceProject(
-        createComponentCanvasBufferProject(master),
+        createComponentCanvasBufferProject(master, state.project.designTokens),
         'Initialize Component Canvas buffer',
       );
       return;
@@ -666,7 +683,7 @@ export function useComponentMasterLifecycle({
       componentSyncSessionRef.current = reconciliation.session;
       setComponentRecoveryStatus('none');
       componentCommandClient.replaceProject(
-        createComponentCanvasBufferProject(master),
+        createComponentCanvasBufferProject(master, state.project.designTokens),
         'Reload Component Canvas buffer from canonical master',
       );
       return;
@@ -778,5 +795,6 @@ export function useComponentMasterLifecycle({
     retryComponentBufferCleanup,
     retryComponentCanvasSave,
     reloadRecoveredComponentMaster,
+    acknowledgeMasterMetadataUpdate,
   };
 }

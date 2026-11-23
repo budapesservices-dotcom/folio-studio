@@ -737,6 +737,10 @@ export function InspectorPanel({
             <div class="empty-icon">{renderIcon('cursor')}</div>
             <strong>Master: {editingMasterComponent.name}</strong>
             <p>Select a layer inside Component Canvas to edit its styles, semantics, or layout.</p>
+            <div class="quick-add">
+              <button type="button" onClick={() => onQuickAdd('rect')}>+ Rectangle</button>
+              <button type="button" onClick={() => onQuickAdd('text')}>+ Text</button>
+            </div>
           </div>
         </div>
       ) : (

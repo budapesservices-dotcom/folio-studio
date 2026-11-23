@@ -92,9 +92,9 @@ export function sanitizeJsText(js: string): string {
  * AST string fields cannot inject arbitrary declarations or close blocks.
  */
 export function sanitizeCssValue(raw: string, fallback = 'transparent'): string {
-  const cleaned = raw.replace(/[\r\n;{}<>]/g, '').trim();
+  const cleaned = raw.replace(/[\r\n;{}<>\\]/g, '').trim();
   if (!cleaned) return fallback;
-  if (/expression\s*\(|javascript:|url\s*\(\s*['"]?\s*javascript:/i.test(cleaned)) {
+  if (/\/\*|\*\/|@import|\b(?:expression|url|javascript|vbscript|data|behavior)\s*[:(]/i.test(cleaned)) {
     return fallback;
   }
   return cleaned;

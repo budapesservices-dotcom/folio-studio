@@ -10,6 +10,7 @@ import type {
 import {
   findTokenUsages,
   generateDesignTokensCss,
+  isSafeCssColorValue,
   resolveDesignTokenValue,
   toCssVariableName,
 } from '../../core/document/tokens';
@@ -99,9 +100,22 @@ export function TokensPanel({
 
   const handleUpdateTokenLiteral = (token: DesignTokenDefinition, raw: string | number) => {
     const isNumeric = token.category !== 'color';
+    if (!isNumeric) {
+      const colorStr = String(raw).trim();
+      if (!isSafeCssColorValue(colorStr)) {
+        onCopyNotice('Invalid CSS color value. Use hex, rgb(), hsl(), or standard CSS color names.');
+        return;
+      }
+    }
+    const minNumeric = token.category === 'typography' ? 1 : 0;
+    const numericVal = Number(raw);
     const nextLiteral = isNumeric
-      ? { kind: 'literal' as const, value: Math.max(0, Number(raw) || 0), unit: 'px' as const }
-      : { kind: 'literal' as const, value: String(raw) };
+      ? {
+          kind: 'literal' as const,
+          value: Number.isFinite(numericVal) ? Math.max(minNumeric, numericVal) : minNumeric,
+          unit: 'px' as const,
+        }
+      : { kind: 'literal' as const, value: String(raw).trim() };
 
     const nextTokens = tokens.tokens.map((item) => {
       if (item.id !== token.id) return item;
@@ -168,7 +182,18 @@ export function TokensPanel({
     const trimmed = newName.trim();
     if (!trimmed) return;
     const isNumeric = newCategory !== 'color';
-    const parsedVal = isNumeric ? Math.max(0, Number(newValue) || 0) : (newValue.trim() || '#7C6FF6');
+    if (!isNumeric) {
+      const candidateColor = newValue.trim() || '#7C6FF6';
+      if (!isSafeCssColorValue(candidateColor)) {
+        onCopyNotice('Invalid CSS color value. Use hex, rgb(), hsl(), or standard CSS color names.');
+        return;
+      }
+    }
+    const minNumeric = newCategory === 'typography' ? 1 : 0;
+    const parsedNum = Number(newValue);
+    const parsedVal = isNumeric
+      ? (Number.isFinite(parsedNum) ? Math.max(minNumeric, parsedNum) : (newCategory === 'typography' ? 16 : 8))
+      : (newValue.trim() || '#7C6FF6');
     const created: DesignTokenDefinition = {
       id: createTokenId(trimmed, tokens.tokens),
       name: trimmed,

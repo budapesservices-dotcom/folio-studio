@@ -27,11 +27,11 @@ Folio is a browser-based, visual-first full-stack web development studio designe
   - `factory.ts`: Project, page, document, and typed node factories (attaching default Light/Dark `designTokens` to new projects).
   - `project.ts`: Active-page / active-document resolution helpers with stale-reference fallback.
   - `layers.ts`: Layer hierarchy traversal, effective lock/visibility state computation, render ordering, clipping mask base resolution, and layer panel row derivation.
-  - `components.ts`: Master component extraction (`buildComponentDefinitionFromNodes`), linked instance creation (`createComponentInstance`), instance detaching (`detachComponentInstance`), Variant Axes & Named Slots factories/pruning (`createComponentVariantAxis`, `createComponentSlot`, `pruneComponentContractForDocument`), and deterministic override resolution (`Master -> Variants -> Slots -> Local Overrides -> Design Tokens`).
-  - `tokens.ts`: Project-level Design Tokens & Themes (`createDefaultDesignTokens`, `resolveDesignTokenValue` with cycle/type-mismatch detection, `resolveNodeWithTokens`, `findTokenUsages`, `generateDesignTokensCss`).
+  - `components.ts`: Master component extraction (`buildComponentDefinitionFromNodes`), linked instance creation (`createComponentInstance`), instance detaching (`detachComponentInstance`), Variant Axes & Named Slots factories/pruning (`createComponentVariantAxis`, `createComponentSlot`, `pruneComponentContractForDocument`), and deterministic override resolution (`Master Baseline -> Design Tokens -> Active Variants -> Slot Assignments -> Direct Instance Overrides`) with overridden token-binding stripping so CSS/React compilers honor instance overrides over master token bindings.
+  - `tokens.ts`: Project-level Design Tokens & Themes (`createDefaultDesignTokens`, `resolveDesignTokenValue` with cycle/type-mismatch/bounds detection, CSS injection-safe color validation `isSafeCssColorValue`, `validateDesignTokenCollection`, `validateNodeTokenBindings`, `resolveNodeWithTokens`, `findTokenUsages`, `generateDesignTokensCss`).
   - `vector.ts`: Deterministic SVG cubic Bezier serialization, bounding-box normalization, anchor/handle scaling, polygon/star/line generators, Catmull-Rom curvature fitting, Ramer-Douglas-Peucker simplification, smooth brush relaxation, segment insertion, corner/smooth toggling, scissors splitting, shape-to-path conversion, flipping, and Pathfinder entry points (`applyPathfinderOperation`).
   - `src/core/document/planarBoolean.ts`: Planar polygon/curve subdivision and boolean solver backing Illustrator-style Pathfinder operations (`unite`, `subtract`, `intersect`, `exclude`) and Shape Builder regions.
-  - `validation.ts`: Runtime `.flop` v1 and v2 schema, hierarchy, node, web layout/semantics, design tokens, component variants/slots, logic graph, and asset validation.
+  - `validation.ts`: Runtime `.flop` v1 and v2 schema, hierarchy, node, web layout/semantics, design tokens (including token-to-node relationship validation across all pages and component masters), component variants/slots, logic graph, and asset validation.
   - `migrations.ts`: Deterministic `migrateProjectV1ToV2` upgrade path preserving IDs, document content, and unknown extension fields.
   - `equality.ts`: Structural equality checks for documents and projects.
 - **`src/core/commands/`**
@@ -67,8 +67,8 @@ Folio is a browser-based, visual-first full-stack web development studio designe
 ### `src/engines/codegen` — Deterministic Code Engine & Live Preview (Implemented)
 
 - `types.ts`, `sanitize.ts`: Strict HTML/attribute escaping, URL protocol allowlist (`http:`, `https:`, `mailto:`, `/`, `#` — rejecting `javascript:`/`data:`/`vbscript:`), CSS/JS breakout neutralization, and traceable `CodeMappingEntry` contracts.
-- `htmlCssCompiler.ts`: Deterministic AST-to-Semantic HTML5, Auto-Layout Flex/Grid CSS, Design Token `var(--token)` bindings, `@media (max-width: 768px)` / `(max-width: 390px)` responsive rules, inline vector `<svg>`, and sandboxed Live Preview document assembly (`buildLivePreviewHtml`).
-- `reactCompiler.ts`: Compiles Master Components (Variants & Slots) into typed React + TypeScript JSX (`src/components/*.tsx`) and Pages (`src/pages/*.tsx`, `src/App.tsx`).
+- `htmlCssCompiler.ts`: Deterministic AST-to-Semantic HTML5, Auto-Layout Flex/Grid CSS, Design Token `var(--token)` bindings, `@media (max-width: 768px)` / `(max-width: 390px)` responsive rules, nested `component-instance` hierarchy with proportional scaling wrappers, inline vector `<svg>`, and sandboxed Live Preview document assembly (`buildLivePreviewHtml`). Shared CSS declaration helpers (`buildNodeCssDeclarations`, `buildChildrenMap`, `resolveTokenCssVar`) are reused by `reactCompiler.ts`.
+- `reactCompiler.ts`: Compiles Master Components into typed React + TypeScript JSX (`src/components/*.tsx`) paired with dedicated stylesheets (`src/components/*.css`) containing base layout/typography/token `var()` rules and `[data-variant-*]` override selectors, enforcing canonical precedence (`Master -> Design Tokens -> Active Variants -> Slot Assignments -> Direct Instance Overrides`), slot visibility/fill/content props, nested hierarchies, inline JSX `<svg>`, deterministic identifier deduplication, and multi-page bundles (`src/pages/*.tsx`, `src/styles/*.css`, `src/styles/tokens.css`, `src/App.tsx`).
 - `mappedSync.ts`, `index.ts`: Explicit 4-category code classification (`generated`, `mapped`, `custom`, `extension`), safe Code → AST mapped synchronization (`applyMappedNodeEdit`) with honest capability reporting, and Custom/Extension module preservation inside `.flop` v2 `codeModules`.
 
 ### `src/app` — Application shell, command orchestration & workspace UI (Implemented)
@@ -124,9 +124,9 @@ Pointer / Keyboard Input
 
 ### 2. Native Command Engine & dual-workspace isolation (P1.1)
 
-- **29 typed commands (`ALL_NATIVE_COMMAND_REGISTRY`):**
-  - **14 frozen Phase 2 commands (`NATIVE_COMMAND_REGISTRY`):** `node.create`, `node.update`, `node.move`, `node.resize`, `node.rotate`, `node.delete`, `node.duplicate`, `node.reorder`, `node.group`, `node.ungroup`, `node.set-visibility`, `node.set-lock`, `document.update`, `page.update`.
-  - **15 P1.1 commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`):** `project.replace`, `page.create`, `page.set-active`, `component.create`, `component.sync-document`, `component.rename`, `component.delete`, `node.replace-many`, `node.split`, `node.update-many`, `node.edit`, `selection.set`, `history.commit-edit`, `history.undo`, `history.redo`.
+- **32 typed commands (`ALL_NATIVE_COMMAND_REGISTRY`):**
+  - **14 frozen Phase 2 commands (`NATIVE_COMMAND_REGISTRY`):** `project.rename`, `node.create`, `node.replace`, `node.transform`, `node.set-properties`, `node.rename`, `node.delete`, `node.set-canvas-state`, `layer.move`, `layer.move-many`, `layer.group`, `layer.ungroup`, `layer.create-clipping-mask`, `layer.remove-clipping-mask`.
+  - **18 extended P1.1+ commands (`EXTENDED_NATIVE_COMMAND_REGISTRY`):** `project.replace`, `page.create`, `page.set-active`, `component.create`, `component.sync-document`, `component.rename`, `component.delete`, `component.update-contract`, `tokens.update`, `code.update-modules`, `node.replace-many`, `node.split`, `node.update-many`, `node.edit`, `selection.set`, `history.commit-edit`, `history.undo`, `history.redo`.
 - **Workspace isolation & concurrency:** Main Canvas (`workspace: 'main'`) and Component Canvas (`workspace: 'component'`) run independent `CanonicalEditorStore` instances. Master component sync uses expected revision / CAS checks (`COMPONENT_CONFLICT`), atomic transactions collapse multi-step operations into a single Undo entry, and failed transactions roll back completely.
 - **Event & revision semantics:** Project-mutating commands increment `projectRevision` monotonically and emit immutable `NativeChangeEvent` payloads. Editor-only commands (`selection.set`, `history.commit-edit`) update editor state without bumping `projectRevision` or emitting project change events.
 
@@ -177,7 +177,7 @@ Pointer / Keyboard Input
 
 ## Build, dependency & quality foundation (P1.2)
 
-- **Reproducible dependency graph:** Direct runtime and dev dependencies in `package.json` are pinned to exact versions and locked by a canonical `lockfileVersion: 3` `package-lock.json` with SHA-512 integrity hashes (`packageManager: "npm@10.9.8"`, `engines.node: ">=22.12.0 <27"`). `.nvmrc`, GitHub Actions (`ci.yml`, `deploy.yml`), and `.devcontainer/devcontainer.json` are aligned on `npm ci`.
+- **Reproducible dependency graph:** Direct runtime and dev dependencies in `package.json` are pinned to exact versions and locked by a canonical `lockfileVersion: 3` `package-lock.json` with SHA-512 integrity hashes (`packageManager: "npm@11.19.1"`, `engines.node: ">=22.12.0 <27"`). `.nvmrc`, GitHub Actions (`ci.yml`, `deploy.yml`), and `.devcontainer/devcontainer.json` are aligned on `npm ci`.
 - **Verification commands:**
   - `npm run check`: Strict TypeScript check (`tsc --noEmit`) across `src`, `tests`, `scripts`, and `vite.config.ts`.
   - `npm run test:unit`: Fast Vitest unit/integration suite.
@@ -190,9 +190,9 @@ Pointer / Keyboard Input
 
 1. **Foundation (Implemented & Verified):** Application shell, AST, SVG canvas, IndexedDB persistence, and `.flop` v2 file I/O.
 2. **Canvas & studio tools (Implemented & Verified):** Dual-mode `PAGE` / `VECTOR` 26-tool registry, native cubic Bezier vector math, planar Pathfinder booleans, selection, resize, rotation, snapping, alignment, distribution, pan, zoom, and strict P0.3 unidirectional tool boundaries.
-3. **Unified project v2 & Native Command Engine (Implemented & Verified):** Multi-page project aggregate, migrations, deterministic hydration, reusable master components/instances/overrides, dual-workspace sync, durable deletion, and 29-command zero-bypass Native Command Engine (P1.1).
-4. **Long-term quality foundation (Implemented — P1.2):** Reproducible npm lockfile/CI configuration, automated rendering/interaction benchmark suite, and synchronized architecture documentation.
-5. **Prototype / Node Logic (Planned):** Typed graph nodes, ports, connections, events, state, API requests, and runtime preview.
-6. **Layout & Animation (Planned):** Auto-layout constraints engine, timeline, tracks, keyframes, easing, and playback.
-7. **Visual-to-Code (Planned):** Deterministic HTML/CSS/React generation preserving Generated/Mapped/Custom/Extension code categories.
+3. **Unified project v2 & Native Command Engine (Implemented & Verified):** Multi-page project aggregate, migrations, deterministic hydration, reusable master components/instances/overrides, dual-workspace sync, durable deletion, and 32-command zero-bypass Native Command Engine (P1.1+).
+4. **Long-term quality foundation (Implemented & Verified — P1.2):** Reproducible npm `lockfileVersion: 3` `package-lock.json`, CI configuration, automated rendering/interaction benchmark suite, and synchronized architecture documentation.
+5. **Web Layout, Design Tokens, Component Contract & Code Engine Stabilization (Implemented & Verified locally):** Auto-Layout Flex/Grid & responsive breakpoints (`Desktop`/`Tablet`/`Mobile`), hardened Design Tokens with CSS injection protection and node binding validation, unified Component Contract precedence across Canvas/HTML/CSS/React, and complete React TSX + CSS compilation with Live Preview.
+6. **Prototype / Node Logic (Planned):** Typed graph nodes, ports, connections, events, state, API requests, and runtime preview.
+7. **Animation (Planned):** Timeline, tracks, keyframes, easing, and playback.
 8. **Professional workflows (Planned):** Accessibility audits, profiling, plugins, collaboration, and scalable command history.

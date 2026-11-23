@@ -3,6 +3,7 @@ import { createInitialProject, createRectNode } from '../src/core/document/facto
 import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
 import {
+  acknowledgeComponentCanvasMetadataUpdate,
   advanceComponentCanvasSyncSession,
   createComponentCanvasBufferProject,
   createComponentCanvasSyncAction,
@@ -512,6 +513,35 @@ describe('Atomic Component Canvas sync and orphan recovery', () => {
     expect(reloadedSession.masterStatus).toBe('present');
     expect(createComponentCanvasSyncAction(getMaster(store), reloadedBuffer, reloadedSession)).toBeNull();
     expect(localBuffer.nodes[0].x).toBe(master.document.nodes[0].x + 400);
+  });
+
+  it('acknowledges intentional contract-only metadata updates without false reload or conflict', () => {
+    const { store, master } = createFixture();
+    const session = createComponentCanvasSyncSession(master);
+    const previousUpdatedAt = master.updatedAt;
+    const contractUpdate = store.dispatchLegacyAction({
+      type: 'update-component-contract',
+      componentId: master.id,
+      expectedUpdatedAt: previousUpdatedAt,
+      expectedMasterDocument: master.document,
+      variants: [{
+        id: 'axis-tone',
+        name: 'Tone',
+        options: [{ id: 'opt-primary', label: 'Primary', overrides: {} }],
+        defaultOptionId: 'opt-primary',
+      }],
+    });
+    expect(contractUpdate.status).toBe('committed');
+    const updatedMaster = getMaster(store);
+    expect(updatedMaster.updatedAt).not.toBe(previousUpdatedAt);
+
+    const acknowledged = acknowledgeComponentCanvasMetadataUpdate(session, previousUpdatedAt, updatedMaster);
+    expect(acknowledged.baseUpdatedAt).toBe(updatedMaster.updatedAt);
+    expect(reconcileComponentCanvasSyncSession(acknowledged, updatedMaster, copyDocument(master.document)).status).toBe('current');
+
+    // Conflicted sessions must never be silently cleared by metadata acknowledgement
+    const conflicted = { ...session, conflicted: true };
+    expect(acknowledgeComponentCanvasMetadataUpdate(conflicted, previousUpdatedAt, updatedMaster)).toBe(conflicted);
   });
 });
 

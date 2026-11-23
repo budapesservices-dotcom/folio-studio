@@ -99,6 +99,23 @@ export function createComponentInstance(
   };
 }
 
+export const OVERRIDE_FIELD_ALLOWED_NODE_TYPES: Record<
+  'text' | 'fill' | 'stroke' | 'visible',
+  ReadonlySet<DesignNode['type']>
+> = {
+  text: new Set(['text']),
+  fill: new Set(['frame', 'rect', 'ellipse', 'path', 'text']),
+  stroke: new Set(['frame', 'rect', 'ellipse', 'path']),
+  visible: new Set(['frame', 'rect', 'ellipse', 'path', 'text', 'group']),
+};
+
+export function isOverrideFieldCompatibleWithNodeType(
+  nodeType: DesignNode['type'],
+  field: 'text' | 'fill' | 'stroke' | 'visible',
+): boolean {
+  return OVERRIDE_FIELD_ALLOWED_NODE_TYPES[field].has(nodeType);
+}
+
 function applyNodeOverrideFields(node: DesignNode, override: ComponentVariantOverride): DesignNode {
   let next: DesignNode = node;
   if (override.visible !== undefined) {
@@ -143,8 +160,8 @@ export function applyComponentOverrides(
 }
 
 /**
- * Deterministically resolves a component instance's internal master nodes with precedence:
- * Master -> Active Variants -> Slot Assignments -> Direct Instance Overrides -> Design Tokens.
+ * Deterministically resolves a component instance's internal master nodes with canonical precedence:
+ * Master -> Variants -> Slots -> Local Overrides -> Tokens.
  */
 export function resolveComponentInstanceNodes(
   instance: ComponentInstanceNode,
@@ -187,9 +204,10 @@ export function resolveComponentInstanceNodes(
     }
   }
 
-  // 3. Apply in deterministic precedence order
+  // 3. Apply in deterministic precedence order:
+  //    Master -> Variants -> Slots -> Local Overrides -> Tokens
   return component.document.nodes.map((masterNode) => {
-    let resolved = tokens ? resolveNodeWithTokens(masterNode, tokens) : masterNode;
+    let resolved: DesignNode = masterNode;
     const variantPatch = variantOverrideByNodeId.get(masterNode.id);
     if (variantPatch) {
       resolved = applyNodeOverrideFields(resolved, variantPatch);
@@ -199,8 +217,23 @@ export function resolveComponentInstanceNodes(
       resolved = applyNodeOverrideFields(resolved, slotPatch);
     }
     resolved = applyComponentOverrides(resolved, instance.overrides);
+    if (tokens) {
+      resolved = resolveNodeWithTokens(resolved, tokens);
+    }
     return resolved;
   });
+}
+
+/**
+ * Resolves a Master Component's default preview using the exact same contract pipeline:
+ * Master -> Default Variants -> Default Slots -> Tokens.
+ */
+export function resolveComponentDefaultNodes(
+  component: ComponentDefinition,
+  tokens?: DesignTokenCollection,
+): DesignNode[] {
+  const virtualInstance = createComponentInstance(component, 0, 0, `__preview_${component.id}`);
+  return resolveComponentInstanceNodes(virtualInstance, component, tokens);
 }
 
 export function getComponentOverrideTargets(component: ComponentDefinition): {
@@ -343,12 +376,16 @@ export function buildComponentDefinitionFromNodes(
   };
 }
 
-export function replaceComponentInstancesInDocument(document: FolioDocument, component: ComponentDefinition): FolioDocument {
+export function replaceComponentInstancesInDocument(
+  document: FolioDocument,
+  component: ComponentDefinition,
+  tokens?: DesignTokenCollection,
+): FolioDocument {
   let changed = false;
   const nodes: DesignNode[] = [];
   for (const node of document.nodes) {
     if (node.type === 'component-instance' && node.componentId === component.id) {
-      nodes.push(...detachComponentInstance(node, component));
+      nodes.push(...detachComponentInstance(node, component, tokens));
       changed = true;
     } else nodes.push(node);
   }
@@ -380,21 +417,32 @@ export function pruneComponentInstanceOverridesInDocument(
   return changed ? { ...document, nodes } : document;
 }
 
-/** Prunes variant overrides and slots on a ComponentDefinition whose master layers were deleted. */
+/** Prunes variant overrides and slots on a ComponentDefinition whose master layers were deleted or changed type. */
 export function pruneComponentContractForDocument(
   component: ComponentDefinition,
   nextDocument: FolioDocument,
 ): ComponentDefinition {
-  const validNodeIds = new Set(nextDocument.nodes.map((node) => node.id));
+  const nodeById = new Map(nextDocument.nodes.map((node) => [node.id, node]));
   let changed = false;
 
   let nextSlots = component.slots;
   if (component.slots) {
-    const filtered = component.slots.filter((slot) => validNodeIds.has(slot.targetNodeId));
-    if (filtered.length !== component.slots.length) {
-      nextSlots = filtered;
-      changed = true;
+    const cleanedSlots: ComponentSlotDefinition[] = [];
+    for (const slot of component.slots) {
+      const targetNode = nodeById.get(slot.targetNodeId);
+      if (!targetNode) {
+        changed = true;
+        continue;
+      }
+      if (slot.defaultText !== undefined && targetNode.type !== 'text') {
+        const { defaultText: _removed, ...rest } = slot;
+        cleanedSlots.push(rest);
+        changed = true;
+      } else {
+        cleanedSlots.push(slot);
+      }
     }
+    if (changed) nextSlots = cleanedSlots;
   }
 
   let nextVariants = component.variants;
@@ -405,8 +453,32 @@ export function pruneComponentContractForDocument(
         const cleanedOverrides: Record<string, ComponentVariantOverride> = {};
         let optChanged = false;
         for (const [nodeId, patch] of Object.entries(option.overrides)) {
-          if (validNodeIds.has(nodeId)) cleanedOverrides[nodeId] = patch;
-          else optChanged = true;
+          const targetNode = nodeById.get(nodeId);
+          if (!targetNode) {
+            optChanged = true;
+            continue;
+          }
+          const cleanedPatch: ComponentVariantOverride = {};
+          let patchDroppedField = false;
+          if (patch.visible !== undefined) cleanedPatch.visible = patch.visible;
+          if (patch.text !== undefined) {
+            if (isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) cleanedPatch.text = patch.text;
+            else patchDroppedField = true;
+          }
+          if (patch.fill !== undefined) {
+            if (isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) cleanedPatch.fill = patch.fill;
+            else patchDroppedField = true;
+          }
+          if (patch.stroke !== undefined) {
+            if (isOverrideFieldCompatibleWithNodeType(targetNode.type, 'stroke')) cleanedPatch.stroke = patch.stroke;
+            else patchDroppedField = true;
+          }
+          if (patchDroppedField) optChanged = true;
+          if (Object.keys(cleanedPatch).length > 0) {
+            cleanedOverrides[nodeId] = patchDroppedField ? cleanedPatch : patch;
+          } else {
+            optChanged = true;
+          }
         }
         if (optChanged) {
           axisChanged = true;
@@ -428,4 +500,129 @@ export function pruneComponentContractForDocument(
     ...(nextSlots !== undefined ? { slots: nextSlots } : {}),
     ...(nextVariants !== undefined ? { variants: nextVariants } : {}),
   };
+}
+
+/**
+ * Atomically prunes orphan or type-incompatible `overrides`, `variantSelection`,
+ * and `slotAssignments` from all instances of `component` inside a page document.
+ */
+export function pruneComponentInstanceContractsInDocument(
+  document: FolioDocument,
+  component: ComponentDefinition,
+): FolioDocument {
+  const masterNodeById = new Map(component.document.nodes.map((node) => [node.id, node]));
+  const axisById = new Map((component.variants ?? []).map((axis) => [axis.id, axis]));
+  const slotById = new Map((component.slots ?? []).map((slot) => [slot.id, slot]));
+
+  let docChanged = false;
+  const nodes = document.nodes.map((node) => {
+    if (node.type !== 'component-instance' || node.componentId !== component.id) return node;
+
+    let instanceChanged = false;
+
+    // 1. Prune overrides pointing to missing or type-incompatible master nodes
+    const nextOverrides: ComponentInstanceNode['overrides'] = {};
+    for (const [childId, ov] of Object.entries(node.overrides)) {
+      const target = masterNodeById.get(childId);
+      if (!target) {
+        instanceChanged = true;
+        continue;
+      }
+      const nextOv: { fill?: string; text?: string } = {};
+      let fieldPruned = false;
+      if (ov.fill !== undefined) {
+        if (isOverrideFieldCompatibleWithNodeType(target.type, 'fill')) nextOv.fill = ov.fill;
+        else fieldPruned = true;
+      }
+      if (ov.text !== undefined) {
+        if (isOverrideFieldCompatibleWithNodeType(target.type, 'text')) nextOv.text = ov.text;
+        else fieldPruned = true;
+      }
+      if (fieldPruned) instanceChanged = true;
+      if (nextOv.fill !== undefined || nextOv.text !== undefined) {
+        nextOverrides[childId] = fieldPruned ? nextOv : ov;
+      } else {
+        instanceChanged = true;
+      }
+    }
+
+    // 2. Prune variantSelection referencing deleted axes or deleted options
+    let nextVariantSelection = node.variantSelection;
+    if (node.variantSelection) {
+      const cleanedSelection: Record<string, string> = {};
+      let selChanged = false;
+      for (const [axisId, optionId] of Object.entries(node.variantSelection)) {
+        const axis = axisById.get(axisId);
+        if (!axis) {
+          selChanged = true;
+          continue;
+        }
+        if (axis.options.some((opt) => opt.id === optionId)) {
+          cleanedSelection[axisId] = optionId;
+        } else {
+          // Selected option was deleted -> fall back to axis defaultOptionId
+          cleanedSelection[axisId] = axis.defaultOptionId;
+          selChanged = true;
+        }
+      }
+      if (selChanged) {
+        instanceChanged = true;
+        nextVariantSelection = Object.keys(cleanedSelection).length > 0 ? cleanedSelection : undefined;
+      }
+    }
+
+    // 3. Prune slotAssignments referencing deleted slots or type-incompatible fields
+    let nextSlotAssignments = node.slotAssignments;
+    if (node.slotAssignments) {
+      const cleanedSlots: NonNullable<ComponentInstanceNode['slotAssignments']> = {};
+      let slotsChanged = false;
+      for (const [slotId, assignment] of Object.entries(node.slotAssignments)) {
+        const slot = slotById.get(slotId);
+        const target = slot ? masterNodeById.get(slot.targetNodeId) : undefined;
+        if (!slot || !target) {
+          slotsChanged = true;
+          continue;
+        }
+        const nextAssignment: { text?: string; fill?: string; visible?: boolean } = {};
+        let fieldPruned = false;
+        if (assignment.visible !== undefined) nextAssignment.visible = assignment.visible;
+        if (assignment.text !== undefined) {
+          if (isOverrideFieldCompatibleWithNodeType(target.type, 'text')) nextAssignment.text = assignment.text;
+          else fieldPruned = true;
+        }
+        if (assignment.fill !== undefined) {
+          if (isOverrideFieldCompatibleWithNodeType(target.type, 'fill')) nextAssignment.fill = assignment.fill;
+          else fieldPruned = true;
+        }
+        if (fieldPruned) slotsChanged = true;
+        if (
+          nextAssignment.text !== undefined ||
+          nextAssignment.fill !== undefined ||
+          nextAssignment.visible !== undefined
+        ) {
+          cleanedSlots[slotId] = fieldPruned ? nextAssignment : assignment;
+        } else {
+          slotsChanged = true;
+        }
+      }
+      if (slotsChanged) {
+        instanceChanged = true;
+        nextSlotAssignments = Object.keys(cleanedSlots).length > 0 ? cleanedSlots : undefined;
+      }
+    }
+
+    if (!instanceChanged) return node;
+    docChanged = true;
+    const updated: ComponentInstanceNode = {
+      ...node,
+      overrides: nextOverrides,
+    };
+    if (nextVariantSelection) updated.variantSelection = nextVariantSelection;
+    else delete updated.variantSelection;
+    if (nextSlotAssignments) updated.slotAssignments = nextSlotAssignments;
+    else delete updated.slotAssignments;
+    return updated;
+  });
+
+  return docChanged ? { ...document, nodes } : document;
 }

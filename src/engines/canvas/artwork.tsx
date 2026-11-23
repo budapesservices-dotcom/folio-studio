@@ -269,7 +269,10 @@ export function ClipMaskArtwork({
     const transform = node.rotation
       ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
       : undefined;
-    const resolved = resolveComponentInstanceNodes(node, component, tokens);
+    const resolvedRaw = resolveComponentInstanceNodes(node, component, tokens);
+    const resolved = resolvedRaw.some((child) => child.layout && child.layout.mode !== 'none')
+      ? computeAutoLayoutNodes(resolvedRaw, { breakpoint: 'desktop', tokens, canvasWidth: component.document.width })
+      : resolvedRaw;
     const visibleChildren = resolved.filter((child) => child.onCanvas !== false);
     const childNodeById = new Map(visibleChildren.map((child) => [child.id, child]));
     const childClipMaskMap = buildLayerClipMaskMap(visibleChildren, childNodeById);
@@ -446,7 +449,13 @@ export function NodeArtwork({
       ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
       : undefined;
     const resolvedChildren = component
-      ? resolveComponentInstanceNodes(node, component, tokens).filter((child) => child.onCanvas !== false)
+      ? (() => {
+          const resolvedRaw = resolveComponentInstanceNodes(node, component, tokens);
+          const laidOut = resolvedRaw.some((child) => child.layout && child.layout.mode !== 'none')
+            ? computeAutoLayoutNodes(resolvedRaw, { breakpoint: 'desktop', tokens, canvasWidth: component.document.width })
+            : resolvedRaw;
+          return laidOut.filter((child) => child.onCanvas !== false);
+        })()
       : [];
     const childNodeById = new Map(resolvedChildren.map((child) => [child.id, child]));
     const childClipMaskMap = buildLayerClipMaskMap(resolvedChildren, childNodeById);

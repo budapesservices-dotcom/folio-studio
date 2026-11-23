@@ -1,11 +1,14 @@
 import { useMemo } from 'preact/hooks';
 import type { ComponentDefinition, DesignTokenCollection } from '../core/document/types';
+import { resolveComponentDefaultNodes } from '../core/document/components';
 import { getEffectiveLayerStates } from '../core/document/layers';
 import { DocumentArtworkContent, sanitizeMaskIdSegment } from '../engines/canvas/artwork';
+import { computeAutoLayoutNodes } from '../engines/layout/autoLayout';
 
 /**
  * Renders a live, proportional SVG preview of a ComponentDefinition's document.
- * Uses the same artwork, group, and clipping-mask pipeline as the Canvas engine
+ * Uses the exact same contract resolution (Master -> Default Variants -> Default Slots -> Tokens),
+ * Auto-Layout, artwork, group, and clipping-mask pipeline as the Canvas engine
  * with a thumbnail-scoped mask ID prefix so DOM mask IDs never collide.
  */
 export function ComponentThumbnail({
@@ -19,8 +22,18 @@ export function ComponentThumbnail({
 }) {
   const doc = component.document;
 
+  const resolvedDoc = useMemo(() => {
+    const resolvedNodes = resolveComponentDefaultNodes(component, designTokens);
+    return { ...doc, nodes: resolvedNodes };
+  }, [component, doc, designTokens]);
+
   const thumbnailGeometry = useMemo(() => {
-    const visibleNodes = doc.nodes.filter((node) => node.onCanvas !== false);
+    const laidOutNodes = computeAutoLayoutNodes(resolvedDoc.nodes, {
+      breakpoint: 'desktop',
+      tokens: designTokens,
+      canvasWidth: resolvedDoc.width,
+    });
+    const visibleNodes = laidOutNodes.filter((node) => node.onCanvas !== false);
     const states = getEffectiveLayerStates(visibleNodes);
     const renderedLeaves = visibleNodes.filter((node) => node.type !== 'group' && states.get(node.id)?.visible);
     if (renderedLeaves.length === 0) return null;
@@ -49,7 +62,7 @@ export function ComponentThumbnail({
       viewBox: `${vbX} ${vbY} ${vbW} ${vbH}`,
       maskPrefix: `folio-thumb-mask-${sanitizeMaskIdSegment(component.id)}`,
     };
-  }, [component.id, doc.nodes]);
+  }, [component.id, designTokens, resolvedDoc.nodes, resolvedDoc.width]);
 
   if (!thumbnailGeometry) {
     return (
@@ -68,7 +81,7 @@ export function ComponentThumbnail({
         role="presentation"
       >
         <DocumentArtworkContent
-          document={doc}
+          document={resolvedDoc}
           components={components}
           maskPrefix={thumbnailGeometry.maskPrefix}
           tokens={designTokens}

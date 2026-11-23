@@ -15,7 +15,7 @@ import { areDocumentsStructurallyEqual } from '../core/document/equality';
 import { classifyNodeChange } from '../core/document/nodeChanges';
 import {
   pruneComponentContractForDocument,
-  pruneComponentInstanceOverridesInDocument,
+  pruneComponentInstanceContractsInDocument,
   replaceComponentInstancesInDocument,
 } from '../core/document/components';
 import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, collapseLegacyCanvasInstances, type LayerDropPosition } from '../core/document/layers';
@@ -443,18 +443,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (!currentComponent || currentComponent.document !== action.expectedMasterDocument ||
           currentComponent.updatedAt !== action.expectedUpdatedAt ||
           areDocumentsStructurallyEqual(currentComponent.document, action.document)) return state;
-      const nextNodeIds = new Set(action.document.nodes.map((node) => node.id));
-      const removedNodeIds = new Set(currentComponent.document.nodes
-        .filter((node) => !nextNodeIds.has(node.id))
-        .map((node) => node.id));
-      const pages = removedNodeIds.size === 0 ? state.project.pages : state.project.pages.map((page) => {
-        const document = pruneComponentInstanceOverridesInDocument(page.document, action.componentId, removedNodeIds);
+      const prunedComponent: ComponentDefinition = {
+        ...pruneComponentContractForDocument(currentComponent, action.document),
+        document: action.document,
+        updatedAt: action.updatedAt,
+      };
+      const components = state.project.components.map((component) =>
+        component.id === action.componentId ? prunedComponent : component);
+      const pages = state.project.pages.map((page) => {
+        const document = pruneComponentInstanceContractsInDocument(page.document, prunedComponent);
         return document === page.document ? page : { ...page, document };
-      });
-      const components = state.project.components.map((component) => {
-        if (component.id !== action.componentId) return component;
-        const pruned = pruneComponentContractForDocument(component, action.document);
-        return { ...pruned, document: action.document, updatedAt: action.updatedAt };
       });
       return withSnapshot(state, touch({ ...state.project, pages, components }));
     }
@@ -476,7 +474,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           target.updatedAt !== action.expectedUpdatedAt) return state;
       // Detach all page instances so deleting a master never leaves broken references.
       const pages = state.project.pages.map((page) => ({
-        ...page, document: replaceComponentInstancesInDocument(page.document, target),
+        ...page, document: replaceComponentInstancesInDocument(page.document, target, state.project.designTokens),
       }));
       const components = state.project.components.filter((component) => component.id !== action.componentId);
       const next = touch({ ...state.project, pages, components });
@@ -497,20 +495,29 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         return state;
       }
       const now = new Date().toISOString();
-      const components = state.project.components.map((component) => {
-        if (component.id !== action.componentId) return component;
-        const updated: ComponentDefinition = { ...component, updatedAt: now };
-        if (nextVariants && nextVariants.length > 0) updated.variants = nextVariants;
-        else delete updated.variants;
-        if (nextSlots && nextSlots.length > 0) updated.slots = nextSlots;
-        else delete updated.slots;
-        return updated;
+      const updatedComponent: ComponentDefinition = { ...target, updatedAt: now };
+      if (nextVariants && nextVariants.length > 0) updatedComponent.variants = nextVariants;
+      else delete updatedComponent.variants;
+      if (nextSlots && nextSlots.length > 0) updatedComponent.slots = nextSlots;
+      else delete updatedComponent.slots;
+
+      const components = state.project.components.map((component) =>
+        component.id === action.componentId ? updatedComponent : component);
+      const pages = state.project.pages.map((page) => {
+        const document = pruneComponentInstanceContractsInDocument(page.document, updatedComponent);
+        return document === page.document ? page : { ...page, document };
       });
-      return withSnapshot(state, touch({ ...state.project, components }));
+      return withSnapshot(state, touch({ ...state.project, pages, components }));
     }
 
     case 'update-design-tokens': {
+      const nextTokenIds = new Set(action.designTokens.tokens.map((token) => token.id));
       const removeSet = new Set(action.unbindTokenIds ?? []);
+      for (const prevToken of state.project.designTokens?.tokens ?? []) {
+        if (!nextTokenIds.has(prevToken.id)) {
+          removeSet.add(prevToken.id);
+        }
+      }
       const tokensChanged = JSON.stringify(state.project.designTokens ?? null) !== JSON.stringify(action.designTokens);
       const pages = removeSet.size === 0
         ? state.project.pages

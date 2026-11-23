@@ -169,4 +169,23 @@ The actual modal is also browser-tested: initial focus enters the safe dialog ac
 - **Pending / Not Claimed:**
   - External GitHub Actions CI run and human manual browser acceptance remain **pending** outside this local workspace.
 
+### Stabilization & Integration Pass (Component Canvas, Design Tokens, Component Contract Precedence, React Compiler & CI)
+
+- **Implementation status:** **Implemented** and **Verified locally** (2026-11-23).
+- **Implemented scope:**
+  1. **Component Canvas & panel divider stabilization:** Restored `+ Rectangle` / `+ Text` quick-add controls in Component Canvas empty Inspector (`src/app/InspectorPanel.tsx`), added `acknowledgeComponentCanvasMetadataUpdate` (`src/app/componentCanvasSync.ts`) so intentional contract-only metadata edits never trigger false sync conflict banners, aligned `clampCurrentPanelWidths` / `resetAllPanelWidths` CSS custom property & ARIA sync (`src/app/workspace/usePanelResizeController.ts`), and aligned `tests/mergeReadiness.browser.test.mjs` toolbar divider assertion (`3` dividers separating `4` semantic groups).
+  2. **Design Tokens hardening & token-to-node validation:** Added CSS injection-safe color validation (`isSafeCssColorValue`), numeric bounds (`spacing`/`radius >= 0`, `typography > 0`), orphan theme key rejection, duplicate CSS variable & theme slug rejection, and `validateNodeTokenBindings` (`src/core/document/tokens.ts`) enforced inside `validateProject()` across all pages and component masters (`src/core/document/validation.ts`); enabled automatic deleted-token unbinding with Undo/Redo in `editorReducer.ts`; synchronized canonical `designTokens` into Component Canvas buffers (`componentCanvasSync.ts`, `useComponentMasterLifecycle.ts`, `useDesignSystemActions.ts`).
+  3. **Canonical Component Contract precedence alignment:** Enforced `Master Baseline -> Design Tokens -> Active Variants -> Slot Assignments -> Direct Instance Overrides` consistently across Canvas (`src/core/document/components.ts`, `src/engines/canvas/artwork.tsx`), HTML/CSS Compiler (`src/engines/codegen/htmlCssCompiler.ts`), and React Compiler (`src/engines/codegen/reactCompiler.ts`), stripping overridden `fill`/`stroke` token bindings while preserving untouched bindings, computing instance Auto-Layout in Canvas, and emitting nested instance hierarchies + proportional scaling wrappers in HTML/CSS.
+  4. **React Compiler visual & structural fidelity:** Generated per-component stylesheets (`src/components/*.css`) with base layout/typography/token `var()` rules and `[data-variant-*]` CSS override rules, full slot (`text`/`Visible`/`Fill`) and `overrides` prop resolution, nested Master hierarchy traversal, inline JSX `<svg>` for `PathNode`, multi-page stylesheet emission (`src/styles/*.css`, `src/styles/tokens.css`), correct component-before-page-CSS import ordering, `../../` custom CSS paths, and deterministic PascalCase identifier deduplication.
+  5. **Lockfile & CI restoration:** Generated canonical `lockfileVersion: 3` `package-lock.json` with 146 registry-resolved entries and SHA-512 integrity hashes.
+- **Local Automated Gate: PASS (2026-11-23):**
+  - `npm run check` (`tsc --noEmit`): **PASS** (0 errors).
+  - `npm run test:unit`: **PASS** (**37 test files / 477 tests passed**).
+  - Real Chromium browser suites (`CHROMIUM_BIN=... npx vitest run ...`): **PASS** — `componentRecovery.browser.test.mjs` (5/5), `mergeReadiness.browser.test.mjs` (1/1), `nativePersistence.browser.test.mjs` (1/1), and `workspaceGeometry.browser.test.mjs` (1/1).
+  - `npm run build`: **PASS** (`dist/` built cleanly).
+  - Live headless Chromium visual verification (`playwright-cli` against `http://localhost:3000/folio-studio/` at `1440×900`): **PASS** — verified 0 console errors/warnings, Main Canvas toolbar groups/dividers, Component Canvas Master Contract + restored `+ Rectangle` / `+ Text` quick-add buttons with zero conflict banner, Design Tokens rack, and Code & Preview Studio `React TSX` output (`src/App.tsx`, `src/pages/MainPagePage.tsx`, `src/components/VisualCard.tsx`, `src/components/VisualCard.css`, `src/styles/index.css`, `src/styles/tokens.css`).
+- **Pending / Not Claimed:**
+  - External GitHub Actions CI run on a pushed branch and human manual browser acceptance remain **pending** outside this local workspace.
+
+
 

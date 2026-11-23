@@ -9,7 +9,8 @@ import {
   type FolioProject,
   type FolioProjectV1,
 } from './types';
-import { validateDesignTokenCollection } from './tokens';
+import { isOverrideFieldCompatibleWithNodeType } from './components';
+import { validateDesignTokenCollection, validateNodeTokenBindings } from './tokens';
 
 export interface ValidationResult {
   ok: boolean;
@@ -181,7 +182,10 @@ function isComponentVariantOverride(value: unknown): boolean {
   );
 }
 
-export function isComponentVariantsList(value: unknown, validNodeIds?: ReadonlySet<string>): boolean {
+export function isComponentVariantsList(
+  value: unknown,
+  validNodes?: ReadonlySet<string> | ReadonlyMap<string, DesignNode>,
+): boolean {
   if (!Array.isArray(value)) return false;
   const axisIds = new Set<string>();
   for (const axis of value) {
@@ -212,7 +216,18 @@ export function isComponentVariantsList(value: unknown, validNodeIds?: ReadonlyS
 
       for (const [nodeId, patch] of Object.entries(option.overrides)) {
         if (!isString(nodeId) || !nodeId.trim() || !isComponentVariantOverride(patch)) return false;
-        if (validNodeIds && !validNodeIds.has(nodeId)) return false;
+        if (validNodes) {
+          if (validNodes instanceof Map) {
+            const targetNode = validNodes.get(nodeId);
+            if (!targetNode) return false;
+            const typedPatch = patch as Record<string, unknown>;
+            if (typedPatch.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) return false;
+            if (typedPatch.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) return false;
+            if (typedPatch.stroke !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'stroke')) return false;
+          } else if (!validNodes.has(nodeId)) {
+            return false;
+          }
+        }
       }
     }
     if (!optionIds.has(axis.defaultOptionId)) return false;
@@ -220,7 +235,10 @@ export function isComponentVariantsList(value: unknown, validNodeIds?: ReadonlyS
   return true;
 }
 
-export function isComponentSlotsList(value: unknown, validNodeIds?: ReadonlySet<string>): boolean {
+export function isComponentSlotsList(
+  value: unknown,
+  validNodes?: ReadonlySet<string> | ReadonlyMap<string, DesignNode>,
+): boolean {
   if (!Array.isArray(value)) return false;
   const slotIds = new Set<string>();
   for (const slot of value) {
@@ -236,7 +254,17 @@ export function isComponentSlotsList(value: unknown, validNodeIds?: ReadonlySet<
     }
     if (slotIds.has(slot.id)) return false;
     slotIds.add(slot.id);
-    if (validNodeIds && !validNodeIds.has(slot.targetNodeId)) return false;
+    if (validNodes) {
+      if (validNodes instanceof Map) {
+        const targetNode = validNodes.get(slot.targetNodeId);
+        if (!targetNode) return false;
+        if (slot.defaultText !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
+          return false;
+        }
+      } else if (!validNodes.has(slot.targetNodeId)) {
+        return false;
+      }
+    }
   }
   return true;
 }
@@ -342,11 +370,11 @@ function isDesignNode(value: unknown): value is DesignNode {
         ((value.shapeMeta.kind === 'polygon' &&
           isFiniteNumber(value.shapeMeta.sides) &&
           value.shapeMeta.sides >= 3 &&
-          value.shapeMeta.sides <= 24) ||
+          value.shapeMeta.sides <= 32) ||
           (value.shapeMeta.kind === 'star' &&
             isFiniteNumber(value.shapeMeta.spikes) &&
             value.shapeMeta.spikes >= 3 &&
-            value.shapeMeta.spikes <= 24 &&
+            value.shapeMeta.spikes <= 32 &&
             isFiniteNumber(value.shapeMeta.innerRatio) &&
             value.shapeMeta.innerRatio >= 0.1 &&
             value.shapeMeta.innerRatio <= 0.95)));
@@ -605,11 +633,11 @@ export function validateProject(input: unknown): ValidationResult {
       return { ok: false, error: 'One or more component definitions are invalid.' };
     }
     if (componentIds.has(component.id)) return { ok: false, error: 'Component IDs must be unique within a project.' };
-    const masterNodeIds = new Set((component.document as FolioDocument).nodes.map((node) => node.id));
-    if (component.variants !== undefined && !isComponentVariantsList(component.variants, masterNodeIds)) {
+    const masterNodesById = new Map((component.document as FolioDocument).nodes.map((node) => [node.id, node]));
+    if (component.variants !== undefined && !isComponentVariantsList(component.variants, masterNodesById)) {
       return { ok: false, error: `Component "${component.name}" contains invalid variant definitions.` };
     }
-    if (component.slots !== undefined && !isComponentSlotsList(component.slots, masterNodeIds)) {
+    if (component.slots !== undefined && !isComponentSlotsList(component.slots, masterNodesById)) {
       return { ok: false, error: `Component "${component.name}" contains invalid slot definitions.` };
     }
     componentIds.add(component.id);
@@ -622,17 +650,95 @@ export function validateProject(input: unknown): ValidationResult {
     }
   }
 
+  const projectDesignTokens = input.designTokens as DesignTokenCollection | undefined;
   const componentsById = new Map((input.components as unknown as ComponentDefinition[]).map((component) => [component.id, component]));
-  for (const page of input.pages as Array<{ document: FolioDocument }>) {
+  for (const component of input.components as unknown as ComponentDefinition[]) {
+    for (const node of component.document.nodes) {
+      const tokenCheck = validateNodeTokenBindings(node, projectDesignTokens);
+      if (!tokenCheck.ok) {
+        return { ok: false, error: `Component "${component.name}": ${tokenCheck.error}` };
+      }
+    }
+  }
+
+  for (const page of input.pages as Array<{ name: string; document: FolioDocument }>) {
     for (const node of page.document.nodes) {
+      const tokenCheck = validateNodeTokenBindings(node, projectDesignTokens);
+      if (!tokenCheck.ok) {
+        return { ok: false, error: `Page "${page.name}": ${tokenCheck.error}` };
+      }
       if (node.type === 'component-instance') {
         const master = componentsById.get(node.componentId);
         if (!master) {
           return { ok: false, error: `A page references missing component: ${node.componentId}.` };
         }
-        const childIds = new Set(master.document.nodes.map((child) => child.id));
-        if (Object.keys(node.overrides).some((childId) => !childIds.has(childId))) {
-          return { ok: false, error: `An instance of ${node.componentId} contains an override for a missing master layer.` };
+        const masterNodesById = new Map(master.document.nodes.map((child) => [child.id, child]));
+        for (const [childId, override] of Object.entries(node.overrides)) {
+          const targetNode = masterNodesById.get(childId);
+          if (!targetNode) {
+            return { ok: false, error: `An instance of ${node.componentId} contains an override for a missing master layer.` };
+          }
+          if (override.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
+            return {
+              ok: false,
+              error: `An instance of ${node.componentId} overrides "text" on incompatible ${targetNode.type} layer "${targetNode.name}".`,
+            };
+          }
+          if (override.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
+            return {
+              ok: false,
+              error: `An instance of ${node.componentId} overrides "fill" on incompatible ${targetNode.type} layer "${targetNode.name}".`,
+            };
+          }
+        }
+        if (node.variantSelection) {
+          const axisById = new Map((master.variants ?? []).map((axis) => [axis.id, axis]));
+          for (const [axisId, optionId] of Object.entries(node.variantSelection)) {
+            const axis = axisById.get(axisId);
+            if (!axis) {
+              return {
+                ok: false,
+                error: `An instance of ${node.componentId} selects unknown variant axis "${axisId}".`,
+              };
+            }
+            if (!axis.options.some((opt) => opt.id === optionId)) {
+              return {
+                ok: false,
+                error: `An instance of ${node.componentId} selects unknown option "${optionId}" for variant axis "${axis.name}".`,
+              };
+            }
+          }
+        }
+        if (node.slotAssignments) {
+          const slotById = new Map((master.slots ?? []).map((slot) => [slot.id, slot]));
+          for (const [slotId, assignment] of Object.entries(node.slotAssignments)) {
+            const slot = slotById.get(slotId);
+            if (!slot) {
+              return {
+                ok: false,
+                error: `An instance of ${node.componentId} assigns unknown slot "${slotId}".`,
+              };
+            }
+            const targetNode = masterNodesById.get(slot.targetNodeId);
+            if (!targetNode) {
+              return {
+                ok: false,
+                error: `Slot "${slot.name}" on ${node.componentId} references missing master layer "${slot.targetNodeId}".`,
+              };
+            }
+            if (assignment.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
+              return {
+                ok: false,
+                error: `Slot "${slot.name}" on ${node.componentId} cannot assign "text" to ${targetNode.type} layer "${targetNode.name}".`,
+              };
+            }
+            if (assignment.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
+              return {
+                ok: false,
+                error: `Slot "${slot.name}" on ${node.componentId} cannot assign "fill" to ${targetNode.type} layer "${targetNode.name}".`,
+              };
+            }
+          }
         }
       }
     }

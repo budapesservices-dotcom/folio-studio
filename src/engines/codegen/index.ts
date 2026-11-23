@@ -68,9 +68,19 @@ export function compileFolioProject(
     files.push(compileTokensCssFile(project));
   } else {
     files.push(...compileReactProjectFiles(project, activePage.id));
-    // Include page stylesheet & tokens CSS so React output is immediately runnable
-    const activeCompiled = compilePageHtmlCss(project, activePage);
-    files.push(activeCompiled.cssFile, compileTokensCssFile(project));
+    // Include every page stylesheet and tokens CSS under `src/styles/` so all React imports resolve cleanly
+    for (const page of project.pages) {
+      const compiled = compilePageHtmlCss(project, page);
+      files.push({
+        ...compiled.cssFile,
+        path: `src/${compiled.cssFile.path}`,
+      });
+    }
+    const tokensCssFile = compileTokensCssFile(project);
+    files.push({
+      ...tokensCssFile,
+      path: `src/${tokensCssFile.path}`,
+    });
   }
 
   for (const mod of project.codeModules ?? []) {

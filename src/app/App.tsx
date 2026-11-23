@@ -14,6 +14,7 @@ import {
   getComponentOverrideTargets,
 } from '../core/document/components';
 import { getActiveDocument, getActivePage } from '../core/document/project';
+import { getProjectDesignTokens } from '../core/document/tokens';
 import {
   loadMostRecentProject,
   saveProjectAndActivate,
@@ -684,8 +685,7 @@ export function App() {
     selectionSourceRef.current = 'layers';
     layerDragEditorRef.current = activeEditorId;
     const currentSelection = focusedEditor.state.selectedNodeIds.filter((id) => layerSourceIds.has(id));
-    const requestedIds = currentSelection.includes(nodeId) ? currentSelection : [nodeId];
-    const draggedIds = expandSelectedLayerIds(layerSourceNodes, requestedIds);
+    const draggedIds = expandSelectedLayerIds(layerSourceNodes, currentSelection.includes(nodeId) ? currentSelection : [nodeId]);
     layerDragSourceRef.current = draggedIds;
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = 'move';
@@ -698,10 +698,7 @@ export function App() {
     if (!layerDragSourceRef.current?.length) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-    setLayerDropTarget({
-      nodeId,
-      position: getLayerDropPosition(event.currentTarget.getBoundingClientRect(), event.clientY),
-    });
+    setLayerDropTarget({ nodeId, position: getLayerDropPosition(event.currentTarget.getBoundingClientRect(), event.clientY) });
   };
 
   const dropLayer = (targetId: string, event: JSX.TargetedDragEvent<HTMLDivElement>) => {
@@ -720,10 +717,7 @@ export function App() {
     if (draggedIds.length > 0) {
       const result = focusedCommandClient.moveLayers(draggedIds, targetId, position);
       if (result.status === 'applied' && position === 'inside') {
-        setCollapsedLayers((current) => ({
-          ...current,
-          [activeEditorId]: (current[activeEditorId] ?? []).filter((id) => id !== targetId),
-        }));
+        setCollapsedLayers((current) => ({ ...current, [activeEditorId]: (current[activeEditorId] ?? []).filter((id) => id !== targetId) }));
       }
     }
     layerDragSourceRef.current = null;
@@ -733,39 +727,22 @@ export function App() {
 
   const dropLayersOnCanvas = (nodeIds: string[], target: EditorTarget) => {
     const source = layerDragEditorRef.current;
-    const clearDrag = () => {
-      layerDragSourceRef.current = null;
-      layerDragEditorRef.current = null;
-      setLayerDropTarget(null);
-    };
-    if (source && source !== target) {
-      setNotice('Drag layers into the Canvas that belongs to the active Layers editor.');
-      clearDrag();
-      return;
-    }
+    const clearDrag = () => { layerDragSourceRef.current = null; layerDragEditorRef.current = null; setLayerDropTarget(null); };
+    if (source && source !== target) { setNotice('Drag layers into the Canvas that belongs to the active Layers editor.'); clearDrag(); return; }
     const targetDocument = target === 'main' ? activeDocument : componentDocument;
     const targetClient = getCommandClient(target);
     const requested = new Set(nodeIds);
     const droppedNodes = targetDocument.nodes.filter((node) => requested.has(node.id));
-    if (droppedNodes.length === 0) {
-      clearDrag();
-      return;
-    }
+    if (droppedNodes.length === 0) { clearDrag(); return; }
     const ids = droppedNodes.map((node) => node.id);
     const existing = droppedNodes.find((node) => node.onCanvas !== false);
     selectionSourceRef.current = 'canvas';
     setActiveEditorId(target);
     windows.setInspectorVisible(true);
     targetClient.selectNodes(ids, 'Select dropped layers');
-    if (existing) {
-      setNotice(`“${existing.name}” is already on the Canvas. Duplicate objects are not allowed.`);
-      clearDrag();
-      return;
-    }
+    if (existing) { setNotice(`“${existing.name}” is already on the Canvas. Duplicate objects are not allowed.`); clearDrag(); return; }
     const result = targetClient.setNodesCanvasState(ids, true, 'Restore layers to canvas');
-    if (result.status === 'applied') {
-      setNotice(`“${droppedNodes[0].name}” has been restored to the Canvas with its previous properties.`);
-    }
+    if (result.status === 'applied') setNotice(`“${droppedNodes[0].name}” has been restored to the Canvas with its previous properties.`);
     clearDrag();
   };
 
@@ -1014,7 +991,7 @@ export function App() {
       setNotice('The linked master component could not be found.');
       return;
     }
-    const detached = detachComponentInstance(selectedNode, master);
+    const detached = detachComponentInstance(selectedNode, master, getProjectDesignTokens(state.project));
     focusedCommandClient.replaceNodeWithNodes(selectedNode.id, detached, 'Detach component instance');
     setNotice('Instance detached. Its nodes can now be edited independently.');
   };
@@ -1374,7 +1351,9 @@ export function App() {
     selectedNode,
     mainCommandClient,
     focusedCommandClient,
+    componentCommandClient,
     setNotice,
+    onMasterMetadataUpdated: componentMaster.acknowledgeMasterMetadataUpdate,
   });
 
   const codeWorkspace = useCodeWorkspace({

@@ -6,7 +6,124 @@ import type {
   DesignTokenUnit,
   DesignTokenValue,
   FolioProject,
+  NodeTokenBindings,
 } from './types';
+
+const ALLOWED_TOKEN_UNITS = new Set<DesignTokenUnit>(['px', 'rem', '%', 'em']);
+const UNSAFE_CSS_VALUE_PATTERN = /[;{}\\\r\n<>'"@]|\/\*|\*\/|\b(?:url|expression|import|javascript|vbscript|data|behavior)\b/i;
+const HEX_COLOR_PATTERN = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const FUNC_COLOR_PATTERN = /^(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch)\(\s*[0-9a-z.%+,\s/-]+\s*\)$/i;
+const COLOR_MIX_PATTERN = /^color-mix\(\s*in\s+[a-z0-9\s-]+,\s*[#0-9a-z.%+,\s()/-]+\s*\)$/i;
+const NAMED_COLOR_PATTERN = /^[a-z]{3,24}$/i;
+
+function hasBalancedParens(input: string, maxDepth: number): boolean {
+  let depth = 0;
+  for (const ch of input) {
+    if (ch === '(') {
+      depth += 1;
+      if (depth > maxDepth) return false;
+    } else if (ch === ')') {
+      depth -= 1;
+      if (depth < 0) return false;
+    }
+  }
+  return depth === 0;
+}
+
+/**
+ * Validates that a CSS color literal is safe to emit into CSS custom properties and SVG/HTML
+ * styles without permitting CSS rule breakouts, comments, quotes, or `url()`/`expression()` payloads.
+ */
+export function isSafeCssColorValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 128) return false;
+  if (UNSAFE_CSS_VALUE_PATTERN.test(trimmed)) return false;
+  if (HEX_COLOR_PATTERN.test(trimmed)) return true;
+  if (NAMED_COLOR_PATTERN.test(trimmed)) return true;
+  if (FUNC_COLOR_PATTERN.test(trimmed) && hasBalancedParens(trimmed, 1)) return true;
+  if (COLOR_MIX_PATTERN.test(trimmed) && hasBalancedParens(trimmed, 2)) return true;
+  return false;
+}
+
+export function toDesignTokenThemeSlug(themeName: string): string {
+  const slug = themeName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'theme';
+}
+
+export const TOKEN_BINDING_CATEGORY_MAP: Record<keyof NodeTokenBindings, DesignTokenCategory> = {
+  fill: 'color',
+  stroke: 'color',
+  radius: 'radius',
+  gap: 'spacing',
+  padding: 'spacing',
+  fontSize: 'typography',
+};
+
+export const TOKEN_BINDING_ALLOWED_NODE_TYPES: Record<keyof NodeTokenBindings, ReadonlySet<DesignNode['type']>> = {
+  fill: new Set(['frame', 'rect', 'ellipse', 'path', 'text']),
+  stroke: new Set(['frame', 'rect', 'ellipse', 'path']),
+  radius: new Set(['frame', 'rect']),
+  gap: new Set(['frame', 'group']),
+  padding: new Set(['frame', 'group']),
+  fontSize: new Set(['text']),
+};
+
+export function validateNodeTokenBindings(
+  node: DesignNode,
+  collection?: DesignTokenCollection,
+): { ok: true } | { ok: false; error: string } {
+  const bindings = node.tokenBindings;
+  if (!bindings) return { ok: true };
+
+  const entries = (Object.entries(bindings) as Array<[string, string | undefined]>).filter(
+    ([, tokenId]) => tokenId !== undefined,
+  );
+  if (entries.length === 0) return { ok: true };
+
+  if (!collection) {
+    return {
+      ok: false,
+      error: `Layer "${node.name}" binds design tokens, but the project has no design token collection.`,
+    };
+  }
+
+  const byId = new Map(collection.tokens.map((token) => [token.id, token]));
+  for (const [rawProp, tokenId] of entries) {
+    if (!(rawProp in TOKEN_BINDING_CATEGORY_MAP)) {
+      return { ok: false, error: `Layer "${node.name}" has unsupported token binding property "${rawProp}".` };
+    }
+    const prop = rawProp as keyof NodeTokenBindings;
+    if (!TOKEN_BINDING_ALLOWED_NODE_TYPES[prop].has(node.type)) {
+      return {
+        ok: false,
+        error: `Layer "${node.name}" (${node.type}) cannot bind "${prop}" to a design token.`,
+      };
+    }
+    if (!tokenId) {
+      return { ok: false, error: `Layer "${node.name}" has an empty token binding for "${prop}".` };
+    }
+    const token = byId.get(tokenId);
+    if (!token) {
+      return {
+        ok: false,
+        error: `Layer "${node.name}" references missing design token "${tokenId}" for "${prop}".`,
+      };
+    }
+    const expectedCategory = TOKEN_BINDING_CATEGORY_MAP[prop];
+    if (token.category !== expectedCategory) {
+      return {
+        ok: false,
+        error: `Layer "${node.name}" binds "${prop}" to "${token.name}" (${token.category}), expected ${expectedCategory}.`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
 
 export interface ResolvedDesignToken {
   ok: true;
@@ -266,20 +383,29 @@ export function resolveDesignTokenValue(
     const activeValue: DesignTokenValue = current.themeValues?.[themeId] ?? current.value;
     if (activeValue.kind === 'literal') {
       if (current.category === 'color') {
-        if (typeof activeValue.value !== 'string' || !activeValue.value.trim()) {
+        if (typeof activeValue.value !== 'string' || !isSafeCssColorValue(activeValue.value)) {
           return {
             ok: false,
             code: 'INVALID_VALUE',
-            message: `Color token "${current.name}" must resolve to a non-empty color string.`,
+            message: `Color token "${current.name}" must resolve to a safe CSS color value.`,
           };
         }
+        const safeColor = activeValue.value.trim();
         return {
           ok: true,
           token: start,
           category: start.category,
-          rawValue: activeValue.value,
-          cssValue: activeValue.value,
+          rawValue: safeColor,
+          cssValue: safeColor,
           chain,
+        };
+      }
+
+      if (activeValue.unit !== undefined && !ALLOWED_TOKEN_UNITS.has(activeValue.unit)) {
+        return {
+          ok: false,
+          code: 'INVALID_VALUE',
+          message: `Numeric token "${current.name}" has unsupported unit "${String(activeValue.unit)}".`,
         };
       }
 
@@ -289,6 +415,20 @@ export function resolveDesignTokenValue(
           ok: false,
           code: 'INVALID_VALUE',
           message: `Numeric token "${current.name}" must resolve to a finite number.`,
+        };
+      }
+      if (start.category === 'typography' && num <= 0) {
+        return {
+          ok: false,
+          code: 'INVALID_VALUE',
+          message: `Typography token "${current.name}" must resolve to a positive number.`,
+        };
+      }
+      if ((start.category === 'spacing' || start.category === 'radius') && num < 0) {
+        return {
+          ok: false,
+          code: 'INVALID_VALUE',
+          message: `Token "${current.name}" (${start.category}) must resolve to a non-negative number.`,
         };
       }
       return {
@@ -329,6 +469,7 @@ export function validateDesignTokenCollection(
     return { ok: false, error: 'Design token collection requires at least one theme.' };
   }
   const themeIds = new Set<string>();
+  const themeSlugs = new Set<string>();
   for (const theme of collection.themes) {
     if (!theme.id || !theme.name.trim()) {
       return { ok: false, error: 'Every design theme must have an ID and non-empty name.' };
@@ -336,13 +477,19 @@ export function validateDesignTokenCollection(
     if (themeIds.has(theme.id)) {
       return { ok: false, error: `Duplicate theme ID "${theme.id}".` };
     }
+    const slug = toDesignTokenThemeSlug(theme.name);
+    if (themeSlugs.has(slug)) {
+      return { ok: false, error: `Duplicate theme slug "${slug}" from theme "${theme.name}".` };
+    }
     themeIds.add(theme.id);
+    themeSlugs.add(slug);
   }
   if (!themeIds.has(collection.activeThemeId)) {
     return { ok: false, error: `Active theme "${collection.activeThemeId}" does not exist.` };
   }
 
   const tokenIds = new Set<string>();
+  const cssVarNames = new Set<string>();
   for (const token of collection.tokens) {
     if (!token.id || !token.name.trim()) {
       return { ok: false, error: 'Every design token must have a stable ID and non-empty name.' };
@@ -350,10 +497,29 @@ export function validateDesignTokenCollection(
     if (tokenIds.has(token.id)) {
       return { ok: false, error: `Duplicate design token ID "${token.id}".` };
     }
+    const cssVar = toCssVariableName(token.name);
+    if (cssVarNames.has(cssVar)) {
+      return { ok: false, error: `Duplicate CSS custom property "${cssVar}" generated from token "${token.name}".` };
+    }
+    if (token.themeValues) {
+      for (const themeKey of Object.keys(token.themeValues)) {
+        if (!themeIds.has(themeKey)) {
+          return {
+            ok: false,
+            error: `Token "${token.name}" defines an override for unknown theme "${themeKey}".`,
+          };
+        }
+      }
+    }
     tokenIds.add(token.id);
+    cssVarNames.add(cssVar);
   }
 
   for (const token of collection.tokens) {
+    const baseResolved = resolveDesignTokenValue(collection, token.id, '');
+    if (!baseResolved.ok) {
+      return { ok: false, error: baseResolved.message };
+    }
     for (const theme of collection.themes) {
       const resolved = resolveDesignTokenValue(collection, token.id, theme.id);
       if (!resolved.ok) {
@@ -530,13 +696,17 @@ export function generateDesignTokensCss(
 ): string {
   const theme = collection.themes.find((item) => item.id === themeId);
   const selector = theme && theme.id !== collection.themes[0]?.id
-    ? `:root[data-theme="${theme.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}"]`
+    ? `:root[data-theme="${toDesignTokenThemeSlug(theme.name)}"]`
     : ':root';
   const lines: string[] = [`${selector} {`];
+  const emittedVars = new Set<string>();
   for (const token of collection.tokens) {
+    const cssVar = toCssVariableName(token.name);
+    if (emittedVars.has(cssVar)) continue;
     const resolved = resolveDesignTokenValue(collection, token.id, themeId);
     if (resolved.ok) {
-      lines.push(`  ${toCssVariableName(token.name)}: ${resolved.cssValue};`);
+      emittedVars.add(cssVar);
+      lines.push(`  ${cssVar}: ${resolved.cssValue};`);
     }
   }
   lines.push('}');

@@ -4,6 +4,7 @@ import {
   generateDesignTokensCss,
   getProjectDesignTokens,
   toCssVariableName,
+  toDesignTokenThemeSlug,
 } from '../../core/document/tokens';
 import type {
   CodeModuleRecord,
@@ -27,11 +28,10 @@ import {
   sanitizeJsText,
   toCssClassName,
   toPageFileSlug,
-  toThemeSlug,
 } from './sanitize';
 import type { CodeMappingEntry, CompiledCodeFile } from './types';
 
-function roundCss(value: number): number {
+export function roundCss(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
@@ -69,7 +69,7 @@ function formatPadding(padding: NodePadding): string {
   return `${roundCss(top)}px ${roundCss(right)}px ${roundCss(bottom)}px ${roundCss(left)}px`;
 }
 
-function resolveTokenCssVar(
+export function resolveTokenCssVar(
   tokens: DesignTokenCollection,
   tokenId: string | undefined,
 ): string | null {
@@ -96,6 +96,25 @@ export function resolveSemanticTag(node: DesignNode): SemanticHtmlTag {
   return 'div';
 }
 
+export function buildArrowheadPoints(
+  tip: { x: number; y: number },
+  from: { x: number; y: number },
+  size: number,
+): string | null {
+  const dx = tip.x - from.x;
+  const dy = tip.y - from.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 0.001) return null;
+  const ux = dx / len;
+  const uy = dy / len;
+  const px = -uy;
+  const py = ux;
+  const backX = tip.x - ux * size;
+  const backY = tip.y - uy * size;
+  const wing = size * 0.48;
+  return `${roundCss(tip.x)},${roundCss(tip.y)} ${roundCss(backX + px * wing)},${roundCss(backY + py * wing)} ${roundCss(backX - px * wing)},${roundCss(backY - py * wing)}`;
+}
+
 function buildInlineSvgMarkup(
   node: PathNode,
   tokens: DesignTokenCollection,
@@ -110,15 +129,39 @@ function buildInlineSvgMarkup(
   const stroke = strokeVar ?? sanitizeCssValue(node.style.stroke || 'none', 'none');
   const strokeWidth = Math.max(0, roundCss(node.style.strokeWidth));
   const fillRule = node.style.fillRule === 'evenodd' ? ' fill-rule="evenodd"' : '';
+  const linecap = ` stroke-linecap="${escapeAttr(node.style.strokeLinecap ?? 'round')}"`;
+  const linejoin = ` stroke-linejoin="${escapeAttr(node.style.strokeLinejoin ?? 'round')}"`;
   const dash = node.style.strokeDasharray
     ? ` stroke-dasharray="${escapeAttr(node.style.strokeDasharray)}"`
     : '';
 
-  return [
-    `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" aria-hidden="true">`,
-    `${indent}  <path d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${fillRule}${dash} />`,
-    `${indent}</svg>`,
+  const svgLines: string[] = [
+    `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" overflow="visible" aria-hidden="true">`,
+    `${indent}  <path d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${fillRule}${linecap}${linejoin}${dash} />`,
   ];
+
+  if (!node.closed && node.points.length >= 2 && (node.style.arrowStart || node.style.arrowEnd)) {
+    const arrowColor =
+      stroke !== 'none' && stroke !== '#00000000' ? stroke : fill;
+    if (arrowColor && arrowColor !== 'none') {
+      const size = Math.max(10, Math.min(28, (node.style.strokeWidth || 2) * 3.8));
+      if (node.style.arrowEnd) {
+        const tip = node.points[node.points.length - 1];
+        const prev = tip.handleIn ?? node.points[node.points.length - 2];
+        const pts = buildArrowheadPoints(tip, prev, size);
+        if (pts) svgLines.push(`${indent}  <polygon points="${escapeAttr(pts)}" fill="${escapeAttr(arrowColor)}" />`);
+      }
+      if (node.style.arrowStart) {
+        const tip = node.points[0];
+        const next = tip.handleOut ?? node.points[1];
+        const pts = buildArrowheadPoints(tip, next, size);
+        if (pts) svgLines.push(`${indent}  <polygon points="${escapeAttr(pts)}" fill="${escapeAttr(arrowColor)}" />`);
+      }
+    }
+  }
+
+  svgLines.push(`${indent}</svg>`);
+  return svgLines;
 }
 
 export function compileTokensCssFile(project: FolioProject): CompiledCodeFile {
@@ -152,7 +195,7 @@ interface CompiledPageArtifacts {
   pageCssContent: string;
 }
 
-function buildChildrenMap(nodes: readonly DesignNode[]): {
+export function buildChildrenMap(nodes: readonly DesignNode[]): {
   roots: DesignNode[];
   childrenByParent: Map<string, DesignNode[]>;
   nodeById: Map<string, DesignNode>;
@@ -173,6 +216,142 @@ function buildChildrenMap(nodes: readonly DesignNode[]): {
     }
   }
   return { roots, childrenByParent, nodeById };
+}
+
+export function buildNodeCssDeclarations(
+  node: DesignNode,
+  tokens: DesignTokenCollection,
+  options: {
+    parent: DesignNode | null;
+    isChildOfAutoLayout: boolean;
+    isInstanceChild: boolean;
+    hasRootAutoLayout: boolean;
+    originOffset: { x: number; y: number };
+  },
+): string[] {
+  const { parent, isChildOfAutoLayout, isInstanceChild, hasRootAutoLayout, originOffset } = options;
+  const declarations: string[] = [];
+
+  if (!node.visible) {
+    declarations.push('display: none;');
+  } else if (node.layout && node.layout.mode === 'flex') {
+    declarations.push('display: flex;');
+    declarations.push(`flex-direction: ${node.layout.direction};`);
+    if (node.layout.wrap === 'wrap') declarations.push('flex-wrap: wrap;');
+    declarations.push(`justify-content: ${mapJustifyContent(node.layout.justifyContent)};`);
+    declarations.push(`align-items: ${mapAlignItems(node.layout.alignItems)};`);
+    const gapVar = resolveTokenCssVar(tokens, node.tokenBindings?.gap);
+    declarations.push(`gap: ${gapVar ?? `${roundCss(node.layout.gap)}px`};`);
+    const padVar = resolveTokenCssVar(tokens, node.tokenBindings?.padding);
+    declarations.push(`padding: ${padVar ?? formatPadding(node.layout.padding)};`);
+  } else if (node.layout && node.layout.mode === 'grid') {
+    declarations.push('display: grid;');
+    const cols = Math.max(1, Math.round(node.layout.gridColumns ?? 2));
+    declarations.push(`grid-template-columns: repeat(${cols}, minmax(0, 1fr));`);
+    const gapVar = resolveTokenCssVar(tokens, node.tokenBindings?.gap);
+    if (gapVar) {
+      declarations.push(`gap: ${gapVar};`);
+    } else {
+      const rowGap = roundCss(node.layout.rowGap ?? node.layout.gap);
+      const colGap = roundCss(node.layout.columnGap ?? node.layout.gap);
+      declarations.push(rowGap === colGap ? `gap: ${rowGap}px;` : `gap: ${rowGap}px ${colGap}px;`);
+    }
+    const padVar = resolveTokenCssVar(tokens, node.tokenBindings?.padding);
+    declarations.push(`padding: ${padVar ?? formatPadding(node.layout.padding)};`);
+  }
+
+  if (isChildOfAutoLayout) {
+    declarations.push('position: relative;');
+    const widthMode = node.layoutChild?.widthMode ?? 'fixed';
+    const heightMode = node.layoutChild?.heightMode ?? 'fixed';
+    if (widthMode === 'fill') {
+      declarations.push('width: 100%;');
+      declarations.push('flex: 1 1 0%;');
+    } else if (widthMode === 'hug') {
+      declarations.push('width: fit-content;');
+    } else {
+      declarations.push(`width: ${roundCss(node.width)}px;`);
+    }
+
+    if (heightMode === 'fill') {
+      declarations.push('height: 100%;');
+      declarations.push('align-self: stretch;');
+    } else if (heightMode === 'hug') {
+      declarations.push('height: fit-content;');
+    } else if (node.type !== 'text') {
+      declarations.push(`min-height: ${roundCss(node.height)}px;`);
+    }
+
+    if (node.layoutChild?.minWidth !== undefined) declarations.push(`min-width: ${roundCss(node.layoutChild.minWidth)}px;`);
+    if (node.layoutChild?.maxWidth !== undefined) declarations.push(`max-width: ${roundCss(node.layoutChild.maxWidth)}px;`);
+    if (node.layoutChild?.minHeight !== undefined) declarations.push(`min-height: ${roundCss(node.layoutChild.minHeight)}px;`);
+    if (node.layoutChild?.maxHeight !== undefined) declarations.push(`max-height: ${roundCss(node.layoutChild.maxHeight)}px;`);
+    if (node.layoutChild?.alignSelf && node.layoutChild.alignSelf !== 'auto') {
+      declarations.push(`align-self: ${mapAlignItems(node.layoutChild.alignSelf)};`);
+    }
+  } else if (hasRootAutoLayout && !parent && !isInstanceChild) {
+    declarations.push('position: relative;');
+    declarations.push('width: 100%;');
+    declarations.push(`min-height: ${roundCss(node.height)}px;`);
+  } else {
+    const relX = roundCss(node.x - originOffset.x);
+    const relY = roundCss(node.y - originOffset.y);
+    declarations.push('position: absolute;');
+    declarations.push(`left: ${relX}px;`);
+    declarations.push(`top: ${relY}px;`);
+    declarations.push(`width: ${roundCss(node.width)}px;`);
+    if (node.type !== 'text') {
+      declarations.push(`height: ${roundCss(node.height)}px;`);
+    }
+  }
+
+  if (Math.abs(node.rotation) > 0.01) {
+    declarations.push(`transform: rotate(${roundCss(node.rotation)}deg);`);
+  }
+  if (node.opacity < 0.999) {
+    declarations.push(`opacity: ${roundCss(node.opacity)};`);
+  }
+
+  if (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') {
+    const fillVar = resolveTokenCssVar(tokens, node.tokenBindings?.fill);
+    const strokeVar = resolveTokenCssVar(tokens, node.tokenBindings?.stroke);
+    const radiusVar = resolveTokenCssVar(tokens, node.tokenBindings?.radius);
+    const fillVal = fillVar ?? sanitizeCssValue(node.style.fill, 'transparent');
+    if (fillVal && fillVal !== 'none') {
+      declarations.push(`background: ${fillVal};`);
+    }
+    if (node.style.strokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
+      const strokeVal = strokeVar ?? sanitizeCssValue(node.style.stroke, 'transparent');
+      declarations.push(`border: ${roundCss(node.style.strokeWidth)}px solid ${strokeVal};`);
+    }
+    if (node.type === 'ellipse') {
+      declarations.push('border-radius: 9999px;');
+    } else if (radiusVar) {
+      declarations.push(`border-radius: ${radiusVar};`);
+    } else if (node.style.radius !== undefined && node.style.radius > 0) {
+      declarations.push(`border-radius: ${roundCss(node.style.radius)}px;`);
+    }
+    if (node.type === 'frame' && node.clipContent) {
+      declarations.push('overflow: hidden;');
+    }
+  } else if (node.type === 'text') {
+    const fillVar = resolveTokenCssVar(tokens, node.tokenBindings?.fill);
+    const fontSizeVar = resolveTokenCssVar(tokens, node.tokenBindings?.fontSize);
+    declarations.push(`color: ${fillVar ?? sanitizeCssValue(node.style.fill, '#111827')};`);
+    declarations.push(`font-family: ${sanitizeCssValue(node.style.fontFamily, 'system-ui, sans-serif')};`);
+    declarations.push(`font-size: ${fontSizeVar ?? `${roundCss(node.style.fontSize)}px`};`);
+    declarations.push(`font-weight: ${Math.round(node.style.fontWeight)};`);
+    declarations.push(`line-height: ${roundCss(node.style.lineHeight)};`);
+    if (Math.abs(node.style.letterSpacing) > 0.01) {
+      declarations.push(`letter-spacing: ${roundCss(node.style.letterSpacing)}px;`);
+    }
+    declarations.push('margin: 0;');
+    declarations.push('white-space: pre-wrap;');
+  } else if (node.type === 'component-instance') {
+    declarations.push('overflow: visible;');
+  }
+
+  return declarations;
 }
 
 function pushCssRule(
@@ -254,127 +433,14 @@ export function compilePageHtmlCss(
     isInstanceChild: boolean,
     originOffset: { x: number; y: number },
   ) => {
-    const declarations: string[] = [];
     const selector = `.${className}`;
-
-    if (!node.visible) {
-      declarations.push('display: none;');
-    } else if (node.layout && node.layout.mode === 'flex') {
-      declarations.push('display: flex;');
-      declarations.push(`flex-direction: ${node.layout.direction};`);
-      if (node.layout.wrap === 'wrap') declarations.push('flex-wrap: wrap;');
-      declarations.push(`justify-content: ${mapJustifyContent(node.layout.justifyContent)};`);
-      declarations.push(`align-items: ${mapAlignItems(node.layout.alignItems)};`);
-      const gapVar = resolveTokenCssVar(tokens, node.tokenBindings?.gap);
-      declarations.push(`gap: ${gapVar ?? `${roundCss(node.layout.gap)}px`};`);
-      const padVar = resolveTokenCssVar(tokens, node.tokenBindings?.padding);
-      declarations.push(`padding: ${padVar ?? formatPadding(node.layout.padding)};`);
-    } else if (node.layout && node.layout.mode === 'grid') {
-      declarations.push('display: grid;');
-      const cols = Math.max(1, Math.round(node.layout.gridColumns ?? 2));
-      declarations.push(`grid-template-columns: repeat(${cols}, minmax(0, 1fr));`);
-      const gapVar = resolveTokenCssVar(tokens, node.tokenBindings?.gap);
-      if (gapVar) {
-        declarations.push(`gap: ${gapVar};`);
-      } else {
-        const rowGap = roundCss(node.layout.rowGap ?? node.layout.gap);
-        const colGap = roundCss(node.layout.columnGap ?? node.layout.gap);
-        declarations.push(rowGap === colGap ? `gap: ${rowGap}px;` : `gap: ${rowGap}px ${colGap}px;`);
-      }
-      const padVar = resolveTokenCssVar(tokens, node.tokenBindings?.padding);
-      declarations.push(`padding: ${padVar ?? formatPadding(node.layout.padding)};`);
-    }
-
-    if (isChildOfAutoLayout) {
-      declarations.push('position: relative;');
-      const widthMode = node.layoutChild?.widthMode ?? 'fixed';
-      const heightMode = node.layoutChild?.heightMode ?? 'fixed';
-      if (widthMode === 'fill') {
-        declarations.push('width: 100%;');
-        declarations.push('flex: 1 1 0%;');
-      } else if (widthMode === 'hug') {
-        declarations.push('width: fit-content;');
-      } else {
-        declarations.push(`width: ${roundCss(node.width)}px;`);
-      }
-
-      if (heightMode === 'fill') {
-        declarations.push('height: 100%;');
-        declarations.push('align-self: stretch;');
-      } else if (heightMode === 'hug') {
-        declarations.push('height: fit-content;');
-      } else if (node.type !== 'text') {
-        declarations.push(`min-height: ${roundCss(node.height)}px;`);
-      }
-
-      if (node.layoutChild?.minWidth !== undefined) declarations.push(`min-width: ${roundCss(node.layoutChild.minWidth)}px;`);
-      if (node.layoutChild?.maxWidth !== undefined) declarations.push(`max-width: ${roundCss(node.layoutChild.maxWidth)}px;`);
-      if (node.layoutChild?.minHeight !== undefined) declarations.push(`min-height: ${roundCss(node.layoutChild.minHeight)}px;`);
-      if (node.layoutChild?.maxHeight !== undefined) declarations.push(`max-height: ${roundCss(node.layoutChild.maxHeight)}px;`);
-      if (node.layoutChild?.alignSelf && node.layoutChild.alignSelf !== 'auto') {
-        declarations.push(`align-self: ${mapAlignItems(node.layoutChild.alignSelf)};`);
-      }
-    } else if (hasRootAutoLayout && !parent && !isInstanceChild) {
-      declarations.push('position: relative;');
-      declarations.push('width: 100%;');
-      declarations.push(`min-height: ${roundCss(node.height)}px;`);
-    } else {
-      const relX = roundCss(node.x - originOffset.x);
-      const relY = roundCss(node.y - originOffset.y);
-      declarations.push('position: absolute;');
-      declarations.push(`left: ${relX}px;`);
-      declarations.push(`top: ${relY}px;`);
-      declarations.push(`width: ${roundCss(node.width)}px;`);
-      if (node.type !== 'text') {
-        declarations.push(`height: ${roundCss(node.height)}px;`);
-      }
-    }
-
-    if (Math.abs(node.rotation) > 0.01) {
-      declarations.push(`transform: rotate(${roundCss(node.rotation)}deg);`);
-    }
-    if (node.opacity < 0.999) {
-      declarations.push(`opacity: ${roundCss(node.opacity)};`);
-    }
-
-    if (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') {
-      const fillVar = resolveTokenCssVar(tokens, node.tokenBindings?.fill);
-      const strokeVar = resolveTokenCssVar(tokens, node.tokenBindings?.stroke);
-      const radiusVar = resolveTokenCssVar(tokens, node.tokenBindings?.radius);
-      const fillVal = fillVar ?? sanitizeCssValue(node.style.fill, 'transparent');
-      if (fillVal && fillVal !== 'none') {
-        declarations.push(`background: ${fillVal};`);
-      }
-      if (node.style.strokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
-        const strokeVal = strokeVar ?? sanitizeCssValue(node.style.stroke, 'transparent');
-        declarations.push(`border: ${roundCss(node.style.strokeWidth)}px solid ${strokeVal};`);
-      }
-      if (node.type === 'ellipse') {
-        declarations.push('border-radius: 9999px;');
-      } else if (radiusVar) {
-        declarations.push(`border-radius: ${radiusVar};`);
-      } else if (node.style.radius !== undefined && node.style.radius > 0) {
-        declarations.push(`border-radius: ${roundCss(node.style.radius)}px;`);
-      }
-      if (node.type === 'frame' && node.clipContent) {
-        declarations.push('overflow: hidden;');
-      }
-    } else if (node.type === 'text') {
-      const fillVar = resolveTokenCssVar(tokens, node.tokenBindings?.fill);
-      const fontSizeVar = resolveTokenCssVar(tokens, node.tokenBindings?.fontSize);
-      declarations.push(`color: ${fillVar ?? sanitizeCssValue(node.style.fill, '#111827')};`);
-      declarations.push(`font-family: ${sanitizeCssValue(node.style.fontFamily, 'system-ui, sans-serif')};`);
-      declarations.push(`font-size: ${fontSizeVar ?? `${roundCss(node.style.fontSize)}px`};`);
-      declarations.push(`font-weight: ${Math.round(node.style.fontWeight)};`);
-      declarations.push(`line-height: ${roundCss(node.style.lineHeight)};`);
-      if (Math.abs(node.style.letterSpacing) > 0.01) {
-        declarations.push(`letter-spacing: ${roundCss(node.style.letterSpacing)}px;`);
-      }
-      declarations.push('margin: 0;');
-      declarations.push('white-space: pre-wrap;');
-    } else if (node.type === 'component-instance') {
-      declarations.push('overflow: visible;');
-    }
+    const declarations = buildNodeCssDeclarations(node, tokens, {
+      parent,
+      isChildOfAutoLayout,
+      isInstanceChild,
+      hasRootAutoLayout,
+      originOffset,
+    });
 
     pushCssRule(
       cssLines,
@@ -425,15 +491,18 @@ export function compilePageHtmlCss(
     isInstanceChild: boolean,
     originOffset: { x: number; y: number },
     htmlLineOffset: number,
+    activeChildrenByParent: Map<string, DesignNode[]>,
+    idPrefix: string,
   ) => {
     const indent = '  '.repeat(depth);
-    const className = toCssClassName('f', node.name, node.id);
+    const emittedId = idPrefix ? `${idPrefix}${node.id}` : node.id;
+    const className = toCssClassName('f', node.name, emittedId);
     emitNodeCss(node, className, parent, isChildOfAutoLayout, isInstanceChild, originOffset);
 
     const tag = resolveSemanticTag(node);
     const attrs: string[] = [
       `class="${escapeAttr(className)}"`,
-      `data-folio-id="${escapeAttr(node.id)}"`,
+      `data-folio-id="${escapeAttr(emittedId)}"`,
     ];
     if (node.ariaLabel?.trim()) {
       attrs.push(`aria-label="${escapeAttr(node.ariaLabel.trim())}"`);
@@ -462,24 +531,58 @@ export function compilePageHtmlCss(
       if (master) {
         const resolvedChildren = resolveComponentInstanceNodes(node, master, tokens);
         const childMap = buildChildrenMap(resolvedChildren);
+        const masterW = Math.max(1, master.document.width);
+        const masterH = Math.max(1, master.document.height);
+        const scaleX = node.width / masterW;
+        const scaleY = node.height / masterH;
+        const needsScale = Math.abs(scaleX - 1) > 0.001 || Math.abs(scaleY - 1) > 0.001;
+        const childPrefix = `${emittedId}__`;
         htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
-        for (const child of childMap.roots) {
-          emitNodeHtml(
-            { ...child, id: `${node.id}__${child.id}` },
-            node,
-            depth + 1,
-            false,
-            true,
-            { x: 0, y: 0 },
-            htmlLineOffset,
-          );
+        if (needsScale) {
+          const innerClass = `${className}__inner`;
+          pushCssRule(cssLines, `.${innerClass}`, [
+            'position: relative;',
+            `width: ${roundCss(masterW)}px;`,
+            `height: ${roundCss(masterH)}px;`,
+            'transform-origin: top left;',
+            `transform: scale(${roundCss(scaleX)}, ${roundCss(scaleY)});`,
+          ]);
+          htmlBodyLines.push(`${indent}  <div class="${escapeAttr(innerClass)}">`);
+          for (const child of childMap.roots) {
+            emitNodeHtml(
+              child,
+              node,
+              depth + 2,
+              false,
+              true,
+              { x: 0, y: 0 },
+              htmlLineOffset,
+              childMap.childrenByParent,
+              childPrefix,
+            );
+          }
+          htmlBodyLines.push(`${indent}  </div>`);
+        } else {
+          for (const child of childMap.roots) {
+            emitNodeHtml(
+              child,
+              node,
+              depth + 1,
+              false,
+              true,
+              { x: 0, y: 0 },
+              htmlLineOffset,
+              childMap.childrenByParent,
+              childPrefix,
+            );
+          }
         }
         htmlBodyLines.push(`${indent}</${tag}>`);
       } else {
         htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}></${tag}>`);
       }
     } else {
-      const children = childrenByParent.get(node.id) ?? [];
+      const children = activeChildrenByParent.get(node.id) ?? [];
       const selfIsAutoLayout = Boolean(node.layout && node.layout.mode !== 'none');
       if (children.length === 0) {
         htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}></${tag}>`);
@@ -487,7 +590,17 @@ export function compilePageHtmlCss(
         htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
         const nextOrigin = { x: node.x, y: node.y };
         for (const child of children) {
-          emitNodeHtml(child, node, depth + 1, selfIsAutoLayout, isInstanceChild, nextOrigin, htmlLineOffset);
+          emitNodeHtml(
+            child,
+            node,
+            depth + 1,
+            selfIsAutoLayout,
+            isInstanceChild,
+            nextOrigin,
+            htmlLineOffset,
+            activeChildrenByParent,
+            idPrefix,
+          );
         }
         htmlBodyLines.push(`${indent}</${tag}>`);
       }
@@ -533,7 +646,7 @@ export function compilePageHtmlCss(
 
   const htmlLineOffset = htmlPreambleLines.length;
   for (const root of roots) {
-    emitNodeHtml(root, null, 2, false, false, { x: 0, y: 0 }, htmlLineOffset);
+    emitNodeHtml(root, null, 2, false, false, { x: 0, y: 0 }, htmlLineOffset, childrenByParent, '');
   }
 
   if (tabletRules.length > 0) {
@@ -620,7 +733,7 @@ export function buildLivePreviewHtml(
   const activeTheme = tokens.themes.find((theme) => theme.id === activeThemeId) ?? tokens.themes[0];
   const themeAttr =
     activeTheme && activeTheme.id !== tokens.themes[0]?.id
-      ? ` data-theme="${escapeAttr(toThemeSlug(activeTheme.name))}"`
+      ? ` data-theme="${escapeAttr(toDesignTokenThemeSlug(activeTheme.name))}"`
       : '';
 
   const tokensCss = compileTokensCssFile(project).content;

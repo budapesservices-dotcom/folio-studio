@@ -1,6 +1,6 @@
 import { createInitialProject } from '../core/document/factory';
 import { areDocumentsStructurallyEqual } from '../core/document/equality';
-import type { ComponentDefinition, FolioDocument, FolioProject } from '../core/document/types';
+import type { ComponentDefinition, DesignTokenCollection, FolioDocument, FolioProject } from '../core/document/types';
 import type { EditorAction } from './editorReducer';
 
 export type ComponentCanvasMasterStatus = 'present' | 'missing' | 'returned';
@@ -65,13 +65,19 @@ export function reconcileComponentCanvasSyncSession(
   return { status: 'reload-buffer', session: createComponentCanvasSyncSession(master), canonicalDocument: master.document };
 }
 
-export function createComponentCanvasBufferProject(master: ComponentDefinition): FolioProject {
+export function createComponentCanvasBufferProject(
+  master: ComponentDefinition,
+  designTokens?: DesignTokenCollection,
+): FolioProject {
   const project = createInitialProject(master.name);
   project.metadata.id = 'folio-component-canvas';
   project.metadata.name = master.name;
   project.pages[0].name = master.name;
   project.pages[0].route = '/';
   project.pages[0].document = { ...master.document, name: master.name, nodes: master.document.nodes.map((node) => ({ ...node })) };
+  if (designTokens) {
+    project.designTokens = designTokens;
+  }
   return project;
 }
 
@@ -108,5 +114,32 @@ export function advanceComponentCanvasSyncSession(
     observedCanonicalDocument: committedMaster.document,
     conflicted: false,
     masterStatus: 'present',
+  };
+}
+
+/**
+ * Advances `baseUpdatedAt` when non-document master metadata (such as Variant axes or Slots)
+ * is intentionally updated, only when the session was previously aligned and the master document
+ * itself did not diverge. Preserves all concurrent conflict and recovery safeguards.
+ */
+export function acknowledgeComponentCanvasMetadataUpdate(
+  session: ComponentCanvasSyncSession,
+  previousUpdatedAt: string,
+  committedMaster: ComponentDefinition,
+): ComponentCanvasSyncSession {
+  if (
+    session.componentId !== committedMaster.id
+    || session.conflicted
+    || session.masterStatus !== 'present'
+    || session.baseUpdatedAt !== previousUpdatedAt
+    || !areDocumentsStructurallyEqual(session.baseDocument, committedMaster.document)
+  ) {
+    return session;
+  }
+  return {
+    ...session,
+    baseDocument: committedMaster.document,
+    baseUpdatedAt: committedMaster.updatedAt,
+    observedCanonicalDocument: committedMaster.document,
   };
 }

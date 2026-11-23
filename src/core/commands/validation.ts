@@ -532,8 +532,9 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       const validSlots = Object.entries(value.slotAssignments).every(([slotId, assignment]) =>
         isNonEmptyString(slotId) &&
         isRecord(assignment) &&
-        hasOnlyKeys(assignment, ['text', 'visible']) &&
+        hasOnlyKeys(assignment, ['text', 'fill', 'visible']) &&
         (assignment.text === undefined || (typeof assignment.text === 'string' && assignment.text.length <= 10000)) &&
+        (assignment.fill === undefined || (typeof assignment.fill === 'string' && assignment.fill.length <= 128)) &&
         (assignment.visible === undefined || typeof assignment.visible === 'boolean'),
       );
       if (!validSlots) return false;
@@ -863,9 +864,9 @@ function isComponentDefinitionData(value: unknown): value is ComponentDefinition
   ) {
     return false;
   }
-  const nodeIds = new Set(value.document.nodes.map((node) => node.id));
-  if (value.variants !== undefined && !isComponentVariantsList(value.variants, nodeIds)) return false;
-  if (value.slots !== undefined && !isComponentSlotsList(value.slots, nodeIds)) return false;
+  const masterNodesById = new Map(value.document.nodes.map((node) => [node.id, node]));
+  if (value.variants !== undefined && !isComponentVariantsList(value.variants, masterNodesById)) return false;
+  if (value.slots !== undefined && !isComponentSlotsList(value.slots, masterNodesById)) return false;
   return true;
 }
 
@@ -1202,12 +1203,12 @@ export function validateComponentUpdateContractPayload(
   ) {
     return invalid('INVALID_PAYLOAD', 'Component contract update requires a component ID, contract changes, and concurrency guard.');
   }
-  const masterNodeIds = new Set(data.expectedMasterDocument.nodes.map((node) => node.id));
-  if (data.variants !== undefined && !isComponentVariantsList(data.variants, masterNodeIds)) {
-    return invalid('INVALID_PAYLOAD', 'Component variants must be valid and reference existing master nodes.');
+  const masterNodesById = new Map(data.expectedMasterDocument.nodes.map((node) => [node.id, node]));
+  if (data.variants !== undefined && !isComponentVariantsList(data.variants, masterNodesById)) {
+    return invalid('INVALID_PAYLOAD', 'Component variants must be valid and compatible with existing master nodes.');
   }
-  if (data.slots !== undefined && !isComponentSlotsList(data.slots, masterNodeIds)) {
-    return invalid('INVALID_PAYLOAD', 'Component slots must be valid and reference existing master nodes.');
+  if (data.slots !== undefined && !isComponentSlotsList(data.slots, masterNodesById)) {
+    return invalid('INVALID_PAYLOAD', 'Component slots must be valid and compatible with existing master nodes.');
   }
   return {
     ok: true,

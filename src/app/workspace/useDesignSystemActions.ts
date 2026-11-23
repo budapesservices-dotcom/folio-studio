@@ -20,7 +20,9 @@ export interface UseDesignSystemActionsArgs {
   selectedNode: DesignNode | null;
   mainCommandClient: WorkspaceCommandClient;
   focusedCommandClient: WorkspaceCommandClient;
+  componentCommandClient?: WorkspaceCommandClient;
   setNotice: (message: string) => void;
+  onMasterMetadataUpdated?: (componentId: string, previousUpdatedAt: string) => void;
 }
 
 export function useDesignSystemActions({
@@ -29,7 +31,9 @@ export function useDesignSystemActions({
   selectedNode,
   mainCommandClient,
   focusedCommandClient,
+  componentCommandClient,
   setNotice,
+  onMasterMetadataUpdated,
 }: UseDesignSystemActionsArgs) {
   const [activeBreakpoint, setActiveBreakpoint] = useState<BreakpointId>('desktop');
   const [tokensRackOpen, setTokensRackOpen] = useState(false);
@@ -49,12 +53,13 @@ export function useDesignSystemActions({
     (next: DesignTokenCollection, unbindTokenIds?: string[], description = 'Update design tokens') => {
       const result = mainCommandClient.updateDesignTokens(next, unbindTokenIds, description);
       if (result.status === 'applied') {
+        componentCommandClient?.updateDesignTokens(next, unbindTokenIds, description);
         if (unbindTokenIds && unbindTokenIds.length > 0) {
           setNotice('Design token deleted and unbound from layers.');
         }
       }
     },
-    [mainCommandClient, setNotice],
+    [mainCommandClient, componentCommandClient, setNotice],
   );
 
   const applyAutoLayout = useCallback(
@@ -133,10 +138,11 @@ export function useDesignSystemActions({
         `Update ${live.name} contract`,
       );
       if (res.status === 'applied') {
+        onMasterMetadataUpdated?.(live.id, live.updatedAt);
         setNotice(`Updated contract for “${live.name}”.`);
       }
     },
-    [project.components, mainCommandClient, setNotice],
+    [project.components, mainCommandClient, onMasterMetadataUpdated, setNotice],
   );
 
   return {

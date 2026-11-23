@@ -5,6 +5,21 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import { createServer as createViteServer } from 'vite';
+import {
+  buildComponentDefinitionFromNodes,
+  createComponentInstance,
+  createComponentSlot,
+  createComponentVariantAxis,
+} from '../src/core/document/components';
+import {
+  createFrameNode,
+  createInitialProject,
+  createRectNode,
+  createTextNode,
+} from '../src/core/document/factory';
+import { getActivePage } from '../src/core/document/project';
+import { createDefaultDesignTokens } from '../src/core/document/tokens';
+import { buildLivePreviewHtml } from '../src/engines/codegen';
 
 const chromiumCandidates = [
   process.env.CHROMIUM_BIN,
@@ -247,7 +262,7 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(baseline.disabledPlaceholders.map((p) => p.text)).toEqual(['Edit', 'Tools', 'Option']);
         expect(baseline.disabledPlaceholders.every((p) => p.ariaDisabled === 'true')).toBe(true);
         expect(baseline.panelGroups).toEqual(['Racks', 'Side panels', 'Workspace windows', 'Utilities']);
-        expect(baseline.panelDividers).toBe(4);
+        expect(baseline.panelDividers).toBe(3);
 
         // 2. WEB-02 Menu open, above-tool-rail stacking, & Escape / outside-click dismissal
         const menuDismissal = await browser.evalJs(`
@@ -929,5 +944,207 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
       }
     },
     45000,
+  );
+
+  it(
+    'renders compiled HTML/CSS Live Preview in real Chromium with verified DOM structure, semantic tags, SVG arrowheads, Auto-Layout, scaling, and Master->Variants->Slots->Overrides->Tokens computed styles',
+    async () => {
+      const project = createInitialProject('Rendered Code Fidelity');
+      project.designTokens = createDefaultDesignTokens();
+      const page = getActivePage(project);
+
+      const heroSection = {
+        ...createFrameNode(0),
+        id: 'sec-hero',
+        name: 'Hero',
+        semanticTag: 'section',
+        ariaLabel: 'Hero Landmark',
+        layout: {
+          mode: 'flex',
+          direction: 'row',
+          wrap: 'nowrap',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 16,
+          padding: { top: 20, right: 20, bottom: 20, left: 20 },
+        },
+        tokenBindings: {
+          fill: 'tok-sem-surface-card',
+          radius: 'tok-radius-md',
+        },
+      };
+
+      const safeLink = {
+        ...createTextNode(1),
+        id: 'cta-safe',
+        parentId: 'sec-hero',
+        name: 'Docs Link',
+        text: 'Read Docs',
+        semanticTag: 'a',
+        href: 'https://folio.dev/docs',
+      };
+
+      const blockedLink = {
+        ...createTextNode(2),
+        id: 'cta-unsafe',
+        parentId: 'sec-hero',
+        name: 'Blocked Link',
+        text: 'Blocked',
+        semanticTag: 'a',
+        href: 'javascript:alert(1)',
+      };
+
+      const arrowPath = {
+        id: 'vec-arrow',
+        type: 'path',
+        name: 'Connector',
+        x: 20,
+        y: 360,
+        width: 80,
+        height: 24,
+        rotation: 0,
+        opacity: 1,
+        visible: true,
+        locked: false,
+        onCanvas: true,
+        points: [
+          { id: 'p1', x: 0, y: 12, pointType: 'corner' },
+          { id: 'p2', x: 80, y: 12, pointType: 'corner' },
+        ],
+        closed: false,
+        style: {
+          fill: 'none',
+          stroke: '#7C6CF6',
+          strokeWidth: 3,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          arrowEnd: true,
+        },
+      };
+
+      const compBg = {
+        ...createRectNode(0),
+        id: 'c-bg',
+        name: 'Surface',
+        x: 0,
+        y: 0,
+        width: 160,
+        height: 44,
+        style: { fill: '#7C6CF6', stroke: '#00000000', strokeWidth: 0, radius: 10 },
+      };
+      const compBadge = {
+        ...createRectNode(1),
+        id: 'c-badge',
+        name: 'Badge',
+        x: 132,
+        y: 12,
+        width: 16,
+        height: 16,
+        style: { fill: '#222222', stroke: '#00000000', strokeWidth: 0, radius: 4 },
+        tokenBindings: { fill: 'tok-sem-accent-primary' },
+      };
+      const compLabel = {
+        ...createTextNode(2),
+        id: 'c-label',
+        name: 'Label',
+        x: 16,
+        y: 12,
+        width: 108,
+        height: 20,
+        text: 'Base Label',
+      };
+      const master = buildComponentDefinitionFromNodes(
+        [compBg, compBadge, compLabel],
+        ['c-bg', 'c-badge', 'c-label'],
+        'Pill CTA',
+        { id: 'comp-pill', now: '2026-01-01T00:00:00.000Z' },
+      );
+      const toneAxis = createComponentVariantAxis('Tone', { id: 'axis-tone', optionLabels: ['Primary', 'Danger'] });
+      toneAxis.options[1].overrides['c-bg'] = { fill: '#E0485A' };
+      toneAxis.options[1].overrides['c-badge'] = { fill: '#FF0000' };
+      const labelSlot = createComponentSlot('Label', 'c-label', { id: 'slot-label', defaultText: 'Default Slot' });
+      const bgSlot = createComponentSlot('Surface', 'c-bg', { id: 'slot-bg' });
+      master.variants = [toneAxis];
+      master.slots = [labelSlot, bgSlot];
+      project.components = [master];
+
+      const instance = createComponentInstance(master, 40, 420, 'inst-pill');
+      instance.width = master.document.width * 2;
+      instance.height = master.document.height * 2;
+      instance.variantSelection = { 'axis-tone': toneAxis.options[1].id };
+      instance.slotAssignments = {
+        'slot-label': { text: 'Slot Label' },
+        'slot-bg': { fill: '#059669' },
+      };
+      instance.overrides = {
+        'c-bg': { fill: '#F59E0B' },
+        'c-label': { text: 'Override Final' },
+        'c-badge': { fill: '#000000' },
+      };
+
+      page.document.nodes = [heroSection, safeLink, blockedLink, arrowPath, instance];
+
+      const html = buildLivePreviewHtml(project, { pageId: page.id, themeId: 'theme-dark' });
+      const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+      const browser = await launchChromium(dataUrl);
+
+      try {
+        const rendered = await browser.evalJs(`
+          const sec = document.querySelector('section[data-folio-id="sec-hero"]');
+          const secStyle = sec ? getComputedStyle(sec) : null;
+          const safeA = document.querySelector('a[data-folio-id="cta-safe"]');
+          const blockedA = document.querySelector('a[data-folio-id="cta-unsafe"]');
+          const arrowSvg = document.querySelector('[data-folio-id="vec-arrow"] svg');
+          const arrowPathEl = arrowSvg?.querySelector('path');
+          const arrowPolyEl = arrowSvg?.querySelector('polygon');
+          const inst = document.querySelector('[data-folio-id="inst-pill"]');
+          const inner = inst?.querySelector('[class$="__inner"]');
+          const bgEl = document.querySelector('[data-folio-id="inst-pill__c-bg"]');
+          const badgeEl = document.querySelector('[data-folio-id="inst-pill__c-badge"]');
+          const labelEl = document.querySelector('[data-folio-id="inst-pill__c-label"]');
+
+          return {
+            themeAttr: document.documentElement.getAttribute('data-theme'),
+            secTag: sec?.tagName,
+            secAria: sec?.getAttribute('aria-label'),
+            secDisplay: secStyle?.display,
+            secBg: secStyle?.backgroundColor,
+            secRadius: secStyle?.borderRadius,
+            safeHref: safeA?.getAttribute('href'),
+            blockedHref: blockedA?.getAttribute('href'),
+            hasArrowPath: Boolean(arrowPathEl && arrowPathEl.getBoundingClientRect().width > 50),
+            hasArrowPoly: Boolean(arrowPolyEl && arrowPolyEl.getBoundingClientRect().width > 4),
+            innerTransform: inner ? getComputedStyle(inner).transform : null,
+            bgColor: bgEl ? getComputedStyle(bgEl).backgroundColor : null,
+            badgeColor: badgeEl ? getComputedStyle(badgeEl).backgroundColor : null,
+            labelText: labelEl?.textContent,
+          };
+        `);
+
+        expect(rendered.themeAttr).toBe('dark');
+        expect(rendered.secTag).toBe('SECTION');
+        expect(rendered.secAria).toBe('Hero Landmark');
+        expect(rendered.secDisplay).toBe('flex');
+        // Dark theme --surface-card (#2B2E3B -> rgb(43, 46, 59)) & --radius-md (16px)
+        expect(rendered.secBg).toBe('rgb(43, 46, 59)');
+        expect(rendered.secRadius).toBe('16px');
+        expect(rendered.safeHref).toBe('https://folio.dev/docs');
+        expect(rendered.blockedHref).toBe('#');
+        expect(rendered.hasArrowPath).toBe(true);
+        expect(rendered.hasArrowPoly).toBe(true);
+        expect(rendered.innerTransform).toBe('matrix(2, 0, 0, 2, 0, 0)');
+        // Unbound bg -> Local Override (#F59E0B -> rgb(245, 158, 11)) beats Slot & Variant
+        expect(rendered.bgColor).toBe('rgb(245, 158, 11)');
+        // Label -> Local Override beats Slot & Variant
+        expect(rendered.labelText).toBe('Override Final');
+        // Token-bound badge -> Dark theme --accent-primary (#9B8CFF -> rgb(155, 140, 255)) wins last (Step 5: Tokens)
+        expect(rendered.badgeColor).toBe('rgb(155, 140, 255)');
+        expect(browser.consoleErrors).toEqual([]);
+        expect(browser.pageErrors).toEqual([]);
+      } finally {
+        await browser.cleanup();
+      }
+    },
+    30000,
   );
 });
