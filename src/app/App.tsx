@@ -3368,6 +3368,7 @@ export function App() {
             zoom={zoom}
             pan={mainView.pan}
             onToolOperation={(operation) => mainToolOperationExecutor.execute(operation)}
+            onToolOperationBatch={(operations) => mainToolOperationExecutor.executeBatch(operations)}
             onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'main')}
           />
         </div>
@@ -3491,6 +3492,7 @@ export function App() {
             zoom={componentCanvasZoom}
             pan={componentView.pan}
             onToolOperation={(operation) => componentToolOperationExecutor.execute(operation)}
+            onToolOperationBatch={(operations) => componentToolOperationExecutor.executeBatch(operations)}
             onLayerDrop={(nodeIds) => dropLayersOnCanvas(nodeIds, 'component')}
           />
         </div>

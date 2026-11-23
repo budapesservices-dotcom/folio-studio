@@ -1085,6 +1085,321 @@ describe('P0.3 Subsystem Boundaries — Executor Envelope Type-Guard Chain', () 
   });
 });
 
+describe('P0.3 Subsystem Boundaries — Atomic Batch Execution & Fail-Closed Batch Validation', () => {
+  it('commits a multi-mutation gesture batch in ONE transaction, ONE revision, ONE NativeChangeEvent, and ONE atomic Undo/Redo', () => {
+    const project = createInitialProject('Atomic Gesture Batch');
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const commandClient = createMainCanvasCommandClient(store);
+    const events: Array<{ transactionId?: string; commandIds: string[]; projectRevision: number }> = [];
+    store.subscribeChanges((evt) => {
+      events.push({
+        transactionId: evt.transactionId,
+        commandIds: [...evt.change.commandIds],
+        projectRevision: evt.projectRevision,
+      });
+    });
+
+    const selectionSpy = vi.fn();
+    const toolSpy = vi.fn();
+    const noticeSpy = vi.fn();
+    const colorSpy = vi.fn();
+    const commitSpy = vi.fn();
+
+    const executor = createToolOperationExecutor({
+      workspace: 'main',
+      commandClient,
+      shell: {
+        onSelectionChange: (ids) => {
+          selectionSpy(ids);
+          commandClient.selectNodes(ids);
+        },
+        onPanChange: () => {},
+        onZoomChange: () => {},
+        onToolChange: toolSpy,
+        onNotice: noticeSpy,
+        onSampledColorOptionChange: colorSpy,
+        onCanvasMutationCommitted: commitSpy,
+      },
+    });
+
+    const initialDoc = getActiveDocument(store.getSnapshot().editorState.project);
+    const initialNodeCount = initialDoc.nodes.length;
+    const newRect: RectNode = {
+      ...(createNodeForDocument('rect', initialDoc) as RectNode),
+      id: 'gesture-rect-1',
+      x: 80,
+      y: 90,
+      width: 140,
+      height: 100,
+    };
+    const shiftedAndRoundedRect: RectNode = {
+      ...newRect,
+      x: 160,
+      y: 130,
+      style: { ...newRect.style, radius: 16 },
+    };
+
+    // Multi-mutation gesture batch: create -> transform/style -> select -> sample-color -> switch-tool -> notify
+    const rawBatch: ToolOperation[] = [
+      createToolOperation('draw-rect', 'main', { kind: 'create-nodes', nodes: [newRect] }),
+      createToolOperation('select', 'main', { kind: 'transform-nodes', nodes: [shiftedAndRoundedRect] }),
+      createToolOperation('select', 'main', { kind: 'select-nodes', nodeIds: [newRect.id] }),
+      createToolOperation('eyedropper', 'main', {
+        kind: 'sample-color',
+        color: '#ef4444',
+        sourceName: 'Accent Swatch',
+        target: 'fill',
+      }),
+      createToolOperation('draw-rect', 'main', { kind: 'switch-tool', nextToolId: 'select' }),
+      createToolOperation('draw-rect', 'main', { kind: 'notify', message: 'Gesture committed' }),
+    ];
+
+    const evalBatch = evaluateToolOperationBatch(rawBatch, {
+      document: initialDoc,
+      selectedNodeIds: [],
+    });
+
+    expect(evalBatch.status).toBe('ready');
+    expect(evalBatch.aborted).toBe(false);
+    expect(evalBatch.rejected).toHaveLength(0);
+    expect(evalBatch.ready).toHaveLength(6);
+
+    const revBefore = store.getSnapshot().projectRevision;
+    const pastBefore = store.getSnapshot().editorState.past.length;
+    const reports = executor.executeBatch(evalBatch.ready);
+
+    // Every operation applied, all 3 document mutations share ONE transactionId
+    expect(reports).toHaveLength(6);
+    expect(reports.every((r) => r.status === 'applied')).toBe(true);
+    const txId = reports[0].transactionId;
+    expect(txId).toBeTruthy();
+    expect(reports[1].transactionId).toBe(txId);
+    expect(reports[3].transactionId).toBe(txId);
+
+    // ONE revision increment, ONE NativeChangeEvent with 3 commandIds, ONE Undo step
+    expect(store.getSnapshot().projectRevision).toBe(revBefore + 1);
+    expect(store.getSnapshot().editorState.past).toHaveLength(pastBefore + 1);
+    expect(events).toHaveLength(1);
+    expect(events[0].transactionId).toBe(txId);
+    expect(events[0].commandIds).toHaveLength(3);
+
+    // Final committed node reflects ALL 3 chained mutations
+    const committedDoc = getActiveDocument(store.getSnapshot().editorState.project);
+    expect(committedDoc.nodes).toHaveLength(initialNodeCount + 1);
+    const finalNode = committedDoc.nodes.find((n) => n.id === newRect.id) as RectNode;
+    expect(finalNode.x).toBe(160);
+    expect(finalNode.y).toBe(130);
+    expect(finalNode.style.radius).toBe(16);
+    expect(finalNode.style.fill).toBe('#ef4444');
+
+    // Shell callbacks fired strictly after commit
+    expect(selectionSpy).toHaveBeenCalledWith([newRect.id]);
+    expect(colorSpy).toHaveBeenCalledWith('#ef4444', 'fill');
+    expect(toolSpy).toHaveBeenCalledWith('select');
+    expect(noticeSpy).toHaveBeenCalledWith('Gesture committed');
+    expect(commitSpy).toHaveBeenCalledTimes(3);
+
+    // SINGLE Undo reverts ALL 3 mutations in the gesture atomically
+    expect(commandClient.undo('Undo gesture').status).toBe('applied');
+    const afterUndo = getActiveDocument(store.getSnapshot().editorState.project);
+    expect(afterUndo.nodes).toHaveLength(initialNodeCount);
+    expect(afterUndo.nodes.some((n) => n.id === newRect.id)).toBe(false);
+
+    // SINGLE Redo restores ALL 3 mutations together
+    expect(commandClient.redo('Redo gesture').status).toBe('applied');
+    const afterRedo = getActiveDocument(store.getSnapshot().editorState.project);
+    const redoneNode = afterRedo.nodes.find((n) => n.id === newRect.id) as RectNode;
+    expect(redoneNode.x).toBe(160);
+    expect(redoneNode.style.radius).toBe(16);
+    expect(redoneNode.style.fill).toBe('#ef4444');
+  });
+
+  it('aborts fail-closed in evaluateToolOperationBatch when ANY operation is rejected so zero operations escape', () => {
+    const project = createInitialProject('Fail-Closed Geometry Batch');
+    const baseDoc = getActiveDocument(project);
+    const lockedRect: RectNode = {
+      ...(createNodeForDocument('rect', baseDoc) as RectNode),
+      id: 'locked-rect-1',
+      locked: true,
+    };
+    const newRect: RectNode = {
+      ...(createNodeForDocument('rect', baseDoc) as RectNode),
+      id: 'valid-new-rect',
+    };
+    const doc = { ...baseDoc, nodes: [...baseDoc.nodes, lockedRect] };
+
+    // Valid op #0 + Rejected op #1 (locked target) + Valid op #2
+    const evaluated = evaluateToolOperationBatch(
+      [
+        createToolOperation('draw-rect', 'main', { kind: 'create-nodes', nodes: [newRect] }),
+        createToolOperation('select', 'main', {
+          kind: 'transform-nodes',
+          nodes: [{ ...lockedRect, x: lockedRect.x + 40 }],
+        }),
+        createToolOperation('draw-rect', 'main', { kind: 'switch-tool', nextToolId: 'select' }),
+      ],
+      { document: doc, selectedNodeIds: [lockedRect.id] },
+    );
+
+    expect(evaluated.status).toBe('rejected');
+    expect(evaluated.aborted).toBe(true);
+    expect(evaluated.failedIndex).toBe(1);
+    expect(evaluated.ready).toHaveLength(0);
+    expect(evaluated.noOps).toHaveLength(0);
+    expect(evaluated.rejected).toHaveLength(1);
+    expect(evaluated.rejected[0].code).toBe('LOCKED_TARGET');
+  });
+
+  it('aborts fail-closed in executeBatch when ANY operation fails envelope validation or workspace check (zero store changes, zero shell callbacks)', () => {
+    const project = createInitialProject('Fail-Closed Executor Pre-Validation');
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const commandClient = createMainCanvasCommandClient(store);
+    const changeSpy = vi.fn();
+    store.subscribeChanges(changeSpy);
+
+    const selectionSpy = vi.fn();
+    const panSpy = vi.fn();
+    const zoomSpy = vi.fn();
+    const toolSpy = vi.fn();
+    const noticeSpy = vi.fn();
+    const commitSpy = vi.fn();
+
+    const executor = createToolOperationExecutor({
+      workspace: 'main',
+      commandClient,
+      shell: {
+        onSelectionChange: selectionSpy,
+        onPanChange: panSpy,
+        onZoomChange: zoomSpy,
+        onToolChange: toolSpy,
+        onNotice: noticeSpy,
+        onCanvasMutationCommitted: commitSpy,
+      },
+    });
+
+    const doc = getActiveDocument(store.getSnapshot().editorState.project);
+    const newRect: RectNode = { ...(createNodeForDocument('rect', doc) as RectNode), id: 'never-created-1' };
+    const evalCreate = evaluateToolOperation(
+      createToolOperation('draw-rect', 'main', { kind: 'create-nodes', nodes: [newRect] }),
+      { document: doc, selectedNodeIds: [] },
+    );
+    const evalSwitch = evaluateToolOperation(
+      createToolOperation('draw-rect', 'main', { kind: 'switch-tool', nextToolId: 'select' }),
+      { document: doc, selectedNodeIds: [] },
+    );
+    const evalWrongWorkspace = evaluateToolOperation(
+      createToolOperation('measure', 'component', { kind: 'notify', message: 'Wrong workspace' }),
+      { document: doc, selectedNodeIds: [] },
+    );
+    expect(evalCreate.status).toBe('ready');
+    expect(evalSwitch.status).toBe('ready');
+    expect(evalWrongWorkspace.status).toBe('ready');
+    if (evalCreate.status !== 'ready' || evalSwitch.status !== 'ready' || evalWrongWorkspace.status !== 'ready') return;
+
+    const revBefore = store.getSnapshot().projectRevision;
+    const pastBefore = store.getSnapshot().editorState.past.length;
+    const nodeCountBefore = doc.nodes.length;
+
+    // 1. Valid ops followed by an unsealed raw operation
+    const rawUnsealed = createToolOperation('measure', 'main', { kind: 'notify', message: 'Unsealed' });
+    const reportsUnsealed = executor.executeBatch([
+      evalCreate.operation,
+      evalSwitch.operation,
+      rawUnsealed as unknown as ValidatedToolOperation,
+    ]);
+
+    expect(reportsUnsealed).toHaveLength(3);
+    expect(reportsUnsealed.every((r) => r.status === 'rejected')).toBe(true);
+    expect(reportsUnsealed[0].reason).toContain('Batch aborted (fail-closed)');
+    expect(reportsUnsealed[2].reason).toContain('Geometry Engine');
+
+    // 2. Valid ops followed by a workspace-mismatched operation
+    const reportsWorkspace = executor.executeBatch([evalCreate.operation, evalWrongWorkspace.operation]);
+    expect(reportsWorkspace).toHaveLength(2);
+    expect(reportsWorkspace.every((r) => r.status === 'rejected')).toBe(true);
+    expect(reportsWorkspace[1].reason).toContain('Workspace mismatch');
+
+    // Store & shell are 100% untouched
+    expect(store.getSnapshot().projectRevision).toBe(revBefore);
+    expect(store.getSnapshot().editorState.past).toHaveLength(pastBefore);
+    expect(getActiveDocument(store.getSnapshot().editorState.project).nodes).toHaveLength(nodeCountBefore);
+    expect(changeSpy).not.toHaveBeenCalled();
+    expect(selectionSpy).not.toHaveBeenCalled();
+    expect(panSpy).not.toHaveBeenCalled();
+    expect(zoomSpy).not.toHaveBeenCalled();
+    expect(toolSpy).not.toHaveBeenCalled();
+    expect(noticeSpy).not.toHaveBeenCalled();
+    expect(commitSpy).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the entire batch fail-closed when the Native Command Engine rejects a later command in the transaction', () => {
+    const project = createInitialProject('Fail-Closed Transaction Rollback');
+    const store = createCanonicalEditorStore(createEditorState(project));
+    const commandClient = createMainCanvasCommandClient(store);
+
+    const selectionSpy = vi.fn();
+    const toolSpy = vi.fn();
+    const noticeSpy = vi.fn();
+    const commitSpy = vi.fn();
+    const executor = createToolOperationExecutor({
+      workspace: 'main',
+      commandClient,
+      shell: {
+        onSelectionChange: selectionSpy,
+        onPanChange: () => {},
+        onZoomChange: () => {},
+        onToolChange: toolSpy,
+        onNotice: noticeSpy,
+        onCanvasMutationCommitted: commitSpy,
+      },
+    });
+
+    const initialDoc = getActiveDocument(store.getSnapshot().editorState.project);
+    const existingTarget = initialDoc.nodes[0] as RectNode;
+    const newRect: RectNode = { ...(createNodeForDocument('rect', initialDoc) as RectNode), id: 'rollback-rect-1' };
+
+    // Seal a batch while existingTarget is unlocked
+    const evalBatch = evaluateToolOperationBatch(
+      [
+        createToolOperation('draw-rect', 'main', { kind: 'create-nodes', nodes: [newRect] }),
+        createToolOperation('select', 'main', {
+          kind: 'transform-nodes',
+          nodes: [{ ...existingTarget, x: existingTarget.x + 50 }],
+        }),
+        createToolOperation('select', 'main', { kind: 'select-nodes', nodeIds: [newRect.id] }),
+        createToolOperation('draw-rect', 'main', { kind: 'switch-tool', nextToolId: 'select' }),
+        createToolOperation('measure', 'main', { kind: 'notify', message: 'Should not fire' }),
+      ],
+      { document: initialDoc, selectedNodeIds: [existingTarget.id] },
+    );
+    expect(evalBatch.status).toBe('ready');
+    expect(evalBatch.ready).toHaveLength(5);
+
+    // Concurrent mutation locks existingTarget in the canonical store before commit
+    expect(commandClient.setNodesProperties([existingTarget.id], { locked: true }, 'Lock target').status).toBe('applied');
+
+    const revBefore = store.getSnapshot().projectRevision;
+    const pastBefore = store.getSnapshot().editorState.past.length;
+    const changeSpy = vi.fn();
+    store.subscribeChanges(changeSpy);
+
+    const reports = executor.executeBatch(evalBatch.ready);
+
+    // Entire batch rolled back: every report rejected, newRect NOT created, zero events, zero shell callbacks
+    expect(reports).toHaveLength(5);
+    expect(reports.every((r) => r.status === 'rejected')).toBe(true);
+    expect(reports[1].commandResult?.code).toBe('LOCKED_TARGET');
+    expect(store.getSnapshot().projectRevision).toBe(revBefore);
+    expect(store.getSnapshot().editorState.past).toHaveLength(pastBefore);
+    expect(getActiveDocument(store.getSnapshot().editorState.project).nodes.some((n) => n.id === newRect.id)).toBe(false);
+    expect(changeSpy).not.toHaveBeenCalled();
+    expect(selectionSpy).not.toHaveBeenCalled();
+    expect(toolSpy).not.toHaveBeenCalled();
+    expect(noticeSpy).not.toHaveBeenCalled();
+    expect(commitSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('P0.3 Subsystem Boundaries — Static Dependency Enforcement', () => {
   const FORBIDDEN_IN_TOOLS_AND_GEOMETRY = [
     '/app/',

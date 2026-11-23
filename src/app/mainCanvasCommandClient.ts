@@ -70,6 +70,59 @@ export function stripUndefinedEntries<T>(value: T): T {
   return value;
 }
 
+/**
+ * Determines whether updating `current` -> `next` carries style, text, opacity,
+ * or vector path changes beyond plain affine bounds (`x`, `y`, `width`, `height`,
+ * `rotation`, `onCanvas`), requiring `node.replace` / `node.update-many` instead
+ * of `node.transform`.
+ */
+export function hasExtendedNodeChange(current: DesignNode | undefined, node: DesignNode): boolean {
+  if (!current) return false;
+  if (current.opacity !== node.opacity) return true;
+  if (node.type === 'text' && current.type === 'text') {
+    return (
+      current.text !== node.text ||
+      current.style.fontSize !== node.style.fontSize ||
+      current.style.fill !== node.style.fill ||
+      current.style.fontFamily !== node.style.fontFamily ||
+      current.style.fontWeight !== node.style.fontWeight ||
+      current.style.lineHeight !== node.style.lineHeight ||
+      current.style.letterSpacing !== node.style.letterSpacing
+    );
+  }
+  if (node.type === 'path' && current.type === 'path') {
+    return (
+      current.width !== node.width ||
+      current.height !== node.height ||
+      current.closed !== node.closed ||
+      current.points !== node.points ||
+      current.shapeMeta !== node.shapeMeta ||
+      current.style.fill !== node.style.fill ||
+      current.style.stroke !== node.style.stroke ||
+      current.style.strokeWidth !== node.style.strokeWidth ||
+      current.style.strokeDasharray !== node.style.strokeDasharray ||
+      current.style.arrowStart !== node.style.arrowStart ||
+      current.style.arrowEnd !== node.style.arrowEnd
+    );
+  }
+  if ((node.type === 'rect' || node.type === 'frame') && current.type === node.type) {
+    return (
+      current.style.fill !== node.style.fill ||
+      current.style.stroke !== node.style.stroke ||
+      current.style.strokeWidth !== node.style.strokeWidth ||
+      current.style.radius !== node.style.radius
+    );
+  }
+  if (node.type === 'ellipse' && current.type === 'ellipse') {
+    return (
+      current.style.fill !== node.style.fill ||
+      current.style.stroke !== node.style.stroke ||
+      current.style.strokeWidth !== node.style.strokeWidth
+    );
+  }
+  return false;
+}
+
 export interface MainCanvasCommandClientOptions {
   actorId?: string;
   onRejected?: (result: NativeCommandResult) => void;
@@ -448,39 +501,9 @@ export function createWorkspaceCommandClient(
       // tool K stroke/radius scaling) carry style/point changes beyond x/y/w/h.
       // Single-node updates route through node.replace; multi-node updates route
       // through node.update-many while preserving atomic single-step undo history.
-      const hasExtendedGeometryOrStyleChange = nodes.some((node) => {
-        const current = astView.getNode(node.id);
-        if (!current) return false;
-        if (current.opacity !== node.opacity) return true;
-        if (node.type === 'text' && current.type === 'text') {
-          return current.text !== node.text ||
-            current.style.fontSize !== node.style.fontSize ||
-            current.style.fill !== node.style.fill ||
-            current.style.fontFamily !== node.style.fontFamily ||
-            current.style.fontWeight !== node.style.fontWeight ||
-            current.style.lineHeight !== node.style.lineHeight ||
-            current.style.letterSpacing !== node.style.letterSpacing;
-        }
-        if (node.type === 'path' && current.type === 'path') {
-          return current.width !== node.width || current.height !== node.height ||
-            current.closed !== node.closed ||
-            current.points !== node.points || current.shapeMeta !== node.shapeMeta ||
-            current.style.fill !== node.style.fill || current.style.stroke !== node.style.stroke ||
-            current.style.strokeWidth !== node.style.strokeWidth ||
-            current.style.strokeDasharray !== node.style.strokeDasharray ||
-            current.style.arrowStart !== node.style.arrowStart ||
-            current.style.arrowEnd !== node.style.arrowEnd;
-        }
-        if ((node.type === 'rect' || node.type === 'frame') && (current.type === node.type)) {
-          return current.style.fill !== node.style.fill || current.style.stroke !== node.style.stroke ||
-            current.style.strokeWidth !== node.style.strokeWidth || current.style.radius !== node.style.radius;
-        }
-        if (node.type === 'ellipse' && current.type === 'ellipse') {
-          return current.style.fill !== node.style.fill || current.style.stroke !== node.style.stroke ||
-            current.style.strokeWidth !== node.style.strokeWidth;
-        }
-        return false;
-      });
+      const hasExtendedGeometryOrStyleChange = nodes.some((node) =>
+        hasExtendedNodeChange(astView.getNode(node.id), node),
+      );
       if (hasExtendedGeometryOrStyleChange) {
         if (nodes.length === 1) {
           return submit(

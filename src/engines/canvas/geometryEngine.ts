@@ -104,6 +104,9 @@ export type GeometryEvaluationResult =
   | { readonly status: 'rejected'; readonly code: GeometryRejectionCode; readonly reason: string };
 
 export interface GeometryBatchEvaluationResult {
+  readonly status: 'ready' | 'no-op' | 'rejected';
+  readonly aborted: boolean;
+  readonly failedIndex?: number;
   readonly ready: readonly ValidatedToolOperation[];
   readonly noOps: ReadonlyArray<{ readonly operationId: string; readonly code: 'ZERO_DELTA_NO_OP' | 'NO_CHANGES'; readonly reason: string }>;
   readonly rejected: ReadonlyArray<{ readonly operationId: string; readonly code: GeometryRejectionCode; readonly reason: string }>;
@@ -686,6 +689,10 @@ export function evaluateToolOperation(
  * Evaluates a sequential batch of Tool Operations emitted by a single Studio Tool
  * transition, projecting created/replaced nodes forward within the batch so
  * follow-up intents (such as selecting newly created nodes) validate accurately.
+ *
+ * Fail-closed guarantee: if ANY operation in the batch is rejected, the entire
+ * batch is aborted immediately (`aborted: true`, `status: 'rejected'`, `ready: []`)
+ * so zero partial operations can reach the Native Command Engine.
  */
 export function evaluateToolOperationBatch(
   operations: readonly ToolOperation[],
@@ -693,12 +700,12 @@ export function evaluateToolOperationBatch(
 ): GeometryBatchEvaluationResult {
   const ready: ValidatedToolOperation[] = [];
   const noOps: Array<{ operationId: string; code: 'ZERO_DELTA_NO_OP' | 'NO_CHANGES'; reason: string }> = [];
-  const rejected: Array<{ operationId: string; code: GeometryRejectionCode; reason: string }> = [];
 
   let projectedNodes = [...context.document.nodes];
   let projectedSelection = [...context.selectedNodeIds];
 
-  for (const op of operations) {
+  for (let index = 0; index < operations.length; index += 1) {
+    const op = operations[index];
     const projectedContext: GeometryValidationContext = {
       document: {
         ...context.document,
@@ -708,40 +715,60 @@ export function evaluateToolOperationBatch(
     };
 
     const result = evaluateToolOperation(op, projectedContext);
-    if (result.status === 'ready') {
-      ready.push(result.operation);
-      const payload = result.operation.payload;
-      if (payload.kind === 'create-nodes') {
-        projectedNodes = [...projectedNodes, ...payload.nodes];
-      } else if (payload.kind === 'transform-nodes') {
-        const byId = new Map(payload.nodes.map((node) => [node.id, node]));
-        projectedNodes = projectedNodes.map((node) => byId.get(node.id) ?? node);
-      } else if (payload.kind === 'replace-node-with-nodes') {
-        const nextNodes: DesignNode[] = [];
-        for (const node of projectedNodes) {
-          if (node.id === payload.nodeId) nextNodes.push(...payload.nodes);
-          else nextNodes.push(node);
-        }
-        projectedNodes = nextNodes;
-      } else if (payload.kind === 'replace-nodes') {
-        const removeSet = new Set(payload.removeIds);
-        projectedNodes = [...projectedNodes.filter((node) => !removeSet.has(node.id)), ...payload.insertNodes];
-      } else if (payload.kind === 'commit-inline-text') {
-        projectedNodes = projectedNodes.map((node) =>
-          node.id === payload.resolvedNode.id ? payload.resolvedNode : node,
-        );
-      } else if (payload.kind === 'sample-color' && payload.resolvedNodesToUpdate.length > 0) {
-        const byId = new Map(payload.resolvedNodesToUpdate.map((node) => [node.id, node]));
-        projectedNodes = projectedNodes.map((node) => byId.get(node.id) ?? node);
-      } else if (payload.kind === 'select-nodes') {
-        projectedSelection = [...payload.nodeIds];
-      }
-    } else if (result.status === 'no-op') {
+    if (result.status === 'rejected') {
+      const candidateId =
+        op && typeof op === 'object' && typeof op.operationId === 'string' && op.operationId.length > 0
+          ? op.operationId
+          : `op-${index}`;
+      return {
+        status: 'rejected',
+        aborted: true,
+        failedIndex: index,
+        ready: [],
+        noOps: [],
+        rejected: [{ operationId: candidateId, code: result.code, reason: result.reason }],
+      };
+    }
+
+    if (result.status === 'no-op') {
       noOps.push({ operationId: op.operationId, code: result.code, reason: result.reason });
-    } else {
-      rejected.push({ operationId: op.operationId, code: result.code, reason: result.reason });
+      continue;
+    }
+
+    ready.push(result.operation);
+    const payload = result.operation.payload;
+    if (payload.kind === 'create-nodes') {
+      projectedNodes = [...projectedNodes, ...payload.nodes];
+    } else if (payload.kind === 'transform-nodes') {
+      const byId = new Map(payload.nodes.map((node) => [node.id, node]));
+      projectedNodes = projectedNodes.map((node) => byId.get(node.id) ?? node);
+    } else if (payload.kind === 'replace-node-with-nodes') {
+      const nextNodes: DesignNode[] = [];
+      for (const node of projectedNodes) {
+        if (node.id === payload.nodeId) nextNodes.push(...payload.nodes);
+        else nextNodes.push(node);
+      }
+      projectedNodes = nextNodes;
+    } else if (payload.kind === 'replace-nodes') {
+      const removeSet = new Set(payload.removeIds);
+      projectedNodes = [...projectedNodes.filter((node) => !removeSet.has(node.id)), ...payload.insertNodes];
+    } else if (payload.kind === 'commit-inline-text') {
+      projectedNodes = projectedNodes.map((node) =>
+        node.id === payload.resolvedNode.id ? payload.resolvedNode : node,
+      );
+    } else if (payload.kind === 'sample-color' && payload.resolvedNodesToUpdate.length > 0) {
+      const byId = new Map(payload.resolvedNodesToUpdate.map((node) => [node.id, node]));
+      projectedNodes = projectedNodes.map((node) => byId.get(node.id) ?? node);
+    } else if (payload.kind === 'select-nodes') {
+      projectedSelection = [...payload.nodeIds];
     }
   }
 
-  return { ready, noOps, rejected };
+  return {
+    status: ready.length > 0 ? 'ready' : 'no-op',
+    aborted: false,
+    ready,
+    noOps,
+    rejected: [],
+  };
 }

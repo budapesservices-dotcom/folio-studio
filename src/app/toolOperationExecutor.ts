@@ -1,4 +1,8 @@
-import type { NativeCommandResult } from '../core/commands/types';
+import type {
+  NativeCommandEnvelope,
+  NativeCommandResult,
+  NativeNodeTransform,
+} from '../core/commands/types';
 import type { DesignNode } from '../core/document/types';
 import {
   getExpectedCategoryForKind,
@@ -32,7 +36,11 @@ import {
   type ValidatedToolOperation,
   type ValidatedToolOperationPayload,
 } from '../engines/canvas/geometryEngine';
-import type { WorkspaceCommandClient } from './mainCanvasCommandClient';
+import {
+  hasExtendedNodeChange,
+  stripUndefinedEntries,
+  type WorkspaceCommandClient,
+} from './mainCanvasCommandClient';
 
 export type SupportedToolOperationKind = ValidatedToolOperationPayload['kind'];
 
@@ -596,6 +604,7 @@ export interface ToolOperationExecutionReport {
   readonly workspace: ToolWorkspaceScope;
   readonly status: 'applied' | 'no-op' | 'rejected';
   readonly commandResult?: NativeCommandResult;
+  readonly transactionId?: string;
   readonly reason?: string;
 }
 
@@ -604,225 +613,448 @@ export interface ToolOperationExecutor {
   executeBatch(operations: readonly ValidatedToolOperation[]): ToolOperationExecutionReport[];
 }
 
+type MutationCommitKind = 'create' | 'transform' | 'replace' | 'text' | 'sample-color';
+
+let fallbackBatchTransactionSequence = 1;
+
+function createBatchTransactionId(): string {
+  const generated = globalThis.crypto?.randomUUID?.();
+  if (generated) return generated;
+  const suffix = (fallbackBatchTransactionSequence++).toString(16).padStart(12, '0');
+  return `00000000-0000-4000-8000-${suffix}`;
+}
+
+function readCandidateOperationId(operation: unknown, fallback: string): string {
+  return isPlainRecord(operation) && isNonEmptyString(operation.operationId) ? operation.operationId : fallback;
+}
+
+function buildTransformEnvelope(
+  commandClient: WorkspaceCommandClient,
+  projectedNodesById: Map<string, DesignNode>,
+  nodes: readonly DesignNode[],
+  description: string,
+  transactionId: string,
+): NativeCommandEnvelope<string, unknown> {
+  const astView = commandClient.getActiveAstView();
+  const makeRef = (nodeId: string) => ({ document: astView.address, nodeId });
+  const hasExtended = nodes.some((node) => hasExtendedNodeChange(projectedNodesById.get(node.id), node));
+  if (hasExtended) {
+    if (nodes.length === 1) {
+      return commandClient.createEnvelope(
+        'node.replace',
+        { kind: 'node', ref: makeRef(nodes[0].id) },
+        { node: stripUndefinedEntries(nodes[0]) },
+        description,
+        transactionId,
+      );
+    }
+    return commandClient.createEnvelope(
+      'node.update-many',
+      { kind: 'document', address: astView.address },
+      { nodes: nodes.map((node) => stripUndefinedEntries(node)) },
+      description,
+      transactionId,
+    );
+  }
+  const entries = nodes.map((node) => {
+    const current = projectedNodesById.get(node.id);
+    const transform: NativeNodeTransform = {
+      x: node.x,
+      y: node.y,
+      width: node.width,
+      height: node.height,
+      rotation: node.rotation,
+      ...(node.onCanvas !== undefined && node.onCanvas !== current?.onCanvas ? { onCanvas: node.onCanvas } : {}),
+    };
+    return { ref: makeRef(node.id), transform };
+  });
+  return commandClient.createEnvelope(
+    'node.transform',
+    { kind: 'document', address: astView.address },
+    { nodes: entries },
+    description,
+    transactionId,
+  );
+}
+
 /**
  * Unidirectional Native Command Engine adapter for Canvas Tool Operations
  * across both Main Canvas and Component Canvas workspaces.
  *
  * Accepts ONLY `ValidatedToolOperation` envelopes sealed by the Geometry Engine
  * and verified through `validateToolOperationEnvelope`.
- * All document mutations commit exclusively through `WorkspaceCommandClient`
- * (Native Command Engine -> Canonical Editor Store). Studio Tools never see
- * `WorkspaceCommandClient`, `CanonicalEditorStore`, `editorReducer`, or UI panels.
+ *
+ * Atomic & Fail-Closed guarantees:
+ * - Phase 1 (Fail-Closed Pre-Validation): Every operation in a batch is validated
+ *   before any command or shell callback executes. If ANY operation fails
+ *   validation or workspace isolation, the entire batch aborts with zero mutations
+ *   and zero shell side-effects.
+ * - Phase 2 (Atomic Single-Transaction Commit): All document-mutating operations
+ *   in a batch are translated into a single `executeTransaction` call sharing one
+ *   `transactionId` — guaranteeing one gesture -> one transaction -> one
+ *   `projectRevision` bump -> one `NativeChangeEvent` -> one Undo snapshot.
+ *   If any command in the transaction is rejected by the Native Command Engine,
+ *   the entire transaction rolls back and zero shell side-effects execute.
  */
 export function createToolOperationExecutor(options: ToolOperationExecutorOptions): ToolOperationExecutor {
-  const execute = (operation: ValidatedToolOperation): ToolOperationExecutionReport => {
-    let validated: ValidatedToolOperation;
-    try {
-      validated = validateToolOperationEnvelope(operation);
-    } catch (error) {
-      const candidateId =
-        isPlainRecord(operation) && isNonEmptyString(operation.operationId) ? operation.operationId : 'unknown';
-      return {
-        operationId: candidateId,
-        workspace: options.workspace,
-        status: 'rejected',
-        reason: error instanceof Error ? error.message : 'Invalid tool operation envelope.',
-      };
+  const executeBatch = (operations: readonly ValidatedToolOperation[]): ToolOperationExecutionReport[] => {
+    if (!Array.isArray(operations) || operations.length === 0) {
+      return [];
     }
 
-    if (validated.workspace !== options.workspace) {
-      return {
-        operationId: validated.operationId,
-        workspace: options.workspace,
-        status: 'rejected',
-        reason: `Workspace mismatch: executor serves "${options.workspace}" but received "${validated.workspace}".`,
-      };
+    // ── Phase 1: Fail-closed validation of EVERY operation in the batch ─────
+    const validatedOps: ValidatedToolOperation[] = [];
+    let failedIndex = -1;
+    let failedReason = '';
+    let failedOperationId = 'unknown';
+
+    for (let i = 0; i < operations.length; i += 1) {
+      const candidate = operations[i];
+      try {
+        const validated = validateToolOperationEnvelope(candidate);
+        if (validated.workspace !== options.workspace) {
+          failedIndex = i;
+          failedOperationId = validated.operationId;
+          failedReason = `Workspace mismatch: executor serves "${options.workspace}" but received "${validated.workspace}".`;
+          break;
+        }
+        validatedOps.push(validated);
+      } catch (error) {
+        failedIndex = i;
+        failedOperationId = readCandidateOperationId(candidate, `op-${i}`);
+        failedReason = error instanceof Error ? error.message : 'Invalid tool operation envelope.';
+        break;
+      }
     }
 
+    if (failedIndex !== -1) {
+      return operations.map((candidate, idx) => {
+        const opId = readCandidateOperationId(candidate, `op-${idx}`);
+        if (idx === failedIndex) {
+          return {
+            operationId: opId,
+            workspace: options.workspace,
+            status: 'rejected',
+            reason: failedReason,
+          };
+        }
+        return {
+          operationId: opId,
+          workspace: options.workspace,
+          status: 'rejected',
+          reason: `Batch aborted (fail-closed): operation #${failedIndex} (${failedOperationId}) failed validation — ${failedReason}`,
+        };
+      });
+    }
+
+    // ── Phase 2: Build ONE atomic Native Command transaction for all mutations ─
     const hydrating = options.shell.isHydrating?.() ?? false;
-    const payload = validated.payload;
-    const description = validated.metadata.description;
+    const batchTransactionId = createBatchTransactionId();
+    const astView = options.commandClient.getActiveAstView();
+    const projectedNodesById = new Map<string, DesignNode>(
+      astView.document.nodes.map((node) => [node.id, node]),
+    );
 
-    switch (payload.kind) {
-      case 'create-nodes': {
-        if (hydrating) {
-          return {
-            operationId: validated.operationId,
-            workspace: options.workspace,
-            status: 'no-op',
-            reason: 'Skipped document creation while hydrating.',
-          };
-        }
-        options.shell.onCanvasMutationCommitted?.('create');
-        const commandResult = options.commandClient.createNodes(
-          payload.nodes,
-          description ?? 'Create with studio tool',
-        );
-        return {
-          operationId: validated.operationId,
-          workspace: options.workspace,
-          status: commandResult.status,
-          commandResult,
-        };
-      }
+    const commandEnvelopes: NativeCommandEnvelope<string, unknown>[] = [];
+    const opCommandIndex = new Map<number, number>();
+    const opMutationKind = new Map<number, MutationCommitKind>();
+    const opHydrationSkipReason = new Map<number, string>();
 
-      case 'transform-nodes': {
-        if (hydrating) {
-          return {
-            operationId: validated.operationId,
-            workspace: options.workspace,
-            status: 'no-op',
-            reason: 'Skipped transform while hydrating.',
-          };
-        }
-        options.shell.onCanvasMutationCommitted?.('transform');
-        const commandResult = options.commandClient.transformNodes(
-          payload.nodes,
-          description ?? 'Transform on canvas',
-        );
-        return {
-          operationId: validated.operationId,
-          workspace: options.workspace,
-          status: commandResult.status,
-          commandResult,
-        };
-      }
+    for (let i = 0; i < validatedOps.length; i += 1) {
+      const validated = validatedOps[i];
+      const payload = validated.payload;
+      const description = validated.metadata.description;
 
-      case 'replace-node-with-nodes': {
-        if (hydrating) {
-          return {
-            operationId: validated.operationId,
-            workspace: options.workspace,
-            status: 'no-op',
-            reason: 'Skipped split while hydrating.',
-          };
-        }
-        options.shell.onCanvasMutationCommitted?.('replace');
-        const commandResult = options.commandClient.replaceNodeWithNodes(
-          payload.nodeId,
-          payload.nodes,
-          description ?? 'Split vector path',
-        );
-        return {
-          operationId: validated.operationId,
-          workspace: options.workspace,
-          status: commandResult.status,
-          commandResult,
-        };
-      }
-
-      case 'replace-nodes': {
-        if (hydrating) {
-          return {
-            operationId: validated.operationId,
-            workspace: options.workspace,
-            status: 'no-op',
-            reason: 'Skipped node replacement while hydrating.',
-          };
-        }
-        options.shell.onCanvasMutationCommitted?.('replace');
-        const commandResult = options.commandClient.replaceNodes(
-          payload.removeIds,
-          payload.insertNodes,
-          description ?? 'Replace vector nodes',
-          payload.selectIds,
-        );
-        return {
-          operationId: validated.operationId,
-          workspace: options.workspace,
-          status: commandResult.status,
-          commandResult,
-        };
-      }
-
-      case 'sample-color': {
-        options.shell.onSampledColorOptionChange?.(payload.color, payload.target);
-        let commandResult: NativeCommandResult | undefined;
-        if (!hydrating && payload.resolvedNodesToUpdate.length > 0) {
-          options.shell.onCanvasMutationCommitted?.('sample-color');
-          commandResult = options.commandClient.transformNodes(
-            payload.resolvedNodesToUpdate,
-            description ?? `Apply sampled ${payload.target}`,
+      switch (payload.kind) {
+        case 'create-nodes': {
+          if (hydrating) {
+            opHydrationSkipReason.set(i, 'Skipped document creation while hydrating.');
+            break;
+          }
+          const envelope = options.commandClient.createEnvelope(
+            'node.create',
+            { kind: 'document', address: astView.address },
+            { nodes: payload.nodes.map((node) => stripUndefinedEntries(node)) },
+            description ?? 'Create with studio tool',
+            batchTransactionId,
           );
+          opCommandIndex.set(i, commandEnvelopes.length);
+          opMutationKind.set(i, 'create');
+          commandEnvelopes.push(envelope);
+          for (const node of payload.nodes) {
+            projectedNodesById.set(node.id, node);
+          }
+          break;
         }
-        options.shell.onNotice?.(payload.noticeMessage);
-        return {
-          operationId: validated.operationId,
-          workspace: options.workspace,
-          status: commandResult ? commandResult.status : 'applied',
-          ...(commandResult ? { commandResult } : {}),
-        };
-      }
 
-      case 'commit-inline-text': {
-        if (hydrating) {
-          return {
-            operationId: validated.operationId,
-            workspace: options.workspace,
-            status: 'no-op',
-            reason: 'Skipped text commit while hydrating.',
-          };
+        case 'transform-nodes': {
+          if (hydrating) {
+            opHydrationSkipReason.set(i, 'Skipped transform while hydrating.');
+            break;
+          }
+          const envelope = buildTransformEnvelope(
+            options.commandClient,
+            projectedNodesById,
+            payload.nodes,
+            description ?? 'Transform on canvas',
+            batchTransactionId,
+          );
+          opCommandIndex.set(i, commandEnvelopes.length);
+          opMutationKind.set(i, 'transform');
+          commandEnvelopes.push(envelope);
+          for (const node of payload.nodes) {
+            projectedNodesById.set(node.id, node);
+          }
+          break;
         }
-        options.shell.onCanvasMutationCommitted?.('text');
-        const commandResult = options.commandClient.replaceNode(
-          payload.resolvedNode,
-          description ?? 'Edit text on canvas',
-        );
-        return {
-          operationId: validated.operationId,
-          workspace: options.workspace,
-          status: commandResult.status,
-          commandResult,
-        };
-      }
 
-      case 'select-nodes': {
-        options.shell.onSelectionChange([...payload.nodeIds]);
-        return {
-          operationId: validated.operationId,
-          workspace: options.workspace,
-          status: 'applied',
-        };
-      }
-
-      case 'viewport-update': {
-        if (payload.pan !== undefined) {
-          options.shell.onPanChange({ x: payload.pan.x, y: payload.pan.y });
+        case 'replace-node-with-nodes': {
+          if (hydrating) {
+            opHydrationSkipReason.set(i, 'Skipped split while hydrating.');
+            break;
+          }
+          const envelope = options.commandClient.createEnvelope(
+            'node.split',
+            { kind: 'document', address: astView.address },
+            { nodeId: payload.nodeId, nodes: payload.nodes.map((node) => stripUndefinedEntries(node)) },
+            description ?? 'Split vector path',
+            batchTransactionId,
+          );
+          opCommandIndex.set(i, commandEnvelopes.length);
+          opMutationKind.set(i, 'replace');
+          commandEnvelopes.push(envelope);
+          projectedNodesById.delete(payload.nodeId);
+          for (const node of payload.nodes) {
+            projectedNodesById.set(node.id, node);
+          }
+          break;
         }
-        if (payload.zoom !== undefined) {
-          options.shell.onZoomChange(payload.zoom);
+
+        case 'replace-nodes': {
+          if (hydrating) {
+            opHydrationSkipReason.set(i, 'Skipped node replacement while hydrating.');
+            break;
+          }
+          const envelope = options.commandClient.createEnvelope(
+            'node.replace-many',
+            { kind: 'document', address: astView.address },
+            {
+              removeIds: [...payload.removeIds],
+              insertNodes: payload.insertNodes.map((node) => stripUndefinedEntries(node)),
+              ...(payload.selectIds !== undefined ? { selectIds: [...payload.selectIds] } : {}),
+            },
+            description ?? 'Replace vector nodes',
+            batchTransactionId,
+          );
+          opCommandIndex.set(i, commandEnvelopes.length);
+          opMutationKind.set(i, 'replace');
+          commandEnvelopes.push(envelope);
+          for (const id of payload.removeIds) {
+            projectedNodesById.delete(id);
+          }
+          for (const node of payload.insertNodes) {
+            projectedNodesById.set(node.id, node);
+          }
+          break;
         }
-        return {
-          operationId: validated.operationId,
-          workspace: options.workspace,
-          status: 'applied',
-        };
-      }
 
-      case 'switch-tool': {
-        options.shell.onToolChange?.(payload.nextToolId);
-        return {
-          operationId: validated.operationId,
-          workspace: options.workspace,
-          status: 'applied',
-        };
-      }
+        case 'sample-color': {
+          if (!hydrating && payload.resolvedNodesToUpdate.length > 0) {
+            const envelope = buildTransformEnvelope(
+              options.commandClient,
+              projectedNodesById,
+              payload.resolvedNodesToUpdate,
+              description ?? `Apply sampled ${payload.target}`,
+              batchTransactionId,
+            );
+            opCommandIndex.set(i, commandEnvelopes.length);
+            opMutationKind.set(i, 'sample-color');
+            commandEnvelopes.push(envelope);
+            for (const node of payload.resolvedNodesToUpdate) {
+              projectedNodesById.set(node.id, node);
+            }
+          }
+          break;
+        }
 
-      case 'notify': {
-        options.shell.onNotice?.(payload.message);
-        return {
-          operationId: validated.operationId,
-          workspace: options.workspace,
-          status: 'applied',
-        };
+        case 'commit-inline-text': {
+          if (hydrating) {
+            opHydrationSkipReason.set(i, 'Skipped text commit while hydrating.');
+            break;
+          }
+          const envelope = options.commandClient.createEnvelope(
+            'node.replace',
+            { kind: 'node', ref: { document: astView.address, nodeId: payload.resolvedNode.id } },
+            { node: stripUndefinedEntries(payload.resolvedNode) },
+            description ?? 'Edit text on canvas',
+            batchTransactionId,
+          );
+          opCommandIndex.set(i, commandEnvelopes.length);
+          opMutationKind.set(i, 'text');
+          commandEnvelopes.push(envelope);
+          projectedNodesById.set(payload.resolvedNode.id, payload.resolvedNode);
+          break;
+        }
+
+        case 'select-nodes':
+        case 'viewport-update':
+        case 'switch-tool':
+        case 'notify':
+          break;
       }
     }
+
+    let transactionCommandResults: readonly NativeCommandResult[] = [];
+    let appliedTransactionId: string | undefined;
+
+    if (commandEnvelopes.length > 0) {
+      const txResult = options.commandClient.executeTransaction(commandEnvelopes);
+      if (txResult.status === 'rejected') {
+        const txFailedCmdIndex = txResult.failedCommandIndex ?? txResult.commandResults.length - 1;
+        const failedCmdResult = txResult.commandResults[txFailedCmdIndex];
+        const txFailureMessage = failedCmdResult?.message ?? txResult.message;
+        return validatedOps.map((validated, opIndex) => {
+          const cmdIndex = opCommandIndex.get(opIndex);
+          if (cmdIndex !== undefined && cmdIndex === txFailedCmdIndex) {
+            return {
+              operationId: validated.operationId,
+              workspace: options.workspace,
+              status: 'rejected',
+              transactionId: txResult.transactionId,
+              ...(failedCmdResult ? { commandResult: failedCmdResult } : {}),
+              reason: txFailureMessage,
+            };
+          }
+          return {
+            operationId: validated.operationId,
+            workspace: options.workspace,
+            status: 'rejected',
+            transactionId: txResult.transactionId,
+            ...(cmdIndex !== undefined && txResult.commandResults[cmdIndex]
+              ? { commandResult: txResult.commandResults[cmdIndex] }
+              : {}),
+            reason: `Batch rolled back (fail-closed): transaction ${txResult.transactionId} failed — ${txFailureMessage}`,
+          };
+        });
+      }
+      transactionCommandResults = txResult.commandResults;
+      appliedTransactionId = txResult.transactionId;
+    }
+
+    // ── Phase 3: Commit shell callbacks strictly AFTER transaction succeeds ─
+    const reports: ToolOperationExecutionReport[] = [];
+
+    for (let i = 0; i < validatedOps.length; i += 1) {
+      const validated = validatedOps[i];
+      const payload = validated.payload;
+      const skipReason = opHydrationSkipReason.get(i);
+      if (skipReason) {
+        reports.push({
+          operationId: validated.operationId,
+          workspace: options.workspace,
+          status: 'no-op',
+          reason: skipReason,
+        });
+        continue;
+      }
+
+      const cmdIndex = opCommandIndex.get(i);
+      const commandResult = cmdIndex !== undefined ? transactionCommandResults[cmdIndex] : undefined;
+      const mutationKind = opMutationKind.get(i);
+
+      switch (payload.kind) {
+        case 'create-nodes':
+        case 'transform-nodes':
+        case 'replace-node-with-nodes':
+        case 'replace-nodes':
+        case 'commit-inline-text': {
+          if (mutationKind && commandResult?.status === 'applied') {
+            options.shell.onCanvasMutationCommitted?.(mutationKind);
+          }
+          reports.push({
+            operationId: validated.operationId,
+            workspace: options.workspace,
+            status: commandResult ? commandResult.status : 'no-op',
+            ...(appliedTransactionId ? { transactionId: appliedTransactionId } : {}),
+            ...(commandResult ? { commandResult } : {}),
+          });
+          break;
+        }
+
+        case 'sample-color': {
+          options.shell.onSampledColorOptionChange?.(payload.color, payload.target);
+          if (mutationKind && commandResult?.status === 'applied') {
+            options.shell.onCanvasMutationCommitted?.(mutationKind);
+          }
+          options.shell.onNotice?.(payload.noticeMessage);
+          reports.push({
+            operationId: validated.operationId,
+            workspace: options.workspace,
+            status: commandResult ? commandResult.status : 'applied',
+            ...(appliedTransactionId && commandResult ? { transactionId: appliedTransactionId } : {}),
+            ...(commandResult ? { commandResult } : {}),
+          });
+          break;
+        }
+
+        case 'select-nodes': {
+          options.shell.onSelectionChange([...payload.nodeIds]);
+          reports.push({
+            operationId: validated.operationId,
+            workspace: options.workspace,
+            status: 'applied',
+            ...(appliedTransactionId ? { transactionId: appliedTransactionId } : {}),
+          });
+          break;
+        }
+
+        case 'viewport-update': {
+          if (payload.pan !== undefined) {
+            options.shell.onPanChange({ x: payload.pan.x, y: payload.pan.y });
+          }
+          if (payload.zoom !== undefined) {
+            options.shell.onZoomChange(payload.zoom);
+          }
+          reports.push({
+            operationId: validated.operationId,
+            workspace: options.workspace,
+            status: 'applied',
+            ...(appliedTransactionId ? { transactionId: appliedTransactionId } : {}),
+          });
+          break;
+        }
+
+        case 'switch-tool': {
+          options.shell.onToolChange?.(payload.nextToolId);
+          reports.push({
+            operationId: validated.operationId,
+            workspace: options.workspace,
+            status: 'applied',
+            ...(appliedTransactionId ? { transactionId: appliedTransactionId } : {}),
+          });
+          break;
+        }
+
+        case 'notify': {
+          options.shell.onNotice?.(payload.message);
+          reports.push({
+            operationId: validated.operationId,
+            workspace: options.workspace,
+            status: 'applied',
+            ...(appliedTransactionId ? { transactionId: appliedTransactionId } : {}),
+          });
+          break;
+        }
+      }
+    }
+
+    return reports;
   };
 
   return {
-    execute,
-    executeBatch(operations) {
-      return operations.map((op) => execute(op));
+    execute(operation) {
+      return executeBatch([operation])[0];
     },
+    executeBatch,
   };
 }

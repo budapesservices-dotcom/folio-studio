@@ -49,6 +49,9 @@ interface CanvasProps {
   zoom: number;
   pan: { x: number; y: number };
   onToolOperation?: (operation: ValidatedToolOperation) => void;
+  onToolOperationBatch?: (
+    operations: readonly ValidatedToolOperation[],
+  ) => ReadonlyArray<{ readonly operationId: string; readonly status: 'applied' | 'no-op' | 'rejected' }> | void;
   onPanChange?: (pan: { x: number; y: number }) => void;
   onZoomChange?: (zoom: number) => void;
   onSelectionChange?: (nodeIds: string[]) => void;
@@ -343,6 +346,7 @@ export function Canvas({
   zoom,
   pan,
   onToolOperation,
+  onToolOperationBatch,
   onPanChange,
   onZoomChange,
   onSelectionChange,
@@ -401,18 +405,57 @@ export function Canvas({
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
-    const updateWidth = () => {
-      const w = svg.getBoundingClientRect().width;
-      if (w > 0) setRenderedSvgWidth(w);
+
+    let rafId: number | null = null;
+    let disposed = false;
+
+    const commitWidth = () => {
+      if (disposed) return;
+      const measured = svg.getBoundingClientRect().width;
+      if (!Number.isFinite(measured) || measured <= 0) return;
+      const rounded = Math.round(measured * 2) / 2;
+      setRenderedSvgWidth((prev) => (Math.abs(prev - rounded) >= 0.5 ? rounded : prev));
     };
-    updateWidth();
+
+    const scheduleWidthUpdate = () => {
+      if (disposed) return;
+      if (typeof requestAnimationFrame !== 'function') {
+        commitWidth();
+        return;
+      }
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        commitWidth();
+      });
+    };
+
+    commitWidth();
+
     if (typeof ResizeObserver !== 'undefined') {
-      const observer = new ResizeObserver(updateWidth);
+      const observer = new ResizeObserver(() => {
+        scheduleWidthUpdate();
+      });
       observer.observe(svg);
-      return () => observer.disconnect();
+      return () => {
+        disposed = true;
+        if (rafId !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        observer.disconnect();
+      };
     }
-    window.addEventListener('resize', updateWidth);
-    return () => window.removeEventListener('resize', updateWidth);
+
+    window.addEventListener('resize', scheduleWidthUpdate);
+    return () => {
+      disposed = true;
+      if (rafId !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      window.removeEventListener('resize', scheduleWidthUpdate);
+    };
   }, [document.width, zoom]);
 
   const rawCanvasUnitsPerPixel = renderedSvgWidth > 10
@@ -657,7 +700,7 @@ export function Canvas({
     }
   };
 
-  const canEditInlineText = Boolean(onToolOperation || onInlineTextCommit);
+  const canEditInlineText = Boolean(onToolOperationBatch || onToolOperation || onInlineTextCommit);
 
   const dispatchValidatedOperation = (validated: ValidatedToolOperation) => {
     if (onToolOperation) {
@@ -698,6 +741,21 @@ export function Canvas({
         onToolNotice?.(payload.message);
         return;
     }
+  };
+
+  const dispatchValidatedOperationBatch = (validatedOps: readonly ValidatedToolOperation[]): boolean => {
+    if (validatedOps.length === 0) return false;
+    if (onToolOperationBatch) {
+      const reports = onToolOperationBatch(validatedOps);
+      if (Array.isArray(reports) && reports.some((report) => report.status === 'rejected')) {
+        return false;
+      }
+      return true;
+    }
+    for (const validatedOp of validatedOps) {
+      dispatchValidatedOperation(validatedOp);
+    }
+    return true;
   };
 
   const evaluateAndDispatchOperation = (operation: ToolOperation) => {
@@ -933,6 +991,7 @@ export function Canvas({
     if (transition.preventDefault) sourceEvent?.preventDefault();
 
     // 2. Unidirectional flow: Studio Tool -> Tool Operation Contract -> Geometry Engine -> Native Command Engine.
+    //    Fail-closed atomic batch: if any operation in the gesture is rejected, zero operations execute.
     const operations = extractToolOperationsFromTransition(toolId, workspace, transition);
     if (operations.length > 0) {
       const evaluated = evaluateToolOperationBatch(operations, {
@@ -940,21 +999,22 @@ export function Canvas({
         selectedNodeIds,
         effectiveLayerStates: layerStates,
       });
-      for (const validatedOp of evaluated.ready) {
-        dispatchValidatedOperation(validatedOp);
-        const validatedPayload = validatedOp.payload;
-        if (
-          validatedPayload.kind === 'create-nodes' &&
-          validatedPayload.openInlineTextForNodeId &&
-          canEditInlineText
-        ) {
-          const createdText = validatedPayload.nodes.find(
-            (n): n is TextNode => n.id === validatedPayload.openInlineTextForNodeId && n.type === 'text',
-          );
-          if (createdText) {
-            const nextEdit = { nodeId: createdText.id, draft: createdText.text };
-            pendingInlineEditRef.current = nextEdit;
-            setInlineTextEdit(nextEdit);
+      if (evaluated.aborted || evaluated.rejected.length > 0 || evaluated.ready.length === 0) {
+        return;
+      }
+      const committed = dispatchValidatedOperationBatch(evaluated.ready);
+      if (committed && canEditInlineText) {
+        for (const validatedOp of evaluated.ready) {
+          const validatedPayload = validatedOp.payload;
+          if (validatedPayload.kind === 'create-nodes' && validatedPayload.openInlineTextForNodeId) {
+            const createdText = validatedPayload.nodes.find(
+              (n): n is TextNode => n.id === validatedPayload.openInlineTextForNodeId && n.type === 'text',
+            );
+            if (createdText) {
+              const nextEdit = { nodeId: createdText.id, draft: createdText.text };
+              pendingInlineEditRef.current = nextEdit;
+              setInlineTextEdit(nextEdit);
+            }
           }
         }
       }
