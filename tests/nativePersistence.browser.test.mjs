@@ -304,16 +304,34 @@ async function waitForApp(browser, expression, description, timeout = 30000) {
 }
 
 async function openCreateMenu(browser) {
-  await browser.click('button[aria-label="Create tools"]');
-  await waitForApp(browser, 'document.querySelectorAll(".tool-rack-menu button[role=menuitem]").length===3',
-    'Create tools menu rendered');
+  await browser.click('button[aria-label="Template library"]');
+  await waitForApp(browser, 'document.querySelectorAll(".template-library-popover .template-card").length>=6',
+    'Template library popover rendered');
+}
+
+async function ensureTemplateComponentMode(browser) {
+  await openCreateMenu(browser);
+  const isComponentMode = await browser.evaluate(
+    'Array.from(document.querySelectorAll(".template-mode-btn")).find((b)=>b.textContent.trim()==="Component")?.getAttribute("aria-pressed")==="true"',
+  );
+  if (!isComponentMode) {
+    await browser.evaluate(
+      '(() => { const btn=Array.from(document.querySelectorAll(".template-mode-btn")).find((b)=>b.textContent.trim()==="Component"); if(!btn) throw new Error("Component mode toggle missing"); btn.click(); return true; })()',
+    );
+    await waitForApp(browser,
+      'Array.from(document.querySelectorAll(".template-mode-btn")).find((b)=>b.textContent.trim()==="Component")?.getAttribute("aria-pressed")==="true"',
+      'Template library switched to Component insert mode');
+  }
+  await browser.evaluate('window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))');
+  await waitForApp(browser, 'document.querySelector(".template-library-popover")===null',
+    'Template library closed after setting Component mode');
 }
 
 async function addShape(browser, label) {
-  const index = { Rectangle: 1, Ellipse: 2, Text: 3 }[label];
-  if (!index) throw new Error('Unsupported test shape: ' + label);
+  const templateId = { Rectangle: 'ui-primary-button', Ellipse: 'ui-input-field', Text: 'ui-kpi-card' }[label];
+  if (!templateId) throw new Error('Unsupported test shape: ' + label);
   await openCreateMenu(browser);
-  await browser.click('.tool-rack-menu button[role="menuitem"]:nth-of-type(' + index + ')');
+  await browser.click('.template-library-popover .template-card[data-template-id="' + templateId + '"] .template-card-primary');
 }
 
 async function readMainProject(browser) {
@@ -383,10 +401,12 @@ async function installNativePersistenceProbe(browser) {
       }, 0);
     };
     const clickMenuItem = (label, mode) => {
-      const item = Array.from(document.querySelectorAll('.tool-rack-menu button[role="menuitem"]'))
-        .find((button) => button.textContent.trim() === label);
+      const templateId = { Rectangle: 'ui-primary-button', Ellipse: 'ui-input-field', Text: 'ui-kpi-card' }[label];
+      const item = document.querySelector(
+        '.template-library-popover .template-card[data-template-id="' + templateId + '"] .template-card-primary',
+      );
       if (!item) {
-        probe.triggerErrors.push(mode + ': ' + label + ' menu item was not mounted');
+        probe.triggerErrors.push(mode + ': ' + label + ' template card was not mounted');
         return;
       }
       item.click();
@@ -473,6 +493,7 @@ describe('Main Canvas App autosave with native Chromium IndexedDB', () => {
         const baselineCount = baseline.nodeCount;
 
         expect(await installNativePersistenceProbe(browser)).toBe(true);
+        await ensureTemplateComponentMode(browser);
 
         // The actual 450 ms App effect must cancel the earlier snapshot and
         // persist only the later revision after a second Main Canvas action.
@@ -480,7 +501,7 @@ describe('Main Canvas App autosave with native Chromium IndexedDB', () => {
           '(() => { const p=window.__folioNativePersistenceProbe; p.puts=[]; p.events=[]; p.triggered=[]; })()',
         );
         await addShape(browser, 'Rectangle');
-        await delay(110);
+        await delay(50);
         await addShape(browser, 'Text');
         await waitForApp(browser,
           'document.querySelector(".statusbar .status-right")?.classList.contains("save-saving")',

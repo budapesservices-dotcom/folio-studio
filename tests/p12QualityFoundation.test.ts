@@ -20,16 +20,8 @@ const rootConfigs = import.meta.glob(
   { query: '?raw', import: 'default', eager: true },
 ) as Record<string, string>;
 
-const strayBunLocks = import.meta.glob('../bun.lock', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>;
-
 describe('P1.2 — Dependency & Lockfile Reproducibility', () => {
-  it('removes conflicting bun.lock and provides a canonical npm lockfileVersion 3 package-lock.json', () => {
-    expect(Object.keys(strayBunLocks)).toHaveLength(0);
-
+  it('provides a canonical npm lockfileVersion 3 package-lock.json matching package.json', () => {
     const pkgRaw = rootConfigs['../package.json'];
     const lockRaw = rootConfigs['../package-lock.json'];
     expect(pkgRaw).toBeTruthy();

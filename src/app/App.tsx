@@ -85,6 +85,14 @@ import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from
 import { bringWindowToFront, getDefaultWindowLayouts, getWindowZIndex, recoverWindowLayout, type WindowId } from './windowManager';
 import { loadWorkspacePreferences, saveWorkspacePreferences, type WorkspaceKind, type WorkspaceLayoutV1, type WorkspacePreferencesLoadResult } from './workspacePreferences';
 import { createToolbarHintStore, DEFAULT_TOOLBAR_HINT, ToolbarHintBar } from './ToolbarHintBar';
+import {
+  buildTemplateComponentAndInstance,
+  computeTemplateInsertionOrigin,
+  instantiateTemplateNodes,
+  type StudioTemplateDefinition,
+  type TemplateInsertMode,
+} from '../core/document/templates';
+import { TemplateLibraryPopover } from './TemplateLibraryPopover';
 
 function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
@@ -142,6 +150,7 @@ function Icon({ name }: { name: string }) {
     rotate: 'M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5',
     eyedropper: 'm19 5-4 4m-1-5 6 6m-7-4-8.5 8.5a2 2 0 0 0-.5 1.1L3 21l5.4-1a2 2 0 0 0 1.1-.5L18 11',
     measure: 'M3 16 16 3l5 5L8 21 3 16zM8 11l2 2M11 8l2 2M14 5l2 2',
+    templates: 'M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z',
   };
 
   return (
@@ -163,7 +172,7 @@ function LayerIcon({ type }: { type: DesignNode['type'] }) {
   return <span class={`layer-type layer-type-${type}`}>{glyph}</span>;
 }
 
-type ToolRackGroupId = CanvasToolGroupId | 'create';
+type ToolRackGroupId = CanvasToolGroupId | 'templates';
 
 type CanvasViewState = { zoom: number; pan: { x: number; y: number } };
 type LayerRenameSession = {
@@ -324,6 +333,8 @@ export function App() {
   });
   const [toolOptions, setToolOptions] = useState<CanvasToolOptions>(DEFAULT_CANVAS_TOOL_OPTIONS);
   const [toolRackOpen, setToolRackOpen] = useState<ToolRackGroupId | null>(null);
+  const [templateInsertMode, setTemplateInsertMode] = useState<TemplateInsertMode>('nodes');
+  const templateInsertCountRef = useRef(0);
   const [projectNameEditing, setProjectNameEditing] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState('');
   const projectNameCancelRef = useRef(false);
@@ -554,6 +565,13 @@ export function App() {
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (
+          event.target instanceof HTMLInputElement
+          && event.target.classList.contains('template-library-search')
+          && event.target.value.trim().length > 0
+        ) {
+          return;
+        }
         event.preventDefault();
         setToolRackOpen(null);
       }
@@ -1248,6 +1266,44 @@ export function App() {
     const node = createNodeForDocument(type, focusedDocument);
     focusedCommandClient.createNodes([node], `Create ${type} node`);
     setInspectorVisible(true);
+  };
+
+  const insertTemplate = (template: StudioTemplateDefinition, requestedMode: TemplateInsertMode) => {
+    if (isHydrating) return;
+    const effectiveMode: TemplateInsertMode = activeEditorId === 'component' ? 'nodes' : requestedMode;
+    const staggerIndex = templateInsertCountRef.current;
+    templateInsertCountRef.current += 1;
+    const origin = computeTemplateInsertionOrigin(focusedDocument, template, staggerIndex);
+
+    if (effectiveMode === 'component' && activeEditorId === 'main') {
+      const existingNames = ownedComponents.map((item) => item.name);
+      const { component, instance } = buildTemplateComponentAndInstance(template, origin, existingNames);
+      const txResult = mainCommandClient.createComponentWithInstance(
+        component,
+        instance,
+        `Insert "${template.name}" as component`,
+      );
+      if (txResult.status === 'applied') {
+        mainCommandClient.selectNodes([instance.id], `Select inserted ${component.name} instance`);
+        setWorkspaceTools((current) => ({ ...current, main: 'select' }));
+        setToolRackOpen(null);
+        setInspectorVisible(true);
+        setNotice(`Inserted “${component.name}” as Master Component + linked Instance.`);
+      }
+      return;
+    }
+
+    const nodes = instantiateTemplateNodes(template, origin);
+    const result = focusedCommandClient.createNodes(nodes, `Insert "${template.name}" template`);
+    if (result.status === 'applied') {
+      const rootIds = nodes.filter((node) => !node.parentId).map((node) => node.id);
+      const selectionTarget = rootIds.length > 0 ? rootIds : [nodes[0].id];
+      focusedCommandClient.selectNodes(selectionTarget, `Select inserted ${template.name}`);
+      setWorkspaceTools((current) => ({ ...current, [activeEditorId]: 'select' }));
+      setToolRackOpen(null);
+      setInspectorVisible(true);
+      setNotice(`Inserted “${template.name}” (${nodes.length} layers).`);
+    }
   };
   const saveNodesAsComponent = (nodes: DesignNode[], sourceNodes: readonly DesignNode[] = activeDocument.nodes) => {
     if (isHydrating || nodes.length === 0) return;
@@ -3030,37 +3086,35 @@ export function App() {
         <div class="tool-rack-group">
           <button
             type="button"
-            class={'tool-rack-group-trigger ' + (toolRackOpen === 'create' ? 'active open' : '')}
-            title="Create tools"
-            aria-label="Create tools"
-            aria-expanded={toolRackOpen === 'create'}
-            onClick={() => { setFileMenuOpen(false); setViewMenuOpen(false); setToolRackOpen((current) => current === 'create' ? null : 'create'); }}
-            onMouseEnter={() => updateToolbarHint('CREATE', 'Create new Rectangle, Ellipse or Text objects in the active Canvas workspace.')}
+            class={'tool-rack-group-trigger ' + (toolRackOpen === 'templates' ? 'active open' : '')}
+            title="Templates — Component & Section Library"
+            aria-label="Template library"
+            aria-expanded={toolRackOpen === 'templates'}
+            onClick={() => {
+              setFileMenuOpen(false);
+              setViewMenuOpen(false);
+              setToolRackOpen((current) => current === 'templates' ? null : 'templates');
+            }}
+            onMouseEnter={() => updateToolbarHint(
+              'TEMPLATES',
+              activeEditorId === 'component'
+                ? 'Browse Vector Starter Kits and UI presets to insert directly as editable layers inside the active Master Component.'
+                : 'Browse ready-to-edit UI Components, Page Sections, and Vector Kits — insert as editable Nodes or reusable Master Components.',
+            )}
           >
-            <Icon name="shapes" />
-            <span>Create</span>
-            <Icon name="chevronRight" />
+            <Icon name="templates" />
+            <span>Templates</span>
+            <span class="tool-rack-corner-tick" aria-hidden="true" />
           </button>
-          {toolRackOpen === 'create' && (
-            <div class="tool-rack-menu" role="menu" aria-label="Create tools">
-              {([
-                { type: 'rect' as const, label: 'Rectangle', icon: 'rect', description: 'Add a new rectangle to the active Canvas.' },
-                { type: 'ellipse' as const, label: 'Ellipse', icon: 'ellipse', description: 'Add a new ellipse to the active Canvas.' },
-                { type: 'text' as const, label: 'Text', icon: 'text', description: 'Add a new text object to the active Canvas.' },
-              ]).map((item) => (
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="tool-rack-item"
-                  key={item.type}
-                  onClick={() => { setToolRackOpen(null); addNode(item.type); }}
-                  onMouseEnter={() => updateToolbarHint(item.label.toUpperCase(), item.description)}
-                >
-                  <span class="tool-rack-item-icon"><Icon name={item.icon} /></span>
-                  <span class="tool-rack-item-name">{item.label}</span>
-                </button>
-              ))}
-            </div>
+          {toolRackOpen === 'templates' && (
+            <TemplateLibraryPopover
+              workspace={activeEditorId}
+              insertMode={templateInsertMode}
+              onInsertModeChange={setTemplateInsertMode}
+              onInsertTemplate={insertTemplate}
+              onHoverHint={updateToolbarHint}
+              onClose={() => setToolRackOpen(null)}
+            />
           )}
         </div>
         <div class="rail-bottom">

@@ -3,6 +3,7 @@ import { getActivePage } from '../core/document/project';
 import type { LayerDropPosition } from '../core/document/layers';
 import type {
   ComponentDefinition,
+  ComponentInstanceNode,
   DesignNode,
   FolioDocument,
   FolioPage,
@@ -97,6 +98,11 @@ export interface MainCanvasCommandClient {
     description?: string,
     mutationLease?: object,
   ): NativeCommandResult;
+  createComponentWithInstance(
+    component: ComponentDefinition,
+    instance: ComponentInstanceNode,
+    description?: string,
+  ): NativeCommandTransactionResult;
   syncComponentDocument(
     args: {
       componentId: string;
@@ -313,6 +319,34 @@ export function createWorkspaceCommandClient(
         description,
         mutationLease,
       );
+    },
+
+    createComponentWithInstance(component, instance, description = 'Insert template as component') {
+      const astView = getActiveAstView();
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      const transactionId = createCommandId();
+      const commands = [
+        createEnvelope(
+          'component.create',
+          { kind: 'project', projectId },
+          { component: stripUndefinedEntries(component) },
+          description,
+          transactionId,
+        ),
+        createEnvelope(
+          'node.create',
+          { kind: 'document', address: astView.address },
+          { nodes: [stripUndefinedEntries(instance)] },
+          description,
+          transactionId,
+        ),
+      ];
+      const result = executeNativeCommandTransaction(store, commands, buildContext());
+      if (result.status === 'rejected' && result.commandResults.length > 0) {
+        const failed = result.commandResults[result.failedCommandIndex ?? result.commandResults.length - 1];
+        if (failed) options.onRejected?.(failed);
+      }
+      return result;
     },
 
     syncComponentDocument(args, description = 'Sync component master document') {

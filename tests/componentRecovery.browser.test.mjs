@@ -665,11 +665,10 @@ async function createDirtyActiveMaster(browser) {
     'document.querySelector(' + JSON.stringify(inputSelector) + ')?.value===' + JSON.stringify(renamedName),
     'rename draft is stored before the concurrent local edit',
   );
-  await browser.click('button[aria-label="Create tools"]');
   await waitForApp(
     browser,
-    'document.querySelectorAll(".tool-rack-menu button[role=menuitem]").length===3',
-    'Create tools menu opens for the Component Canvas',
+    'Array.from(document.querySelectorAll(".inspector-empty .quick-add button")).some((button)=>button.textContent.trim().includes("Rectangle"))',
+    'Inspector quick-add Rectangle control is mounted for the empty Component Canvas',
   );
 
   // Both real UI event handlers run in one browser task. Preact publishes the
@@ -677,8 +676,8 @@ async function createDirtyActiveMaster(browser) {
   // sees a changed master timestamp plus a structurally dirty buffer and must
   // pause rather than overwrite either side.
   const race = await browser.evaluate(
-    '(() => {const item=Array.from(document.querySelectorAll(".tool-rack-menu button[role=menuitem]"))' +
-    '.find((button)=>button.textContent.trim()==="Rectangle");' +
+    '(() => {const item=Array.from(document.querySelectorAll(".inspector-empty .quick-add button"))' +
+    '.find((button)=>button.textContent.trim().includes("Rectangle"));' +
     'const card=Array.from(document.querySelectorAll(".component-rack-card")).find((entry)=>' +
     'entry.querySelector(".component-rack-card-name")?.textContent.trim()===' + JSON.stringify(originalName) + ');' +
     'const form=card?.querySelector("form");if(!item||!form)throw new Error("Concurrent UI controls were not both available");' +

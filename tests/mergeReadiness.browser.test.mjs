@@ -330,33 +330,76 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(pagesRackCheck.rightAfter).toBeGreaterThan(pagesRackCheck.rightBefore + 200);
 
         // 4. WEB-07 Tool Rack flyout remains strictly above Main Canvas when Layers sidebar is hidden
+        //    and real-time search dynamically filters UI Components, Page Sections, and Vector Starter Kits
         const toolRackCheck = await browser.evalJs(`
           const layersToggle = document.querySelector('button[aria-label="Show or hide Layers sidebar"]');
           layersToggle.click();
           await new Promise((r) => setTimeout(r, 60));
 
-          const createBtn = document.querySelector('button[aria-label="Create tools"]');
-          createBtn.click();
+          const templatesBtn = document.querySelector('button[aria-label="Template library"]');
+          templatesBtn.click();
           await new Promise((r) => setTimeout(r, 60));
 
-          const menu = document.querySelector('.tool-rack-menu');
-          const firstItem = menu?.querySelector('.tool-rack-item');
+          const menu = document.querySelector('.template-library-popover');
+          const firstItem = menu?.querySelector('.template-card-primary');
           const rect = firstItem?.getBoundingClientRect();
           const hit = rect ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) : null;
           const flyoutClickable = Boolean(hit && menu.contains(hit));
 
-          // Escape dismisses flyout
+          const initialSections = Array.from(menu.querySelectorAll('.template-library-section'))
+            .map((el) => el.getAttribute('data-template-section'));
+
+          const searchInput = menu.querySelector('input.template-library-search');
+          const setSearch = async (val) => {
+            searchInput.value = val;
+            searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+            await new Promise((r) => setTimeout(r, 40));
+          };
+
+          await setSearch('hero');
+          const heroSections = Array.from(menu.querySelectorAll('.template-library-section'))
+            .map((el) => el.getAttribute('data-template-section'));
+          const heroCardIds = Array.from(menu.querySelectorAll('.template-card'))
+            .map((el) => el.getAttribute('data-template-id'));
+
+          await setSearch('vector');
+          const vectorSections = Array.from(menu.querySelectorAll('.template-library-section'))
+            .map((el) => el.getAttribute('data-template-section'));
+          const vectorCardCount = menu.querySelectorAll('.template-card').length;
+
+          await setSearch('');
+          const restoredCount = menu.querySelectorAll('.template-card').length;
+
+          // Escape dismisses flyout when search is empty
           window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
           await new Promise((r) => setTimeout(r, 40));
-          const dismissed = !document.querySelector('.tool-rack-menu');
+          const dismissed = !document.querySelector('.template-library-popover');
 
           // Restore Layers
           layersToggle.click();
           await new Promise((r) => setTimeout(r, 60));
 
-          return { flyoutClickable, dismissed };
+          return {
+            flyoutClickable,
+            initialSections,
+            heroSections,
+            heroCardIds,
+            vectorSections,
+            vectorCardCount,
+            restoredCount,
+            dismissed,
+          };
         `);
-        expect(toolRackCheck).toEqual({ flyoutClickable: true, dismissed: true });
+        expect(toolRackCheck).toEqual({
+          flyoutClickable: true,
+          initialSections: ['ui', 'sections', 'vectors'],
+          heroSections: ['sections'],
+          heroCardIds: ['section-hero'],
+          vectorSections: ['vectors'],
+          vectorCardCount: 5,
+          restoredCount: 15,
+          dismissed: true,
+        });
 
         // 5. Layer Context Menu & Layer Color Palette root stacking (not clipped by Layers sidebar)
         const layerPopoversCheck = await browser.evalJs(`
@@ -418,18 +461,36 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
           compToggle.click();
           await new Promise((r) => setTimeout(r, 60));
 
-          // WEB-10: Create Rect, Ellipse, and Text inside Component Canvas (420x280)
-          const addFromCreateMenu = async (label) => {
-            document.querySelector('button[aria-label="Create tools"]').click();
+          // WEB-10: Create Rect, Ellipse, and Text inside Component Canvas (420x280) using real Studio Shape/Text tools
+          const drawOnComponentCanvas = async (groupAriaLabel, toolName, x1Frac, y1Frac, x2Frac, y2Frac) => {
+            const trigger = document.querySelector('button[aria-label="' + groupAriaLabel + '"]');
+            trigger.click();
             await new Promise((r) => setTimeout(r, 40));
-            const item = Array.from(document.querySelectorAll('.tool-rack-item')).find((el) => el.textContent?.includes(label));
-            item.click();
-            await new Promise((r) => setTimeout(r, 60));
+            if (toolName) {
+              const item = Array.from(document.querySelectorAll('.tool-rack-menu .tool-rack-item'))
+                .find((el) => el.textContent?.includes(toolName));
+              item.click();
+              await new Promise((r) => setTimeout(r, 40));
+            }
+            const svgEl = document.querySelector('[data-window-id="component-canvas"] .canvas-stage svg');
+            const sr = svgEl.getBoundingClientRect();
+            const startX = sr.left + sr.width * x1Frac;
+            const startY = sr.top + sr.height * y1Frac;
+            const endX = sr.left + sr.width * x2Frac;
+            const endY = sr.top + sr.height * y2Frac;
+            svgEl.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 1, clientX: startX, clientY: startY }));
+            svgEl.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 1, clientX: endX, clientY: endY }));
+            svgEl.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, button: 0, buttons: 0, pointerId: 1, clientX: endX, clientY: endY }));
+            await new Promise((r) => setTimeout(r, 70));
           };
 
-          await addFromCreateMenu('Rectangle');
-          await addFromCreateMenu('Ellipse');
-          await addFromCreateMenu('Text');
+          await drawOnComponentCanvas('Shape tools', 'Rectangle', 0.12, 0.14, 0.56, 0.58);
+          await drawOnComponentCanvas('Shape tools', 'Ellipse', 0.24, 0.22, 0.68, 0.66);
+          await drawOnComponentCanvas('Text tools', null, 0.16, 0.72, 0.58, 0.86);
+          // Commit inline text editing if opened
+          const inlineEditor = document.querySelector('.canvas-inline-text-editor');
+          if (inlineEditor) inlineEditor.blur();
+          await new Promise((r) => setTimeout(r, 60));
 
           const compSvg = document.querySelector('[data-window-id="component-canvas"] .canvas-stage svg');
           const compHints = document.querySelectorAll('[data-window-id="component-canvas"] .canvas-hint').length;
