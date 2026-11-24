@@ -1,11 +1,13 @@
 /**
- * Folio Node Logic v1 — Live Preview & React Codegen Bridges.
+ * Folio Node Logic — Live Preview & React Codegen Bridges.
  *
- * Compiles valid Folio Logic Graphs into:
+ * Compiles valid Folio Logic Graphs (31 primary nodes + 13 backward-compatible
+ * legacy v1 nodes, Scoped Data Pipeline, Private per-target state, and Baked
+ * Logic Frames) into:
  * 1. A tiny, zero-`eval`, zero-`innerHTML` sandbox-safe micro-runtime script
  *    for Folio's Live Preview (`<iframe sandbox="allow-scripts">`).
  * 2. Clean, typed React hooks (`useState`, `useEffect`, event handlers, and
- *    dynamic text/visibility/fill bindings) for `reactCompiler.ts`.
+ *    dynamic text/visibility/fill/variant bindings) for `reactCompiler.ts`.
  */
 
 import { getProjectDesignTokens, toDesignTokenThemeSlug } from '../../core/document/tokens';
@@ -708,9 +710,10 @@ export interface ReactPageLogicPlan {
 
 /**
  * Generates clean React `useState`/`useEffect` state bindings and typed event
- * handlers for pages containing active Node Logic v1 graphs, with full 18-node
- * parity matching Folio's headless `PrototypeRuntime` and Live Preview runtime.
- * Returns `hasLogic: false` for static pages so generated TSX stays unchanged.
+ * handlers for pages containing active Node Logic graphs, emitting bindings for
+ * supported DOM events, shared/private state, and visual/navigation/animation
+ * actions. Returns `hasLogic: false` for static pages so generated TSX stays
+ * unchanged.
  */
 export function buildReactPageLogicPlan(
   project: FolioProject,

@@ -32,6 +32,10 @@ import {
   resolveAstNodeById,
   type PipelineOriginRef,
 } from './pipeline';
+import {
+  detectInlineSecretHeaders,
+  isSafeSecretRef,
+} from './networkSecrets';
 
 export type LogicDiagnosticSeverity = 'error' | 'warning';
 
@@ -139,6 +143,26 @@ export function validateLogicGraphSemantics(
       'INVALID_GRAPH_SCOPE',
       `Logic graph "${graph.name}" target "${String(graph.targetId)}" does not match an existing ${graph.scope}.`,
     );
+  }
+
+  // Network credential security boundary: never allow raw secrets in `.flop` settings
+  if (graph.networkSettings) {
+    const rawRef = graph.networkSettings.authSecretRef ?? '';
+    if (rawRef.trim() && !isSafeSecretRef(rawRef)) {
+      push(
+        'error',
+        'UNSAFE_AUTH_SECRET_REF',
+        `Network Auth Secret Ref in "${graph.name}" must be an environment key reference (e.g. API_TOKEN), never a raw token or credential.`,
+      );
+    }
+    const flaggedHeaders = detectInlineSecretHeaders(graph.networkSettings.globalHeaders ?? '');
+    if (flaggedHeaders.length > 0) {
+      push(
+        'error',
+        'HARDCODED_SECRET_HEADER',
+        `Network Global Headers in "${graph.name}" contain hardcoded credential header(s) (${flaggedHeaders.join(', ')}). Use Auth Secret Ref or a server-side proxy instead.`,
+      );
+    }
   }
 
   const variablesById = collectAvailableVariables(graph, project);

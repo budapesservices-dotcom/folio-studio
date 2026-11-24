@@ -649,10 +649,11 @@ export function isLogicVariableDefinition(value: unknown): value is import('./ty
 
 export function isLogicNetworkSettings(value: unknown): value is import('./types').LogicNetworkSettings {
   if (!isRecord(value)) return false;
+  if (Object.prototype.hasOwnProperty.call(value, 'authToken')) return false;
   return (
     isString(value.baseUrl) && value.baseUrl.length <= 2048 &&
     isString(value.globalHeaders) && value.globalHeaders.length <= 8192 &&
-    isString(value.authToken) && value.authToken.length <= 2048
+    isString(value.authSecretRef) && value.authSecretRef.length <= 128
   );
 }
 

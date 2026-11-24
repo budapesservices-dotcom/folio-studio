@@ -40,6 +40,47 @@ export function migrateProjectV1ToV2(input: FolioProjectV1): FolioProject {
   };
 }
 
+const SAFE_LEGACY_SECRET_REF = /^(?:env:)?[A-Z][A-Z0-9_]{1,63}$/i;
+
+function normalizeLegacyNetworkSettingsOnGraphs(
+  candidate: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(candidate.logicGraphs)) return candidate;
+  let mutated = false;
+  const nextGraphs = candidate.logicGraphs.map((entry) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      return entry;
+    }
+    const graphRecord = entry as Record<string, unknown>;
+    const rawSettings = graphRecord.networkSettings;
+    if (typeof rawSettings !== 'object' || rawSettings === null || Array.isArray(rawSettings)) {
+      return entry;
+    }
+    const settingsRecord = rawSettings as Record<string, unknown>;
+    const hasLegacyAuthToken = Object.prototype.hasOwnProperty.call(settingsRecord, 'authToken');
+    const missingSecretRef = typeof settingsRecord.authSecretRef !== 'string';
+    if (!hasLegacyAuthToken && !missingSecretRef) {
+      return entry;
+    }
+    mutated = true;
+    const legacyToken = typeof settingsRecord.authToken === 'string' ? settingsRecord.authToken.trim() : '';
+    let migratedRef = typeof settingsRecord.authSecretRef === 'string' ? settingsRecord.authSecretRef.trim() : '';
+    if (!migratedRef && legacyToken && SAFE_LEGACY_SECRET_REF.test(legacyToken)) {
+      migratedRef = legacyToken.replace(/^env:/i, '').trim();
+    }
+    const sanitizedSettings: Record<string, unknown> = {
+      baseUrl: typeof settingsRecord.baseUrl === 'string' ? settingsRecord.baseUrl : '',
+      globalHeaders: typeof settingsRecord.globalHeaders === 'string' ? settingsRecord.globalHeaders : '',
+      authSecretRef: migratedRef,
+    };
+    return {
+      ...graphRecord,
+      networkSettings: sanitizedSettings,
+    };
+  });
+  return mutated ? { ...candidate, logicGraphs: nextGraphs } : candidate;
+}
+
 /** Normalize any supported native project version to the current v2 schema. */
 export function migrateProjectToV2(input: unknown): FolioProject {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
@@ -49,7 +90,7 @@ export function migrateProjectToV2(input: unknown): FolioProject {
   const version = (input as { formatVersion?: unknown }).formatVersion;
   if (version === 1) return migrateProjectV1ToV2(input as FolioProjectV1);
   if (version === FOLIO_FORMAT_VERSION) {
-    const candidate = input as Record<string, unknown>;
+    let candidate = normalizeLegacyNetworkSettingsOnGraphs(input as Record<string, unknown>);
     if (Array.isArray(candidate.pages) && candidate.pages.length > 0) {
       const activePageExists = candidate.pages.some(
         (page) => typeof page === 'object' && page !== null &&
@@ -58,11 +99,11 @@ export function migrateProjectToV2(input: unknown): FolioProject {
       if (!activePageExists) {
         const firstPage = candidate.pages[0] as { id?: unknown };
         if (typeof firstPage?.id === 'string') {
-          return requireValidProject({ ...candidate, activePageId: firstPage.id });
+          candidate = { ...candidate, activePageId: firstPage.id };
         }
       }
     }
-    return requireValidProject(input);
+    return requireValidProject(candidate);
   }
 
   throw new Error(`Unsupported .flop format version: ${String(version)}.`);

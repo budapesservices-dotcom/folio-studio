@@ -62,6 +62,7 @@ import {
   getLogicPortDataType,
   getUsedSourceReferenceIds,
   isSourceLogicNodeType,
+  migrateLegacyNodeInGraph,
   moveFrameWithChildrenInGraph,
   moveNodeInGraph,
   removeConnectionFromGraph,
@@ -1699,7 +1700,7 @@ export default function NodeLogicWorkspace({
                   <span class="nl-palette-marker" aria-hidden="true">{marker.glyph}</span>
                   <span class="nl-palette-copy">
                     <strong>{item.label}</strong>
-                    <span>{marker.label}</span>
+                    <span>{item.paletteSubtitle ?? marker.label}</span>
                   </span>
                   <span class="nl-palette-plus" aria-hidden="true">+</span>
                 </button>
@@ -2525,6 +2526,15 @@ export default function NodeLogicWorkspace({
           onResetRuntime={() => {
             if (!runtimeRef.current) return;
             setRuntimeSnapshot(runtimeRef.current.reset());
+          }}
+          onUpgradeLegacyNode={(nodeId) => {
+            if (!activeGraph) return;
+            const nextGraph = migrateLegacyNodeInGraph(activeGraph, nodeId);
+            if (nextGraph === activeGraph) return;
+            const upgradedNode = nextGraph.nodes.find((n) => n.id === nodeId);
+            const upgradedDef = upgradedNode ? getLogicNodeDefinition(upgradedNode.type) : undefined;
+            commitGraphUpdate(nextGraph, `Upgrade legacy node to ${upgradedDef?.label ?? 'modern node'}`);
+            onNotice(`Upgraded legacy node to “${upgradedDef?.label ?? 'modern node'}”.`);
           }}
           onToggleComponentNodeLogic={onToggleComponentNodeLogic}
         />

@@ -163,7 +163,7 @@ describe('Folio Node Logic v2 — 31-Node, 7-Category Efficient Architecture', (
     graph = updateNetworkSettingsInGraph(graph, {
       baseUrl: 'https://api.folio.dev',
       globalHeaders: '{"X-App":"Folio"}',
-      authToken: 'env:FOLIO_TOKEN',
+      authSecretRef: 'FOLIO_TOKEN',
     });
 
     const clickNode = createLogicNode({ id: 'n-click', type: 'event.on-click', data: { targetNodeId: buttonId } });
@@ -263,7 +263,7 @@ describe('Folio Node Logic v2 — 31-Node, 7-Category Efficient Architecture', (
       scope: 'page',
       targetId: pageId,
       variables: [itemsVar],
-      networkSettings: { baseUrl: 'https://api.example.com', globalHeaders: '{}', authToken: '' },
+      networkSettings: { baseUrl: 'https://api.example.com', globalHeaders: '{}', authSecretRef: '' },
       nodes: [
         click,
         flowCtrl,

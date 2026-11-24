@@ -17,9 +17,14 @@ import type {
   LogicVariableValue,
 } from '../../core/document/types';
 import {
+  clearSessionNetworkTestToken,
   formatPipelinePayloadSummary,
   getLogicNodeDefinition,
+  getSessionNetworkTestToken,
+  hasSessionNetworkTestToken,
+  isSafeSecretRef,
   resolveAstNodeById,
+  setSessionNetworkTestToken,
   type LogicDiagnostic,
   type LogicNodeEventKind,
   type PrototypeRuntimeSnapshot,
@@ -82,6 +87,7 @@ export interface NodeLogicInspectorProps {
   onRunMount: () => void;
   onTriggerNodeEvent: (nodeId: string, event: LogicNodeEventKind) => void;
   onResetRuntime: () => void;
+  onUpgradeLegacyNode?: (nodeId: string) => void;
   onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
 }
 
@@ -144,6 +150,7 @@ export function NodeLogicInspector({
   onRunMount,
   onTriggerNodeEvent,
   onResetRuntime,
+  onUpgradeLegacyNode,
   onToggleComponentNodeLogic,
 }: NodeLogicInspectorProps) {
   const [newVarName, setNewVarName] = useState('');
@@ -154,18 +161,34 @@ export function NodeLogicInspector({
   const [newVarComputed, setNewVarComputed] = useState(false);
   const [newVarComputedExpr, setNewVarComputedExpr] = useState('');
   const [expandedTraceGroups, setExpandedTraceGroups] = useState<Record<string, boolean>>({});
+  const [, setSessionTokenVersion] = useState(0);
 
   const nodeDef = selectedNode ? getLogicNodeDefinition(selectedNode.type) : undefined;
+  const replacementDef = nodeDef?.replacementType
+    ? getLogicNodeDefinition(nodeDef.replacementType)
+    : undefined;
   const nodeDiagnostics = selectedNode
     ? diagnostics.filter((item) => item.nodeId === selectedNode.id)
     : [];
+  const networkDiagnostics = diagnostics.filter(
+    (item) =>
+      item.code === 'UNSAFE_AUTH_SECRET_REF' ||
+      item.code === 'HARDCODED_SECRET_HEADER',
+  );
 
   const graphVariables = graph?.variables ?? [];
   const networkSettings: LogicNetworkSettings = graph?.networkSettings ?? {
     baseUrl: '',
     globalHeaders: '',
-    authToken: '',
+    authSecretRef: '',
   };
+  const sessionTestToken = graph
+    ? getSessionNetworkTestToken(graph.id, networkSettings.authSecretRef)
+    : '';
+  const hasSessionToken = graph
+    ? hasSessionNetworkTestToken(graph.id, networkSettings.authSecretRef)
+    : false;
+  const authSecretRefValid = isSafeSecretRef(networkSettings.authSecretRef);
 
   const interactiveTriggers = graph
     ? graph.nodes.flatMap((node) => {
@@ -386,6 +409,26 @@ export function NodeLogicInspector({
                 </div>
                 {nodeDef?.description && (
                   <p class="nl-inspector-desc">{nodeDef.description}</p>
+                )}
+
+                {nodeDef?.deprecated && replacementDef && onUpgradeLegacyNode && (
+                  <div class="nl-legacy-banner" role="note" data-testid="nl-legacy-upgrade-banner">
+                    <div class="nl-legacy-banner-copy">
+                      <strong>Legacy v1 Node</strong>
+                      <span>
+                        Kept for older <code>.flop</code> files. Upgrade to{' '}
+                        <strong>{replacementDef.label}</strong> to use the modern node contract.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      class="nl-primary-btn"
+                      data-testid="nl-upgrade-legacy-btn"
+                      onClick={() => onUpgradeLegacyNode(selectedNode.id)}
+                    >
+                      Upgrade to {replacementDef.label}
+                    </button>
+                  </div>
                 )}
 
                 <div class="nl-inspector-fields">
@@ -963,19 +1006,82 @@ export function NodeLogicInspector({
                   />
                 </label>
                 <label class="nl-field">
-                  <span>Auth Token (Bearer / Env var ref)</span>
+                  <span>Auth Secret Reference (Env Key)</span>
                   <input
-                    class="nl-input"
-                    type="password"
-                    aria-label="Network Auth Token"
-                    placeholder="env:API_TOKEN or token placeholder"
-                    value={networkSettings.authToken}
-                    onInput={(event) => onUpdateNetworkSettings({ authToken: event.currentTarget.value })}
+                    class="nl-input nl-tabular"
+                    type="text"
+                    aria-label="Auth Secret Reference"
+                    placeholder="API_TOKEN"
+                    value={networkSettings.authSecretRef}
+                    onInput={(event) => onUpdateNetworkSettings({ authSecretRef: event.currentTarget.value })}
                   />
                 </label>
-                <p class="nl-inspector-hint">
-                  Tip: Prefer an environment placeholder like <code>env:API_TOKEN</code> rather than storing live secrets in client-side <code>.flop</code> files.
-                </p>
+                {!authSecretRefValid && (
+                  <div class="nl-diag-item is-error" role="alert">
+                    <span class="nl-diag-severity">Error</span>
+                    <span>
+                      Enter an environment key name only (e.g. <code>API_TOKEN</code>), never a raw token or secret value.
+                    </span>
+                  </div>
+                )}
+
+                <div class="nl-field">
+                  <div class="nl-session-token-head">
+                    <span>Local Test Token (Session-Only)</span>
+                    {hasSessionToken && (
+                      <span class="nl-session-badge" data-testid="nl-session-token-badge">
+                        Active in RAM
+                      </span>
+                    )}
+                  </div>
+                  <div class="nl-session-token-row">
+                    <input
+                      class="nl-input"
+                      type="password"
+                      autocomplete="off"
+                      aria-label="Local Session Test Token"
+                      placeholder="Temporary Bearer token (not saved)"
+                      value={sessionTestToken}
+                      onInput={(event) => {
+                        setSessionNetworkTestToken(
+                          graph.id,
+                          networkSettings.authSecretRef,
+                          event.currentTarget.value,
+                        );
+                        setSessionTokenVersion((v) => v + 1);
+                      }}
+                    />
+                    {hasSessionToken && (
+                      <button
+                        type="button"
+                        class="nl-secondary-btn"
+                        onClick={() => {
+                          clearSessionNetworkTestToken(graph.id, networkSettings.authSecretRef);
+                          setSessionTokenVersion((v) => v + 1);
+                        }}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div class="nl-security-banner" role="note" data-testid="nl-network-security-warning">
+                  <strong>Security Notice:</strong> Never embed live API keys or sensitive credentials in public frontend apps.
+                  Only the <code>Auth Secret Reference</code> key name is saved to <code>.flop</code> files; your Local Test Token stays strictly in browser memory for this session and is never written to <code>.flop</code>, Live Preview, or exported code.
+                </div>
+
+                {networkDiagnostics.length > 0 && (
+                  <div class="nl-diag-block" role="status">
+                    <div class="nl-section-label">Network Security Checks</div>
+                    {networkDiagnostics.map((diag, idx) => (
+                      <div key={`${diag.code}-${idx}`} class={`nl-diag-item is-${diag.severity}`}>
+                        <span class="nl-diag-severity">{diag.severity === 'error' ? 'Error' : 'Warning'}</span>
+                        <span>{diag.message}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </>
             )}
           </div>

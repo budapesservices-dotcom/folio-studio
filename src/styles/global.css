@@ -6479,6 +6479,90 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   background: #141a28;
 }
 
+.nl-session-token-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.nl-session-token-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nl-session-token-row .nl-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.nl-session-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(45, 212, 191, 0.45);
+  background: rgba(45, 212, 191, 0.14);
+  color: #99f6e4;
+  font-size: 9.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.nl-security-banner {
+  padding: 8px 9px;
+  border: 1px solid rgba(251, 191, 36, 0.36);
+  border-radius: 5px;
+  background: rgba(251, 191, 36, 0.08);
+  color: #fde68a;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.nl-security-banner strong {
+  color: #fef3c7;
+}
+
+.nl-security-banner code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fde68a;
+  font-size: 10px;
+}
+
+.nl-legacy-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 1px solid rgba(167, 139, 250, 0.38);
+  border-radius: 5px;
+  background: rgba(139, 92, 246, 0.1);
+}
+
+.nl-legacy-banner-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: #ddd6fe;
+}
+
+.nl-legacy-banner-copy strong {
+  color: #f5f3ff;
+}
+
+.nl-legacy-banner-copy code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #ede9fe;
+  font-size: 10px;
+}
+
 /* ── Stage 8: Motion Timeline Studio (Dockable Bottom Drawer) ─────────────── */
 .app-shell.has-motion-timeline {
   grid-template-rows: 56px minmax(0, 1fr) 236px 27px;

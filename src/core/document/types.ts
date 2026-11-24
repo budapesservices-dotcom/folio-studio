@@ -513,11 +513,15 @@ export interface LogicVariableDefinition {
   computedExpression?: string;
 }
 
-/** Project/graph-level network defaults used by HTTP Request and Realtime Socket nodes. */
+/**
+ * Project/graph-level network defaults used by HTTP Request and Realtime Socket nodes.
+ * Stores only an environment/secret key reference (`authSecretRef`, e.g. `API_TOKEN`),
+ * never raw tokens or credentials in `.flop` files or exported bundles.
+ */
 export interface LogicNetworkSettings {
   baseUrl: string;
   globalHeaders: string;
-  authToken: string;
+  authSecretRef: string;
 }
 
 /** Versioned node graph contract for the Folio Node Logic engine (.flop v2 compatible). */

@@ -13,14 +13,45 @@ function safeFileName(name: string): string {
   return cleaned || 'untitled-project';
 }
 
+const SAFE_EXPORT_SECRET_REF = /^(?:env:)?[A-Z][A-Z0-9_]{1,63}$/i;
+
+/**
+ * Produces a validated, secret-safe `.flop` v2 JSON string.
+ * Guarantees that no raw `authToken` or non-reference secret value is ever
+ * written into exported `.flop` project files.
+ */
+export function serializeProjectToFlopJson(project: FolioProject): string {
+  const sanitizedProject: FolioProject = {
+    ...project,
+    logicGraphs: project.logicGraphs.map((graph) => {
+      if (!graph.networkSettings) return graph;
+      const rawRef = typeof graph.networkSettings.authSecretRef === 'string'
+        ? graph.networkSettings.authSecretRef.trim()
+        : '';
+      const safeRef = rawRef && SAFE_EXPORT_SECRET_REF.test(rawRef)
+        ? rawRef.replace(/^env:/i, '').trim()
+        : '';
+      return {
+        ...graph,
+        networkSettings: {
+          baseUrl: graph.networkSettings.baseUrl,
+          globalHeaders: graph.networkSettings.globalHeaders,
+          authSecretRef: safeRef,
+        },
+      };
+    }),
+  };
+  const validatedProject = requireValidProject(sanitizedProject);
+  return JSON.stringify(validatedProject, null, 2);
+}
+
 export function downloadProject(project: FolioProject): void {
-  const validatedProject = requireValidProject(project);
-  const content = JSON.stringify(validatedProject, null, 2);
+  const content = serializeProjectToFlopJson(project);
   const blob = new Blob([content], { type: 'application/vnd.folio.project+json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `${safeFileName(validatedProject.metadata.name)}.flop`;
+  anchor.download = `${safeFileName(project.metadata.name)}.flop`;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();

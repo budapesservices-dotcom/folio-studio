@@ -37,6 +37,7 @@ import {
   getLogicNodeDefinition,
   getLogicNodePort,
   isNodeCenterInsideFrame,
+  migrateLegacyLogicNode,
   type BuiltInLogicNodeType,
   type LogicNodeCategory,
   type LogicPortDataType,
@@ -1060,15 +1061,65 @@ export function updateNetworkSettingsInGraph(
   const current: LogicNetworkSettings = graph.networkSettings ?? {
     baseUrl: '',
     globalHeaders: '',
-    authToken: '',
+    authSecretRef: '',
   };
   return touchLogicGraph({
     ...graph,
     networkSettings: {
       baseUrl: patch.baseUrl ?? current.baseUrl,
       globalHeaders: patch.globalHeaders ?? current.globalHeaders,
-      authToken: patch.authToken ?? current.authToken,
+      authSecretRef: patch.authSecretRef ?? current.authSecretRef,
     },
+  });
+}
+
+/**
+ * Losslessly upgrades a single deprecated legacy v1 node inside a LogicGraph to
+ * its modern primary node equivalent while remapping connected wire ports and
+ * preserving node position, ID, and frame membership.
+ */
+export function migrateLegacyNodeInGraph(graph: LogicGraph, nodeId: string): LogicGraph {
+  const targetNode = graph.nodes.find((node) => node.id === nodeId);
+  if (!targetNode) return graph;
+  const migration = migrateLegacyLogicNode(targetNode);
+  if (!migration.migrated) return graph;
+
+  const nextNodes = graph.nodes.map((node) => (node.id === nodeId ? migration.node : node));
+  const nextConnections: LogicConnection[] = [];
+  for (const conn of graph.connections) {
+    let nextConn = conn;
+    if (conn.sourceNodeId === nodeId && migration.outputPortMap[conn.sourcePortId]) {
+      nextConn = {
+        ...nextConn,
+        sourcePortId: migration.outputPortMap[conn.sourcePortId],
+      };
+    }
+    if (conn.targetNodeId === nodeId && migration.inputPortMap[conn.targetPortId]) {
+      nextConn = {
+        ...nextConn,
+        targetPortId: migration.inputPortMap[conn.targetPortId],
+      };
+    }
+    // Keep only connections whose endpoints still exist on the upgraded node
+    const sourceNode = nextNodes.find((n) => n.id === nextConn.sourceNodeId);
+    const targetNodeAfter = nextNodes.find((n) => n.id === nextConn.targetNodeId);
+    const sourcePortDef = sourceNode ? getLogicNodePort(sourceNode.type, nextConn.sourcePortId) : undefined;
+    const targetPortDef = targetNodeAfter ? getLogicNodePort(targetNodeAfter.type, nextConn.targetPortId) : undefined;
+    const sourceOk =
+      nextConn.sourceNodeId !== nodeId ||
+      Boolean(sourcePortDef && sourcePortDef.direction === 'out');
+    const targetOk =
+      nextConn.targetNodeId !== nodeId ||
+      Boolean(targetPortDef && targetPortDef.direction === 'in');
+    if (sourceOk && targetOk) {
+      nextConnections.push(nextConn);
+    }
+  }
+
+  return touchLogicGraph({
+    ...graph,
+    nodes: nextNodes,
+    connections: nextConnections,
   });
 }
 
@@ -1480,7 +1531,7 @@ export function createLogicPresetGraph(
       networkSettings: {
         baseUrl: 'https://api.example.com',
         globalHeaders: '{"Accept":"application/json"}',
-        authToken: '',
+        authSecretRef: '',
       },
       nodes: [onLoad, httpReq, jsonPick, saveState, toast],
       connections: [

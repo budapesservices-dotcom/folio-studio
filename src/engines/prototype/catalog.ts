@@ -32,6 +32,20 @@ import type {
 
 export type LogicPortDirection = 'in' | 'out';
 export type LogicPortDataType = 'exec' | 'string' | 'number' | 'boolean' | 'list' | 'object' | 'any';
+/**
+ * Folio Node Logic enforces a strict 2-wire contract:
+ * 1. `execution` wire (`dataType === 'exec'`) — deterministic control-flow sequencing.
+ * 2. `data` wire (all non-`exec` ports) — typed value flow.
+ *
+ * Layer/element targeting is NEVER a 3rd wire kind; it is always a Target Reference
+ * (`targetNodeId` or `targetMode: 'pipeline'` / `Inherit from Pipeline`) in node data.
+ */
+export type LogicWireKind = 'execution' | 'data';
+
+export function getLogicWireKind(dataType: LogicPortDataType): LogicWireKind {
+  return dataType === 'exec' ? 'execution' : 'data';
+}
+
 export type LogicNodeCategory =
   | 'source'
   | 'event'
@@ -131,10 +145,17 @@ export interface LogicNodeTypeDefinition {
   readonly type: BuiltInLogicNodeType;
   readonly category: LogicNodeCategory;
   readonly label: string;
+  /** Concise palette subtitle clarifying primary vs advanced usage. */
+  readonly paletteSubtitle?: string;
   readonly description: string;
   readonly ports: readonly LogicPortDefinition[];
   readonly defaultData: Readonly<Record<string, string | number | boolean | null>>;
+  /** Hidden from UI Node Palette; kept strictly for backward-compatible `.flop` v2 files. */
   readonly legacy?: boolean;
+  /** Explicit deprecation marker paired with `legacy: true` for migration helpers & inspector UI. */
+  readonly deprecated?: boolean;
+  /** Modern primary node type that supersedes this deprecated legacy node. */
+  readonly replacementType?: PrimaryLogicNodeType;
 }
 
 const EVENT_COMMON_DEFAULT_DATA = Object.freeze({
@@ -159,7 +180,8 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'source.element',
     category: 'source',
     label: 'Element / Layer',
-    description: 'Reads live properties (value, text, fill, visibility, bounds) or listens to clicks/hovers on a target layer, form input, or sent component.',
+    paletteSubtitle: 'Source · Advanced property reader',
+    description: 'Advanced data source for reading live properties (value, text, fill, visibility, bounds) from a specific layer, form input, or component. For standard button clicks, prefer Event → On Click.',
     ports: [
       { id: 'onClick', label: 'On Click', direction: 'out', dataType: 'exec' },
       { id: 'onHover', label: 'On Hover', direction: 'out', dataType: 'exec' },
@@ -217,7 +239,8 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'event.on-click',
     category: 'event',
     label: 'On Click',
-    description: 'Fires on Click, Double Click, or Click Outside for the targeted design layer.',
+    paletteSubtitle: 'Event · Primary button trigger',
+    description: 'Primary trigger for button and layer clicks (Click, Double Click, or Click Outside). Automatically passes the clicked layer or group into the Scoped Data Pipeline.',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'out', dataType: 'exec' },
       { id: 'target', label: 'Target ID', direction: 'out', dataType: 'string' },
@@ -729,8 +752,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'source.page',
     category: 'source',
     label: 'Page (Legacy)',
-    description: 'Legacy v1 Page source node preserved for backward compatibility. Prefer App / Context.',
+    description: 'Deprecated v1 Page source node preserved for backward compatibility. Prefer App / Context.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'source.context',
     ports: [
       { id: 'onLoad', label: 'On Load', direction: 'out', dataType: 'exec' },
       { id: 'route', label: 'Route', direction: 'out', dataType: 'string' },
@@ -741,8 +766,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'source.component',
     category: 'source',
     label: 'Component (Legacy)',
-    description: 'Legacy v1 Component source node preserved for backward compatibility. Prefer Element / Layer.',
+    description: 'Deprecated v1 Component source node preserved for backward compatibility. Prefer Element / Layer.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'source.element',
     ports: [
       { id: 'onClick', label: 'On Click', direction: 'out', dataType: 'exec' },
       { id: 'onHover', label: 'On Hover', direction: 'out', dataType: 'exec' },
@@ -754,8 +781,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'source.theme',
     category: 'source',
     label: 'Theme (Legacy)',
-    description: 'Legacy v1 Theme source node preserved for backward compatibility. Prefer App / Context.',
+    description: 'Deprecated v1 Theme source node preserved for backward compatibility. Prefer App / Context.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'source.context',
     ports: [
       { id: 'themeId', label: 'Theme ID', direction: 'out', dataType: 'string' },
     ],
@@ -765,8 +794,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'event.on-page-load',
     category: 'event',
     label: 'On Page Load (Legacy)',
-    description: 'Legacy v1 Page Load trigger preserved for backward compatibility. Prefer On Lifecycle.',
+    description: 'Deprecated v1 Page Load trigger preserved for backward compatibility. Prefer On Lifecycle.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'event.on-lifecycle',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'out', dataType: 'exec' },
     ],
@@ -776,8 +807,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'state.set',
     category: 'state',
     label: 'Set State (Legacy)',
-    description: 'Legacy v1 Set State node preserved for backward compatibility. Prefer Update State.',
+    description: 'Deprecated v1 Set State node preserved for backward compatibility. Prefer Update State.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'state.update',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'in', dataType: 'exec' },
       { id: 'value', label: 'Value', direction: 'in', dataType: 'any' },
@@ -790,8 +823,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'state.increment',
     category: 'state',
     label: 'Increment State (Legacy)',
-    description: 'Legacy v1 Increment State node preserved for backward compatibility. Prefer Update State.',
+    description: 'Deprecated v1 Increment State node preserved for backward compatibility. Prefer Update State.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'state.update',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'in', dataType: 'exec' },
       { id: 'step', label: 'Step', direction: 'in', dataType: 'number' },
@@ -804,8 +839,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'logic.compare',
     category: 'logic',
     label: 'Compare (Legacy)',
-    description: 'Legacy v1 Compare node preserved for backward compatibility. Prefer Condition.',
+    description: 'Deprecated v1 Compare node preserved for backward compatibility. Prefer Condition.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'logic.condition',
     ports: [
       { id: 'left', label: 'Left', direction: 'in', dataType: 'any' },
       { id: 'right', label: 'Right', direction: 'in', dataType: 'any' },
@@ -817,8 +854,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'logic.template',
     category: 'logic',
     label: 'Text Template (Legacy)',
-    description: 'Legacy v1 Text Template node preserved for backward compatibility. Prefer Text.',
+    description: 'Deprecated v1 Text Template node preserved for backward compatibility. Prefer Text.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'logic.text',
     ports: [
       { id: 'value', label: 'Value', direction: 'in', dataType: 'any' },
       { id: 'text', label: 'Text', direction: 'out', dataType: 'string' },
@@ -829,8 +868,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'action.set-visible',
     category: 'action',
     label: 'Set Visible (Legacy)',
-    description: 'Legacy v1 Set Visible node preserved for backward compatibility. Prefer Set Layer.',
+    description: 'Deprecated v1 Set Visible node preserved for backward compatibility. Prefer Set Layer.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'action.set-layer',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'in', dataType: 'exec' },
       { id: 'visible', label: 'Visible', direction: 'in', dataType: 'boolean' },
@@ -842,8 +883,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'action.set-text',
     category: 'action',
     label: 'Set Text (Legacy)',
-    description: 'Legacy v1 Set Text node preserved for backward compatibility. Prefer Set Layer.',
+    description: 'Deprecated v1 Set Text node preserved for backward compatibility. Prefer Set Layer.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'action.set-layer',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'in', dataType: 'exec' },
       { id: 'text', label: 'Text', direction: 'in', dataType: 'string' },
@@ -855,8 +898,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'action.set-fill',
     category: 'action',
     label: 'Set Fill Color (Legacy)',
-    description: 'Legacy v1 Set Fill Color node preserved for backward compatibility. Prefer Set Layer.',
+    description: 'Deprecated v1 Set Fill Color node preserved for backward compatibility. Prefer Set Layer.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'action.set-layer',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'in', dataType: 'exec' },
       { id: 'fill', label: 'Color', direction: 'in', dataType: 'string' },
@@ -868,8 +913,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'action.set-theme',
     category: 'action',
     label: 'Set Theme (Legacy)',
-    description: 'Legacy v1 Set Theme node preserved for backward compatibility. Prefer System & Form.',
+    description: 'Deprecated v1 Set Theme node preserved for backward compatibility. Prefer System & Form.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'action.system-form',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'in', dataType: 'exec' },
       { id: 'themeId', label: 'Theme ID', direction: 'in', dataType: 'string' },
@@ -881,8 +928,10 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'action.play-animation',
     category: 'action',
     label: 'Play Animation (Legacy)',
-    description: 'Legacy v1 Play Animation node preserved for backward compatibility. Prefer Media & Animation.',
+    description: 'Deprecated v1 Play Animation node preserved for backward compatibility. Prefer Media & Animation.',
     legacy: true,
+    deprecated: true,
+    replacementType: 'action.media-animation',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'in', dataType: 'exec' },
       { id: 'next', label: 'Next', direction: 'out', dataType: 'exec' },
@@ -899,9 +948,129 @@ export function isPrimaryLogicNodeType(type: string): type is PrimaryLogicNodeTy
   return isBuiltInLogicNodeType(type) && !LOGIC_NODE_CATALOG[type].legacy;
 }
 
+export function isLegacyLogicNodeType(type: string): type is LegacyLogicNodeType {
+  return isBuiltInLogicNodeType(type) && Boolean(LOGIC_NODE_CATALOG[type].legacy);
+}
+
 export function getLogicNodeDefinition(type: string): LogicNodeTypeDefinition | undefined {
   if (!isBuiltInLogicNodeType(type)) return undefined;
   return LOGIC_NODE_CATALOG[type];
+}
+
+export interface LegacyNodeMigrationResult {
+  readonly migrated: boolean;
+  readonly node: LogicNode;
+  /** Maps old incoming port IDs -> new incoming port IDs on the upgraded node. */
+  readonly inputPortMap: Readonly<Record<string, string>>;
+  /** Maps old outgoing port IDs -> new outgoing port IDs on the upgraded node. */
+  readonly outputPortMap: Readonly<Record<string, string>>;
+}
+
+/**
+ * Lightweight, lossless migration helper converting any of the 13 deprecated v1
+ * legacy nodes into its modern primary v2 counterpart while preserving ID,
+ * position, data fields, and port mappings for connected wires.
+ */
+export function migrateLegacyLogicNode(node: LogicNode): LegacyNodeMigrationResult {
+  const def = getLogicNodeDefinition(node.type);
+  if (!def || !def.legacy || !def.replacementType) {
+    return { migrated: false, node, inputPortMap: {}, outputPortMap: {} };
+  }
+  const targetDef = LOGIC_NODE_CATALOG[def.replacementType];
+  const baseData: Record<string, string | number | boolean | null> = { ...targetDef.defaultData };
+  const inputPortMap: Record<string, string> = {};
+  const outputPortMap: Record<string, string> = {};
+
+  switch (node.type as LegacyLogicNodeType) {
+    case 'source.page':
+      baseData.contextKind = 'page';
+      baseData.pageId = node.data.pageId ?? '';
+      break;
+    case 'source.theme':
+      baseData.contextKind = 'theme';
+      baseData.themeId = node.data.themeId ?? '';
+      break;
+    case 'source.component':
+      baseData.componentId = node.data.componentId ?? '';
+      outputPortMap.componentId = 'target';
+      break;
+    case 'event.on-page-load':
+      baseData.event = 'page-load';
+      if (node.data.once !== undefined) baseData.once = node.data.once;
+      if (node.data.debounceMs !== undefined) baseData.debounceMs = node.data.debounceMs;
+      if (node.data.throttleMs !== undefined) baseData.throttleMs = node.data.throttleMs;
+      break;
+    case 'state.set':
+      baseData.variableId = node.data.variableId ?? '';
+      baseData.operation = 'set';
+      baseData.value = node.data.value ?? '';
+      break;
+    case 'state.increment':
+      baseData.variableId = node.data.variableId ?? '';
+      baseData.operation = 'increment';
+      baseData.step = node.data.step ?? 1;
+      baseData.min = node.data.min ?? null;
+      baseData.max = node.data.max ?? null;
+      inputPortMap.step = 'value';
+      break;
+    case 'logic.compare':
+      baseData.mode = 'compare';
+      baseData.operator = node.data.operator ?? '==';
+      baseData.left = node.data.left ?? null;
+      baseData.right = node.data.right ?? null;
+      break;
+    case 'logic.template':
+      baseData.mode = 'template';
+      baseData.template = node.data.template ?? '{{value}}';
+      break;
+    case 'action.set-visible':
+      baseData.targetNodeId = node.data.targetNodeId ?? '';
+      if (node.data.targetMode !== undefined) baseData.targetMode = node.data.targetMode;
+      if (node.data.pipelineChildId !== undefined) baseData.pipelineChildId = node.data.pipelineChildId;
+      baseData.property = 'visible';
+      baseData.visibleMode = node.data.mode ?? 'toggle';
+      inputPortMap.visible = 'value';
+      break;
+    case 'action.set-text':
+      baseData.targetNodeId = node.data.targetNodeId ?? '';
+      if (node.data.targetMode !== undefined) baseData.targetMode = node.data.targetMode;
+      if (node.data.pipelineChildId !== undefined) baseData.pipelineChildId = node.data.pipelineChildId;
+      baseData.property = 'text';
+      baseData.text = node.data.text ?? '';
+      inputPortMap.text = 'value';
+      break;
+    case 'action.set-fill':
+      baseData.targetNodeId = node.data.targetNodeId ?? '';
+      if (node.data.targetMode !== undefined) baseData.targetMode = node.data.targetMode;
+      if (node.data.pipelineChildId !== undefined) baseData.pipelineChildId = node.data.pipelineChildId;
+      baseData.property = 'fill';
+      baseData.fill = node.data.fill ?? '#3B82F6';
+      inputPortMap.fill = 'value';
+      break;
+    case 'action.set-theme':
+      baseData.action = 'set-theme';
+      baseData.themeId = node.data.themeId ?? '';
+      inputPortMap.themeId = 'value';
+      break;
+    case 'action.play-animation':
+      baseData.targetKind = 'animation';
+      baseData.clipId = node.data.clipId ?? '';
+      baseData.command = 'play';
+      break;
+  }
+
+  return {
+    migrated: true,
+    node: {
+      id: node.id,
+      type: def.replacementType,
+      x: node.x,
+      y: node.y,
+      data: baseData,
+    },
+    inputPortMap,
+    outputPortMap,
+  };
 }
 
 export function getLogicNodePort(
