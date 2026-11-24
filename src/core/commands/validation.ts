@@ -358,7 +358,7 @@ function isLayerDropPosition(value: unknown): value is LayerDropPosition {
 
 const COMMON_NODE_KEYS = [
   'id', 'name', 'type', 'x', 'y', 'width', 'height', 'rotation',
-  'opacity', 'blendMode', 'effects', 'visible', 'locked', 'layerColor', 'parentId', 'onCanvas', 'clipMaskBaseId',
+  'opacity', 'blendMode', 'effects', 'visible', 'locked', 'aspectRatioLocked', 'layerColor', 'parentId', 'onCanvas', 'clipMaskBaseId',
   'semanticTag', 'ariaLabel', 'href', 'layout', 'layoutChild', 'responsive', 'tokenBindings',
 ] as const;
 
@@ -392,6 +392,7 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     (value.effects !== undefined && !isValidEffectsList(value.effects)) ||
     typeof value.visible !== 'boolean' ||
     typeof value.locked !== 'boolean' ||
+    (value.aspectRatioLocked !== undefined && typeof value.aspectRatioLocked !== 'boolean') ||
     (value.layerColor !== undefined && (typeof value.layerColor !== 'string' || value.layerColor.length > 128)) ||
     (value.onCanvas !== undefined && typeof value.onCanvas !== 'boolean') ||
     (value.parentId !== undefined && value.parentId !== null && !isNonEmptyString(value.parentId)) ||

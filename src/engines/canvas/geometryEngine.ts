@@ -176,6 +176,13 @@ function validateNodeGeometry(node: DesignNode): string | null {
     if (node.style.radius !== undefined && (!isFiniteNumber(node.style.radius) || node.style.radius < 0)) {
       return `Shape node ${node.id} has invalid corner radius.`;
     }
+  } else if (node.type === 'image') {
+    if (node.style.strokeWidth !== undefined && (!isFiniteNumber(node.style.strokeWidth) || node.style.strokeWidth < 0)) {
+      return `Image node ${node.id} has invalid strokeWidth.`;
+    }
+    if (node.style.radius !== undefined && (!isFiniteNumber(node.style.radius) || node.style.radius < 0)) {
+      return `Image node ${node.id} has invalid corner radius.`;
+    }
   }
 
   return null;

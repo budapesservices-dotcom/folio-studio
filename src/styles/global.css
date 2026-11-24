@@ -963,6 +963,43 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .text-field:focus, .number-field:focus, .text-area-field:focus, .select-field:focus { border-color: #8174dc; }
 .select-field { cursor: pointer; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 9px; }
+.size-field-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr); align-items: end; gap: 6px; margin-top: 2px; }
+.size-field-row .field-label { margin-bottom: 0; min-width: 0; }
+.aspect-lock-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 31px;
+  padding: 0;
+  border: 1px solid #343b49;
+  border-radius: 5px;
+  color: #7d879b;
+  background: #141a24;
+  cursor: pointer;
+  transition: color 130ms ease, border-color 130ms ease, background-color 130ms ease, box-shadow 130ms ease;
+}
+.aspect-lock-btn:hover {
+  color: #d6dcf0;
+  border-color: #59637a;
+  background: #1d2433;
+}
+.aspect-lock-btn.is-locked {
+  color: #c8beff;
+  border-color: #7b6ee0;
+  background: #2b2646;
+  box-shadow: inset 0 0 0 1px rgba(158, 147, 245, 0.18);
+}
+.aspect-lock-btn.is-locked:hover {
+  color: #ece8ff;
+  border-color: #9b8ff5;
+  background: #352e57;
+}
+.aspect-lock-btn:focus-visible {
+  outline: 2px solid #8b7cf6;
+  outline-offset: 1px;
+}
+.aspect-lock-icon { width: 14px; height: 14px; display: block; }
 .number-field { font-variant-numeric: tabular-nums; }
 .rotation-field { margin-top: 12px; }
 .opacity-control-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }

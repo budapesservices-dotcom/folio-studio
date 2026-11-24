@@ -1,4 +1,12 @@
+import { isBlendMode, isFillPaint, isVisualEffect } from '../document/styling';
 import type { DesignNode } from '../document/types';
+import {
+  isNodeLayoutChildConfig,
+  isNodeLayoutConfig,
+  isNodeTokenBindings,
+  isResponsiveOverrides,
+  SEMANTIC_HTML_TAGS,
+} from '../document/validation';
 
 export const TOOL_OPERATION_PROTOCOL = 'folio.tool-operation' as const;
 export const TOOL_OPERATION_VERSION = 1 as const;
@@ -305,23 +313,41 @@ const COMMON_NODE_KEYS = [
   'height',
   'rotation',
   'opacity',
+  'blendMode',
+  'effects',
   'visible',
   'locked',
+  'aspectRatioLocked',
   'layerColor',
   'parentId',
   'onCanvas',
   'clipMaskBaseId',
+  'semanticTag',
+  'ariaLabel',
+  'href',
+  'layout',
+  'layoutChild',
+  'responsive',
+  'tokenBindings',
 ] as const;
 
 const FRAME_NODE_KEYS = [...COMMON_NODE_KEYS, 'style', 'clipContent', 'isSection'] as const;
 const SHAPE_NODE_KEYS = [...COMMON_NODE_KEYS, 'style'] as const;
 const PATH_NODE_KEYS = [...COMMON_NODE_KEYS, 'points', 'closed', 'style', 'pathKind', 'subpaths', 'shapeMeta'] as const;
 const TEXT_NODE_KEYS = [...COMMON_NODE_KEYS, 'text', 'style'] as const;
-const INSTANCE_NODE_KEYS = [...COMMON_NODE_KEYS, 'componentId', 'overrides'] as const;
+const IMAGE_NODE_KEYS = [...COMMON_NODE_KEYS, 'assetId', 'alt', 'naturalWidth', 'naturalHeight', 'style'] as const;
+const INSTANCE_NODE_KEYS = [
+  ...COMMON_NODE_KEYS,
+  'componentId',
+  'overrides',
+  'variantSelection',
+  'slotAssignments',
+] as const;
 
-const SHAPE_STYLE_KEYS = ['fill', 'stroke', 'strokeWidth', 'radius'] as const;
+const SHAPE_STYLE_KEYS = ['fill', 'fills', 'stroke', 'strokeWidth', 'radius'] as const;
 const PATH_STYLE_KEYS = [
   'fill',
+  'fills',
   'stroke',
   'strokeWidth',
   'strokeLinecap',
@@ -331,11 +357,24 @@ const PATH_STYLE_KEYS = [
   'arrowStart',
   'arrowEnd',
 ] as const;
-const TEXT_STYLE_KEYS = ['fill', 'fontSize', 'fontFamily', 'fontWeight', 'letterSpacing', 'lineHeight'] as const;
+const TEXT_STYLE_KEYS = [
+  'fill',
+  'fontSize',
+  'fontFamily',
+  'fontWeight',
+  'letterSpacing',
+  'lineHeight',
+  'textAlign',
+  'textWrap',
+  'textTransform',
+  'textDecoration',
+] as const;
+const IMAGE_STYLE_KEYS = ['fit', 'radius', 'stroke', 'strokeWidth'] as const;
 const ANCHOR_POINT_KEYS = ['id', 'x', 'y', 'handleIn', 'handleOut', 'pointType'] as const;
 const POINT_2D_KEYS = ['x', 'y'] as const;
 const SUBPATH_KEYS = ['points', 'closed'] as const;
 const INSTANCE_OVERRIDE_KEYS = ['fill', 'text'] as const;
+const SLOT_ASSIGNMENT_KEYS = ['text', 'fill', 'visible'] as const;
 
 const VALID_PATH_KINDS = new Set([
   'pen',
@@ -351,6 +390,11 @@ const VALID_PATH_KINDS = new Set([
 const VALID_STROKE_LINECAPS = new Set(['butt', 'round', 'square']);
 const VALID_STROKE_LINEJOINS = new Set(['miter', 'round', 'bevel']);
 const VALID_POINT_TYPES = new Set(['corner', 'smooth', 'symmetric']);
+const VALID_TEXT_ALIGNS = new Set(['left', 'center', 'right']);
+const VALID_TEXT_WRAPS = new Set(['wrap', 'nowrap']);
+const VALID_TEXT_TRANSFORMS = new Set(['none', 'uppercase', 'lowercase', 'capitalize']);
+const VALID_TEXT_DECORATIONS = new Set(['none', 'underline', 'line-through']);
+const VALID_IMAGE_FITS = new Set(['cover', 'contain', 'fill']);
 
 const STANDARD_OBJECT_PROTOTYPE_KEYS = new Set(Reflect.ownKeys(Object.prototype));
 const STANDARD_ARRAY_PROTOTYPE_KEYS = new Set(Reflect.ownKeys(Array.prototype));
@@ -503,6 +547,11 @@ function validateShapeStyle(
   if (typeof value.fill !== 'string' || value.fill.length > TOOL_OPERATION_LIMITS.maxColorLength) {
     return fail('INVALID_NODE', `${path}.fill must be a string.`, `${path}.fill`);
   }
+  if (value.fills !== undefined) {
+    if (!isDenseArray(value.fills) || value.fills.length > 16 || !value.fills.every(isFillPaint)) {
+      return fail('INVALID_NODE', `${path}.fills must contain up to 16 valid FillPaint entries.`, `${path}.fills`);
+    }
+  }
   if (typeof value.stroke !== 'string' || value.stroke.length > TOOL_OPERATION_LIMITS.maxColorLength) {
     return fail('INVALID_NODE', `${path}.stroke must be a string.`, `${path}.stroke`);
   }
@@ -528,6 +577,11 @@ function validatePathStyle(
   }
   if (typeof value.fill !== 'string' || value.fill.length > TOOL_OPERATION_LIMITS.maxColorLength) {
     return fail('INVALID_NODE', `${path}.fill must be a string.`, `${path}.fill`);
+  }
+  if (value.fills !== undefined) {
+    if (!isDenseArray(value.fills) || value.fills.length > 16 || !value.fills.every(isFillPaint)) {
+      return fail('INVALID_NODE', `${path}.fills must contain up to 16 valid FillPaint entries.`, `${path}.fills`);
+    }
   }
   if (typeof value.stroke !== 'string' || value.stroke.length > TOOL_OPERATION_LIMITS.maxColorLength) {
     return fail('INVALID_NODE', `${path}.stroke must be a string.`, `${path}.stroke`);
@@ -584,6 +638,9 @@ export function validateDesignNodePayload(
   if (typeof value.locked !== 'boolean') {
     return fail('INVALID_NODE', `${path}.locked must be a boolean.`, `${path}.locked`);
   }
+  if (value.aspectRatioLocked !== undefined && typeof value.aspectRatioLocked !== 'boolean') {
+    return fail('INVALID_NODE', `${path}.aspectRatioLocked must be a boolean.`, `${path}.aspectRatioLocked`);
+  }
   if (
     value.layerColor !== undefined &&
     (typeof value.layerColor !== 'string' || value.layerColor.length > TOOL_OPERATION_LIMITS.maxColorLength)
@@ -598,6 +655,35 @@ export function validateDesignNodePayload(
   }
   if (value.clipMaskBaseId !== undefined && !isNonEmptyString(value.clipMaskBaseId)) {
     return fail('INVALID_NODE', `${path}.clipMaskBaseId must be a non-empty string.`, `${path}.clipMaskBaseId`);
+  }
+  if (value.blendMode !== undefined && !isBlendMode(value.blendMode)) {
+    return fail('INVALID_NODE', `${path}.blendMode is not a supported BlendMode.`, `${path}.blendMode`);
+  }
+  if (value.effects !== undefined) {
+    if (!isDenseArray(value.effects) || value.effects.length > 16 || !value.effects.every(isVisualEffect)) {
+      return fail('INVALID_NODE', `${path}.effects must contain up to 16 valid VisualEffect entries.`, `${path}.effects`);
+    }
+  }
+  if (value.semanticTag !== undefined && !SEMANTIC_HTML_TAGS.has(String(value.semanticTag))) {
+    return fail('INVALID_NODE', `${path}.semanticTag is not a supported semantic HTML tag.`, `${path}.semanticTag`);
+  }
+  if (value.ariaLabel !== undefined && (typeof value.ariaLabel !== 'string' || value.ariaLabel.length > 512)) {
+    return fail('INVALID_NODE', `${path}.ariaLabel must be a string.`, `${path}.ariaLabel`);
+  }
+  if (value.href !== undefined && (typeof value.href !== 'string' || value.href.length > 2048)) {
+    return fail('INVALID_NODE', `${path}.href must be a string.`, `${path}.href`);
+  }
+  if (value.layout !== undefined && !isNodeLayoutConfig(value.layout)) {
+    return fail('INVALID_NODE', `${path}.layout is not a valid Auto-Layout configuration.`, `${path}.layout`);
+  }
+  if (value.layoutChild !== undefined && !isNodeLayoutChildConfig(value.layoutChild)) {
+    return fail('INVALID_NODE', `${path}.layoutChild is not a valid layout child configuration.`, `${path}.layoutChild`);
+  }
+  if (value.responsive !== undefined && !isResponsiveOverrides(value.responsive)) {
+    return fail('INVALID_NODE', `${path}.responsive is not a valid responsive override map.`, `${path}.responsive`);
+  }
+  if (value.tokenBindings !== undefined && !isNodeTokenBindings(value.tokenBindings)) {
+    return fail('INVALID_NODE', `${path}.tokenBindings is not a valid token binding map.`, `${path}.tokenBindings`);
   }
   if (!isFiniteNumber(value.x) || !isFiniteNumber(value.y)) {
     return fail('INVALID_GEOMETRY', `Node ${value.id} has non-finite coordinates.`, path);
@@ -681,6 +767,62 @@ export function validateDesignNodePayload(
       }
       if (!isFiniteNumber(style.lineHeight) || style.lineHeight <= 0) {
         return fail('INVALID_GEOMETRY', `Text node ${value.id} has invalid lineHeight.`, `${path}.style.lineHeight`);
+      }
+      if (style.textAlign !== undefined && (typeof style.textAlign !== 'string' || !VALID_TEXT_ALIGNS.has(style.textAlign))) {
+        return fail('INVALID_NODE', `${path}.style.textAlign must be "left", "center", or "right".`, `${path}.style.textAlign`);
+      }
+      if (style.textWrap !== undefined && (typeof style.textWrap !== 'string' || !VALID_TEXT_WRAPS.has(style.textWrap))) {
+        return fail('INVALID_NODE', `${path}.style.textWrap must be "wrap" or "nowrap".`, `${path}.style.textWrap`);
+      }
+      if (
+        style.textTransform !== undefined &&
+        (typeof style.textTransform !== 'string' || !VALID_TEXT_TRANSFORMS.has(style.textTransform))
+      ) {
+        return fail('INVALID_NODE', `${path}.style.textTransform is invalid.`, `${path}.style.textTransform`);
+      }
+      if (
+        style.textDecoration !== undefined &&
+        (typeof style.textDecoration !== 'string' || !VALID_TEXT_DECORATIONS.has(style.textDecoration))
+      ) {
+        return fail('INVALID_NODE', `${path}.style.textDecoration is invalid.`, `${path}.style.textDecoration`);
+      }
+      return null;
+    }
+
+    case 'image': {
+      const extra = findUnexpectedKey(value, IMAGE_NODE_KEYS);
+      if (extra) return fail('INVALID_NODE', `Unexpected property "${extra}" on ${path}.`, `${path}.${extra}`);
+      if (!isNonEmptyString(value.assetId)) {
+        return fail('INVALID_NODE', `${path}.assetId must be a non-empty string.`, `${path}.assetId`);
+      }
+      if (value.alt !== undefined && (typeof value.alt !== 'string' || value.alt.length > TOOL_OPERATION_LIMITS.maxNameLength)) {
+        return fail('INVALID_NODE', `${path}.alt must be a string.`, `${path}.alt`);
+      }
+      if (value.naturalWidth !== undefined && (!isFiniteNumber(value.naturalWidth) || value.naturalWidth <= 0)) {
+        return fail('INVALID_GEOMETRY', `${path}.naturalWidth must be a positive finite number.`, `${path}.naturalWidth`);
+      }
+      if (value.naturalHeight !== undefined && (!isFiniteNumber(value.naturalHeight) || value.naturalHeight <= 0)) {
+        return fail('INVALID_GEOMETRY', `${path}.naturalHeight must be a positive finite number.`, `${path}.naturalHeight`);
+      }
+      if (!isPlainRecord(value.style)) {
+        return fail('INVALID_NODE', `${path}.style must be a plain image style object.`, `${path}.style`);
+      }
+      const styleExtra = findUnexpectedKey(value.style, IMAGE_STYLE_KEYS);
+      if (styleExtra) {
+        return fail('INVALID_NODE', `Unexpected property "${styleExtra}" on ${path}.style.`, `${path}.style.${styleExtra}`);
+      }
+      const style = value.style;
+      if (typeof style.fit !== 'string' || !VALID_IMAGE_FITS.has(style.fit)) {
+        return fail('INVALID_NODE', `${path}.style.fit must be "cover", "contain", or "fill".`, `${path}.style.fit`);
+      }
+      if (style.radius !== undefined && (!isFiniteNumber(style.radius) || style.radius < 0)) {
+        return fail('INVALID_GEOMETRY', `${path}.style.radius must be a finite number >= 0.`, `${path}.style.radius`);
+      }
+      if (style.stroke !== undefined && (typeof style.stroke !== 'string' || style.stroke.length > TOOL_OPERATION_LIMITS.maxColorLength)) {
+        return fail('INVALID_NODE', `${path}.style.stroke must be a string.`, `${path}.style.stroke`);
+      }
+      if (style.strokeWidth !== undefined && (!isFiniteNumber(style.strokeWidth) || style.strokeWidth < 0)) {
+        return fail('INVALID_GEOMETRY', `${path}.style.strokeWidth must be a finite number >= 0.`, `${path}.style.strokeWidth`);
       }
       return null;
     }
@@ -846,6 +988,50 @@ export function validateDesignNodePayload(
           (typeof override.text !== 'string' || override.text.length > TOOL_OPERATION_LIMITS.maxTextLength)
         ) {
           return fail('INVALID_NODE', `${overridePath}.text must be a string.`, `${overridePath}.text`);
+        }
+      }
+      if (value.variantSelection !== undefined) {
+        if (!isPlainRecord(value.variantSelection)) {
+          return fail('INVALID_NODE', `${path}.variantSelection must be a plain object.`, `${path}.variantSelection`);
+        }
+        for (const [axisId, optionId] of Object.entries(value.variantSelection)) {
+          if (!isNonEmptyString(axisId) || !isNonEmptyString(optionId)) {
+            return fail(
+              'INVALID_NODE',
+              `${path}.variantSelection entries must map non-empty axis IDs to option IDs.`,
+              `${path}.variantSelection.${axisId}`,
+            );
+          }
+        }
+      }
+      if (value.slotAssignments !== undefined) {
+        if (!isPlainRecord(value.slotAssignments)) {
+          return fail('INVALID_NODE', `${path}.slotAssignments must be a plain object.`, `${path}.slotAssignments`);
+        }
+        for (const [slotId, assignment] of Object.entries(value.slotAssignments)) {
+          const slotPath = `${path}.slotAssignments.${slotId}`;
+          if (!isNonEmptyString(slotId) || !isPlainRecord(assignment)) {
+            return fail('INVALID_NODE', `${slotPath} must be a plain slot assignment object.`, slotPath);
+          }
+          const slotExtra = findUnexpectedKey(assignment, SLOT_ASSIGNMENT_KEYS);
+          if (slotExtra) {
+            return fail('INVALID_NODE', `Unexpected property "${slotExtra}" on ${slotPath}.`, `${slotPath}.${slotExtra}`);
+          }
+          if (
+            assignment.text !== undefined &&
+            (typeof assignment.text !== 'string' || assignment.text.length > TOOL_OPERATION_LIMITS.maxTextLength)
+          ) {
+            return fail('INVALID_NODE', `${slotPath}.text must be a string.`, `${slotPath}.text`);
+          }
+          if (
+            assignment.fill !== undefined &&
+            (typeof assignment.fill !== 'string' || assignment.fill.length > TOOL_OPERATION_LIMITS.maxColorLength)
+          ) {
+            return fail('INVALID_NODE', `${slotPath}.fill must be a string.`, `${slotPath}.fill`);
+          }
+          if (assignment.visible !== undefined && typeof assignment.visible !== 'boolean') {
+            return fail('INVALID_NODE', `${slotPath}.visible must be a boolean.`, `${slotPath}.visible`);
+          }
         }
       }
       return null;

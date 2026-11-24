@@ -15,6 +15,7 @@ import type {
   RectNode,
   TextNode,
 } from '../core/document/types';
+import { computeProportionalDimensions } from '../engines/canvas/geometry';
 import { PANEL_RESIZE_CONSTRAINTS, type ResizablePanelId } from './panelResize';
 import { normalizePositiveDimension } from './editorReducer';
 import type { EditorTarget } from './editorContext';
@@ -154,6 +155,55 @@ export function InspectorPanel({
       ? selectedRootNodes[0]
       : null;
 
+  const isAspectRatioLocked = Boolean(selectedNode?.aspectRatioLocked);
+
+  const captureAspectRatioAnchor = (input: HTMLInputElement) => {
+    if (!selectedNode || selectedNode.width <= 0 || selectedNode.height <= 0) {
+      delete input.dataset.aspectAnchor;
+      delete input.dataset.aspectAnchorNodeId;
+      return;
+    }
+    input.dataset.aspectAnchor = String(selectedNode.width / selectedNode.height);
+    input.dataset.aspectAnchorNodeId = selectedNode.id;
+  };
+
+  const handleDimensionInput = (axis: 'width' | 'height', input: HTMLInputElement) => {
+    if (!selectedNode) return;
+    const value = parseNumericInput(input.value);
+    if (value === null) return;
+    const currentAxisValue = axis === 'width' ? selectedNode.width : selectedNode.height;
+    const safeNext = normalizePositiveDimension(value, currentAxisValue);
+    if (!isAspectRatioLocked) {
+      onUpdateSelected(axis === 'width' ? { width: safeNext } : { height: safeNext });
+      return;
+    }
+    const storedAnchor =
+      input.dataset.aspectAnchorNodeId === selectedNode.id
+        ? Number(input.dataset.aspectAnchor)
+        : NaN;
+    const anchor =
+      Number.isFinite(storedAnchor) && storedAnchor > 0
+        ? storedAnchor
+        : selectedNode.height > 0
+          ? selectedNode.width / selectedNode.height
+          : 1;
+    const next = computeProportionalDimensions({
+      currentWidth: selectedNode.width,
+      currentHeight: selectedNode.height,
+      axis,
+      nextValue: safeNext,
+      lockAspectRatio: true,
+      anchorRatio: anchor,
+    });
+    onUpdateSelected({ width: next.width, height: next.height });
+  };
+
+  const handleToggleAspectRatioLock = () => {
+    if (!selectedNode) return;
+    onUpdateSelected({ aspectRatioLocked: !isAspectRatioLocked });
+    onCommitEdit();
+  };
+
   return (
     <aside
       class={`inspector-panel ${visible ? '' : 'is-hidden'}`}
@@ -265,6 +315,8 @@ export function InspectorPanel({
                   }}
                 />
               </label>
+            </div>
+            <div class="size-field-row">
               <label class="field-label">
                 W
                 <input
@@ -272,14 +324,48 @@ export function InspectorPanel({
                   type="number"
                   min="1"
                   value={Math.round(selectedNode.width)}
-                  onInput={(event) => {
-                    const value = parseNumericInput(event.currentTarget.value);
-                    if (value !== null) {
-                      onUpdateSelected({ width: normalizePositiveDimension(value, selectedNode.width) });
-                    }
+                  onFocus={(event) => captureAspectRatioAnchor(event.currentTarget)}
+                  onBlur={(event) => {
+                    delete event.currentTarget.dataset.aspectAnchor;
+                    delete event.currentTarget.dataset.aspectAnchorNodeId;
                   }}
+                  onInput={(event) => handleDimensionInput('width', event.currentTarget)}
                 />
               </label>
+              <button
+                type="button"
+                class={`aspect-lock-btn${isAspectRatioLocked ? ' is-locked' : ''}`}
+                aria-pressed={isAspectRatioLocked}
+                aria-label={isAspectRatioLocked ? 'Unlock aspect ratio' : 'Lock aspect ratio'}
+                title={
+                  isAspectRatioLocked
+                    ? 'Aspect ratio locked — W and H scale proportionally (click to unlock)'
+                    : 'Lock aspect ratio — sync W and H proportionally'
+                }
+                onClick={handleToggleAspectRatioLock}
+              >
+                {isAspectRatioLocked ? (
+                  <svg class="aspect-lock-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M6.5 9.5L9.5 6.5M5.8 11.2L4.6 12.4a2.3 2.3 0 0 1-3.25-3.25l1.2-1.2a2.3 2.3 0 0 1 3.25 0M10.2 4.8l1.2-1.2a2.3 2.3 0 0 1 3.25 3.25l-1.2 1.2a2.3 2.3 0 0 1-3.25 0"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                ) : (
+                  <svg class="aspect-lock-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M5.8 11.2L4.6 12.4a2.3 2.3 0 0 1-3.25-3.25l1.2-1.2a2.3 2.3 0 0 1 3.25 0M10.2 4.8l1.2-1.2a2.3 2.3 0 0 1 3.25 3.25l-1.2 1.2a2.3 2.3 0 0 1-3.25 0M4.5 3.5L6 5M10 11l1.5 1.5"
+                      stroke="currentColor"
+                      stroke-width="1.45"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                )}
+              </button>
               <label class="field-label">
                 H
                 <input
@@ -287,12 +373,12 @@ export function InspectorPanel({
                   type="number"
                   min="1"
                   value={Math.round(selectedNode.height)}
-                  onInput={(event) => {
-                    const value = parseNumericInput(event.currentTarget.value);
-                    if (value !== null) {
-                      onUpdateSelected({ height: normalizePositiveDimension(value, selectedNode.height) });
-                    }
+                  onFocus={(event) => captureAspectRatioAnchor(event.currentTarget)}
+                  onBlur={(event) => {
+                    delete event.currentTarget.dataset.aspectAnchor;
+                    delete event.currentTarget.dataset.aspectAnchorNodeId;
                   }}
+                  onInput={(event) => handleDimensionInput('height', event.currentTarget)}
                 />
               </label>
             </div>

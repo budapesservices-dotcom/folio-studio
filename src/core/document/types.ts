@@ -220,6 +220,8 @@ export interface NodeBase {
   blendMode?: BlendMode;
   /** Optional visual effects stack (Drop Shadow, Inner Shadow, Layer Blur, Backdrop Blur). */
   effects?: VisualEffect[];
+  /** When true, W and H scale proportionally in the Inspector and across all canvas resize handles. */
+  aspectRatioLocked?: boolean;
 }
 
 export interface ShapeStyle {

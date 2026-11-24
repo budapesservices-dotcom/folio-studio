@@ -359,7 +359,8 @@ function isCommonNode(value: Record<string, unknown>): boolean {
     (value.responsive === undefined || isResponsiveOverrides(value.responsive)) &&
     (value.tokenBindings === undefined || isNodeTokenBindings(value.tokenBindings)) &&
     (value.blendMode === undefined || isBlendMode(value.blendMode)) &&
-    (value.effects === undefined || (Array.isArray(value.effects) && value.effects.length <= 16 && value.effects.every(isVisualEffect)))
+    (value.effects === undefined || (Array.isArray(value.effects) && value.effects.length <= 16 && value.effects.every(isVisualEffect))) &&
+    (value.aspectRatioLocked === undefined || typeof value.aspectRatioLocked === 'boolean')
   );
 }
 

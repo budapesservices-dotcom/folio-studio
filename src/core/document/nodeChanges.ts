@@ -287,6 +287,7 @@ export function classifyNodeChange(
       JSON.stringify(before.effects ?? []) !== JSON.stringify(after.effects ?? [])) ||
     before.visible !== after.visible ||
     before.locked !== after.locked ||
+    Boolean(before.aspectRatioLocked) !== Boolean(after.aspectRatioLocked) ||
     (before.layerColor ?? undefined) !== (after.layerColor ?? undefined) ||
     (before.parentId ?? null) !== (after.parentId ?? null) ||
     (before.clipMaskBaseId ?? undefined) !== (after.clipMaskBaseId ?? undefined) ||

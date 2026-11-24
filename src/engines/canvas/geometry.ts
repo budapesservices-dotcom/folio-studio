@@ -641,3 +641,51 @@ export function distributeNodes(
     [positionKey]: positions.get(node.id) ?? node[positionKey],
   }));
 }
+
+export interface ProportionalDimensionsInput {
+  readonly currentWidth: number;
+  readonly currentHeight: number;
+  readonly axis: 'width' | 'height';
+  readonly nextValue: number;
+  readonly lockAspectRatio: boolean;
+  /** Optional pinned width/height ratio captured at edit start to prevent rounding drift across keystrokes. */
+  readonly anchorRatio?: number | null;
+}
+
+export interface ProportionalDimensionsResult {
+  readonly width: number;
+  readonly height: number;
+}
+
+export function computeProportionalDimensions(
+  input: ProportionalDimensionsInput,
+): ProportionalDimensionsResult {
+  const safeCurrentW = Number.isFinite(input.currentWidth) && input.currentWidth > 0 ? input.currentWidth : 1;
+  const safeCurrentH = Number.isFinite(input.currentHeight) && input.currentHeight > 0 ? input.currentHeight : 1;
+  const safeNext =
+    Number.isFinite(input.nextValue) && input.nextValue > 0
+      ? input.nextValue
+      : input.axis === 'width'
+        ? safeCurrentW
+        : safeCurrentH;
+
+  if (!input.lockAspectRatio) {
+    return input.axis === 'width'
+      ? { width: safeNext, height: safeCurrentH }
+      : { width: safeCurrentW, height: safeNext };
+  }
+
+  const ratio =
+    typeof input.anchorRatio === 'number' && Number.isFinite(input.anchorRatio) && input.anchorRatio > 0
+      ? input.anchorRatio
+      : safeCurrentW / safeCurrentH;
+
+  if (input.axis === 'width') {
+    const syncedHeight = Math.max(1, roundGeom(safeNext / ratio));
+    return { width: safeNext, height: syncedHeight };
+  }
+
+  const syncedWidth = Math.max(1, roundGeom(safeNext * ratio));
+  return { width: syncedWidth, height: safeNext };
+}
+

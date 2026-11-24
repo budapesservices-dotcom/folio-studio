@@ -475,7 +475,8 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           session.handle === 'ne' ||
           session.handle === 'se' ||
           session.handle === 'sw';
-        const lockAspect = isCorner || Boolean(session.uniformScale) || event.shiftKey;
+        const nodeLocksAspect = session.nodes.some((node) => Boolean(node.aspectRatioLocked));
+        const lockAspect = isCorner || Boolean(session.uniformScale) || event.shiftKey || nodeLocksAspect;
         const resizeTargets = context.otherNodes.filter((node) => !session.ids.includes(node.id));
         const snappedResize = snapResizeBounds(
           session.bounds,
@@ -496,7 +497,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           {
             uniformScale: Boolean(session.uniformScale),
             fromCenter: event.altKey,
-            constrainAspect: event.shiftKey,
+            constrainAspect: event.shiftKey || nodeLocksAspect,
           },
         );
         const nextBounds = getBounds(previewNodes);
