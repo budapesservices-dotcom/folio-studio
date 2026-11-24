@@ -316,12 +316,16 @@ Milestones must be implemented and verified incrementally. Do not begin a later 
 
 ## 13. Current implementation reality
 
-The repository contains an evolving implementation with a TypeScript, Vite, Preact, DOM/SVG stack and an existing JSON-based \`.flop\` persistence model documented in \`docs/ARCHITECTURE.md\`. That document and the source/tests describe the current implementation.
+The repository contains an evolving TypeScript, Vite, Preact, DOM/SVG implementation and the current JSON-based .flop v2 persistence model documented in docs/ARCHITECTURE.md. That document and the source/tests describe implementation reality.
 
-This blueprint describes agreed product direction and target architecture. It does not claim that multi-application projects, the complete component contract, Node Logic runtime, full code mapping, archive-based container, realtime collaboration, AI project control, backend workspace, or deployment infrastructure are already implemented.
+**Current Node Logic reality:** the repository contains a .flop v2-compatible graph model, a 31-primary-node catalog plus 13 legacy compatibility nodes, typed Execution/Data ports, Pipeline target resolution, semantic validation, a deterministic headless PrototypeRuntime, Smart Logic Frames, a visual Node Logic workspace, and Live Preview/React code-generation paths. This is an implemented baseline, not full production parity: network nodes are simulated in the headless runtime, source.external is a placeholder, variable persist/computed-expression metadata is not executed by the runtime, component-scoped graphs are not selected by the standard page runtime helper, and Live Preview/React support is narrower than the 31-node catalog. See [Node Logic v1 specification](specs/NODE_LOGIC_V1.md) and [current repository architecture](ARCHITECTURE.md).
+
+**Current AST reality:** FrameNode, PathNode, ImageNode and the existing group/rect/ellipse/text/component-instance families are implemented, along with the read-only scoped NativeAstDocumentView facade. The Native AST v1 document describes remaining target-contract gaps as well as the implemented baseline.
+
+This blueprint describes agreed product direction and target architecture. It does not claim that multi-application projects, the complete component contract, full code mapping/round-trip synchronization, an archive-based .flop container, realtime collaboration, AI project control, a complete backend workspace, or hosted deployment infrastructure are already implemented.
 
 When target direction and current source differ, document the gap and plan a deliberate migration. Never silently replace working behavior or project files.
 
 ---
 
-**Next architecture milestone:** [Native AST v1 Specification](specs/NATIVE_AST_V1.md) — define canonical document/node structures, stable identity, typed properties, relationships, capabilities, and schema evolution so Canvas, Components, Node Logic, and Code share the same meaning.
+**Next architecture milestone:** close the gap between the implemented Native AST baseline and the remaining Native AST v1 contracts, while prioritizing tested Node Logic parity and secure runtime boundaries. The [Native AST v1 Specification](specs/NATIVE_AST_V1.md), [Node Logic v1 specification](specs/NODE_LOGIC_V1.md), and [current Architecture](ARCHITECTURE.md) must remain aligned.
