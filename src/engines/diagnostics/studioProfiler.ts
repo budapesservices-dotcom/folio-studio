@@ -252,7 +252,7 @@ export function analyzeProjectHealth(
       id: 'compute-kernels',
       label: 'WASM Spatial & Worker Compute Engine',
       status: 'healthy',
-      summary: `Spatial: ${computeKernels.spatialBackend.toUpperCase()} · Worker: ${computeKernels.workerReady ? 'Active' : computeKernels.workerSupported ? 'Standby' : 'Sync Fallback'} · WASM: ${computeKernels.wasmSupported ? 'Supported' : 'Fallback'}.`,
+      summary: `Spatial: ${computeKernels.spatialBackend.toUpperCase()} · Worker: ${computeKernels.workerActive ? 'Active' : computeKernels.workerSupported ? 'Standby' : 'Sync Fallback'} · WASM: ${computeKernels.wasmSupported ? 'Supported' : 'Fallback'}.`,
     },
   ];
 

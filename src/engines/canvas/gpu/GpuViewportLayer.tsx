@@ -63,11 +63,12 @@ export const GpuViewportLayer = memo(function GpuViewportLayer({
 }: GpuViewportLayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const instancedCanvasRef = useRef<HTMLCanvasElement>(null);
+  const webgpuCanvasRef = useRef<HTMLCanvasElement>(null);
   const tileCanvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<HybridGpuViewportEngine | null>(null);
   const [assetVersion, setAssetVersion] = useState(0);
 
-  // Initialize / dispose GPU engine tied to `active` lifecycle
+  // Initialize / dispose GPU engine tied to `active` lifecycle, then opportunistically upgrade to WebGPU
   useEffect(() => {
     if (!active) {
       if (engineRef.current) {
@@ -78,13 +79,24 @@ export const GpuViewportLayer = memo(function GpuViewportLayer({
     }
 
     const instanced = instancedCanvasRef.current;
+    const webgpuCanvas = webgpuCanvasRef.current;
     const tile = tileCanvasRef.current;
     if (!instanced || !tile) return;
 
     const engine = new HybridGpuViewportEngine(instanced, tile, 64);
     engineRef.current = engine;
 
+    let cancelled = false;
+    if (webgpuCanvas) {
+      void engine.upgradeToWebGpuAsync(webgpuCanvas).then((upgraded) => {
+        if (!cancelled && upgraded && engineRef.current === engine) {
+          setAssetVersion((v) => v + 1);
+        }
+      });
+    }
+
     return () => {
+      cancelled = true;
       engine.dispose();
       if (engineRef.current === engine) {
         engineRef.current = null;
@@ -172,6 +184,11 @@ export const GpuViewportLayer = memo(function GpuViewportLayer({
       aria-hidden="true"
     >
       <canvas ref={instancedCanvasRef} class="gpu-viewport-canvas gpu-instanced-layer" />
+      <canvas
+        ref={webgpuCanvasRef}
+        class="gpu-viewport-canvas gpu-instanced-layer"
+        style={{ display: 'none' }}
+      />
       <canvas ref={tileCanvasRef} class="gpu-viewport-canvas gpu-tile-layer" />
     </div>
   );

@@ -8,7 +8,6 @@ import { auditPageAccessibility } from '../../engines/codegen/a11yAudit';
 import { defaultSpatialIndexKernel } from './spatialIndex';
 import {
   WASM_SPATIAL_MODULE_BYTES,
-  createWasmSpatialIndexKernel,
   createWasmSpatialIndexKernelAsync,
   isWebAssemblySupported,
 } from './wasmSpatialKernel';

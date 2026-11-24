@@ -1426,6 +1426,7 @@ export function validateAssetUpsertPayload(
       asset.source.startsWith('data:application/font') ||
       asset.source.startsWith('data:application/octet-stream') ||
       asset.source.startsWith('idb://') ||
+      asset.source.startsWith('folio-asset://') ||
       asset.source.startsWith('assets/') ||
       asset.source.startsWith('/assets/') ||
       asset.source.startsWith('https://')

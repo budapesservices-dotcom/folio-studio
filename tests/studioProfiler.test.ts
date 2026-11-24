@@ -66,16 +66,17 @@ describe('P2-2 — Studio Scene Profiler & Project Health Diagnostics', () => {
     expect(health.nodeBreakdown.rect).toBe(SPATIAL_CULLING_THRESHOLD + 11);
   });
 
-  it('runs a non-destructive live scene profile across all 8 runtime engine stages', () => {
+  it('runs a non-destructive live scene profile across all 9 runtime engine stages', () => {
     const project = createInteractiveStarterProject('Profile Target');
     const profile = runLiveSceneProfile(project);
 
-    expect(profile.stages).toHaveLength(8);
+    expect(profile.stages).toHaveLength(9);
     expect(profile.stages.map((stage) => stage.id)).toEqual([
       'ast-view',
       'layer-tree',
       'auto-layout',
       'spatial-index',
+      'gpu-scene-pack',
       'a11y-audit',
       'compile-html',
       'compile-react',

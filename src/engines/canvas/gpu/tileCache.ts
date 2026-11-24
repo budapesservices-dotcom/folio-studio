@@ -166,12 +166,22 @@ interface CachedImageEntry {
   failed: boolean;
 }
 
+const MAX_CACHED_IMAGES = 128;
 const imageElementCache = new Map<string, CachedImageEntry>();
 
 function getOrLoadImage(url: string, onLoaded?: () => void): HTMLImageElement | null {
   if (!url || typeof Image === 'undefined') return null;
   let entry = imageElementCache.get(url);
-  if (!entry) {
+  if (entry) {
+    // Refresh LRU recency
+    imageElementCache.delete(url);
+    imageElementCache.set(url, entry);
+  } else {
+    while (imageElementCache.size >= MAX_CACHED_IMAGES) {
+      const oldestKey = imageElementCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      imageElementCache.delete(oldestKey);
+    }
     const img = new Image();
     img.decoding = 'async';
     entry = { img, loaded: false, failed: false };
@@ -264,18 +274,133 @@ function applyNodeEffectsAndBlend(ctx: CanvasRenderingContext2D, node: DesignNod
   if (effects.length === 0) return;
 
   const filters: string[] = [];
+  const dropShadows: Array<{ x: number; y: number; blur: number; color: string }> = [];
   for (const eff of effects) {
     if (eff.type === 'layer-blur' && eff.radius > 0) {
       filters.push(`blur(${eff.radius}px)`);
     } else if (eff.type === 'drop-shadow') {
-      ctx.shadowOffsetX = eff.x;
-      ctx.shadowOffsetY = eff.y;
-      ctx.shadowBlur = Math.max(0, eff.blur);
-      ctx.shadowColor = sanitizeStyleColor(eff.color);
+      dropShadows.push({
+        x: eff.x,
+        y: eff.y,
+        blur: Math.max(0, eff.blur),
+        color: sanitizeStyleColor(eff.color),
+      });
     }
   }
+
+  // Use native canvas shadow for single shadow (widest support), and CSS filter chain when multiple shadows stack
+  if (dropShadows.length === 1) {
+    const ds = dropShadows[0];
+    ctx.shadowOffsetX = ds.x;
+    ctx.shadowOffsetY = ds.y;
+    ctx.shadowBlur = ds.blur;
+    ctx.shadowColor = ds.color;
+  } else if (dropShadows.length > 1) {
+    for (const ds of dropShadows) {
+      filters.push(`drop-shadow(${ds.x}px ${ds.y}px ${ds.blur}px ${ds.color})`);
+    }
+  }
+
   if (filters.length > 0 && 'filter' in ctx) {
     ctx.filter = filters.join(' ');
+  }
+}
+
+function traceNodeGeometryPath(ctx: CanvasRenderingContext2D, node: DesignNode): boolean {
+  if (node.type === 'rect' || node.type === 'frame' || node.type === 'image') {
+    traceRoundedRect(ctx, node.x, node.y, node.width, node.height, node.style.radius ?? 0);
+    return true;
+  }
+  if (node.type === 'ellipse') {
+    ctx.beginPath();
+    ctx.ellipse(
+      node.x + node.width * 0.5,
+      node.y + node.height * 0.5,
+      Math.max(0.5, node.width * 0.5),
+      Math.max(0.5, node.height * 0.5),
+      0,
+      0,
+      Math.PI * 2,
+    );
+    return true;
+  }
+  if (node.type === 'path' && node.points.length > 0) {
+    ctx.beginPath();
+    traceSubpath(ctx, node.x, node.y, node.points, node.closed);
+    if (node.subpaths) {
+      for (const sub of node.subpaths) {
+        traceSubpath(ctx, node.x, node.y, sub.points, sub.closed);
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+function renderInnerShadowsForNode(ctx: CanvasRenderingContext2D, node: DesignNode): void {
+  const effects = getVisibleEffects(node);
+  const innerShadows = effects.filter((eff) => eff.type === 'inner-shadow');
+  if (innerShadows.length === 0) return;
+
+  for (const eff of innerShadows) {
+    if (eff.type !== 'inner-shadow') continue;
+    ctx.save();
+    if ('filter' in ctx) ctx.filter = 'none';
+    if (!traceNodeGeometryPath(ctx, node)) {
+      ctx.restore();
+      return;
+    }
+    ctx.clip();
+    // Draw an inverted frame around the shape with a cast shadow so the shadow falls strictly inside the clip region
+    const pad = Math.max(40, eff.blur * 3 + Math.abs(eff.x) + Math.abs(eff.y) + Math.abs(eff.spread ?? 0) + 16);
+    ctx.shadowOffsetX = eff.x;
+    ctx.shadowOffsetY = eff.y;
+    ctx.shadowBlur = Math.max(0, eff.blur);
+    ctx.shadowColor = sanitizeStyleColor(eff.color);
+    ctx.fillStyle = sanitizeStyleColor(eff.color);
+    ctx.beginPath();
+    ctx.rect(node.x - pad, node.y - pad, node.width + pad * 2, node.height + pad * 2);
+    if (node.type === 'ellipse') {
+      ctx.ellipse(
+        node.x + node.width * 0.5,
+        node.y + node.height * 0.5,
+        Math.max(0.5, node.width * 0.5),
+        Math.max(0.5, node.height * 0.5),
+        0,
+        0,
+        Math.PI * 2,
+        true,
+      );
+    } else if (node.type === 'rect' || node.type === 'frame' || node.type === 'image') {
+      const r = Math.max(0, Math.min(node.style.radius ?? 0, node.width * 0.5, node.height * 0.5));
+      if (r > 0) {
+        const x = node.x;
+        const y = node.y;
+        const w = node.width;
+        const h = node.height;
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+      } else {
+        ctx.rect(node.x, node.y, node.width, node.height);
+      }
+    } else if (node.type === 'path' && node.points.length > 0) {
+      traceSubpath(ctx, node.x, node.y, node.points, node.closed);
+      if (node.subpaths) {
+        for (const sub of node.subpaths) {
+          traceSubpath(ctx, node.x, node.y, sub.points, sub.closed);
+        }
+      }
+    }
+    ctx.fill('evenodd');
+    ctx.restore();
   }
 }
 
@@ -522,13 +647,39 @@ function renderTextNode(ctx: CanvasRenderingContext2D, node: TextNode): void {
   const firstBaselineY = node.y + fontSize;
   const decoration = node.style.textDecoration;
 
+  const letterSpacing = node.style.letterSpacing || 0;
+  const ctxWithSpacing = ctx as CanvasRenderingContext2D & { letterSpacing?: string };
+  const supportsNativeSpacing = letterSpacing !== 0 && 'letterSpacing' in ctxWithSpacing;
+  if (supportsNativeSpacing) {
+    ctxWithSpacing.letterSpacing = `${letterSpacing}px`;
+  }
+
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     const baselineY = firstBaselineY + i * lineHeightPx;
-    ctx.fillText(line, anchorX, baselineY);
+    let metricsW = ctx.measureText(line).width;
+
+    if (letterSpacing !== 0 && !supportsNativeSpacing && line.length > 1) {
+      const totalExtra = letterSpacing * (line.length - 1);
+      metricsW += totalExtra;
+      let cursorX =
+        textAlign === 'center'
+          ? anchorX - metricsW * 0.5
+          : textAlign === 'right'
+            ? anchorX - metricsW
+            : anchorX;
+      ctx.textAlign = 'left';
+      for (let c = 0; c < line.length; c += 1) {
+        const ch = line[c];
+        ctx.fillText(ch, cursorX, baselineY);
+        cursorX += ctx.measureText(ch).width + letterSpacing;
+      }
+      ctx.textAlign = textAlign;
+    } else {
+      ctx.fillText(line, anchorX, baselineY);
+    }
 
     if (decoration && decoration !== 'none' && line.length > 0) {
-      const metricsW = ctx.measureText(line).width;
       const startX =
         textAlign === 'center'
           ? anchorX - metricsW * 0.5
@@ -543,6 +694,10 @@ function renderTextNode(ctx: CanvasRenderingContext2D, node: TextNode): void {
       ctx.lineWidth = Math.max(1, fontSize * 0.065);
       ctx.stroke();
     }
+  }
+
+  if (supportsNativeSpacing) {
+    ctxWithSpacing.letterSpacing = '0px';
   }
 }
 
@@ -666,6 +821,30 @@ export function renderRichNodeToContext2D(
     }
   }
 
+  // Apply sibling/ancestor vector clip masks if present (supporting rotated mask geometry)
+  const clipMaskIds = context.clipMaskMap.get(node.id);
+  if (clipMaskIds && clipMaskIds.length > 0) {
+    for (const maskId of clipMaskIds) {
+      const maskNode = context.nodeById.get(maskId);
+      if (!maskNode || !maskNode.visible) continue;
+      if (maskNode.rotation) {
+        const mcx = maskNode.x + maskNode.width * 0.5;
+        const mcy = maskNode.y + maskNode.height * 0.5;
+        ctx.translate(mcx, mcy);
+        ctx.rotate((maskNode.rotation * Math.PI) / 180);
+        ctx.translate(-mcx, -mcy);
+        if (traceNodeGeometryPath(ctx, maskNode)) {
+          ctx.clip();
+        }
+        ctx.translate(mcx, mcy);
+        ctx.rotate((-maskNode.rotation * Math.PI) / 180);
+        ctx.translate(-mcx, -mcy);
+      } else if (traceNodeGeometryPath(ctx, maskNode)) {
+        ctx.clip();
+      }
+    }
+  }
+
   ctx.globalAlpha = Math.max(0, Math.min(1, node.opacity ?? 1));
   applyNodeEffectsAndBlend(ctx, node);
 
@@ -681,18 +860,22 @@ export function renderRichNodeToContext2D(
     case 'rect':
     case 'frame':
       renderRectOrFrameNode(ctx, node);
+      renderInnerShadowsForNode(ctx, node);
       break;
     case 'ellipse':
       renderEllipseNode(ctx, node);
+      renderInnerShadowsForNode(ctx, node);
       break;
     case 'path':
       renderPathNode(ctx, node);
+      renderInnerShadowsForNode(ctx, node);
       break;
     case 'text':
       renderTextNode(ctx, node);
       break;
     case 'image':
       renderImageNode(ctx, node, context);
+      renderInnerShadowsForNode(ctx, node);
       break;
     case 'component-instance':
       renderComponentInstanceNode(ctx, node, context, depth, visitedComponentIds);

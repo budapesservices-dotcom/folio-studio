@@ -256,20 +256,28 @@ describe('Prioritas 2 — Pillar 1: Nested Component Instances (DAG, Rendering &
 });
 
 describe('Prioritas 2 — Pillar 2: ImageNode & Binary Asset Pipeline (Deduplication, SVG Sanitization, ZIP & .flop)', () => {
-  it('sanitizes malicious SVG markup by stripping scripts, event handlers, foreignObject, and javascript: URIs', () => {
+  it('sanitizes malicious SVG markup by stripping scripts, event handlers, SMIL animate/set, style, foreignObject, and obfuscated javascript: URIs', () => {
     const hostileSvg = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" onload="alert(1)">
+      <svg/onload=alert(1) xmlns="http://www.w3.org/2000/svg" width="120" height="80">
         <script>fetch('https://evil.test')</script>
+        <style>@import url("javascript:alert(9)")</style>
         <foreignObject width="100" height="50"><div>xss</div></foreignObject>
-        <a href="javascript:alert(2)"><rect width="120" height="80" fill="#22C55E" onclick="evil()" /></a>
+        <animate attributeName="href" to="javascript:alert(3)" />
+        <set attributeName="onmouseover" to="alert(4)" />
+        <a href="&#106;avascript:alert(2)"><rect width="120" height="80" fill="#22C55E" onclick="evil()" /></a>
+        <a href=javascript:alert(5)><circle r="10" /></a>
       </svg>
     `;
     const clean = sanitizeSvgMarkup(hostileSvg);
     expect(clean).not.toMatch(/<script/i);
+    expect(clean).not.toMatch(/<style/i);
     expect(clean).not.toMatch(/<foreignObject/i);
+    expect(clean).not.toMatch(/<animate/i);
+    expect(clean).not.toMatch(/<set\b/i);
     expect(clean).not.toMatch(/onload\s*=/i);
     expect(clean).not.toMatch(/onclick\s*=/i);
     expect(clean).not.toMatch(/javascript:/i);
+    expect(clean).not.toMatch(/&#106;avascript:/i);
     expect(clean).toContain('#22C55E');
   });
 

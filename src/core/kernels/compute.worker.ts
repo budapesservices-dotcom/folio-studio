@@ -17,6 +17,7 @@ import type {
   FolioProject,
   PathNode,
 } from '../document/types';
+import { getActivePage } from '../document/project';
 import {
   applyPathfinderOperation,
   decomposeNodesForShapeBuilder,
@@ -76,7 +77,9 @@ export type ComputeWorkerRequest =
       readonly id: number;
       readonly type: 'a11y.audit';
       readonly project: FolioProject;
-      readonly page: FolioPage;
+      readonly page?: FolioPage;
+      readonly pageId?: string;
+      readonly themeId?: string;
     };
 
 export type ComputeWorkerResponse =
@@ -86,7 +89,7 @@ export type ComputeWorkerResponse =
       readonly durationMs: number;
       readonly backend: 'wasm' | 'worker';
       readonly payload:
-        | { readonly count: number; readonly wasmActive: boolean }
+        | { readonly count: number; readonly indexedCount: number; readonly wasmActive: boolean }
         | { readonly ids: string[] }
         | { readonly node: PathNode | null }
         | { readonly arrangement: PlanarArrangement }
@@ -118,12 +121,13 @@ export function handleComputeWorkerMessage(request: ComputeWorkerRequest): Compu
         activeSpatialIndex = wasmKernel
           ? wasmKernel.buildIndex(request.entries, request.cellSize)
           : new FlatGridSpatialIndex(request.entries, request.cellSize);
+        const count = activeSpatialIndex.count;
         return {
           id: request.id,
           ok: true,
           durationMs: nowMs() - start,
           backend: wasmKernel ? 'wasm' : 'worker',
-          payload: { count: activeSpatialIndex.count, wasmActive: Boolean(wasmKernel) },
+          payload: { count, indexedCount: count, wasmActive: Boolean(wasmKernel) },
         };
       }
       case 'spatial.queryRect': {
@@ -182,7 +186,13 @@ export function handleComputeWorkerMessage(request: ComputeWorkerRequest): Compu
         };
       }
       case 'a11y.audit': {
-        const report = auditPageAccessibility(request.project, request.page);
+        const targetPage =
+          request.page
+          ?? (request.pageId
+            ? request.project.pages.find((p) => p.id === request.pageId)
+            : undefined)
+          ?? getActivePage(request.project);
+        const report = auditPageAccessibility(request.project, targetPage, request.themeId);
         return {
           id: request.id,
           ok: true,
@@ -191,10 +201,18 @@ export function handleComputeWorkerMessage(request: ComputeWorkerRequest): Compu
           payload: { report },
         };
       }
+      default: {
+        const unknownType = String((request as { type?: unknown })?.type ?? 'unknown');
+        return {
+          id: (request as { id?: number })?.id ?? -1,
+          ok: false,
+          error: `Unsupported compute worker request type: "${unknownType}".`,
+        };
+      }
     }
   } catch (error) {
     return {
-      id: request.id,
+      id: (request as { id?: number })?.id ?? -1,
       ok: false,
       error: error instanceof Error ? error.message : 'Compute worker execution failed.',
     };

@@ -30,14 +30,11 @@ export type GpuBackendKind = 'webgpu' | 'webgl2' | 'canvas2d-tiled' | 'svg-dom';
 export const GPU_HYBRID_AUTO_THRESHOLD = 250;
 
 /**
- * Contiguous Float32 layout per GPU instanced primitive:
- * [0..3]  x, y, width, height
- * [4..7]  fillR, fillG, fillB, fillA
- * [8]     cornerRadius
- * [9]     rotationRadians
- * [10..13] strokeR, strokeG, strokeB, strokeA
- * [14]    strokeWidth
- * [15]    shapeKind (0 = rect/frame, 1 = ellipse)
+ * Contiguous zero-copy Float32 layout per GPU instanced primitive (4 x vec4 = 64 bytes):
+ * [0..3]   a_rect   : x, y, width, height
+ * [4..7]   a_fill   : fillR, fillG, fillB, fillA
+ * [8..11]  a_geom   : cornerRadius, rotationRadians, strokeWidth, shapeKind (0=rect/frame, 1=ellipse)
+ * [12..15] a_stroke : strokeR, strokeG, strokeB, strokeA
  */
 export const GPU_INSTANCE_STRIDE_FLOATS = 16;
 

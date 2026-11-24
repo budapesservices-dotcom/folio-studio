@@ -9,11 +9,22 @@ import type {
 import type { PathfinderOperation, PlanarArrangement } from '../document/vector';
 import type { A11yAuditReport } from '../../engines/codegen/a11yAudit';
 import type { SpatialBoundsEntry, SpatialQueryRect } from './types';
-import {
-  handleComputeWorkerMessage,
-  type ComputeWorkerRequest,
-  type ComputeWorkerResponse,
-} from './compute.worker';
+import type { ComputeWorkerRequest, ComputeWorkerResponse } from './compute.worker';
+
+let localWorkerHandlerPromise:
+  | Promise<typeof import('./compute.worker').handleComputeWorkerMessage>
+  | null = null;
+
+function loadLocalWorkerHandler(): Promise<
+  typeof import('./compute.worker').handleComputeWorkerMessage
+> {
+  if (!localWorkerHandlerPromise) {
+    localWorkerHandlerPromise = import('./compute.worker').then(
+      (mod) => mod.handleComputeWorkerMessage,
+    );
+  }
+  return localWorkerHandlerPromise;
+}
 
 interface PendingJob {
   resolve: (response: ComputeWorkerResponse) => void;
@@ -26,6 +37,9 @@ export interface ComputeWorkerStats {
   readonly completedJobs: number;
   readonly lastDurationMs: number;
 }
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+type ComputeWorkerRequestPayload = DistributiveOmit<ComputeWorkerRequest, 'id'>;
 
 /**
  * Typed async bridge to Folio's dedicated Compute Web Worker.
@@ -91,17 +105,22 @@ export class ComputeWorkerClient {
     return this.ensureWorker() !== null;
   }
 
-  private dispatch(requestWithoutId: Omit<ComputeWorkerRequest, 'id'>): Promise<ComputeWorkerResponse> {
+  private async runLocalFallback(request: ComputeWorkerRequest): Promise<ComputeWorkerResponse> {
+    const handleComputeWorkerMessage = await loadLocalWorkerHandler();
+    const response = handleComputeWorkerMessage(request);
+    if (response.ok) {
+      this.completedJobs += 1;
+      this.lastDurationMs = response.durationMs;
+    }
+    return response;
+  }
+
+  private dispatch(requestWithoutId: ComputeWorkerRequestPayload): Promise<ComputeWorkerResponse> {
     const id = this.nextRequestId++;
     const request = { ...requestWithoutId, id } as ComputeWorkerRequest;
     const worker = this.ensureWorker();
     if (!worker) {
-      const response = handleComputeWorkerMessage(request);
-      if (response.ok) {
-        this.completedJobs += 1;
-        this.lastDurationMs = response.durationMs;
-      }
-      return Promise.resolve(response);
+      return this.runLocalFallback(request);
     }
 
     return new Promise<ComputeWorkerResponse>((resolve, reject) => {
@@ -110,12 +129,7 @@ export class ComputeWorkerClient {
         worker.postMessage(request);
       } catch {
         this.pending.delete(id);
-        const fallback = handleComputeWorkerMessage(request);
-        if (fallback.ok) {
-          this.completedJobs += 1;
-          this.lastDurationMs = fallback.durationMs;
-        }
-        resolve(fallback);
+        this.runLocalFallback(request).then(resolve, reject);
       }
     });
   }
@@ -123,10 +137,10 @@ export class ComputeWorkerClient {
   async syncSpatialIndexAsync(
     entries: readonly SpatialBoundsEntry[],
     cellSize?: number,
-  ): Promise<{ count: number; wasmActive: boolean; durationMs: number }> {
+  ): Promise<{ count: number; indexedCount: number; wasmActive: boolean; durationMs: number }> {
     const res = await this.dispatch({ type: 'spatial.sync', entries, cellSize });
     if (!res.ok) throw new Error(res.error);
-    const payload = res.payload as { count: number; wasmActive: boolean };
+    const payload = res.payload as { count: number; indexedCount: number; wasmActive: boolean };
     return { ...payload, durationMs: res.durationMs };
   }
 
@@ -183,9 +197,14 @@ export class ComputeWorkerClient {
 
   async auditAccessibilityAsync(
     project: FolioProject,
-    page: FolioPage,
+    pageOrId: FolioPage | string,
+    themeId?: string,
   ): Promise<A11yAuditReport> {
-    const res = await this.dispatch({ type: 'a11y.audit', project, page });
+    const res = await this.dispatch(
+      typeof pageOrId === 'string'
+        ? { type: 'a11y.audit', project, pageId: pageOrId, themeId }
+        : { type: 'a11y.audit', project, page: pageOrId, themeId },
+    );
     if (!res.ok) throw new Error(res.error);
     return (res.payload as { report: A11yAuditReport }).report;
   }
@@ -199,6 +218,10 @@ export class ComputeWorkerClient {
       job.reject(new Error('Compute worker was terminated.'));
     }
     this.pending.clear();
+  }
+
+  dispose(): void {
+    this.terminate();
   }
 }
 

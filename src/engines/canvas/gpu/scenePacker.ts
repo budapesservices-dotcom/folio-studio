@@ -5,7 +5,7 @@
  * Node unit tests, and 10,000-node benchmark suites.
  */
 
-import type { DesignNode, EllipseNode, FrameNode, RectNode } from '../../../core/document/types';
+import type { ComponentDefinition, DesignNode, EllipseNode, FrameNode, RectNode } from '../../../core/document/types';
 import { getVisibleEffects, getVisibleFillPaints } from '../../../core/document/styling';
 import {
   DEFAULT_TILE_SIZE,
@@ -304,17 +304,19 @@ export function packSceneToGpuBatches(
       buffer[base + 7] = fill[3];
 
       const maxR = Math.min(node.width, node.height) * 0.5;
+      // a_geom: [cornerRadius, rotationRadians, strokeWidth, shapeKind]
       buffer[base + 8] = node.type === 'ellipse'
         ? 0
         : Math.max(0, Math.min(maxR, node.style.radius ?? 0));
       buffer[base + 9] = (node.rotation || 0) * (Math.PI / 180);
+      buffer[base + 10] = strokeW;
+      buffer[base + 11] = node.type === 'ellipse' ? 1 : 0;
 
-      buffer[base + 10] = stroke[0];
-      buffer[base + 11] = stroke[1];
-      buffer[base + 12] = stroke[2];
-      buffer[base + 13] = stroke[3];
-      buffer[base + 14] = strokeW;
-      buffer[base + 15] = node.type === 'ellipse' ? 1 : 0;
+      // a_stroke: [strokeR, strokeG, strokeB, strokeA]
+      buffer[base + 12] = stroke[0];
+      buffer[base + 13] = stroke[1];
+      buffer[base + 14] = stroke[2];
+      buffer[base + 15] = stroke[3];
 
       instanceCount += 1;
     } else {
@@ -387,6 +389,7 @@ export function computeTileSignature(
   nodesInTile: readonly DesignNode[],
   tile: TileCoord,
   scaleBucket: number,
+  componentById?: ReadonlyMap<string, ComponentDefinition>,
 ): string {
   let hash = 2166136261 >>> 0;
   const mixInt = (n: number) => {
@@ -404,6 +407,33 @@ export function computeTileSignature(
   mixInt(tile.row);
   mixInt(Math.round(scaleBucket * 100));
   mixInt(nodesInTile.length);
+
+  const mixPaint = (p: NonNullable<RectNode['style']['fills']>[number]) => {
+    mixStr(p.type);
+    mixInt(Math.round((p.opacity ?? 1) * 1000));
+    if (p.visible === false) mixInt(0);
+    if (p.type === 'solid') {
+      mixStr(p.color);
+    } else if (p.type === 'linear-gradient') {
+      mixInt(Math.round(p.angle * 10));
+      mixInt(p.stops.length);
+      for (const stop of p.stops) {
+        mixInt(Math.round(stop.offset * 1000));
+        mixStr(stop.color);
+        mixInt(Math.round((stop.opacity ?? 1) * 1000));
+      }
+    } else {
+      mixInt(Math.round((p.cx ?? 0.5) * 1000));
+      mixInt(Math.round((p.cy ?? 0.5) * 1000));
+      mixInt(Math.round((p.r ?? 0.5) * 1000));
+      mixInt(p.stops.length);
+      for (const stop of p.stops) {
+        mixInt(Math.round(stop.offset * 1000));
+        mixStr(stop.color);
+        mixInt(Math.round((stop.opacity ?? 1) * 1000));
+      }
+    }
+  };
 
   for (let i = 0; i < nodesInTile.length; i += 1) {
     const node = nodesInTile[i];
@@ -423,20 +453,22 @@ export function computeTileSignature(
       mixInt(Math.round(node.style.fontSize * 10));
       mixInt(node.style.fontWeight);
       mixStr(node.style.fontFamily);
+      mixInt(Math.round((node.style.lineHeight ?? 1.4) * 100));
+      mixInt(Math.round((node.style.letterSpacing ?? 0) * 100));
       if (node.style.textAlign) mixStr(node.style.textAlign);
       if (node.style.textTransform) mixStr(node.style.textTransform);
       if (node.style.textDecoration) mixStr(node.style.textDecoration);
+      if (node.style.textWrap) mixStr(node.style.textWrap);
     } else if (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') {
       mixStr(node.style.fill);
       mixStr(node.style.stroke);
       mixInt(Math.round(node.style.strokeWidth * 10));
       mixInt(Math.round((node.style.radius ?? 0) * 10));
+      if (node.type === 'frame' && node.clipContent) mixInt(1);
       if (node.style.fills) {
         mixInt(node.style.fills.length);
         for (const p of node.style.fills) {
-          mixStr(p.type);
-          if (p.type === 'solid') mixStr(p.color);
-          else mixInt(p.stops.length);
+          mixPaint(p);
         }
       }
     } else if (node.type === 'path') {
@@ -445,10 +477,42 @@ export function computeTileSignature(
       mixInt(Math.round(node.style.strokeWidth * 10));
       mixInt(node.points.length);
       mixInt(node.closed ? 1 : 0);
-      mixInt(node.subpaths?.length ?? 0);
-      if (node.points.length > 0) {
-        mixInt(Math.round(node.points[0].x * 10));
-        mixInt(Math.round(node.points[0].y * 10));
+      for (const pt of node.points) {
+        mixStr(pt.pointType);
+        mixInt(Math.round(pt.x * 10));
+        mixInt(Math.round(pt.y * 10));
+        if (pt.handleIn) {
+          mixInt(Math.round(pt.handleIn.x * 10));
+          mixInt(Math.round(pt.handleIn.y * 10));
+        }
+        if (pt.handleOut) {
+          mixInt(Math.round(pt.handleOut.x * 10));
+          mixInt(Math.round(pt.handleOut.y * 10));
+        }
+      }
+      if (node.subpaths && node.subpaths.length > 0) {
+        mixInt(node.subpaths.length);
+        for (const sub of node.subpaths) {
+          mixInt(sub.points.length);
+          mixInt(sub.closed ? 1 : 0);
+          for (const pt of sub.points) {
+            mixStr(pt.pointType);
+            mixInt(Math.round(pt.x * 10));
+            mixInt(Math.round(pt.y * 10));
+            if (pt.handleIn) {
+              mixInt(Math.round(pt.handleIn.x * 10));
+              mixInt(Math.round(pt.handleIn.y * 10));
+            }
+            if (pt.handleOut) {
+              mixInt(Math.round(pt.handleOut.x * 10));
+              mixInt(Math.round(pt.handleOut.y * 10));
+            }
+          }
+        }
+      }
+      if (node.style.fills) {
+        mixInt(node.style.fills.length);
+        for (const p of node.style.fills) mixPaint(p);
       }
     } else if (node.type === 'image') {
       mixStr(node.assetId);
@@ -456,7 +520,12 @@ export function computeTileSignature(
       mixInt(Math.round((node.style.radius ?? 0) * 10));
     } else if (node.type === 'component-instance') {
       mixStr(node.componentId);
-      mixStr(JSON.stringify(node.overrides));
+      const master = componentById?.get(node.componentId);
+      if (master) {
+        mixStr(master.updatedAt);
+        mixInt(master.document.nodes.length);
+      }
+      mixStr(JSON.stringify(node.overrides ?? {}));
       if (node.variantSelection) mixStr(JSON.stringify(node.variantSelection));
       if (node.slotAssignments) mixStr(JSON.stringify(node.slotAssignments));
     }
@@ -465,9 +534,13 @@ export function computeTileSignature(
       mixInt(node.effects.length);
       for (const eff of node.effects) {
         mixStr(eff.type);
-        if (eff.visible === false) mixInt(0);
-        else if (eff.type === 'drop-shadow' || eff.type === 'inner-shadow') {
+        if (eff.visible === false) {
+          mixInt(0);
+        } else if (eff.type === 'drop-shadow' || eff.type === 'inner-shadow') {
+          mixInt(Math.round(eff.x * 10));
+          mixInt(Math.round(eff.y * 10));
           mixInt(Math.round(eff.blur * 10));
+          mixInt(Math.round((eff.spread ?? 0) * 10));
           mixStr(eff.color);
         } else {
           mixInt(Math.round(eff.radius * 10));

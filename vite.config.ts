@@ -1,11 +1,22 @@
 import { defineConfig } from 'vite';
 import preact from '@preact/preset-vite';
 
-export default defineConfig({
-  // GitHub Pages serves this repository under /folio-studio/.
-  base: '/folio-studio/',
-  plugins: [preact()],
-  clearScreen: false,
+export default defineConfig(({ command }) => {
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  if (command === 'build' && proc?.env && proc.env.NODE_ENV !== 'production') {
+    proc.env.NODE_ENV = 'production';
+  }
+  const isServe = command === 'serve';
+  return {
+    // GitHub Pages serves this repository under /folio-studio/.
+    base: '/folio-studio/',
+    plugins: [
+      preact({
+        devToolsEnabled: isServe,
+        prefreshEnabled: isServe,
+      }),
+    ],
+    clearScreen: false,
   server: {
     // Codespaces needs Vite to listen beyond the loopback interface.
     host: '0.0.0.0',
@@ -38,6 +49,9 @@ export default defineConfig({
           ) {
             return 'core-engine';
           }
+          if (id.includes('/src/engines/canvas/gpu/') && !id.endsWith('/gpu/types.ts')) {
+            return 'gpu-engine';
+          }
           if (id.includes('/src/engines/canvas/')) {
             return 'canvas-engine';
           }
@@ -54,4 +68,5 @@ export default defineConfig({
       },
     },
   },
+  };
 });

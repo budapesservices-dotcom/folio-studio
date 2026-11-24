@@ -40,6 +40,7 @@ import {
   computeVisibleTileGrid,
   packSceneToGpuBatches,
 } from '../src/engines/canvas/gpu/scenePacker';
+import { defaultSpatialIndexKernel } from '../src/core/kernels/spatialIndex';
 import { createWasmSpatialIndexKernel } from '../src/core/kernels/wasmSpatialKernel';
 import { handleComputeWorkerMessage } from '../src/core/kernels/compute.worker';
 import { computeProjectDelta, applyProjectDelta } from '../src/engines/history';
@@ -1049,7 +1050,7 @@ export function runStudioBenchmark(overrides: Partial<BenchmarkConfig> = {}): St
   );
 
   // 9. WebAssembly Linear-Memory Spatial Kernel: 60 Viewport Queries
-  const wasmKernel = createWasmSpatialIndexKernel();
+  const wasmKernel = createWasmSpatialIndexKernel() ?? defaultSpatialIndexKernel;
   const wasmEntries = activeDoc.nodes.map((node, zIndex) => ({
     id: node.id,
     minX: node.x,
@@ -1100,12 +1101,12 @@ export function runStudioBenchmark(overrides: Partial<BenchmarkConfig> = {}): St
       () => {
         handleComputeWorkerMessage({
           id: 1,
-          kind: 'spatial.sync',
+          type: 'spatial.sync',
           entries: wasmEntries,
         });
         const resp = handleComputeWorkerMessage({
           id: 2,
-          kind: 'spatial.queryRect',
+          type: 'spatial.queryRect',
           rect: { minX: 0, minY: 0, maxX: 960, maxY: 640 },
         });
         if (!resp.ok) {

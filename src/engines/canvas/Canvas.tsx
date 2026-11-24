@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { lazy, Suspense } from 'preact/compat';
 import type { JSX } from 'preact';
 import type {
   AssetReference,
@@ -33,12 +34,15 @@ import {
 } from './canvasHelpers';
 import { CanvasInteractiveOverlays } from './CanvasOverlays';
 import { CanvasSceneLayer } from './CanvasSceneLayer';
-import { GpuViewportLayer } from './gpu/GpuViewportLayer';
 import {
   GPU_HYBRID_AUTO_THRESHOLD,
   type GpuSceneMetrics,
   type ViewportRendererMode,
 } from './gpu/types';
+
+const LazyGpuViewportLayer = lazy(() =>
+  import('./gpu/GpuViewportLayer').then((m) => ({ default: m.GpuViewportLayer })),
+);
 import { computeSpacingRedlines, getBounds, type Bounds, type SnapGuide } from './geometry';
 import {
   evaluateToolOperation,
@@ -420,6 +424,10 @@ export function Canvas({
       const baseIds = masks.get(node.id) ?? [];
       return baseIds.every((baseId) => states.get(baseId)?.visible);
     });
+    const selectable = staticCanvasNodes.filter((node) => {
+      const effective = states.get(node.id);
+      return effective?.visible && !effective.locked;
+    });
     return {
       nodeById: byId,
       layerStates: states,
@@ -427,6 +435,7 @@ export function Canvas({
       frameClipMap: frameClips,
       clipMaskBaseIds,
       visibleRenderNodes: renderNodes,
+      selectableNodes: selectable,
       spatialIndex: buildSpatialIndexForNodes(renderNodes),
     };
   }, [staticCanvasNodes]);
@@ -469,8 +478,9 @@ export function Canvas({
     [displayedNodes, previewNodes, staticCanvasNodes],
   );
 
-  // When drag preview is isolated, reuse static scene maps for CanvasSceneLayer while
-  // keeping interaction nodeById/selectionBounds synchronized with live preview coordinates.
+  // When drag preview is isolated, reuse static scene maps and spatial index directly
+  // instead of rebuilding the entire scene graph at 60–120Hz, while keeping nodeById
+  // synchronized with live preview coordinates for selection bounds and handles.
   const {
     nodeById,
     layerStates,
@@ -481,17 +491,31 @@ export function Canvas({
     spatialIndex,
   } = useMemo(() => {
     if (!previewNodes || previewNodes.length === 0) {
-      const selectable = staticCanvasNodes.filter((node) => {
-        const effective = staticSceneData.layerStates.get(node.id);
-        return effective?.visible && !effective.locked;
-      });
       return {
         nodeById: staticSceneData.nodeById,
         layerStates: staticSceneData.layerStates,
         clipMaskMap: staticSceneData.clipMaskMap,
         frameClipMap: staticSceneData.frameClipMap,
         visibleRenderNodes: staticSceneData.visibleRenderNodes,
-        selectableNodes: selectable,
+        selectableNodes: staticSceneData.selectableNodes,
+        spatialIndex: staticSceneData.spatialIndex,
+      };
+    }
+    if (canIsolatePreviewNodes) {
+      const byId = new Map(staticSceneData.nodeById);
+      for (let i = 0; i < previewNodes.length; i += 1) {
+        const preview = previewNodes[i];
+        if (preview.onCanvas !== false) {
+          byId.set(preview.id, preview);
+        }
+      }
+      return {
+        nodeById: byId,
+        layerStates: staticSceneData.layerStates,
+        clipMaskMap: staticSceneData.clipMaskMap,
+        frameClipMap: staticSceneData.frameClipMap,
+        visibleRenderNodes: staticSceneData.visibleRenderNodes,
+        selectableNodes: staticSceneData.selectableNodes,
         spatialIndex: staticSceneData.spatialIndex,
       };
     }
@@ -518,7 +542,7 @@ export function Canvas({
       selectableNodes: selectable,
       spatialIndex: buildSpatialIndexForNodes(renderNodes),
     };
-  }, [canvasNodes, previewNodes, staticCanvasNodes, staticSceneData]);
+  }, [canIsolatePreviewNodes, canvasNodes, previewNodes, staticSceneData]);
 
   const sceneCanvasNodes = canIsolatePreviewNodes ? staticCanvasNodes : canvasNodes;
   const sceneNodeById = canIsolatePreviewNodes ? staticSceneData.nodeById : nodeById;
@@ -981,12 +1005,13 @@ export function Canvas({
 
   const resolveGpuHitNodeId = (point: { x: number; y: number }): string | null => {
     const hits = spatialIndex.queryPoint(point.x, point.y, 4 * invZoom);
+    // queryPoint() already returns hits sorted highest zIndex (topmost) first.
     for (let i = 0; i < hits.length; i += 1) {
-      const hitId = hits[i].id;
+      const hitId = hits[i];
       const node = nodeById.get(hitId);
       if (!node || node.type === 'group') continue;
       const state = layerStates.get(hitId);
-      if (!state?.visible) continue;
+      if (!state?.visible || state.locked) continue;
       return hitId;
     }
     return null;
@@ -998,10 +1023,9 @@ export function Canvas({
       gpuHybridActive &&
       raw.targetNodeId === null &&
       raw.resizeHandle === null &&
-      raw.rotateZone === null &&
-      raw.smartHandle === null &&
-      raw.anchorHit === null &&
-      !raw.pivotHit
+      !raw.rotateHandle &&
+      !raw.smartHandleHit &&
+      !raw.anchorHit
     ) {
       const hitNodeId = resolveGpuHitNodeId(raw.point);
       if (hitNodeId) {
@@ -1373,27 +1397,31 @@ export function Canvas({
           <span>{effectiveDocWidth} × {document.height}</span>
         </div>
         <div class="artboard-stack">
-          <GpuViewportLayer
-            active={gpuHybridActive}
-            docWidth={effectiveDocWidth}
-            docHeight={document.height}
-            background={document.background}
-            canvasNodes={sceneCanvasNodes}
-            renderNodes={sceneVisibleRenderNodes}
-            viewportRect={gpuViewportRect}
-            zoom={zoom}
-            components={components}
-            assets={assets}
-            nodeById={sceneNodeById}
-            clipMaskMap={sceneClipMaskMap}
-            frameClipMap={sceneFrameClipMap}
-            componentById={componentById}
-            assetById={assetById}
-            tokens={designTokens}
-            hiddenNodeIds={isolatedPreviewIdSet}
-            inlineEditNodeId={inlineEditNode?.id ?? null}
-            onMetrics={onGpuMetrics}
-          />
+          {gpuHybridActive && (
+            <Suspense fallback={null}>
+              <LazyGpuViewportLayer
+                active={gpuHybridActive}
+                docWidth={effectiveDocWidth}
+                docHeight={document.height}
+                background={document.background}
+                canvasNodes={sceneCanvasNodes}
+                renderNodes={sceneVisibleRenderNodes}
+                viewportRect={gpuViewportRect}
+                zoom={zoom}
+                components={components}
+                assets={assets}
+                nodeById={sceneNodeById}
+                clipMaskMap={sceneClipMaskMap}
+                frameClipMap={sceneFrameClipMap}
+                componentById={componentById}
+                assetById={assetById}
+                tokens={designTokens}
+                hiddenNodeIds={isolatedPreviewIdSet}
+                inlineEditNodeId={inlineEditNode?.id ?? null}
+                onMetrics={onGpuMetrics}
+              />
+            </Suspense>
+          )}
           <svg
             ref={svgRef}
             class={`artboard${gpuHybridActive ? ' is-gpu-hybrid' : ''}`}

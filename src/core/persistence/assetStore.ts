@@ -46,9 +46,72 @@ export interface StoredAssetBlobRecord {
   readonly createdAt: string;
 }
 
-/** In-memory fast cache mapping sha256 -> displayable data/object URL. */
+/** Bounded in-memory LRU cache mapping sha256 -> displayable URL and raw bytes. */
+const MAX_MEMORY_ASSET_ENTRIES = 128;
+const MAX_MEMORY_ASSET_BYTES = 64 * 1024 * 1024;
+const INLINE_ASSET_BYTE_THRESHOLD = 16 * 1024;
 const memoryUrlByHash = new Map<string, string>();
 const memoryBytesByHash = new Map<string, { bytes: Uint8Array; mimeType: string }>();
+let memoryCachedByteTotal = 0;
+
+function evictAssetMemoryCacheIfNeeded(): void {
+  while (
+    memoryBytesByHash.size > MAX_MEMORY_ASSET_ENTRIES ||
+    memoryCachedByteTotal > MAX_MEMORY_ASSET_BYTES
+  ) {
+    const oldestKey = memoryBytesByHash.keys().next().value;
+    if (oldestKey === undefined) break;
+    const evictedBytes = memoryBytesByHash.get(oldestKey);
+    if (evictedBytes) {
+      memoryCachedByteTotal = Math.max(0, memoryCachedByteTotal - evictedBytes.bytes.byteLength);
+      memoryBytesByHash.delete(oldestKey);
+    }
+    const evictedUrl = memoryUrlByHash.get(oldestKey);
+    if (evictedUrl) {
+      if (evictedUrl.startsWith('blob:') && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+        URL.revokeObjectURL(evictedUrl);
+      }
+      memoryUrlByHash.delete(oldestKey);
+    }
+  }
+}
+
+function setMemoryAssetCache(sha256: string, bytes: Uint8Array, mimeType: string): string {
+  const existingBytes = memoryBytesByHash.get(sha256);
+  if (existingBytes) {
+    memoryCachedByteTotal = Math.max(0, memoryCachedByteTotal - existingBytes.bytes.byteLength);
+    memoryBytesByHash.delete(sha256);
+  }
+  const existingUrl = memoryUrlByHash.get(sha256);
+  if (existingUrl) {
+    memoryUrlByHash.delete(sha256);
+    memoryBytesByHash.set(sha256, { bytes, mimeType });
+    memoryCachedByteTotal += bytes.byteLength;
+    memoryUrlByHash.set(sha256, existingUrl);
+    evictAssetMemoryCacheIfNeeded();
+    return existingUrl;
+  }
+
+  let displayUrl: string;
+  if (
+    typeof URL !== 'undefined' &&
+    typeof URL.createObjectURL === 'function' &&
+    typeof Blob !== 'undefined' &&
+    typeof window !== 'undefined'
+  ) {
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    displayUrl = URL.createObjectURL(new Blob([copy.buffer], { type: mimeType }));
+  } else {
+    displayUrl = bytesToDataUrl(bytes, mimeType);
+  }
+
+  memoryBytesByHash.set(sha256, { bytes, mimeType });
+  memoryCachedByteTotal += bytes.byteLength;
+  memoryUrlByHash.set(sha256, displayUrl);
+  evictAssetMemoryCacheIfNeeded();
+  return displayUrl;
+}
 
 /**
  * Pure deterministic SHA-256 implementation (FIPS 180-4) used as a reliable
@@ -133,26 +196,132 @@ export async function computeBytesSha256(bytes: Uint8Array): Promise<string> {
   return sha256FallbackHex(bytes);
 }
 
+const DISALLOWED_SVG_TAGS = new Set([
+  'script',
+  'foreignobject',
+  'iframe',
+  'object',
+  'embed',
+  'applet',
+  'meta',
+  'link',
+  'style',
+  'animate',
+  'animatetransform',
+  'animatemotion',
+  'set',
+  'handler',
+  'listener',
+]);
+
+function decodeBasicHtmlEntities(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);?/gi, (_m, hex: string) => {
+      const cp = parseInt(hex, 16);
+      return Number.isFinite(cp) ? String.fromCodePoint(cp) : '';
+    })
+    .replace(/&#(\d+);?/g, (_m, dec: string) => {
+      const cp = parseInt(dec, 10);
+      return Number.isFinite(cp) ? String.fromCodePoint(cp) : '';
+    })
+    .replace(/&colon;/gi, ':')
+    .replace(/&tab;/gi, '\t')
+    .replace(/&newline;/gi, '\n');
+}
+
+function isSafeSvgHref(rawValue: string): boolean {
+  const decoded = decodeBasicHtmlEntities(rawValue)
+    .replace(/[\u0000-\u0020\u007f-\u009f]+/g, '')
+    .toLowerCase();
+  if (!decoded || decoded.startsWith('#')) return true;
+  if (/^data:image\/(?:png|jpeg|jpg|webp|gif);base64,/i.test(decoded)) return true;
+  return false;
+}
+
 /**
  * Strictly sanitizes uploaded SVG markup so embedded scripts, foreignObject HTML,
- * inline event handlers, and dangerous href/src protocols cannot execute.
+ * SMIL animation attribute overrides, style injection, inline event handlers
+ * (including slash-separated `<svg/onload=...>`), and dangerous/entity-encoded URIs
+ * cannot execute.
  */
 export function sanitizeSvgMarkup(rawSvg: string): string {
+  if (typeof DOMParser !== 'undefined' && typeof XMLSerializer !== 'undefined') {
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(rawSvg, 'image/svg+xml');
+      const parserError = doc.querySelector('parsererror');
+      const root = doc.documentElement;
+      if (!parserError && root && root.localName.toLowerCase() === 'svg') {
+        const walk = (el: Element) => {
+          const children = Array.from(el.children);
+          for (const child of children) {
+            if (DISALLOWED_SVG_TAGS.has(child.localName.toLowerCase())) {
+              child.remove();
+              continue;
+            }
+            walk(child);
+          }
+          for (const attr of Array.from(el.attributes)) {
+            const name = attr.name.toLowerCase();
+            const localName = attr.localName.toLowerCase();
+            if (name.startsWith('on') || localName.startsWith('on')) {
+              el.removeAttribute(attr.name);
+              continue;
+            }
+            if (localName === 'href' || localName === 'src' || name === 'xlink:href') {
+              if (!isSafeSvgHref(attr.value)) {
+                el.removeAttribute(attr.name);
+              }
+              continue;
+            }
+            if (localName === 'style') {
+              const normalizedStyle = decodeBasicHtmlEntities(attr.value).replace(/[\u0000-\u0020]+/g, '');
+              if (/(?:javascript|vbscript|expression|@import|url\s*\(\s*['"]?\s*(?:javascript|vbscript|data:text\/html))/i.test(normalizedStyle)) {
+                el.removeAttribute(attr.name);
+              }
+            }
+          }
+        };
+        walk(root);
+        return new XMLSerializer().serializeToString(root).trim();
+      }
+    } catch {
+      // Fall through to hardened string sanitizer below
+    }
+  }
+
   let clean = rawSvg
-    // Remove dangerous elements and their bodies
-    .replace(/<(script|foreignObject|iframe|object|embed|applet|meta|link)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
-    .replace(/<(script|foreignObject|iframe|object|embed|applet|meta|link)\b[^>]*\/?>/gi, '')
-    // Strip inline on* event handler attributes
-    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-    // Neutralize javascript:/vbscript:/data:text/html in href/xlink:href/src attributes
+    // Remove disallowed elements and their bodies (including SMIL animate/set and style)
     .replace(
-      /\b(xlink:href|href|src)\s*=\s*("[^"]*"|'[^']*')/gi,
-      (_match, attr: string, quoted: string) => {
-        const inner = quoted.slice(1, -1).trim();
-        if (/^(?:javascript|vbscript|data\s*:\s*text\/html)/i.test(inner)) {
-          return `${attr}=""`;
+      /<(script|foreignObject|iframe|object|embed|applet|meta|link|style|animate|animateTransform|animateMotion|set|handler|listener)\b[^>]*>[\s\S]*?<\/\1>/gi,
+      '',
+    )
+    .replace(
+      /<(script|foreignObject|iframe|object|embed|applet|meta|link|style|animate|animateTransform|animateMotion|set|handler|listener)\b[^>]*\/?>/gi,
+      '',
+    )
+    // Strip inline on* event handlers separated by whitespace OR slash (`<svg/onload=...>`)
+    .replace(/(?:[\s/]+)on[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s/>]+)/gi, '')
+    // Neutralize dangerous href/xlink:href/src (quoted OR unquoted, including HTML entities)
+    .replace(
+      /(?:[\s/]+)(xlink:href|href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gi,
+      (_match, attr: string, dq?: string, sq?: string, uq?: string) => {
+        const val = dq ?? sq ?? uq ?? '';
+        if (!isSafeSvgHref(val)) {
+          return '';
         }
-        return `${attr}=${quoted}`;
+        return ` ${attr}="${val.replace(/"/g, '&quot;')}"`;
+      },
+    )
+    // Strip dangerous CSS expressions / javascript url() inside inline style attributes
+    .replace(
+      /(?:[\s/]+)style\s*=\s*(?:"([^"]*)"|'([^']*)')/gi,
+      (full, dq?: string, sq?: string) => {
+        const val = decodeBasicHtmlEntities(dq ?? sq ?? '').replace(/[\u0000-\u0020]+/g, '');
+        if (/(?:javascript|vbscript|expression|@import|url\s*\(\s*['"]?\s*(?:javascript|vbscript|data:text\/html))/i.test(val)) {
+          return '';
+        }
+        return full;
       },
     );
   clean = clean.trim();
@@ -240,10 +409,8 @@ export async function putDeduplicatedAssetBlob(input: {
   width?: number;
   height?: number;
 }): Promise<{ deduplicated: boolean; persistedInIdb: boolean }> {
-  const dataUrl = bytesToDataUrl(input.bytes, input.mimeType);
   const alreadyInMemory = memoryBytesByHash.has(input.sha256);
-  memoryBytesByHash.set(input.sha256, { bytes: input.bytes, mimeType: input.mimeType });
-  memoryUrlByHash.set(input.sha256, dataUrl);
+  setMemoryAssetCache(input.sha256, input.bytes, input.mimeType);
 
   const db = await openAssetDatabase();
   if (!db) {
@@ -307,8 +474,7 @@ export async function getAssetBytesByHash(sha256: string): Promise<{ bytes: Uint
   if (!record) return null;
   const buffer = await record.blob.arrayBuffer();
   const entry = { bytes: new Uint8Array(buffer), mimeType: record.mimeType };
-  memoryBytesByHash.set(sha256, entry);
-  memoryUrlByHash.set(sha256, bytesToDataUrl(entry.bytes, entry.mimeType));
+  setMemoryAssetCache(sha256, entry.bytes, entry.mimeType);
   return entry;
 }
 
@@ -416,7 +582,7 @@ export async function ingestImageBytes(
     detectedSize = await probeImageDimensionsInBrowser(dataUrl);
   }
 
-  await putDeduplicatedAssetBlob({
+  const stored = await putDeduplicatedAssetBlob({
     sha256,
     bytes: finalBytes,
     mimeType,
@@ -430,12 +596,20 @@ export async function ingestImageBytes(
     return { asset: existing, deduplicated: true, existingAssetId: existing.id };
   }
 
+  // When persisted in IndexedDB blob store and above the small-inline threshold,
+  // reference by content-addressed URI to prevent multi-MB base64 duplication in autosaves.
+  // Export pipelines materialize `folio-asset://` into portable data URLs automatically.
+  const persistedSource =
+    stored.persistedInIdb && finalBytes.byteLength > INLINE_ASSET_BYTE_THRESHOLD
+      ? `folio-asset://${sha256}`
+      : dataUrl;
+
   const asset: AssetReference = {
     id: `asset-${sha256.slice(0, 12)}`,
     name: input.name.trim() || `image.${EXTENSION_BY_MIME[mimeType] ?? 'png'}`,
     kind: 'image',
     mimeType,
-    source: dataUrl,
+    source: persistedSource,
     sha256,
     byteLength: finalBytes.byteLength,
     ...(detectedSize ? { width: detectedSize.width, height: detectedSize.height } : {}),

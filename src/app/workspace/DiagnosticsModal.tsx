@@ -140,7 +140,7 @@ export default function DiagnosticsModal({
                 {health.historyUndoCount} / {health.historyRedoCount}
               </strong>
               <span class="diagnostics-kpi-meta">
-                {health.computeKernels.spatialBackend.toUpperCase()} · {health.computeKernels.workerReady ? 'Worker' : 'Sync'} · GPU &ge;{health.spatialCullingThreshold}
+                {health.computeKernels.spatialBackend.toUpperCase()} · {health.computeKernels.workerActive ? 'Worker' : 'Sync'} · GPU &ge;{health.spatialCullingThreshold}
               </span>
             </div>
           </div>
