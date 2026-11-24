@@ -189,6 +189,8 @@ The actual modal is also browser-tested: initial focus enters the safe dialog ac
 
 ### Visual Node Logic Graph Editor (v1.1), Complete Application Menu Bar & Interactive Starter Experience
 
+> **Historical baseline:** this section records the 2026-11-23 implementation/verification snapshot. Its 17-node and 3-tab counts are historical and are superseded by the current 2026-11-24 contract below and [Node Logic v1 specification](specs/NODE_LOGIC_V1.md).
+
 - **Implementation status:** **Implemented** and **Verified locally** (2026-11-23).
 - **Implemented scope:**
   1. **Visual Node Logic Graph Editor (`src/app/workspace/nodeLogicGraphHelpers.ts`, `NodeLogicWorkspace.tsx`, `NodeLogicInspector.tsx`, `CanvasWindows.tsx`):** Lazy-loaded pan/zoom spatial node-wire editor inside `NodeLogicWindow` over Folio's 17-node `src/engines/prototype` engine (`Event`, `State`, `Logic`, `Action`). Supports searchable/filterable 17-node catalog, node dragging, typed Bezier port wiring with direction normalization, type compatibility, duplicate/cycle rejection, 3-tab inspector (`Node`, `Variables`, `Simulate`) with clickable diagnostics and headless `PrototypeRuntime` trigger simulation, 3 one-click presets (`Click Counter`, `Toggle Visibility`, `Theme Switcher`), and direct **`Test in Live Preview`** launch targeting `useCodeWorkspace` / `LazyCodeWorkspace`. All graph mutations dispatch through Native Commands (`logic.create-graph`, `logic.update-graph`, `logic.delete-graph`) with Undo/Redo support.
@@ -207,6 +209,37 @@ The actual modal is also browser-tested: initial focus enters the safe dialog ac
   - Production build (`npm run build`): **PASS** (`dist/` built cleanly with lazy chunks).
 - **Pending / Not Claimed:**
   - External GitHub Actions CI run on a pushed branch, `package-lock.json` lockfile restoration in git, and human manual browser acceptance remain **pending** outside this local workspace.
+
+### Node Logic current contract and acceptance status (2026-11-24)
+
+- **Source snapshot:** `8d5eaa8aada8adfe26478bfce27f9abfac40b1c7` on `codex/pr1-main-reconciliation-20261122`.
+- **Current catalog:** 31 primary nodes in 7 categories (Source 3, Event 8, State 3, Logic 5, Action 6, Flow 3, Network 3) plus 13 legacy compatibility types retained for `.flop` v2 files. The previous 17-node / 18-node counts are not current.
+- **Current editor:** searchable/filterable primary palette; pan/zoom graph canvas; draggable nodes; typed Bezier Execution/Data wires; graph diagnostics; Node, Variables, Simulate, and Network inspector tabs; Pipeline/static target selection; graph presets; Smart Logic Frames with bake/unbake, exposed ports/parameters, and reusable presets; Native Command graph mutations; `Test in Live Preview` bridge.
+- **Current contract:** [Node Logic v1 specification](specs/NODE_LOGIC_V1.md). Keep catalog availability separate from simulator behavior and from Live Preview/React code-generation support.
+
+#### Automated evidence on the current source snapshot
+
+- GitHub Actions [FOLIO verification run #634](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/45377342163) on the exact source snapshot above: **Type-check PASS**; test job **FAIL**; production build **SKIPPED** because tests failed.
+- Test aggregate: **595 passed / 597 total** across 59 files; 58 files passed and 1 file failed.
+- Node Logic focused suites passed in that CI run: `tests/nodeLogicV2Architecture.test.ts` **5/5**, `tests/nodeLogicFrames.test.ts` **5/5**, and `tests/nodeLogicWorkspace.test.ts` **11/11**.
+- One failing browser assertion is in `tests/mergeReadiness.browser.test.mjs` (line 1254): the starter-graph simulation assertion did not find the expected `clickCount` value in the inspector simulation values. This is an unresolved browser acceptance failure; do not classify it as a flaky test or an environment issue without a reproduced investigation.
+- The second failing browser assertion is in the same file (line 1383): Motion Timeline expected at least 4 tracks but received 3. This is a Motion acceptance failure, not evidence that Node Logic itself failed its focused unit suites.
+
+#### Required acceptance before claiming the expanded Node Logic milestone is complete
+
+- [ ] Re-run the exact browser suite after investigating/fixing the starter simulation assertion; confirm the graph renders, clicking the correct target updates state, the trace is visible, and the Live Preview interaction produces the same expected result.
+- [ ] Re-run the complete CI gate successfully: TypeScript check, unit + browser tests, and production build. The latest verified run currently has no successful build because the build step was skipped.
+- [ ] Add or maintain a per-node support matrix for all 31 primary types across Headless Prototype Runtime, Live Preview, and React export. A catalog entry alone is not proof of parity.
+- [ ] Verify Execution and Data port direction/type rules, duplicate/missing connection rejection, dataflow DAG validation, and bounded runtime execution.
+- [ ] Verify static target references and Pipeline-inherited targets; test that per-target private toggle state remains isolated for two different origin elements.
+- [ ] Verify Smart Logic Frame grouping, boundary-port compilation, invalid-bake rejection, exposed parameter edits, unbake round-trip, and independent preset instances in both Headless Runtime and Live Preview.
+- [ ] Mark network behavior accurately: current headless HTTP/Socket nodes are simulated and `source.external` is a placeholder. Do not treat them as real API/WebSocket integrations.
+- [ ] Do not claim variable `persist` / `computedExpression` behavior until runtime/storage semantics and reload/session tests exist.
+- [ ] Do not claim component-scoped graphs execute in page preview until the page runtime explicitly selects and executes them with per-component-instance context.
+- [ ] Do not claim production `debounceMs` / `throttleMs` behavior until the runtime has a scheduler contract and fake-clock tests.
+- [ ] Perform manual browser acceptance of a simple Canvas button interaction (On Click → Show/Hide/Toggle target), then verify the same behavior in Live Preview and exported React output.
+
+**Current status:** graph model, catalog, semantic validator, headless runtime baseline, graph editor, and Smart Logic Frames are implemented. Expanded cross-runtime parity, real network execution, variable persistence/computed expressions, component-scope runtime integration, and the latest browser acceptance failures remain open.
 
 ### Stage 8 — Motion & Animation Engine (`src/engines/animation`) & Interactive Motion Timeline Studio
 
