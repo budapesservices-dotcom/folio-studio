@@ -594,16 +594,21 @@ export type AnimationEasing =
 export type AnimatableProperty =
   | 'x'
   | 'y'
+  | 'width'
+  | 'height'
   | 'opacity'
   | 'rotation'
   | 'scale'
-  | 'fill';
+  | 'radius'
+  | 'fill'
+  | 'stroke'
+  | 'strokeWidth';
 
 export interface AnimationKeyframe {
   id: string;
   /** Time offset in milliseconds within [0, clip.durationMs]. */
   timeMs: number;
-  /** Numeric value for geometry/opacity/scale/rotation, or CSS color string for fill. */
+  /** Numeric value for geometry/opacity/scale/rotation/radius/strokeWidth, or CSS color string for fill/stroke. */
   value: number | string;
   easing: AnimationEasing;
 }

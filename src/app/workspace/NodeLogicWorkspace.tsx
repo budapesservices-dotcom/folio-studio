@@ -16,6 +16,7 @@ import {
   createLogicGraph,
   createPrototypeRuntime,
   getLogicNodeDefinition,
+  getLogicNodeGuide,
   validateLogicGraphSemantics,
   type BuiltInLogicNodeType,
   type LogicNodeCategory,
@@ -152,6 +153,7 @@ export default function NodeLogicWorkspace({
   );
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
+  const [openGuideNodeId, setOpenGuideNodeId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<NodeLogicInspectorTab>('node');
   const [paletteCategory, setPaletteCategory] = useState<'all' | LogicNodeCategory>('all');
   const [paletteSearch, setPaletteSearch] = useState('');
@@ -192,6 +194,7 @@ export default function NodeLogicWorkspace({
     if (!activeGraph) {
       setSelectedNodeId(null);
       setSelectedConnectionId(null);
+      setOpenGuideNodeId(null);
       return;
     }
     if (selectedNodeId && !activeGraph.nodes.some((n) => n.id === selectedNodeId)) {
@@ -200,7 +203,10 @@ export default function NodeLogicWorkspace({
     if (selectedConnectionId && !activeGraph.connections.some((c) => c.id === selectedConnectionId)) {
       setSelectedConnectionId(null);
     }
-  }, [activeGraph, selectedNodeId, selectedConnectionId]);
+    if (openGuideNodeId && !activeGraph.nodes.some((n) => n.id === openGuideNodeId)) {
+      setOpenGuideNodeId(null);
+    }
+  }, [activeGraph, selectedNodeId, selectedConnectionId, openGuideNodeId]);
 
   // Fit view when switching to a different graph
   const fittedGraphIdRef = useRef<string | null>(null);
@@ -838,10 +844,11 @@ export default function NodeLogicWorkspace({
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
       return;
     }
-    if (event.key === 'Escape' && (wirePatch || wireLiftCandidate)) {
+    if (event.key === 'Escape' && (wirePatch || wireLiftCandidate || openGuideNodeId)) {
       event.preventDefault();
       setWirePatch(null);
       setWireLiftCandidate(null);
+      setOpenGuideNodeId(null);
       return;
     }
     if ((event.key === 'Delete' || event.key === 'Backspace') && activeGraph) {
@@ -872,6 +879,8 @@ export default function NodeLogicWorkspace({
 
   const selectedNode = activeGraph?.nodes.find((n) => n.id === selectedNodeId) ?? null;
   const selectedConnection = activeGraph?.connections.find((c) => c.id === selectedConnectionId) ?? null;
+  const openGuideNode = activeGraph?.nodes.find((n) => n.id === openGuideNodeId) ?? null;
+  const openNodeGuide = openGuideNode ? getLogicNodeGuide(openGuideNode.type) : null;
 
   const isWireActivelyShown = Boolean(wirePatch && (wirePatch.mode === 'click' || wirePatch.hasDragged));
 
@@ -1249,6 +1258,7 @@ export default function NodeLogicWorkspace({
           onPointerDown={(event) => {
             if (event.button !== 0 && event.button !== 1) return;
             setPresetsOpen(false);
+            setOpenGuideNodeId(null);
             if (wirePatch) {
               setWirePatch(null);
               return;
@@ -1357,12 +1367,13 @@ export default function NodeLogicWorkspace({
                 const isSourceNode = isSourceLogicNodeType(node.type);
                 const diagCounts = diagnosticsByNodeId.get(node.id);
                 const isSelected = selectedNodeId === node.id;
+                const isGuideOpen = openGuideNodeId === node.id;
 
                 return (
                   <article
                     key={node.id}
                     data-logic-node-id={node.id}
-                    class={`nl-node-card nl-cat-${category} ${isSelected ? 'is-selected' : ''} ${diagCounts?.errors ? 'has-error' : ''}`}
+                    class={`nl-node-card nl-cat-${category} ${isSelected ? 'is-selected' : ''} ${isGuideOpen ? 'has-guide-open' : ''} ${diagCounts?.errors ? 'has-error' : ''}`}
                     style={{
                       width: `${LOGIC_NODE_WIDTH}px`,
                       transform: `translate(${node.x}px, ${node.y}px)`,
@@ -1371,6 +1382,9 @@ export default function NodeLogicWorkspace({
                       event.stopPropagation();
                       setSelectedNodeId(node.id);
                       setSelectedConnectionId(null);
+                      if (openGuideNodeId && openGuideNodeId !== node.id) {
+                        setOpenGuideNodeId(null);
+                      }
                     }}
                   >
                     <header
@@ -1395,6 +1409,37 @@ export default function NodeLogicWorkspace({
                     >
                       <span class="nl-node-marker" aria-hidden="true">{marker.glyph}</span>
                       <strong class="nl-node-title">{def?.label ?? node.type}</strong>
+                      <button
+                        type="button"
+                        class={`nl-node-guide-btn ${isGuideOpen ? 'is-active' : ''}`}
+                        aria-label={`Connection guide for ${def?.label ?? node.type}`}
+                        aria-expanded={isGuideOpen}
+                        title="Connection guide: see what connects IN and OUT"
+                        data-testid={`nl-guide-btn-${node.id}`}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedNodeId(node.id);
+                          setOpenGuideNodeId((current) => (current === node.id ? null : node.id));
+                        }}
+                      >
+                        <svg viewBox="0 0 16 16" aria-hidden="true" class="nl-guide-bulb-svg">
+                          <path
+                            d="M8 1.75a4.25 4.25 0 0 0-2.46 7.71c.48.35.76.89.76 1.48v.31h3.4v-.31c0-.59.28-1.13.76-1.48A4.25 4.25 0 0 0 8 1.75Z"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.35"
+                            stroke-linejoin="round"
+                          />
+                          <path
+                            d="M6.45 12.85h3.1M6.9 14.35h2.2"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.35"
+                            stroke-linecap="round"
+                          />
+                        </svg>
+                      </button>
                       {diagCounts?.errors ? (
                         <span class="nl-node-diag is-error" title={`${diagCounts.errors} validation error(s)`}>
                           !{diagCounts.errors}
@@ -1522,6 +1567,91 @@ export default function NodeLogicWorkspace({
                   Click any node in the left palette to add it to “{activeGraph.name}”.
                 </div>
               )}
+            </div>
+          )}
+
+          {openNodeGuide && openGuideNode && (
+            <div
+              class="nl-node-guide-popover"
+              role="dialog"
+              aria-label={`${openNodeGuide.label} connection guide`}
+              data-testid="nl-node-guide-popover"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              onWheel={(event) => event.stopPropagation()}
+            >
+              <div class="nl-guide-popover-header">
+                <span class="nl-guide-popover-title">
+                  <svg class="nl-guide-bulb-svg" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M8 1.75a4.25 4.25 0 0 0-2.55 7.65c.44.33.8.95.8 1.55v.3h3.5v-.3c0-.6.36-1.22.8-1.55A4.25 4.25 0 0 0 8 1.75Z"
+                      stroke="currentColor"
+                      strokeWidth="1.35"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M6.25 13.1h3.5M6.9 14.5h2.2"
+                      stroke="currentColor"
+                      strokeWidth="1.35"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                  <strong>{openNodeGuide.label}</strong>
+                  <span>Connection Guide</span>
+                </span>
+                <button
+                  type="button"
+                  class="nl-guide-popover-close"
+                  aria-label="Close connection guide"
+                  onClick={() => setOpenGuideNodeId(null)}
+                >
+                  ×
+                </button>
+              </div>
+
+              <p class="nl-guide-role">{openNodeGuide.roleSummary}</p>
+
+              <div class="nl-guide-section">
+                <div class="nl-guide-section-title">IN — Connects from</div>
+                {openNodeGuide.inHints.length === 0 ? (
+                  <p class="nl-guide-empty">Starting trigger / source node — no input wire required.</p>
+                ) : (
+                  <ul class="nl-guide-port-list">
+                    {openNodeGuide.inHints.map((hint) => (
+                      <li key={hint.portId} class="nl-guide-port-item">
+                        <span class={`nl-guide-port-tag nl-port-${hint.dataType}`}>
+                          {hint.portLabel} · {hint.dataType}
+                        </span>
+                        <span class="nl-guide-port-text">{hint.summary}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div class="nl-guide-section">
+                <div class="nl-guide-section-title">OUT — Connects to</div>
+                {openNodeGuide.outHints.length === 0 ? (
+                  <p class="nl-guide-empty">Terminal node — no outgoing port.</p>
+                ) : (
+                  <ul class="nl-guide-port-list">
+                    {openNodeGuide.outHints.map((hint) => (
+                      <li key={hint.portId} class="nl-guide-port-item">
+                        <span class={`nl-guide-port-tag nl-port-${hint.dataType}`}>
+                          {hint.portLabel} · {hint.dataType}
+                        </span>
+                        <span class="nl-guide-port-text">{hint.summary}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div class="nl-guide-example">
+                <span class="nl-guide-example-label">Example Flow</span>
+                <span class="nl-guide-example-text">{openNodeGuide.exampleFlow}</span>
+              </div>
             </div>
           )}
 

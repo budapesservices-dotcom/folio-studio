@@ -2,18 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type {
   AnimatableProperty,
   AnimationClip,
+  DesignNode,
   FolioDocument,
   FolioPage,
   FolioProjectV2,
 } from '../../core/document/types';
 import {
-  addTrackToClip,
   applyAnimatedPosesToDocument,
+  applyAutoKeyFromNodeChange,
   buildPresetClipForPage,
+  captureNodeKeyframeSnapshot,
   createAnimationClip,
   evaluateClipAtTime,
-  getDefaultNodePropertyValue,
-  upsertKeyframeInClip,
   type MotionPresetDefinition,
 } from '../../engines/animation';
 import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
@@ -26,8 +26,14 @@ export interface UseMotionPlaybackOptions {
   onNotice: (message: string) => void;
 }
 
+export interface AutoKeyCaptureResult {
+  readonly captured: boolean;
+  readonly keepCanonicalUnchanged: boolean;
+}
+
 export interface MotionPlaybackController {
   motionOpen: boolean;
+  autoKeyEnabled: boolean;
   pageClips: readonly AnimationClip[];
   activeClip: AnimationClip | null;
   playheadMs: number;
@@ -35,6 +41,7 @@ export interface MotionPlaybackController {
   previewActive: boolean;
   animatedMainDocument: FolioDocument;
   toggleMotionOpen: () => void;
+  toggleAutoKey: () => void;
   closeMotion: () => void;
   selectClip: (clipId: string) => void;
   play: () => void;
@@ -47,6 +54,7 @@ export interface MotionPlaybackController {
   deleteActiveClip: () => void;
   updateClip: (nextClip: AnimationClip, description?: string) => void;
   keyframeSelectedLayers: (properties?: readonly AnimatableProperty[]) => void;
+  recordAutoKeyNodes: (afterNodes: readonly DesignNode[], description?: string) => AutoKeyCaptureResult;
 }
 
 export function useMotionPlayback({
@@ -57,6 +65,7 @@ export function useMotionPlayback({
   onNotice,
 }: UseMotionPlaybackOptions): MotionPlaybackController {
   const [motionOpen, setMotionOpen] = useState(false);
+  const [autoKeyEnabled, setAutoKeyEnabled] = useState(true);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -159,6 +168,10 @@ export function useMotionPlayback({
     });
   }, []);
 
+  const toggleAutoKey = useCallback(() => {
+    setAutoKeyEnabled((enabled) => !enabled);
+  }, []);
+
   const closeMotion = useCallback(() => {
     setIsPlaying(false);
     setPreviewActive(false);
@@ -248,10 +261,12 @@ export function useMotionPlayback({
     mainCommandClient.updateAnimationClip(nextClip, description);
   }, [mainCommandClient]);
 
-  const keyframeSelectedLayers = useCallback((properties: readonly AnimatableProperty[] = ['y', 'opacity']) => {
+  const keyframeSelectedLayers = useCallback((properties?: readonly AnimatableProperty[]) => {
+    const animatedById = new Map(animatedMainDocument.nodes.map((node) => [node.id, node]));
+    const canonicalById = new Map(activePage.document.nodes.map((node) => [node.id, node]));
     const targetNodes = selectedNodeIds
-      .map((id) => activePage.document.nodes.find((n) => n.id === id))
-      .filter((n): n is NonNullable<typeof n> => Boolean(n));
+      .map((id) => animatedById.get(id) ?? canonicalById.get(id))
+      .filter((n): n is DesignNode => Boolean(n));
 
     if (targetNodes.length === 0) {
       onNotice('Select one or more layers on the canvas to insert keyframes.');
@@ -266,38 +281,133 @@ export function useMotionPlayback({
     }
 
     let nextClip = clip;
-    let addedCount = 0;
+    let totalCaptured = 0;
     for (const node of targetNodes) {
-      for (const prop of properties) {
-        const existingTrack = nextClip.tracks.find((t) => t.targetNodeId === node.id && t.property === prop);
-        const value = getDefaultNodePropertyValue(node, prop);
-        if (!existingTrack) {
-          const added = addTrackToClip(nextClip, node, prop);
-          nextClip = added.clip;
-          if (playheadMs > 0 && playheadMs < nextClip.durationMs) {
-            nextClip = upsertKeyframeInClip(nextClip, added.trackId, playheadMs, value, 'ease-out').clip;
-          }
-          addedCount += 1;
-        } else {
-          nextClip = upsertKeyframeInClip(nextClip, existingTrack.id, playheadMs, value, 'ease-out').clip;
-          addedCount += 1;
-        }
-      }
+      const canonicalNode = canonicalById.get(node.id) ?? node;
+      const snap = captureNodeKeyframeSnapshot(nextClip, node, playheadMs, {
+        baselineNode: canonicalNode,
+        properties,
+        easing: 'ease-out',
+      });
+      nextClip = snap.clip;
+      totalCaptured += snap.capturedProperties.length;
     }
 
     const result = isNewClip
       ? mainCommandClient.createAnimationClip(nextClip, 'Create clip & keyframe selection')
-      : mainCommandClient.updateAnimationClip(nextClip, 'Keyframe selected layers');
+      : mainCommandClient.updateAnimationClip(nextClip, 'Keyframe all properties for selection');
 
     if (result.status === 'applied') {
       if (isNewClip) setActiveClipId(nextClip.id);
       setPreviewActive(true);
-      onNotice(`Inserted ${addedCount} keyframe${addedCount === 1 ? '' : 's'} at ${(playheadMs / 1000).toFixed(2)}s.`);
+      onNotice(
+        `Keyframed ${targetNodes.length} layer${targetNodes.length === 1 ? '' : 's'} (${totalCaptured} properties) at ${(playheadMs / 1000).toFixed(2)}s.`,
+      );
     }
-  }, [selectedNodeIds, activePage, activeClip, pageClips.length, playheadMs, mainCommandClient, onNotice]);
+  }, [selectedNodeIds, animatedMainDocument.nodes, activePage, activeClip, pageClips.length, playheadMs, mainCommandClient, onNotice]);
+
+  const recordAutoKeyNodes = useCallback((
+    afterNodes: readonly DesignNode[],
+    description = 'Auto-keyframe layer change',
+  ): AutoKeyCaptureResult => {
+    if (!motionOpen || !autoKeyEnabled || isPlaying || afterNodes.length === 0) {
+      return { captured: false, keepCanonicalUnchanged: false };
+    }
+
+    const animatedById = new Map(animatedMainDocument.nodes.map((node) => [node.id, node]));
+    const canonicalById = new Map(activePage.document.nodes.map((node) => [node.id, node]));
+
+    // At 0ms: keep normal editing friction-free; only sync 0ms keyframes for layers that already have tracks.
+    if (playheadMs <= 0) {
+      if (!activeClip) return { captured: false, keepCanonicalUnchanged: false };
+      let nextClip = activeClip;
+      let anyUpdated = false;
+      for (const afterNode of afterNodes) {
+        const hasTracks = nextClip.tracks.some((track) => track.targetNodeId === afterNode.id);
+        if (!hasTracks) continue;
+        const beforeNode = animatedById.get(afterNode.id) ?? canonicalById.get(afterNode.id);
+        if (!beforeNode) continue;
+        const auto = applyAutoKeyFromNodeChange(nextClip, beforeNode, afterNode, 0, {
+          baselineNode: canonicalById.get(afterNode.id) ?? beforeNode,
+          easing: 'linear',
+        });
+        if (auto.recorded) {
+          nextClip = auto.clip;
+          anyUpdated = true;
+        }
+      }
+      if (anyUpdated) {
+        mainCommandClient.updateAnimationClip(nextClip, `${description} (0.00s)`);
+      }
+      return { captured: anyUpdated, keepCanonicalUnchanged: false };
+    }
+
+    // At playheadMs > 0: Auto-Key captures full object state at playheadMs and preserves 0ms canonical pose!
+    let clip = activeClip;
+    let isNewClip = false;
+    if (!clip) {
+      clip = createAnimationClip({
+        pageId: activePage.id,
+        name: `Clip ${pageClips.length + 1}`,
+        durationMs: Math.max(1200, playheadMs),
+      });
+      isNewClip = true;
+    }
+
+    let nextClip = clip;
+    let anyRecorded = false;
+    let lastChangedCount = 0;
+
+    for (const afterNode of afterNodes) {
+      const beforeNode = animatedById.get(afterNode.id) ?? canonicalById.get(afterNode.id);
+      const baselineNode = canonicalById.get(afterNode.id) ?? beforeNode;
+      if (!beforeNode || !baselineNode) continue;
+      const auto = applyAutoKeyFromNodeChange(nextClip, beforeNode, afterNode, playheadMs, {
+        baselineNode,
+        easing: 'ease-out',
+      });
+      if (auto.recorded) {
+        nextClip = auto.clip;
+        anyRecorded = true;
+        lastChangedCount += auto.changedProperties.length;
+      }
+    }
+
+    if (!anyRecorded) {
+      return { captured: false, keepCanonicalUnchanged: false };
+    }
+
+    const result = isNewClip
+      ? mainCommandClient.createAnimationClip(nextClip, description)
+      : mainCommandClient.updateAnimationClip(nextClip, description);
+
+    if (result.status === 'applied') {
+      if (isNewClip) setActiveClipId(nextClip.id);
+      setPreviewActive(true);
+      onNotice(
+        `Auto-keyed at ${(playheadMs / 1000).toFixed(2)}s (${lastChangedCount} changed · full object state saved).`,
+      );
+      return { captured: true, keepCanonicalUnchanged: true };
+    }
+
+    return { captured: false, keepCanonicalUnchanged: false };
+  }, [
+    motionOpen,
+    autoKeyEnabled,
+    isPlaying,
+    playheadMs,
+    animatedMainDocument.nodes,
+    activePage.document.nodes,
+    activePage.id,
+    activeClip,
+    pageClips.length,
+    mainCommandClient,
+    onNotice,
+  ]);
 
   return {
     motionOpen,
+    autoKeyEnabled,
     pageClips,
     activeClip,
     playheadMs,
@@ -305,6 +415,7 @@ export function useMotionPlayback({
     previewActive,
     animatedMainDocument,
     toggleMotionOpen,
+    toggleAutoKey,
     closeMotion,
     selectClip,
     play,
@@ -317,5 +428,6 @@ export function useMotionPlayback({
     deleteActiveClip,
     updateClip,
     keyframeSelectedLayers,
+    recordAutoKeyNodes,
   };
 }

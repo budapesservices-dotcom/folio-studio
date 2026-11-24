@@ -50,6 +50,7 @@ import { PagesRackPanel } from './workspace/PagesRackPanel';
 import { ComponentRackPanel } from './workspace/ComponentRackPanel';
 import { StatusBar } from './workspace/StatusBar';
 import { ComponentDeletionDialog, ProjectHydrationOverlay } from './workspace/ComponentDeletionDialog';
+import { createMotionAutoKeyBridge } from './workspace/motionAutoKeyBridge';
 
 // Lazy-loaded feature bundles kept outside Folio's critical startup chunk.
 const LazyCodeWorkspace = lazy(() => import('./workspace/LazyCodeWorkspace'));
@@ -554,6 +555,28 @@ export function App() {
     onNotice: setNotice,
   });
   const motion = useMotionPlayback({ project: state.project, activePage, selectedNodeIds: state.selectedNodeIds, mainCommandClient, onNotice: setNotice });
+  const isMainMotionPoseActive = activeEditorId === 'main' && motion.motionOpen && (motion.previewActive || motion.isPlaying);
+  const animatedMainNodesById = useMemo(
+    () => new Map(motion.animatedMainDocument.nodes.map((node) => [node.id, node])),
+    [motion.animatedMainDocument.nodes],
+  );
+  const inspectorSelectedNode = isMainMotionPoseActive && selectedNode
+    ? (animatedMainNodesById.get(selectedNode.id) ?? selectedNode)
+    : selectedNode;
+  const inspectorSelectedNodes = isMainMotionPoseActive
+    ? focusedEditor.selectedNodes.map((node) => animatedMainNodesById.get(node.id) ?? node)
+    : focusedEditor.selectedNodes;
+  const motionAutoKeyBridge = createMotionAutoKeyBridge({
+    activeEditorId,
+    motion,
+    inspectorSelectedNode,
+    mainToolOperationExecutor,
+    onUpdateSelectedFallback: selectionActions.updateSelected,
+    onUpdateSelectedStyleFallback: selectionActions.updateSelectedStyle,
+    onSampledColorOption: (color, target) => setToolOptions((current) => (target === 'stroke' ? { ...current, strokeColor: color } : { ...current, fillColor: color })),
+    onCanvasInteraction: () => { selectionSourceRef.current = 'canvas'; },
+  });
+
   const openLivePreviewForPage = useCallback((pageId?: string) => {
     setActiveEditorId('main');
     setCodeWorkspaceLaunch((current) => ({ viewMode: 'preview', pageId, nonce: current.nonce + 1 }));
@@ -784,8 +807,8 @@ export function App() {
         onSimplifyPath={() => selectionActions.handleSimplifyPath('main')}
         onTogglePathClosed={() => selectionActions.handleTogglePathClosed('main')}
         onSelectTool={(nextTool) => chooseCanvasTool(nextTool, 'main')}
-        onToolOperation={(operation) => mainToolOperationExecutor.execute(operation)}
-        onToolOperationBatch={(operations) => mainToolOperationExecutor.executeBatch(operations)}
+        onToolOperation={(operation) => motionAutoKeyBridge.executeMainToolOperations([operation])}
+        onToolOperationBatch={(operations) => motionAutoKeyBridge.executeMainToolOperations(operations)}
         onLayerDrop={(nodeIds) => layers.dropLayersOnCanvas(nodeIds, 'main')}
         onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'main', point); }}
       />
@@ -892,9 +915,9 @@ export function App() {
         isResizing={panelResize.resizingPanel === 'inspector'}
         resizeHandleRef={panelResize.inspectorResizeHandleRef}
         activeEditorId={activeEditorId}
-        selectedNode={selectedNode}
-        selectedNodes={focusedEditor.selectedNodes}
-        selectedCount={focusedEditor.selectedNodes.length}
+        selectedNode={inspectorSelectedNode}
+        selectedNodes={inspectorSelectedNodes}
+        selectedCount={inspectorSelectedNodes.length}
         canRemoveFromCanvas={selectionSourceRef.current !== 'layers'}
         selectedInstanceComponent={selectedInstanceComponent}
         editingMasterComponent={componentMaster.editingComponent}
@@ -917,8 +940,8 @@ export function App() {
         onRemoveFromCanvas={(nodeId) => {
           focusedCommandClient.setNodesCanvasState([nodeId], false, 'Remove from canvas');
         }}
-        onUpdateSelected={selectionActions.updateSelected}
-        onUpdateSelectedStyle={selectionActions.updateSelectedStyle}
+        onUpdateSelected={motionAutoKeyBridge.handleInspectorUpdateSelected}
+        onUpdateSelectedStyle={motionAutoKeyBridge.handleInspectorUpdateSelectedStyle}
         onApplyAutoLayout={designSystem.applyAutoLayout}
         onUpdateInstanceOverride={selectionActions.updateInstanceOverride}
         onUpdateInstanceVariant={designSystem.updateInstanceVariant}
@@ -1076,6 +1099,8 @@ export function App() {
             playheadMs={motion.playheadMs}
             isPlaying={motion.isPlaying}
             previewActive={motion.previewActive}
+            autoKeyEnabled={motion.autoKeyEnabled}
+            onToggleAutoKey={motion.toggleAutoKey}
             onSelectClip={motion.selectClip}
             onCreateClip={motion.createNewClip}
             onApplyPreset={motion.applyPreset}

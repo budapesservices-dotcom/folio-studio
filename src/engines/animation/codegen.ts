@@ -103,6 +103,10 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
           } else if (track.property === 'y') {
             dy = Math.round((Number(val) - node.y) * 100) / 100;
             hasTransform = true;
+          } else if (track.property === 'width') {
+            declarations.push(`width: ${Math.max(1, Math.round(Number(val) * 100) / 100)}px;`);
+          } else if (track.property === 'height') {
+            declarations.push(`height: ${Math.max(1, Math.round(Number(val) * 100) / 100)}px;`);
           } else if (track.property === 'rotation') {
             rotation = Math.round(Number(val) * 100) / 100;
             hasTransform = true;
@@ -111,9 +115,15 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
             hasTransform = true;
           } else if (track.property === 'opacity') {
             declarations.push(`opacity: ${Math.max(0, Math.min(1, Number(val)))};`);
+          } else if (track.property === 'radius' && node.type !== 'ellipse') {
+            declarations.push(`border-radius: ${Math.max(0, Math.round(Number(val) * 100) / 100)}px;`);
           } else if (track.property === 'fill') {
             const prop = node.type === 'text' ? 'color' : 'background-color';
             declarations.push(`${prop}: ${String(val)};`);
+          } else if (track.property === 'stroke') {
+            declarations.push(`border-color: ${String(val)};`);
+          } else if (track.property === 'strokeWidth') {
+            declarations.push(`border-width: ${Math.max(0, Math.round(Number(val) * 100) / 100)}px;`);
           }
         }
 

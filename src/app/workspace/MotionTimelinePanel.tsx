@@ -16,12 +16,18 @@ import {
   ANIMATION_EASING_LABELS,
   MOTION_PRESETS,
   addTrackToClip,
+  captureNodeKeyframeSnapshot,
   deleteKeyframeFromClip,
+  deleteLayerKeyframesAtTimeInClip,
   evaluateTrackAtTime,
   getDefaultNodePropertyValue,
+  groupClipTracksByNode,
+  moveLayerKeyframesInClip,
+  removeLayerTracksFromClip,
   removeTrackFromClip,
   updateClipSettings,
   updateKeyframeInClip,
+  updateLayerKeyframesEasingInClip,
   upsertKeyframeInClip,
   type MotionPresetDefinition,
 } from '../../engines/animation';
@@ -35,6 +41,8 @@ export interface MotionTimelinePanelProps {
   playheadMs: number;
   isPlaying: boolean;
   previewActive: boolean;
+  autoKeyEnabled: boolean;
+  onToggleAutoKey: () => void;
   onSelectClip: (clipId: string) => void;
   onCreateClip: () => void;
   onApplyPreset: (presetId: MotionPresetDefinition['id']) => void;
@@ -49,6 +57,10 @@ export interface MotionTimelinePanelProps {
   onFocusStudio?: () => void;
   onClose: () => void;
 }
+
+type TimelineSelection =
+  | { kind: 'track'; trackId: string; keyframeId: string }
+  | { kind: 'layer'; targetNodeId: string; timeMs: number };
 
 function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`;
@@ -72,6 +84,8 @@ export function MotionTimelinePanel({
   playheadMs,
   isPlaying,
   previewActive,
+  autoKeyEnabled,
+  onToggleAutoKey,
   onSelectClip,
   onCreateClip,
   onApplyPreset,
@@ -89,14 +103,16 @@ export function MotionTimelinePanel({
   const nodes = activePage.document.nodes;
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
 
-  const [selectedKeyframe, setSelectedKeyframe] = useState<{ trackId: string; keyframeId: string } | null>(null);
+  const [selection, setSelection] = useState<TimelineSelection | null>(null);
+  const [expandedNodeIds, setExpandedNodeIds] = useState<ReadonlySet<string>>(() => new Set());
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [newTrackNodeId, setNewTrackNodeId] = useState<string>('');
   const [newTrackProperty, setNewTrackProperty] = useState<AnimatableProperty>('y');
 
   const rulerRef = useRef<HTMLDivElement | null>(null);
   const lanesContainerRef = useRef<HTMLDivElement | null>(null);
-  const draggingKfRef = useRef<{ trackId: string; keyframeId: string; startX: number; origTimeMs: number } | null>(null);
+  const activeClipRef = useRef<AnimationClip | null>(activeClip);
+  activeClipRef.current = activeClip;
 
   // Keep selected add-track target synced with canvas selection or first visible node
   useEffect(() => {
@@ -110,15 +126,45 @@ export function MotionTimelinePanel({
     }
   }, [selectedNodeIds, nodes, nodeById, newTrackNodeId]);
 
-  // Validate selected keyframe still exists when clip changes
-  const activeSelection = useMemo<{ track: AnimationTrack; keyframe: AnimationKeyframe } | null>(() => {
-    if (!activeClip || !selectedKeyframe) return null;
-    const track = activeClip.tracks.find((t) => t.id === selectedKeyframe.trackId);
+  const groupedLayers = useMemo(
+    () => (activeClip ? groupClipTracksByNode(activeClip) : []),
+    [activeClip],
+  );
+
+  // Validate active selection against current clip
+  const activeTrackSelection = useMemo<{ track: AnimationTrack; keyframe: AnimationKeyframe } | null>(() => {
+    if (!activeClip || !selection || selection.kind !== 'track') return null;
+    const track = activeClip.tracks.find((t) => t.id === selection.trackId);
     if (!track) return null;
-    const keyframe = track.keyframes.find((k) => k.id === selectedKeyframe.keyframeId);
+    const keyframe = track.keyframes.find((k) => k.id === selection.keyframeId);
     if (!keyframe) return null;
     return { track, keyframe };
-  }, [activeClip, selectedKeyframe]);
+  }, [activeClip, selection]);
+
+  const activeLayerSelection = useMemo<{
+    targetNodeId: string;
+    timeMs: number;
+    trackCount: number;
+    easing: AnimationEasing;
+  } | null>(() => {
+    if (!activeClip || !selection || selection.kind !== 'layer') return null;
+    const group = groupedLayers.find((g) => g.targetNodeId === selection.targetNodeId);
+    if (!group || !group.keyframeTimes.some((t) => Math.abs(t - selection.timeMs) <= 1)) return null;
+    let easing: AnimationEasing = 'ease-out';
+    for (const track of group.tracks) {
+      const kf = track.keyframes.find((k) => Math.abs(k.timeMs - selection.timeMs) <= 1);
+      if (kf) {
+        easing = kf.easing;
+        break;
+      }
+    }
+    return {
+      targetNodeId: selection.targetNodeId,
+      timeMs: selection.timeMs,
+      trackCount: group.tracks.length,
+      easing,
+    };
+  }, [activeClip, selection, groupedLayers]);
 
   const durationMs = activeClip?.durationMs ?? 1200;
   const playheadPct = Math.max(0, Math.min(100, (playheadMs / Math.max(1, durationMs)) * 100));
@@ -144,8 +190,16 @@ export function MotionTimelinePanel({
     return Math.round((ratio * durationMs) / 10) * 10;
   };
 
+  const toggleExpandLayer = (targetNodeId: string) => {
+    setExpandedNodeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(targetNodeId)) next.delete(targetNodeId);
+      else next.add(targetNodeId);
+      return next;
+    });
+  };
+
   const handleRulerPointerDown = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
-    if (!activeClip) return;
     event.preventDefault();
     const target = event.currentTarget;
     target.setPointerCapture?.(event.pointerId);
@@ -169,36 +223,77 @@ export function MotionTimelinePanel({
     kf: AnimationKeyframe,
   ) => {
     event.stopPropagation();
-    setSelectedKeyframe({ trackId: track.id, keyframeId: kf.id });
+    setSelection({ kind: 'track', trackId: track.id, keyframeId: kf.id });
     onSeek(kf.timeMs);
 
-    if (!activeClip) return;
+    const startClip = activeClipRef.current;
+    if (!startClip) return;
     const laneEl = (event.currentTarget as HTMLElement).parentElement;
     if (!laneEl) return;
     const rect = laneEl.getBoundingClientRect();
-    draggingKfRef.current = {
-      trackId: track.id,
-      keyframeId: kf.id,
-      startX: event.clientX,
-      origTimeMs: kf.timeMs,
-    };
+    const startX = event.clientX;
+    const origTimeMs = kf.timeMs;
 
     const handleMove = (moveEvent: PointerEvent) => {
-      if (!draggingKfRef.current || rect.width <= 0) return;
-      const dx = moveEvent.clientX - draggingKfRef.current.startX;
+      const currentClip = activeClipRef.current;
+      if (!currentClip || rect.width <= 0) return;
+      const dx = moveEvent.clientX - startX;
       if (Math.abs(dx) < 3) return;
-      const deltaMs = (dx / rect.width) * activeClip.durationMs;
+      const deltaMs = (dx / rect.width) * currentClip.durationMs;
       const nextTime = Math.max(
         0,
-        Math.min(activeClip.durationMs, Math.round((draggingKfRef.current.origTimeMs + deltaMs) / 10) * 10),
+        Math.min(currentClip.durationMs, Math.round((origTimeMs + deltaMs) / 10) * 10),
       );
-      const updated = updateKeyframeInClip(activeClip, track.id, kf.id, { timeMs: nextTime });
+      const updated = updateKeyframeInClip(currentClip, track.id, kf.id, { timeMs: nextTime });
       onUpdateClip(updated, 'Move keyframe');
       onSeek(nextTime);
     };
 
     const handleUp = () => {
-      draggingKfRef.current = null;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  };
+
+  const handleMasterKeyframePointerDown = (
+    event: JSX.TargetedPointerEvent<HTMLButtonElement>,
+    targetNodeId: string,
+    timeMs: number,
+  ) => {
+    event.stopPropagation();
+    setSelection({ kind: 'layer', targetNodeId, timeMs });
+    onSeek(timeMs);
+
+    const startClip = activeClipRef.current;
+    if (!startClip) return;
+    const laneEl = (event.currentTarget as HTMLElement).parentElement;
+    if (!laneEl) return;
+    const rect = laneEl.getBoundingClientRect();
+    const startX = event.clientX;
+    let currentTimeMs = timeMs;
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      const currentClip = activeClipRef.current;
+      if (!currentClip || rect.width <= 0) return;
+      const dx = moveEvent.clientX - startX;
+      if (Math.abs(dx) < 3) return;
+      const deltaMs = (dx / rect.width) * currentClip.durationMs;
+      const nextTime = Math.max(
+        0,
+        Math.min(currentClip.durationMs, Math.round((timeMs + deltaMs) / 10) * 10),
+      );
+      if (nextTime === currentTimeMs) return;
+      const updated = moveLayerKeyframesInClip(currentClip, targetNodeId, currentTimeMs, nextTime);
+      currentTimeMs = nextTime;
+      onUpdateClip(updated, 'Move layer keyframe pose');
+      setSelection({ kind: 'layer', targetNodeId, timeMs: nextTime });
+      onSeek(nextTime);
+    };
+
+    const handleUp = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
     };
@@ -219,8 +314,68 @@ export function MotionTimelinePanel({
       ?? (node ? getDefaultNodePropertyValue(node, track.property) : 0);
     const added = upsertKeyframeInClip(activeClip, track.id, clickedMs, evaluated, 'ease-out');
     onUpdateClip(added.clip, `Insert ${track.property} keyframe`);
-    setSelectedKeyframe({ trackId: track.id, keyframeId: added.keyframeId });
+    setSelection({ kind: 'track', trackId: track.id, keyframeId: added.keyframeId });
     onSeek(clickedMs);
+  };
+
+  const handleMasterLaneDoubleClick = (
+    event: JSX.TargetedMouseEvent<HTMLDivElement>,
+    targetNodeId: string,
+  ) => {
+    if (!activeClip) return;
+    const node = nodeById.get(targetNodeId);
+    if (!node) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const clickedMs = computeTimeFromClientX(event.clientX, rect);
+    const group = groupedLayers.find((g) => g.targetNodeId === targetNodeId);
+    let nextClip = activeClip;
+    if (group && group.tracks.length > 0) {
+      for (const track of group.tracks) {
+        const evaluated = evaluateTrackAtTime(track, clickedMs)
+          ?? getDefaultNodePropertyValue(node, track.property);
+        nextClip = upsertKeyframeInClip(nextClip, track.id, clickedMs, evaluated, 'ease-out').clip;
+      }
+    } else {
+      nextClip = captureNodeKeyframeSnapshot(activeClip, node, clickedMs, {
+        baselineNode: node,
+        easing: 'ease-out',
+      }).clip;
+    }
+    onUpdateClip(nextClip, `Insert full keyframe for ${node.name}`);
+    setSelection({ kind: 'layer', targetNodeId, timeMs: clickedMs });
+    onSeek(clickedMs);
+  };
+
+  const handleQuickKeyframeLayer = (targetNodeId: string) => {
+    if (!activeClip) return;
+    const node = nodeById.get(targetNodeId);
+    if (!node) return;
+    const group = groupedLayers.find((g) => g.targetNodeId === targetNodeId);
+    let nextClip = activeClip;
+    if (group && group.tracks.length > 0) {
+      for (const track of group.tracks) {
+        const val = evaluateTrackAtTime(track, playheadMs)
+          ?? getDefaultNodePropertyValue(node, track.property);
+        nextClip = upsertKeyframeInClip(nextClip, track.id, playheadMs, val, 'ease-out').clip;
+      }
+    } else {
+      nextClip = captureNodeKeyframeSnapshot(activeClip, node, playheadMs, {
+        baselineNode: node,
+        easing: 'ease-out',
+      }).clip;
+    }
+    onUpdateClip(nextClip, `Insert full keyframe for ${node.name}`);
+    setSelection({ kind: 'layer', targetNodeId, timeMs: playheadMs });
+  };
+
+  const handleRemoveLayerTracks = (targetNodeId: string) => {
+    if (!activeClip) return;
+    const node = nodeById.get(targetNodeId);
+    const nextClip = removeLayerTracksFromClip(activeClip, targetNodeId);
+    if (selection?.kind === 'layer' && selection.targetNodeId === targetNodeId) {
+      setSelection(null);
+    }
+    onUpdateClip(nextClip, `Remove all tracks for ${node?.name ?? targetNodeId}`);
   };
 
   const handleAddTrack = () => {
@@ -230,9 +385,10 @@ export function MotionTimelinePanel({
     const { clip: nextClip, trackId } = addTrackToClip(activeClip, node, newTrackProperty);
     if (nextClip !== activeClip) {
       onUpdateClip(nextClip, `Add ${newTrackProperty} track for ${node.name}`);
+      setExpandedNodeIds((prev) => new Set(prev).add(node.id));
       const addedTrack = nextClip.tracks.find((t) => t.id === trackId);
       if (addedTrack && addedTrack.keyframes[0]) {
-        setSelectedKeyframe({ trackId: addedTrack.id, keyframeId: addedTrack.keyframes[0].id });
+        setSelection({ kind: 'track', trackId: addedTrack.id, keyframeId: addedTrack.keyframes[0].id });
       }
     }
   };
@@ -244,13 +400,13 @@ export function MotionTimelinePanel({
       ?? (node ? getDefaultNodePropertyValue(node, track.property) : 0);
     const added = upsertKeyframeInClip(activeClip, track.id, playheadMs, value, 'ease-out');
     onUpdateClip(added.clip, `Insert ${track.property} keyframe`);
-    setSelectedKeyframe({ trackId: track.id, keyframeId: added.keyframeId });
+    setSelection({ kind: 'track', trackId: track.id, keyframeId: added.keyframeId });
   };
 
   const handleRemoveTrack = (track: AnimationTrack) => {
     if (!activeClip) return;
     const nextClip = removeTrackFromClip(activeClip, track.id);
-    if (selectedKeyframe?.trackId === track.id) setSelectedKeyframe(null);
+    if (selection?.kind === 'track' && selection.trackId === track.id) setSelection(null);
     onUpdateClip(nextClip, `Remove ${track.property} track`);
   };
 
@@ -273,11 +429,11 @@ export function MotionTimelinePanel({
   };
 
   const handleInspectorPatch = (patch: Partial<Pick<AnimationKeyframe, 'timeMs' | 'value' | 'easing'>>) => {
-    if (!activeClip || !activeSelection) return;
+    if (!activeClip || !activeTrackSelection) return;
     const nextClip = updateKeyframeInClip(
       activeClip,
-      activeSelection.track.id,
-      activeSelection.keyframe.id,
+      activeTrackSelection.track.id,
+      activeTrackSelection.keyframe.id,
       patch,
     );
     onUpdateClip(nextClip, 'Update keyframe');
@@ -287,14 +443,26 @@ export function MotionTimelinePanel({
   };
 
   const handleDeleteSelectedKeyframe = () => {
-    if (!activeClip || !activeSelection) return;
-    const nextClip = deleteKeyframeFromClip(
-      activeClip,
-      activeSelection.track.id,
-      activeSelection.keyframe.id,
-    );
-    setSelectedKeyframe(null);
-    onUpdateClip(nextClip, 'Delete keyframe');
+    if (!activeClip) return;
+    if (activeTrackSelection) {
+      const nextClip = deleteKeyframeFromClip(
+        activeClip,
+        activeTrackSelection.track.id,
+        activeTrackSelection.keyframe.id,
+      );
+      setSelection(null);
+      onUpdateClip(nextClip, 'Delete keyframe');
+      return;
+    }
+    if (activeLayerSelection) {
+      const nextClip = deleteLayerKeyframesAtTimeInClip(
+        activeClip,
+        activeLayerSelection.targetNodeId,
+        activeLayerSelection.timeMs,
+      );
+      setSelection(null);
+      onUpdateClip(nextClip, 'Delete layer keyframe pose');
+    }
   };
 
   return (
@@ -382,6 +550,22 @@ export function MotionTimelinePanel({
         <div class="mt-header-group mt-transport" role="group" aria-label="Playback transport">
           <button
             type="button"
+            class={`mt-toggle-btn mt-autokey-btn ${autoKeyEnabled ? 'is-recording' : ''}`}
+            aria-pressed={autoKeyEnabled}
+            data-testid="motion-autokey-toggle"
+            title={
+              autoKeyEnabled
+                ? 'Auto-Key ON: Scrub the playhead, then move, resize, rotate, or recolor objects directly on Canvas or Inspector to automatically add keyframes.'
+                : 'Auto-Key OFF: Enable to automatically record keyframes when editing objects on Canvas or Inspector.'
+            }
+            onClick={onToggleAutoKey}
+          >
+            <span class="mt-autokey-dot" aria-hidden="true" />
+            <span>Auto-Key</span>
+          </button>
+
+          <button
+            type="button"
             class={`mt-icon-btn mt-play-btn ${isPlaying ? 'playing' : ''}`}
             disabled={!activeClip}
             aria-label={isPlaying ? 'Pause animation' : 'Play animation'}
@@ -450,12 +634,12 @@ export function MotionTimelinePanel({
             disabled={selectedNodeIds.length === 0}
             title={
               selectedNodeIds.length > 0
-                ? 'Insert Y & Opacity keyframes for selected canvas layers at current playhead'
+                ? 'Snapshot ALL properties (position, size, rotation, opacity, radius, fill, stroke) of selected layers at the current playhead'
                 : 'Select a layer on the canvas first'
             }
             onClick={onKeyframeSelected}
           >
-            + Keyframe Selected
+            + Keyframe All
           </button>
           <button
             type="button"
@@ -528,7 +712,6 @@ export function MotionTimelinePanel({
             tabIndex={0}
             onPointerDown={handleRulerPointerDown}
             onKeyDown={(event) => {
-              if (!activeClip) return;
               if (event.key === 'ArrowRight') {
                 event.preventDefault();
                 onSeek(playheadMs + (event.shiftKey ? 100 : 20));
@@ -553,11 +736,13 @@ export function MotionTimelinePanel({
         </div>
 
         <div ref={lanesContainerRef} class="mt-tracks-scroll" role="list" aria-label="Animation tracks">
-          {!activeClip || activeClip.tracks.length === 0 ? (
+          {!activeClip || groupedLayers.length === 0 ? (
             <div class="mt-empty-tracks">
-              {activeClip
-                ? 'No tracks yet. Pick a layer and property above, or apply a motion preset.'
-                : 'Create a clip or choose a motion preset to animate layers on this page.'}
+              {autoKeyEnabled
+                ? 'Scrub the ruler to any time, then move, resize, or recolor any object on Canvas or Inspector — keyframes record automatically!'
+                : activeClip
+                  ? 'No tracks yet. Turn on Auto-Key, click + Keyframe All, or pick a layer and property above.'
+                  : 'Scrub the ruler and edit an object on Canvas (Auto-Key), or create a clip / preset.'}
             </div>
           ) : (
             <div class="mt-tracks-inner">
@@ -569,82 +754,176 @@ export function MotionTimelinePanel({
                   />
                 </div>
               </div>
-              {activeClip.tracks.map((track) => {
-                const targetNode = nodeById.get(track.targetNodeId);
-                const liveValue = evaluateTrackAtTime(track, playheadMs);
-                const isSelectedTrack = activeSelection?.track.id === track.id;
-                return (
-                  <div
-                    key={track.id}
-                    role="listitem"
-                    class={`mt-track-grid-row ${isSelectedTrack ? 'selected' : ''}`}
-                  >
-                    <div class="mt-track-row">
-                      <button
-                        type="button"
-                        class="mt-track-target"
-                        onClick={() => targetNode && onSelectCanvasNode(targetNode.id)}
-                        title={targetNode ? `Select "${targetNode.name}" on canvas` : 'Missing layer'}
-                      >
-                        <span class="mt-track-node-name">{targetNode?.name ?? 'Missing layer'}</span>
-                        <span class="mt-track-prop-code">{ANIMATABLE_PROPERTY_META[track.property].label}</span>
-                      </button>
-                      <span class="mt-track-value" title="Evaluated value at playhead">
-                        {formatTrackValue(track.property, liveValue)}
-                      </span>
-                      <button
-                        type="button"
-                        class="mt-mini-btn"
-                        aria-label={`Insert keyframe on ${targetNode?.name ?? track.targetNodeId} ${track.property}`}
-                        title={`Insert keyframe at ${formatSeconds(playheadMs)}`}
-                        onClick={() => handleQuickKeyframeTrack(track)}
-                      >
-                        ◆
-                      </button>
-                      <button
-                        type="button"
-                        class="mt-mini-btn mt-danger-btn"
-                        aria-label={`Remove ${track.property} track`}
-                        title="Remove track"
-                        onClick={() => handleRemoveTrack(track)}
-                      >
-                        ×
-                      </button>
-                    </div>
+              {groupedLayers.map((group) => {
+                const targetNode = nodeById.get(group.targetNodeId);
+                const isExpanded = expandedNodeIds.has(group.targetNodeId);
+                const isLayerSelected =
+                  activeLayerSelection?.targetNodeId === group.targetNodeId
+                  || selectedNodeIds.includes(group.targetNodeId);
+                const firstTime = group.keyframeTimes[0];
+                const lastTime = group.keyframeTimes[group.keyframeTimes.length - 1];
 
+                return (
+                  <div key={group.targetNodeId} class="mt-layer-group">
                     <div
-                      class="mt-lane"
-                      onDblClick={(event) => handleLaneDoubleClick(event, track)}
-                      title="Double-click to insert a keyframe"
+                      role="listitem"
+                      class={`mt-track-grid-row mt-layer-master-row ${isLayerSelected ? 'selected' : ''}`}
                     >
-                      <div class="mt-lane-track">
-                        {track.keyframes.length >= 2 && (
-                          <div
-                            class="mt-lane-span"
-                            style={{
-                              left: `${(track.keyframes[0].timeMs / Math.max(1, durationMs)) * 100}%`,
-                              width: `${((track.keyframes[track.keyframes.length - 1].timeMs - track.keyframes[0].timeMs) / Math.max(1, durationMs)) * 100}%`,
-                            }}
-                          />
-                        )}
-                        {track.keyframes.map((kf) => {
-                          const leftPct = (kf.timeMs / Math.max(1, durationMs)) * 100;
-                          const isSelected = activeSelection?.track.id === track.id
-                            && activeSelection.keyframe.id === kf.id;
-                          return (
-                            <button
-                              key={kf.id}
-                              type="button"
-                              class={`mt-keyframe ${isSelected ? 'selected' : ''}`}
-                              style={{ left: `${leftPct}%` }}
-                              aria-label={`Keyframe ${targetNode?.name ?? track.targetNodeId} ${track.property} at ${kf.timeMs}ms (${kf.value})`}
-                              title={`${track.property}: ${kf.value} @ ${kf.timeMs}ms (${ANIMATION_EASING_LABELS[kf.easing]}) — drag to re-time`}
-                              onPointerDown={(event) => handleKeyframePointerDown(event, track, kf)}
+                      <div class="mt-track-row">
+                        <button
+                          type="button"
+                          class="mt-mini-btn mt-layer-expand-btn"
+                          aria-expanded={isExpanded}
+                          aria-label={`${isExpanded ? 'Collapse' : 'Expand'} property tracks for ${targetNode?.name ?? group.targetNodeId}`}
+                          title={isExpanded ? 'Collapse property tracks' : 'Expand individual property tracks'}
+                          onClick={() => toggleExpandLayer(group.targetNodeId)}
+                        >
+                          {isExpanded ? '▾' : '▸'}
+                        </button>
+                        <button
+                          type="button"
+                          class="mt-track-target"
+                          onClick={() => targetNode && onSelectCanvasNode(targetNode.id)}
+                          title={targetNode ? `Select "${targetNode.name}" on canvas` : 'Missing layer'}
+                        >
+                          <span class="mt-track-node-name">{targetNode?.name ?? 'Missing layer'}</span>
+                          <span class="mt-layer-prop-count" title="Animated properties in this layer">
+                            {group.tracks.length} {group.tracks.length === 1 ? 'prop' : 'props'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          class="mt-mini-btn"
+                          aria-label={`Insert full keyframe for ${targetNode?.name ?? group.targetNodeId}`}
+                          title={`Keyframe all properties at ${formatSeconds(playheadMs)}`}
+                          onClick={() => handleQuickKeyframeLayer(group.targetNodeId)}
+                        >
+                          ◆
+                        </button>
+                        <button
+                          type="button"
+                          class="mt-mini-btn mt-danger-btn"
+                          aria-label={`Remove all tracks for ${targetNode?.name ?? group.targetNodeId}`}
+                          title="Remove all tracks for this layer"
+                          onClick={() => handleRemoveLayerTracks(group.targetNodeId)}
+                        >
+                          ×
+                        </button>
+                      </div>
+
+                      <div
+                        class="mt-lane"
+                        onDblClick={(event) => handleMasterLaneDoubleClick(event, group.targetNodeId)}
+                        title="Double-click to insert a full object keyframe"
+                      >
+                        <div class="mt-lane-track">
+                          {group.keyframeTimes.length >= 2 && (
+                            <div
+                              class="mt-lane-span mt-lane-span-master"
+                              style={{
+                                left: `${(firstTime / Math.max(1, durationMs)) * 100}%`,
+                                width: `${((lastTime - firstTime) / Math.max(1, durationMs)) * 100}%`,
+                              }}
                             />
-                          );
-                        })}
+                          )}
+                          {group.keyframeTimes.map((timeMs) => {
+                            const leftPct = (timeMs / Math.max(1, durationMs)) * 100;
+                            const isSelected =
+                              activeLayerSelection?.targetNodeId === group.targetNodeId
+                              && Math.abs(activeLayerSelection.timeMs - timeMs) <= 1;
+                            return (
+                              <button
+                                key={timeMs}
+                                type="button"
+                                class={`mt-keyframe mt-keyframe-master ${isSelected ? 'selected' : ''}`}
+                                style={{ left: `${leftPct}%` }}
+                                aria-label={`Layer keyframe ${targetNode?.name ?? group.targetNodeId} at ${timeMs}ms (${group.tracks.length} properties)`}
+                                title={`${targetNode?.name ?? 'Layer'} · All ${group.tracks.length} properties @ ${timeMs}ms — drag to re-time`}
+                                onPointerDown={(event) => handleMasterKeyframePointerDown(event, group.targetNodeId, timeMs)}
+                              />
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
+
+                    {isExpanded && group.tracks.map((track) => {
+                      const liveValue = evaluateTrackAtTime(track, playheadMs);
+                      const isSelectedTrack = activeTrackSelection?.track.id === track.id;
+                      return (
+                        <div
+                          key={track.id}
+                          role="listitem"
+                          class={`mt-track-grid-row mt-subtrack-row ${isSelectedTrack ? 'selected' : ''}`}
+                        >
+                          <div class="mt-track-row mt-subtrack-label-cell">
+                            <button
+                              type="button"
+                              class="mt-track-target"
+                              onClick={() => targetNode && onSelectCanvasNode(targetNode.id)}
+                              title={targetNode ? `Select "${targetNode.name}" on canvas` : 'Missing layer'}
+                            >
+                              <span class="mt-track-prop-code">{ANIMATABLE_PROPERTY_META[track.property].label}</span>
+                            </button>
+                            <span class="mt-track-value" title="Evaluated value at playhead">
+                              {formatTrackValue(track.property, liveValue)}
+                            </span>
+                            <button
+                              type="button"
+                              class="mt-mini-btn"
+                              aria-label={`Insert keyframe on ${targetNode?.name ?? track.targetNodeId} ${track.property}`}
+                              title={`Insert ${track.property} keyframe at ${formatSeconds(playheadMs)}`}
+                              onClick={() => handleQuickKeyframeTrack(track)}
+                            >
+                              ◆
+                            </button>
+                            <button
+                              type="button"
+                              class="mt-mini-btn mt-danger-btn"
+                              aria-label={`Remove ${track.property} track`}
+                              title="Remove property track"
+                              onClick={() => handleRemoveTrack(track)}
+                            >
+                              ×
+                            </button>
+                          </div>
+
+                          <div
+                            class="mt-lane"
+                            onDblClick={(event) => handleLaneDoubleClick(event, track)}
+                            title="Double-click to insert a keyframe"
+                          >
+                            <div class="mt-lane-track">
+                              {track.keyframes.length >= 2 && (
+                                <div
+                                  class="mt-lane-span"
+                                  style={{
+                                    left: `${(track.keyframes[0].timeMs / Math.max(1, durationMs)) * 100}%`,
+                                    width: `${((track.keyframes[track.keyframes.length - 1].timeMs - track.keyframes[0].timeMs) / Math.max(1, durationMs)) * 100}%`,
+                                  }}
+                                />
+                              )}
+                              {track.keyframes.map((kf) => {
+                                const leftPct = (kf.timeMs / Math.max(1, durationMs)) * 100;
+                                const isSelected = activeTrackSelection?.track.id === track.id
+                                  && activeTrackSelection.keyframe.id === kf.id;
+                                return (
+                                  <button
+                                    key={kf.id}
+                                    type="button"
+                                    class={`mt-keyframe ${isSelected ? 'selected' : ''}`}
+                                    style={{ left: `${leftPct}%` }}
+                                    aria-label={`Keyframe ${targetNode?.name ?? track.targetNodeId} ${track.property} at ${kf.timeMs}ms (${kf.value})`}
+                                    title={`${track.property}: ${kf.value} @ ${kf.timeMs}ms (${ANIMATION_EASING_LABELS[kf.easing]}) — drag to re-time`}
+                                    onPointerDown={(event) => handleKeyframePointerDown(event, track, kf)}
+                                  />
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })}
@@ -654,11 +933,11 @@ export function MotionTimelinePanel({
       </div>
 
       <footer class="mt-inspector-strip" aria-label="Selected keyframe inspector">
-        {activeSelection ? (
+        {activeTrackSelection ? (
           <>
             <span class="mt-inspector-target">
-              <strong>{nodeById.get(activeSelection.track.targetNodeId)?.name ?? 'Layer'}</strong>
-              <span>· {ANIMATABLE_PROPERTY_META[activeSelection.track.property].label}</span>
+              <strong>{nodeById.get(activeTrackSelection.track.targetNodeId)?.name ?? 'Layer'}</strong>
+              <span>· {ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].label}</span>
             </span>
 
             <label class="mt-inspector-field">
@@ -669,7 +948,7 @@ export function MotionTimelinePanel({
                 max={durationMs}
                 step={10}
                 aria-label="Keyframe time (ms)"
-                value={activeSelection.keyframe.timeMs}
+                value={activeTrackSelection.keyframe.timeMs}
                 onChange={(event) => {
                   const val = Number.parseInt(event.currentTarget.value, 10);
                   if (Number.isFinite(val)) handleInspectorPatch({ timeMs: val });
@@ -678,14 +957,14 @@ export function MotionTimelinePanel({
               <span>ms</span>
             </label>
 
-            {ANIMATABLE_PROPERTY_META[activeSelection.track.property].kind === 'color' ? (
+            {ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].kind === 'color' ? (
               <label class="mt-inspector-field">
-                <span>Fill</span>
+                <span>{ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].label}</span>
                 <input
                   type="color"
-                  aria-label="Keyframe fill color"
-                  value={typeof activeSelection.keyframe.value === 'string' && /^#[0-9a-fA-F]{6}$/.test(activeSelection.keyframe.value)
-                    ? activeSelection.keyframe.value
+                  aria-label="Keyframe color"
+                  value={typeof activeTrackSelection.keyframe.value === 'string' && /^#[0-9a-fA-F]{6}$/.test(activeTrackSelection.keyframe.value)
+                    ? activeTrackSelection.keyframe.value
                     : '#7c6ff7'}
                   onInput={(event) => handleInspectorPatch({ value: event.currentTarget.value })}
                 />
@@ -693,7 +972,7 @@ export function MotionTimelinePanel({
                   type="text"
                   class="mt-hex-input"
                   aria-label="Keyframe hex color"
-                  value={String(activeSelection.keyframe.value)}
+                  value={String(activeTrackSelection.keyframe.value)}
                   onChange={(event) => handleInspectorPatch({ value: event.currentTarget.value.trim() })}
                 />
               </label>
@@ -702,18 +981,18 @@ export function MotionTimelinePanel({
                 <span>Value</span>
                 <input
                   type="number"
-                  step={ANIMATABLE_PROPERTY_META[activeSelection.track.property].step}
-                  min={ANIMATABLE_PROPERTY_META[activeSelection.track.property].min}
-                  max={ANIMATABLE_PROPERTY_META[activeSelection.track.property].max}
+                  step={ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].step}
+                  min={ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].min}
+                  max={ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].max}
                   aria-label="Keyframe value"
-                  value={Number(activeSelection.keyframe.value)}
+                  value={Number(activeTrackSelection.keyframe.value)}
                   onChange={(event) => {
                     const val = Number.parseFloat(event.currentTarget.value);
                     if (Number.isFinite(val)) handleInspectorPatch({ value: val });
                   }}
                 />
-                {ANIMATABLE_PROPERTY_META[activeSelection.track.property].unit && (
-                  <span>{ANIMATABLE_PROPERTY_META[activeSelection.track.property].unit}</span>
+                {ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].unit && (
+                  <span>{ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].unit}</span>
                 )}
               </label>
             )}
@@ -723,7 +1002,7 @@ export function MotionTimelinePanel({
               <select
                 class="mt-select"
                 aria-label="Keyframe easing curve"
-                value={activeSelection.keyframe.easing}
+                value={activeTrackSelection.keyframe.easing}
                 onChange={(event) => handleInspectorPatch({ easing: event.currentTarget.value as AnimationEasing })}
               >
                 {ANIMATION_EASINGS.map((easing) => (
@@ -742,9 +1021,77 @@ export function MotionTimelinePanel({
               Delete Keyframe
             </button>
           </>
+        ) : activeLayerSelection && activeClip ? (
+          <>
+            <span class="mt-inspector-target">
+              <strong>{nodeById.get(activeLayerSelection.targetNodeId)?.name ?? 'Layer'}</strong>
+              <span>· Full Pose ({activeLayerSelection.trackCount} props)</span>
+            </span>
+
+            <label class="mt-inspector-field">
+              <span>Time</span>
+              <input
+                type="number"
+                min={0}
+                max={durationMs}
+                step={10}
+                aria-label="Layer keyframe time (ms)"
+                value={activeLayerSelection.timeMs}
+                onChange={(event) => {
+                  const val = Number.parseInt(event.currentTarget.value, 10);
+                  if (!Number.isFinite(val)) return;
+                  const nextClip = moveLayerKeyframesInClip(
+                    activeClip,
+                    activeLayerSelection.targetNodeId,
+                    activeLayerSelection.timeMs,
+                    val,
+                  );
+                  onUpdateClip(nextClip, 'Re-time layer keyframe pose');
+                  setSelection({ kind: 'layer', targetNodeId: activeLayerSelection.targetNodeId, timeMs: val });
+                  onSeek(val);
+                }}
+              />
+              <span>ms</span>
+            </label>
+
+            <label class="mt-inspector-field">
+              <span>Easing</span>
+              <select
+                class="mt-select"
+                aria-label="Layer keyframe easing curve"
+                value={activeLayerSelection.easing}
+                onChange={(event) => {
+                  const easing = event.currentTarget.value as AnimationEasing;
+                  const nextClip = updateLayerKeyframesEasingInClip(
+                    activeClip,
+                    activeLayerSelection.targetNodeId,
+                    activeLayerSelection.timeMs,
+                    easing,
+                  );
+                  onUpdateClip(nextClip, 'Update layer keyframe easing');
+                }}
+              >
+                {ANIMATION_EASINGS.map((easing) => (
+                  <option key={easing} value={easing}>
+                    {ANIMATION_EASING_LABELS[easing]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              type="button"
+              class="mt-btn mt-danger-btn mt-inspector-delete"
+              onClick={handleDeleteSelectedKeyframe}
+            >
+              Delete Pose
+            </button>
+          </>
         ) : (
           <span class="mt-inspector-hint">
-            Scrub the ruler to preview live poses on Canvas · Click any ◆ keyframe to edit value &amp; easing · Double-click a lane to insert a keyframe
+            {autoKeyEnabled
+              ? 'Auto-Key ON · Scrub the ruler, then move, resize, rotate, or recolor any object on Canvas or Inspector to auto-keyframe everything!'
+              : 'Scrub the ruler to preview poses · Click ◆ to edit timing & easing · Click ▸ on a layer to expand individual properties'}
           </span>
         )}
       </footer>

@@ -8,15 +8,21 @@ import type {
   FolioDocument,
   FolioPage,
 } from '../../core/document/types';
+import { scalePathNodeGeometry } from '../../core/document/vector';
 import { evaluateEasing } from './easing';
 
 export const ANIMATABLE_PROPERTIES: readonly AnimatableProperty[] = Object.freeze([
   'x',
   'y',
-  'opacity',
+  'width',
+  'height',
   'rotation',
+  'opacity',
   'scale',
+  'radius',
   'fill',
+  'stroke',
+  'strokeWidth',
 ]);
 
 export const ANIMATABLE_PROPERTY_META: Readonly<Record<AnimatableProperty, {
@@ -29,19 +35,29 @@ export const ANIMATABLE_PROPERTY_META: Readonly<Record<AnimatableProperty, {
 }>> = Object.freeze({
   x: { label: 'X', unit: 'px', step: 1, kind: 'number' },
   y: { label: 'Y', unit: 'px', step: 1, kind: 'number' },
-  opacity: { label: 'Opacity', unit: '', step: 0.05, min: 0, max: 1, kind: 'number' },
+  width: { label: 'W', unit: 'px', step: 1, min: 1, max: 20000, kind: 'number' },
+  height: { label: 'H', unit: 'px', step: 1, min: 1, max: 20000, kind: 'number' },
   rotation: { label: 'Rotation', unit: 'deg', step: 1, kind: 'number' },
+  opacity: { label: 'Opacity', unit: '', step: 0.05, min: 0, max: 1, kind: 'number' },
   scale: { label: 'Scale', unit: 'x', step: 0.05, min: 0.05, max: 5, kind: 'number' },
+  radius: { label: 'Radius', unit: 'px', step: 1, min: 0, max: 2000, kind: 'number' },
   fill: { label: 'Fill', unit: '', step: 0, kind: 'color' },
+  stroke: { label: 'Stroke', unit: '', step: 0, kind: 'color' },
+  strokeWidth: { label: 'Stroke W', unit: 'px', step: 0.5, min: 0, max: 200, kind: 'number' },
 });
 
 export interface AnimatedNodePose {
   x?: number;
   y?: number;
+  width?: number;
+  height?: number;
   opacity?: number;
   rotation?: number;
   scale?: number;
+  radius?: number;
   fill?: string;
+  stroke?: string;
+  strokeWidth?: number;
 }
 
 export interface MotionPresetDefinition {
@@ -163,7 +179,7 @@ export function evaluateTrackAtTime(
       const rawT = (timeMs - start.timeMs) / span;
       const easedT = evaluateEasing(end.easing, rawT);
 
-      if (track.property === 'fill') {
+      if (track.property === 'fill' || track.property === 'stroke') {
         return interpolateHexColor(String(start.value), String(end.value), easedT);
       }
 
@@ -172,6 +188,8 @@ export function evaluateTrackAtTime(
       const interpolated = startNum + (endNum - startNum) * easedT;
       if (track.property === 'opacity') return roundTo2(clamp(interpolated, 0, 1));
       if (track.property === 'scale') return roundTo2(clamp(interpolated, 0.05, 10));
+      if (track.property === 'width' || track.property === 'height') return roundTo2(clamp(interpolated, 1, 20000));
+      if (track.property === 'radius' || track.property === 'strokeWidth') return roundTo2(clamp(interpolated, 0, 2000));
       return roundTo2(interpolated);
     }
   }
@@ -198,6 +216,8 @@ export function evaluateClipAtTime(
     const pose = poses[track.targetNodeId] ?? (poses[track.targetNodeId] = {});
     if (track.property === 'fill') {
       pose.fill = String(value);
+    } else if (track.property === 'stroke') {
+      pose.stroke = String(value);
     } else {
       pose[track.property] = Number(value);
     }
@@ -224,11 +244,13 @@ export function applyAnimatedPosesToDocument(
 
     const baseX = pose.x ?? node.x;
     const baseY = pose.y ?? node.y;
+    const baseWidth = pose.width !== undefined ? Math.max(1, roundTo2(pose.width)) : node.width;
+    const baseHeight = pose.height !== undefined ? Math.max(1, roundTo2(pose.height)) : node.height;
     const scale = pose.scale ?? 1;
-    const scaledWidth = scale !== 1 ? Math.max(1, roundTo2(node.width * scale)) : node.width;
-    const scaledHeight = scale !== 1 ? Math.max(1, roundTo2(node.height * scale)) : node.height;
-    const centeredX = scale !== 1 ? roundTo2(baseX + (node.width - scaledWidth) / 2) : baseX;
-    const centeredY = scale !== 1 ? roundTo2(baseY + (node.height - scaledHeight) / 2) : baseY;
+    const scaledWidth = scale !== 1 ? Math.max(1, roundTo2(baseWidth * scale)) : baseWidth;
+    const scaledHeight = scale !== 1 ? Math.max(1, roundTo2(baseHeight * scale)) : baseHeight;
+    const centeredX = scale !== 1 ? roundTo2(baseX + (baseWidth - scaledWidth) / 2) : baseX;
+    const centeredY = scale !== 1 ? roundTo2(baseY + (baseHeight - scaledHeight) / 2) : baseY;
 
     const basePatch = {
       x: centeredX,
@@ -239,21 +261,48 @@ export function applyAnimatedPosesToDocument(
       opacity: pose.opacity !== undefined ? clamp(pose.opacity, 0, 1) : node.opacity,
     };
 
-    if (pose.fill !== undefined && 'style' in node) {
-      return {
-        ...node,
-        ...basePatch,
-        style: {
-          ...node.style,
-          fill: pose.fill,
-        },
+    let nextNode: DesignNode =
+      node.type === 'path' && (scaledWidth !== node.width || scaledHeight !== node.height)
+        ? {
+            ...scalePathNodeGeometry(node, centeredX, centeredY, scaledWidth, scaledHeight),
+            rotation: basePatch.rotation,
+            opacity: basePatch.opacity,
+          }
+        : ({ ...node, ...basePatch } as DesignNode);
+
+    const hasStyleAnim =
+      pose.fill !== undefined ||
+      pose.stroke !== undefined ||
+      pose.strokeWidth !== undefined ||
+      pose.radius !== undefined;
+
+    if (hasStyleAnim && 'style' in nextNode) {
+      const nextStyle: Record<string, unknown> = { ...nextNode.style };
+      if (pose.fill !== undefined && 'fill' in nextNode.style) {
+        nextStyle.fill = pose.fill;
+        if ('fills' in nextStyle) {
+          nextStyle.fills = undefined;
+        }
+      }
+      if (pose.stroke !== undefined && 'stroke' in nextNode.style) {
+        nextStyle.stroke = pose.stroke;
+        if ('strokes' in nextStyle) {
+          nextStyle.strokes = undefined;
+        }
+      }
+      if (pose.strokeWidth !== undefined && 'strokeWidth' in nextNode.style) {
+        nextStyle.strokeWidth = Math.max(0, roundTo2(pose.strokeWidth));
+      }
+      if (pose.radius !== undefined && 'radius' in nextNode.style) {
+        nextStyle.radius = Math.max(0, roundTo2(pose.radius));
+      }
+      nextNode = {
+        ...nextNode,
+        style: nextStyle,
       } as DesignNode;
     }
 
-    return {
-      ...node,
-      ...basePatch,
-    } as DesignNode;
+    return nextNode;
   });
 
   if (!changed) return document;
@@ -263,22 +312,96 @@ export function applyAnimatedPosesToDocument(
   };
 }
 
+function normalizeAnimatableColor(raw: string | undefined, fallback: string): string {
+  const trimmed = raw?.trim() ?? '';
+  if (!trimmed || trimmed.toLowerCase() === 'none') return 'transparent';
+  if (trimmed.toLowerCase() === 'transparent') return 'transparent';
+  if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(trimmed)) return trimmed;
+  if (/^(?:rgba?|hsla?)\(\s*[0-9.%\s,/+-]+\s*\)$/i.test(trimmed)) return trimmed;
+  return fallback;
+}
+
+/**
+ * Returns the complete list of animatable properties supported by a given DesignNode
+ * so keyframing an object captures its full visual state (position, size, rotation,
+ * opacity, radius, fill, stroke, stroke width) in one action.
+ */
+export function getAnimatablePropertiesForNode(node: DesignNode): AnimatableProperty[] {
+  const base: AnimatableProperty[] = ['x', 'y', 'width', 'height', 'rotation', 'opacity'];
+  switch (node.type) {
+    case 'rect':
+    case 'frame':
+      return [...base, 'radius', 'fill', 'stroke', 'strokeWidth'];
+    case 'ellipse':
+    case 'path':
+      return [...base, 'fill', 'stroke', 'strokeWidth'];
+    case 'text':
+      return [...base, 'fill'];
+    case 'image':
+      return [...base, 'radius', 'stroke', 'strokeWidth'];
+    case 'group':
+    case 'component-instance':
+    default:
+      return base;
+  }
+}
+
 export function getDefaultNodePropertyValue(node: DesignNode, property: AnimatableProperty): number | string {
   switch (property) {
     case 'x':
       return roundTo2(node.x);
     case 'y':
       return roundTo2(node.y);
+    case 'width':
+      return Math.max(1, roundTo2(node.width));
+    case 'height':
+      return Math.max(1, roundTo2(node.height));
     case 'opacity':
-      return roundTo2(node.opacity ?? 1);
+      return roundTo2(clamp(node.opacity ?? 1, 0, 1));
     case 'rotation':
       return roundTo2(node.rotation ?? 0);
     case 'scale':
       return 1;
-    case 'fill':
-      return 'style' in node && 'fill' in node.style && typeof node.style.fill === 'string' && node.style.fill.trim()
-        ? node.style.fill
-        : '#4f8cff';
+    case 'radius':
+      return 'style' in node && 'radius' in node.style && typeof node.style.radius === 'number'
+        ? Math.max(0, roundTo2(node.style.radius))
+        : 0;
+    case 'fill': {
+      if ('style' in node && 'fill' in node.style) {
+        if (typeof node.style.fill === 'string' && node.style.fill.trim().length > 0) {
+          return normalizeAnimatableColor(node.style.fill, '#4f8cff');
+        }
+        if ('fills' in node.style && Array.isArray(node.style.fills)) {
+          const firstSolid = node.style.fills.find(
+            (item): item is Extract<typeof item, { type: 'solid' }> => item.visible !== false && item.type === 'solid',
+          );
+          if (firstSolid && firstSolid.color) {
+            return normalizeAnimatableColor(firstSolid.color, '#4f8cff');
+          }
+        }
+        return 'transparent';
+      }
+      return '#4f8cff';
+    }
+    case 'stroke': {
+      if ('style' in node && 'stroke' in node.style) {
+        if (typeof node.style.stroke === 'string' && node.style.stroke.trim().length > 0) {
+          return normalizeAnimatableColor(node.style.stroke, 'transparent');
+        }
+        if ('strokes' in node.style && Array.isArray(node.style.strokes)) {
+          const firstStroke = node.style.strokes.find((item) => item.visible !== false && typeof item.color === 'string');
+          if (firstStroke && firstStroke.color) {
+            return normalizeAnimatableColor(firstStroke.color, 'transparent');
+          }
+        }
+        return 'transparent';
+      }
+      return 'transparent';
+    }
+    case 'strokeWidth':
+      return 'style' in node && 'strokeWidth' in node.style && typeof node.style.strokeWidth === 'number'
+        ? Math.max(0, roundTo2(node.style.strokeWidth))
+        : 0;
   }
 }
 
@@ -470,6 +593,276 @@ export function deleteKeyframeFromClip(
       return {
         ...track,
         keyframes: track.keyframes.filter((kf) => kf.id !== keyframeId),
+      };
+    }),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function areAnimatableValuesEqual(a: number | string, b: number | string): boolean {
+  if (typeof a === 'number' && typeof b === 'number') {
+    return Math.abs(a - b) <= 1e-4;
+  }
+  return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+}
+
+/**
+ * Captures a unified full-object keyframe snapshot at `timeMs` covering all
+ * supported animatable properties for `node` (position, size, rotation, opacity,
+ * radius, fill, stroke, strokeWidth). When creating a brand-new track at
+ * `timeMs > 0` with a `baselineNode`, automatically seeds a `0ms` baseline
+ * keyframe so motion interpolates immediately without manual setup.
+ */
+export function captureNodeKeyframeSnapshot(
+  clip: AnimationClip,
+  node: DesignNode,
+  timeMs: number,
+  options?: {
+    baselineNode?: DesignNode;
+    properties?: readonly AnimatableProperty[];
+    easing?: AnimationEasing;
+  },
+): { clip: AnimationClip; capturedProperties: readonly AnimatableProperty[] } {
+  const properties = options?.properties && options.properties.length > 0
+    ? [...options.properties]
+    : getAnimatablePropertiesForNode(node);
+  const clampedTime = clamp(Math.round(timeMs), 0, clip.durationMs);
+  const easing = options?.easing ?? 'ease-out';
+  const baselineNode = options?.baselineNode;
+
+  let nextTracks = [...clip.tracks];
+  for (const property of properties) {
+    const value = getDefaultNodePropertyValue(node, property);
+    const existingIndex = nextTracks.findIndex(
+      (track) => track.targetNodeId === node.id && track.property === property,
+    );
+
+    if (existingIndex === -1) {
+      const keyframes: AnimationKeyframe[] = [];
+      if (clampedTime > 0 && baselineNode) {
+        keyframes.push({
+          id: createMotionId('kf'),
+          timeMs: 0,
+          value: getDefaultNodePropertyValue(baselineNode, property),
+          easing: 'linear',
+        });
+      }
+      keyframes.push({
+        id: createMotionId('kf'),
+        timeMs: clampedTime,
+        value,
+        easing: clampedTime === 0 ? 'linear' : easing,
+      });
+      nextTracks.push({
+        id: createMotionId('track'),
+        targetNodeId: node.id,
+        property,
+        keyframes: sortKeyframes(keyframes),
+      });
+    } else {
+      const track = nextTracks[existingIndex];
+      const near = track.keyframes.find((kf) => Math.abs(kf.timeMs - clampedTime) <= 15);
+      const nextKeyframes = near
+        ? track.keyframes.map((kf) => (kf.id === near.id ? { ...kf, timeMs: clampedTime, value } : kf))
+        : [
+            ...track.keyframes,
+            {
+              id: createMotionId('kf'),
+              timeMs: clampedTime,
+              value,
+              easing: clampedTime === 0 ? 'linear' : easing,
+            },
+          ];
+      nextTracks[existingIndex] = {
+        ...track,
+        keyframes: sortKeyframes(nextKeyframes),
+      };
+    }
+  }
+
+  return {
+    capturedProperties: properties,
+    clip: {
+      ...clip,
+      tracks: nextTracks,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+/**
+ * Inspects an edit from `beforeNode` -> `afterNode` during Motion Auto-Key mode.
+ * If any animatable property changed, captures a full-object keyframe snapshot
+ * at `timeMs` (auto-seeding `0ms` from `baselineNode ?? beforeNode` for new tracks).
+ */
+export function applyAutoKeyFromNodeChange(
+  clip: AnimationClip,
+  beforeNode: DesignNode,
+  afterNode: DesignNode,
+  timeMs: number,
+  options?: {
+    baselineNode?: DesignNode;
+    easing?: AnimationEasing;
+  },
+): {
+  clip: AnimationClip;
+  recorded: boolean;
+  changedProperties: AnimatableProperty[];
+} {
+  const properties = getAnimatablePropertiesForNode(afterNode);
+  const changedProperties: AnimatableProperty[] = [];
+  for (const property of properties) {
+    const beforeValue = getDefaultNodePropertyValue(beforeNode, property);
+    const afterValue = getDefaultNodePropertyValue(afterNode, property);
+    if (!areAnimatableValuesEqual(beforeValue, afterValue)) {
+      changedProperties.push(property);
+    }
+  }
+
+  if (changedProperties.length === 0) {
+    return { clip, recorded: false, changedProperties: [] };
+  }
+
+  const { clip: nextClip } = captureNodeKeyframeSnapshot(clip, afterNode, timeMs, {
+    baselineNode: options?.baselineNode ?? beforeNode,
+    properties,
+    easing: options?.easing ?? 'ease-out',
+  });
+
+  return {
+    clip: nextClip,
+    recorded: true,
+    changedProperties,
+  };
+}
+
+export interface GroupedAnimationLayer {
+  readonly targetNodeId: string;
+  readonly tracks: readonly AnimationTrack[];
+  readonly keyframeTimes: readonly number[];
+}
+
+/**
+ * Groups flat AnimationTracks by `targetNodeId` in stable order so the Motion
+ * Timeline can render one clean master row per animated object with expandable
+ * per-property sub-tracks.
+ */
+export function groupClipTracksByNode(clip: AnimationClip): GroupedAnimationLayer[] {
+  const map = new Map<string, AnimationTrack[]>();
+  for (const track of clip.tracks) {
+    const existing = map.get(track.targetNodeId);
+    if (existing) {
+      existing.push(track);
+    } else {
+      map.set(track.targetNodeId, [track]);
+    }
+  }
+
+  const groups: GroupedAnimationLayer[] = [];
+  for (const [targetNodeId, tracks] of map.entries()) {
+    const timeSet = new Set<number>();
+    for (const track of tracks) {
+      for (const kf of track.keyframes) {
+        timeSet.add(Math.round(kf.timeMs));
+      }
+    }
+    groups.push({
+      targetNodeId,
+      tracks,
+      keyframeTimes: [...timeSet].sort((a, b) => a - b),
+    });
+  }
+  return groups;
+}
+
+/**
+ * Moves all keyframes belonging to `targetNodeId` at `fromTimeMs` together to `toTimeMs`.
+ */
+export function moveLayerKeyframesInClip(
+  clip: AnimationClip,
+  targetNodeId: string,
+  fromTimeMs: number,
+  toTimeMs: number,
+): AnimationClip {
+  const clampedTo = clamp(Math.round(toTimeMs), 0, clip.durationMs);
+  const roundedFrom = Math.round(fromTimeMs);
+  if (clampedTo === roundedFrom) return clip;
+
+  return {
+    ...clip,
+    tracks: clip.tracks.map((track) => {
+      if (track.targetNodeId !== targetNodeId) return track;
+      const moved = track.keyframes.map((kf) =>
+        Math.abs(kf.timeMs - roundedFrom) <= 1 ? { ...kf, timeMs: clampedTo } : kf,
+      );
+      // Deduplicate if dragged directly onto an existing keyframe timestamp
+      const deduped: AnimationKeyframe[] = [];
+      for (const kf of sortKeyframes(moved)) {
+        const last = deduped[deduped.length - 1];
+        if (last && Math.abs(last.timeMs - kf.timeMs) <= 1) {
+          deduped[deduped.length - 1] = kf;
+        } else {
+          deduped.push(kf);
+        }
+      }
+      return { ...track, keyframes: deduped };
+    }),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Deletes every keyframe at `timeMs` across all tracks for `targetNodeId`.
+ */
+export function deleteLayerKeyframesAtTimeInClip(
+  clip: AnimationClip,
+  targetNodeId: string,
+  timeMs: number,
+): AnimationClip {
+  const roundedTime = Math.round(timeMs);
+  return {
+    ...clip,
+    tracks: clip.tracks.map((track) => {
+      if (track.targetNodeId !== targetNodeId) return track;
+      return {
+        ...track,
+        keyframes: track.keyframes.filter((kf) => Math.abs(kf.timeMs - roundedTime) > 1),
+      };
+    }),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Removes all animation tracks belonging to `targetNodeId` from the clip.
+ */
+export function removeLayerTracksFromClip(clip: AnimationClip, targetNodeId: string): AnimationClip {
+  return {
+    ...clip,
+    tracks: clip.tracks.filter((track) => track.targetNodeId !== targetNodeId),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Updates the easing curve of all keyframes at `timeMs` across all tracks for `targetNodeId`.
+ */
+export function updateLayerKeyframesEasingInClip(
+  clip: AnimationClip,
+  targetNodeId: string,
+  timeMs: number,
+  easing: AnimationEasing,
+): AnimationClip {
+  const roundedTime = Math.round(timeMs);
+  return {
+    ...clip,
+    tracks: clip.tracks.map((track) => {
+      if (track.targetNodeId !== targetNodeId) return track;
+      return {
+        ...track,
+        keyframes: track.keyframes.map((kf) =>
+          Math.abs(kf.timeMs - roundedTime) <= 1 ? { ...kf, easing } : kf,
+        ),
       };
     }),
     updatedAt: new Date().toISOString(),

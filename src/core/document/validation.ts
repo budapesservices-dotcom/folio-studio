@@ -744,7 +744,19 @@ export function isCodeModuleList(value: unknown): value is import('./types').Cod
 }
 
 const ANIMATION_EASINGS_SET = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'spring']);
-const ANIMATABLE_PROPERTIES_SET = new Set(['x', 'y', 'opacity', 'rotation', 'scale', 'fill']);
+const ANIMATABLE_PROPERTIES_SET = new Set([
+  'x',
+  'y',
+  'width',
+  'height',
+  'opacity',
+  'rotation',
+  'scale',
+  'radius',
+  'fill',
+  'stroke',
+  'strokeWidth',
+]);
 const SAFE_HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 const SAFE_FUNC_COLOR_PATTERN = /^(?:rgba?|hsla?)\(\s*[0-9.%\s,/+-]+\s*\)$/i;
 
@@ -802,12 +814,14 @@ export function isAnimationClip(value: unknown): value is import('./types').Anim
       if (keyframeIds.has(kf.id)) return false;
       keyframeIds.add(kf.id);
 
-      if (track.property === 'fill') {
+      if (track.property === 'fill' || track.property === 'stroke') {
         if (!isSafeAnimationColorValue(kf.value)) return false;
       } else {
         if (!isFiniteNumber(kf.value)) return false;
         if (track.property === 'opacity' && (kf.value < 0 || kf.value > 1)) return false;
         if (track.property === 'scale' && (kf.value < 0.05 || kf.value > 10)) return false;
+        if ((track.property === 'width' || track.property === 'height') && (kf.value < 1 || kf.value > 20000)) return false;
+        if ((track.property === 'radius' || track.property === 'strokeWidth') && (kf.value < 0 || kf.value > 2000)) return false;
       }
     }
   }

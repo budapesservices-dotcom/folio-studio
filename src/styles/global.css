@@ -4975,6 +4975,206 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   text-overflow: ellipsis;
 }
 
+.nl-node-card.has-guide-open {
+  z-index: 90;
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.45), 0 14px 32px rgba(0, 0, 0, 0.5);
+}
+
+.nl-node-guide-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: rgba(15, 20, 30, 0.45);
+  color: #a9b6cc;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.nl-node-guide-btn:hover {
+  background: rgba(251, 191, 36, 0.16);
+  border-color: rgba(251, 191, 36, 0.45);
+  color: #fde68a;
+}
+
+.nl-node-guide-btn.is-active {
+  background: rgba(245, 158, 11, 0.24);
+  border-color: #f59e0b;
+  color: #fde68a;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.28);
+}
+
+.nl-guide-bulb-svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+
+.nl-node-guide-popover {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  left: auto;
+  z-index: 45;
+  width: min(296px, calc(100% - 20px));
+  max-height: calc(100% - 20px);
+  overflow-y: auto;
+  padding: 11px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.52);
+  border-radius: 9px;
+  background: rgba(20, 25, 37, 0.97);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.62);
+  color: #dce4f4;
+  font-size: 11px;
+  line-height: 1.42;
+  cursor: default;
+}
+
+.nl-guide-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid #252e41;
+}
+
+.nl-guide-popover-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #fde68a;
+  font-size: 11.5px;
+}
+
+.nl-guide-popover-title strong {
+  color: #f4f7fd;
+  font-weight: 650;
+}
+
+.nl-guide-popover-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #96a4bc;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.nl-guide-popover-close:hover {
+  background: #252e41;
+  color: #f4f7fd;
+}
+
+.nl-guide-role {
+  margin: 0 0 8px;
+  color: #a8b5cb;
+  font-size: 10.5px;
+}
+
+.nl-guide-section {
+  margin-bottom: 8px;
+}
+
+.nl-guide-section-title {
+  margin-bottom: 4px;
+  color: #8f9db5;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.nl-guide-empty {
+  margin: 0;
+  padding: 5px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #93a1b9;
+  font-size: 10.5px;
+}
+
+.nl-guide-port-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.nl-guide-port-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 7px;
+  border: 1px solid #222a3a;
+  border-radius: 5px;
+  background: rgba(15, 20, 30, 0.65);
+}
+
+.nl-guide-port-tag {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  background: #232b3d;
+  color: #e6ecf8;
+}
+
+.nl-guide-port-tag.nl-port-exec { background: rgba(56, 189, 248, 0.18); color: #7dd3fc; }
+.nl-guide-port-tag.nl-port-boolean { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
+.nl-guide-port-tag.nl-port-string { background: rgba(52, 211, 153, 0.18); color: #6ee7b7; }
+.nl-guide-port-tag.nl-port-number { background: rgba(167, 139, 250, 0.2); color: #c4b5fd; }
+.nl-guide-port-tag.nl-port-color { background: rgba(244, 114, 182, 0.2); color: #f9a8d4; }
+.nl-guide-port-tag.nl-port-any { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
+
+.nl-guide-port-text {
+  color: #cbd5e7;
+  font-size: 10.5px;
+}
+
+.nl-guide-example {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.24);
+}
+
+.nl-guide-example-label {
+  color: #fbbf24;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.nl-guide-example-text {
+  color: #f3f6fc;
+  font-size: 10.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
 .nl-node-diag {
   flex: 0 0 auto;
   display: inline-flex;
@@ -5830,6 +6030,31 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   color: #ece9ff;
 }
 
+.mt-autokey-btn {
+  gap: 5px;
+  padding: 0 9px;
+  font-weight: 600;
+}
+
+.mt-autokey-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #6c7790;
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.mt-autokey-btn.is-recording {
+  background: rgba(220, 38, 38, 0.18);
+  border-color: #ef4444;
+  color: #fecaca;
+}
+
+.mt-autokey-btn.is-recording .mt-autokey-dot {
+  background: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.85);
+}
+
 .mt-cta-btn {
   background: #27224a;
   border-color: #6d5de0;
@@ -6245,6 +6470,40 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
     );
 }
 
+.mt-layer-master-row {
+  background: #171d2b;
+  height: 30px;
+}
+
+.mt-layer-master-row.selected {
+  background: #1f263b;
+}
+
+.mt-layer-expand-btn {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: #9aa7bf;
+}
+
+.mt-layer-prop-count {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #232b3e;
+  color: #9aa7bf;
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.mt-subtrack-row {
+  height: 25px;
+  background: #121723;
+}
+
+.mt-subtrack-label-cell {
+  padding-left: 26px;
+}
+
 .mt-lane-span {
   position: absolute;
   top: 50%;
@@ -6252,6 +6511,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   transform: translateY(-50%);
   background: rgba(164, 148, 255, 0.34);
   pointer-events: none;
+}
+
+.mt-lane-span-master {
+  height: 3px;
+  background: rgba(139, 124, 246, 0.45);
 }
 
 .mt-keyframe {
@@ -6267,6 +6531,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   cursor: grab;
   z-index: 6;
   transition: transform 100ms ease, background-color 100ms ease, border-color 100ms ease;
+}
+
+.mt-keyframe.mt-keyframe-master {
+  width: 11px;
+  height: 11px;
+  border-color: #e9d5ff;
+  background: #9b87ff;
 }
 
 .mt-keyframe:hover {
