@@ -7,9 +7,12 @@ export default defineConfig(({ command }) => {
     proc.env.NODE_ENV = 'production';
   }
   const isServe = command === 'serve';
+  // Cloudflare Pages serves at root '/'; GitHub Pages serves under '/folio-studio/'.
+  const resolvedBase =
+    proc?.env?.VITE_BASE_PATH
+    || (proc?.env?.CF_PAGES === '1' ? '/' : '/folio-studio/');
   return {
-    // GitHub Pages serves this repository under /folio-studio/.
-    base: '/folio-studio/',
+    base: resolvedBase,
     plugins: [
       preact({
         devToolsEnabled: isServe,
