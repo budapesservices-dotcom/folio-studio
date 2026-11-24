@@ -1,3 +1,4 @@
+import { sanitizeProjectNetworkSecrets } from '../core/document/networkSecrets';
 import { getActiveDocument } from '../core/document/project';
 import { requireValidProject } from '../core/document/validation';
 import type { FolioDocument, FolioProject } from '../core/document/types';
@@ -33,13 +34,15 @@ export function createProjectExportSnapshot(
   editingComponentId: string | null,
   componentCanvasProject: FolioProject,
 ): FolioProject {
-  if (!editingComponentId) return project;
+  if (!editingComponentId) return sanitizeProjectNetworkSecrets(project);
 
   const component = project.components.find((item) => item.id === editingComponentId);
-  if (!component) return project;
+  if (!component) return sanitizeProjectNetworkSecrets(project);
 
   const editedDocument: FolioDocument = getActiveDocument(componentCanvasProject);
-  if (areDocumentsEqual(component.document, editedDocument)) return project;
+  if (areDocumentsEqual(component.document, editedDocument)) {
+    return sanitizeProjectNetworkSecrets(project);
+  }
 
   const updatedAt = new Date().toISOString();
   const snapshot: FolioProject = {
@@ -49,5 +52,5 @@ export function createProjectExportSnapshot(
       ? { ...item, document: editedDocument, updatedAt }
       : item),
   };
-  return requireValidProject(snapshot);
+  return requireValidProject(sanitizeProjectNetworkSecrets(snapshot));
 }

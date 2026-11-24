@@ -1,4 +1,5 @@
 import { migrateProjectToV2 } from '../document/migrations';
+import { sanitizeProjectNetworkSecrets } from '../document/networkSecrets';
 import { requireValidProject } from '../document/validation';
 import type { FolioProject } from '../document/types';
 
@@ -13,34 +14,14 @@ function safeFileName(name: string): string {
   return cleaned || 'untitled-project';
 }
 
-const SAFE_EXPORT_SECRET_REF = /^(?:env:)?[A-Z][A-Z0-9_]{1,63}$/i;
-
 /**
  * Produces a validated, secret-safe `.flop` v2 JSON string.
- * Guarantees that no raw `authToken` or non-reference secret value is ever
- * written into exported `.flop` project files.
+ * Guarantees that no raw `authToken`, unsafe `authSecretRef`, raw credential
+ * inside `globalHeaders`, embedded URL credentials, or network node secrets are
+ * ever written into exported `.flop` project files.
  */
 export function serializeProjectToFlopJson(project: FolioProject): string {
-  const sanitizedProject: FolioProject = {
-    ...project,
-    logicGraphs: project.logicGraphs.map((graph) => {
-      if (!graph.networkSettings) return graph;
-      const rawRef = typeof graph.networkSettings.authSecretRef === 'string'
-        ? graph.networkSettings.authSecretRef.trim()
-        : '';
-      const safeRef = rawRef && SAFE_EXPORT_SECRET_REF.test(rawRef)
-        ? rawRef.replace(/^env:/i, '').trim()
-        : '';
-      return {
-        ...graph,
-        networkSettings: {
-          baseUrl: graph.networkSettings.baseUrl,
-          globalHeaders: graph.networkSettings.globalHeaders,
-          authSecretRef: safeRef,
-        },
-      };
-    }),
-  };
+  const sanitizedProject = sanitizeProjectNetworkSecrets(project);
   const validatedProject = requireValidProject(sanitizedProject);
   return JSON.stringify(validatedProject, null, 2);
 }

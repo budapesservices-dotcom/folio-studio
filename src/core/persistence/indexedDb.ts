@@ -2,6 +2,7 @@ import type { ComponentDefinition, FolioPage, FolioProject } from '../document/t
 import { createEmptyDocument } from '../document/factory';
 import { getActiveDocument } from '../document/project';
 import { migrateProjectToV2 } from '../document/migrations';
+import { sanitizeProjectNetworkSecrets } from '../document/networkSecrets';
 import { requireValidProject, validateProject } from '../document/validation';
 
 const DATABASE_NAME = 'folio-studio';
@@ -161,7 +162,7 @@ async function persistProjectUnlocked(
   activate: boolean,
   revisionFence?: ProjectRevisionFence,
 ): Promise<boolean> {
-  const project = requireValidProject(input);
+  const project = requireValidProject(sanitizeProjectNetworkSecrets(input));
   if (activate && project.metadata.id === RESERVED_COMPONENT_PROJECT_ID) {
     throw new Error('The Component Canvas workspace cannot be activated as a root project.');
   }
@@ -240,7 +241,7 @@ async function persistProjectUnlocked(
 }
 
 export function saveProject(input: FolioProject, projectRevision?: number): Promise<void> {
-  const project = requireValidProject(input);
+  const project = requireValidProject(sanitizeProjectNetworkSecrets(input));
   return enqueueProjectWrite(async () => {
     const persistedRevision = persistedProjectRevisions.get(project.metadata.id);
     if (projectRevision !== undefined && persistedRevision !== undefined && projectRevision < persistedRevision) return;
@@ -271,7 +272,7 @@ export function saveProjectIfRevisionCurrent(
   getCanonicalRevision: () => number,
   subscribeToCanonicalRevision: (listener: () => void) => () => void,
 ): Promise<RevisionFencedProjectSaveResult> {
-  const project = requireValidProject(input);
+  const project = requireValidProject(sanitizeProjectNetworkSecrets(input));
   return enqueueProjectWrite(async () => {
     const persistedRevision = persistedProjectRevisions.get(project.metadata.id);
     const isCurrent = () => getCanonicalRevision() === projectRevision;
@@ -301,7 +302,7 @@ export function withProjectWriteLock<T>(
   operation: (persist: (project: FolioProject, projectRevision?: number) => Promise<void>) => Promise<T>,
 ): Promise<T> {
   return enqueueProjectWrite(() => operation(async (input, projectRevision) => {
-    const project = requireValidProject(input);
+    const project = requireValidProject(sanitizeProjectNetworkSecrets(input));
     const persistedRevision = persistedProjectRevisions.get(project.metadata.id);
     if (projectRevision !== undefined && persistedRevision !== undefined && projectRevision < persistedRevision) return;
     await persistProjectUnlocked(project, false);
@@ -316,7 +317,7 @@ export function withProjectWriteLock<T>(
  * The pointer cannot commit unless the validated project record commits too.
  */
 export function saveProjectAndActivate(input: FolioProject): Promise<void> {
-  const project = requireValidProject(input);
+  const project = requireValidProject(sanitizeProjectNetworkSecrets(input));
   return enqueueProjectWrite(async () => {
     await persistProjectUnlocked(project, true);
     persistedProjectRevisions.delete(project.metadata.id);

@@ -358,7 +358,7 @@ export function NodeLogicInspector({
           class={`nl-tab-btn ${activeTab === 'simulate' ? 'is-active' : ''}`}
           onClick={() => onChangeTab('simulate')}
         >
-          Sim
+          Simulate
         </button>
         <button
           type="button"

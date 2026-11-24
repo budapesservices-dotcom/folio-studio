@@ -2,6 +2,7 @@ import {
   buildGoogleFontsStylesheetUrl,
   collectProjectGoogleFonts,
 } from '../../core/document/fonts';
+import { sanitizeProjectNetworkSecrets } from '../../core/document/networkSecrets';
 import type { FolioProject } from '../../core/document/types';
 import { getActivePage } from '../../core/document/project';
 import {
@@ -182,13 +183,14 @@ function buildHtmlCssScaffoldEntries(project: FolioProject, activePageId: string
  * preserved Custom/Extension modules) and packages it into a runnable ZIP archive.
  */
 export function buildCompiledProjectBundle(
-  project: FolioProject,
+  inputProject: FolioProject,
   options: {
     target: CodeOutputTarget;
     pageId?: string;
     themeId?: string;
   },
 ): CompiledProjectBundle {
+  const project = sanitizeProjectNetworkSecrets(inputProject);
   const compiled = compileFolioProject(project, {
     target: options.target,
     pageId: options.pageId,

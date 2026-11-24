@@ -1,3 +1,4 @@
+import { sanitizeProjectNetworkSecrets } from '../../core/document/networkSecrets';
 import { getActivePage } from '../../core/document/project';
 import { getProjectDesignTokens } from '../../core/document/tokens';
 import type {
@@ -94,9 +95,10 @@ export {
  * - `extension` (Per-node or per-page CSS overrides anchored by stable node/page IDs)
  */
 export function compileFolioProject(
-  project: FolioProject,
+  inputProject: FolioProject,
   options: CodegenOptions = {},
 ): CompiledProjectOutput {
+  const project = sanitizeProjectNetworkSecrets(inputProject);
   const target: CodeOutputTarget = options.target ?? 'html-css';
   const activePage =
     (options.pageId ? project.pages.find((p) => p.id === options.pageId) : undefined) ??

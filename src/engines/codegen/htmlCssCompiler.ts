@@ -4,6 +4,7 @@ import {
   buildGoogleFontsStylesheetUrl,
   collectProjectGoogleFonts,
 } from '../../core/document/fonts';
+import { sanitizeProjectNetworkSecrets } from '../../core/document/networkSecrets';
 import { getActivePage } from '../../core/document/project';
 import {
   buildCssBackgroundFromFills,
@@ -855,9 +856,10 @@ export const LIVE_PREVIEW_CSP =
  *   NEVER grants `allow-same-origin`.
  */
 export function buildLivePreviewHtml(
-  project: FolioProject,
+  inputProject: FolioProject,
   options: LivePreviewOptions = {},
 ): string {
+  const project = sanitizeProjectNetworkSecrets(inputProject);
   const page =
     (options.pageId ? project.pages.find((item) => item.id === options.pageId) : undefined) ??
     getActivePage(project);

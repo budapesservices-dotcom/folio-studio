@@ -14,6 +14,7 @@
  * - Explicit, unit-testable capability parity matrix across all 31 primary nodes.
  */
 
+import { sanitizeLogicNodeDataRecord } from '../../core/document/networkSecrets';
 import { getProjectDesignTokens, toDesignTokenThemeSlug } from '../../core/document/tokens';
 import type {
   DesignNode,
@@ -156,16 +157,13 @@ export interface CompiledPageLogicRuntimeConfig {
 }
 
 /**
- * Strips any legacy credential fields (`authToken`) from node data so compiled
- * Live Preview scripts and exported React TSX files can never leak secrets.
+ * Strips any credential fields (`authToken`, sensitive headers, raw tokens,
+ * embedded URL credentials) from node data using the single-source-of-truth
+ * sanitizer so compiled Live Preview scripts and exported React TSX files can
+ * never leak secrets.
  */
 export function sanitizeNodeDataForRuntime(node: LogicNode): Record<string, unknown> {
-  const clean: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node.data)) {
-    if (key === 'authToken') continue;
-    clean[key] = value;
-  }
-  return clean;
+  return { ...sanitizeLogicNodeDataRecord(node.type, node.data) };
 }
 
 function extractNodeFill(node: DesignNode): string | undefined {

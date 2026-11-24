@@ -33,7 +33,9 @@ import {
   type PipelineOriginRef,
 } from './pipeline';
 import {
+  containsRawSecretPattern,
   detectInlineSecretHeaders,
+  hasEmbeddedUrlCredentials,
   isSafeSecretRef,
 } from './networkSecrets';
 
@@ -161,6 +163,13 @@ export function validateLogicGraphSemantics(
         'error',
         'HARDCODED_SECRET_HEADER',
         `Network Global Headers in "${graph.name}" contain hardcoded credential header(s) (${flaggedHeaders.join(', ')}). Use Auth Secret Ref or a server-side proxy instead.`,
+      );
+    }
+    if (hasEmbeddedUrlCredentials(graph.networkSettings.baseUrl ?? '')) {
+      push(
+        'error',
+        'UNSAFE_NETWORK_URL_CREDENTIALS',
+        `Network Base URL in "${graph.name}" must not embed username/password credentials.`,
       );
     }
   }
@@ -551,6 +560,19 @@ export function validateLogicGraphSemantics(
         if (endpoint && /^(?:javascript|vbscript):/i.test(endpoint)) {
           push('error', 'UNSAFE_NAVIGATE_URL', `External Data node "${node.id}" uses an unsafe endpoint protocol.`, { nodeId: node.id });
         }
+        if (endpoint && hasEmbeddedUrlCredentials(endpoint)) {
+          push('error', 'UNSAFE_NETWORK_URL_CREDENTIALS', `External Data node "${node.id}" must not embed credentials in its endpoint URL.`, { nodeId: node.id });
+        }
+        const rawHeaders = typeof node.data.headers === 'string' ? node.data.headers : '';
+        const flaggedNodeHeaders = detectInlineSecretHeaders(rawHeaders);
+        if (flaggedNodeHeaders.length > 0) {
+          push(
+            'error',
+            'HARDCODED_SECRET_HEADER',
+            `External Data node "${node.id}" headers contain hardcoded credential(s) (${flaggedNodeHeaders.join(', ')}).`,
+            { nodeId: node.id },
+          );
+        }
         break;
       }
 
@@ -940,6 +962,46 @@ export function validateLogicGraphSemantics(
         if (rawUrl && /^(?:javascript|vbscript):/i.test(rawUrl)) {
           push('error', 'UNSAFE_NAVIGATE_URL', `HTTP Request node "${node.id}" uses an unsafe URL protocol.`, { nodeId: node.id });
         }
+        if (rawUrl && hasEmbeddedUrlCredentials(rawUrl)) {
+          push('error', 'UNSAFE_NETWORK_URL_CREDENTIALS', `HTTP Request node "${node.id}" must not embed credentials in its URL.`, { nodeId: node.id });
+        }
+        const rawHeaders = typeof node.data.headers === 'string' ? node.data.headers : '';
+        const flaggedHttpHeaders = detectInlineSecretHeaders(rawHeaders);
+        if (flaggedHttpHeaders.length > 0) {
+          push(
+            'error',
+            'HARDCODED_SECRET_HEADER',
+            `HTTP Request node "${node.id}" headers contain hardcoded credential(s) (${flaggedHttpHeaders.join(', ')}).`,
+            { nodeId: node.id },
+          );
+        }
+        const rawBody = typeof node.data.body === 'string' ? node.data.body : '';
+        if (rawBody && containsRawSecretPattern(rawBody)) {
+          push(
+            'error',
+            'HARDCODED_SECRET_HEADER',
+            `HTTP Request node "${node.id}" body contains an inline secret token.`,
+            { nodeId: node.id },
+          );
+        }
+        break;
+      }
+
+      case 'network.socket': {
+        const rawSocketUrl = typeof node.data.url === 'string' ? node.data.url.trim() : '';
+        if (rawSocketUrl && hasEmbeddedUrlCredentials(rawSocketUrl)) {
+          push('error', 'UNSAFE_NETWORK_URL_CREDENTIALS', `Realtime Socket node "${node.id}" must not embed credentials in its URL.`, { nodeId: node.id });
+        }
+        const rawSocketHeaders = typeof node.data.headers === 'string' ? node.data.headers : '';
+        const flaggedSocketHeaders = detectInlineSecretHeaders(rawSocketHeaders);
+        if (flaggedSocketHeaders.length > 0) {
+          push(
+            'error',
+            'HARDCODED_SECRET_HEADER',
+            `Realtime Socket node "${node.id}" headers contain hardcoded credential(s) (${flaggedSocketHeaders.join(', ')}).`,
+            { nodeId: node.id },
+          );
+        }
         break;
       }
 
@@ -952,7 +1014,6 @@ export function validateLogicGraphSemantics(
       case 'flow.loop-timer':
       case 'flow.control':
       case 'network.json':
-      case 'network.socket':
         break;
     }
   }

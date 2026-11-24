@@ -104,7 +104,7 @@ export function MotionTimelinePanel({
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
 
   const [selection, setSelection] = useState<TimelineSelection | null>(null);
-  const [expandedNodeIds, setExpandedNodeIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [expandedOverrides, setExpandedOverrides] = useState<Readonly<Record<string, boolean>>>(() => ({}));
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [newTrackNodeId, setNewTrackNodeId] = useState<string>('');
   const [newTrackProperty, setNewTrackProperty] = useState<AnimatableProperty>('y');
@@ -190,12 +190,21 @@ export function MotionTimelinePanel({
     return Math.round((ratio * durationMs) / 10) * 10;
   };
 
-  const toggleExpandLayer = (targetNodeId: string) => {
-    setExpandedNodeIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(targetNodeId)) next.delete(targetNodeId);
-      else next.add(targetNodeId);
-      return next;
+  const isLayerGroupExpanded = (targetNodeId: string, trackCount: number): boolean => {
+    const key = `${activeClip?.id ?? ''}:${targetNodeId}`;
+    const override = expandedOverrides[key];
+    if (override !== undefined) return override;
+    // Compact hand-authored or preset layers (<= 4 animated properties) expand
+    // by default so individual property tracks are immediately inspectable;
+    // dense full-pose Auto-Key snapshots stay collapsed until expanded.
+    return trackCount <= 4;
+  };
+
+  const toggleExpandLayer = (targetNodeId: string, trackCount: number) => {
+    const key = `${activeClip?.id ?? ''}:${targetNodeId}`;
+    setExpandedOverrides((prev) => {
+      const current = prev[key] ?? trackCount <= 4;
+      return { ...prev, [key]: !current };
     });
   };
 
@@ -385,7 +394,8 @@ export function MotionTimelinePanel({
     const { clip: nextClip, trackId } = addTrackToClip(activeClip, node, newTrackProperty);
     if (nextClip !== activeClip) {
       onUpdateClip(nextClip, `Add ${newTrackProperty} track for ${node.name}`);
-      setExpandedNodeIds((prev) => new Set(prev).add(node.id));
+      const expandKey = `${activeClip.id}:${node.id}`;
+      setExpandedOverrides((prev) => ({ ...prev, [expandKey]: true }));
       const addedTrack = nextClip.tracks.find((t) => t.id === trackId);
       if (addedTrack && addedTrack.keyframes[0]) {
         setSelection({ kind: 'track', trackId: addedTrack.id, keyframeId: addedTrack.keyframes[0].id });
@@ -756,7 +766,7 @@ export function MotionTimelinePanel({
               </div>
               {groupedLayers.map((group) => {
                 const targetNode = nodeById.get(group.targetNodeId);
-                const isExpanded = expandedNodeIds.has(group.targetNodeId);
+                const isExpanded = isLayerGroupExpanded(group.targetNodeId, group.tracks.length);
                 const isLayerSelected =
                   activeLayerSelection?.targetNodeId === group.targetNodeId
                   || selectedNodeIds.includes(group.targetNodeId);
@@ -776,7 +786,7 @@ export function MotionTimelinePanel({
                           aria-expanded={isExpanded}
                           aria-label={`${isExpanded ? 'Collapse' : 'Expand'} property tracks for ${targetNode?.name ?? group.targetNodeId}`}
                           title={isExpanded ? 'Collapse property tracks' : 'Expand individual property tracks'}
-                          onClick={() => toggleExpandLayer(group.targetNodeId)}
+                          onClick={() => toggleExpandLayer(group.targetNodeId, group.tracks.length)}
                         >
                           {isExpanded ? '▾' : '▸'}
                         </button>
@@ -1058,7 +1068,7 @@ export function MotionTimelinePanel({
               <span>Easing</span>
               <select
                 class="mt-select"
-                aria-label="Layer keyframe easing curve"
+                aria-label="Keyframe easing curve"
                 value={activeLayerSelection.easing}
                 onChange={(event) => {
                   const easing = event.currentTarget.value as AnimationEasing;

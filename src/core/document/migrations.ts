@@ -1,4 +1,8 @@
 import {
+  sanitizeLogicNodeDataRecord,
+  sanitizeNetworkSettingsForPersistence,
+} from './networkSecrets';
+import {
   FOLIO_FORMAT,
   FOLIO_FORMAT_VERSION,
   type FolioProject,
@@ -40,8 +44,6 @@ export function migrateProjectV1ToV2(input: FolioProjectV1): FolioProject {
   };
 }
 
-const SAFE_LEGACY_SECRET_REF = /^(?:env:)?[A-Z][A-Z0-9_]{1,63}$/i;
-
 function normalizeLegacyNetworkSettingsOnGraphs(
   candidate: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -52,30 +54,60 @@ function normalizeLegacyNetworkSettingsOnGraphs(
       return entry;
     }
     const graphRecord = entry as Record<string, unknown>;
-    const rawSettings = graphRecord.networkSettings;
-    if (typeof rawSettings !== 'object' || rawSettings === null || Array.isArray(rawSettings)) {
-      return entry;
+    let graphMutated = false;
+    let nextSettings = graphRecord.networkSettings;
+
+    if (
+      typeof nextSettings === 'object'
+      && nextSettings !== null
+      && !Array.isArray(nextSettings)
+    ) {
+      const settingsRecord = nextSettings as Record<string, unknown>;
+      const sanitized = sanitizeNetworkSettingsForPersistence(settingsRecord);
+      const hasExtraKeys = Object.keys(settingsRecord).some(
+        (key) => key !== 'baseUrl' && key !== 'globalHeaders' && key !== 'authSecretRef',
+      );
+      if (
+        hasExtraKeys
+        || sanitized.baseUrl !== settingsRecord.baseUrl
+        || sanitized.globalHeaders !== settingsRecord.globalHeaders
+        || sanitized.authSecretRef !== settingsRecord.authSecretRef
+      ) {
+        nextSettings = sanitized;
+        graphMutated = true;
+      }
     }
-    const settingsRecord = rawSettings as Record<string, unknown>;
-    const hasLegacyAuthToken = Object.prototype.hasOwnProperty.call(settingsRecord, 'authToken');
-    const missingSecretRef = typeof settingsRecord.authSecretRef !== 'string';
-    if (!hasLegacyAuthToken && !missingSecretRef) {
-      return entry;
+
+    let nextNodes = graphRecord.nodes;
+    if (Array.isArray(graphRecord.nodes)) {
+      let nodesMutated = false;
+      const mappedNodes = graphRecord.nodes.map((nodeEntry) => {
+        if (typeof nodeEntry !== 'object' || nodeEntry === null || Array.isArray(nodeEntry)) {
+          return nodeEntry;
+        }
+        const nodeRecord = nodeEntry as Record<string, unknown>;
+        const nodeType = typeof nodeRecord.type === 'string' ? nodeRecord.type : '';
+        const nodeData = nodeRecord.data;
+        if (typeof nodeData !== 'object' || nodeData === null || Array.isArray(nodeData)) {
+          return nodeEntry;
+        }
+        const cleanData = sanitizeLogicNodeDataRecord(nodeType, nodeData as Record<string, unknown>);
+        if (cleanData === nodeData) return nodeEntry;
+        nodesMutated = true;
+        return { ...nodeRecord, data: cleanData };
+      });
+      if (nodesMutated) {
+        nextNodes = mappedNodes;
+        graphMutated = true;
+      }
     }
+
+    if (!graphMutated) return entry;
     mutated = true;
-    const legacyToken = typeof settingsRecord.authToken === 'string' ? settingsRecord.authToken.trim() : '';
-    let migratedRef = typeof settingsRecord.authSecretRef === 'string' ? settingsRecord.authSecretRef.trim() : '';
-    if (!migratedRef && legacyToken && SAFE_LEGACY_SECRET_REF.test(legacyToken)) {
-      migratedRef = legacyToken.replace(/^env:/i, '').trim();
-    }
-    const sanitizedSettings: Record<string, unknown> = {
-      baseUrl: typeof settingsRecord.baseUrl === 'string' ? settingsRecord.baseUrl : '',
-      globalHeaders: typeof settingsRecord.globalHeaders === 'string' ? settingsRecord.globalHeaders : '',
-      authSecretRef: migratedRef,
-    };
     return {
       ...graphRecord,
-      networkSettings: sanitizedSettings,
+      ...(nextSettings !== undefined ? { networkSettings: nextSettings } : {}),
+      ...(nextNodes !== undefined ? { nodes: nextNodes } : {}),
     };
   });
   return mutated ? { ...candidate, logicGraphs: nextGraphs } : candidate;

@@ -1,3 +1,4 @@
+import { sanitizeProjectNetworkSecrets } from '../../core/document/networkSecrets';
 import { getActivePage } from '../../core/document/project';
 import { getProjectDesignTokens } from '../../core/document/tokens';
 import type {
@@ -1081,9 +1082,10 @@ function buildAppEntryFile(
 }
 
 export function compileReactProjectFiles(
-  project: FolioProject,
+  inputProject: FolioProject,
   activePageId?: string,
 ): CompiledCodeFile[] {
+  const project = sanitizeProjectNetworkSecrets(inputProject);
   const activePage =
     (activePageId ? project.pages.find((p) => p.id === activePageId) : undefined) ??
     getActivePage(project);
