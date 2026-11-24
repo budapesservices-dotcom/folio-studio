@@ -42,7 +42,6 @@ import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
 import {
   LOGIC_CATALOG_LIST,
   LOGIC_NODE_WIDTH,
-  LOGIC_PRESETS,
   addConnectionToGraph,
   addNodeToGraph,
   addVariableToGraph,
@@ -86,6 +85,11 @@ import {
   type SnapLogicPortMatch,
 } from './nodeLogicGraphHelpers';
 import { NodeLogicInspector, type NodeLogicInspectorTab } from './NodeLogicInspector';
+import {
+  NodeLogicPresetsMenu,
+  computePresetsMenuLayout,
+  type PresetsMenuLayout,
+} from './NodeLogicPresetsMenu';
 import { StudioIcon } from './StudioIcon';
 
 export interface NodeLogicWorkspaceProps {
@@ -223,7 +227,7 @@ export default function NodeLogicWorkspace({
   const [paletteCategory, setPaletteCategory] = useState<'all' | LogicNodeCategory>('all');
   const [paletteSearch, setPaletteSearch] = useState('');
   const [presetsOpen, setPresetsOpen] = useState(false);
-  const [presetsMenuPos, setPresetsMenuPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
+  const [presetsMenuPos, setPresetsMenuPos] = useState<PresetsMenuLayout | null>(null);
   const [renamingGraph, setRenamingGraph] = useState(false);
   const [graphNameDraft, setGraphNameDraft] = useState('');
   const [viewport, setViewport] = useState<LogicViewportTransform>({ panX: 32, panY: 32, zoom: 0.85 });
@@ -237,16 +241,14 @@ export default function NodeLogicWorkspace({
   const suppressNextPortClickRef = useRef(false);
   const suppressContextMenuRef = useRef(false);
 
-  const computePresetsMenuPosition = useCallback(() => {
+  const computePresetsMenuPosition = useCallback((): PresetsMenuLayout | null => {
     const btn = presetsButtonRef.current;
     if (!btn) return null;
     const rect = btn.getBoundingClientRect();
-    const menuWidth = 276;
-    const margin = 12;
-    const left = Math.max(margin, Math.min(rect.left, window.innerWidth - menuWidth - margin));
-    const top = Math.min(rect.bottom + 6, Math.max(margin, window.innerHeight - 200));
-    const maxHeight = Math.max(180, window.innerHeight - top - 16);
-    return { top: Math.round(top), left: Math.round(left), maxHeight: Math.round(maxHeight) };
+    return computePresetsMenuLayout(
+      { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
   }, []);
 
   useEffect(() => {
@@ -269,11 +271,19 @@ export default function NodeLogicWorkspace({
       }
     };
     const topbarEl = topbarRef.current;
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && topbarEl
+        ? new ResizeObserver(() => syncPosition())
+        : null;
+    if (resizeObserver && topbarEl) {
+      resizeObserver.observe(topbarEl);
+    }
     window.addEventListener('resize', syncPosition);
     topbarEl?.addEventListener('scroll', syncPosition, { passive: true });
     window.addEventListener('pointerdown', handleOutsidePointerDown, true);
     window.addEventListener('keydown', handleKeyDown);
     return () => {
+      resizeObserver?.disconnect();
       window.removeEventListener('resize', syncPosition);
       topbarEl?.removeEventListener('scroll', syncPosition);
       window.removeEventListener('pointerdown', handleOutsidePointerDown, true);
@@ -1798,77 +1808,14 @@ export default function NodeLogicWorkspace({
       </div>
 
       {presetsOpen && presetsMenuPos && (
-        <div
-          ref={presetsMenuRef}
-          class="nl-presets-menu"
-          data-testid="nl-presets-menu"
-          role="menu"
-          aria-label="Interactive logic presets"
-          style={{
-            top: `${presetsMenuPos.top}px`,
-            left: `${presetsMenuPos.left}px`,
-            maxHeight: `${presetsMenuPos.maxHeight}px`,
-          }}
-        >
-          <div class="nl-presets-section-title">Starter Graph Presets</div>
-          {LOGIC_PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              role="menuitem"
-              class="nl-preset-item"
-              onClick={() => handleInsertPreset(preset.id)}
-            >
-              <strong>{preset.name}</strong>
-              <span>{preset.description}</span>
-            </button>
-          ))}
-          <div class="nl-presets-divider" />
-          <div class="nl-presets-section-title">
-            Saved Frame Presets ({savedFramePresets.length})
-          </div>
-          {savedFramePresets.length === 0 ? (
-            <div class="nl-preset-empty">
-              Bake any Smart Logic Frame and click “Save as Preset” to reuse it here.
-            </div>
-          ) : (
-            savedFramePresets.map((fPreset) => {
-              const fpColor = getLogicFrameColorPreset(fPreset.color);
-              return (
-                <div key={fPreset.id} class="nl-saved-preset-row">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="nl-preset-item nl-saved-preset-btn"
-                    onClick={() => handleInsertSavedFramePreset(fPreset)}
-                  >
-                    <strong class="nl-saved-preset-title">
-                      <span
-                        class="nl-saved-preset-dot"
-                        style={{ backgroundColor: fpColor.accent }}
-                        aria-hidden="true"
-                      />
-                      {fPreset.name}
-                    </strong>
-                    <span>{fPreset.description ?? `${fPreset.nodes.length} baked nodes`}</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="nl-saved-preset-del"
-                    aria-label={`Remove saved preset ${fPreset.name}`}
-                    title="Remove saved preset"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleDeleteSavedFramePreset(fPreset.id);
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              );
-            })
-          )}
-        </div>
+        <NodeLogicPresetsMenu
+          menuRef={presetsMenuRef}
+          layout={presetsMenuPos}
+          savedFramePresets={savedFramePresets}
+          onInsertPreset={handleInsertPreset}
+          onInsertSavedFramePreset={handleInsertSavedFramePreset}
+          onDeleteSavedFramePreset={handleDeleteSavedFramePreset}
+        />
       )}
 
       {/* Main 3-Column Node Logic Studio Body */}

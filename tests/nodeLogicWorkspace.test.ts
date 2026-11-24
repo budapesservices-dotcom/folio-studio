@@ -35,6 +35,7 @@ import {
   updateNodeDataInGraph,
   updateVariableInGraph,
 } from '../src/app/workspace/nodeLogicGraphHelpers';
+import { computePresetsMenuLayout } from '../src/app/workspace/NodeLogicPresetsMenu';
 
 describe('Node Logic Workspace Helpers & Starter Experience', () => {
   it('computes deterministic port positions and cubic Bezier paths', () => {
@@ -476,5 +477,35 @@ describe('Node Logic Workspace Helpers & Starter Experience', () => {
     const deleted = removeNodesFromGraph(moved, [n1.node.id, n2.node.id]);
     expect(deleted.nodes.map((n) => n.id)).toEqual([n3.node.id]);
     expect(deleted.connections).toHaveLength(0);
+  });
+
+  it('computes bounded, flip-aware preset menu layouts for normal and restricted viewports', () => {
+    // Normal viewport with ample space below opens below the Presets trigger
+    const normal = computePresetsMenuLayout(
+      { top: 180, bottom: 208, left: 320, right: 390 },
+      { width: 1440, height: 900 },
+    );
+    expect(normal.placement).toBe('below');
+    expect(normal.top).toBe(214);
+    expect(normal.left).toBe(320);
+    expect(normal.maxHeight).toBe(360);
+
+    // Restricted space below (anchor near bottom of viewport) flips above the trigger cleanly
+    const flipped = computePresetsMenuLayout(
+      { top: 420, bottom: 448, left: 260, right: 330 },
+      { width: 800, height: 500 },
+    );
+    expect(flipped.placement).toBe('above');
+    expect(flipped.top).toBeGreaterThanOrEqual(10);
+    expect(flipped.top + flipped.maxHeight).toBeLessThanOrEqual(414);
+
+    // Very short restricted viewport clamps height cleanly inside viewport bounds without overflow
+    const compact = computePresetsMenuLayout(
+      { top: 64, bottom: 92, left: 680, right: 750 },
+      { width: 720, height: 260 },
+    );
+    expect(compact.left + 284).toBeLessThanOrEqual(710);
+    expect(compact.top).toBeGreaterThanOrEqual(10);
+    expect(compact.top + compact.maxHeight).toBeLessThanOrEqual(250);
   });
 });

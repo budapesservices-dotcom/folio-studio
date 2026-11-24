@@ -4841,17 +4841,78 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .nl-presets-menu {
   position: fixed;
   z-index: 1450;
-  width: 276px;
-  padding: 6px;
+  width: 284px;
+  padding: 0;
   border: 1px solid #353f54;
   border-radius: 7px;
   background: #181e2b;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.62);
   display: flex;
   flex-direction: column;
-  gap: 3px;
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #364159 transparent;
+}
+
+.nl-presets-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 6px;
+  background: #161c28;
+  border-bottom: 1px solid #283247;
+}
+
+.nl-presets-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 25px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #93a0b8;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.nl-presets-tab:hover {
+  background: #21283a;
+  color: #e2e8f5;
+}
+
+.nl-presets-tab.is-active {
+  background: #272245;
+  border-color: #6b5ce7;
+  color: #ece8ff;
+}
+
+.nl-presets-tab:focus-visible {
+  outline: 1.5px solid #8b7cf6;
+  outline-offset: -1px;
+}
+
+.nl-presets-tab-count {
+  font-size: 9.5px;
+  font-weight: 650;
+  opacity: 0.78;
+}
+
+.nl-presets-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
 }
 
 .nl-preset-item {
