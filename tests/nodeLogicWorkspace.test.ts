@@ -21,11 +21,15 @@ import {
   createLogicPresetGraph,
   findSnapLogicPort,
   getLogicNodeHeight,
+  getLogicNodeIdsInMarquee,
   getLogicPortWorldPosition,
   getUsedSourceReferenceIds,
   moveNodeInGraph,
+  moveNodesInGraph,
+  normalizeLogicMarqueeRect,
   removeConnectionFromGraph,
   removeNodeFromGraph,
+  removeNodesFromGraph,
   removeVariableFromGraph,
   repatchConnectionInGraph,
   updateNodeDataInGraph,
@@ -432,5 +436,45 @@ describe('Node Logic Workspace Helpers & Starter Experience', () => {
     const arrangedSrc = arranged.nodes.find((n) => n.id === srcComp.node.id)!;
     const arrangedActB = arranged.nodes.find((n) => n.id === actB.node.id)!;
     expect(arrangedSrc.x + LOGIC_NODE_WIDTH).toBeLessThan(arrangedActB.x);
+  });
+
+  it('supports marquee rectangle normalization, AABB node hit-testing, and atomic multi-node move & delete', () => {
+    let graph = createLogicGraph({ id: 'g-multi', name: 'Multi Select', scope: 'page', targetId: 'page-1' });
+    const n1 = addNodeToGraph(graph, 'event.on-click', { x: 40, y: 60 });
+    const n2 = addNodeToGraph(n1.graph, 'state.toggle', { x: 340, y: 80 });
+    const n3 = addNodeToGraph(n2.graph, 'action.set-layer', { x: 760, y: 420 });
+    const wired12 = addConnectionToGraph(n3.graph, n1.node.id, 'exec', n2.node.id, 'exec');
+    expect(wired12.ok).toBe(true);
+    if (!wired12.ok) return;
+    const wired23 = addConnectionToGraph(wired12.graph, n2.node.id, 'next', n3.node.id, 'exec');
+    expect(wired23.ok).toBe(true);
+    if (!wired23.ok) return;
+    graph = wired23.graph;
+
+    // Reverse bottom-right to top-left marquee drag normalizes cleanly
+    const rect = normalizeLogicMarqueeRect({ x: 420, y: 240 }, { x: 20, y: 20 });
+    expect(rect).toEqual({ x: 20, y: 20, width: 400, height: 220 });
+
+    // Selects n1 and n2 (overlapping), excludes far-away n3
+    const hits = getLogicNodeIdsInMarquee(graph.nodes, rect);
+    expect(hits).toEqual([n1.node.id, n2.node.id]);
+
+    // Excludes hidden nodes (e.g. collapsed inside a baked Smart Frame)
+    const hitsExcludingBaked = getLogicNodeIdsInMarquee(graph.nodes, rect, new Set([n2.node.id]));
+    expect(hitsExcludingBaked).toEqual([n1.node.id]);
+
+    // Atomic multi-node move shifts selected nodes by (dx, dy) and leaves unselected untouched
+    const moved = moveNodesInGraph(graph, [n1.node.id, n2.node.id], 55, -20);
+    expect(moved.nodes.find((n) => n.id === n1.node.id)).toMatchObject({ x: 95, y: 40 });
+    expect(moved.nodes.find((n) => n.id === n2.node.id)).toMatchObject({ x: 395, y: 60 });
+    expect(moved.nodes.find((n) => n.id === n3.node.id)).toMatchObject({ x: 760, y: 420 });
+
+    // Zero delta returns same graph reference
+    expect(moveNodesInGraph(moved, [n1.node.id], 0, 0)).toBe(moved);
+
+    // Atomic multi-node delete removes both nodes and all connected wires
+    const deleted = removeNodesFromGraph(moved, [n1.node.id, n2.node.id]);
+    expect(deleted.nodes.map((n) => n.id)).toEqual([n3.node.id]);
+    expect(deleted.connections).toHaveLength(0);
   });
 });

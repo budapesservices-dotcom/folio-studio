@@ -601,6 +601,48 @@ export function addNodeToGraph(
   };
 }
 
+export interface LogicMarqueeRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export function normalizeLogicMarqueeRect(start: LogicPoint, end: LogicPoint): LogicMarqueeRect {
+  const x = Math.min(start.x, end.x);
+  const y = Math.min(start.y, end.y);
+  return {
+    x,
+    y,
+    width: Math.abs(end.x - start.x),
+    height: Math.abs(end.y - start.y),
+  };
+}
+
+export function getLogicNodeIdsInMarquee(
+  nodes: readonly LogicNode[],
+  rect: LogicMarqueeRect,
+  hiddenNodeIds?: ReadonlySet<string>,
+): string[] {
+  const right = rect.x + rect.width;
+  const bottom = rect.y + rect.height;
+  const matched: string[] = [];
+  for (const node of nodes) {
+    if (hiddenNodeIds?.has(node.id)) continue;
+    const nodeRight = node.x + LOGIC_NODE_WIDTH;
+    const nodeBottom = node.y + getLogicNodeHeight(node);
+    const intersects =
+      node.x <= right
+      && nodeRight >= rect.x
+      && node.y <= bottom
+      && nodeBottom >= rect.y;
+    if (intersects) {
+      matched.push(node.id);
+    }
+  }
+  return matched;
+}
+
 export function moveNodeInGraph(
   graph: LogicGraph,
   nodeId: string,
@@ -615,6 +657,29 @@ export function moveNodeInGraph(
     if (node.x === nextX && node.y === nextY) return node;
     changed = true;
     return { ...node, x: nextX, y: nextY };
+  });
+  return changed ? touchLogicGraph({ ...graph, nodes }) : graph;
+}
+
+export function moveNodesInGraph(
+  graph: LogicGraph,
+  nodeIds: readonly string[],
+  dx: number,
+  dy: number,
+): LogicGraph {
+  const roundedDx = Math.round(dx);
+  const roundedDy = Math.round(dy);
+  if ((roundedDx === 0 && roundedDy === 0) || nodeIds.length === 0) return graph;
+  const idSet = new Set(nodeIds);
+  let changed = false;
+  const nodes = graph.nodes.map((node) => {
+    if (!idSet.has(node.id)) return node;
+    changed = true;
+    return {
+      ...node,
+      x: Math.round(node.x + roundedDx),
+      y: Math.round(node.y + roundedDy),
+    };
   });
   return changed ? touchLogicGraph({ ...graph, nodes }) : graph;
 }
@@ -639,17 +704,19 @@ export function updateNodeDataInGraph(
   return changed ? touchLogicGraph({ ...graph, nodes }) : graph;
 }
 
-export function removeNodeFromGraph(graph: LogicGraph, nodeId: string): LogicGraph {
-  const nextNodes = graph.nodes.filter((node) => node.id !== nodeId);
+export function removeNodesFromGraph(graph: LogicGraph, nodeIds: readonly string[]): LogicGraph {
+  if (nodeIds.length === 0) return graph;
+  const removeSet = new Set(nodeIds);
+  const nextNodes = graph.nodes.filter((node) => !removeSet.has(node.id));
   if (nextNodes.length === graph.nodes.length) return graph;
   const nextConnections = graph.connections.filter(
-    (conn) => conn.sourceNodeId !== nodeId && conn.targetNodeId !== nodeId,
+    (conn) => !removeSet.has(conn.sourceNodeId) && !removeSet.has(conn.targetNodeId),
   );
   const nextFrames = graph.frames
     ? graph.frames.map((frame) => {
-        if (!frame.childNodeIds.includes(nodeId)) return frame;
-        const nextChildIds = frame.childNodeIds.filter((cid) => cid !== nodeId);
-        const nextExposed = frame.exposedParams?.filter((p) => p.nodeId !== nodeId);
+        if (!frame.childNodeIds.some((cid) => removeSet.has(cid))) return frame;
+        const nextChildIds = frame.childNodeIds.filter((cid) => !removeSet.has(cid));
+        const nextExposed = frame.exposedParams?.filter((p) => !removeSet.has(p.nodeId));
         return {
           ...frame,
           childNodeIds: nextChildIds,
@@ -663,6 +730,10 @@ export function removeNodeFromGraph(graph: LogicGraph, nodeId: string): LogicGra
     connections: nextConnections,
     ...(nextFrames ? { frames: nextFrames } : {}),
   });
+}
+
+export function removeNodeFromGraph(graph: LogicGraph, nodeId: string): LogicGraph {
+  return removeNodesFromGraph(graph, [nodeId]);
 }
 
 export function createFrameInGraph(

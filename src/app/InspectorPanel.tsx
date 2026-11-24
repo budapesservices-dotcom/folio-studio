@@ -9,6 +9,7 @@ import type {
   DesignNode,
   DesignTokenCollection,
   EllipseNode,
+  FolioProject,
   FrameNode,
   ImageFitMode,
   PathNode,
@@ -23,6 +24,12 @@ import type { CanvasToolId } from '../core/tools/operationContract';
 import { InspectorWebLayoutSection } from './workspace/InspectorWebLayoutSection';
 import { InspectorComponentContractSection } from './workspace/InspectorComponentContractSection';
 import { InspectorEffectsAndStyleSection } from './workspace/InspectorEffectsAndStyleSection';
+import { InspectorInteractionsSection } from './workspace/InspectorInteractionsSection';
+import type {
+  QuickInteractionConfig,
+  QuickInteractionEntry,
+  QuickInteractionScopeContext,
+} from './workspace/quickInteractions';
 
 export const INSPECTOR_FONT_FAMILIES = CURATED_FONT_FAMILIES.map((entry) => ({
   label: entry.label,
@@ -83,6 +90,20 @@ export interface InspectorPanelProps {
   onInsertImageFiles?: (files: readonly File[]) => void;
   onDuplicateSelection: () => void;
   onCopySelection: () => void;
+  project?: FolioProject;
+  activePageId?: string;
+  scopedNodes?: readonly DesignNode[];
+  onCreateQuickInteraction?: (
+    scopeContext: QuickInteractionScopeContext,
+    config: QuickInteractionConfig,
+  ) => { entryId: string } | null;
+  onUpdateQuickInteraction?: (
+    entry: QuickInteractionEntry,
+    layerId: string,
+    nextConfig: QuickInteractionConfig,
+  ) => void;
+  onDeleteQuickInteraction?: (entry: QuickInteractionEntry) => void;
+  onOpenInteractionInNodeGraph?: (graphId: string, nodeIds: readonly string[]) => void;
 }
 
 function parseNumericInput(raw: string): number | null {
@@ -134,6 +155,13 @@ export function InspectorPanel({
   onInsertImageFiles,
   onDuplicateSelection,
   onCopySelection,
+  project,
+  activePageId,
+  scopedNodes,
+  onCreateQuickInteraction,
+  onUpdateQuickInteraction,
+  onDeleteQuickInteraction,
+  onOpenInteractionInNodeGraph,
 }: InspectorPanelProps) {
   const triggerImagePicker = () => {
     if (typeof document === 'undefined') return;
@@ -395,6 +423,27 @@ export function InspectorPanel({
               />
             </label>
           </section>
+
+          {project &&
+            activePageId &&
+            scopedNodes &&
+            onCreateQuickInteraction &&
+            onUpdateQuickInteraction &&
+            onDeleteQuickInteraction &&
+            onOpenInteractionInNodeGraph && (
+              <InspectorInteractionsSection
+                project={project}
+                activeEditorId={activeEditorId}
+                activePageId={activePageId}
+                editingMasterComponent={activeEditorId === 'component' ? editingMasterComponent : null}
+                selectedNode={selectedNode}
+                scopedNodes={scopedNodes}
+                onCreateQuickInteraction={onCreateQuickInteraction}
+                onUpdateQuickInteraction={onUpdateQuickInteraction}
+                onDeleteQuickInteraction={onDeleteQuickInteraction}
+                onOpenInteractionInNodeGraph={onOpenInteractionInNodeGraph}
+              />
+            )}
 
           <section class="property-section">
             <div class="section-title">Appearance</div>
@@ -958,6 +1007,26 @@ export function InspectorPanel({
                 </button>
               </div>
             </section>
+            {project &&
+              activePageId &&
+              scopedNodes &&
+              onCreateQuickInteraction &&
+              onUpdateQuickInteraction &&
+              onDeleteQuickInteraction &&
+              onOpenInteractionInNodeGraph && (
+                <InspectorInteractionsSection
+                  project={project}
+                  activeEditorId={activeEditorId}
+                  activePageId={activePageId}
+                  editingMasterComponent={activeEditorId === 'component' ? editingMasterComponent : null}
+                  selectedNode={singleRootContainer}
+                  scopedNodes={scopedNodes}
+                  onCreateQuickInteraction={onCreateQuickInteraction}
+                  onUpdateQuickInteraction={onUpdateQuickInteraction}
+                  onDeleteQuickInteraction={onDeleteQuickInteraction}
+                  onOpenInteractionInNodeGraph={onOpenInteractionInNodeGraph}
+                />
+              )}
             <InspectorWebLayoutSection
               selectedNode={singleRootContainer}
               activeBreakpoint={activeBreakpoint}

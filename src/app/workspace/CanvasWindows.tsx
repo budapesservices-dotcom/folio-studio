@@ -656,6 +656,11 @@ export interface NodeLogicWindowProps {
   onNotice: (message: string) => void;
   onOpenLivePreview: (pageId?: string) => void;
   onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
+  focusRequest?: {
+    readonly graphId: string;
+    readonly nodeIds: readonly string[];
+    readonly nonce: number;
+  } | null;
   onPositionChange: (position: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
   onFocus: () => void;
@@ -681,6 +686,7 @@ export function NodeLogicWindow({
   onNotice,
   onOpenLivePreview,
   onToggleComponentNodeLogic,
+  focusRequest = null,
   onPositionChange,
   onSizeChange,
   onFocus,
@@ -764,6 +770,7 @@ export function NodeLogicWindow({
                 onNotice={onNotice}
                 onOpenLivePreview={onOpenLivePreview}
                 onToggleComponentNodeLogic={onToggleComponentNodeLogic}
+                focusRequest={focusRequest}
                 autoArrangeRequestNonce={autoArrangeRequestNonce}
                 onActiveGraphNodeCountChange={setActiveGraphNodeCount}
               />

@@ -57,6 +57,7 @@ import {
   createStarterMainPageLogicGraph,
   findSnapLogicPort,
   getLogicNodeCategory,
+  getLogicNodeIdsInMarquee,
   getLogicNodePorts,
   getLogicNodeSummary,
   getLogicPortDataType,
@@ -64,10 +65,12 @@ import {
   isSourceLogicNodeType,
   migrateLegacyNodeInGraph,
   moveFrameWithChildrenInGraph,
-  moveNodeInGraph,
+  moveNodesInGraph,
+  normalizeLogicMarqueeRect,
   removeConnectionFromGraph,
   removeFrameFromGraph,
   removeNodeFromGraph,
+  removeNodesFromGraph,
   removeVariableFromGraph,
   repatchConnectionInGraph,
   resolveLogicPortWorldPosition,
@@ -92,6 +95,11 @@ export interface NodeLogicWorkspaceProps {
   onNotice: (message: string) => void;
   onOpenLivePreview: (pageId?: string) => void;
   onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
+  focusRequest?: {
+    readonly graphId: string;
+    readonly nodeIds: readonly string[];
+    readonly nonce: number;
+  } | null;
   autoArrangeRequestNonce?: number;
   onActiveGraphNodeCountChange?: (nodeCount: number) => void;
 }
@@ -118,14 +126,23 @@ interface WireLiftCandidate {
 }
 
 interface NodeDragState {
-  readonly nodeId: string;
+  readonly nodeIds: readonly string[];
   readonly pointerId: number;
   readonly startClientX: number;
   readonly startClientY: number;
-  readonly originX: number;
-  readonly originY: number;
-  readonly currentX: number;
-  readonly currentY: number;
+  readonly dx: number;
+  readonly dy: number;
+}
+
+interface MarqueeDragState {
+  readonly pointerId: number;
+  readonly startClientX: number;
+  readonly startClientY: number;
+  readonly startWorld: LogicPoint;
+  readonly currentWorld: LogicPoint;
+  readonly hasDragged: boolean;
+  readonly additive: boolean;
+  readonly baseSelection: readonly string[];
 }
 
 interface FrameDragState {
@@ -177,13 +194,18 @@ export default function NodeLogicWorkspace({
   onNotice,
   onOpenLivePreview,
   onToggleComponentNodeLogic,
+  focusRequest = null,
   autoArrangeRequestNonce = 0,
   onActiveGraphNodeCountChange,
 }: NodeLogicWorkspaceProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const topbarRef = useRef<HTMLDivElement | null>(null);
+  const presetsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const presetsMenuRef = useRef<HTMLDivElement | null>(null);
   const lastHandledArrangeNonceRef = useRef<number>(0);
+  const lastHandledFocusNonceRef = useRef<number>(0);
   const [activeGraphId, setActiveGraphId] = useState<string | null>(
-    () => project.logicGraphs[0]?.id ?? null,
+    () => focusRequest?.graphId ?? project.logicGraphs[0]?.id ?? null,
   );
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
@@ -201,15 +223,91 @@ export default function NodeLogicWorkspace({
   const [paletteCategory, setPaletteCategory] = useState<'all' | LogicNodeCategory>('all');
   const [paletteSearch, setPaletteSearch] = useState('');
   const [presetsOpen, setPresetsOpen] = useState(false);
+  const [presetsMenuPos, setPresetsMenuPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   const [renamingGraph, setRenamingGraph] = useState(false);
   const [graphNameDraft, setGraphNameDraft] = useState('');
   const [viewport, setViewport] = useState<LogicViewportTransform>({ panX: 32, panY: 32, zoom: 0.85 });
   const [nodeDrag, setNodeDrag] = useState<NodeDragState | null>(null);
+  const [marqueeDrag, setMarqueeDrag] = useState<MarqueeDragState | null>(null);
   const [frameDrag, setFrameDrag] = useState<FrameDragState | null>(null);
   const [panDrag, setPanDrag] = useState<PanDragState | null>(null);
+  const [spacePanHeld, setSpacePanHeld] = useState(false);
   const [wirePatch, setWirePatch] = useState<WirePatchState | null>(null);
   const [wireLiftCandidate, setWireLiftCandidate] = useState<WireLiftCandidate | null>(null);
   const suppressNextPortClickRef = useRef(false);
+  const suppressContextMenuRef = useRef(false);
+
+  const computePresetsMenuPosition = useCallback(() => {
+    const btn = presetsButtonRef.current;
+    if (!btn) return null;
+    const rect = btn.getBoundingClientRect();
+    const menuWidth = 276;
+    const margin = 12;
+    const left = Math.max(margin, Math.min(rect.left, window.innerWidth - menuWidth - margin));
+    const top = Math.min(rect.bottom + 6, Math.max(margin, window.innerHeight - 200));
+    const maxHeight = Math.max(180, window.innerHeight - top - 16);
+    return { top: Math.round(top), left: Math.round(left), maxHeight: Math.round(maxHeight) };
+  }, []);
+
+  useEffect(() => {
+    if (!presetsOpen) return;
+    const syncPosition = () => {
+      const next = computePresetsMenuPosition();
+      if (next) setPresetsMenuPos(next);
+    };
+    syncPosition();
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (presetsButtonRef.current?.contains(target) || presetsMenuRef.current?.contains(target)) {
+        return;
+      }
+      setPresetsOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPresetsOpen(false);
+      }
+    };
+    const topbarEl = topbarRef.current;
+    window.addEventListener('resize', syncPosition);
+    topbarEl?.addEventListener('scroll', syncPosition, { passive: true });
+    window.addEventListener('pointerdown', handleOutsidePointerDown, true);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('resize', syncPosition);
+      topbarEl?.removeEventListener('scroll', syncPosition);
+      window.removeEventListener('pointerdown', handleOutsidePointerDown, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [presetsOpen, computePresetsMenuPosition]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement
+        || target instanceof HTMLTextAreaElement
+        || target instanceof HTMLSelectElement
+        || target?.isContentEditable
+      ) {
+        return;
+      }
+      setSpacePanHeld(true);
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code === 'Space') setSpacePanHeld(false);
+    };
+    const handleBlur = () => setSpacePanHeld(false);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
 
   const activePage = useMemo(
     () => project.pages.find((page) => page.id === activePageId) ?? getActivePage(project),
@@ -273,6 +371,46 @@ export default function NodeLogicWorkspace({
       setViewport(computeFitViewTransform(activeGraph.nodes, el.clientWidth, el.clientHeight));
     }
   }, [activeGraph]);
+
+  // Honor external "Open in Node Graph" focus requests from Canvas Inspector
+  useEffect(() => {
+    if (!focusRequest || focusRequest.nonce === lastHandledFocusNonceRef.current) return;
+    const targetGraph = project.logicGraphs.find((g) => g.id === focusRequest.graphId);
+    if (!targetGraph) return;
+    lastHandledFocusNonceRef.current = focusRequest.nonce;
+    fittedGraphIdRef.current = targetGraph.id;
+    setActiveGraphId(targetGraph.id);
+
+    const validIds = new Set(targetGraph.nodes.map((n) => n.id));
+    const focusedIds = focusRequest.nodeIds.filter((id) => validIds.has(id));
+    setSelectedFrameId(null);
+    setSelectedConnectionId(null);
+    setFrameBakeErrors([]);
+    if (focusedIds.length > 0) {
+      setSelectedNodeIds(focusedIds);
+      setSelectedNodeId(focusedIds[0]);
+      setInspectorTab('node');
+    }
+
+    const targetNodes =
+      focusedIds.length > 0
+        ? targetGraph.nodes.filter((n) => focusedIds.includes(n.id))
+        : targetGraph.nodes;
+
+    const applyFit = () => {
+      const el = stageRef.current;
+      if (el && el.clientWidth > 0 && el.clientHeight > 0 && targetNodes.length > 0) {
+        setViewport(computeFitViewTransform(targetNodes, el.clientWidth, el.clientHeight));
+      }
+    };
+
+    if (stageRef.current && stageRef.current.clientWidth > 0) {
+      applyFit();
+    } else if (typeof requestAnimationFrame === 'function') {
+      const rafId = requestAnimationFrame(applyFit);
+      return () => cancelAnimationFrame(rafId);
+    }
+  }, [focusRequest, project.logicGraphs]);
 
   const scopedAstNodes: readonly DesignNode[] = useMemo(() => {
     if (!activeGraph) return activePage.document.nodes;
@@ -750,9 +888,14 @@ export default function NodeLogicWorkspace({
   const displayNodes = useMemo(() => {
     if (!activeGraph) return [];
     if (!nodeDrag && !frameDrag) return activeGraph.nodes;
+    const draggedNodeIdSet = nodeDrag ? new Set(nodeDrag.nodeIds) : null;
     return activeGraph.nodes.map((node) => {
-      if (nodeDrag && node.id === nodeDrag.nodeId) {
-        return { ...node, x: nodeDrag.currentX, y: nodeDrag.currentY };
+      if (nodeDrag && draggedNodeIdSet?.has(node.id)) {
+        return {
+          ...node,
+          x: Math.round(node.x + nodeDrag.dx),
+          y: Math.round(node.y + nodeDrag.dy),
+        };
       }
       if (frameDrag && draggedFrameChildIds?.has(node.id)) {
         return {
@@ -781,6 +924,14 @@ export default function NodeLogicWorkspace({
     return map;
   }, [displayFrames]);
 
+  const marqueeRect = useMemo(
+    () =>
+      marqueeDrag?.hasDragged
+        ? normalizeLogicMarqueeRect(marqueeDrag.startWorld, marqueeDrag.currentWorld)
+        : null,
+    [marqueeDrag],
+  );
+
   const connectedPortKeys = useMemo(() => {
     const keys = new Set<string>();
     if (!activeGraph) return keys;
@@ -794,23 +945,46 @@ export default function NodeLogicWorkspace({
     return keys;
   }, [activeGraph, wirePatch]);
 
-  // Global pointer tracking for smooth node dragging, frame dragging, panning, and drag-and-patch wires
+  // Global pointer tracking for smooth multi-node dragging, marquee selection, frame dragging, panning, and wires
   useEffect(() => {
-    if (!nodeDrag && !frameDrag && !panDrag && !wirePatch && !wireLiftCandidate) return;
+    if (!nodeDrag && !marqueeDrag && !frameDrag && !panDrag && !wirePatch && !wireLiftCandidate) return;
 
     const handlePointerMove = (event: PointerEvent) => {
       if (nodeDrag && event.pointerId === nodeDrag.pointerId) {
-        const dx = (event.clientX - nodeDrag.startClientX) / viewport.zoom;
-        const dy = (event.clientY - nodeDrag.startClientY) / viewport.zoom;
-        setNodeDrag((current) =>
+        const dx = Math.round((event.clientX - nodeDrag.startClientX) / viewport.zoom);
+        const dy = Math.round((event.clientY - nodeDrag.startClientY) / viewport.zoom);
+        setNodeDrag((current) => (current ? { ...current, dx, dy } : null));
+        return;
+      }
+
+      if (marqueeDrag && event.pointerId === marqueeDrag.pointerId) {
+        const currentWorld = screenToWorld(event.clientX, event.clientY);
+        const dist = Math.hypot(
+          event.clientX - marqueeDrag.startClientX,
+          event.clientY - marqueeDrag.startClientY,
+        );
+        const hasDragged = marqueeDrag.hasDragged || dist >= DRAG_ACTIVATION_THRESHOLD_PX;
+        setMarqueeDrag((current) =>
           current
             ? {
                 ...current,
-                currentX: Math.round(current.originX + dx),
-                currentY: Math.round(current.originY + dy),
+                currentWorld,
+                hasDragged,
               }
             : null,
         );
+        if (hasDragged && activeGraph) {
+          const rect = normalizeLogicMarqueeRect(marqueeDrag.startWorld, currentWorld);
+          const hiddenIds = new Set(bakedFrameByChildId.keys());
+          const hits = getLogicNodeIdsInMarquee(displayNodes, rect, hiddenIds);
+          const nextSelected = marqueeDrag.additive
+            ? Array.from(new Set([...marqueeDrag.baseSelection, ...hits]))
+            : hits;
+          setSelectedNodeIds(nextSelected);
+          setSelectedNodeId(nextSelected[0] ?? null);
+          setSelectedFrameId(null);
+          setSelectedConnectionId(null);
+        }
         return;
       }
 
@@ -902,12 +1076,21 @@ export default function NodeLogicWorkspace({
 
     const handlePointerUp = (event: PointerEvent) => {
       if (nodeDrag && event.pointerId === nodeDrag.pointerId) {
-        if (activeGraph && (nodeDrag.currentX !== nodeDrag.originX || nodeDrag.currentY !== nodeDrag.originY)) {
-          const moved = moveNodeInGraph(activeGraph, nodeDrag.nodeId, nodeDrag.currentX, nodeDrag.currentY);
-          const synced = syncNodeFrameMembershipAfterDrag(moved, nodeDrag.nodeId);
-          commitGraphUpdate(synced, 'Move logic node');
+        if (activeGraph && (nodeDrag.dx !== 0 || nodeDrag.dy !== 0)) {
+          let nextGraph = moveNodesInGraph(activeGraph, nodeDrag.nodeIds, nodeDrag.dx, nodeDrag.dy);
+          for (const movedId of nodeDrag.nodeIds) {
+            nextGraph = syncNodeFrameMembershipAfterDrag(nextGraph, movedId);
+          }
+          commitGraphUpdate(
+            nextGraph,
+            nodeDrag.nodeIds.length > 1 ? 'Move logic nodes' : 'Move logic node',
+          );
         }
         setNodeDrag(null);
+      }
+
+      if (marqueeDrag && event.pointerId === marqueeDrag.pointerId) {
+        setMarqueeDrag(null);
       }
 
       if (frameDrag && event.pointerId === frameDrag.pointerId) {
@@ -1034,6 +1217,7 @@ export default function NodeLogicWorkspace({
     };
   }, [
     nodeDrag,
+    marqueeDrag,
     frameDrag,
     panDrag,
     wirePatch,
@@ -1042,6 +1226,7 @@ export default function NodeLogicWorkspace({
     activeGraph,
     displayNodes,
     displayFrames,
+    bakedFrameByChildId,
     commitGraphUpdate,
     screenToWorld,
     onNotice,
@@ -1175,11 +1360,13 @@ export default function NodeLogicWorkspace({
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
       return;
     }
-    if (event.key === 'Escape' && (wirePatch || wireLiftCandidate || openGuideNodeId)) {
+    if (event.key === 'Escape' && (wirePatch || wireLiftCandidate || openGuideNodeId || presetsOpen || marqueeDrag)) {
       event.preventDefault();
       setWirePatch(null);
       setWireLiftCandidate(null);
       setOpenGuideNodeId(null);
+      setPresetsOpen(false);
+      setMarqueeDrag(null);
       return;
     }
     if ((event.ctrlKey || event.metaKey || event.shiftKey) && event.key.toLowerCase() === 'g' && activeGraph) {
@@ -1196,6 +1383,11 @@ export default function NodeLogicWorkspace({
         event.preventDefault();
         const frame = (activeGraph.frames ?? []).find((f) => f.id === selectedFrameId);
         handleDeleteFrame(selectedFrameId, Boolean(frame?.isBaked));
+      } else if (selectedNodeIds.length > 1) {
+        event.preventDefault();
+        commitGraphUpdate(removeNodesFromGraph(activeGraph, selectedNodeIds), 'Delete logic nodes');
+        setSelectedNodeId(null);
+        setSelectedNodeIds([]);
       } else if (selectedNodeId) {
         event.preventDefault();
         commitGraphUpdate(removeNodeFromGraph(activeGraph, selectedNodeId), 'Delete logic node');
@@ -1454,7 +1646,7 @@ export default function NodeLogicWorkspace({
       data-testid="node-logic-studio"
     >
       {/* Top Graph Control & Live Preview Bridge Bar */}
-      <div class="nl-topbar">
+      <div ref={topbarRef} class="nl-topbar">
         <div class="nl-topbar-left">
           {renamingGraph && activeGraph ? (
             <input
@@ -1537,76 +1729,22 @@ export default function NodeLogicWorkspace({
 
           <div class="nl-presets-anchor">
             <button
+              ref={presetsButtonRef}
               type="button"
               class={`nl-bar-btn ${presetsOpen ? 'is-active' : ''}`}
+              data-testid="nl-presets-btn"
               aria-haspopup="menu"
               aria-expanded={presetsOpen}
-              onClick={() => setPresetsOpen((open) => !open)}
+              onClick={() => {
+                if (!presetsOpen) {
+                  const pos = computePresetsMenuPosition();
+                  if (pos) setPresetsMenuPos(pos);
+                }
+                setPresetsOpen((open) => !open);
+              }}
             >
               Presets{savedFramePresets.length > 0 ? ` (${savedFramePresets.length})` : ''}
             </button>
-            {presetsOpen && (
-              <div class="nl-presets-menu" role="menu" aria-label="Interactive logic presets">
-                <div class="nl-presets-section-title">Starter Graph Presets</div>
-                {LOGIC_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    role="menuitem"
-                    class="nl-preset-item"
-                    onClick={() => handleInsertPreset(preset.id)}
-                  >
-                    <strong>{preset.name}</strong>
-                    <span>{preset.description}</span>
-                  </button>
-                ))}
-                <div class="nl-presets-divider" />
-                <div class="nl-presets-section-title">
-                  Saved Frame Presets ({savedFramePresets.length})
-                </div>
-                {savedFramePresets.length === 0 ? (
-                  <div class="nl-preset-empty">
-                    Bake any Smart Logic Frame and click “Save as Preset” to reuse it here.
-                  </div>
-                ) : (
-                  savedFramePresets.map((fPreset) => {
-                    const fpColor = getLogicFrameColorPreset(fPreset.color);
-                    return (
-                      <div key={fPreset.id} class="nl-saved-preset-row">
-                        <button
-                          type="button"
-                          role="menuitem"
-                          class="nl-preset-item nl-saved-preset-btn"
-                          onClick={() => handleInsertSavedFramePreset(fPreset)}
-                        >
-                          <strong class="nl-saved-preset-title">
-                            <span
-                              class="nl-saved-preset-dot"
-                              style={{ backgroundColor: fpColor.accent }}
-                              aria-hidden="true"
-                            />
-                            {fPreset.name}
-                          </strong>
-                          <span>{fPreset.description ?? `${fPreset.nodes.length} baked nodes`}</span>
-                        </button>
-                        <button
-                          type="button"
-                          class="nl-saved-preset-del"
-                          aria-label={`Remove saved preset ${fPreset.name}`}
-                          title="Remove saved preset"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleDeleteSavedFramePreset(fPreset.id);
-                          }}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
           </div>
 
           {activeGraph && (
@@ -1658,6 +1796,80 @@ export default function NodeLogicWorkspace({
           </button>
         </div>
       </div>
+
+      {presetsOpen && presetsMenuPos && (
+        <div
+          ref={presetsMenuRef}
+          class="nl-presets-menu"
+          data-testid="nl-presets-menu"
+          role="menu"
+          aria-label="Interactive logic presets"
+          style={{
+            top: `${presetsMenuPos.top}px`,
+            left: `${presetsMenuPos.left}px`,
+            maxHeight: `${presetsMenuPos.maxHeight}px`,
+          }}
+        >
+          <div class="nl-presets-section-title">Starter Graph Presets</div>
+          {LOGIC_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              role="menuitem"
+              class="nl-preset-item"
+              onClick={() => handleInsertPreset(preset.id)}
+            >
+              <strong>{preset.name}</strong>
+              <span>{preset.description}</span>
+            </button>
+          ))}
+          <div class="nl-presets-divider" />
+          <div class="nl-presets-section-title">
+            Saved Frame Presets ({savedFramePresets.length})
+          </div>
+          {savedFramePresets.length === 0 ? (
+            <div class="nl-preset-empty">
+              Bake any Smart Logic Frame and click “Save as Preset” to reuse it here.
+            </div>
+          ) : (
+            savedFramePresets.map((fPreset) => {
+              const fpColor = getLogicFrameColorPreset(fPreset.color);
+              return (
+                <div key={fPreset.id} class="nl-saved-preset-row">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="nl-preset-item nl-saved-preset-btn"
+                    onClick={() => handleInsertSavedFramePreset(fPreset)}
+                  >
+                    <strong class="nl-saved-preset-title">
+                      <span
+                        class="nl-saved-preset-dot"
+                        style={{ backgroundColor: fpColor.accent }}
+                        aria-hidden="true"
+                      />
+                      {fPreset.name}
+                    </strong>
+                    <span>{fPreset.description ?? `${fPreset.nodes.length} baked nodes`}</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="nl-saved-preset-del"
+                    aria-label={`Remove saved preset ${fPreset.name}`}
+                    title="Remove saved preset"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDeleteSavedFramePreset(fPreset.id);
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
 
       {/* Main 3-Column Node Logic Studio Body */}
       <div class="nl-body">
@@ -1715,33 +1927,78 @@ export default function NodeLogicWorkspace({
         {/* Center Pan/Zoom Node-Wire Graph Canvas */}
         <div
           ref={stageRef}
-          class={`nl-canvas-stage ${panDrag ? 'is-panning' : ''} ${isWireActivelyShown ? 'is-connecting' : ''}`}
+          class={`nl-canvas-stage ${panDrag ? 'is-panning' : ''} ${spacePanHeld && !panDrag ? 'is-space-pan' : ''} ${marqueeDrag?.hasDragged ? 'is-marquee-selecting' : ''} ${isWireActivelyShown ? 'is-connecting' : ''}`}
           data-testid="node-logic-canvas"
+          onContextMenu={(event) => {
+            if (suppressContextMenuRef.current) {
+              event.preventDefault();
+              suppressContextMenuRef.current = false;
+            }
+          }}
           onPointerDown={(event) => {
-            if (event.button !== 0 && event.button !== 1) return;
+            if (event.button !== 0 && event.button !== 1 && event.button !== 2) return;
             setPresetsOpen(false);
             setOpenGuideNodeId(null);
             if (wirePatch) {
               setWirePatch(null);
               return;
             }
-            setSelectedNodeId(null);
-            setSelectedNodeIds([]);
+            const wantsPan =
+              event.button === 1
+              || event.button === 2
+              || (event.button === 0 && (spacePanHeld || event.altKey));
+            if (wantsPan) {
+              if (event.button === 1 || event.button === 2) {
+                event.preventDefault();
+              }
+              if (event.button === 2) {
+                suppressContextMenuRef.current = true;
+              }
+              setPanDrag({
+                pointerId: event.pointerId,
+                startClientX: event.clientX,
+                startClientY: event.clientY,
+                originPanX: viewport.panX,
+                originPanY: viewport.panY,
+              });
+              return;
+            }
+            const startWorld = screenToWorld(event.clientX, event.clientY);
+            const baseSelection =
+              selectedNodeIds.length > 0
+                ? selectedNodeIds
+                : selectedNodeId
+                  ? [selectedNodeId]
+                  : [];
             setSelectedFrameId(null);
             setSelectedConnectionId(null);
-            setPanDrag({
+            if (!event.shiftKey) {
+              setSelectedNodeId(null);
+              setSelectedNodeIds([]);
+            }
+            setMarqueeDrag({
               pointerId: event.pointerId,
               startClientX: event.clientX,
               startClientY: event.clientY,
-              originPanX: viewport.panX,
-              originPanY: viewport.panY,
+              startWorld,
+              currentWorld: startWorld,
+              hasDragged: false,
+              additive: event.shiftKey,
+              baseSelection,
             });
           }}
           onWheel={(event) => {
             if (event.ctrlKey || event.metaKey) {
               event.preventDefault();
               stepZoom(event.deltaY < 0 ? 'in' : 'out');
+              return;
             }
+            event.preventDefault();
+            setViewport((current) => ({
+              ...current,
+              panX: Math.round(current.panX - event.deltaX),
+              panY: Math.round(current.panY - event.deltaY),
+            }));
           }}
         >
           {!activeGraph ? (
@@ -2132,6 +2389,8 @@ export default function NodeLogicWorkspace({
                             : [...base, node.id];
                         });
                         setSelectedNodeId(node.id);
+                      } else if (selectedNodeIds.length > 1 && selectedNodeIds.includes(node.id)) {
+                        setSelectedNodeId(node.id);
                       } else {
                         setSelectedNodeId(node.id);
                         setSelectedNodeIds([node.id]);
@@ -2159,17 +2418,20 @@ export default function NodeLogicWorkspace({
                           setSelectedNodeId(node.id);
                           return;
                         }
+                        const alreadyMultiSelected =
+                          selectedNodeIds.length > 1 && selectedNodeIds.includes(node.id);
+                        const dragIds = alreadyMultiSelected ? selectedNodeIds : [node.id];
                         setSelectedNodeId(node.id);
-                        setSelectedNodeIds([node.id]);
+                        if (!alreadyMultiSelected) {
+                          setSelectedNodeIds([node.id]);
+                        }
                         setNodeDrag({
-                          nodeId: node.id,
+                          nodeIds: dragIds,
                           pointerId: event.pointerId,
                           startClientX: event.clientX,
                           startClientY: event.clientY,
-                          originX: node.x,
-                          originY: node.y,
-                          currentX: node.x,
-                          currentY: node.y,
+                          dx: 0,
+                          dy: 0,
                         });
                       }}
                     >
@@ -2332,6 +2594,19 @@ export default function NodeLogicWorkspace({
                 <div class="nl-empty-graph-hint">
                   Click any node in the left palette to add it to “{activeGraph.name}”.
                 </div>
+              )}
+
+              {marqueeRect && (
+                <div
+                  class="nl-marquee-box"
+                  data-testid="nl-marquee-box"
+                  aria-hidden="true"
+                  style={{
+                    transform: `translate(${marqueeRect.x}px, ${marqueeRect.y}px)`,
+                    width: `${marqueeRect.width}px`,
+                    height: `${marqueeRect.height}px`,
+                  }}
+                />
               )}
             </div>
           )}

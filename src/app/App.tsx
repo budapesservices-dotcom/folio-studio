@@ -51,6 +51,7 @@ import { ComponentRackPanel } from './workspace/ComponentRackPanel';
 import { StatusBar } from './workspace/StatusBar';
 import { ComponentDeletionDialog, ProjectHydrationOverlay } from './workspace/ComponentDeletionDialog';
 import { createMotionAutoKeyBridge } from './workspace/motionAutoKeyBridge';
+import { useQuickInteractionActions } from './workspace/useQuickInteractionActions';
 
 // Lazy-loaded feature bundles kept outside Folio's critical startup chunk.
 const LazyCodeWorkspace = lazy(() => import('./workspace/LazyCodeWorkspace'));
@@ -331,6 +332,8 @@ export function App() {
   const updateToolOptions = (patch: Partial<CanvasToolOptions>) => {
     setToolOptions((current) => ({ ...current, ...patch }));
   };
+
+  const quickInteractions = useQuickInteractionActions({ project: state.project, mainCommandClient, openNodeLogic: windows.openNodeLogic, setNotice });
 
   const chooseCanvasTool = (toolId: CanvasToolId, target: EditorTarget = activeEditorId) => {
     const resolvedToolId = isToolAvailableInWorkspace(toolId, target) ? toolId : 'select';
@@ -891,6 +894,7 @@ export function App() {
         onNotice={setNotice}
         onOpenLivePreview={openLivePreviewForPage}
         onToggleComponentNodeLogic={designSystem.toggleComponentNodeLogic}
+        focusRequest={quickInteractions.nodeLogicFocusRequest}
         onPositionChange={windows.setNodeLogicPosition}
         onSizeChange={windows.setNodeLogicSize}
         onFocus={() => { windows.focusWindow('node-logic'); setActiveEditorId('main'); }}
@@ -958,6 +962,13 @@ export function App() {
         onInsertImageFiles={(files) => { void handleInsertImageFiles(files, activeEditorId); }}
         onDuplicateSelection={() => selectionActions.duplicateSelection(activeEditorId)}
         onCopySelection={() => selectionActions.copySelection(activeEditorId)}
+        project={state.project}
+        activePageId={activePageId}
+        scopedNodes={focusedDocument.nodes}
+        onCreateQuickInteraction={quickInteractions.createQuickInteraction}
+        onUpdateQuickInteraction={quickInteractions.updateQuickInteraction}
+        onDeleteQuickInteraction={quickInteractions.deleteQuickInteraction}
+        onOpenInteractionInNodeGraph={quickInteractions.openInteractionInNodeGraph}
       />
 
       <PagesRackPanel
