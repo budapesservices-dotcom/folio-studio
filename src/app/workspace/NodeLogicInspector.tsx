@@ -6,6 +6,7 @@ import type {
   DesignThemeDefinition,
   FolioPage,
   LogicConnection,
+  LogicFrame,
   LogicGraph,
   LogicNetworkSettings,
   LogicNode,
@@ -24,6 +25,7 @@ import {
   type PrototypeRuntimeSnapshot,
 } from '../../engines/prototype';
 import { getDefaultInitialValueForType } from './nodeLogicGraphHelpers';
+import { NodeLogicFrameInspector } from './NodeLogicFrameInspector';
 import { NodeLogicNodeFields } from './NodeLogicNodeFields';
 import { StudioIcon } from './StudioIcon';
 
@@ -33,7 +35,9 @@ export interface NodeLogicInspectorProps {
   activeTab: NodeLogicInspectorTab;
   graph: LogicGraph | null;
   selectedNode: LogicNode | null;
+  selectedFrame: LogicFrame | null;
   selectedConnection: LogicConnection | null;
+  frameBakeErrors: readonly LogicDiagnostic[];
   scopedAstNodes: readonly DesignNode[];
   availableVariables: readonly LogicVariableDefinition[];
   components: readonly ComponentDefinition[];
@@ -44,6 +48,14 @@ export interface NodeLogicInspectorProps {
   runtimeSnapshot: PrototypeRuntimeSnapshot | null;
   onChangeTab: (tab: NodeLogicInspectorTab) => void;
   onUpdateNodeData: (nodeId: string, patch: Record<string, string | number | boolean | null>) => void;
+  onUpdateFrame: (
+    frameId: string,
+    patch: Partial<Pick<LogicFrame, 'title' | 'color' | 'exposedParams'>>,
+  ) => void;
+  onBakeFrame: (frameId: string) => void;
+  onUnbakeFrame: (frameId: string) => void;
+  onSaveFramePreset: (frameId: string) => void;
+  onDeleteFrame: (frameId: string, deleteChildren?: boolean) => void;
   onDeleteNode: (nodeId: string) => void;
   onDeleteConnection: (connectionId: string) => void;
   onFocusNode: (nodeId: string) => void;
@@ -104,7 +116,9 @@ export function NodeLogicInspector({
   activeTab,
   graph,
   selectedNode,
+  selectedFrame,
   selectedConnection,
+  frameBakeErrors,
   scopedAstNodes,
   availableVariables,
   components,
@@ -115,6 +129,11 @@ export function NodeLogicInspector({
   runtimeSnapshot,
   onChangeTab,
   onUpdateNodeData,
+  onUpdateFrame,
+  onBakeFrame,
+  onUnbakeFrame,
+  onSaveFramePreset,
+  onDeleteFrame,
   onDeleteNode,
   onDeleteConnection,
   onFocusNode,
@@ -134,6 +153,7 @@ export function NodeLogicInspector({
   const [newVarPersist, setNewVarPersist] = useState<LogicVariablePersist>('none');
   const [newVarComputed, setNewVarComputed] = useState(false);
   const [newVarComputedExpr, setNewVarComputedExpr] = useState('');
+  const [expandedTraceGroups, setExpandedTraceGroups] = useState<Record<string, boolean>>({});
 
   const nodeDef = selectedNode ? getLogicNodeDefinition(selectedNode.type) : undefined;
   const nodeDiagnostics = selectedNode
@@ -331,7 +351,21 @@ export function NodeLogicInspector({
       <div class="nl-inspector-body">
         {activeTab === 'node' && (
           <div class="nl-inspector-section">
-            {selectedNode ? (
+            {selectedFrame && graph ? (
+              <NodeLogicFrameInspector
+                graph={graph}
+                frame={selectedFrame}
+                diagnostics={diagnostics}
+                bakeErrors={frameBakeErrors}
+                onUpdateFrame={onUpdateFrame}
+                onUpdateNodeData={onUpdateNodeData}
+                onBakeFrame={onBakeFrame}
+                onUnbakeFrame={onUnbakeFrame}
+                onSaveFramePreset={onSaveFramePreset}
+                onDeleteFrame={onDeleteFrame}
+                onFocusNode={onFocusNode}
+              />
+            ) : selectedNode ? (
               <>
                 <div class="nl-inspector-head">
                   <div>
@@ -743,9 +777,21 @@ export function NodeLogicInspector({
                       ) : (
                         <div class="nl-sim-kv-list nl-tabular">
                           {privateEntries.map(([memKey, memVal]) => {
-                            const sepIdx = memKey.indexOf(':');
-                            const memNodeId = sepIdx > 0 ? memKey.slice(0, sepIdx) : memKey;
-                            const memOriginId = sepIdx > 0 ? memKey.slice(sepIdx + 1) : 'default';
+                            const parts = memKey.split(':');
+                            let memFrameId: string | null = null;
+                            let memNodeId = memKey;
+                            let memOriginId = 'default';
+                            if (parts.length >= 3) {
+                              memFrameId = parts[0];
+                              memNodeId = parts[1];
+                              memOriginId = parts.slice(2).join(':');
+                            } else if (parts.length === 2) {
+                              memNodeId = parts[0];
+                              memOriginId = parts[1];
+                            }
+                            const ownerFrame = memFrameId
+                              ? graph?.frames?.find((f) => f.id === memFrameId)
+                              : undefined;
                             const logicNode = graph?.nodes.find((n) => n.id === memNodeId);
                             const logicLabel = logicNode
                               ? (getLogicNodeDefinition(logicNode.type)?.label ?? logicNode.type)
@@ -754,9 +800,12 @@ export function NodeLogicInspector({
                               memOriginId === 'default'
                                 ? 'default'
                                 : (resolveAstNodeById(memOriginId, astMap, compMap)?.name ?? memOriginId);
+                            const displayLabel = ownerFrame
+                              ? `${ownerFrame.title} / ${logicLabel} · ${originName}`
+                              : `${logicLabel} · ${originName}`;
                             return (
                               <div key={memKey} class="nl-sim-kv">
-                                <span>{logicLabel} · {originName}</span>
+                                <span>{displayLabel}</span>
                                 <strong>{String(memVal)}</strong>
                               </div>
                             );
@@ -821,8 +870,50 @@ export function NodeLogicInspector({
                     <div class="nl-trace-list nl-tabular">
                       {runtimeSnapshot.trace.slice(-16).map((entry) => {
                         const payloadSummary = formatPipelinePayloadSummary(entry.payload);
+                        const hasNested = Boolean(entry.nestedSteps && entry.nestedSteps.length > 0);
+                        const groupKey = `${entry.step}-${entry.nodeId}`;
+                        const isExpanded = Boolean(expandedTraceGroups[groupKey]);
+                        if (hasNested) {
+                          return (
+                            <div key={groupKey} class="nl-trace-group" data-testid={`nl-trace-group-${entry.frameId ?? entry.nodeId}`}>
+                              <button
+                                type="button"
+                                class="nl-trace-group-toggle"
+                                aria-expanded={isExpanded}
+                                onClick={() =>
+                                  setExpandedTraceGroups((prev) => ({
+                                    ...prev,
+                                    [groupKey]: !prev[groupKey],
+                                  }))
+                                }
+                              >
+                                <span class="nl-trace-step">#{entry.step}</span>
+                                <span class="nl-trace-group-title">{entry.detail}</span>
+                                <span class="nl-trace-chevron" aria-hidden="true">
+                                  {isExpanded ? '▾' : '▸'}
+                                </span>
+                              </button>
+                              {isExpanded && entry.nestedSteps && (
+                                <div class="nl-trace-nested-list">
+                                  {entry.nestedSteps.map((sub) => {
+                                    const subPayload = formatPipelinePayloadSummary(sub.payload);
+                                    return (
+                                      <div key={`${sub.step}-${sub.nodeId}`} class="nl-trace-row is-nested">
+                                        <span class="nl-trace-step">#{sub.step}</span>
+                                        <span class="nl-trace-detail">{sub.detail}</span>
+                                        {subPayload && (
+                                          <span class="nl-trace-payload">{subPayload}</span>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
                         return (
-                          <div key={`${entry.step}-${entry.nodeId}`} class="nl-trace-row">
+                          <div key={groupKey} class="nl-trace-row">
                             <span class="nl-trace-step">#{entry.step}</span>
                             <span class="nl-trace-detail">{entry.detail}</span>
                             {payloadSummary && (

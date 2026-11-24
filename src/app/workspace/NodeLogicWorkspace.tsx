@@ -6,6 +6,8 @@ import type {
   DesignNode,
   FolioProject,
   LogicConnection,
+  LogicFrame,
+  LogicFramePreset,
   LogicGraph,
   LogicNetworkSettings,
   LogicNode,
@@ -16,12 +18,21 @@ import type {
   LogicVariableValue,
 } from '../../core/document/types';
 import {
+  BAKED_FRAME_NODE_WIDTH,
+  bakeLogicFrame,
+  createLogicFramePresetFromFrame,
   createLogicGraph,
   createPrototypeRuntime,
+  getLogicFrameColorPreset,
   getLogicNodeDefinition,
   getLogicNodeGuide,
+  instantiateLogicFramePreset,
+  loadStoredLogicFramePresets,
+  saveStoredLogicFramePresets,
+  unbakeLogicFrame,
   validateLogicGraphSemantics,
   type BuiltInLogicNodeType,
+  type LogicDiagnostic,
   type LogicNodeCategory,
   type LogicNodeEventKind,
   type PrototypeRuntime,
@@ -40,6 +51,7 @@ import {
   canConnectLogicPorts,
   computeFitViewTransform,
   computeNextNodePosition,
+  createFrameInGraph,
   createLogicId,
   createLogicPresetGraph,
   createStarterMainPageLogicGraph,
@@ -48,15 +60,19 @@ import {
   getLogicNodePorts,
   getLogicNodeSummary,
   getLogicPortDataType,
-  getLogicPortWorldPosition,
   getUsedSourceReferenceIds,
   isSourceLogicNodeType,
+  moveFrameWithChildrenInGraph,
   moveNodeInGraph,
   removeConnectionFromGraph,
+  removeFrameFromGraph,
   removeNodeFromGraph,
   removeVariableFromGraph,
   repatchConnectionInGraph,
+  resolveLogicPortWorldPosition,
+  syncNodeFrameMembershipAfterDrag,
   touchLogicGraph,
+  updateFrameInGraph,
   updateNetworkSettingsInGraph,
   updateNodeDataInGraph,
   updateVariableInGraph,
@@ -111,6 +127,15 @@ interface NodeDragState {
   readonly currentY: number;
 }
 
+interface FrameDragState {
+  readonly frameId: string;
+  readonly pointerId: number;
+  readonly startClientX: number;
+  readonly startClientY: number;
+  readonly dx: number;
+  readonly dy: number;
+}
+
 interface PanDragState {
   readonly pointerId: number;
   readonly startClientX: number;
@@ -160,7 +185,16 @@ export default function NodeLogicWorkspace({
     () => project.logicGraphs[0]?.id ?? null,
   );
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
+  const [frameBakeErrors, setFrameBakeErrors] = useState<readonly LogicDiagnostic[]>([]);
+  const [savedFramePresets, setSavedFramePresets] = useState<LogicFramePreset[]>(() => {
+    const merged = new Map<string, LogicFramePreset>();
+    for (const p of project.logicFramePresets ?? []) merged.set(p.id, p);
+    for (const p of loadStoredLogicFramePresets()) merged.set(p.id, p);
+    return Array.from(merged.values());
+  });
   const [openGuideNodeId, setOpenGuideNodeId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<NodeLogicInspectorTab>('node');
   const [paletteCategory, setPaletteCategory] = useState<'all' | LogicNodeCategory>('all');
@@ -170,6 +204,7 @@ export default function NodeLogicWorkspace({
   const [graphNameDraft, setGraphNameDraft] = useState('');
   const [viewport, setViewport] = useState<LogicViewportTransform>({ panX: 32, panY: 32, zoom: 0.85 });
   const [nodeDrag, setNodeDrag] = useState<NodeDragState | null>(null);
+  const [frameDrag, setFrameDrag] = useState<FrameDragState | null>(null);
   const [panDrag, setPanDrag] = useState<PanDragState | null>(null);
   const [wirePatch, setWirePatch] = useState<WirePatchState | null>(null);
   const [wireLiftCandidate, setWireLiftCandidate] = useState<WireLiftCandidate | null>(null);
@@ -201,20 +236,31 @@ export default function NodeLogicWorkspace({
   useEffect(() => {
     if (!activeGraph) {
       setSelectedNodeId(null);
+      setSelectedNodeIds([]);
+      setSelectedFrameId(null);
       setSelectedConnectionId(null);
+      setFrameBakeErrors([]);
       setOpenGuideNodeId(null);
       return;
     }
-    if (selectedNodeId && !activeGraph.nodes.some((n) => n.id === selectedNodeId)) {
+    const validIds = new Set(activeGraph.nodes.map((n) => n.id));
+    if (selectedNodeId && !validIds.has(selectedNodeId)) {
       setSelectedNodeId(null);
+    }
+    if (selectedNodeIds.some((id) => !validIds.has(id))) {
+      setSelectedNodeIds((prev) => prev.filter((id) => validIds.has(id)));
+    }
+    if (selectedFrameId && !(activeGraph.frames ?? []).some((f) => f.id === selectedFrameId)) {
+      setSelectedFrameId(null);
+      setFrameBakeErrors([]);
     }
     if (selectedConnectionId && !activeGraph.connections.some((c) => c.id === selectedConnectionId)) {
       setSelectedConnectionId(null);
     }
-    if (openGuideNodeId && !activeGraph.nodes.some((n) => n.id === openGuideNodeId)) {
+    if (openGuideNodeId && !validIds.has(openGuideNodeId)) {
       setOpenGuideNodeId(null);
     }
-  }, [activeGraph, selectedNodeId, selectedConnectionId, openGuideNodeId]);
+  }, [activeGraph, selectedNodeId, selectedNodeIds, selectedFrameId, selectedConnectionId, openGuideNodeId]);
 
   // Fit view when switching to a different graph
   const fittedGraphIdRef = useRef<string | null>(null);
@@ -498,19 +544,241 @@ export default function NodeLogicWorkspace({
     });
   };
 
-  // Render positions with live node drag preview overlaid smoothly
+  // Smart Logic Frame handlers
+  const handleCreateOrWrapFrame = useCallback(() => {
+    if (!activeGraph) return;
+    const rect = stageRef.current?.getBoundingClientRect();
+    const centerWorld = rect
+      ? {
+          x: Math.round((rect.width / 2 - viewport.panX) / viewport.zoom - 150),
+          y: Math.round((rect.height / 2 - viewport.panY) / viewport.zoom - 95),
+        }
+      : { x: 140, y: 100 };
+    const candidateIds =
+      selectedNodeIds.length > 0
+        ? selectedNodeIds
+        : selectedNodeId
+          ? [selectedNodeId]
+          : [];
+    const { graph: nextGraph, frame } = createFrameInGraph(activeGraph, {
+      childNodeIds: candidateIds,
+      fallbackOrigin: centerWorld,
+    });
+    commitGraphUpdate(
+      nextGraph,
+      candidateIds.length > 0 ? `Wrap ${candidateIds.length} node(s) in Logic Frame` : 'Create empty Logic Frame',
+    );
+    setSelectedFrameId(frame.id);
+    setSelectedNodeId(null);
+    setSelectedNodeIds([]);
+    setSelectedConnectionId(null);
+    setFrameBakeErrors([]);
+    setInspectorTab('node');
+    onNotice(
+      candidateIds.length > 0
+        ? `Wrapped ${candidateIds.length} node${candidateIds.length === 1 ? '' : 's'} into "${frame.title}".`
+        : `Created empty Smart Logic Frame "${frame.title}". Drag nodes inside to group.`,
+    );
+  }, [activeGraph, selectedNodeIds, selectedNodeId, viewport, commitGraphUpdate, onNotice]);
+
+  const handleUpdateFrame = useCallback(
+    (frameId: string, patch: Partial<Pick<LogicFrame, 'title' | 'color' | 'exposedParams'>>) => {
+      if (!activeGraph) return;
+      commitGraphUpdate(updateFrameInGraph(activeGraph, frameId, patch), 'Update Smart Logic Frame');
+    },
+    [activeGraph, commitGraphUpdate],
+  );
+
+  const handleBakeFrame = useCallback(
+    (frameId: string) => {
+      if (!activeGraph) return;
+      const result = bakeLogicFrame(activeGraph, frameId, project);
+      if (!result.ok) {
+        setFrameBakeErrors(result.errors);
+        setSelectedFrameId(frameId);
+        setSelectedNodeId(null);
+        setInspectorTab('node');
+        onNotice(result.errors[0]?.message ?? 'Cannot bake Logic Frame due to validation errors.');
+        return;
+      }
+      setFrameBakeErrors([]);
+      commitGraphUpdate(result.graph, `Bake Logic Frame "${result.frame.title}"`);
+      setSelectedFrameId(frameId);
+      setSelectedNodeId(null);
+      setSelectedNodeIds([]);
+      setSelectedConnectionId(null);
+      setInspectorTab('node');
+      if (result.warnings.length > 0) {
+        onNotice(
+          `Baked "${result.frame.title}" (${result.warnings.length} portability warning${result.warnings.length === 1 ? '' : 's'} in Diagnostics).`,
+        );
+      } else {
+        onNotice(
+          `Baked "${result.frame.title}" into a compiled function block (${result.frame.bakedData?.compiledPlan.steps.length ?? 0} steps).`,
+        );
+      }
+    },
+    [activeGraph, project, commitGraphUpdate, onNotice],
+  );
+
+  const handleUnbakeFrame = useCallback(
+    (frameId: string) => {
+      if (!activeGraph) return;
+      const target = (activeGraph.frames ?? []).find((f) => f.id === frameId);
+      if (!target) return;
+      const nextGraph = unbakeLogicFrame(activeGraph, frameId);
+      setFrameBakeErrors([]);
+      commitGraphUpdate(nextGraph, `Unbake Logic Frame "${target.title}"`);
+      setSelectedFrameId(frameId);
+      setInspectorTab('node');
+      onNotice(`Unbaked "${target.title}" for visual editing.`);
+    },
+    [activeGraph, commitGraphUpdate, onNotice],
+  );
+
+  const handleSaveFramePreset = useCallback(
+    (frameId: string) => {
+      if (!activeGraph) return;
+      const target = (activeGraph.frames ?? []).find((f) => f.id === frameId);
+      if (!target) return;
+      const preset = createLogicFramePresetFromFrame(activeGraph, target);
+      const nextPresets = [
+        preset,
+        ...savedFramePresets.filter((item) => item.name.toLowerCase() !== preset.name.toLowerCase()),
+      ].slice(0, 64);
+      setSavedFramePresets(nextPresets);
+      saveStoredLogicFramePresets(nextPresets);
+      onNotice(`Saved "${preset.name}" to Presets menu.`);
+    },
+    [activeGraph, savedFramePresets, onNotice],
+  );
+
+  const handleInsertSavedFramePreset = useCallback(
+    (preset: LogicFramePreset) => {
+      setPresetsOpen(false);
+      if (!activeGraph) return;
+      const rect = stageRef.current?.getBoundingClientRect();
+      const baseOrigin = rect
+        ? {
+            x: Math.round((rect.width / 2 - viewport.panX) / viewport.zoom - BAKED_FRAME_NODE_WIDTH / 2),
+            y: Math.round((rect.height / 2 - viewport.panY) / viewport.zoom - 70),
+          }
+        : computeNextNodePosition(activeGraph);
+      const insertOrigin = { ...baseOrigin };
+      const existingFrames = activeGraph.frames ?? [];
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const collidesFrame = existingFrames.some(
+          (f) =>
+            Math.abs(f.bounds.x - insertOrigin.x) < BAKED_FRAME_NODE_WIDTH + 16 &&
+            Math.abs(f.bounds.y - insertOrigin.y) < 168,
+        );
+        const collidesNode = activeGraph.nodes.some(
+          (n) =>
+            Math.abs(n.x - insertOrigin.x) < BAKED_FRAME_NODE_WIDTH &&
+            Math.abs(n.y - insertOrigin.y) < 140,
+        );
+        if (!collidesFrame && !collidesNode) break;
+        insertOrigin.y += 184;
+      }
+      const { graph: nextGraph, frame } = instantiateLogicFramePreset(activeGraph, preset, insertOrigin);
+      commitGraphUpdate(nextGraph, `Insert Baked Frame preset "${preset.name}"`);
+      setSelectedFrameId(frame.id);
+      setSelectedNodeId(null);
+      setSelectedNodeIds([]);
+      setSelectedConnectionId(null);
+      setFrameBakeErrors([]);
+      setInspectorTab('node');
+      onNotice(`Inserted independent "${frame.title}" instance. Wire any Event into its input port.`);
+    },
+    [activeGraph, viewport, commitGraphUpdate, onNotice],
+  );
+
+  const handleDeleteSavedFramePreset = useCallback(
+    (presetId: string) => {
+      const next = savedFramePresets.filter((item) => item.id !== presetId);
+      setSavedFramePresets(next);
+      saveStoredLogicFramePresets(next);
+      onNotice('Removed saved Frame preset.');
+    },
+    [savedFramePresets, onNotice],
+  );
+
+  const handleDeleteFrame = useCallback(
+    (frameId: string, deleteChildren = false) => {
+      if (!activeGraph) return;
+      const target = (activeGraph.frames ?? []).find((f) => f.id === frameId);
+      commitGraphUpdate(
+        removeFrameFromGraph(activeGraph, frameId, deleteChildren),
+        deleteChildren ? 'Delete Baked Logic Frame' : 'Unwrap Logic Frame',
+      );
+      setSelectedFrameId(null);
+      setFrameBakeErrors([]);
+      onNotice(
+        deleteChildren
+          ? `Deleted baked frame "${target?.title ?? 'Frame'}" and its internal nodes.`
+          : `Unwrapped "${target?.title ?? 'Frame'}" (internal nodes preserved).`,
+      );
+    },
+    [activeGraph, commitGraphUpdate, onNotice],
+  );
+
+  // Render positions with live node drag and frame drag previews overlaid smoothly
+  const displayFrames: readonly LogicFrame[] = useMemo(() => {
+    const frames = activeGraph?.frames ?? [];
+    if (!frameDrag) return frames;
+    return frames.map((frame) =>
+      frame.id === frameDrag.frameId
+        ? {
+            ...frame,
+            bounds: {
+              ...frame.bounds,
+              x: Math.round(frame.bounds.x + frameDrag.dx),
+              y: Math.round(frame.bounds.y + frameDrag.dy),
+            },
+          }
+        : frame,
+    );
+  }, [activeGraph, frameDrag]);
+
+  const draggedFrameChildIds = useMemo(() => {
+    if (!frameDrag || !activeGraph) return null;
+    const target = (activeGraph.frames ?? []).find((f) => f.id === frameDrag.frameId);
+    return target ? new Set(target.childNodeIds) : null;
+  }, [frameDrag, activeGraph]);
+
   const displayNodes = useMemo(() => {
     if (!activeGraph) return [];
-    if (!nodeDrag) return activeGraph.nodes;
-    return activeGraph.nodes.map((node) =>
-      node.id === nodeDrag.nodeId ? { ...node, x: nodeDrag.currentX, y: nodeDrag.currentY } : node,
-    );
-  }, [activeGraph, nodeDrag]);
+    if (!nodeDrag && !frameDrag) return activeGraph.nodes;
+    return activeGraph.nodes.map((node) => {
+      if (nodeDrag && node.id === nodeDrag.nodeId) {
+        return { ...node, x: nodeDrag.currentX, y: nodeDrag.currentY };
+      }
+      if (frameDrag && draggedFrameChildIds?.has(node.id)) {
+        return {
+          ...node,
+          x: Math.round(node.x + frameDrag.dx),
+          y: Math.round(node.y + frameDrag.dy),
+        };
+      }
+      return node;
+    });
+  }, [activeGraph, nodeDrag, frameDrag, draggedFrameChildIds]);
 
   const displayNodesById = useMemo(
     () => new Map(displayNodes.map((node) => [node.id, node])),
     [displayNodes],
   );
+
+  const bakedFrameByChildId = useMemo(() => {
+    const map = new Map<string, LogicFrame>();
+    for (const frame of displayFrames) {
+      if (!frame.isBaked) continue;
+      for (const cid of frame.childNodeIds) {
+        map.set(cid, frame);
+      }
+    }
+    return map;
+  }, [displayFrames]);
 
   const connectedPortKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -525,9 +793,9 @@ export default function NodeLogicWorkspace({
     return keys;
   }, [activeGraph, wirePatch]);
 
-  // Global pointer tracking for smooth node dragging, panning, and drag-and-patch / drag-to-disconnect wires
+  // Global pointer tracking for smooth node dragging, frame dragging, panning, and drag-and-patch wires
   useEffect(() => {
-    if (!nodeDrag && !panDrag && !wirePatch && !wireLiftCandidate) return;
+    if (!nodeDrag && !frameDrag && !panDrag && !wirePatch && !wireLiftCandidate) return;
 
     const handlePointerMove = (event: PointerEvent) => {
       if (nodeDrag && event.pointerId === nodeDrag.pointerId) {
@@ -542,6 +810,13 @@ export default function NodeLogicWorkspace({
               }
             : null,
         );
+        return;
+      }
+
+      if (frameDrag && event.pointerId === frameDrag.pointerId) {
+        const dx = Math.round((event.clientX - frameDrag.startClientX) / viewport.zoom);
+        const dy = Math.round((event.clientY - frameDrag.startClientY) / viewport.zoom);
+        setFrameDrag((current) => (current ? { ...current, dx, dy } : null));
         return;
       }
 
@@ -572,6 +847,7 @@ export default function NodeLogicWorkspace({
             pointerWorld,
             WIRE_SNAP_RADIUS_WORLD,
             conn.id,
+            displayFrames,
           );
           setWireLiftCandidate(null);
           setWirePatch({
@@ -607,6 +883,7 @@ export default function NodeLogicWorkspace({
               pointerWorld,
               WIRE_SNAP_RADIUS_WORLD,
               wirePatch.detachedConnection?.id,
+              displayFrames,
             )
           : null;
         setWirePatch((current) =>
@@ -625,10 +902,24 @@ export default function NodeLogicWorkspace({
     const handlePointerUp = (event: PointerEvent) => {
       if (nodeDrag && event.pointerId === nodeDrag.pointerId) {
         if (activeGraph && (nodeDrag.currentX !== nodeDrag.originX || nodeDrag.currentY !== nodeDrag.originY)) {
-          const nextGraph = moveNodeInGraph(activeGraph, nodeDrag.nodeId, nodeDrag.currentX, nodeDrag.currentY);
-          commitGraphUpdate(nextGraph, 'Move logic node');
+          const moved = moveNodeInGraph(activeGraph, nodeDrag.nodeId, nodeDrag.currentX, nodeDrag.currentY);
+          const synced = syncNodeFrameMembershipAfterDrag(moved, nodeDrag.nodeId);
+          commitGraphUpdate(synced, 'Move logic node');
         }
         setNodeDrag(null);
+      }
+
+      if (frameDrag && event.pointerId === frameDrag.pointerId) {
+        if (activeGraph && (frameDrag.dx !== 0 || frameDrag.dy !== 0)) {
+          const nextGraph = moveFrameWithChildrenInGraph(
+            activeGraph,
+            frameDrag.frameId,
+            frameDrag.dx,
+            frameDrag.dy,
+          );
+          commitGraphUpdate(nextGraph, 'Move Smart Logic Frame');
+        }
+        setFrameDrag(null);
       }
 
       if (panDrag && event.pointerId === panDrag.pointerId) {
@@ -679,6 +970,7 @@ export default function NodeLogicWorkspace({
               finalPointer,
               WIRE_SNAP_RADIUS_WORLD,
               wirePatch.detachedConnection?.id,
+              displayFrames,
             );
 
           if (wirePatch.detachedConnection) {
@@ -741,12 +1033,14 @@ export default function NodeLogicWorkspace({
     };
   }, [
     nodeDrag,
+    frameDrag,
     panDrag,
     wirePatch,
     wireLiftCandidate,
     viewport.zoom,
     activeGraph,
     displayNodes,
+    displayFrames,
     commitGraphUpdate,
     screenToWorld,
     onNotice,
@@ -766,8 +1060,13 @@ export default function NodeLogicWorkspace({
     // If user already started click-mode wiring, let handlePortClick complete it
     if (wirePatch?.mode === 'click') return;
 
-    const node = displayNodesById.get(nodeId);
-    const startPos = node ? getLogicPortWorldPosition(node, portId) : null;
+    const startPos = resolveLogicPortWorldPosition(
+      displayNodesById,
+      displayFrames,
+      nodeId,
+      portId,
+      direction,
+    );
     if (!startPos) return;
 
     // If grabbing an already-connected input port, lift its latest incoming wire so dragging detaches or re-patches it
@@ -823,8 +1122,13 @@ export default function NodeLogicWorkspace({
     if (!activeGraph) return;
 
     if (!wirePatch) {
-      const node = displayNodesById.get(nodeId);
-      const startPos = node ? getLogicPortWorldPosition(node, portId) : null;
+      const startPos = resolveLogicPortWorldPosition(
+        displayNodesById,
+        displayFrames,
+        nodeId,
+        portId,
+        direction,
+      );
       if (!startPos) return;
       setWirePatch({
         mode: 'click',
@@ -862,9 +1166,10 @@ export default function NodeLogicWorkspace({
     commitGraphUpdate(result.graph, 'Connect logic ports');
     setSelectedConnectionId(result.connection.id);
     setSelectedNodeId(null);
+    setSelectedFrameId(null);
   };
 
-  // Keyboard delete / Escape inside Node Logic stage
+  // Keyboard delete / Escape / Ctrl+G or Shift+G wrap in Frame inside Node Logic stage
   const handleStageKeyDown = (event: KeyboardEvent) => {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
       return;
@@ -876,15 +1181,25 @@ export default function NodeLogicWorkspace({
       setOpenGuideNodeId(null);
       return;
     }
+    if ((event.ctrlKey || event.metaKey || event.shiftKey) && event.key.toLowerCase() === 'g' && activeGraph) {
+      event.preventDefault();
+      handleCreateOrWrapFrame();
+      return;
+    }
     if ((event.key === 'Delete' || event.key === 'Backspace') && activeGraph) {
       if (selectedConnectionId) {
         event.preventDefault();
         commitGraphUpdate(removeConnectionFromGraph(activeGraph, selectedConnectionId), 'Delete logic connection');
         setSelectedConnectionId(null);
+      } else if (selectedFrameId) {
+        event.preventDefault();
+        const frame = (activeGraph.frames ?? []).find((f) => f.id === selectedFrameId);
+        handleDeleteFrame(selectedFrameId, Boolean(frame?.isBaked));
       } else if (selectedNodeId) {
         event.preventDefault();
         commitGraphUpdate(removeNodeFromGraph(activeGraph, selectedNodeId), 'Delete logic node');
         setSelectedNodeId(null);
+        setSelectedNodeIds((prev) => prev.filter((id) => id !== selectedNodeId));
       }
     }
   };
@@ -903,6 +1218,7 @@ export default function NodeLogicWorkspace({
   }, [paletteCategory, paletteSearch]);
 
   const selectedNode = activeGraph?.nodes.find((n) => n.id === selectedNodeId) ?? null;
+  const selectedFrame = (activeGraph?.frames ?? []).find((f) => f.id === selectedFrameId) ?? null;
   const selectedConnection = activeGraph?.connections.find((c) => c.id === selectedConnectionId) ?? null;
   const openGuideNode = activeGraph?.nodes.find((n) => n.id === openGuideNodeId) ?? null;
   const openNodeGuide = openGuideNode ? getLogicNodeGuide(openGuideNode.type) : null;
@@ -911,14 +1227,19 @@ export default function NodeLogicWorkspace({
 
   const pendingWirePath = useMemo(() => {
     if (!wirePatch || !isWireActivelyShown) return null;
-    const anchorNode = displayNodesById.get(wirePatch.anchorNodeId);
-    const anchorPos = anchorNode ? getLogicPortWorldPosition(anchorNode, wirePatch.anchorPortId) : null;
+    const anchorPos = resolveLogicPortWorldPosition(
+      displayNodesById,
+      displayFrames,
+      wirePatch.anchorNodeId,
+      wirePatch.anchorPortId,
+      wirePatch.anchorDirection,
+    );
     if (!anchorPos) return null;
     const endPoint = wirePatch.snapTarget ? wirePatch.snapTarget.position : wirePatch.pointerWorld;
     return wirePatch.anchorDirection === 'out'
       ? buildLogicWirePath(anchorPos, endPoint)
       : buildLogicWirePath(endPoint, anchorPos);
-  }, [wirePatch, isWireActivelyShown, displayNodesById]);
+  }, [wirePatch, isWireActivelyShown, displayNodesById, displayFrames]);
 
   const isUnpluggingWire = Boolean(
     isWireActivelyShown && wirePatch?.detachedConnection && !wirePatch.snapTarget,
@@ -1197,6 +1518,22 @@ export default function NodeLogicWorkspace({
             + Graph
           </button>
 
+          {activeGraph && (
+            <button
+              type="button"
+              class={`nl-bar-btn ${selectedNodeIds.length > 0 ? 'is-accent' : ''}`}
+              data-testid="nl-create-frame-btn"
+              title="Wrap selected nodes into a Smart Logic Frame, or create an empty Frame (Ctrl+G / Shift+G)"
+              onClick={handleCreateOrWrapFrame}
+            >
+              {selectedNodeIds.length > 1
+                ? `Wrap Frame (${selectedNodeIds.length})`
+                : selectedNodeIds.length === 1 || selectedNodeId
+                  ? 'Wrap Frame'
+                  : '+ Frame'}
+            </button>
+          )}
+
           <div class="nl-presets-anchor">
             <button
               type="button"
@@ -1205,10 +1542,11 @@ export default function NodeLogicWorkspace({
               aria-expanded={presetsOpen}
               onClick={() => setPresetsOpen((open) => !open)}
             >
-              Presets
+              Presets{savedFramePresets.length > 0 ? ` (${savedFramePresets.length})` : ''}
             </button>
             {presetsOpen && (
               <div class="nl-presets-menu" role="menu" aria-label="Interactive logic presets">
+                <div class="nl-presets-section-title">Starter Graph Presets</div>
                 {LOGIC_PRESETS.map((preset) => (
                   <button
                     key={preset.id}
@@ -1221,6 +1559,51 @@ export default function NodeLogicWorkspace({
                     <span>{preset.description}</span>
                   </button>
                 ))}
+                <div class="nl-presets-divider" />
+                <div class="nl-presets-section-title">
+                  Saved Frame Presets ({savedFramePresets.length})
+                </div>
+                {savedFramePresets.length === 0 ? (
+                  <div class="nl-preset-empty">
+                    Bake any Smart Logic Frame and click “Save as Preset” to reuse it here.
+                  </div>
+                ) : (
+                  savedFramePresets.map((fPreset) => {
+                    const fpColor = getLogicFrameColorPreset(fPreset.color);
+                    return (
+                      <div key={fPreset.id} class="nl-saved-preset-row">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          class="nl-preset-item nl-saved-preset-btn"
+                          onClick={() => handleInsertSavedFramePreset(fPreset)}
+                        >
+                          <strong class="nl-saved-preset-title">
+                            <span
+                              class="nl-saved-preset-dot"
+                              style={{ backgroundColor: fpColor.accent }}
+                              aria-hidden="true"
+                            />
+                            {fPreset.name}
+                          </strong>
+                          <span>{fPreset.description ?? `${fPreset.nodes.length} baked nodes`}</span>
+                        </button>
+                        <button
+                          type="button"
+                          class="nl-saved-preset-del"
+                          aria-label={`Remove saved preset ${fPreset.name}`}
+                          title="Remove saved preset"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleDeleteSavedFramePreset(fPreset.id);
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             )}
           </div>
@@ -1342,6 +1725,8 @@ export default function NodeLogicWorkspace({
               return;
             }
             setSelectedNodeId(null);
+            setSelectedNodeIds([]);
+            setSelectedFrameId(null);
             setSelectedConnectionId(null);
             setPanDrag({
               pointerId: event.pointerId,
@@ -1379,14 +1764,109 @@ export default function NodeLogicWorkspace({
                 transform: `translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})`,
               }}
             >
+              {/* Unbaked Smart Logic Frames (Background Containers) */}
+              {displayFrames
+                .filter((frame) => !frame.isBaked)
+                .map((frame) => {
+                  const colorPreset = getLogicFrameColorPreset(frame.color);
+                  const isFrameSelected = selectedFrameId === frame.id;
+                  return (
+                    <section
+                      key={frame.id}
+                      data-logic-frame-id={frame.id}
+                      data-testid={`nl-frame-${frame.id}`}
+                      aria-label={`Smart Logic Frame ${frame.title}`}
+                      class={`nl-frame-box ${isFrameSelected ? 'is-selected' : ''}`}
+                      style={{
+                        width: `${frame.bounds.width}px`,
+                        height: `${frame.bounds.height}px`,
+                        transform: `translate(${frame.bounds.x}px, ${frame.bounds.y}px)`,
+                        backgroundColor: colorPreset.bg,
+                        borderColor: isFrameSelected ? colorPreset.accent : colorPreset.border,
+                      }}
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                        setSelectedFrameId(frame.id);
+                        setSelectedNodeId(null);
+                        setSelectedNodeIds([]);
+                        setSelectedConnectionId(null);
+                        setInspectorTab('node');
+                      }}
+                    >
+                      <header
+                        class="nl-frame-header"
+                        style={{ borderBottomColor: colorPreset.border }}
+                        onPointerDown={(event) => {
+                          if (event.button !== 0) return;
+                          event.stopPropagation();
+                          setSelectedFrameId(frame.id);
+                          setSelectedNodeId(null);
+                          setSelectedNodeIds([]);
+                          setSelectedConnectionId(null);
+                          setInspectorTab('node');
+                          setFrameDrag({
+                            frameId: frame.id,
+                            pointerId: event.pointerId,
+                            startClientX: event.clientX,
+                            startClientY: event.clientY,
+                            dx: 0,
+                            dy: 0,
+                          });
+                        }}
+                      >
+                        <span
+                          class="nl-frame-accent-dot"
+                          style={{ backgroundColor: colorPreset.accent }}
+                          aria-hidden="true"
+                        />
+                        <strong class="nl-frame-title">{frame.title}</strong>
+                        <span class="nl-frame-count nl-tabular">
+                          {frame.childNodeIds.length} node{frame.childNodeIds.length === 1 ? '' : 's'}
+                        </span>
+                        <button
+                          type="button"
+                          class="nl-frame-mini-btn is-bake"
+                          data-testid={`nl-frame-bake-${frame.id}`}
+                          aria-label={`Bake frame ${frame.title}`}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleBakeFrame(frame.id);
+                          }}
+                        >
+                          Bake
+                        </button>
+                      </header>
+                    </section>
+                  );
+                })}
+
               {/* SVG Wire Layer */}
               <svg class="nl-wires-svg" aria-label="Logic connections">
                 {activeGraph.connections.map((conn) => {
+                  const srcFrame = bakedFrameByChildId.get(conn.sourceNodeId);
+                  const tgtFrame = bakedFrameByChildId.get(conn.targetNodeId);
+                  // Hide frozen internal wires inside the same Baked Frame
+                  if (srcFrame && tgtFrame && srcFrame.id === tgtFrame.id) {
+                    return null;
+                  }
                   const srcNode = displayNodesById.get(conn.sourceNodeId);
                   const tgtNode = displayNodesById.get(conn.targetNodeId);
                   if (!srcNode || !tgtNode) return null;
-                  const start = getLogicPortWorldPosition(srcNode, conn.sourcePortId);
-                  const end = getLogicPortWorldPosition(tgtNode, conn.targetPortId);
+                  const start = resolveLogicPortWorldPosition(
+                    displayNodesById,
+                    displayFrames,
+                    conn.sourceNodeId,
+                    conn.sourcePortId,
+                    'out',
+                  );
+                  const end = resolveLogicPortWorldPosition(
+                    displayNodesById,
+                    displayFrames,
+                    conn.targetNodeId,
+                    conn.targetPortId,
+                    'in',
+                  );
                   if (!start || !end) return null;
                   const pathD = buildLogicWirePath(start, end);
                   const dataType = getLogicPortDataType(srcNode.type, conn.sourcePortId);
@@ -1426,8 +1906,191 @@ export default function NodeLogicWorkspace({
                 )}
               </svg>
 
-              {/* HTML Node Cards Layer */}
-              {displayNodes.map((node) => {
+              {/* Baked Smart Logic Frame Nodes (Collapsed Function Blocks) */}
+              {displayFrames
+                .filter((frame) => frame.isBaked && frame.bakedData)
+                .map((frame) => {
+                  const baked = frame.bakedData!;
+                  const colorPreset = getLogicFrameColorPreset(frame.color);
+                  const isFrameSelected = selectedFrameId === frame.id;
+                  const rowCount = Math.max(1, baked.exposedInputs.length, baked.exposedOutputs.length);
+                  return (
+                    <article
+                      key={frame.id}
+                      data-logic-frame-id={frame.id}
+                      data-testid={`nl-baked-frame-${frame.id}`}
+                      class={`nl-node-card nl-baked-frame-card ${isFrameSelected ? 'is-selected' : ''}`}
+                      style={{
+                        width: `${BAKED_FRAME_NODE_WIDTH}px`,
+                        transform: `translate(${frame.bounds.x}px, ${frame.bounds.y}px)`,
+                        borderColor: isFrameSelected ? colorPreset.accent : colorPreset.border,
+                      }}
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                        setSelectedFrameId(frame.id);
+                        setSelectedNodeId(null);
+                        setSelectedNodeIds([]);
+                        setSelectedConnectionId(null);
+                        setInspectorTab('node');
+                      }}
+                    >
+                      <header
+                        class="nl-node-header nl-baked-frame-header"
+                        style={{ borderBottomColor: colorPreset.border }}
+                        onPointerDown={(event) => {
+                          if (event.button !== 0) return;
+                          event.stopPropagation();
+                          setSelectedFrameId(frame.id);
+                          setSelectedNodeId(null);
+                          setSelectedNodeIds([]);
+                          setSelectedConnectionId(null);
+                          setInspectorTab('node');
+                          setFrameDrag({
+                            frameId: frame.id,
+                            pointerId: event.pointerId,
+                            startClientX: event.clientX,
+                            startClientY: event.clientY,
+                            dx: 0,
+                            dy: 0,
+                          });
+                        }}
+                      >
+                        <span
+                          class="nl-baked-fn-glyph"
+                          style={{ color: colorPreset.accent }}
+                          aria-hidden="true"
+                        >
+                          ƒ
+                        </span>
+                        <strong class="nl-node-title">{frame.title}</strong>
+                        <button
+                          type="button"
+                          class="nl-frame-mini-btn"
+                          data-testid={`nl-frame-unbake-${frame.id}`}
+                          aria-label={`Unbake frame ${frame.title}`}
+                          title="Unbake to edit internal nodes"
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleUnbakeFrame(frame.id);
+                          }}
+                        >
+                          Unbake
+                        </button>
+                      </header>
+                      <div class="nl-node-subtitle nl-tabular">
+                        Baked · {frame.childNodeIds.length} node{frame.childNodeIds.length === 1 ? '' : 's'} · {baked.exposedParams.length} param{baked.exposedParams.length === 1 ? '' : 's'}
+                      </div>
+                      <div class="nl-node-ports">
+                        {Array.from({ length: rowCount }).map((_, rowIdx) => {
+                          const expIn = baked.exposedInputs[rowIdx];
+                          const expOut = baked.exposedOutputs[rowIdx];
+                          const inDataType = expIn?.dataType ?? (expIn?.kind === 'exec' ? 'exec' : 'any');
+                          const outDataType = expOut?.dataType ?? (expOut?.kind === 'exec' ? 'exec' : 'any');
+
+                          const inConnected = Boolean(
+                            expIn && connectedPortKeys.has(`${expIn.targetNodeId}:${expIn.targetPort}`),
+                          );
+                          const outConnected = Boolean(
+                            expOut && connectedPortKeys.has(`${expOut.sourceNodeId}:${expOut.sourcePort}`),
+                          );
+                          const inCompatible = Boolean(
+                            isWireActivelyShown &&
+                              wirePatch &&
+                              expIn &&
+                              canConnectLogicPorts(
+                                activeGraph,
+                                wirePatch.anchorNodeId,
+                                wirePatch.anchorPortId,
+                                expIn.targetNodeId,
+                                expIn.targetPort,
+                                wirePatch.detachedConnection?.id,
+                              ).ok,
+                          );
+                          const outCompatible = Boolean(
+                            isWireActivelyShown &&
+                              wirePatch &&
+                              expOut &&
+                              canConnectLogicPorts(
+                                activeGraph,
+                                wirePatch.anchorNodeId,
+                                wirePatch.anchorPortId,
+                                expOut.sourceNodeId,
+                                expOut.sourcePort,
+                                wirePatch.detachedConnection?.id,
+                              ).ok,
+                          );
+                          const inSnapped = Boolean(
+                            isWireActivelyShown &&
+                              wirePatch?.snapTarget &&
+                              expIn &&
+                              wirePatch.snapTarget.nodeId === expIn.targetNodeId &&
+                              wirePatch.snapTarget.portId === expIn.targetPort,
+                          );
+                          const outSnapped = Boolean(
+                            isWireActivelyShown &&
+                              wirePatch?.snapTarget &&
+                              expOut &&
+                              wirePatch.snapTarget.nodeId === expOut.sourceNodeId &&
+                              wirePatch.snapTarget.portId === expOut.sourcePort,
+                          );
+
+                          return (
+                            <div key={rowIdx} class="nl-port-row">
+                              <div class="nl-port-slot nl-port-slot-in">
+                                {expIn && (
+                                  <button
+                                    type="button"
+                                    data-port-dir="in"
+                                    data-port-id={expIn.portId}
+                                    class={`nl-port-btn nl-port-${inDataType} ${inConnected ? 'is-connected' : ''} ${inCompatible ? 'is-compatible' : ''} ${inSnapped ? 'is-snap-target' : ''}`}
+                                    aria-label={`Baked input ${expIn.label} on ${frame.title}`}
+                                    title={expIn.label}
+                                    onPointerDown={(event) =>
+                                      handlePortPointerDown(event, expIn.targetNodeId, expIn.targetPort, 'in')
+                                    }
+                                    onClick={(event) =>
+                                      handlePortClick(event, expIn.targetNodeId, expIn.targetPort, 'in')
+                                    }
+                                  >
+                                    <span class={`nl-port-socket ${expIn.kind === 'exec' ? 'is-exec' : ''}`} />
+                                    <span class="nl-port-label">{expIn.label}</span>
+                                  </button>
+                                )}
+                              </div>
+                              <div class="nl-port-slot nl-port-slot-out">
+                                {expOut && (
+                                  <button
+                                    type="button"
+                                    data-port-dir="out"
+                                    data-port-id={expOut.portId}
+                                    class={`nl-port-btn nl-port-${outDataType} ${outConnected ? 'is-connected' : ''} ${outCompatible ? 'is-compatible' : ''} ${outSnapped ? 'is-snap-target' : ''}`}
+                                    aria-label={`Baked output ${expOut.label} on ${frame.title}`}
+                                    title={expOut.label}
+                                    onPointerDown={(event) =>
+                                      handlePortPointerDown(event, expOut.sourceNodeId, expOut.sourcePort, 'out')
+                                    }
+                                    onClick={(event) =>
+                                      handlePortClick(event, expOut.sourceNodeId, expOut.sourcePort, 'out')
+                                    }
+                                  >
+                                    <span class="nl-port-label">{expOut.label}</span>
+                                    <span class={`nl-port-socket ${expOut.kind === 'exec' ? 'is-exec' : ''}`} />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </article>
+                  );
+                })}
+
+              {/* HTML Node Cards Layer (Hide nodes collapsed inside Baked Frames) */}
+              {displayNodes
+                .filter((node) => !bakedFrameByChildId.has(node.id))
+                .map((node) => {
                 const def = getLogicNodeDefinition(node.type);
                 const category = getLogicNodeCategory(node.type);
                 const marker = CATEGORY_MARKERS[category];
@@ -1444,7 +2107,7 @@ export default function NodeLogicWorkspace({
                 );
                 const isSourceNode = isSourceLogicNodeType(node.type);
                 const diagCounts = diagnosticsByNodeId.get(node.id);
-                const isSelected = selectedNodeId === node.id;
+                const isSelected = selectedNodeId === node.id || selectedNodeIds.includes(node.id);
                 const isGuideOpen = openGuideNodeId === node.id;
 
                 return (
@@ -1458,8 +2121,20 @@ export default function NodeLogicWorkspace({
                     }}
                     onPointerDown={(event) => {
                       event.stopPropagation();
-                      setSelectedNodeId(node.id);
+                      setSelectedFrameId(null);
                       setSelectedConnectionId(null);
+                      if (event.shiftKey) {
+                        setSelectedNodeIds((prev) => {
+                          const base = prev.length > 0 ? prev : selectedNodeId ? [selectedNodeId] : [];
+                          return base.includes(node.id)
+                            ? base.filter((id) => id !== node.id)
+                            : [...base, node.id];
+                        });
+                        setSelectedNodeId(node.id);
+                      } else {
+                        setSelectedNodeId(node.id);
+                        setSelectedNodeIds([node.id]);
+                      }
                       if (openGuideNodeId && openGuideNodeId !== node.id) {
                         setOpenGuideNodeId(null);
                       }
@@ -1470,9 +2145,21 @@ export default function NodeLogicWorkspace({
                       onPointerDown={(event) => {
                         if (event.button !== 0) return;
                         event.stopPropagation();
-                        setSelectedNodeId(node.id);
+                        setSelectedFrameId(null);
                         setSelectedConnectionId(null);
                         setInspectorTab('node');
+                        if (event.shiftKey) {
+                          setSelectedNodeIds((prev) => {
+                            const base = prev.length > 0 ? prev : selectedNodeId ? [selectedNodeId] : [];
+                            return base.includes(node.id)
+                              ? base.filter((id) => id !== node.id)
+                              : [...base, node.id];
+                          });
+                          setSelectedNodeId(node.id);
+                          return;
+                        }
+                        setSelectedNodeId(node.id);
+                        setSelectedNodeIds([node.id]);
                         setNodeDrag({
                           nodeId: node.id,
                           pointerId: event.pointerId,
@@ -1753,7 +2440,9 @@ export default function NodeLogicWorkspace({
           activeTab={inspectorTab}
           graph={activeGraph}
           selectedNode={selectedNode}
+          selectedFrame={selectedFrame}
           selectedConnection={selectedConnection}
+          frameBakeErrors={frameBakeErrors}
           scopedAstNodes={scopedAstNodes}
           availableVariables={availableVariables}
           components={project.components}
@@ -1767,10 +2456,16 @@ export default function NodeLogicWorkspace({
             if (!activeGraph) return;
             commitGraphUpdate(updateNodeDataInGraph(activeGraph, nodeId, patch), 'Update logic node properties');
           }}
+          onUpdateFrame={handleUpdateFrame}
+          onBakeFrame={handleBakeFrame}
+          onUnbakeFrame={handleUnbakeFrame}
+          onSaveFramePreset={handleSaveFramePreset}
+          onDeleteFrame={handleDeleteFrame}
           onDeleteNode={(nodeId) => {
             if (!activeGraph) return;
             commitGraphUpdate(removeNodeFromGraph(activeGraph, nodeId), 'Delete logic node');
             setSelectedNodeId(null);
+            setSelectedNodeIds((prev) => prev.filter((id) => id !== nodeId));
           }}
           onDeleteConnection={(connectionId) => {
             if (!activeGraph) return;
@@ -1779,6 +2474,8 @@ export default function NodeLogicWorkspace({
           }}
           onFocusNode={(nodeId) => {
             setSelectedNodeId(nodeId);
+            setSelectedNodeIds([nodeId]);
+            setSelectedFrameId(null);
             setSelectedConnectionId(null);
             setInspectorTab('node');
             const target = activeGraph?.nodes.find((n) => n.id === nodeId);

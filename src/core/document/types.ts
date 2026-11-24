@@ -537,6 +537,99 @@ export interface LogicConnection {
   targetPortId: string;
 }
 
+export interface LogicFrameBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface LogicFrameExposedInput {
+  portId: string;
+  targetNodeId: string;
+  targetPort: string;
+  label: string;
+  kind: 'exec' | 'data';
+  dataType?: string;
+}
+
+export interface LogicFrameExposedOutput {
+  portId: string;
+  sourceNodeId: string;
+  sourcePort: string;
+  label: string;
+  kind: 'exec' | 'data';
+  dataType?: string;
+}
+
+export type LogicFrameExposedParamType = 'string' | 'number' | 'boolean' | 'color' | 'select';
+
+export interface LogicFrameExposedParam {
+  paramId: string;
+  nodeId: string;
+  field: string;
+  label: string;
+  type: LogicFrameExposedParamType;
+}
+
+export interface LogicFrameCompiledEdge {
+  targetNodeId: string;
+  targetPort: string;
+}
+
+export interface LogicFrameCompiledDataInput {
+  sourceNodeId: string;
+  sourcePort: string;
+}
+
+export interface LogicFrameCompiledStep {
+  nodeId: string;
+  order: number;
+  nextByPort: Record<string, LogicFrameCompiledEdge[]>;
+  dataInputs: Record<string, LogicFrameCompiledDataInput>;
+  externalExitsByPort: Record<string, string[]>;
+}
+
+export interface LogicFrameCompiledPlan {
+  version: 1;
+  internalNodeIds: string[];
+  entryRoutes: Record<string, { targetNodeId: string; targetPort: string }>;
+  steps: LogicFrameCompiledStep[];
+}
+
+export interface LogicFrameBakedData {
+  exposedInputs: LogicFrameExposedInput[];
+  exposedOutputs: LogicFrameExposedOutput[];
+  compiledPlan: LogicFrameCompiledPlan;
+  exposedParams: LogicFrameExposedParam[];
+  bakedAt?: string;
+}
+
+/** Smart Logic Frame grouping visual nodes and supporting Function Baking (.flop v2 compatible). */
+export interface LogicFrame {
+  id: string;
+  title: string;
+  color: string;
+  bounds: LogicFrameBounds;
+  childNodeIds: string[];
+  isBaked: boolean;
+  /** Pinned editable parameters preserved across unbake/bake transitions. */
+  exposedParams?: LogicFrameExposedParam[];
+  bakedData?: LogicFrameBakedData;
+}
+
+/** Reusable baked Smart Logic Frame preset persisted inside `.flop` v2 or local studio presets. */
+export interface LogicFramePreset {
+  id: string;
+  name: string;
+  description?: string;
+  color: string;
+  createdAt: string;
+  frame: LogicFrame;
+  nodes: LogicNode[];
+  connections: LogicConnection[];
+}
+
 export interface LogicGraph {
   id: string;
   name: string;
@@ -546,6 +639,8 @@ export interface LogicGraph {
   variables?: LogicVariableDefinition[];
   /** Optional network settings (Base URL, Global Headers, Auth Token) for Network nodes. */
   networkSettings?: LogicNetworkSettings;
+  /** Optional Smart Logic Frames (visual grouping & baked function blocks). */
+  frames?: LogicFrame[];
   nodes: LogicNode[];
   connections: LogicConnection[];
   createdAt: string;
@@ -664,6 +759,8 @@ export interface FolioProjectV2 {
   codeModules?: CodeModuleRecord[];
   /** Optional Motion & Animation timeline clips anchored to pages & stable node IDs. */
   animations?: AnimationClip[];
+  /** Optional reusable Smart Logic Frame presets saved by the user. */
+  logicFramePresets?: LogicFramePreset[];
 }
 
 /** Current project alias used by the editor, persistence and file I/O. */

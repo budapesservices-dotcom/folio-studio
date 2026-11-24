@@ -14,6 +14,8 @@ import type {
   FolioPage,
   FolioProject,
   LogicConnection,
+  LogicFrame,
+  LogicFrameCompiledStep,
   LogicGraph,
   LogicNode,
   LogicValueType,
@@ -65,6 +67,9 @@ export interface LogicExecutionTraceEntry {
   readonly detail: string;
   readonly originLayerId?: string | null;
   readonly payload?: PipelineStepOutput;
+  readonly frameId?: string;
+  readonly frameTitle?: string;
+  readonly nestedSteps?: readonly LogicExecutionTraceEntry[];
 }
 
 export interface PrototypeToastNotice {
@@ -100,11 +105,19 @@ export interface PrototypeRuntime {
   getSnapshot(): PrototypeRuntimeSnapshot;
 }
 
+interface BakedFrameNodeIndex {
+  readonly frame: LogicFrame;
+  readonly step: LogicFrameCompiledStep;
+  readonly childSet: ReadonlySet<string>;
+}
+
 interface IndexedGraph {
   readonly graph: LogicGraph;
   readonly nodesById: Map<string, LogicNode>;
   readonly outgoingBySource: Map<string, LogicConnection[]>;
   readonly incomingByTarget: Map<string, LogicConnection[]>;
+  readonly bakedFrameByNodeId: Map<string, LogicFrame>;
+  readonly compiledStepByNodeId: Map<string, BakedFrameNodeIndex>;
 }
 
 function clampStepBudget(raw: number | undefined): number {
@@ -130,7 +143,26 @@ function indexGraph(graph: LogicGraph): IndexedGraph {
     inList.push(conn);
     incomingByTarget.set(inKey, inList);
   }
-  return { graph, nodesById, outgoingBySource, incomingByTarget };
+  const bakedFrameByNodeId = new Map<string, LogicFrame>();
+  const compiledStepByNodeId = new Map<string, BakedFrameNodeIndex>();
+  for (const frame of graph.frames ?? []) {
+    if (!frame.isBaked || !frame.bakedData?.compiledPlan) continue;
+    const childSet = new Set(frame.childNodeIds);
+    for (const childId of frame.childNodeIds) {
+      bakedFrameByNodeId.set(childId, frame);
+    }
+    for (const step of frame.bakedData.compiledPlan.steps) {
+      compiledStepByNodeId.set(step.nodeId, { frame, step, childSet });
+    }
+  }
+  return {
+    graph,
+    nodesById,
+    outgoingBySource,
+    incomingByTarget,
+    bakedFrameByNodeId,
+    compiledStepByNodeId,
+  };
 }
 
 function parseListValue(raw: unknown): unknown[] {
@@ -423,7 +455,8 @@ export function createPrototypeRuntime(
         case 'state.toggle': {
           const variableId = typeof node.data.variableId === 'string' ? node.data.variableId.trim() : '';
           if (!variableId) {
-            const memKey = getPrivateToggleMemoryKey(node.id, context.origin);
+            const ownerFrame = indexed.bakedFrameByNodeId.get(node.id);
+            const memKey = getPrivateToggleMemoryKey(node.id, context.origin, ownerFrame?.id);
             return Object.prototype.hasOwnProperty.call(privateMemory, memKey)
               ? privateMemory[memKey]
               : Boolean(node.data.initialValue);
@@ -644,6 +677,17 @@ export function createPrototypeRuntime(
     context: PipelineContext,
     refField?: string,
   ): unknown => {
+    const bakedStep = indexed.compiledStepByNodeId.get(node.id)?.step;
+    const compiledDataInput = bakedStep?.dataInputs[portId];
+    if (compiledDataInput) {
+      return evaluateDataPort(
+        indexed,
+        compiledDataInput.sourceNodeId,
+        compiledDataInput.sourcePort,
+        visiting,
+        context,
+      );
+    }
     const incoming = indexed.incomingByTarget.get(`${node.id}:${portId}`);
     if (incoming && incoming.length > 0) {
       const first = incoming[0];
@@ -666,6 +710,8 @@ export function createPrototypeRuntime(
     context: PipelineContext,
     refField?: string,
   ): boolean => {
+    const bakedStep = indexed.compiledStepByNodeId.get(node.id)?.step;
+    if (bakedStep?.dataInputs[portId]) return true;
     if ((indexed.incomingByTarget.get(`${node.id}:${portId}`)?.length ?? 0) > 0) return true;
     if (refField) {
       const refVal = node.data[refField];
@@ -695,12 +741,36 @@ export function createPrototypeRuntime(
     const queue: ExecutionQueueItem[] = [...initialQueue];
     let dispatchSteps = 0;
 
+    interface ActiveFrameTraceGroup {
+      readonly frame: LogicFrame;
+      readonly traceIndex: number;
+      readonly nestedSteps: LogicExecutionTraceEntry[];
+      lastPayload?: PipelineStepOutput;
+    }
+    const activeFrameGroups = new Map<string, ActiveFrameTraceGroup>();
+
     const enqueueOutgoing = (
       indexed: IndexedGraph,
       nodeId: string,
       portId: string,
       nextContext: PipelineContext,
     ) => {
+      const bakedEntry = indexed.compiledStepByNodeId.get(nodeId);
+      if (bakedEntry) {
+        // Execute internal sub-graph transitions directly via pre-compiled plan (zero raw graph edge scan)
+        const internalNext = bakedEntry.step.nextByPort[portId] ?? [];
+        for (const edge of internalNext) {
+          queue.push({ indexed, nodeId: edge.targetNodeId, context: nextContext });
+        }
+        // Forward any boundary-exiting connections leaving the Baked Frame to external nodes
+        const outgoingAll = indexed.outgoingBySource.get(`${nodeId}:${portId}`) ?? [];
+        for (const conn of outgoingAll) {
+          if (!bakedEntry.childSet.has(conn.targetNodeId)) {
+            queue.push({ indexed, nodeId: conn.targetNodeId, context: nextContext });
+          }
+        }
+        return;
+      }
       const connections = indexed.outgoingBySource.get(`${nodeId}:${portId}`) ?? [];
       for (const conn of connections) {
         queue.push({ indexed, nodeId: conn.targetNodeId, context: nextContext });
@@ -750,6 +820,33 @@ export function createPrototypeRuntime(
       dispatchSteps += 1;
       totalSteps += 1;
       const visiting = new Set<string>();
+      const activeBakedEntry = next.indexed.compiledStepByNodeId.get(node.id);
+      let activeFrameGroup: ActiveFrameTraceGroup | undefined;
+      if (activeBakedEntry) {
+        const groupKey = `${ctx.executionId}:${activeBakedEntry.frame.id}`;
+        activeFrameGroup = activeFrameGroups.get(groupKey);
+        if (!activeFrameGroup) {
+          const traceIndex = trace.length;
+          trace.push({
+            step: totalSteps,
+            graphId: next.indexed.graph.id,
+            nodeId: activeBakedEntry.frame.id,
+            nodeType: 'logic.frame.baked',
+            frameId: activeBakedEntry.frame.id,
+            frameTitle: activeBakedEntry.frame.title,
+            detail: `Baked Frame “${activeBakedEntry.frame.title}” (0 steps)`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            nestedSteps: [],
+          });
+          activeFrameGroup = {
+            frame: activeBakedEntry.frame,
+            traceIndex,
+            nestedSteps: [],
+          };
+          activeFrameGroups.set(groupKey, activeFrameGroup);
+        }
+      }
+      const traceLenBefore = trace.length;
 
       switch (node.type) {
         case 'source.page':
@@ -857,8 +954,9 @@ export function createPrototypeRuntime(
         case 'state.toggle': {
           const variableId = typeof node.data.variableId === 'string' ? node.data.variableId.trim() : '';
           if (!variableId) {
-            // Node-owned, target-bound private boolean memory (Anti-Amnesia)
-            const memoryKey = getPrivateToggleMemoryKey(node.id, ctx.origin);
+            // Node-owned, target-bound private boolean memory (Anti-Amnesia + Baked Frame isolation)
+            const ownerFrame = next.indexed.bakedFrameByNodeId.get(node.id);
+            const memoryKey = getPrivateToggleMemoryKey(node.id, ctx.origin, ownerFrame?.id);
             const initialBool = Boolean(node.data.initialValue);
             const prevVal = Object.prototype.hasOwnProperty.call(privateMemory, memoryKey)
               ? privateMemory[memoryKey]
@@ -1530,6 +1628,26 @@ export function createPrototypeRuntime(
         case 'network.json':
           break;
       }
+
+      if (activeFrameGroup && trace.length > traceLenBefore) {
+        const addedEntries = trace.splice(traceLenBefore);
+        for (const entry of addedEntries) {
+          activeFrameGroup.nestedSteps.push(entry);
+          if (entry.payload) {
+            activeFrameGroup.lastPayload = entry.payload;
+          }
+        }
+        const count = activeFrameGroup.nestedSteps.length;
+        const existingGroup = trace[activeFrameGroup.traceIndex];
+        if (existingGroup) {
+          trace[activeFrameGroup.traceIndex] = {
+            ...existingGroup,
+            detail: `Baked Frame “${activeFrameGroup.frame.title}” (${count} step${count === 1 ? '' : 's'})`,
+            ...(activeFrameGroup.lastPayload ? { payload: { ...activeFrameGroup.lastPayload } } : {}),
+            nestedSteps: [...activeFrameGroup.nestedSteps],
+          };
+        }
+      }
     }
   };
 
@@ -1555,6 +1673,14 @@ export function createPrototypeRuntime(
       trace: trace.map((entry) => ({
         ...entry,
         ...(entry.payload ? { payload: { ...entry.payload } } : {}),
+        ...(entry.nestedSteps
+          ? {
+              nestedSteps: entry.nestedSteps.map((nested) => ({
+                ...nested,
+                ...(nested.payload ? { payload: { ...nested.payload } } : {}),
+              })),
+            }
+          : {}),
       })),
       warnings: [...warnings],
     };

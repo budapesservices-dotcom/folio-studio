@@ -708,7 +708,178 @@ export function isLogicGraph(value: unknown): value is import('./types').LogicGr
     if (connectionIds.has(connection.id)) return false;
     connectionIds.add(connection.id);
   }
+
+  if (value.frames !== undefined) {
+    if (!Array.isArray(value.frames) || value.frames.length > 256) return false;
+    const frameIds = new Set<string>();
+    for (const frame of value.frames) {
+      if (!isLogicFrame(frame, nodeIds)) return false;
+      if (frameIds.has(frame.id)) return false;
+      frameIds.add(frame.id);
+    }
+  }
   return true;
+}
+
+const LOGIC_FRAME_PARAM_TYPES = new Set(['string', 'number', 'boolean', 'color', 'select']);
+
+function isLogicFrameExposedParam(value: unknown): value is import('./types').LogicFrameExposedParam {
+  return (
+    isRecord(value) &&
+    isString(value.paramId) && value.paramId.trim().length > 0 &&
+    isString(value.nodeId) && value.nodeId.trim().length > 0 &&
+    isString(value.field) && value.field.trim().length > 0 &&
+    isString(value.label) && value.label.trim().length > 0 &&
+    isString(value.type) && LOGIC_FRAME_PARAM_TYPES.has(value.type)
+  );
+}
+
+function isLogicFrameBakedData(value: unknown): value is import('./types').LogicFrameBakedData {
+  if (!isRecord(value)) return false;
+  if (
+    !Array.isArray(value.exposedInputs) ||
+    !Array.isArray(value.exposedOutputs) ||
+    !Array.isArray(value.exposedParams) ||
+    !isRecord(value.compiledPlan)
+  ) {
+    return false;
+  }
+  for (const inp of value.exposedInputs) {
+    if (
+      !isRecord(inp) ||
+      !isString(inp.portId) || inp.portId.trim().length === 0 ||
+      !isString(inp.targetNodeId) || inp.targetNodeId.trim().length === 0 ||
+      !isString(inp.targetPort) || inp.targetPort.trim().length === 0 ||
+      !isString(inp.label) ||
+      (inp.kind !== 'exec' && inp.kind !== 'data') ||
+      (inp.dataType !== undefined && !isString(inp.dataType))
+    ) {
+      return false;
+    }
+  }
+  for (const outp of value.exposedOutputs) {
+    if (
+      !isRecord(outp) ||
+      !isString(outp.portId) || outp.portId.trim().length === 0 ||
+      !isString(outp.sourceNodeId) || outp.sourceNodeId.trim().length === 0 ||
+      !isString(outp.sourcePort) || outp.sourcePort.trim().length === 0 ||
+      !isString(outp.label) ||
+      (outp.kind !== 'exec' && outp.kind !== 'data') ||
+      (outp.dataType !== undefined && !isString(outp.dataType))
+    ) {
+      return false;
+    }
+  }
+  for (const param of value.exposedParams) {
+    if (!isLogicFrameExposedParam(param)) return false;
+  }
+  const plan = value.compiledPlan;
+  if (
+    plan.version !== 1 ||
+    !Array.isArray(plan.internalNodeIds) ||
+    !plan.internalNodeIds.every((id) => isString(id) && id.trim().length > 0) ||
+    !isRecord(plan.entryRoutes) ||
+    !Array.isArray(plan.steps)
+  ) {
+    return false;
+  }
+  for (const step of plan.steps) {
+    if (
+      !isRecord(step) ||
+      !isString(step.nodeId) || step.nodeId.trim().length === 0 ||
+      !isFiniteNumber(step.order) ||
+      !isRecord(step.nextByPort) ||
+      !isRecord(step.dataInputs) ||
+      !isRecord(step.externalExitsByPort)
+    ) {
+      return false;
+    }
+  }
+  if (value.bakedAt !== undefined && !isString(value.bakedAt)) return false;
+  return true;
+}
+
+export function isLogicFrame(
+  value: unknown,
+  validNodeIds?: ReadonlySet<string>,
+): value is import('./types').LogicFrame {
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.trim().length === 0 || value.id.length > 128 ||
+    !isString(value.title) || value.title.trim().length === 0 || value.title.length > 128 ||
+    !isString(value.color) || value.color.trim().length === 0 || value.color.length > 64 ||
+    typeof value.isBaked !== 'boolean' ||
+    !isRecord(value.bounds) ||
+    !isFiniteNumber(value.bounds.x) ||
+    !isFiniteNumber(value.bounds.y) ||
+    !isFiniteNumber(value.bounds.width) || value.bounds.width < 40 ||
+    !isFiniteNumber(value.bounds.height) || value.bounds.height < 40 ||
+    !Array.isArray(value.childNodeIds)
+  ) {
+    return false;
+  }
+  const childSeen = new Set<string>();
+  for (const cid of value.childNodeIds) {
+    if (!isString(cid) || cid.trim().length === 0 || childSeen.has(cid)) return false;
+    if (validNodeIds && !validNodeIds.has(cid)) return false;
+    childSeen.add(cid);
+  }
+  if (value.exposedParams !== undefined) {
+    if (!Array.isArray(value.exposedParams)) return false;
+    for (const param of value.exposedParams) {
+      if (!isLogicFrameExposedParam(param)) return false;
+    }
+  }
+  if (value.bakedData !== undefined && !isLogicFrameBakedData(value.bakedData)) {
+    return false;
+  }
+  return true;
+}
+
+export function isLogicFramePreset(value: unknown): value is import('./types').LogicFramePreset {
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.trim().length === 0 || value.id.length > 128 ||
+    !isString(value.name) || value.name.trim().length === 0 || value.name.length > 128 ||
+    (value.description !== undefined && (!isString(value.description) || value.description.length > 512)) ||
+    !isString(value.color) || value.color.trim().length === 0 ||
+    !isString(value.createdAt) || value.createdAt.trim().length === 0 ||
+    !Array.isArray(value.nodes) ||
+    !Array.isArray(value.connections)
+  ) {
+    return false;
+  }
+  const nodeIds = new Set<string>();
+  for (const node of value.nodes) {
+    if (
+      !isRecord(node) || !isString(node.id) || node.id.trim().length === 0 ||
+      !isString(node.type) || node.type.trim().length === 0 ||
+      !isFiniteNumber(node.x) || !isFiniteNumber(node.y) || !isRecord(node.data)
+    ) {
+      return false;
+    }
+    if (nodeIds.has(node.id)) return false;
+    nodeIds.add(node.id);
+    if (!Object.values(node.data).every((item) =>
+      item === null || typeof item === 'string' || typeof item === 'boolean' || isFiniteNumber(item),
+    )) {
+      return false;
+    }
+  }
+  const connIds = new Set<string>();
+  for (const conn of value.connections) {
+    if (
+      !isRecord(conn) || !isString(conn.id) || conn.id.trim().length === 0 ||
+      !isString(conn.sourceNodeId) || !isString(conn.sourcePortId) || conn.sourcePortId.trim().length === 0 ||
+      !isString(conn.targetNodeId) || !isString(conn.targetPortId) || conn.targetPortId.trim().length === 0 ||
+      !nodeIds.has(conn.sourceNodeId) || !nodeIds.has(conn.targetNodeId)
+    ) {
+      return false;
+    }
+    if (connIds.has(conn.id)) return false;
+    connIds.add(conn.id);
+  }
+  return isLogicFrame(value.frame, nodeIds);
 }
 
 function isSafeAssetSource(source: string): boolean {
@@ -1255,6 +1426,22 @@ export function validateProject(input: unknown): ValidationResult {
       if (animFrozen && pagesFrozen) {
         validatedFrozenAnimationsContext.set(input.animations as object, input.pages);
       }
+    }
+  }
+
+  if (input.logicFramePresets !== undefined) {
+    if (!Array.isArray(input.logicFramePresets) || input.logicFramePresets.length > 128) {
+      return { ok: false, error: 'Project logic frame presets must be an array of valid frame presets.' };
+    }
+    const presetIds = new Set<string>();
+    for (const preset of input.logicFramePresets) {
+      if (!isLogicFramePreset(preset)) {
+        return { ok: false, error: 'One or more saved logic frame presets contain invalid data.' };
+      }
+      if (presetIds.has(preset.id)) {
+        return { ok: false, error: 'Logic frame preset IDs must be unique within a project.' };
+      }
+      presetIds.add(preset.id);
     }
   }
 

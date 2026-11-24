@@ -6158,6 +6158,327 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   gap: 5px;
 }
 
+/* Smart Logic Frames (Visual Container, Baked Function Node, Inspector & Grouped Trace) */
+.nl-bar-btn.is-accent {
+  border-color: rgba(45, 212, 191, 0.45);
+  background: rgba(45, 212, 191, 0.14);
+  color: #99f6e4;
+}
+
+.nl-presets-section-title {
+  padding: 5px 8px 3px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #7d8ca6;
+}
+
+.nl-presets-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: #252e42;
+}
+
+.nl-preset-empty {
+  padding: 6px 8px 8px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: #7d8ca6;
+}
+
+.nl-saved-preset-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.nl-saved-preset-btn {
+  flex: 1 1 auto;
+}
+
+.nl-saved-preset-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nl-saved-preset-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+.nl-saved-preset-del {
+  flex: 0 0 24px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #7f8ea8;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.nl-saved-preset-del:hover {
+  background: #3a1f29;
+  color: #ffa1b5;
+}
+
+.nl-frame-box {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  border: 1px dashed rgba(45, 212, 191, 0.42);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.nl-frame-box.is-selected {
+  border-style: solid;
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.35), 0 12px 28px rgba(0, 0, 0, 0.25);
+}
+
+.nl-frame-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid rgba(45, 212, 191, 0.28);
+  border-radius: 7px 7px 0 0;
+  background: rgba(15, 19, 29, 0.72);
+  cursor: grab;
+  user-select: none;
+}
+
+.nl-frame-header:active {
+  cursor: grabbing;
+}
+
+.nl-frame-accent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+.nl-frame-title {
+  color: #edf1f8;
+  font-size: 11.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nl-frame-count {
+  margin-left: auto;
+  color: #8c9ab2;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.nl-frame-mini-btn {
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid #33405a;
+  border-radius: 4px;
+  background: #1a2233;
+  color: #dbe4f5;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.nl-frame-mini-btn:hover {
+  background: #253048;
+  border-color: #5b6d91;
+}
+
+.nl-frame-mini-btn.is-bake {
+  border-color: rgba(45, 212, 191, 0.45);
+  background: rgba(45, 212, 191, 0.14);
+  color: #99f6e4;
+}
+
+.nl-frame-mini-btn.is-bake:hover {
+  background: rgba(45, 212, 191, 0.26);
+}
+
+.nl-baked-frame-card {
+  z-index: 4;
+  background: #151b29;
+  border-width: 1px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.42);
+}
+
+.nl-baked-frame-header {
+  background: linear-gradient(180deg, #1d2538 0%, #171e2d 100%);
+}
+
+.nl-baked-fn-glyph {
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.nl-frame-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.nl-frame-action-bar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.nl-frame-color-swatches {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-top: 2px;
+}
+
+.nl-frame-swatch {
+  width: 20px;
+  height: 20px;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: transform 100ms ease, border-color 120ms ease;
+}
+
+.nl-frame-swatch:hover {
+  transform: scale(1.08);
+}
+
+.nl-frame-swatch.is-active {
+  border-color: #f8fafc;
+  box-shadow: 0 0 0 1px #0f131d;
+}
+
+.nl-frame-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #242c3c;
+}
+
+.nl-exposed-param-list,
+.nl-exposed-param-editors {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nl-exposed-pin-item {
+  padding: 5px 7px;
+  border: 1px solid #252e41;
+  border-radius: 4px;
+  background: #131824;
+}
+
+.nl-exposed-pin-label {
+  font-size: 10.5px;
+  color: #dce4f4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nl-color-input-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+}
+
+.nl-color-swatch-input {
+  width: 28px;
+  height: 26px;
+  padding: 2px;
+  border: 1px solid #2b3447;
+  border-radius: 4px;
+  background: #111621;
+  cursor: pointer;
+}
+
+.nl-frame-ports-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: #111622;
+  color: #8c9ab2;
+  font-size: 10px;
+}
+
+.nl-trace-group {
+  border: 1px solid rgba(45, 212, 191, 0.32);
+  border-radius: 5px;
+  background: #121824;
+  overflow: hidden;
+}
+
+.nl-trace-group-toggle {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 7px;
+  border: 0;
+  background: rgba(45, 212, 191, 0.08);
+  color: #e6ecf8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nl-trace-group-toggle:hover {
+  background: rgba(45, 212, 191, 0.14);
+}
+
+.nl-trace-group-title {
+  color: #99f6e4;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nl-trace-chevron {
+  color: #99f6e4;
+  font-size: 10px;
+  text-align: right;
+}
+
+.nl-trace-nested-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px;
+  border-top: 1px solid #232c3d;
+  background: #0f141f;
+}
+
+.nl-trace-row.is-nested {
+  border-color: #1e2636;
+  background: #141a28;
+}
+
 /* ── Stage 8: Motion Timeline Studio (Dockable Bottom Drawer) ─────────────── */
 .app-shell.has-motion-timeline {
   grid-template-rows: 56px minmax(0, 1fr) 236px 27px;

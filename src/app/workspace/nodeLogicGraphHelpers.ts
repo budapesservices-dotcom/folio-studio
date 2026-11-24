@@ -12,6 +12,8 @@ import type {
   FolioPage,
   FolioProject,
   LogicConnection,
+  LogicFrame,
+  LogicFrameBounds,
   LogicGraph,
   LogicNetworkSettings,
   LogicNode,
@@ -22,15 +24,19 @@ import type {
   LogicVariableValue,
 } from '../../core/document/types';
 import {
+  BAKED_FRAME_NODE_WIDTH,
   LOGIC_NODE_CATALOG,
   PRIMARY_LOGIC_NODE_TYPES,
   areLogicPortTypesCompatible,
+  computeFrameBoundsFromNodes,
   createLogicConnection,
+  createLogicFrameId,
   createLogicGraph,
   createLogicNode,
   createLogicVariable,
   getLogicNodeDefinition,
   getLogicNodePort,
+  isNodeCenterInsideFrame,
   type BuiltInLogicNodeType,
   type LogicNodeCategory,
   type LogicPortDataType,
@@ -372,9 +378,68 @@ export interface SnapLogicPortMatch {
   readonly distance: number;
 }
 
+export function getBakedFrameNodeHeight(frame: LogicFrame): number {
+  const inputsCount = frame.bakedData?.exposedInputs.length ?? 0;
+  const outputsCount = frame.bakedData?.exposedOutputs.length ?? 0;
+  const rowCount = Math.max(1, inputsCount, outputsCount);
+  return LOGIC_NODE_HEADER_HEIGHT + LOGIC_NODE_SUBTITLE_HEIGHT + LOGIC_NODE_BODY_PAD_Y * 2 + rowCount * LOGIC_PORT_ROW_HEIGHT;
+}
+
+export function getBakedFramePortWorldPosition(
+  frame: LogicFrame,
+  direction: 'in' | 'out',
+  rowIndex: number,
+): LogicPoint {
+  const x = direction === 'in' ? frame.bounds.x : frame.bounds.x + BAKED_FRAME_NODE_WIDTH;
+  const y =
+    frame.bounds.y
+    + LOGIC_NODE_HEADER_HEIGHT
+    + LOGIC_NODE_SUBTITLE_HEIGHT
+    + LOGIC_NODE_BODY_PAD_Y
+    + rowIndex * LOGIC_PORT_ROW_HEIGHT
+    + LOGIC_PORT_ROW_HEIGHT / 2;
+  return { x, y };
+}
+
+/**
+ * Resolves the visual world position of `(nodeId, portId)`. If `nodeId` is
+ * collapsed inside a Baked Smart Logic Frame, routes the endpoint seamlessly
+ * to the corresponding exposed port socket on the Baked Frame Node card.
+ */
+export function resolveLogicPortWorldPosition(
+  displayNodesById: ReadonlyMap<string, LogicNode>,
+  displayFrames: readonly LogicFrame[],
+  nodeId: string,
+  portId: string,
+  direction: 'in' | 'out',
+): LogicPoint | null {
+  for (const frame of displayFrames) {
+    if (!frame.isBaked || !frame.bakedData) continue;
+    if (!frame.childNodeIds.includes(nodeId)) continue;
+    if (direction === 'in') {
+      const idx = frame.bakedData.exposedInputs.findIndex(
+        (inp) => inp.targetNodeId === nodeId && inp.targetPort === portId,
+      );
+      if (idx >= 0) {
+        return getBakedFramePortWorldPosition(frame, 'in', idx);
+      }
+      return getBakedFramePortWorldPosition(frame, 'in', 0);
+    }
+    const idx = frame.bakedData.exposedOutputs.findIndex(
+      (outp) => outp.sourceNodeId === nodeId && outp.sourcePort === portId,
+    );
+    if (idx >= 0) {
+      return getBakedFramePortWorldPosition(frame, 'out', idx);
+    }
+    return getBakedFramePortWorldPosition(frame, 'out', 0);
+  }
+  const node = displayNodesById.get(nodeId);
+  return node ? getLogicPortWorldPosition(node, portId) : null;
+}
+
 /**
  * Finds the nearest compatible socket within `snapRadius` world units for
- * magnetic drag-and-patch wiring.
+ * magnetic drag-and-patch wiring across both visible nodes and Baked Frame Nodes.
  */
 export function findSnapLogicPort(
   graph: LogicGraph,
@@ -384,12 +449,20 @@ export function findSnapLogicPort(
   pointerWorld: LogicPoint,
   snapRadius = 26,
   ignoreConnectionId?: string,
+  displayFrames: readonly LogicFrame[] = graph.frames ?? [],
 ): SnapLogicPortMatch | null {
   let best: SnapLogicPortMatch | null = null;
   const maxDistSq = snapRadius * snapRadius;
 
+  const hiddenInBaked = new Set<string>();
+  for (const frame of displayFrames) {
+    if (frame.isBaked) {
+      for (const cid of frame.childNodeIds) hiddenInBaked.add(cid);
+    }
+  }
+
   for (const node of nodes) {
-    if (node.id === anchorNodeId) continue;
+    if (node.id === anchorNodeId || hiddenInBaked.has(node.id)) continue;
     const { inputs, outputs } = getLogicNodePorts(node.type);
     const allPorts = [...inputs, ...outputs];
     for (const port of allPorts) {
@@ -419,6 +492,65 @@ export function findSnapLogicPort(
         };
       }
     }
+  }
+
+  // Also check exposed ports on Baked Frame Nodes
+  for (const frame of displayFrames) {
+    if (!frame.isBaked || !frame.bakedData) continue;
+    frame.bakedData.exposedInputs.forEach((inp, idx) => {
+      if (inp.targetNodeId === anchorNodeId) return;
+      const pos = getBakedFramePortWorldPosition(frame, 'in', idx);
+      const dx = pos.x - pointerWorld.x;
+      const dy = pos.y - pointerWorld.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq > maxDistSq) return;
+      const check = canConnectLogicPorts(
+        graph,
+        anchorNodeId,
+        anchorPortId,
+        inp.targetNodeId,
+        inp.targetPort,
+        ignoreConnectionId,
+      );
+      if (!check.ok) return;
+      const dist = Math.sqrt(distSq);
+      if (!best || dist < best.distance) {
+        best = {
+          nodeId: inp.targetNodeId,
+          portId: inp.targetPort,
+          direction: 'in',
+          position: pos,
+          distance: dist,
+        };
+      }
+    });
+    frame.bakedData.exposedOutputs.forEach((outp, idx) => {
+      if (outp.sourceNodeId === anchorNodeId) return;
+      const pos = getBakedFramePortWorldPosition(frame, 'out', idx);
+      const dx = pos.x - pointerWorld.x;
+      const dy = pos.y - pointerWorld.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq > maxDistSq) return;
+      const check = canConnectLogicPorts(
+        graph,
+        anchorNodeId,
+        anchorPortId,
+        outp.sourceNodeId,
+        outp.sourcePort,
+        ignoreConnectionId,
+      );
+      if (!check.ok) return;
+      const dist = Math.sqrt(distSq);
+      if (!best || dist < best.distance) {
+        best = {
+          nodeId: outp.sourceNodeId,
+          portId: outp.sourcePort,
+          direction: 'out',
+          position: pos,
+          distance: dist,
+        };
+      }
+    });
   }
   return best;
 }
@@ -512,10 +644,248 @@ export function removeNodeFromGraph(graph: LogicGraph, nodeId: string): LogicGra
   const nextConnections = graph.connections.filter(
     (conn) => conn.sourceNodeId !== nodeId && conn.targetNodeId !== nodeId,
   );
+  const nextFrames = graph.frames
+    ? graph.frames.map((frame) => {
+        if (!frame.childNodeIds.includes(nodeId)) return frame;
+        const nextChildIds = frame.childNodeIds.filter((cid) => cid !== nodeId);
+        const nextExposed = frame.exposedParams?.filter((p) => p.nodeId !== nodeId);
+        return {
+          ...frame,
+          childNodeIds: nextChildIds,
+          ...(nextExposed ? { exposedParams: nextExposed } : {}),
+        };
+      })
+    : undefined;
   return touchLogicGraph({
     ...graph,
     nodes: nextNodes,
     connections: nextConnections,
+    ...(nextFrames ? { frames: nextFrames } : {}),
+  });
+}
+
+export function createFrameInGraph(
+  graph: LogicGraph,
+  options: {
+    title?: string;
+    color?: string;
+    childNodeIds?: readonly string[];
+    fallbackOrigin?: LogicPoint;
+  } = {},
+): { graph: LogicGraph; frame: LogicFrame } {
+  const existingFrames = graph.frames ?? [];
+  const validNodeIds = new Set(graph.nodes.map((n) => n.id));
+  const cleanChildIds = [...new Set((options.childNodeIds ?? []).filter((id) => validNodeIds.has(id)))];
+  const childSet = new Set(cleanChildIds);
+
+  // Ensure a node belongs to at most one frame at a time
+  const cleanedFrames = existingFrames.map((f) => {
+    if (!f.childNodeIds.some((cid) => childSet.has(cid))) return f;
+    return {
+      ...f,
+      childNodeIds: f.childNodeIds.filter((cid) => !childSet.has(cid)),
+    };
+  });
+
+  const bounds = computeFrameBoundsFromNodes(
+    graph.nodes,
+    cleanChildIds,
+    options.fallbackOrigin ?? { x: 100 + existingFrames.length * 36, y: 90 + existingFrames.length * 28 },
+  );
+  const title = options.title?.trim() || `Logic Frame ${existingFrames.length + 1}`;
+  const frame: LogicFrame = {
+    id: createLogicFrameId('lframe'),
+    title,
+    color: options.color ?? 'teal',
+    bounds,
+    childNodeIds: cleanChildIds,
+    isBaked: false,
+    exposedParams: [],
+  };
+  return {
+    frame,
+    graph: touchLogicGraph({
+      ...graph,
+      frames: [...cleanedFrames, frame],
+    }),
+  };
+}
+
+export function updateFrameInGraph(
+  graph: LogicGraph,
+  frameId: string,
+  patch: Partial<Pick<LogicFrame, 'title' | 'color' | 'bounds' | 'childNodeIds' | 'exposedParams'>>,
+): LogicGraph {
+  const frames = graph.frames ?? [];
+  let changed = false;
+  const nextFrames = frames.map((frame) => {
+    if (frame.id !== frameId) return frame;
+    changed = true;
+    const nextExposed = patch.exposedParams ?? frame.exposedParams;
+    return {
+      ...frame,
+      ...(patch.title !== undefined ? { title: patch.title.trim() || frame.title } : {}),
+      ...(patch.color !== undefined ? { color: patch.color } : {}),
+      ...(patch.bounds !== undefined ? { bounds: { ...patch.bounds } } : {}),
+      ...(patch.childNodeIds !== undefined ? { childNodeIds: [...patch.childNodeIds] } : {}),
+      ...(nextExposed !== undefined ? { exposedParams: nextExposed.map((p) => ({ ...p })) } : {}),
+      ...(frame.bakedData && patch.exposedParams !== undefined
+        ? {
+            bakedData: {
+              ...frame.bakedData,
+              exposedParams: patch.exposedParams.map((p) => ({ ...p })),
+            },
+          }
+        : {}),
+    };
+  });
+  return changed ? touchLogicGraph({ ...graph, frames: nextFrames }) : graph;
+}
+
+export function moveFrameWithChildrenInGraph(
+  graph: LogicGraph,
+  frameId: string,
+  dx: number,
+  dy: number,
+): LogicGraph {
+  const roundedDx = Math.round(dx);
+  const roundedDy = Math.round(dy);
+  if (roundedDx === 0 && roundedDy === 0) return graph;
+  const frames = graph.frames ?? [];
+  const target = frames.find((f) => f.id === frameId);
+  if (!target) return graph;
+
+  const childSet = new Set(target.childNodeIds);
+  const nextNodes = graph.nodes.map((node) =>
+    childSet.has(node.id)
+      ? { ...node, x: Math.round(node.x + roundedDx), y: Math.round(node.y + roundedDy) }
+      : node,
+  );
+  const nextFrames = frames.map((frame) =>
+    frame.id === frameId
+      ? {
+          ...frame,
+          bounds: {
+            ...frame.bounds,
+            x: Math.round(frame.bounds.x + roundedDx),
+            y: Math.round(frame.bounds.y + roundedDy),
+          },
+        }
+      : frame,
+  );
+  return touchLogicGraph({
+    ...graph,
+    nodes: nextNodes,
+    frames: nextFrames,
+  });
+}
+
+/**
+ * Updates unbaked Smart Logic Frame membership after a user drops a dragged node
+ * inside or outside a frame area, expanding the destination frame cleanly if needed.
+ */
+export function syncNodeFrameMembershipAfterDrag(graph: LogicGraph, nodeId: string): LogicGraph {
+  const frames = graph.frames ?? [];
+  if (frames.length === 0) return graph;
+  const node = graph.nodes.find((n) => n.id === nodeId);
+  if (!node) return graph;
+
+  // Find the topmost unbaked frame whose bounds contain the node center
+  let targetFrameId: string | null = null;
+  for (let i = frames.length - 1; i >= 0; i -= 1) {
+    const candidate = frames[i];
+    if (candidate.isBaked) continue;
+    if (isNodeCenterInsideFrame(node, candidate.bounds)) {
+      targetFrameId = candidate.id;
+      break;
+    }
+  }
+
+  let changed = false;
+  const nextFrames = frames.map((frame) => {
+    if (frame.isBaked) return frame;
+    const isMember = frame.childNodeIds.includes(nodeId);
+    if (frame.id === targetFrameId) {
+      if (!isMember) {
+        changed = true;
+        const nextChildIds = [...frame.childNodeIds, nodeId];
+        const expandedBounds = expandBoundsToContain(
+          frame.bounds,
+          computeFrameBoundsFromNodes(graph.nodes, nextChildIds, { x: frame.bounds.x, y: frame.bounds.y }),
+        );
+        return { ...frame, childNodeIds: nextChildIds, bounds: expandedBounds };
+      }
+      // Already a member; expand frame bounds slightly if node moved near edge
+      const padded = expandBoundsToContain(
+        frame.bounds,
+        computeFrameBoundsFromNodes(graph.nodes, frame.childNodeIds, { x: frame.bounds.x, y: frame.bounds.y }),
+      );
+      if (
+        padded.x !== frame.bounds.x ||
+        padded.y !== frame.bounds.y ||
+        padded.width !== frame.bounds.width ||
+        padded.height !== frame.bounds.height
+      ) {
+        changed = true;
+        return { ...frame, bounds: padded };
+      }
+      return frame;
+    }
+    if (isMember) {
+      changed = true;
+      return {
+        ...frame,
+        childNodeIds: frame.childNodeIds.filter((cid) => cid !== nodeId),
+        ...(frame.exposedParams
+          ? { exposedParams: frame.exposedParams.filter((p) => p.nodeId !== nodeId) }
+          : {}),
+      };
+    }
+    return frame;
+  });
+
+  return changed ? touchLogicGraph({ ...graph, frames: nextFrames }) : graph;
+}
+
+function expandBoundsToContain(base: LogicFrameBounds, required: LogicFrameBounds): LogicFrameBounds {
+  const minX = Math.min(base.x, required.x);
+  const minY = Math.min(base.y, required.y);
+  const maxX = Math.max(base.x + base.width, required.x + required.width);
+  const maxY = Math.max(base.y + base.height, required.y + required.height);
+  return {
+    x: Math.round(minX),
+    y: Math.round(minY),
+    width: Math.round(maxX - minX),
+    height: Math.round(maxY - minY),
+  };
+}
+
+export function removeFrameFromGraph(
+  graph: LogicGraph,
+  frameId: string,
+  deleteChildren = false,
+): LogicGraph {
+  const frames = graph.frames ?? [];
+  const target = frames.find((f) => f.id === frameId);
+  if (!target) return graph;
+
+  const nextFrames = frames.filter((f) => f.id !== frameId);
+  if (!deleteChildren) {
+    return touchLogicGraph({
+      ...graph,
+      frames: nextFrames,
+    });
+  }
+  const removeSet = new Set(target.childNodeIds);
+  const nextNodes = graph.nodes.filter((n) => !removeSet.has(n.id));
+  const nextConnections = graph.connections.filter(
+    (c) => !removeSet.has(c.sourceNodeId) && !removeSet.has(c.targetNodeId),
+  );
+  return touchLogicGraph({
+    ...graph,
+    nodes: nextNodes,
+    connections: nextConnections,
+    frames: nextFrames,
   });
 }
 
@@ -1547,8 +1917,32 @@ export function autoArrangeLogicGraph(graph: LogicGraph): LogicGraph {
     return node;
   });
 
+  const nextFrames = graph.frames
+    ? graph.frames.map((frame) => {
+        if (frame.childNodeIds.length === 0) return frame;
+        const nextBounds = computeFrameBoundsFromNodes(nextNodes, frame.childNodeIds, {
+          x: frame.bounds.x,
+          y: frame.bounds.y,
+        });
+        if (
+          nextBounds.x !== frame.bounds.x ||
+          nextBounds.y !== frame.bounds.y ||
+          nextBounds.width !== frame.bounds.width ||
+          nextBounds.height !== frame.bounds.height
+        ) {
+          changed = true;
+          return { ...frame, bounds: nextBounds };
+        }
+        return frame;
+      })
+    : undefined;
+
   if (!changed) return graph;
-  return touchLogicGraph({ ...graph, nodes: nextNodes });
+  return touchLogicGraph({
+    ...graph,
+    nodes: nextNodes,
+    ...(nextFrames ? { frames: nextFrames } : {}),
+  });
 }
 
 export const LOGIC_CATALOG_LIST = Object.freeze(

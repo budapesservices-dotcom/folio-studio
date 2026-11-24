@@ -42,6 +42,7 @@ export interface LogicDiagnostic {
   readonly graphId: string;
   readonly nodeId?: string;
   readonly connectionId?: string;
+  readonly frameId?: string;
 }
 
 export interface LogicValidationReport {
@@ -118,7 +119,7 @@ export function validateLogicGraphSemantics(
     severity: LogicDiagnosticSeverity,
     code: string,
     message: string,
-    extra?: { nodeId?: string; connectionId?: string },
+    extra?: { nodeId?: string; connectionId?: string; frameId?: string },
   ) => {
     diagnostics.push({
       severity,
@@ -127,6 +128,7 @@ export function validateLogicGraphSemantics(
       graphId: graph.id,
       ...(extra?.nodeId ? { nodeId: extra.nodeId } : {}),
       ...(extra?.connectionId ? { connectionId: extra.connectionId } : {}),
+      ...(extra?.frameId ? { frameId: extra.frameId } : {}),
     });
   };
 
@@ -684,13 +686,10 @@ export function validateLogicGraphSemantics(
       }
 
       case 'action.set-layer': {
-        const { targetNode, failed } = resolveActionTarget('Set Layer');
-        if (failed || !targetNode) {
-          break;
-        }
+        const { targetNode } = resolveActionTarget('Set Layer');
         const property = String(node.data.property ?? 'text');
         const hasDynamicValue = incomingDataPorts.has(`${node.id}:value`) || hasScopedRef.has('pipelineRef');
-        if (property === 'fill' && (targetNode.type === 'group' || targetNode.type === 'component-instance')) {
+        if (targetNode && property === 'fill' && (targetNode.type === 'group' || targetNode.type === 'component-instance')) {
           push(
             'warning',
             'INCOMPATIBLE_TARGET_NODE',
@@ -931,6 +930,35 @@ export function validateLogicGraphSemantics(
       case 'network.json':
       case 'network.socket':
         break;
+    }
+  }
+
+  // Smart Logic Frame portability & integrity checks
+  const frameTargetActionTypes = new Set([
+    'action.set-layer',
+    'action.set-visible',
+    'action.set-text',
+    'action.set-fill',
+    'action.set-variant',
+    'action.media-animation',
+    'action.play-animation',
+  ]);
+  for (const frame of graph.frames ?? []) {
+    for (const childId of frame.childNodeIds) {
+      const childNode = logicNodesById.get(childId);
+      if (!childNode || !frameTargetActionTypes.has(childNode.type)) continue;
+      const targetMode = getNodeTargetMode(childNode);
+      const staticTarget =
+        typeof childNode.data.targetNodeId === 'string' ? childNode.data.targetNodeId.trim() : '';
+      if (targetMode !== 'pipeline' && staticTarget.length > 0) {
+        const childDef = getLogicNodeDefinition(childNode.type);
+        push(
+          'warning',
+          'HARDCODED_LAYER_IN_FRAME',
+          `"${childDef?.label ?? childNode.type}" inside frame "${frame.title}" targets a static layer instead of "Inherit from Pipeline". Switch to Pipeline mode for portable Presets.`,
+          { nodeId: childNode.id, frameId: frame.id },
+        );
+      }
     }
   }
 

@@ -541,8 +541,13 @@ export function resolvePipelineTargetLayerId(
 export function getPrivateToggleMemoryKey(
   nodeId: string,
   origin: PipelineOriginRef | null,
+  frameId?: string | null,
 ): string {
-  return `${nodeId}:${origin?.layerId ?? 'default'}`;
+  const originSegment = origin?.layerId ?? 'default';
+  if (frameId && frameId.trim().length > 0) {
+    return `${frameId.trim()}:${nodeId}:${originSegment}`;
+  }
+  return `${nodeId}:${originSegment}`;
 }
 
 export function createPipelineContext(
