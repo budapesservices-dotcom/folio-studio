@@ -28,10 +28,15 @@ import type {
 import { toKebabCase } from '../codegen/sanitize';
 import { buildLivePreviewAnimationPayload } from '../animation/codegen';
 import { isBuiltInLogicNodeType, type BuiltInLogicNodeType } from './catalog';
+import {
+  COMPONENT_INSTANCE_NODE_SEP,
+  collectPageComponentInstances,
+  getInstanceIdFromExpandedGraphId,
+} from './componentScope';
 import { buildPipelineOriginRef, getNodeTargetMode, getUpstreamPipelineOrigins } from './pipeline';
 import { MAX_LOGIC_EXECUTION_STEPS } from './runtime';
 
-export type ParitySupportLevel = 'full' | 'simulated' | 'not-applicable';
+export type ParitySupportLevel = 'full' | 'simulated' | 'unsupported' | 'not-applicable';
 
 export interface NodeRuntimeParityEntry {
   readonly type: BuiltInLogicNodeType;
@@ -40,6 +45,70 @@ export interface NodeRuntimeParityEntry {
   readonly reactCodegen: ParitySupportLevel;
   readonly notes: string;
 }
+
+export interface RuntimeFeatureParityEntry {
+  readonly feature:
+    | 'component.scoped-logic'
+    | 'pipeline.scoped-context'
+    | 'frame.baked'
+    | 'legacy.v1-migration'
+    | 'variable.persist'
+    | 'variable.computed';
+  readonly headless: ParitySupportLevel;
+  readonly livePreview: ParitySupportLevel;
+  readonly reactCodegen: ParitySupportLevel;
+  readonly notes: string;
+}
+
+/**
+ * Explicit capability parity matrix for cross-cutting Node Logic runtime
+ * features (Component-Scoped Logic, Pipeline Context, Baked Frames, Legacy v1
+ * compatibility, and Variable metadata capabilities).
+ */
+export const RUNTIME_FEATURE_PARITY_MATRIX: readonly RuntimeFeatureParityEntry[] = [
+  {
+    feature: 'component.scoped-logic',
+    headless: 'full',
+    livePreview: 'full',
+    reactCodegen: 'full',
+    notes: 'Per-instance expansion with nodeLogicEnabled gate, Master->Variants->Slots->Local Overrides->Tokens precedence, and isolated memory/state',
+  },
+  {
+    feature: 'pipeline.scoped-context',
+    headless: 'full',
+    livePreview: 'full',
+    reactCodegen: 'full',
+    notes: 'Scoped PipelineContext (origin, instanceId, children, animationIds, steps) across page, group, and component instances',
+  },
+  {
+    feature: 'frame.baked',
+    headless: 'full',
+    livePreview: 'full',
+    reactCodegen: 'full',
+    notes: 'Pre-compiled compiledPlan execution with instance+frame+node+origin private memory isolation',
+  },
+  {
+    feature: 'legacy.v1-migration',
+    headless: 'full',
+    livePreview: 'full',
+    reactCodegen: 'full',
+    notes: '13 legacy v1 node types executed natively with full .flop JSON v2 backward compatibility',
+  },
+  {
+    feature: 'variable.persist',
+    headless: 'unsupported',
+    livePreview: 'unsupported',
+    reactCodegen: 'unsupported',
+    notes: 'Stored as .flop v2 metadata only; browser storage is blocked in sandboxed Live Preview (<iframe sandbox="allow-scripts">) and not yet executed at runtime',
+  },
+  {
+    feature: 'variable.computed',
+    headless: 'unsupported',
+    livePreview: 'unsupported',
+    reactCodegen: 'unsupported',
+    notes: 'Stored as .flop v2 metadata only; computed expression evaluation is not active at runtime under FOLIO zero-eval security policy',
+  },
+] as const;
 
 /**
  * Canonical runtime parity matrix for all 31 primary Node Logic types across
@@ -101,6 +170,7 @@ export interface CompiledRuntimeNodeMeta {
   readonly fill?: string;
   readonly opacity?: number;
   readonly componentId?: string;
+  readonly instanceId?: string;
   readonly animationIds?: readonly string[];
   readonly children?: readonly CompiledOriginChildMeta[];
 }
@@ -125,6 +195,7 @@ export interface CompiledBakedFramePayload {
 
 export interface CompiledRuntimeGraphPayload {
   readonly id: string;
+  readonly instanceId?: string;
   readonly nodes: ReadonlyArray<{
     readonly id: string;
     readonly type: string;
@@ -191,10 +262,13 @@ export function compilePageLogicRuntimeConfig(
   const variableNameToId: Record<string, string> = {};
 
   for (const graph of graphs) {
+    const isInstanceGraph = Boolean(getInstanceIdFromExpandedGraphId(graph.id));
     for (const variable of graph.variables ?? []) {
       variableTypes[variable.id] = variable.valueType;
-      variableNameToId[variable.name] = variable.id;
-      variableNameToId[variable.name.toLowerCase()] = variable.id;
+      if (!isInstanceGraph || !Object.prototype.hasOwnProperty.call(variableNameToId, variable.name)) {
+        variableNameToId[variable.name] = variable.id;
+        variableNameToId[variable.name.toLowerCase()] = variable.id;
+      }
       if (!Object.prototype.hasOwnProperty.call(variables, variable.id)) {
         variables[variable.id] = variable.initialValue;
         variableInitialValues[variable.id] = variable.initialValue;
@@ -204,6 +278,7 @@ export function compilePageLogicRuntimeConfig(
 
   const astNodesById = new Map(page.document.nodes.map((node) => [node.id, node]));
   const componentsById = new Map(project.components.map((comp) => [comp.id, comp]));
+  const { expandedInstances } = collectPageComponentInstances(project, page);
 
   const nodeMeta: Record<string, CompiledRuntimeNodeMeta> = {};
   for (const node of page.document.nodes) {
@@ -212,6 +287,7 @@ export function compilePageLogicRuntimeConfig(
       astNodesById,
       componentsById,
       project.animations,
+      tokens,
     );
     const fill = extractNodeFill(node);
     nodeMeta[node.id] = {
@@ -223,6 +299,7 @@ export function compilePageLogicRuntimeConfig(
       ...(fill !== undefined ? { fill } : {}),
       opacity: node.opacity,
       ...(node.type === 'component-instance' ? { componentId: node.componentId } : {}),
+      ...(originRef?.instanceId ? { instanceId: originRef.instanceId } : {}),
       ...(originRef && originRef.animationIds.length > 0 ? { animationIds: originRef.animationIds } : {}),
       ...(originRef?.children && originRef.children.length > 0
         ? {
@@ -234,24 +311,47 @@ export function compilePageLogicRuntimeConfig(
           }
         : {}),
     };
+  }
 
-    if (node.type === 'component-instance') {
-      const master = componentsById.get(node.componentId);
-      if (master) {
-        for (const child of master.document.nodes) {
-          const scopedId = `${node.id}__${child.id}`;
-          const childFill = extractNodeFill(child);
-          nodeMeta[scopedId] = {
-            name: child.name,
-            type: child.type,
-            visible: child.visible,
-            display: child.layout?.mode === 'flex' ? 'flex' : child.layout?.mode === 'grid' ? 'grid' : 'block',
-            ...(child.type === 'text' ? { text: child.text } : {}),
-            ...(childFill !== undefined ? { fill: childFill } : {}),
-            opacity: child.opacity,
-          };
-        }
-      }
+  // Populate resolved metadata for every expanded component instance (including nested instances)
+  // respecting canonical precedence: Master -> Variants -> Slots -> Local Overrides -> Tokens.
+  for (const instance of expandedInstances) {
+    for (const resolvedChild of instance.resolvedNodes) {
+      const scopedId = `${instance.instanceId}${COMPONENT_INSTANCE_NODE_SEP}${resolvedChild.id}`;
+      const childOrigin = buildPipelineOriginRef(
+        scopedId,
+        astNodesById,
+        componentsById,
+        project.animations,
+        tokens,
+      );
+      const childFill = extractNodeFill(resolvedChild);
+      nodeMeta[scopedId] = {
+        name: resolvedChild.name,
+        type: resolvedChild.type,
+        visible: resolvedChild.visible,
+        display:
+          resolvedChild.layout?.mode === 'flex'
+            ? 'flex'
+            : resolvedChild.layout?.mode === 'grid'
+              ? 'grid'
+              : 'block',
+        ...(resolvedChild.type === 'text' ? { text: resolvedChild.text } : {}),
+        ...(childFill !== undefined ? { fill: childFill } : {}),
+        opacity: resolvedChild.opacity,
+        ...(resolvedChild.type === 'component-instance' ? { componentId: resolvedChild.componentId } : {}),
+        instanceId: childOrigin?.instanceId ?? instance.instanceId,
+        ...(childOrigin && childOrigin.animationIds.length > 0 ? { animationIds: childOrigin.animationIds } : {}),
+        ...(childOrigin?.children && childOrigin.children.length > 0
+          ? {
+              children: childOrigin.children.map((sub) => ({
+                id: sub.id,
+                name: sub.name,
+                type: sub.type,
+              })),
+            }
+          : {}),
+      };
     }
   }
 
@@ -302,30 +402,34 @@ export function compilePageLogicRuntimeConfig(
     pageRouteById[p.id] = p.route;
   }
 
-  const compiledGraphs: CompiledRuntimeGraphPayload[] = graphs.map((graph) => ({
-    id: graph.id,
-    nodes: graph.nodes
-      .filter((node) => isBuiltInLogicNodeType(node.type))
-      .map((node) => ({
-        id: node.id,
-        type: node.type,
-        data: sanitizeNodeDataForRuntime(node),
+  const compiledGraphs: CompiledRuntimeGraphPayload[] = graphs.map((graph) => {
+    const instanceId = getInstanceIdFromExpandedGraphId(graph.id);
+    return {
+      id: graph.id,
+      ...(instanceId ? { instanceId } : {}),
+      nodes: graph.nodes
+        .filter((node) => isBuiltInLogicNodeType(node.type))
+        .map((node) => ({
+          id: node.id,
+          type: node.type,
+          data: sanitizeNodeDataForRuntime(node),
+        })),
+      connections: graph.connections.map((conn) => ({
+        sourceNodeId: conn.sourceNodeId,
+        sourcePortId: conn.sourcePortId,
+        targetNodeId: conn.targetNodeId,
+        targetPortId: conn.targetPortId,
       })),
-    connections: graph.connections.map((conn) => ({
-      sourceNodeId: conn.sourceNodeId,
-      sourcePortId: conn.sourcePortId,
-      targetNodeId: conn.targetNodeId,
-      targetPortId: conn.targetPortId,
-    })),
-    bakedFrames: (graph.frames ?? [])
-      .filter((frame) => frame.isBaked && frame.bakedData?.compiledPlan)
-      .map((frame) => ({
-        id: frame.id,
-        title: frame.title,
-        childNodeIds: [...frame.childNodeIds],
-        compiledPlan: frame.bakedData!.compiledPlan,
-      })),
-  }));
+      bakedFrames: (graph.frames ?? [])
+        .filter((frame) => frame.isBaked && frame.bakedData?.compiledPlan)
+        .map((frame) => ({
+          id: frame.id,
+          title: frame.title,
+          childNodeIds: [...frame.childNodeIds],
+          compiledPlan: frame.bakedData!.compiledPlan,
+        })),
+    };
+  });
 
   return {
     activePageId: page.id,
@@ -379,6 +483,7 @@ function resolvePossibleActionTargetIds(
   project: FolioProject,
 ): string[] {
   if (getNodeTargetMode(node) === 'pipeline') {
+    const tokens = getProjectDesignTokens(project);
     const origins = getUpstreamPipelineOrigins(
       graph.nodes,
       graph.connections,
@@ -386,6 +491,7 @@ function resolvePossibleActionTargetIds(
       astNodesById,
       componentsById,
       project.animations,
+      tokens,
     );
     const childId = typeof node.data.pipelineChildId === 'string' ? node.data.pipelineChildId.trim() : '';
     const resolved = new Set<string>();
@@ -405,8 +511,9 @@ function resolvePossibleActionTargetIds(
 
 /**
  * Discovers all interactive DOM event targets and dynamic visual override
- * targets for React TSX codegen, covering both static override targets and
- * Scoped Pipeline inherited targets (Origin + Group/Component children).
+ * targets for React TSX codegen, covering static override targets, Scoped
+ * Pipeline inherited targets (Origin + Group/Component children), and
+ * per-instance expanded component-scoped targets.
  */
 export function discoverDynamicReactTargets(
   project: FolioProject,
@@ -435,6 +542,7 @@ export function discoverDynamicReactTargets(
 
   const astNodesById = new Map(page.document.nodes.map((node) => [node.id, node]));
   const componentsById = new Map(project.components.map((comp) => [comp.id, comp]));
+  const { expandedInstances } = collectPageComponentInstances(project, page);
 
   for (const graph of graphs) {
     for (const node of graph.nodes) {
@@ -453,12 +561,17 @@ export function discoverDynamicReactTargets(
         clickNodes.add(targetId);
         hoverEnterNodes.add(targetId);
       } else if (node.type === 'source.component') {
-        const compId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
-        if (compId) {
-          for (const pageNode of page.document.nodes) {
-            if (pageNode.type === 'component-instance' && pageNode.componentId === compId) {
-              clickNodes.add(pageNode.id);
-              hoverEnterNodes.add(pageNode.id);
+        if (targetId) {
+          clickNodes.add(targetId);
+          hoverEnterNodes.add(targetId);
+        } else {
+          const compId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
+          if (compId) {
+            for (const inst of expandedInstances) {
+              if (inst.componentId === compId) {
+                clickNodes.add(inst.instanceId);
+                hoverEnterNodes.add(inst.instanceId);
+              }
             }
           }
         }

@@ -600,7 +600,7 @@ export function NodeLogicInspector({
                       </select>
                     </label>
                     <label class="nl-field">
-                      <span>Persist</span>
+                      <span>Persist (metadata)</span>
                       <select
                         class="select-field"
                         aria-label="New variable persistence"
@@ -608,28 +608,38 @@ export function NodeLogicInspector({
                         onChange={(event) => setNewVarPersist(event.currentTarget.value as LogicVariablePersist)}
                       >
                         <option value="none">None</option>
-                        <option value="local">LocalStorage</option>
-                        <option value="session">SessionStorage</option>
+                        <option value="local">LocalStorage (metadata only)</option>
+                        <option value="session">SessionStorage (metadata only)</option>
                       </select>
                     </label>
                   </div>
+                  {newVarPersist !== 'none' && (
+                    <p class="nl-inspector-hint">
+                      Metadata only · runtime persistence is not yet executed (storage is disabled in sandboxed Live Preview).
+                    </p>
+                  )}
                   <label class="nl-checkbox-row">
                     <input
                       type="checkbox"
                       checked={newVarComputed}
                       onChange={(event) => setNewVarComputed(event.currentTarget.checked)}
                     />
-                    <span>Computed variable</span>
+                    <span>Computed variable (metadata only)</span>
                   </label>
                   {newVarComputed && (
-                    <input
-                      class="nl-input"
-                      type="text"
-                      aria-label="Computed expression"
-                      placeholder="e.g. {{price}} * {{qty}}"
-                      value={newVarComputedExpr}
-                      onInput={(event) => setNewVarComputedExpr(event.currentTarget.value)}
-                    />
+                    <>
+                      <input
+                        class="nl-input"
+                        type="text"
+                        aria-label="Computed expression"
+                        placeholder="e.g. {{price}} * {{qty}}"
+                        value={newVarComputedExpr}
+                        onInput={(event) => setNewVarComputedExpr(event.currentTarget.value)}
+                      />
+                      <p class="nl-inspector-hint">
+                        Metadata only · computed expressions are not evaluated at runtime (zero-eval policy).
+                      </p>
+                    </>
                   )}
                   <button type="submit" class="nl-primary-btn">
                     Add Variable
@@ -679,10 +689,15 @@ export function NodeLogicInspector({
                             }
                           >
                             <option value="none">No persist</option>
-                            <option value="local">LocalStorage</option>
-                            <option value="session">Session</option>
+                            <option value="local">LocalStorage (metadata only)</option>
+                            <option value="session">Session (metadata only)</option>
                           </select>
                         </div>
+                        {variable.persist && variable.persist !== 'none' && (
+                          <p class="nl-inspector-hint">
+                            Metadata only · runtime persistence is not yet active.
+                          </p>
+                        )}
                         <div class="nl-var-row-edit">
                           <span class="nl-var-initial-label">Initial</span>
                           {variable.valueType === 'boolean' ? (
@@ -721,19 +736,24 @@ export function NodeLogicInspector({
                               onUpdateVariable(variable.id, { computed: event.currentTarget.checked })
                             }
                           />
-                          <span>Computed</span>
+                          <span>Computed (metadata only)</span>
                         </label>
                         {variable.computed && (
-                          <input
-                            class="nl-input"
-                            type="text"
-                            aria-label={`Computed expression for ${variable.name}`}
-                            placeholder="Expression (e.g. {{count}} items)"
-                            value={variable.computedExpression ?? ''}
-                            onInput={(event) =>
-                              onUpdateVariable(variable.id, { computedExpression: event.currentTarget.value })
-                            }
-                          />
+                          <>
+                            <input
+                              class="nl-input"
+                              type="text"
+                              aria-label={`Computed expression for ${variable.name}`}
+                              placeholder="Expression (e.g. {{count}} items)"
+                              value={variable.computedExpression ?? ''}
+                              onInput={(event) =>
+                                onUpdateVariable(variable.id, { computedExpression: event.currentTarget.value })
+                              }
+                            />
+                            <p class="nl-inspector-hint">
+                              Metadata only · not evaluated at runtime.
+                            </p>
+                          </>
                         )}
                       </div>
                     ))}

@@ -24,6 +24,10 @@ import type {
 import { sanitizeHref } from '../codegen/sanitize';
 import { isBuiltInLogicNodeType, type LogicCompareOperator } from './catalog';
 import {
+  getInstanceIdFromExpandedGraphId,
+  resolveApplicableGraphsForPage,
+} from './componentScope';
+import {
   buildPipelineOriginRef,
   clonePipelineContextWithStep,
   createPipelineContext,
@@ -120,6 +124,7 @@ interface IndexedGraph {
   readonly incomingByTarget: Map<string, LogicConnection[]>;
   readonly bakedFrameByNodeId: Map<string, LogicFrame>;
   readonly compiledStepByNodeId: Map<string, BakedFrameNodeIndex>;
+  readonly instanceId?: string;
 }
 
 function clampStepBudget(raw: number | undefined): number {
@@ -157,6 +162,7 @@ function indexGraph(graph: LogicGraph): IndexedGraph {
       compiledStepByNodeId.set(step.nodeId, { frame, step, childSet });
     }
   }
+  const instanceId = getInstanceIdFromExpandedGraphId(graph.id);
   return {
     graph,
     nodesById,
@@ -164,6 +170,7 @@ function indexGraph(graph: LogicGraph): IndexedGraph {
     incomingByTarget,
     bakedFrameByNodeId,
     compiledStepByNodeId,
+    ...(instanceId ? { instanceId } : {}),
   };
 }
 
@@ -285,7 +292,7 @@ export function interpolateLogicTemplate(
   variableNameToId: ReadonlyMap<string, string>,
   connectedValue?: unknown,
 ): string {
-  return template.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_match, rawKey: string) => {
+  return template.replace(/\{\{\s*([a-zA-Z0-9_.:-]+)\s*\}\}/g, (_match, rawKey: string) => {
     if (rawKey === 'value' && connectedValue !== undefined && connectedValue !== null) {
       return typeof connectedValue === 'object' ? JSON.stringify(connectedValue) : String(connectedValue);
     }
@@ -327,9 +334,13 @@ export function getApplicableGraphsForPage(
   project: FolioProject,
   pageId: string,
 ): LogicGraph[] {
-  return project.logicGraphs.filter(
-    (graph) => graph.scope === 'project' || (graph.scope === 'page' && graph.targetId === pageId),
-  );
+  const page = project.pages.find((item) => item.id === pageId);
+  if (!page) {
+    return project.logicGraphs.filter(
+      (graph) => graph.scope === 'project' || (graph.scope === 'page' && graph.targetId === pageId),
+    );
+  }
+  return [...resolveApplicableGraphsForPage(project, page).graphs];
 }
 
 export function createPrototypeRuntime(
@@ -463,7 +474,7 @@ export function createPrototypeRuntime(
           const variableId = typeof node.data.variableId === 'string' ? node.data.variableId.trim() : '';
           if (!variableId) {
             const ownerFrame = indexed.bakedFrameByNodeId.get(node.id);
-            const memKey = getPrivateToggleMemoryKey(node.id, context.origin, ownerFrame?.id);
+            const memKey = getPrivateToggleMemoryKey(node.id, context.origin, ownerFrame?.id, indexed.instanceId);
             return Object.prototype.hasOwnProperty.call(privateMemory, memKey)
               ? privateMemory[memKey]
               : Boolean(node.data.initialValue);
@@ -482,7 +493,7 @@ export function createPrototypeRuntime(
         case 'source.element': {
           const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
           if (portId === 'target') return targetId;
-          const ast = astNodesById.get(targetId);
+          const ast = resolveAstNodeById(targetId, astNodesById, componentsById, tokens);
           const prop = String(node.data.property ?? 'value');
           const ov = nodeOverrides[targetId];
           if (prop === 'text' || prop === 'value') {
@@ -490,7 +501,12 @@ export function createPrototypeRuntime(
             return ast && ast.type === 'text' ? ast.text : (ast?.name ?? '');
           }
           if (prop === 'visible') return ov?.visible ?? ast?.visible ?? true;
-          if (prop === 'fill') return ov?.fill ?? (ast && 'fill' in ast ? ast.fill : '');
+          if (prop === 'fill') {
+            if (ov?.fill !== undefined) return ov.fill;
+            return ast && 'style' in ast && ast.style && 'fill' in ast.style && typeof ast.style.fill === 'string'
+              ? ast.style.fill
+              : '';
+          }
           if (prop === 'opacity') return ov?.opacity ?? ast?.opacity ?? 1;
           if (prop === 'componentId') return typeof node.data.componentId === 'string' ? node.data.componentId : '';
           return targetId;
@@ -791,10 +807,19 @@ export function createPrototypeRuntime(
             candidateNode.type === 'event.on-state-change' &&
             candidateNode.data.variableId === variableId
           ) {
+            const stateOrigin = candidateGraph.instanceId
+              ? buildPipelineOriginRef(
+                  candidateGraph.instanceId,
+                  astNodesById,
+                  componentsById,
+                  project.animations,
+                  tokens,
+                )
+              : null;
             const freshCtx = createPipelineContext(
               nextExecutionId('state'),
               'state-change',
-              null,
+              stateOrigin,
             );
             queue.push({
               indexed: candidateGraph,
@@ -830,7 +855,7 @@ export function createPrototypeRuntime(
       const activeBakedEntry = next.indexed.compiledStepByNodeId.get(node.id);
       let activeFrameGroup: ActiveFrameTraceGroup | undefined;
       if (activeBakedEntry) {
-        const groupKey = `${ctx.executionId}:${activeBakedEntry.frame.id}`;
+        const groupKey = `${ctx.executionId}:${next.indexed.instanceId ?? ''}:${activeBakedEntry.frame.id}`;
         activeFrameGroup = activeFrameGroups.get(groupKey);
         if (!activeFrameGroup) {
           const traceIndex = trace.length;
@@ -961,9 +986,9 @@ export function createPrototypeRuntime(
         case 'state.toggle': {
           const variableId = typeof node.data.variableId === 'string' ? node.data.variableId.trim() : '';
           if (!variableId) {
-            // Node-owned, target-bound private boolean memory (Anti-Amnesia + Baked Frame isolation)
+            // Node-owned, target-bound private boolean memory (Anti-Amnesia + Baked Frame + Component Instance isolation)
             const ownerFrame = next.indexed.bakedFrameByNodeId.get(node.id);
-            const memoryKey = getPrivateToggleMemoryKey(node.id, ctx.origin, ownerFrame?.id);
+            const memoryKey = getPrivateToggleMemoryKey(node.id, ctx.origin, ownerFrame?.id, next.indexed.instanceId);
             const initialBool = Boolean(node.data.initialValue);
             const prevVal = Object.prototype.hasOwnProperty.call(privateMemory, memoryKey)
               ? privateMemory[memoryKey]
@@ -1149,7 +1174,7 @@ export function createPrototypeRuntime(
 
         case 'action.set-layer': {
           const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
-          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById);
+          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById, tokens);
           if (!astNode) {
             warnings.push(`Set Layer "${node.id}" target node "${targetNodeId}" not found.`);
             break;
@@ -1224,7 +1249,7 @@ export function createPrototypeRuntime(
 
         case 'action.set-visible': {
           const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
-          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById);
+          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById, tokens);
           if (!astNode) {
             warnings.push(`Set Visible "${node.id}" target node "${targetNodeId}" not found.`);
             break;
@@ -1256,7 +1281,7 @@ export function createPrototypeRuntime(
 
         case 'action.set-text': {
           const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
-          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById);
+          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById, tokens);
           if (!astNode || astNode.type !== 'text') {
             warnings.push(`Set Text "${node.id}" target text node "${targetNodeId}" not found.`);
             break;
@@ -1281,7 +1306,7 @@ export function createPrototypeRuntime(
 
         case 'action.set-fill': {
           const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
-          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById);
+          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById, tokens);
           if (!astNode || astNode.type === 'group' || astNode.type === 'component-instance') {
             warnings.push(`Set Fill "${node.id}" target node "${targetNodeId}" does not support fill.`);
             break;
@@ -1310,7 +1335,7 @@ export function createPrototypeRuntime(
 
         case 'action.set-variant': {
           const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
-          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById);
+          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById, tokens);
           if (!astNode || astNode.type !== 'component-instance') {
             warnings.push(`Set Variant "${node.id}" target "${targetNodeId}" is not a component instance.`);
             break;
@@ -1407,7 +1432,7 @@ export function createPrototypeRuntime(
               originLayerId: ctx.origin?.layerId ?? null,
               payload: { tone, message: msg },
             });
-          } else if (targetNodeId && resolveAstNodeById(targetNodeId, astNodesById, componentsById)) {
+          } else if (targetNodeId && resolveAstNodeById(targetNodeId, astNodesById, componentsById, tokens)) {
             const open = mode === 'open-modal' || mode === 'open-drawer';
             ensureNodeOverride(targetNodeId).visible = open;
             stepPayload = { mode, targetNodeId, visible: open };
@@ -1699,25 +1724,34 @@ export function createPrototypeRuntime(
       mounted = true;
       const starters: ExecutionQueueItem[] = [];
       for (const indexed of indexedGraphs) {
+        const mountOrigin = indexed.instanceId
+          ? buildPipelineOriginRef(
+              indexed.instanceId,
+              astNodesById,
+              componentsById,
+              project.animations,
+              tokens,
+            )
+          : null;
         for (const node of indexed.graph.nodes) {
           if (node.type === 'event.on-page-load') {
             starters.push({
               indexed,
               nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('mount'), 'page-load', null),
+              context: createPipelineContext(nextExecutionId('mount'), 'page-load', mountOrigin),
             });
           } else if (node.type === 'event.on-lifecycle' && (node.data.trigger === 'page-load' || !node.data.trigger)) {
             starters.push({
               indexed,
               nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('lifecycle'), 'page-load', null),
+              context: createPipelineContext(nextExecutionId('lifecycle'), 'page-load', mountOrigin),
             });
           } else if (node.type === 'source.page' && node.data.pageId === activePageId) {
             starters.push({
               indexed,
               nodeId: node.id,
               outPortId: 'onLoad',
-              context: createPipelineContext(nextExecutionId('page'), 'page-load', null),
+              context: createPipelineContext(nextExecutionId('page'), 'page-load', mountOrigin),
             });
           } else if (
             node.type === 'source.context' &&
@@ -1728,7 +1762,7 @@ export function createPrototypeRuntime(
               indexed,
               nodeId: node.id,
               outPortId: 'onLoad',
-              context: createPipelineContext(nextExecutionId('context'), 'page-load', null),
+              context: createPipelineContext(nextExecutionId('context'), 'page-load', mountOrigin),
             });
           }
         }
@@ -1740,7 +1774,7 @@ export function createPrototypeRuntime(
     },
 
     dispatchNodeEvent(nodeId: string, event: LogicNodeEventKind, payload?: unknown) {
-      const targetAstNode = astNodesById.get(nodeId);
+      const targetAstNode = resolveAstNodeById(nodeId, astNodesById, componentsById, tokens);
       const targetComponentId =
         targetAstNode && targetAstNode.type === 'component-instance'
           ? targetAstNode.componentId
@@ -1750,6 +1784,7 @@ export function createPrototypeRuntime(
         astNodesById,
         componentsById,
         project.animations,
+        tokens,
       );
       const starters: ExecutionQueueItem[] = [];
       for (const indexed of indexedGraphs) {
@@ -1843,7 +1878,9 @@ export function createPrototypeRuntime(
             }
           } else if (
             node.type === 'source.component' &&
-            ((targetComponentId && node.data.componentId === targetComponentId) || node.data.componentId === nodeId)
+            (typeof node.data.targetNodeId === 'string' && node.data.targetNodeId.trim().length > 0
+              ? node.data.targetNodeId.trim() === nodeId
+              : ((targetComponentId && node.data.componentId === targetComponentId) || node.data.componentId === nodeId))
           ) {
             if (event === 'click') {
               starters.push({

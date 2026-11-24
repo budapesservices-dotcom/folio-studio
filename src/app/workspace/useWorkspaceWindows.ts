@@ -321,14 +321,14 @@ export function useWorkspaceWindows({
   const workspacePreferencesDirtyRef = useRef(false);
   const workspacePreferencesTimerRef = useRef<number | null>(null);
 
-  const flushWorkspacePreferences = useCallback((fromPageHide = false) => {
+  const flushWorkspacePreferences = useCallback((_fromPageHide = false) => {
     if (workspacePreferencesTimerRef.current !== null) {
       window.clearTimeout(workspacePreferencesTimerRef.current);
       workspacePreferencesTimerRef.current = null;
     }
     if (!workspacePreferencesDirtyRef.current || !workspacePreferencesEnabledRef.current) return;
     workspacePreferencesDirtyRef.current = false;
-    if (fromPageHide && workspacePreferencesPersistedOnceRef.current) {
+    if (workspacePreferencesPersistedOnceRef.current && !workspacePreferencesReplaceMalformedRef.current) {
       try {
         if (window.localStorage.getItem('folio.workspace-layout.v1') === null) {
           return;

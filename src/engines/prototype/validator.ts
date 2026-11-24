@@ -174,6 +174,36 @@ export function validateLogicGraphSemantics(
     }
   }
 
+  // Warn when a component-scoped logic graph belongs to a component not enabled for Node Logic
+  if (graph.scope === 'component' && graph.targetId) {
+    const targetComponent = componentsById.get(graph.targetId);
+    if (targetComponent && !targetComponent.nodeLogicEnabled) {
+      push(
+        'warning',
+        'COMPONENT_NOT_ENABLED_FOR_LOGIC',
+        `Component "${targetComponent.name}" is not enabled for Node Logic. Enable "Send to Node" in Component Rack to execute this graph on page instances.`,
+      );
+    }
+  }
+
+  // Honest capability warnings for variable metadata features not executed at runtime
+  for (const variable of graph.variables ?? []) {
+    if (variable.persist && variable.persist !== 'none') {
+      push(
+        'warning',
+        'UNSUPPORTED_VARIABLE_PERSIST',
+        `Variable "${variable.name}" sets persist="${variable.persist}", which is stored as .flop metadata only and is not yet executed in Headless Simulator, sandboxed Live Preview, or exported React TSX.`,
+      );
+    }
+    if (variable.computed) {
+      push(
+        'warning',
+        'UNSUPPORTED_COMPUTED_VARIABLE',
+        `Variable "${variable.name}" is marked as computed, which is stored as .flop metadata only and is not evaluated at runtime under FOLIO's zero-eval security policy.`,
+      );
+    }
+  }
+
   const variablesById = collectAvailableVariables(graph, project);
   const pagesById = new Map(project.pages.map((page) => [page.id, page]));
   const pageRoutes = new Set(project.pages.map((page) => page.route));

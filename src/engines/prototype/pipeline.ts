@@ -17,10 +17,12 @@
  *   for target-bound Anti-Amnesia across clicks and duplicated components.
  */
 
+import { resolveComponentInstanceNodes } from '../../core/document/components';
 import type {
   AnimationClip,
   ComponentDefinition,
   DesignNode,
+  DesignTokenCollection,
   LogicConnection,
   LogicNode,
 } from '../../core/document/types';
@@ -38,6 +40,7 @@ export interface PipelineOriginRef {
   readonly layerId: string;
   readonly name: string;
   readonly type: DesignNode['type'];
+  readonly instanceId?: string;
   readonly animationIds: readonly string[];
   readonly children?: readonly PipelineOriginChildRef[];
 }
@@ -74,35 +77,183 @@ export const PIPELINE_REF_DATA_KEYS = [
 
 export type PipelineRefDataKey = (typeof PIPELINE_REF_DATA_KEYS)[number];
 
+const MAX_SCOPED_COMPONENT_DEPTH = 16;
+
+interface ResolvedScopedNodeInfo {
+  readonly node: DesignNode;
+  readonly owningInstanceId?: string;
+  readonly owningInstanceResolvedNodes?: readonly DesignNode[];
+}
+
+function resolveScopedNodeDetails(
+  nodeId: string,
+  astNodesById: ReadonlyMap<string, DesignNode>,
+  componentsById?: ReadonlyMap<string, ComponentDefinition>,
+  tokens?: DesignTokenCollection,
+): ResolvedScopedNodeInfo | undefined {
+  if (!nodeId) return undefined;
+  const direct = astNodesById.get(nodeId);
+  if (direct) {
+    return {
+      node: direct,
+      ...(direct.type === 'component-instance' ? { owningInstanceId: direct.id } : {}),
+    };
+  }
+  if (!componentsById || !nodeId.includes('__')) return undefined;
+
+  // Match the root component instance in astNodesById (supports IDs that may contain underscores)
+  let rootInstanceId: string | null = null;
+  let remainder = '';
+  let searchFrom = 0;
+  while (searchFrom < nodeId.length) {
+    const idx = nodeId.indexOf('__', searchFrom);
+    if (idx <= 0) break;
+    const candidatePrefix = nodeId.slice(0, idx);
+    const candidateNode = astNodesById.get(candidatePrefix);
+    if (candidateNode && candidateNode.type === 'component-instance') {
+      rootInstanceId = candidatePrefix;
+      remainder = nodeId.slice(idx + 2);
+      break;
+    }
+    searchFrom = idx + 2;
+  }
+
+  if (!rootInstanceId || !remainder) return undefined;
+  let currentNode: DesignNode = astNodesById.get(rootInstanceId)!;
+  let currentInstancePath = rootInstanceId;
+  const visitedComponentIds = new Set<string>();
+  let depth = 0;
+
+  while (currentNode.type === 'component-instance' && remainder.length > 0) {
+    if (depth >= MAX_SCOPED_COMPONENT_DEPTH) return undefined;
+    const master = componentsById.get(currentNode.componentId);
+    if (!master || visitedComponentIds.has(master.id)) return undefined;
+    visitedComponentIds.add(master.id);
+    depth += 1;
+
+    const resolvedChildren = resolveComponentInstanceNodes(currentNode, master, tokens);
+
+    // First check exact match on remaining suffix inside this instance's resolved nodes
+    const exactMatch = resolvedChildren.find((item) => item.id === remainder);
+    if (exactMatch) {
+      return {
+        node: exactMatch,
+        owningInstanceId:
+          exactMatch.type === 'component-instance'
+            ? `${currentInstancePath}__${exactMatch.id}`
+            : currentInstancePath,
+        owningInstanceResolvedNodes: resolvedChildren,
+      };
+    }
+
+    // Otherwise split for nested component-instance traversal
+    let matchedChild: DesignNode | undefined;
+    let nextRemainder = '';
+    let childSearchFrom = 0;
+    while (childSearchFrom < remainder.length) {
+      const idx = remainder.indexOf('__', childSearchFrom);
+      if (idx <= 0) break;
+      const childPrefix = remainder.slice(0, idx);
+      const found = resolvedChildren.find(
+        (item) => item.id === childPrefix && item.type === 'component-instance',
+      );
+      if (found) {
+        matchedChild = found;
+        nextRemainder = remainder.slice(idx + 2);
+        break;
+      }
+      childSearchFrom = idx + 2;
+    }
+
+    if (!matchedChild || !nextRemainder) return undefined;
+    currentInstancePath = `${currentInstancePath}__${matchedChild.id}`;
+    currentNode = matchedChild;
+    remainder = nextRemainder;
+  }
+
+  return undefined;
+}
+
 /**
- * Resolves a DesignNode by ID, supporting both direct page/component AST node IDs
- * and expanded component-instance child IDs (`${instanceId}__${masterChildId}`).
+ * Resolves a DesignNode by ID, supporting direct page/component AST node IDs,
+ * component-instance child IDs (`${instanceId}__${masterChildId}`), and nested
+ * component-instance paths (`${outer}__${inner}__${leafId}`), respecting
+ * canonical precedence: Master -> Variants -> Slots -> Local Overrides -> Tokens.
  */
 export function resolveAstNodeById(
   nodeId: string,
   astNodesById: ReadonlyMap<string, DesignNode>,
   componentsById?: ReadonlyMap<string, ComponentDefinition>,
+  tokens?: DesignTokenCollection,
 ): DesignNode | undefined {
-  if (!nodeId) return undefined;
-  const direct = astNodesById.get(nodeId);
-  if (direct) return direct;
-  const sepIndex = nodeId.indexOf('__');
-  if (sepIndex <= 0 || !componentsById) return undefined;
-  const instanceId = nodeId.slice(0, sepIndex);
-  const childId = nodeId.slice(sepIndex + 2);
-  const instance = astNodesById.get(instanceId);
-  if (!instance || instance.type !== 'component-instance') return undefined;
-  const master = componentsById.get(instance.componentId);
-  if (!master) return undefined;
-  return master.document.nodes.find((item) => item.id === childId);
+  return resolveScopedNodeDetails(nodeId, astNodesById, componentsById, tokens)?.node;
+}
+
+/**
+ * Extracts the owning component instance path ID for a component instance root
+ * or any scoped child inside a component instance (including nested instances).
+ * Returns `undefined` for regular non-component page layers.
+ */
+export function extractComponentInstanceIdFromScopedId(
+  nodeId: string,
+  astNodesById: ReadonlyMap<string, DesignNode>,
+  componentsById?: ReadonlyMap<string, ComponentDefinition>,
+): string | undefined {
+  return resolveScopedNodeDetails(nodeId, astNodesById, componentsById)?.owningInstanceId;
+}
+
+function collectResolvedComponentChildren(
+  instanceNode: Extract<DesignNode, { type: 'component-instance' }>,
+  prefixPath: string,
+  componentsById: ReadonlyMap<string, ComponentDefinition>,
+  tokens: DesignTokenCollection | undefined,
+  children: PipelineOriginChildRef[],
+  childIdSet: Set<string>,
+  visitedComponentIds: ReadonlySet<string>,
+  depth: number,
+): void {
+  if (depth >= MAX_SCOPED_COMPONENT_DEPTH) return;
+  const master = componentsById.get(instanceNode.componentId);
+  if (!master || visitedComponentIds.has(master.id)) return;
+  const nextVisited = new Set(visitedComponentIds);
+  nextVisited.add(master.id);
+  const resolvedNodes = resolveComponentInstanceNodes(instanceNode, master, tokens);
+  for (const child of resolvedNodes) {
+    const scopedId = `${prefixPath}__${child.id}`;
+    if (!childIdSet.has(scopedId)) {
+      childIdSet.add(scopedId);
+      children.push(
+        Object.freeze({
+          id: scopedId,
+          name: child.name,
+          type: child.type,
+        }),
+      );
+    }
+    if (child.type === 'component-instance') {
+      collectResolvedComponentChildren(
+        child,
+        scopedId,
+        componentsById,
+        tokens,
+        children,
+        childIdSet,
+        nextVisited,
+        depth + 1,
+      );
+    }
+  }
 }
 
 /**
  * Builds a lightweight `PipelineOriginRef` for a given layer ID.
  * - For Groups / Frames (any node with descendants via `parentId`), collects all
  *   descendant `{ id, name, type }` entries safely without deep-cloning AST styles.
- * - For Component Instances, collects master component children with stable
- *   `${instanceId}__${childId}` IDs matching Live Preview `data-folio-id` markup.
+ * - For Component Instances (and nested Component Instances), collects resolved
+ *   master children with stable `${instanceId}__${childId}` IDs matching Live
+ *   Preview `data-folio-id` markup and canonical component precedence.
+ * - Carries `instanceId` whenever the origin is a component instance or a layer
+ *   inside a component instance.
  * - Collects attached animation clip IDs whose tracks target the layer or its children.
  */
 export function buildPipelineOriginRef(
@@ -110,28 +261,67 @@ export function buildPipelineOriginRef(
   astNodesById: ReadonlyMap<string, DesignNode>,
   componentsById?: ReadonlyMap<string, ComponentDefinition>,
   animations?: readonly AnimationClip[],
+  tokens?: DesignTokenCollection,
 ): PipelineOriginRef | null {
   if (!layerId) return null;
-  const root = astNodesById.get(layerId);
-  if (!root) return null;
+  const details = resolveScopedNodeDetails(layerId, astNodesById, componentsById, tokens);
+  if (!details) return null;
+  const root = details.node;
+  const instanceId = details.owningInstanceId;
 
   const children: PipelineOriginChildRef[] = [];
   const childIdSet = new Set<string>();
 
   if (root.type === 'component-instance' && componentsById) {
-    const master = componentsById.get(root.componentId);
-    if (master) {
-      for (const masterChild of master.document.nodes) {
-        const scopedId = `${root.id}__${masterChild.id}`;
-        if (childIdSet.has(scopedId)) continue;
+    collectResolvedComponentChildren(
+      root,
+      layerId,
+      componentsById,
+      tokens,
+      children,
+      childIdSet,
+      new Set<string>(),
+      0,
+    );
+  } else if (details.owningInstanceResolvedNodes && instanceId) {
+    // Descendants inside a component instance's resolved node tree
+    const byParent = new Map<string, DesignNode[]>();
+    for (const candidate of details.owningInstanceResolvedNodes) {
+      const pid = candidate.parentId;
+      if (!pid) continue;
+      const list = byParent.get(pid) ?? [];
+      list.push(candidate);
+      byParent.set(pid, list);
+    }
+    const visited = new Set<string>([root.id]);
+    const queue: string[] = [root.id];
+    while (queue.length > 0) {
+      const parentId = queue.shift()!;
+      for (const child of byParent.get(parentId) ?? []) {
+        if (visited.has(child.id)) continue;
+        visited.add(child.id);
+        const scopedId = `${instanceId}__${child.id}`;
         childIdSet.add(scopedId);
         children.push(
           Object.freeze({
             id: scopedId,
-            name: masterChild.name,
-            type: masterChild.type,
+            name: child.name,
+            type: child.type,
           }),
         );
+        if (child.type === 'component-instance' && componentsById) {
+          collectResolvedComponentChildren(
+            child,
+            scopedId,
+            componentsById,
+            tokens,
+            children,
+            childIdSet,
+            new Set<string>(),
+            0,
+          );
+        }
+        queue.push(child.id);
       }
     }
   } else {
@@ -168,7 +358,10 @@ export function buildPipelineOriginRef(
   if (animations && animations.length > 0) {
     for (const clip of animations) {
       const matchesOrigin = clip.tracks.some(
-        (track) => track.targetNodeId === root.id || childIdSet.has(track.targetNodeId),
+        (track) =>
+          track.targetNodeId === layerId
+          || track.targetNodeId === root.id
+          || childIdSet.has(track.targetNodeId),
       );
       if (matchesOrigin) {
         animationIds.push(clip.id);
@@ -177,9 +370,10 @@ export function buildPipelineOriginRef(
   }
 
   return Object.freeze({
-    layerId: root.id,
+    layerId,
     name: root.name,
     type: root.type,
+    ...(instanceId ? { instanceId } : {}),
     animationIds: Object.freeze(animationIds),
     ...(children.length > 0 ? { children: Object.freeze(children) } : {}),
   });
@@ -235,6 +429,8 @@ export function getUpstreamNodes(
 export function getOriginProducerLayerId(
   node: LogicNode,
   astNodesById: ReadonlyMap<string, DesignNode>,
+  componentsById?: ReadonlyMap<string, ComponentDefinition>,
+  tokens?: DesignTokenCollection,
 ): string | null {
   switch (node.type) {
     case 'event.on-click':
@@ -243,11 +439,11 @@ export function getOriginProducerLayerId(
     case 'event.on-drag':
     case 'event.on-scroll-view': {
       const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
-      return targetId && astNodesById.has(targetId) ? targetId : null;
+      return targetId && resolveAstNodeById(targetId, astNodesById, componentsById, tokens) ? targetId : null;
     }
     case 'source.element': {
       const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
-      if (targetId && astNodesById.has(targetId)) return targetId;
+      if (targetId && resolveAstNodeById(targetId, astNodesById, componentsById, tokens)) return targetId;
       const compId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
       if (compId) {
         for (const item of astNodesById.values()) {
@@ -259,6 +455,10 @@ export function getOriginProducerLayerId(
       return null;
     }
     case 'source.component': {
+      const explicitTarget = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId.trim() : '';
+      if (explicitTarget && resolveAstNodeById(explicitTarget, astNodesById, componentsById, tokens)) {
+        return explicitTarget;
+      }
       const compId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
       if (!compId) return null;
       for (const item of astNodesById.values()) {
@@ -283,15 +483,16 @@ export function getUpstreamPipelineOrigins(
   astNodesById: ReadonlyMap<string, DesignNode>,
   componentsById?: ReadonlyMap<string, ComponentDefinition>,
   animations?: readonly AnimationClip[],
+  tokens?: DesignTokenCollection,
 ): readonly PipelineOriginRef[] {
   const upstream = getUpstreamNodes(nodes, connections, targetNodeId);
   const origins: PipelineOriginRef[] = [];
   const seenLayerIds = new Set<string>();
 
   for (const src of upstream) {
-    const layerId = getOriginProducerLayerId(src, astNodesById);
+    const layerId = getOriginProducerLayerId(src, astNodesById, componentsById, tokens);
     if (!layerId || seenLayerIds.has(layerId)) continue;
-    const ref = buildPipelineOriginRef(layerId, astNodesById, componentsById, animations);
+    const ref = buildPipelineOriginRef(layerId, astNodesById, componentsById, animations, tokens);
     if (ref) {
       seenLayerIds.add(layerId);
       origins.push(ref);
@@ -503,6 +704,7 @@ export function resolvePipelineRefValue(
     if (parsed.field === 'layerId') return { found: true, value: context.origin.layerId };
     if (parsed.field === 'name') return { found: true, value: context.origin.name };
     if (parsed.field === 'type') return { found: true, value: context.origin.type };
+    if (parsed.field === 'instanceId') return { found: true, value: context.origin.instanceId ?? '' };
     if (parsed.field === 'animationIds') return { found: true, value: context.origin.animationIds };
     return { found: false, value: undefined };
   }
@@ -542,12 +744,18 @@ export function getPrivateToggleMemoryKey(
   nodeId: string,
   origin: PipelineOriginRef | null,
   frameId?: string | null,
+  instanceId?: string | null,
 ): string {
   const originSegment = origin?.layerId ?? 'default';
-  if (frameId && frameId.trim().length > 0) {
-    return `${frameId.trim()}:${nodeId}:${originSegment}`;
-  }
-  return `${nodeId}:${originSegment}`;
+  const effectiveInstanceId =
+    (typeof instanceId === 'string' && instanceId.trim().length > 0 ? instanceId.trim() : '')
+    || (typeof origin?.instanceId === 'string' && origin.instanceId.trim().length > 0 ? origin.instanceId.trim() : '');
+  const trimmedFrameId = typeof frameId === 'string' && frameId.trim().length > 0 ? frameId.trim() : '';
+  const parts: string[] = [];
+  if (effectiveInstanceId) parts.push(effectiveInstanceId);
+  if (trimmedFrameId) parts.push(trimmedFrameId);
+  parts.push(nodeId, originSegment);
+  return parts.join(':');
 }
 
 export function createPipelineContext(

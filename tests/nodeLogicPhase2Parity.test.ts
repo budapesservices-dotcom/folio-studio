@@ -25,7 +25,10 @@ import {
   instantiateLogicFramePreset,
   LOGIC_NODE_CATALOG,
   NODE_RUNTIME_PARITY_MATRIX,
+  RUNTIME_FEATURE_PARITY_MATRIX,
+  validateLogicGraphSemantics,
 } from '../src/engines/prototype';
+import { createPreviewDomHarness, createReactTsxHarness } from './helpers/parityRuntimeHarness';
 
 interface MockDomElement {
   id: string;
@@ -699,5 +702,440 @@ describe('Phase 2 — Node Logic Parity Unification (Headless ↔ Live Preview �
     expect(pageTsx).not.toContain('sk-live-SUPER-SECRET-999');
     expect(pageTsx).not.toContain('authToken');
     expect(pageTsx).not.toContain('dangerouslySetInnerHTML');
+  });
+
+  it('proves 3-runtime behavioral execution parity for Sources, Lifecycle, Hover, and State-Change events (Headless ↔ Live Preview ↔ Executed React TSX)', () => {
+    const fx = createParityFixture();
+    const hoveredVar = createLogicVariable({
+      id: 'var-hovered',
+      name: 'hovered',
+      valueType: 'boolean',
+      initialValue: false,
+    });
+    const widthVar = createLogicVariable({
+      id: 'var-width',
+      name: 'vw',
+      valueType: 'number',
+      initialValue: 0,
+    });
+
+    const onLifecycle = createLogicNode({
+      id: 'ev-load',
+      type: 'event.on-lifecycle',
+      data: { trigger: 'page-load' },
+    });
+    const ctxViewport = createLogicNode({
+      id: 'src-vp',
+      type: 'source.context',
+      data: { contextKind: 'viewport', viewportMetric: 'width' },
+    });
+    const readStatus = createLogicNode({
+      id: 'src-el',
+      type: 'source.element',
+      data: { targetNodeId: fx.statusTextId, property: 'text' },
+    });
+    const setWidth = createLogicNode({
+      id: 'st-set-vp',
+      type: 'state.update',
+      data: { variableId: widthVar.id, operation: 'set' },
+    });
+    const formatMount = createLogicNode({
+      id: 'lg-mount-txt',
+      type: 'logic.text',
+      data: { mode: 'template', template: 'VP={{vw}}' },
+    });
+    const writeMount = createLogicNode({
+      id: 'act-mount-txt',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.statusTextId, property: 'text' },
+    });
+
+    const onHoverEnter = createLogicNode({
+      id: 'ev-hover-in',
+      type: 'event.on-hover',
+      data: { targetNodeId: fx.rectAId, phase: 'enter' },
+    });
+    const onHoverLeave = createLogicNode({
+      id: 'ev-hover-out',
+      type: 'event.on-hover',
+      data: { targetNodeId: fx.rectAId, phase: 'leave' },
+    });
+    const setHoverTrue = createLogicNode({
+      id: 'st-hover-on',
+      type: 'state.update',
+      data: { variableId: hoveredVar.id, operation: 'set', value: true },
+    });
+    const setHoverFalse = createLogicNode({
+      id: 'st-hover-off',
+      type: 'state.update',
+      data: { variableId: hoveredVar.id, operation: 'set', value: false },
+    });
+    const onStateChange = createLogicNode({
+      id: 'ev-state-chg',
+      type: 'event.on-state-change',
+      data: { variableId: hoveredVar.id },
+    });
+    const branchHover = createLogicNode({
+      id: 'lg-br-hover',
+      type: 'logic.branch',
+      data: { mode: 'if-else' },
+    });
+    const getHover = createLogicNode({
+      id: 'st-get-hover',
+      type: 'state.get',
+      data: { variableId: hoveredVar.id },
+    });
+    const fillCardOn = createLogicNode({
+      id: 'act-card-on',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.cardBId, property: 'fill', fill: '#8B5CF6' },
+    });
+    const fillCardOff = createLogicNode({
+      id: 'act-card-off',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.cardBId, property: 'fill', fill: '#334155' },
+    });
+
+    const graph = createLogicGraph({
+      id: 'graph-sources-events-parity',
+      name: 'Sources & Events Behavioral Parity',
+      scope: 'page',
+      targetId: fx.pageId,
+      variables: [hoveredVar, widthVar],
+      nodes: [
+        onLifecycle,
+        ctxViewport,
+        readStatus,
+        setWidth,
+        formatMount,
+        writeMount,
+        onHoverEnter,
+        onHoverLeave,
+        setHoverTrue,
+        setHoverFalse,
+        onStateChange,
+        getHover,
+        branchHover,
+        fillCardOn,
+        fillCardOff,
+      ],
+      connections: [
+        createLogicConnection({ id: 'se1', sourceNodeId: onLifecycle.id, sourcePortId: 'exec', targetNodeId: setWidth.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'se2', sourceNodeId: setWidth.id, sourcePortId: 'next', targetNodeId: writeMount.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'sd1', sourceNodeId: ctxViewport.id, sourcePortId: 'value', targetNodeId: setWidth.id, targetPortId: 'value' }),
+        createLogicConnection({ id: 'sd2', sourceNodeId: formatMount.id, sourcePortId: 'text', targetNodeId: writeMount.id, targetPortId: 'value' }),
+        createLogicConnection({ id: 'se3', sourceNodeId: onHoverEnter.id, sourcePortId: 'exec', targetNodeId: setHoverTrue.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'se4', sourceNodeId: onHoverLeave.id, sourcePortId: 'exec', targetNodeId: setHoverFalse.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'se5', sourceNodeId: onStateChange.id, sourcePortId: 'exec', targetNodeId: branchHover.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'sd3', sourceNodeId: getHover.id, sourcePortId: 'value', targetNodeId: branchHover.id, targetPortId: 'condition' }),
+        createLogicConnection({ id: 'se6', sourceNodeId: branchHover.id, sourcePortId: 'true', targetNodeId: fillCardOn.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'se7', sourceNodeId: branchHover.id, sourcePortId: 'false', targetNodeId: fillCardOff.id, targetPortId: 'exec' }),
+      ],
+    });
+
+    const project: FolioProject = { ...fx.project, logicGraphs: [graph] };
+    const page = getActivePage(project);
+
+    // 1. Headless Runtime
+    const rt = createPrototypeRuntime(project);
+    const mountSnap = rt.mount();
+    expect(mountSnap.variables[widthVar.id]).toBe(1440);
+    expect(mountSnap.nodeOverrides[fx.statusTextId]?.text).toBe('VP=1440');
+
+    const enterSnap = rt.dispatchNodeEvent(fx.rectAId, 'hover-enter');
+    expect(enterSnap.variables[hoveredVar.id]).toBe(true);
+    expect(enterSnap.nodeOverrides[fx.cardBId]?.fill).toBe('#8B5CF6');
+
+    const leaveSnap = rt.dispatchNodeEvent(fx.rectAId, 'hover-leave');
+    expect(leaveSnap.variables[hoveredVar.id]).toBe(false);
+    expect(leaveSnap.nodeOverrides[fx.cardBId]?.fill).toBe('#334155');
+
+    // 2. Live Preview Micro-Runtime
+    const script = buildLivePreviewLogicScript(project, page)!;
+    const preview = createPreviewDomHarness(script, [fx.statusTextId, fx.rectAId, fx.cardBId], {
+      initialTextById: { [fx.statusTextId]: 'Ready' },
+    });
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('VP=1440');
+    preview.hoverEnter(fx.rectAId);
+    expect(preview.elements.get(fx.cardBId)?.style.background).toBe('#8B5CF6');
+    preview.hoverLeave(fx.rectAId);
+    expect(preview.elements.get(fx.cardBId)?.style.background).toBe('#334155');
+
+    // 3. Real Executed React TSX
+    const reactHarness = createReactTsxHarness(project, fx.pageId);
+    expect(reactHarness.getText(fx.statusTextId)).toBe('VP=1440');
+    reactHarness.hoverEnter(fx.rectAId);
+    expect(reactHarness.getStyle(fx.cardBId).background).toBe('#8B5CF6');
+    reactHarness.hoverLeave(fx.rectAId);
+    expect(reactHarness.getStyle(fx.cardBId).background).toBe('#334155');
+  });
+
+  it('proves 3-runtime behavioral execution parity for Actions (navigate, media-animation), Flow (control), and Network (http/json/socket)', () => {
+    const fx = createParityFixture();
+    const pricingPage = {
+      id: 'page-pricing',
+      name: 'Pricing',
+      route: '/pricing',
+      document: {
+        id: 'doc-pricing',
+        name: 'Pricing',
+        width: 1440,
+        height: 900,
+        background: '#0F172A',
+        nodes: [],
+      },
+    };
+    const projectWithPages: FolioProject = {
+      ...fx.project,
+      pages: [...fx.project.pages, pricingPage],
+      animations: [
+        {
+          id: 'anim-pulse',
+          name: 'Pulse',
+          pageId: fx.pageId,
+          durationMs: 400,
+          loop: false,
+          autoplay: false,
+          createdAt: '2026-11-24T00:00:00.000Z',
+          updatedAt: '2026-11-24T00:00:00.000Z',
+          tracks: [
+            {
+              id: 'tr-1',
+              targetNodeId: fx.rectAId,
+              property: 'opacity',
+              keyframes: [
+                { id: 'kf-0', timeMs: 0, value: 1, easing: 'ease-out' },
+                { id: 'kf-1', timeMs: 400, value: 0.4, easing: 'ease-out' },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const onClick = createLogicNode({ id: 'ev-run', type: 'event.on-click', data: { targetNodeId: fx.triggerBtnId } });
+    const seq = createLogicNode({ id: 'fl-seq', type: 'flow.control', data: { mode: 'sequence' } });
+    const playAnim = createLogicNode({
+      id: 'act-anim',
+      type: 'action.media-animation',
+      data: { command: 'play', clipId: 'anim-pulse', targetMode: 'override', targetNodeId: fx.rectAId },
+    });
+    const navPricing = createLogicNode({
+      id: 'act-nav',
+      type: 'action.navigate',
+      data: { mode: 'internal', route: '/pricing' },
+    });
+    const jsonParse = createLogicNode({
+      id: 'net-json-parse',
+      type: 'network.json',
+      data: { mode: 'get-field', path: 'plan.tier' },
+    });
+    const planVar = createLogicVariable({
+      id: 'var-payload',
+      name: 'payload',
+      valueType: 'object',
+      initialValue: { plan: { tier: 'enterprise' } },
+    });
+    const getPayload = createLogicNode({ id: 'st-get-payload', type: 'state.get', data: { variableId: planVar.id } });
+    const setStatusTier = createLogicNode({
+      id: 'act-tier',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.statusTextId, property: 'text' },
+    });
+    const socketNode = createLogicNode({
+      id: 'net-sock',
+      type: 'network.socket',
+      data: { url: 'wss://example.com/ws', eventName: 'ping' },
+    });
+
+    const graph = createLogicGraph({
+      id: 'graph-actions-flow-net',
+      name: 'Actions, Flow & Network Parity',
+      scope: 'page',
+      targetId: fx.pageId,
+      variables: [planVar],
+      nodes: [onClick, seq, playAnim, navPricing, getPayload, jsonParse, setStatusTier, socketNode],
+      connections: [
+        createLogicConnection({ id: 'af1', sourceNodeId: onClick.id, sourcePortId: 'exec', targetNodeId: seq.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'af2', sourceNodeId: seq.id, sourcePortId: 'step1', targetNodeId: setStatusTier.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'af3', sourceNodeId: setStatusTier.id, sourcePortId: 'next', targetNodeId: playAnim.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'af4', sourceNodeId: seq.id, sourcePortId: 'step2', targetNodeId: socketNode.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'af5', sourceNodeId: socketNode.id, sourcePortId: 'onMessage', targetNodeId: navPricing.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'afd1', sourceNodeId: getPayload.id, sourcePortId: 'value', targetNodeId: jsonParse.id, targetPortId: 'input' }),
+        createLogicConnection({ id: 'afd2', sourceNodeId: jsonParse.id, sourcePortId: 'output', targetNodeId: setStatusTier.id, targetPortId: 'value' }),
+      ],
+    });
+
+    const project: FolioProject = { ...projectWithPages, logicGraphs: [graph] };
+    const page = getActivePage(project);
+
+    // 1. Headless Runtime
+    const rt = createPrototypeRuntime(project);
+    const snap = rt.dispatchNodeEvent(fx.triggerBtnId, 'click');
+    expect(snap.nodeOverrides[fx.statusTextId]?.text).toBe('enterprise');
+    expect(snap.playedAnimations).toContain('anim-pulse');
+    expect(snap.activeRoute).toBe('/pricing');
+
+    // 2. Live Preview Micro-Runtime
+    const script = buildLivePreviewLogicScript(project, page)!;
+    const preview = createPreviewDomHarness(script, [fx.triggerBtnId, fx.statusTextId, fx.rectAId]);
+    preview.click(fx.triggerBtnId);
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('enterprise');
+    expect(preview.docElementAttrs['data-folio-route']).toBe('/pricing');
+
+    // 3. Real Executed React TSX
+    const reactHarness = createReactTsxHarness(project, fx.pageId);
+    reactHarness.click(fx.triggerBtnId);
+    expect(reactHarness.getText(fx.statusTextId)).toBe('enterprise');
+    expect(reactHarness.navigatedRoutes).toContain('/pricing');
+  });
+
+  it('proves 3-runtime behavioral execution parity for Legacy v1 nodes (on-page-load, state.set/increment, logic.compare/template, action.set-visible/text/fill/theme)', () => {
+    const fx = createParityFixture();
+    const countVar = createLogicVariable({ id: 'v-leg-count', name: 'legacyCount', valueType: 'number', initialValue: 0 });
+
+    const onLoad = createLogicNode({ id: 'leg-load', type: 'event.on-page-load', data: {} });
+    const setInit = createLogicNode({ id: 'leg-set', type: 'state.set', data: { variableId: countVar.id, value: 4 } });
+    const onClick = createLogicNode({ id: 'leg-click', type: 'event.on-click', data: { targetNodeId: fx.triggerBtnId } });
+    const inc = createLogicNode({ id: 'leg-inc', type: 'state.increment', data: { variableId: countVar.id, step: 1 } });
+    const getCount = createLogicNode({ id: 'leg-get', type: 'state.get', data: { variableId: countVar.id } });
+    const cmp = createLogicNode({ id: 'leg-cmp', type: 'logic.compare', data: { operator: '==', right: 5 } });
+    const tpl = createLogicNode({ id: 'leg-tpl', type: 'logic.template', data: { template: 'Legacy={{legacyCount}}' } });
+    const setVis = createLogicNode({ id: 'leg-vis', type: 'action.set-visible', data: { targetNodeId: fx.modalBoxId, mode: 'show' } });
+    const setText = createLogicNode({ id: 'leg-txt', type: 'action.set-text', data: { targetNodeId: fx.statusTextId } });
+    const setFill = createLogicNode({ id: 'leg-fill', type: 'action.set-fill', data: { targetNodeId: fx.cardBId, fill: '#EC4899' } });
+    const branch = createLogicNode({ id: 'leg-br', type: 'logic.branch', data: { mode: 'if-else' } });
+
+    const graph = createLogicGraph({
+      id: 'graph-legacy-v1-parity',
+      name: 'Legacy v1 Behavioral Parity',
+      scope: 'page',
+      targetId: fx.pageId,
+      variables: [countVar],
+      nodes: [onLoad, setInit, onClick, inc, getCount, cmp, tpl, branch, setVis, setText, setFill],
+      connections: [
+        createLogicConnection({ id: 'l1', sourceNodeId: onLoad.id, sourcePortId: 'exec', targetNodeId: setInit.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'l2', sourceNodeId: onClick.id, sourcePortId: 'exec', targetNodeId: inc.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'l3', sourceNodeId: inc.id, sourcePortId: 'next', targetNodeId: branch.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'l4', sourceNodeId: branch.id, sourcePortId: 'true', targetNodeId: setVis.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'l5', sourceNodeId: setVis.id, sourcePortId: 'next', targetNodeId: setText.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'l6', sourceNodeId: setText.id, sourcePortId: 'next', targetNodeId: setFill.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'ld1', sourceNodeId: getCount.id, sourcePortId: 'value', targetNodeId: cmp.id, targetPortId: 'left' }),
+        createLogicConnection({ id: 'ld2', sourceNodeId: cmp.id, sourcePortId: 'result', targetNodeId: branch.id, targetPortId: 'condition' }),
+        createLogicConnection({ id: 'ld3', sourceNodeId: tpl.id, sourcePortId: 'text', targetNodeId: setText.id, targetPortId: 'text' }),
+      ],
+    });
+
+    const project: FolioProject = { ...fx.project, logicGraphs: [graph] };
+    const page = getActivePage(project);
+
+    // 1. Headless Runtime
+    const rt = createPrototypeRuntime(project);
+    rt.mount();
+    const snap = rt.dispatchNodeEvent(fx.triggerBtnId, 'click');
+    expect(snap.variables[countVar.id]).toBe(5);
+    expect(snap.nodeOverrides[fx.modalBoxId]?.visible).toBe(true);
+    expect(snap.nodeOverrides[fx.statusTextId]?.text).toBe('Legacy=5');
+    expect(snap.nodeOverrides[fx.cardBId]?.fill).toBe('#EC4899');
+
+    // 2. Live Preview Micro-Runtime
+    const script = buildLivePreviewLogicScript(project, page)!;
+    const preview = createPreviewDomHarness(script, [fx.triggerBtnId, fx.modalBoxId, fx.statusTextId, fx.cardBId], {
+      initialDisplayById: { [fx.modalBoxId]: 'none' },
+    });
+    preview.click(fx.triggerBtnId);
+    expect(preview.elements.get(fx.modalBoxId)?.style.display).toBe('block');
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('Legacy=5');
+    expect(preview.elements.get(fx.cardBId)?.style.background).toBe('#EC4899');
+
+    // 3. Real Executed React TSX
+    const reactHarness = createReactTsxHarness(project, fx.pageId);
+    reactHarness.click(fx.triggerBtnId);
+    expect(reactHarness.getStyle(fx.modalBoxId).display).toBe('block');
+    expect(reactHarness.getText(fx.statusTextId)).toBe('Legacy=5');
+    expect(reactHarness.getStyle(fx.cardBId).background).toBe('#EC4899');
+  });
+
+  it('honestly marks variable.persist and variable.computed as unsupported in feature parity matrix, emits validator warnings, and executes safely without eval or storage errors', () => {
+    const byFeature = new Map(RUNTIME_FEATURE_PARITY_MATRIX.map((entry) => [entry.feature, entry]));
+    for (const fullFeature of ['component.scoped-logic', 'pipeline.scoped-context', 'frame.baked', 'legacy.v1-migration'] as const) {
+      const entry = byFeature.get(fullFeature);
+      expect(entry, `Missing feature ${fullFeature}`).toBeDefined();
+      expect(entry!.headless).toBe('full');
+      expect(entry!.livePreview).toBe('full');
+      expect(entry!.reactCodegen).toBe('full');
+    }
+
+    for (const unsupportedFeature of ['variable.persist', 'variable.computed'] as const) {
+      const entry = byFeature.get(unsupportedFeature);
+      expect(entry, `Missing feature ${unsupportedFeature}`).toBeDefined();
+      expect(entry!.headless).toBe('unsupported');
+      expect(entry!.livePreview).toBe('unsupported');
+      expect(entry!.reactCodegen).toBe('unsupported');
+      expect(entry!.notes.length).toBeGreaterThan(10);
+    }
+
+    const fx = createParityFixture();
+    const persistedVar = createLogicVariable({
+      id: 'var-persisted',
+      name: 'savedName',
+      valueType: 'string',
+      initialValue: 'guest',
+      persist: 'local',
+    });
+    const computedVar = createLogicVariable({
+      id: 'var-computed',
+      name: 'doubled',
+      valueType: 'number',
+      initialValue: 0,
+      computed: true,
+      computedExpression: 'clicks * 2',
+    });
+    const graph = createLogicGraph({
+      id: 'graph-audit-vars',
+      name: 'Persist & Computed Audit',
+      scope: 'page',
+      targetId: fx.pageId,
+      variables: [persistedVar, computedVar],
+      nodes: [
+        createLogicNode({ id: 'ev-audit', type: 'event.on-click', data: { targetNodeId: fx.triggerBtnId } }),
+        createLogicNode({
+          id: 'act-audit',
+          type: 'action.set-layer',
+          data: { targetMode: 'override', targetNodeId: fx.statusTextId, property: 'text', text: 'Safe' },
+        }),
+      ],
+      connections: [
+        createLogicConnection({ id: 'ca1', sourceNodeId: 'ev-audit', sourcePortId: 'exec', targetNodeId: 'act-audit', targetPortId: 'exec' }),
+      ],
+    });
+    const project: FolioProject = { ...fx.project, logicGraphs: [graph] };
+
+    // Validator emits explicit non-fatal warnings for both unsupported metadata fields
+    const report = validateLogicGraphSemantics(graph, project);
+    expect(report.ok).toBe(true);
+    expect(report.warnings.some((w) => w.code === 'UNSUPPORTED_VARIABLE_PERSIST')).toBe(true);
+    expect(report.warnings.some((w) => w.code === 'UNSUPPORTED_COMPUTED_VARIABLE')).toBe(true);
+
+    // All 3 runtimes execute cleanly without eval/new Function or storage SecurityError
+    const rt = createPrototypeRuntime(project);
+    const snap = rt.dispatchNodeEvent(fx.triggerBtnId, 'click');
+    expect(snap.variables[persistedVar.id]).toBe('guest');
+    expect(snap.variables[computedVar.id]).toBe(0);
+    expect(snap.nodeOverrides[fx.statusTextId]?.text).toBe('Safe');
+
+    const page = getActivePage(project);
+    const script = buildLivePreviewLogicScript(project, page)!;
+    expect(script).not.toContain('localStorage');
+    expect(script).not.toContain('eval(');
+    const preview = createPreviewDomHarness(script, [fx.triggerBtnId, fx.statusTextId]);
+    preview.click(fx.triggerBtnId);
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('Safe');
+
+    const reactHarness = createReactTsxHarness(project, fx.pageId);
+    expect(reactHarness.pageFile.content).not.toContain('localStorage');
+    expect(reactHarness.pageFile.content).not.toContain('eval(');
+    reactHarness.click(fx.triggerBtnId);
+    expect(reactHarness.getText(fx.statusTextId)).toBe('Safe');
   });
 });

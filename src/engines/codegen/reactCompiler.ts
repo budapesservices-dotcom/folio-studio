@@ -31,7 +31,8 @@ import {
   toPascalCase,
 } from './sanitize';
 import type { CodeMappingEntry, CompiledCodeFile } from './types';
-import { buildReactPageLogicPlan } from '../prototype/codegen';
+import { isBuiltInLogicNodeType } from '../prototype/catalog';
+import { buildReactPageLogicPlan, type ReactPageLogicPlan } from '../prototype/codegen';
 
 function escapeJsxText(value: string): string {
   return value
@@ -311,6 +312,8 @@ function buildNestedInstancePropsList(
   node: ComponentInstanceNode,
   comp: ComponentDefinition,
   cls: string,
+  childSupportsScopedLogic: boolean,
+  parentSupportsScopedLogic: boolean,
 ): { props: string[]; needsScale: boolean } {
   const masterW = Math.max(1, comp.document.width);
   const masterH = Math.max(1, comp.document.height);
@@ -322,7 +325,11 @@ function buildNestedInstancePropsList(
     ? [`style={{ transform: ${escapeTsString(`scale(${roundCss(scaleX)}, ${roundCss(scaleY)})`)}, transformOrigin: "top left" }}`]
     : [`className=${escapeTsString(cls)}`];
 
-  const usedPropNames = new Set<string>(['className', 'style', 'overrides']);
+  const usedPropNames = new Set<string>(
+    childSupportsScopedLogic
+      ? ['className', 'style', 'overrides', 'instanceId', 'logicOverrides', 'onLogicEvent']
+      : ['className', 'style', 'overrides'],
+  );
   const allocProp = (raw: string, fallback: string): string => {
     const base = toCamelCase(raw, fallback);
     let candidate = base;
@@ -340,7 +347,14 @@ function buildNestedInstancePropsList(
     const chosenId = node.variantSelection?.[axis.id] ?? axis.defaultOptionId;
     const opt = axis.options.find((o) => o.id === chosenId) ?? axis.options[0];
     if (opt) {
-      instanceProps.push(`${propName}=${escapeTsString(opt.label)}`);
+      if (parentSupportsScopedLogic && childSupportsScopedLogic) {
+        const unionType = axis.options.map((o) => escapeTsString(o.label)).join(' | ') || 'string';
+        instanceProps.push(
+          `${propName}={(logicOverrides?.[scopedId(${escapeTsString(node.id)})]?.variants?.[${escapeTsString(axis.id)}] ?? ${escapeTsString(opt.label)}) as ${unionType}}`,
+        );
+      } else {
+        instanceProps.push(`${propName}=${escapeTsString(opt.label)}`);
+      }
     }
   }
   for (const slot of comp.slots ?? []) {
@@ -370,6 +384,11 @@ function buildNestedInstancePropsList(
   if (Object.keys(cleanedOverrides).length > 0) {
     instanceProps.push(`overrides={${JSON.stringify(cleanedOverrides)}}`);
   }
+  if (parentSupportsScopedLogic && childSupportsScopedLogic) {
+    instanceProps.push(`instanceId={scopedId(${escapeTsString(node.id)})}`);
+    instanceProps.push('logicOverrides={logicOverrides}');
+    instanceProps.push('onLogicEvent={onLogicEvent}');
+  }
 
   return { props: instanceProps, needsScale };
 }
@@ -381,9 +400,15 @@ function buildComponentFiles(
   componentsById: ReadonlyMap<string, ComponentDefinition>,
   componentNamesById: ReadonlyMap<string, string>,
   assetsById: ReadonlyMap<string, AssetReference>,
+  supportsScopedLogic: boolean,
+  componentsWithScopedLogic: ReadonlySet<string>,
 ): CompiledCodeFile[] {
   const rootClass = `folio-comp-${toKebabCase(component.name, 'component')}`;
-  const usedProps = new Set<string>(['className', 'style', 'overrides']);
+  const usedProps = new Set<string>(
+    supportsScopedLogic
+      ? ['className', 'style', 'overrides', 'instanceId', 'logicOverrides', 'onLogicEvent']
+      : ['className', 'style', 'overrides'],
+  );
 
   const allocProp = (raw: string, fallback: string): string => {
     const base = toCamelCase(raw, fallback);
@@ -494,9 +519,23 @@ function buildComponentFiles(
   }
 
   propLines.push('  overrides?: Record<string, { fill?: string; text?: string }>;');
+  if (supportsScopedLogic) {
+    propLines.push('  instanceId?: string;');
+    propLines.push(
+      '  logicOverrides?: Record<string, { visible?: boolean; text?: string; fill?: string; opacity?: number; transform?: string; disabled?: boolean; transitionMs?: number; variants?: Record<string, string> }>;',
+    );
+    propLines.push(
+      '  onLogicEvent?: (kind: "click" | "double-click" | "hover-enter" | "hover-leave", targetId: string) => void;',
+    );
+  }
   propLines.push('  className?: string;');
   propLines.push('  style?: React.CSSProperties;');
-  destructuredProps.push('overrides', 'className', 'style');
+  destructuredProps.push(
+    'overrides',
+    ...(supportsScopedLogic ? ['instanceId', 'logicOverrides', 'onLogicEvent'] : []),
+    'className',
+    'style',
+  );
 
   lines.push(`export interface ${componentName}Props {`);
   lines.push(...propLines);
@@ -508,6 +547,9 @@ function buildComponentFiles(
     lines.push(`  ${entry},`);
   }
   lines.push(`}: ${componentName}Props) {`);
+  if (supportsScopedLogic) {
+    lines.push('  const scopedId = (localId: string) => (instanceId ? `${instanceId}__${localId}` : localId);');
+  }
 
   // Precompute variant-driven text resolution for any node that has variant text overrides
   const variantTextVarByNodeId = new Map<string, string>();
@@ -540,16 +582,19 @@ function buildComponentFiles(
   const emitMasterJsx = (node: DesignNode, depth: number) => {
     const slot = slotByTargetId.get(node.id);
     const hasVariantTarget = variantTargetedNodes.has(node.id);
-    if (!node.visible && !slot && !hasVariantTarget) return;
+    if (!node.visible && !slot && !hasVariantTarget && !supportsScopedLogic) return;
 
     const indent = '  '.repeat(depth);
     const tag = resolveSemanticTag(node);
     const cls = toCssClassName('fc', node.name, node.id);
     const startLine = lines.length + 1;
+    const nodeIdLit = escapeTsString(node.id);
+    const scopedIdExpr = `scopedId(${nodeIdLit})`;
+    const dynOvExpr = `logicOverrides?.[${scopedIdExpr}]`;
 
     const attrs: string[] = [
       `className=${escapeTsString(cls)}`,
-      `data-folio-id=${escapeTsString(node.id)}`,
+      supportsScopedLogic ? `data-folio-id={${scopedIdExpr}}` : `data-folio-id=${nodeIdLit}`,
     ];
     if (node.ariaLabel?.trim()) {
       attrs.push(`aria-label=${escapeTsString(node.ariaLabel.trim())}`);
@@ -560,27 +605,67 @@ function buildComponentFiles(
     if (tag === 'button') {
       attrs.push('type="button"');
     }
+    if (supportsScopedLogic) {
+      attrs.push(`onClick={onLogicEvent ? () => onLogicEvent("click", ${scopedIdExpr}) : undefined}`);
+      attrs.push(`onDoubleClick={onLogicEvent ? () => onLogicEvent("double-click", ${scopedIdExpr}) : undefined}`);
+      attrs.push(`onMouseEnter={onLogicEvent ? () => onLogicEvent("hover-enter", ${scopedIdExpr}) : undefined}`);
+      attrs.push(`onMouseLeave={onLogicEvent ? () => onLogicEvent("hover-leave", ${scopedIdExpr}) : undefined}`);
+      attrs.push(`aria-disabled={${dynOvExpr}?.disabled ? "true" : undefined}`);
+      if (tag === 'button') {
+        attrs.push(`disabled={Boolean(${dynOvExpr}?.disabled)}`);
+      }
+    }
 
     // Build inline style override expression respecting canonical precedence:
-    // Master -> Variants -> Slots -> Local Overrides -> Tokens.
+    // Master -> Variants -> Slots -> Local Overrides -> Tokens (+ Runtime Logic Overrides).
     // When fill is bound to a Design Token, the token CSS variable governs final color.
     const hasBoundFill = Boolean(resolveTokenCssVar(tokens, node.tokenBindings?.fill));
-    const directFillExpr = `overrides?.[${escapeTsString(node.id)}]?.fill`;
-    const effectiveFillExpr = slot
+    const directFillExpr = `overrides?.[${nodeIdLit}]?.fill`;
+    const baseFillExpr = slot
       ? `${directFillExpr} ?? ${slot.fillProp}`
       : directFillExpr;
+    const effectiveFillExpr = supportsScopedLogic
+      ? `${dynOvExpr}?.fill ?? ${baseFillExpr}`
+      : baseFillExpr;
 
+    const shownDisplay = node.layout?.mode === 'flex' ? 'flex' : node.layout?.mode === 'grid' ? 'grid' : 'block';
     const styleParts: string[] = [];
-    if (!hasBoundFill) {
+    const runtimeFillExpr = hasBoundFill
+      ? (supportsScopedLogic ? `${dynOvExpr}?.fill` : undefined)
+      : effectiveFillExpr;
+    if (runtimeFillExpr) {
       if (node.type === 'text') {
-        styleParts.push(`...(${effectiveFillExpr} ? { color: ${effectiveFillExpr} } : {})`);
+        styleParts.push(`...(${runtimeFillExpr} ? { color: ${runtimeFillExpr} } : {})`);
       } else if (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') {
-        styleParts.push(`...(${effectiveFillExpr} ? { background: ${effectiveFillExpr} } : {})`);
+        styleParts.push(`...(${runtimeFillExpr} ? { background: ${runtimeFillExpr} } : {})`);
       }
     }
     if (slot) {
       styleParts.push(
-        `...(${slot.visibleProp} === false ? { display: 'none' } : ${slot.visibleProp} === true ? { display: ${escapeTsString(node.layout?.mode === 'flex' ? 'flex' : node.layout?.mode === 'grid' ? 'grid' : 'block')} } : {})`,
+        `...(${slot.visibleProp} === false ? { display: 'none' } : ${slot.visibleProp} === true ? { display: ${escapeTsString(shownDisplay)} } : {})`,
+      );
+    }
+    if (supportsScopedLogic) {
+      if (!node.visible && !slot && !hasVariantTarget) {
+        styleParts.push(
+          `...(${dynOvExpr}?.visible === true ? { display: ${escapeTsString(shownDisplay)} } : { display: 'none' })`,
+        );
+      } else {
+        styleParts.push(
+          `...(${dynOvExpr}?.visible === false ? { display: 'none' } : ${dynOvExpr}?.visible === true ? { display: ${escapeTsString(shownDisplay)} } : {})`,
+        );
+      }
+      styleParts.push(
+        `...(${dynOvExpr}?.opacity !== undefined ? { opacity: ${dynOvExpr}?.opacity } : {})`,
+      );
+      styleParts.push(
+        `...(${dynOvExpr}?.transform ? { transform: ${dynOvExpr}?.transform } : {})`,
+      );
+      styleParts.push(
+        `...(${dynOvExpr}?.transitionMs ? { transition: \`all \${${dynOvExpr}?.transitionMs}ms ease\` } : {})`,
+      );
+      styleParts.push(
+        `...(${dynOvExpr}?.disabled ? { pointerEvents: "none" as const, opacity: 0.5 } : {})`,
       );
     }
     if (styleParts.length > 0) {
@@ -591,13 +676,25 @@ function buildComponentFiles(
       const childComp = node.componentId !== component.id ? componentsById.get(node.componentId) : undefined;
       const childCompName = node.componentId !== component.id ? componentNamesById.get(node.componentId) : undefined;
       if (childComp && childCompName) {
-        const { props: nestedProps, needsScale } = buildNestedInstancePropsList(node, childComp, cls);
-        if (needsScale || slot) {
+        const childSupportsScoped = componentsWithScopedLogic.has(childComp.id);
+        const { props: nestedProps, needsScale } = buildNestedInstancePropsList(
+          node,
+          childComp,
+          cls,
+          childSupportsScoped,
+          supportsScopedLogic,
+        );
+        if (needsScale || slot || supportsScopedLogic) {
           const wrapperAttrs = [
             `className=${escapeTsString(cls)}`,
-            `data-folio-id=${escapeTsString(node.id)}`,
+            supportsScopedLogic ? `data-folio-id={${scopedIdExpr}}` : `data-folio-id=${nodeIdLit}`,
             `data-folio-component=${escapeTsString(node.componentId)}`,
           ];
+          if (supportsScopedLogic) {
+            wrapperAttrs.push(`onClick={onLogicEvent ? () => onLogicEvent("click", ${scopedIdExpr}) : undefined}`);
+            wrapperAttrs.push(`onMouseEnter={onLogicEvent ? () => onLogicEvent("hover-enter", ${scopedIdExpr}) : undefined}`);
+            wrapperAttrs.push(`onMouseLeave={onLogicEvent ? () => onLogicEvent("hover-leave", ${scopedIdExpr}) : undefined}`);
+          }
           if (styleParts.length > 0) {
             wrapperAttrs.push(`style={{ ${styleParts.join(', ')} }}`);
           }
@@ -627,10 +724,13 @@ function buildComponentFiles(
       const baseWithVariant = variantTextVar
         ? `${variantTextVar} ?? ${fallbackText}`
         : fallbackText;
-      const directTextExpr = `overrides?.[${escapeTsString(node.id)}]?.text`;
-      const contentExpr = slot
+      const directTextExpr = `overrides?.[${nodeIdLit}]?.text`;
+      const baseContentExpr = slot
         ? `${directTextExpr} ?? (${slot.contentProp} !== undefined ? ${slot.contentProp} : (${baseWithVariant}))`
         : `${directTextExpr} ?? (${baseWithVariant})`;
+      const contentExpr = supportsScopedLogic
+        ? `${dynOvExpr}?.text ?? (${baseContentExpr})`
+        : baseContentExpr;
       lines.push(`${indent}<${tag} ${attrs.join(' ')}>{${contentExpr}}</${tag}>`);
     } else if (node.type === 'path') {
       lines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
@@ -693,6 +793,8 @@ function buildPageReactFile(
   pageComponentName: string,
   componentNamesById: ReadonlyMap<string, string>,
   tokens: DesignTokenCollection,
+  logicPlan: ReactPageLogicPlan,
+  componentsWithScopedLogic: ReadonlySet<string>,
 ): CompiledCodeFile {
   const slug = toPageFileSlug(page.route, page.name);
   const componentsById = new Map(project.components.map((c) => [c.id, c]));
@@ -705,7 +807,6 @@ function buildPageReactFile(
     }
   }
 
-  const logicPlan = buildReactPageLogicPlan(project, page);
   const reactImport = logicPlan.hasLogic
     ? `import React, { useState${logicPlan.needsUseEffect ? ', useEffect' : ''} } from 'react';`
     : "import React from 'react';";
@@ -763,7 +864,12 @@ function buildPageReactFile(
         const instanceProps: string[] = needsScale
           ? [`style={{ transform: ${escapeTsString(`scale(${roundCss(scaleX)}, ${roundCss(scaleY)})`)}, transformOrigin: "top left" }}`]
           : [`className=${escapeTsString(cls)}`];
-        const usedPropNames = new Set<string>(['className', 'style', 'overrides']);
+        const supportsScopedForComp = componentsWithScopedLogic.has(comp.id);
+        const usedPropNames = new Set<string>(
+          supportsScopedForComp
+            ? ['className', 'style', 'overrides', 'instanceId', 'logicOverrides', 'onLogicEvent']
+            : ['className', 'style', 'overrides'],
+        );
         const allocProp = (raw: string, fallback: string): string => {
           const base = toCamelCase(raw, fallback);
           let candidate = base;
@@ -817,6 +923,11 @@ function buildPageReactFile(
         }
         if (Object.keys(cleanedOverrides).length > 0) {
           instanceProps.push(`overrides={${JSON.stringify(cleanedOverrides)}}`);
+        }
+        if (supportsScopedForComp && logicPlan.hasLogic) {
+          instanceProps.push(`instanceId=${escapeTsString(node.id)}`);
+          instanceProps.push('logicOverrides={logicOverrides}');
+          instanceProps.push('onLogicEvent={runLogicTrigger}');
         }
 
         const instanceEventAttrs = logicPlan.getNodeEventAttrs(node.id);
@@ -1100,14 +1211,61 @@ export function compileReactProjectFiles(
     (component) => toPascalCase(component.name, 'FolioComponent'),
   );
 
+  const pageLogicPlans = new Map<string, ReactPageLogicPlan>();
   const pagesWithNavigation = new Set<string>();
-  const pageFiles: CompiledCodeFile[] = [];
+  const componentsWithScopedLogic = new Set<string>();
+
+  for (const comp of project.components) {
+    if (
+      comp.nodeLogicEnabled
+      && project.logicGraphs.some(
+        (graph) =>
+          graph.scope === 'component'
+          && graph.targetId === comp.id
+          && graph.nodes.some((n) => isBuiltInLogicNodeType(n.type)),
+      )
+    ) {
+      componentsWithScopedLogic.add(comp.id);
+    }
+  }
+
   for (const page of project.pages) {
-    if (buildReactPageLogicPlan(project, page).hasNavigation) {
+    const plan = buildReactPageLogicPlan(project, page);
+    pageLogicPlans.set(page.id, plan);
+    if (plan.hasNavigation) {
       pagesWithNavigation.add(page.id);
     }
+    for (const node of page.document.nodes) {
+      if (node.type === 'component-instance' && plan.hasScopedChildLogic(node.id)) {
+        componentsWithScopedLogic.add(node.componentId);
+      }
+    }
+  }
+
+  // Propagate scoped logic support upward through nested component masters
+  for (let pass = 0; pass < project.components.length; pass += 1) {
+    let added = false;
+    for (const comp of project.components) {
+      if (componentsWithScopedLogic.has(comp.id)) continue;
+      if (
+        comp.document.nodes.some(
+          (node) => node.type === 'component-instance' && componentsWithScopedLogic.has(node.componentId),
+        )
+      ) {
+        componentsWithScopedLogic.add(comp.id);
+        added = true;
+      }
+    }
+    if (!added) break;
+  }
+
+  const pageFiles: CompiledCodeFile[] = [];
+  for (const page of project.pages) {
     const pageCompName = pageNamesById.get(page.id) ?? `${toPascalCase(page.name, 'Page')}Page`;
-    pageFiles.push(buildPageReactFile(project, page, pageCompName, componentNamesById, tokens));
+    const plan = pageLogicPlans.get(page.id) ?? buildReactPageLogicPlan(project, page);
+    pageFiles.push(
+      buildPageReactFile(project, page, pageCompName, componentNamesById, tokens, plan, componentsWithScopedLogic),
+    );
   }
 
   const files: CompiledCodeFile[] = [
@@ -1126,6 +1284,8 @@ export function compileReactProjectFiles(
         componentsById,
         componentNamesById,
         assetsById,
+        componentsWithScopedLogic.has(component.id),
+        componentsWithScopedLogic,
       ),
     );
   }

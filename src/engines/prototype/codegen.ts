@@ -141,13 +141,15 @@ export function buildLivePreviewLogicScript(
     '  function buildOrigin(layerId) {',
     '    if (!layerId || !CONFIG.nodeMeta || !CONFIG.nodeMeta[layerId]) return null;',
     '    var m = CONFIG.nodeMeta[layerId];',
-    '    return {',
+    '    var o = {',
     '      layerId: layerId,',
     '      name: m.name || layerId,',
     '      type: m.type || "rect",',
     '      animationIds: m.animationIds || [],',
     '      children: m.children || []',
     '    };',
+    '    if (m.instanceId) o.instanceId = m.instanceId;',
+    '    return o;',
     '  }',
     '  function createCtx(eventKind, originLayerId) {',
     '    execCounter += 1;',
@@ -165,6 +167,7 @@ export function buildLivePreviewLogicScript(
     '    if (t.indexOf("origin:") === 0) {',
     '      if (!ctx.origin) return { found: false, value: undefined };',
     '      var of = t.slice(7).trim();',
+    '      if (of === "instanceId") return { found: true, value: ctx.origin.instanceId || "" };',
     '      if (Object.prototype.hasOwnProperty.call(ctx.origin, of)) return { found: true, value: ctx.origin[of] };',
     '      return { found: false, value: undefined };',
     '    }',
@@ -190,12 +193,17 @@ export function buildLivePreviewLogicScript(
     '    }',
     '    return (n.data && n.data.targetNodeId) || "";',
     '  }',
-    '  function getPrivateMemKey(nodeId, ctx, frameId) {',
+    '  function getPrivateMemKey(nodeId, ctx, frameId, instanceId) {',
     '    var originSeg = ctx && ctx.origin ? ctx.origin.layerId : "default";',
-    '    return (frameId ? frameId + ":" : "") + nodeId + ":" + originSeg;',
+    '    var inst = instanceId || (ctx && ctx.origin && ctx.origin.instanceId) || "";',
+    '    var parts = [];',
+    '    if (inst) parts.push(inst);',
+    '    if (frameId) parts.push(frameId);',
+    '    parts.push(nodeId, originSeg);',
+    '    return parts.join(":");',
     '  }',
     '  function interpolate(tpl, connected) {',
-    '    return String(tpl || "").replace(/\\{\\{\\s*([a-zA-Z0-9_.-]+)\\s*\\}\\}/g, function (_, key) {',
+    '    return String(tpl || "").replace(/\\{\\{\\s*([a-zA-Z0-9_.:-]+)\\s*\\}\\}/g, function (_, key) {',
     '      if (key === "value" && connected !== undefined && connected !== null) return String(connected);',
     '      if (Object.prototype.hasOwnProperty.call(state, key)) return String(state[key]);',
     '      var mapped = CONFIG.variableNameToId[key] || CONFIG.variableNameToId[key.toLowerCase()];',
@@ -282,7 +290,7 @@ export function buildLivePreviewLogicScript(
     '      var stepsArr = bf.compiledPlan && bf.compiledPlan.steps ? bf.compiledPlan.steps : [];',
     '      stepsArr.forEach(function (st) { stepByNode[st.nodeId] = { frameId: bf.id, step: st, childMap: childMap }; });',
     '    });',
-    '    return { id: g.id, nodes: g.nodes, byId: byId, out: out, inc: inc, bakedByNode: bakedByNode, stepByNode: stepByNode };',
+    '    return { id: g.id, instanceId: g.instanceId || "", nodes: g.nodes, byId: byId, out: out, inc: inc, bakedByNode: bakedByNode, stepByNode: stepByNode };',
     '  });',
     '  function runQueue(starters) {',
     '    var queue = starters.slice();',
@@ -302,7 +310,7 @@ export function buildLivePreviewLogicScript(
     '      if (n.type === "state.toggle") {',
     '        var tvid = typeof n.data.variableId === "string" ? n.data.variableId.trim() : "";',
     '        if (!tvid) {',
-    '          var mk = getPrivateMemKey(n.id, ctx, g.bakedByNode[n.id]);',
+    '          var mk = getPrivateMemKey(n.id, ctx, g.bakedByNode[n.id], g.instanceId);',
     '          res = Object.prototype.hasOwnProperty.call(privateMemory, mk) ? privateMemory[mk] : Boolean(n.data.initialValue);',
     '        } else {',
     '          res = Object.prototype.hasOwnProperty.call(state, tvid) ? Boolean(state[tvid]) : false;',
@@ -312,14 +320,18 @@ export function buildLivePreviewLogicScript(
     '      } else if (n.type === "source.page") {',
     '        res = (CONFIG.pageRouteById && CONFIG.pageRouteById[n.data.pageId]) || "";',
     '      } else if (n.type === "source.context") {',
-    '        var ctxKind = String(n.data.contextType || "page");',
-    '        if (portId === "themeId" || ctxKind === "theme") res = n.data.themeId || "";',
-    '        else if (ctxKind === "viewport") res = { width: window.innerWidth || 1440, height: window.innerHeight || 900 };',
+    '        var ctxKind = String(n.data.contextKind || n.data.contextType || "page");',
+    '        if (portId === "route") res = (CONFIG.pageRouteById && CONFIG.pageRouteById[n.data.pageId]) || activeRoute;',
+    '        else if (portId === "themeId" || ctxKind === "theme") res = n.data.themeId || "";',
+    '        else if (ctxKind === "viewport") res = n.data.viewportMetric === "height" ? (window.innerHeight || 900) : (window.innerWidth || 1440);',
     '        else if (ctxKind === "url-params") {',
-    '          var params = {};',
-    '          try { new URLSearchParams(window.location ? window.location.search : "").forEach(function (pv, pk) { params[pk] = pv; }); } catch (e) {}',
-    '          res = params;',
-    '        } else if (ctxKind === "user-auth") res = { authenticated: false, role: "guest" };',
+    '          var paramKey = String(n.data.paramKey || "");',
+    '          if (paramKey) {',
+    '            try { res = new URLSearchParams(window.location ? window.location.search : "").get(paramKey) || ""; } catch (e) { res = ""; }',
+    '          } else {',
+    '            res = "";',
+    '          }',
+    '        } else if (ctxKind === "user-auth") res = n.data.authField === "email" ? "guest@folio.app" : false;',
     '        else res = (CONFIG.pageRouteById && CONFIG.pageRouteById[n.data.pageId]) || activeRoute;',
     '      } else if (n.type === "source.external") {',
     '        res = portId === "count" ? 0 : [];',
@@ -475,7 +487,7 @@ export function buildLivePreviewLogicScript(
     '        for (var j = 0; j < cg.nodes.length; j++) {',
     '          var cn = cg.nodes[j];',
     '          if (cn.type === "event.on-state-change" && cn.data.variableId === varId) {',
-    '            queue.push({ g: cg, nodeId: cn.id, ctx: createCtx("state-change", null), initPayload: { variableId: varId, value: val } });',
+    '            queue.push({ g: cg, nodeId: cn.id, ctx: createCtx("state-change", cg.instanceId || null), initPayload: { variableId: varId, value: val } });',
     '          }',
     '        }',
     '      }',
@@ -510,7 +522,7 @@ export function buildLivePreviewLogicScript(
     '      } else if (n.type === "state.toggle") {',
     '        var tvid = typeof n.data.variableId === "string" ? n.data.variableId.trim() : "";',
     '        if (!tvid) {',
-    '          var mk = getPrivateMemKey(n.id, ctx, g.bakedByNode[n.id]);',
+    '          var mk = getPrivateMemKey(n.id, ctx, g.bakedByNode[n.id], g.instanceId);',
     '          var prevPriv = Object.prototype.hasOwnProperty.call(privateMemory, mk) ? privateMemory[mk] : Boolean(n.data.initialValue);',
     '          var nextPriv = !prevPriv;',
     '          privateMemory[mk] = nextPriv;',
@@ -827,7 +839,7 @@ export function buildLivePreviewLogicScript(
     '        else if (n.type === "source.element" && n.data.targetNodeId === nodeId) {',
     '          if (kind === "click") starters.push({ g: g, nodeId: n.id, outPortId: "onClick", ctx: createCtx("click", nodeId) });',
     '          else if (kind === "hover-enter") starters.push({ g: g, nodeId: n.id, outPortId: "onHover", ctx: createCtx("hover-enter", nodeId) });',
-    '        } else if (n.type === "source.component" && targetCompId && n.data.componentId === targetCompId) {',
+    '        } else if (n.type === "source.component" && (n.data && n.data.targetNodeId ? n.data.targetNodeId === nodeId : (targetCompId && n.data.componentId === targetCompId))) {',
     '          if (kind === "click") starters.push({ g: g, nodeId: n.id, outPortId: "onClick", ctx: createCtx("click", nodeId) });',
     '          else if (kind === "hover-enter") starters.push({ g: g, nodeId: n.id, outPortId: "onHover", ctx: createCtx("hover-enter", nodeId) });',
     '        }',
@@ -916,12 +928,17 @@ export function buildLivePreviewLogicScript(
     '          bindClickTarget(tid, "click");',
     '          bindHoverTarget(tid, "hover-enter");',
     '        } else if (n.type === "source.component" && n.data && n.data.componentId) {',
-    '          Object.keys(CONFIG.nodeMeta).forEach(function (nid) {',
-    '            if (CONFIG.nodeMeta[nid] && CONFIG.nodeMeta[nid].componentId === n.data.componentId) {',
-    '              bindClickTarget(nid, "click");',
-    '              bindHoverTarget(nid, "hover-enter");',
-    '            }',
-    '          });',
+    '          if (n.data.targetNodeId) {',
+    '            bindClickTarget(n.data.targetNodeId, "click");',
+    '            bindHoverTarget(n.data.targetNodeId, "hover-enter");',
+    '          } else {',
+    '            Object.keys(CONFIG.nodeMeta).forEach(function (nid) {',
+    '              if (CONFIG.nodeMeta[nid] && CONFIG.nodeMeta[nid].componentId === n.data.componentId) {',
+    '                bindClickTarget(nid, "click");',
+    '                bindHoverTarget(nid, "hover-enter");',
+    '              }',
+    '            });',
+    '          }',
     '        }',
     '      });',
     '    });',
@@ -932,7 +949,7 @@ export function buildLivePreviewLogicScript(
     '          var ks = [];',
     '          keyListeners.forEach(function (kl) {',
     '            if ((kl.n.data.direction || "down") === dir && matchKeyCombo(ev, kl.n.data.keyCombo)) {',
-    '              ks.push({ g: kl.g, nodeId: kl.n.id, ctx: createCtx("key-" + dir, null), initPayload: { key: ev && ev.key ? ev.key : "" } });',
+    '              ks.push({ g: kl.g, nodeId: kl.n.id, ctx: createCtx("key-" + dir, kl.g.instanceId || null), initPayload: { key: ev && ev.key ? ev.key : "" } });',
     '            }',
     '          });',
     '          if (ks.length) runQueue(ks);',
@@ -942,16 +959,16 @@ export function buildLivePreviewLogicScript(
     '    if (hasResizeListener) {',
     '      window.addEventListener("resize", function () {',
     '        var rs = [];',
-    '        indexed.forEach(function (rg) { rg.nodes.forEach(function (rn) { if (rn.type === "event.on-lifecycle" && rn.data.trigger === "resize") rs.push({ g: rg, nodeId: rn.id, ctx: createCtx("resize", null), initPayload: { width: window.innerWidth || 0, height: window.innerHeight || 0 } }); }); });',
+    '        indexed.forEach(function (rg) { rg.nodes.forEach(function (rn) { if (rn.type === "event.on-lifecycle" && rn.data.trigger === "resize") rs.push({ g: rg, nodeId: rn.id, ctx: createCtx("resize", rg.instanceId || null), initPayload: { width: window.innerWidth || 0, height: window.innerHeight || 0 } }); }); });',
     '        if (rs.length) runQueue(rs);',
     '      });',
     '    }',
     '    var loadStarters = [];',
     '    indexed.forEach(function (g) {',
     '      g.nodes.forEach(function (n) {',
-    '        if (n.type === "event.on-page-load" || (n.type === "event.on-lifecycle" && (!n.data.trigger || n.data.trigger === "page-load"))) loadStarters.push({ g: g, nodeId: n.id, ctx: createCtx("page-load", null) });',
+    '        if (n.type === "event.on-page-load" || (n.type === "event.on-lifecycle" && (!n.data.trigger || n.data.trigger === "page-load"))) loadStarters.push({ g: g, nodeId: n.id, ctx: createCtx("page-load", g.instanceId || null) });',
     '        else if ((n.type === "source.page" || n.type === "source.context") && n.data && (!n.data.pageId || n.data.pageId === CONFIG.activePageId)) {',
-    '          loadStarters.push({ g: g, nodeId: n.id, outPortId: "onLoad", ctx: createCtx("page-load", null) });',
+    '          loadStarters.push({ g: g, nodeId: n.id, outPortId: "onLoad", ctx: createCtx("page-load", g.instanceId || null) });',
     '        }',
     '      });',
     '    });',
@@ -979,14 +996,16 @@ export interface ReactPageLogicPlan {
   hasDynamicDisabled(nodeId: string): boolean;
   hasDynamicTransition(nodeId: string): boolean;
   hasDynamicVariant(nodeId: string, axisId?: string): boolean;
+  hasScopedChildLogic(instanceIdPrefix: string): boolean;
 }
 
 /**
  * Generates clean, strict-TypeScript React `useState`/`useEffect` state
  * bindings and scoped-pipeline event handlers for pages containing active
  * Node Logic graphs. Shares full parity with `PrototypeRuntime` and Live
- * Preview (Scoped Data Pipeline, Private target+frame memory, Baked Logic
- * Frames, 31 primary nodes + legacy v1 nodes, zero secrets).
+ * Preview (Scoped Data Pipeline, Private target+frame+instance memory, Baked
+ * Logic Frames, Component-Scoped per-instance graphs, 31 primary nodes +
+ * legacy v1 nodes, zero secrets).
  *
  * Returns `hasLogic: false` for static pages so generated TSX stays unchanged.
  */
@@ -1012,6 +1031,7 @@ export function buildReactPageLogicPlan(
       hasDynamicDisabled: () => false,
       hasDynamicTransition: () => false,
       hasDynamicVariant: () => false,
+      hasScopedChildLogic: () => false,
     };
   }
 
@@ -1031,9 +1051,9 @@ export function buildReactPageLogicPlan(
     '{ visible?: boolean; text?: string; fill?: string; opacity?: number; transform?: string; disabled?: boolean; transitionMs?: number; variants?: Record<string, string> }';
   const varValType = 'string | number | boolean | unknown[] | Record<string, unknown>';
   const graphArrayType =
-    'Array<{ id: string; nodes: Array<{ id: string; type: string; data: Record<string, unknown> }>; connections: Array<{ sourceNodeId: string; sourcePortId: string; targetNodeId: string; targetPortId: string }>; bakedFrames: Array<{ id: string; title: string; childNodeIds: string[]; compiledPlan: { entryNodeIds: string[]; steps: Array<{ nodeId: string; nextByPort: Record<string, Array<{ targetNodeId: string; targetPort: string }>>; dataInputs: Record<string, { sourceNodeId: string; sourcePort: string }> }> } }> }>';
+    'Array<{ id: string; instanceId?: string; nodes: Array<{ id: string; type: string; data: Record<string, unknown> }>; connections: Array<{ sourceNodeId: string; sourcePortId: string; targetNodeId: string; targetPortId: string }>; bakedFrames: Array<{ id: string; title: string; childNodeIds: string[]; compiledPlan: { entryNodeIds: string[]; steps: Array<{ nodeId: string; nextByPort: Record<string, Array<{ targetNodeId: string; targetPort: string }>>; dataInputs: Record<string, { sourceNodeId: string; sourcePort: string }> }> } }> }>';
   const nodeMetaType =
-    'Record<string, { name: string; type: string; visible: boolean; display: string; text?: string; fill?: string; opacity?: number; componentId?: string; animationIds?: string[]; children?: Array<{ id: string; name: string; type: string }> }>';
+    'Record<string, { name: string; type: string; visible: boolean; display: string; text?: string; fill?: string; opacity?: number; componentId?: string; instanceId?: string; animationIds?: string[]; children?: Array<{ id: string; name: string; type: string }> }>';
 
   const hookLines: string[] = [
     `  const [logicState, setLogicState] = useState<Record<string, ${varValType}>>(${JSON.stringify(config.variables)});`,
@@ -1074,12 +1094,12 @@ export function buildReactPageLogicPlan(
       ? ['    const emittedToasts: Array<{ id: string; message: string; tone: string }> = [];']
       : []),
     `    const maxSteps = ${config.maxSteps};`,
-    '    type PipelineOrigin = { layerId: string; name: string; type: string; animationIds: string[]; children: Array<{ id: string; name: string; type: string }> };',
+    '    type PipelineOrigin = { layerId: string; name: string; type: string; instanceId?: string; animationIds: string[]; children: Array<{ id: string; name: string; type: string }> };',
     '    type PipelineCtx = { executionId: string; eventKind: string; origin: PipelineOrigin | null; steps: Record<string, Record<string, unknown>> };',
     '    const buildOrigin = (layerId?: string): PipelineOrigin | null => {',
     '      if (!layerId || !logicNodeMeta[layerId]) return null;',
     '      const m = logicNodeMeta[layerId];',
-    '      return { layerId, name: m.name, type: m.type, animationIds: m.animationIds ?? [], children: m.children ?? [] };',
+    '      return { layerId, name: m.name, type: m.type, ...(m.instanceId ? { instanceId: m.instanceId } : {}), animationIds: m.animationIds ?? [], children: m.children ?? [] };',
     '    };',
     '    const createCtx = (eventKind: string, originLayerId?: string): PipelineCtx => {',
     '      logicExecCounterRef.current += 1;',
@@ -1152,6 +1172,7 @@ export function buildReactPageLogicPlan(
     '      if (t.startsWith("origin:")) {',
     '        if (!ctx.origin) return { found: false, value: undefined };',
     '        const field = t.slice(7).trim();',
+    '        if (field === "instanceId") return { found: true, value: ctx.origin.instanceId ?? "" };',
     '        const originRec = ctx.origin as unknown as Record<string, unknown>;',
     '        return Object.prototype.hasOwnProperty.call(originRec, field) ? { found: true, value: originRec[field] } : { found: false, value: undefined };',
     '      }',
@@ -1189,17 +1210,17 @@ export function buildReactPageLogicPlan(
     '    const targetCompId = targetNodeId ? logicInstanceComponentById[targetNodeId] : undefined;',
     '    for (const ig of indexedGraphs) {',
     '      for (const n of ig.graph.nodes) {',
-    '        if (triggerKind === "page-load" && (n.type === "event.on-page-load" || (n.type === "event.on-lifecycle" && (!n.data.trigger || n.data.trigger === "page-load")))) queue.push({ ig, nodeId: n.id, ctx: createCtx("page-load") });',
-    '        else if (triggerKind === "page-load" && (n.type === "source.page" || n.type === "source.context") && (!n.data.pageId || n.data.pageId === logicActivePageId)) queue.push({ ig, nodeId: n.id, outPortId: "onLoad", ctx: createCtx("page-load") });',
+    '        if (triggerKind === "page-load" && (n.type === "event.on-page-load" || (n.type === "event.on-lifecycle" && (!n.data.trigger || n.data.trigger === "page-load")))) queue.push({ ig, nodeId: n.id, ctx: createCtx("page-load", ig.graph.instanceId) });',
+    '        else if (triggerKind === "page-load" && (n.type === "source.page" || n.type === "source.context") && (!n.data.pageId || n.data.pageId === logicActivePageId)) queue.push({ ig, nodeId: n.id, outPortId: "onLoad", ctx: createCtx("page-load", ig.graph.instanceId) });',
     '        else if (triggerKind === "click" && n.type === "event.on-click" && n.data.targetNodeId === targetNodeId && (!n.data.mode || n.data.mode === "click")) queue.push({ ig, nodeId: n.id, ctx: createCtx("click", targetNodeId), initPayload: { targetLayerId: targetNodeId } });',
     '        else if (triggerKind === "double-click" && n.type === "event.on-click" && n.data.targetNodeId === targetNodeId && n.data.mode === "double-click") queue.push({ ig, nodeId: n.id, ctx: createCtx("double-click", targetNodeId), initPayload: { targetLayerId: targetNodeId } });',
     '        else if (triggerKind === "hover-enter" && n.type === "event.on-hover" && n.data.targetNodeId === targetNodeId && (!n.data.phase || n.data.phase === "enter")) queue.push({ ig, nodeId: n.id, ctx: createCtx("hover-enter", targetNodeId), initPayload: { targetLayerId: targetNodeId, isHovered: true } });',
     '        else if (triggerKind === "hover-leave" && n.type === "event.on-hover" && n.data.targetNodeId === targetNodeId && n.data.phase === "leave") queue.push({ ig, nodeId: n.id, ctx: createCtx("hover-leave", targetNodeId), initPayload: { targetLayerId: targetNodeId, isHovered: false } });',
-    '        else if (triggerKind === "key-down" && n.type === "event.on-key-press" && (!n.data.keyCombo || String(n.data.keyCombo).toLowerCase() === String(extraPayload?.key ?? "").toLowerCase())) queue.push({ ig, nodeId: n.id, ctx: createCtx("key-down"), initPayload: extraPayload });',
+    '        else if (triggerKind === "key-down" && n.type === "event.on-key-press" && (!n.data.keyCombo || String(n.data.keyCombo).toLowerCase() === String(extraPayload?.key ?? "").toLowerCase())) queue.push({ ig, nodeId: n.id, ctx: createCtx("key-down", ig.graph.instanceId), initPayload: extraPayload });',
     '        else if (n.type === "source.element" && n.data.targetNodeId === targetNodeId) {',
     '          if (triggerKind === "click") queue.push({ ig, nodeId: n.id, outPortId: "onClick", ctx: createCtx("click", targetNodeId) });',
     '          else if (triggerKind === "hover-enter") queue.push({ ig, nodeId: n.id, outPortId: "onHover", ctx: createCtx("hover-enter", targetNodeId) });',
-    '        } else if (n.type === "source.component" && targetCompId && n.data.componentId === targetCompId) {',
+    '        } else if (n.type === "source.component" && (typeof n.data.targetNodeId === "string" && n.data.targetNodeId ? n.data.targetNodeId === targetNodeId : (targetCompId && n.data.componentId === targetCompId))) {',
     '          if (triggerKind === "click") queue.push({ ig, nodeId: n.id, outPortId: "onClick", ctx: createCtx("click", targetNodeId) });',
     '          else if (triggerKind === "hover-enter") queue.push({ ig, nodeId: n.id, outPortId: "onHover", ctx: createCtx("hover-enter", targetNodeId) });',
     '        }',
@@ -1210,7 +1231,7 @@ export function buildReactPageLogicPlan(
     '      for (const ig of indexedGraphs) {',
     '        for (const cn of ig.graph.nodes) {',
     '          if (cn.type === "event.on-state-change" && cn.data.variableId === varId) {',
-    '            queue.push({ ig, nodeId: cn.id, ctx: createCtx("state-change"), initPayload: { variableId: varId, value: val } });',
+    '            queue.push({ ig, nodeId: cn.id, ctx: createCtx("state-change", ig.graph.instanceId), initPayload: { variableId: varId, value: val } });',
     '          }',
     '        }',
     '      }',
@@ -1232,7 +1253,8 @@ export function buildReactPageLogicPlan(
     '          const tvid = typeof n.data.variableId === "string" ? n.data.variableId.trim() : "";',
     '          if (!tvid) {',
     '            const frameId = ig.bakedByNode[n.id];',
-    '            const mk = `${frameId ? `${frameId}:` : ""}${n.id}:${ctx.origin?.layerId ?? "default"}`;',
+    '            const instId = ig.graph.instanceId || ctx.origin?.instanceId || "";',
+    '            const mk = [instId, frameId ?? "", n.id, ctx.origin?.layerId ?? "default"].filter(Boolean).join(":");',
     '            return Object.prototype.hasOwnProperty.call(privateMemory, mk) ? privateMemory[mk] : Boolean(n.data.initialValue);',
     '          }',
     '          return Boolean(nextVars[tvid]);',
@@ -1241,7 +1263,15 @@ export function buildReactPageLogicPlan(
     '          return nextVars[String(n.data.variableId ?? "")] ?? null;',
     '        }',
     '        if (n.type === "source.page") return logicPageRouteById[String(n.data.pageId ?? "")] ?? "";',
-    '        if (n.type === "source.context") return portId === "themeId" || n.data.contextType === "theme" ? String(n.data.themeId ?? "") : (logicPageRouteById[String(n.data.pageId ?? "")] ?? "/");',
+    '        if (n.type === "source.context") {',
+    '          const ctxKind = String(n.data.contextKind ?? n.data.contextType ?? "page");',
+    '          if (portId === "route") return logicPageRouteById[String(n.data.pageId ?? "")] ?? "/";',
+    '          if (portId === "themeId" || ctxKind === "theme") return String(n.data.themeId ?? "");',
+    '          if (ctxKind === "viewport") return n.data.viewportMetric === "height" ? (typeof window !== "undefined" ? (window.innerHeight || 900) : 900) : (typeof window !== "undefined" ? (window.innerWidth || 1440) : 1440);',
+    '          if (ctxKind === "user-auth") return n.data.authField === "email" ? "guest@folio.app" : false;',
+    '          if (ctxKind === "url-params") return "";',
+    '          return logicPageRouteById[String(n.data.pageId ?? "")] ?? "/";',
+    '        }',
     '        if (n.type === "source.component") return String(n.data.componentId ?? "");',
     '        if (n.type === "source.element") {',
     '          const elId = String(n.data.targetNodeId ?? "");',
@@ -1294,7 +1324,7 @@ export function buildReactPageLogicPlan(
     '            const dec = typeof n.data.decimals === "number" ? Math.max(0, Math.min(6, n.data.decimals)) : 2;',
     '            try { return tmode === "format-currency" ? new Intl.NumberFormat(loc, { style: "currency", currency: String(n.data.currency ?? "USD"), maximumFractionDigits: dec }).format(safeNum) : new Intl.NumberFormat(loc, { maximumFractionDigits: dec }).format(safeNum); } catch { return safeNum.toFixed(dec); }',
     '          }',
-    '          return String(n.data.template ?? "").replace(/\\{\\{\\s*([a-zA-Z0-9_.-]+)\\s*\\}\\}/g, (_, k: string) => {',
+    '          return String(n.data.template ?? "").replace(/\\{\\{\\s*([a-zA-Z0-9_.:-]+)\\s*\\}\\}/g, (_, k: string) => {',
     '            if (k === "value" && connected !== undefined && connected !== null) return String(connected);',
     '            if (Object.prototype.hasOwnProperty.call(nextVars, k)) return String(nextVars[k]);',
     '            const mapped = logicVarNameToId[k] ?? logicVarNameToId[k.toLowerCase()];',
@@ -1375,7 +1405,8 @@ export function buildReactPageLogicPlan(
     '        const vid = typeof n.data.variableId === "string" ? n.data.variableId.trim() : "";',
     '        if (!vid) {',
     '          const frameId = step.ig.bakedByNode[n.id];',
-    '          const mk = `${frameId ? `${frameId}:` : ""}${n.id}:${ctx.origin?.layerId ?? "default"}`;',
+    '          const instId = step.ig.graph.instanceId || ctx.origin?.instanceId || "";',
+    '          const mk = [instId, frameId ?? "", n.id, ctx.origin?.layerId ?? "default"].filter(Boolean).join(":");',
     '          const prevPriv = Object.prototype.hasOwnProperty.call(privateMemory, mk) ? privateMemory[mk] : Boolean(n.data.initialValue);',
     '          const nextPriv = !prevPriv;',
     '          privateMemory[mk] = nextPriv;',
@@ -1668,6 +1699,31 @@ export function buildReactPageLogicPlan(
       const axes = targets.variantTargets.get(nodeId);
       if (!axes) return false;
       return axisId ? axes.has(axisId) : axes.size > 0;
+    },
+    hasScopedChildLogic: (instanceIdPrefix: string) => {
+      const prefix = `${instanceIdPrefix}__`;
+      const sets: ReadonlyArray<ReadonlySet<string>> = [
+        targets.clickNodes,
+        targets.doubleClickNodes,
+        targets.hoverEnterNodes,
+        targets.hoverLeaveNodes,
+        targets.visibleTargets,
+        targets.textTargets,
+        targets.fillTargets,
+        targets.opacityTargets,
+        targets.transformTargets,
+        targets.disabledTargets,
+        targets.transitionTargets,
+      ];
+      for (const set of sets) {
+        for (const id of set) {
+          if (id.startsWith(prefix)) return true;
+        }
+      }
+      for (const id of targets.variantTargets.keys()) {
+        if (id.startsWith(prefix)) return true;
+      }
+      return false;
     },
   };
 }
