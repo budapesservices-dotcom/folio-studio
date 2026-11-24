@@ -1,6 +1,6 @@
 # Folio Studio
 
-Folio is a lightweight-first visual development studio for interface design, interactive prototypes, and visual-to-code workflows. Its long-term direction connects visual design, behavior, code, and runtime around one native project model.
+Folio is a lightweight-first visual development studio for interface design, interactive prototypes, and visual-to-code workflows. Its long-term direction connects visual design, behavior, code, and runtime around one native project models.
 
 ## Local development
 
