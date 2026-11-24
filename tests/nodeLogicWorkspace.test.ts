@@ -203,10 +203,14 @@ describe('Node Logic Workspace Helpers & Starter Experience', () => {
       expect(report.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
 
       const runtime = createPrototypeRuntime(testProject, { pageId: page.id });
+      const mountedSnap = runtime.mount();
       const firstInteractive =
         page.document.nodes.find((n) => n.type === 'rect' || n.type === 'frame' || n.type === 'ellipse')
         ?? page.document.nodes[0];
-      const snap = runtime.dispatchNodeEvent(firstInteractive.id, 'click');
+      const snap =
+        mountedSnap.trace.length > 0
+          ? mountedSnap
+          : runtime.dispatchNodeEvent(firstInteractive.id, 'click');
       expect(snap.trace.length).toBeGreaterThan(0);
     }
   });
@@ -254,12 +258,12 @@ describe('Node Logic Workspace Helpers & Starter Experience', () => {
       expect(src.x + LOGIC_NODE_WIDTH).toBeLessThan(tgt.x);
     }
 
-    // Verify upstream data provider (logic.template) is aligned right before action.set-text
-    const tpl = arranged.nodes.find((n) => n.type === 'logic.template')!;
-    const setText = arranged.nodes.find((n) => n.type === 'action.set-text')!;
+    // Verify upstream data provider (logic.text) is aligned right before action.set-layer
+    const tpl = arranged.nodes.find((n) => n.type === 'logic.text')!;
+    const setLayer = arranged.nodes.find((n) => n.type === 'action.set-layer')!;
     const evt = arranged.nodes.find((n) => n.type === 'event.on-click')!;
     expect(tpl.x).toBeGreaterThan(evt.x);
-    expect(tpl.x).toBeLessThan(setText.x);
+    expect(tpl.x).toBeLessThan(setLayer.x);
 
     // Verify semantic validity is preserved and second run is idempotent (same reference)
     const arrangedProject = { ...starter, logicGraphs: [arranged] };

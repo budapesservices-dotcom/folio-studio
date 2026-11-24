@@ -493,11 +493,13 @@ export interface DesignTokenCollection {
   tokens: DesignTokenDefinition[];
 }
 
-/** Typed primitive values supported by Node Logic v1 variables and data ports. */
-export type LogicValueType = 'string' | 'number' | 'boolean';
-export type LogicVariableValue = string | number | boolean;
+/** Typed values supported by Folio Node Logic variables and data ports. */
+export type LogicValueType = 'string' | 'number' | 'boolean' | 'list' | 'object';
+export type LogicVariableValue = string | number | boolean | readonly unknown[] | Readonly<Record<string, unknown>>;
+export type LogicVariableScope = 'local' | 'global';
+export type LogicVariablePersist = 'none' | 'local' | 'session';
 
-/** Declared graph-scoped or project-scoped variable for Node Logic v1. */
+/** Declared graph-scoped or project-scoped variable for Node Logic. */
 export interface LogicVariableDefinition {
   /** Stable internal variable ID independent of editable display name. */
   id: string;
@@ -505,6 +507,17 @@ export interface LogicVariableDefinition {
   valueType: LogicValueType;
   initialValue: LogicVariableValue;
   description?: string;
+  scope?: LogicVariableScope;
+  persist?: LogicVariablePersist;
+  computed?: boolean;
+  computedExpression?: string;
+}
+
+/** Project/graph-level network defaults used by HTTP Request and Realtime Socket nodes. */
+export interface LogicNetworkSettings {
+  baseUrl: string;
+  globalHeaders: string;
+  authToken: string;
 }
 
 /** Versioned node graph contract for the Folio Node Logic engine (.flop v2 compatible). */
@@ -531,6 +544,8 @@ export interface LogicGraph {
   targetId: string | null;
   /** Optional typed variables declared for this graph (omitted in legacy .flop v2 files). */
   variables?: LogicVariableDefinition[];
+  /** Optional network settings (Base URL, Global Headers, Auth Token) for Network nodes. */
+  networkSettings?: LogicNetworkSettings;
   nodes: LogicNode[];
   connections: LogicConnection[];
   createdAt: string;

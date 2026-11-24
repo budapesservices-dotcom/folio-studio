@@ -1,5 +1,4 @@
 import { useState } from 'preact/hooks';
-import { isSafeCssColorValue } from '../../core/document/tokens';
 import type {
   AnimationClip,
   ComponentDefinition,
@@ -8,22 +7,25 @@ import type {
   FolioPage,
   LogicConnection,
   LogicGraph,
+  LogicNetworkSettings,
   LogicNode,
   LogicValueType,
   LogicVariableDefinition,
+  LogicVariablePersist,
+  LogicVariableScope,
   LogicVariableValue,
 } from '../../core/document/types';
 import {
-  LOGIC_COMPARE_OPERATORS,
   getLogicNodeDefinition,
   type LogicDiagnostic,
   type LogicNodeEventKind,
   type PrototypeRuntimeSnapshot,
 } from '../../engines/prototype';
-import { getUsedSourceReferenceIds } from './nodeLogicGraphHelpers';
+import { getDefaultInitialValueForType } from './nodeLogicGraphHelpers';
+import { NodeLogicNodeFields } from './NodeLogicNodeFields';
 import { StudioIcon } from './StudioIcon';
 
-export type NodeLogicInspectorTab = 'node' | 'variables' | 'simulate';
+export type NodeLogicInspectorTab = 'node' | 'variables' | 'simulate' | 'network';
 
 export interface NodeLogicInspectorProps {
   activeTab: NodeLogicInspectorTab;
@@ -43,12 +45,26 @@ export interface NodeLogicInspectorProps {
   onDeleteNode: (nodeId: string) => void;
   onDeleteConnection: (connectionId: string) => void;
   onFocusNode: (nodeId: string) => void;
-  onAddVariable: (args: { name: string; valueType: LogicValueType; initialValue: LogicVariableValue }) => void;
+  onAddVariable: (args: {
+    name: string;
+    valueType: LogicValueType;
+    initialValue: LogicVariableValue;
+    scope?: LogicVariableScope;
+    persist?: LogicVariablePersist;
+    computed?: boolean;
+    computedExpression?: string;
+  }) => void;
   onUpdateVariable: (
     variableId: string,
-    patch: Partial<Pick<LogicVariableDefinition, 'name' | 'valueType' | 'initialValue'>>,
+    patch: Partial<
+      Pick<
+        LogicVariableDefinition,
+        'name' | 'valueType' | 'initialValue' | 'scope' | 'persist' | 'computed' | 'computedExpression'
+      >
+    >,
   ) => void;
   onDeleteVariable: (variableId: string) => void;
+  onUpdateNetworkSettings: (patch: Partial<LogicNetworkSettings>) => void;
   onRunMount: () => void;
   onTriggerNodeEvent: (nodeId: string, event: LogicNodeEventKind) => void;
   onResetRuntime: () => void;
@@ -61,7 +77,25 @@ function parseLiteralForType(raw: string, valueType: LogicValueType): LogicVaria
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? parsed : 0;
   }
+  if (valueType === 'list') {
+    const trimmed = raw.trim();
+    return trimmed || '[]';
+  }
+  if (valueType === 'object') {
+    const trimmed = raw.trim();
+    return trimmed || '{}';
+  }
   return raw;
+}
+
+function formatVariableValue(val: LogicVariableValue): string {
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  try {
+    return JSON.stringify(val);
+  } catch {
+    return String(val);
+  }
 }
 
 export function NodeLogicInspector({
@@ -85,6 +119,7 @@ export function NodeLogicInspector({
   onAddVariable,
   onUpdateVariable,
   onDeleteVariable,
+  onUpdateNetworkSettings,
   onRunMount,
   onTriggerNodeEvent,
   onResetRuntime,
@@ -93,6 +128,10 @@ export function NodeLogicInspector({
   const [newVarName, setNewVarName] = useState('');
   const [newVarType, setNewVarType] = useState<LogicValueType>('number');
   const [newVarInitial, setNewVarInitial] = useState('0');
+  const [newVarScope, setNewVarScope] = useState<LogicVariableScope>('local');
+  const [newVarPersist, setNewVarPersist] = useState<LogicVariablePersist>('none');
+  const [newVarComputed, setNewVarComputed] = useState(false);
+  const [newVarComputedExpr, setNewVarComputedExpr] = useState('');
 
   const nodeDef = selectedNode ? getLogicNodeDefinition(selectedNode.type) : undefined;
   const nodeDiagnostics = selectedNode
@@ -100,31 +139,91 @@ export function NodeLogicInspector({
     : [];
 
   const graphVariables = graph?.variables ?? [];
+  const networkSettings: LogicNetworkSettings = graph?.networkSettings ?? {
+    baseUrl: '',
+    globalHeaders: '',
+    authToken: '',
+  };
 
   const interactiveTriggers = graph
     ? graph.nodes.flatMap((node) => {
-        if (node.type === 'event.on-click' || node.type === 'event.on-hover') {
+        if (node.type === 'event.on-click') {
           const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
           if (!targetId) return [];
           const targetAst = scopedAstNodes.find((item) => item.id === targetId);
-          const eventKind: LogicNodeEventKind =
-            node.type === 'event.on-click'
-              ? 'click'
-              : node.data.phase === 'leave'
-                ? 'hover-leave'
-                : 'hover-enter';
           return [
             {
               logicNodeId: node.id,
               targetNodeId: targetId,
-              targetName: targetAst?.name ?? 'Unbound layer',
+              eventKind: 'click' as LogicNodeEventKind,
+              label: `Click “${targetAst?.name ?? 'Unbound'}”`,
+            },
+          ];
+        }
+        if (node.type === 'event.on-hover') {
+          const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
+          if (!targetId) return [];
+          const targetAst = scopedAstNodes.find((item) => item.id === targetId);
+          const eventKind: LogicNodeEventKind = node.data.phase === 'leave' ? 'hover-leave' : 'hover-enter';
+          return [
+            {
+              logicNodeId: node.id,
+              targetNodeId: targetId,
               eventKind,
               label:
-                eventKind === 'click'
-                  ? `Click “${targetAst?.name ?? 'Unbound'}”`
-                  : eventKind === 'hover-leave'
-                    ? `Hover Leave “${targetAst?.name ?? 'Unbound'}”`
-                    : `Hover Enter “${targetAst?.name ?? 'Unbound'}”`,
+                eventKind === 'hover-leave'
+                  ? `Hover Leave “${targetAst?.name ?? 'Unbound'}”`
+                  : `Hover Enter “${targetAst?.name ?? 'Unbound'}”`,
+            },
+          ];
+        }
+        if (node.type === 'event.on-input') {
+          const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
+          if (!targetId) return [];
+          const targetAst = scopedAstNodes.find((item) => item.id === targetId);
+          return [
+            {
+              logicNodeId: node.id,
+              targetNodeId: targetId,
+              eventKind: 'input' as LogicNodeEventKind,
+              label: `Input (${String(node.data.mode ?? 'change')}) “${targetAst?.name ?? 'Layer'}”`,
+            },
+          ];
+        }
+        if (node.type === 'event.on-key-press') {
+          return [
+            {
+              logicNodeId: node.id,
+              targetNodeId: node.id,
+              eventKind: 'key-press' as LogicNodeEventKind,
+              label: `Key Press “${String(node.data.keyCombo ?? 'Enter')}”`,
+            },
+          ];
+        }
+        if (node.type === 'event.on-drag') {
+          const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
+          if (!targetId) return [];
+          const targetAst = scopedAstNodes.find((item) => item.id === targetId);
+          return [
+            {
+              logicNodeId: node.id,
+              targetNodeId: targetId,
+              eventKind: 'drag' as LogicNodeEventKind,
+              label: `Drag (${String(node.data.phase ?? 'start')}) “${targetAst?.name ?? 'Layer'}”`,
+            },
+          ];
+        }
+        if (node.type === 'event.on-scroll-view') {
+          const targetId = typeof node.data.targetNodeId === 'string' && node.data.targetNodeId
+            ? node.data.targetNodeId
+            : node.id;
+          const targetAst = scopedAstNodes.find((item) => item.id === targetId);
+          return [
+            {
+              logicNodeId: node.id,
+              targetNodeId: targetId,
+              eventKind: 'scroll-view' as LogicNodeEventKind,
+              label: `Scroll / View (${String(node.data.mode ?? 'enter-view')})${targetAst ? ` “${targetAst.name}”` : ''}`,
             },
           ];
         }
@@ -137,14 +236,12 @@ export function NodeLogicInspector({
             {
               logicNodeId: node.id,
               targetNodeId: targetId,
-              targetName: name,
               eventKind: 'click' as LogicNodeEventKind,
               label: `Click Layer “${name}”`,
             },
             {
               logicNodeId: node.id,
               targetNodeId: targetId,
-              targetName: name,
               eventKind: 'hover-enter' as LogicNodeEventKind,
               label: `Hover Layer “${name}”`,
             },
@@ -163,16 +260,8 @@ export function NodeLogicInspector({
             {
               logicNodeId: node.id,
               targetNodeId: instance.id,
-              targetName: name,
               eventKind: 'click' as LogicNodeEventKind,
               label: `Click Component “${name}”`,
-            },
-            {
-              logicNodeId: node.id,
-              targetNodeId: instance.id,
-              targetName: name,
-              eventKind: 'hover-enter' as LogicNodeEventKind,
-              label: `Hover Component “${name}”`,
             },
           ];
         }
@@ -186,635 +275,14 @@ export function NodeLogicInspector({
       name: newVarName.trim() || `state${graphVariables.length + 1}`,
       valueType: newVarType,
       initialValue: parseLiteralForType(newVarInitial, newVarType),
+      scope: newVarScope,
+      persist: newVarPersist,
+      ...(newVarComputed ? { computed: true, computedExpression: newVarComputedExpr.trim() } : {}),
     });
     setNewVarName('');
-    setNewVarInitial(newVarType === 'number' ? '0' : newVarType === 'boolean' ? 'false' : '');
-  };
-
-  const renderNodeFields = (node: LogicNode) => {
-    const targetNodeId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
-    const variableId = typeof node.data.variableId === 'string' ? node.data.variableId : '';
-
-    const textNodes = scopedAstNodes.filter((item) => item.type === 'text');
-    const fillableNodes = scopedAstNodes.filter(
-      (item) => item.type !== 'group' && item.type !== 'component-instance',
-    );
-    const instanceNodes = scopedAstNodes.filter((item) => item.type === 'component-instance');
-
-    const renderAstTargetPicker = (label: string, candidates: readonly DesignNode[]) => (
-      <label class="nl-field">
-        <span>{label}</span>
-        <select
-          class="select-field"
-          value={targetNodeId}
-          onChange={(event) => onUpdateNodeData(node.id, { targetNodeId: event.currentTarget.value })}
-        >
-          <option value="">Select layer…</option>
-          {candidates.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name} ({item.type})
-            </option>
-          ))}
-        </select>
-      </label>
-    );
-
-    const renderVariablePicker = (filterType?: LogicValueType) => {
-      const candidates = filterType
-        ? availableVariables.filter((item) => item.valueType === filterType)
-        : availableVariables;
-      return (
-        <div class="nl-field-group">
-          <label class="nl-field">
-            <span>Variable{filterType ? ` (${filterType})` : ''}</span>
-            <select
-              class="select-field"
-              value={variableId}
-              onChange={(event) => onUpdateNodeData(node.id, { variableId: event.currentTarget.value })}
-            >
-              <option value="">Select variable…</option>
-              {candidates.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} ({item.valueType})
-                </option>
-              ))}
-            </select>
-          </label>
-          {candidates.length === 0 && (
-            <button
-              type="button"
-              class="nl-inline-link"
-              onClick={() => onChangeTab('variables')}
-            >
-              + Declare a {filterType ?? 'state'} variable
-            </button>
-          )}
-        </div>
-      );
-    };
-
-    switch (node.type) {
-      case 'source.page': {
-        const pageId = typeof node.data.pageId === 'string' ? node.data.pageId : '';
-        const usedPageIds = graph ? getUsedSourceReferenceIds(graph, 'source.page', node.id) : new Set<string>();
-        return (
-          <>
-            <label class="nl-field">
-              <span>Project page</span>
-              <select
-                class="select-field nl-source-select"
-                aria-label="Source page"
-                value={pageId}
-                onChange={(event) => onUpdateNodeData(node.id, { pageId: event.currentTarget.value })}
-              >
-                <option value="">Select available page…</option>
-                {pages.map((page) => {
-                  const isUsed = usedPageIds.has(page.id);
-                  return (
-                    <option key={page.id} value={page.id} disabled={isUsed}>
-                      {page.name} ({page.route}){isUsed ? ' — In graph' : ''}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-            <p class="nl-inspector-hint">
-              Pages already placed in another Page node are greyed out. Wire On Load to run actions on mount, or drag Route into a Navigate node.
-            </p>
-          </>
-        );
-      }
-
-      case 'source.component': {
-        const componentId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
-        const usedComponentIds = graph
-          ? getUsedSourceReferenceIds(graph, 'source.component', node.id)
-          : new Set<string>();
-        const enabledComponents = components.filter((c) => c.nodeLogicEnabled || c.id === componentId);
-        const disabledComponents = components.filter((c) => !c.nodeLogicEnabled);
-        return (
-          <>
-            <label class="nl-field">
-              <span>Component (sent to Node Logic)</span>
-              <select
-                class="select-field nl-source-select"
-                aria-label="Source component"
-                value={componentId}
-                onChange={(event) => onUpdateNodeData(node.id, { componentId: event.currentTarget.value })}
-              >
-                <option value="">
-                  {enabledComponents.length === 0 ? 'No components sent to Node yet…' : 'Select component…'}
-                </option>
-                {enabledComponents.map((comp) => {
-                  const isUsed = usedComponentIds.has(comp.id);
-                  const suffix = !comp.nodeLogicEnabled
-                    ? ' — Disabled'
-                    : isUsed
-                      ? ' — In graph'
-                      : '';
-                  return (
-                    <option key={comp.id} value={comp.id} disabled={isUsed}>
-                      {comp.name}{suffix}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-            <p class="nl-inspector-hint">
-              Only components enabled with “Send to Node” appear here. Components already assigned to another node are greyed out.
-            </p>
-            {onToggleComponentNodeLogic && disabledComponents.length > 0 && (
-              <div class="nl-quick-enable-box">
-                <div class="nl-section-label">Send Component to Node Logic</div>
-                <div class="nl-quick-enable-list">
-                  {disabledComponents.map((comp) => (
-                    <div key={comp.id} class="nl-quick-enable-row">
-                      <span>{comp.name}</span>
-                      <button
-                        type="button"
-                        class="nl-quick-enable-btn"
-                        onClick={() => {
-                          onToggleComponentNodeLogic(comp, true);
-                          if (!componentId && !usedComponentIds.has(comp.id)) {
-                            onUpdateNodeData(node.id, { componentId: comp.id });
-                          }
-                        }}
-                      >
-                        Send to Node
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        );
-      }
-
-      case 'source.element': {
-        const usedElementIds = graph
-          ? getUsedSourceReferenceIds(graph, 'source.element', node.id)
-          : new Set<string>();
-        return (
-          <>
-            <label class="nl-field">
-              <span>Canvas layer</span>
-              <select
-                class="select-field nl-source-select"
-                aria-label="Source canvas layer"
-                value={targetNodeId}
-                onChange={(event) => onUpdateNodeData(node.id, { targetNodeId: event.currentTarget.value })}
-              >
-                <option value="">Select available layer…</option>
-                {scopedAstNodes.map((item) => {
-                  const isUsed = usedElementIds.has(item.id);
-                  return (
-                    <option key={item.id} value={item.id} disabled={isUsed}>
-                      {item.name} ({item.type}){isUsed ? ' — In graph' : ''}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-            <p class="nl-inspector-hint">
-              Layers already bound to another Canvas Layer node are greyed out. Drag On Click or On Hover directly to any action.
-            </p>
-          </>
-        );
-      }
-
-      case 'source.theme': {
-        const themeId = typeof node.data.themeId === 'string' ? node.data.themeId : '';
-        const usedThemeIds = graph ? getUsedSourceReferenceIds(graph, 'source.theme', node.id) : new Set<string>();
-        return (
-          <>
-            <label class="nl-field">
-              <span>Design Token theme</span>
-              <select
-                class="select-field nl-source-select"
-                aria-label="Source theme"
-                value={themeId}
-                onChange={(event) => onUpdateNodeData(node.id, { themeId: event.currentTarget.value })}
-              >
-                <option value="">Select available theme…</option>
-                {themes.map((theme) => {
-                  const isUsed = usedThemeIds.has(theme.id);
-                  return (
-                    <option key={theme.id} value={theme.id} disabled={isUsed}>
-                      {theme.name}{isUsed ? ' — In graph' : ''}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-            <p class="nl-inspector-hint">
-              Themes already assigned to another Theme node are greyed out.
-            </p>
-          </>
-        );
-      }
-
-      case 'event.on-click':
-        return renderAstTargetPicker('Target layer', scopedAstNodes);
-
-      case 'event.on-hover':
-        return (
-          <>
-            {renderAstTargetPicker('Target layer', scopedAstNodes)}
-            <label class="nl-field">
-              <span>Hover phase</span>
-              <select
-                class="select-field"
-                value={node.data.phase === 'leave' ? 'leave' : 'enter'}
-                onChange={(event) => onUpdateNodeData(node.id, { phase: event.currentTarget.value })}
-              >
-                <option value="enter">Pointer enter</option>
-                <option value="leave">Pointer leave</option>
-              </select>
-            </label>
-          </>
-        );
-
-      case 'event.on-page-load':
-        return (
-          <p class="nl-inspector-hint">
-            Runs automatically once when this page mounts in Simulate or Live Preview.
-          </p>
-        );
-
-      case 'event.on-state-change':
-      case 'state.get':
-        return renderVariablePicker();
-
-      case 'state.toggle':
-        return renderVariablePicker('boolean');
-
-      case 'state.set': {
-        const selectedVar = availableVariables.find((item) => item.id === variableId);
-        return (
-          <>
-            {renderVariablePicker()}
-            {selectedVar && (
-              <label class="nl-field">
-                <span>Literal value (fallback when Value port is unwired)</span>
-                {selectedVar.valueType === 'boolean' ? (
-                  <select
-                    class="select-field"
-                    value={String(Boolean(node.data.value))}
-                    onChange={(event) =>
-                      onUpdateNodeData(node.id, { value: event.currentTarget.value === 'true' })
-                    }
-                  >
-                    <option value="true">true</option>
-                    <option value="false">false</option>
-                  </select>
-                ) : selectedVar.valueType === 'number' ? (
-                  <input
-                    class="nl-input"
-                    type="number"
-                    value={typeof node.data.value === 'number' ? node.data.value : 0}
-                    onInput={(event) => {
-                      const next = Number(event.currentTarget.value);
-                      onUpdateNodeData(node.id, { value: Number.isFinite(next) ? next : 0 });
-                    }}
-                  />
-                ) : (
-                  <input
-                    class="nl-input"
-                    type="text"
-                    value={node.data.value === null || node.data.value === undefined ? '' : String(node.data.value)}
-                    onInput={(event) => onUpdateNodeData(node.id, { value: event.currentTarget.value })}
-                  />
-                )}
-              </label>
-            )}
-          </>
-        );
-      }
-
-      case 'state.increment':
-        return (
-          <>
-            {renderVariablePicker('number')}
-            <div class="nl-field-grid">
-              <label class="nl-field">
-                <span>Step</span>
-                <input
-                  class="nl-input nl-tabular"
-                  type="number"
-                  value={typeof node.data.step === 'number' ? node.data.step : 1}
-                  onInput={(event) => {
-                    const next = Number(event.currentTarget.value);
-                    onUpdateNodeData(node.id, { step: Number.isFinite(next) ? next : 1 });
-                  }}
-                />
-              </label>
-              <label class="nl-field">
-                <span>Min</span>
-                <input
-                  class="nl-input nl-tabular"
-                  type="number"
-                  placeholder="none"
-                  value={typeof node.data.min === 'number' ? node.data.min : ''}
-                  onInput={(event) => {
-                    const raw = event.currentTarget.value.trim();
-                    const parsed = raw === '' ? null : Number(raw);
-                    onUpdateNodeData(node.id, {
-                      min: parsed !== null && Number.isFinite(parsed) ? parsed : null,
-                    });
-                  }}
-                />
-              </label>
-              <label class="nl-field">
-                <span>Max</span>
-                <input
-                  class="nl-input nl-tabular"
-                  type="number"
-                  placeholder="none"
-                  value={typeof node.data.max === 'number' ? node.data.max : ''}
-                  onInput={(event) => {
-                    const raw = event.currentTarget.value.trim();
-                    const parsed = raw === '' ? null : Number(raw);
-                    onUpdateNodeData(node.id, {
-                      max: parsed !== null && Number.isFinite(parsed) ? parsed : null,
-                    });
-                  }}
-                />
-              </label>
-            </div>
-          </>
-        );
-
-      case 'logic.branch':
-        return (
-          <label class="nl-field">
-            <span>Fallback condition (when Condition port is unwired)</span>
-            <select
-              class="select-field"
-              value={String(Boolean(node.data.condition))}
-              onChange={(event) =>
-                onUpdateNodeData(node.id, { condition: event.currentTarget.value === 'true' })
-              }
-            >
-              <option value="true">True</option>
-              <option value="false">False</option>
-            </select>
-          </label>
-        );
-
-      case 'logic.compare':
-        return (
-          <>
-            <label class="nl-field">
-              <span>Operator</span>
-              <select
-                class="select-field"
-                value={String(node.data.operator ?? '==')}
-                onChange={(event) => onUpdateNodeData(node.id, { operator: event.currentTarget.value })}
-              >
-                {LOGIC_COMPARE_OPERATORS.map((op) => (
-                  <option key={op} value={op}>{op}</option>
-                ))}
-              </select>
-            </label>
-            <div class="nl-field-grid nl-field-grid-2">
-              <label class="nl-field">
-                <span>Left fallback</span>
-                <input
-                  class="nl-input"
-                  type="text"
-                  value={node.data.left === null || node.data.left === undefined ? '' : String(node.data.left)}
-                  onInput={(event) => {
-                    const raw = event.currentTarget.value;
-                    const asNum = raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : raw;
-                    onUpdateNodeData(node.id, { left: asNum });
-                  }}
-                />
-              </label>
-              <label class="nl-field">
-                <span>Right fallback</span>
-                <input
-                  class="nl-input"
-                  type="text"
-                  value={node.data.right === null || node.data.right === undefined ? '' : String(node.data.right)}
-                  onInput={(event) => {
-                    const raw = event.currentTarget.value;
-                    const asNum = raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : raw;
-                    onUpdateNodeData(node.id, { right: asNum });
-                  }}
-                />
-              </label>
-            </div>
-          </>
-        );
-
-      case 'logic.template':
-        return (
-          <label class="nl-field">
-            <span>Template (use {'{{variableName}}'} or {'{{value}}'})</span>
-            <input
-              class="nl-input"
-              type="text"
-              value={typeof node.data.template === 'string' ? node.data.template : '{{value}}'}
-              onInput={(event) => onUpdateNodeData(node.id, { template: event.currentTarget.value })}
-            />
-          </label>
-        );
-
-      case 'action.set-visible':
-        return (
-          <>
-            {renderAstTargetPicker('Target layer', scopedAstNodes)}
-            <label class="nl-field">
-              <span>Visibility mode</span>
-              <select
-                class="select-field"
-                value={String(node.data.mode ?? 'toggle')}
-                onChange={(event) => onUpdateNodeData(node.id, { mode: event.currentTarget.value })}
-              >
-                <option value="toggle">Toggle</option>
-                <option value="show">Show</option>
-                <option value="hide">Hide</option>
-              </select>
-            </label>
-          </>
-        );
-
-      case 'action.set-text':
-        return (
-          <>
-            {renderAstTargetPicker('Target text layer', textNodes)}
-            <label class="nl-field">
-              <span>Fallback text (when Text port is unwired)</span>
-              <input
-                class="nl-input"
-                type="text"
-                value={typeof node.data.text === 'string' ? node.data.text : ''}
-                onInput={(event) => onUpdateNodeData(node.id, { text: event.currentTarget.value })}
-              />
-            </label>
-          </>
-        );
-
-      case 'action.set-fill': {
-        const fillValue = typeof node.data.fill === 'string' ? node.data.fill : '#8B7CF6';
-        const isHex = /^#[0-9a-fA-F]{6}$/.test(fillValue);
-        return (
-          <>
-            {renderAstTargetPicker('Target fillable layer', fillableNodes)}
-            <div class="nl-field">
-              <span>Fill color</span>
-              <div class="nl-color-row">
-                <input
-                  type="color"
-                  class="nl-color-swatch"
-                  aria-label="Pick fill color"
-                  value={isHex ? fillValue : '#8B7CF6'}
-                  onInput={(event) => onUpdateNodeData(node.id, { fill: event.currentTarget.value })}
-                />
-                <input
-                  class="nl-input nl-tabular"
-                  type="text"
-                  value={fillValue}
-                  onInput={(event) => onUpdateNodeData(node.id, { fill: event.currentTarget.value })}
-                />
-              </div>
-              {!isSafeCssColorValue(fillValue) && (
-                <span class="nl-field-error">Enter a valid hex, rgb(), or hsl() color.</span>
-              )}
-            </div>
-          </>
-        );
-      }
-
-      case 'action.set-variant': {
-        const targetInstance = instanceNodes.find((item) => item.id === targetNodeId);
-        const master =
-          targetInstance && targetInstance.type === 'component-instance'
-            ? components.find((comp) => comp.id === targetInstance.componentId)
-            : undefined;
-        const axes = master?.variants ?? [];
-        const axisId = typeof node.data.axisId === 'string' ? node.data.axisId : '';
-        const selectedAxis = axes.find((axis) => axis.id === axisId);
-        const optionId = typeof node.data.optionId === 'string' ? node.data.optionId : '';
-
-        return (
-          <>
-            {renderAstTargetPicker('Component instance', instanceNodes)}
-            <label class="nl-field">
-              <span>Variant axis</span>
-              <select
-                class="select-field"
-                value={axisId}
-                onChange={(event) => {
-                  const nextAxisId = event.currentTarget.value;
-                  const nextAxis = axes.find((a) => a.id === nextAxisId);
-                  onUpdateNodeData(node.id, {
-                    axisId: nextAxisId,
-                    optionId: nextAxis?.options[0]?.id ?? '',
-                  });
-                }}
-              >
-                <option value="">Select axis…</option>
-                {axes.map((axis) => (
-                  <option key={axis.id} value={axis.id}>{axis.name}</option>
-                ))}
-              </select>
-            </label>
-            <label class="nl-field">
-              <span>Variant option</span>
-              <select
-                class="select-field"
-                value={optionId}
-                onChange={(event) => onUpdateNodeData(node.id, { optionId: event.currentTarget.value })}
-              >
-                <option value="">Select option…</option>
-                {(selectedAxis?.options ?? []).map((opt) => (
-                  <option key={opt.id} value={opt.id}>{opt.label}</option>
-                ))}
-              </select>
-            </label>
-          </>
-        );
-      }
-
-      case 'action.navigate':
-        return (
-          <>
-            <label class="nl-field">
-              <span>Project page route</span>
-              <select
-                class="select-field"
-                value={pages.some((p) => p.route === node.data.route) ? String(node.data.route) : ''}
-                onChange={(event) => {
-                  if (event.currentTarget.value) {
-                    onUpdateNodeData(node.id, { route: event.currentTarget.value });
-                  }
-                }}
-              >
-                <option value="">Custom route or URL…</option>
-                {pages.map((page) => (
-                  <option key={page.id} value={page.route}>
-                    {page.name} ({page.route})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label class="nl-field">
-              <span>Route / safe URL (fallback when Route port is unwired)</span>
-              <input
-                class="nl-input"
-                type="text"
-                value={typeof node.data.route === 'string' ? node.data.route : '/'}
-                onInput={(event) => onUpdateNodeData(node.id, { route: event.currentTarget.value })}
-              />
-            </label>
-          </>
-        );
-
-      case 'action.set-theme':
-        return (
-          <label class="nl-field">
-            <span>Design Token theme</span>
-            <select
-              class="select-field"
-              value={typeof node.data.themeId === 'string' ? node.data.themeId : ''}
-              onChange={(event) => onUpdateNodeData(node.id, { themeId: event.currentTarget.value })}
-            >
-              <option value="">Select theme…</option>
-              {themes.map((theme) => (
-                <option key={theme.id} value={theme.id}>{theme.name}</option>
-              ))}
-            </select>
-          </label>
-        );
-
-      case 'action.play-animation':
-        return (
-          <label class="nl-field">
-            <span>Motion Timeline clip</span>
-            <select
-              class="select-field"
-              value={typeof node.data.clipId === 'string' ? node.data.clipId : ''}
-              onChange={(event) => onUpdateNodeData(node.id, { clipId: event.currentTarget.value })}
-            >
-              <option value="">Select animation clip…</option>
-              {animations.map((clip) => (
-                <option key={clip.id} value={clip.id}>
-                  {clip.name} ({(clip.durationMs / 1000).toFixed(2)}s)
-                </option>
-              ))}
-            </select>
-          </label>
-        );
-
-      default:
-        return (
-          <p class="nl-inspector-hint">
-            Non-v1 node type “{node.type}” is preserved safely inside this .flop v2 project.
-          </p>
-        );
-    }
+    setNewVarInitial(String(getDefaultInitialValueForType(newVarType)));
+    setNewVarComputed(false);
+    setNewVarComputedExpr('');
   };
 
   return (
@@ -836,7 +304,7 @@ export function NodeLogicInspector({
           class={`nl-tab-btn ${activeTab === 'variables' ? 'is-active' : ''}`}
           onClick={() => onChangeTab('variables')}
         >
-          Variables ({graphVariables.length})
+          Vars ({graphVariables.length})
         </button>
         <button
           type="button"
@@ -845,7 +313,16 @@ export function NodeLogicInspector({
           class={`nl-tab-btn ${activeTab === 'simulate' ? 'is-active' : ''}`}
           onClick={() => onChangeTab('simulate')}
         >
-          Simulate
+          Sim
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'network'}
+          class={`nl-tab-btn ${activeTab === 'network' ? 'is-active' : ''}`}
+          onClick={() => onChangeTab('network')}
+        >
+          Network
         </button>
       </div>
 
@@ -876,7 +353,19 @@ export function NodeLogicInspector({
                 )}
 
                 <div class="nl-inspector-fields">
-                  {renderNodeFields(selectedNode)}
+                  <NodeLogicNodeFields
+                    node={selectedNode}
+                    graph={graph}
+                    scopedAstNodes={scopedAstNodes}
+                    availableVariables={availableVariables}
+                    components={components}
+                    pages={pages}
+                    themes={themes}
+                    animations={animations}
+                    onChangeTab={onChangeTab}
+                    onUpdateNodeData={onUpdateNodeData}
+                    onToggleComponentNodeLogic={onToggleComponentNodeLogic}
+                  />
                 </div>
 
                 {nodeDiagnostics.length > 0 && (
@@ -963,7 +452,7 @@ export function NodeLogicInspector({
 
         {activeTab === 'variables' && (
           <div class="nl-inspector-section">
-            <div class="nl-section-label">Graph State Variables</div>
+            <div class="nl-section-label">State Variables</div>
             {!graph ? (
               <p class="nl-inspector-hint">Create a logic graph before declaring variables.</p>
             ) : (
@@ -973,7 +462,7 @@ export function NodeLogicInspector({
                     class="nl-input"
                     type="text"
                     aria-label="New variable name"
-                    placeholder="Variable name (e.g. isOpen)"
+                    placeholder="Variable name (e.g. cartItems)"
                     value={newVarName}
                     onInput={(event) => setNewVarName(event.currentTarget.value)}
                   />
@@ -985,12 +474,14 @@ export function NodeLogicInspector({
                       onChange={(event) => {
                         const nextType = event.currentTarget.value as LogicValueType;
                         setNewVarType(nextType);
-                        setNewVarInitial(nextType === 'number' ? '0' : nextType === 'boolean' ? 'false' : '');
+                        setNewVarInitial(String(getDefaultInitialValueForType(nextType)));
                       }}
                     >
                       <option value="number">Number</option>
                       <option value="boolean">Boolean</option>
                       <option value="string">String</option>
+                      <option value="list">List (Array)</option>
+                      <option value="object">Object (JSON)</option>
                     </select>
                     {newVarType === 'boolean' ? (
                       <select
@@ -1007,12 +498,57 @@ export function NodeLogicInspector({
                         class="nl-input nl-tabular"
                         type={newVarType === 'number' ? 'number' : 'text'}
                         aria-label="New variable initial value"
-                        placeholder="Initial"
+                        placeholder={newVarType === 'list' ? '[]' : newVarType === 'object' ? '{}' : 'Initial'}
                         value={newVarInitial}
                         onInput={(event) => setNewVarInitial(event.currentTarget.value)}
                       />
                     )}
                   </div>
+                  <div class="nl-field-grid nl-field-grid-2">
+                    <label class="nl-field">
+                      <span>Scope</span>
+                      <select
+                        class="select-field"
+                        aria-label="New variable scope"
+                        value={newVarScope}
+                        onChange={(event) => setNewVarScope(event.currentTarget.value as LogicVariableScope)}
+                      >
+                        <option value="local">Local</option>
+                        <option value="global">Global</option>
+                      </select>
+                    </label>
+                    <label class="nl-field">
+                      <span>Persist</span>
+                      <select
+                        class="select-field"
+                        aria-label="New variable persistence"
+                        value={newVarPersist}
+                        onChange={(event) => setNewVarPersist(event.currentTarget.value as LogicVariablePersist)}
+                      >
+                        <option value="none">None</option>
+                        <option value="local">LocalStorage</option>
+                        <option value="session">SessionStorage</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label class="nl-checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={newVarComputed}
+                      onChange={(event) => setNewVarComputed(event.currentTarget.checked)}
+                    />
+                    <span>Computed variable</span>
+                  </label>
+                  {newVarComputed && (
+                    <input
+                      class="nl-input"
+                      type="text"
+                      aria-label="Computed expression"
+                      placeholder="e.g. {{price}} * {{qty}}"
+                      value={newVarComputedExpr}
+                      onInput={(event) => setNewVarComputedExpr(event.currentTarget.value)}
+                    />
+                  )}
                   <button type="submit" class="nl-primary-btn">
                     Add Variable
                   </button>
@@ -1036,6 +572,35 @@ export function NodeLogicInspector({
                             <StudioIcon name="trash" />
                           </button>
                         </div>
+                        <div class="nl-var-meta-grid">
+                          <select
+                            class="select-field"
+                            aria-label={`Scope for ${variable.name}`}
+                            value={variable.scope ?? 'local'}
+                            onChange={(event) =>
+                              onUpdateVariable(variable.id, {
+                                scope: event.currentTarget.value as LogicVariableScope,
+                              })
+                            }
+                          >
+                            <option value="local">Local</option>
+                            <option value="global">Global</option>
+                          </select>
+                          <select
+                            class="select-field"
+                            aria-label={`Persist for ${variable.name}`}
+                            value={variable.persist ?? 'none'}
+                            onChange={(event) =>
+                              onUpdateVariable(variable.id, {
+                                persist: event.currentTarget.value as LogicVariablePersist,
+                              })
+                            }
+                          >
+                            <option value="none">No persist</option>
+                            <option value="local">LocalStorage</option>
+                            <option value="session">Session</option>
+                          </select>
+                        </div>
                         <div class="nl-var-row-edit">
                           <span class="nl-var-initial-label">Initial</span>
                           {variable.valueType === 'boolean' ? (
@@ -1057,7 +622,7 @@ export function NodeLogicInspector({
                               class="nl-input nl-tabular"
                               type={variable.valueType === 'number' ? 'number' : 'text'}
                               aria-label={`Initial value for ${variable.name}`}
-                              value={String(variable.initialValue)}
+                              value={formatVariableValue(variable.initialValue)}
                               onInput={(event) =>
                                 onUpdateVariable(variable.id, {
                                   initialValue: parseLiteralForType(event.currentTarget.value, variable.valueType),
@@ -1066,6 +631,28 @@ export function NodeLogicInspector({
                             />
                           )}
                         </div>
+                        <label class="nl-checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(variable.computed)}
+                            onChange={(event) =>
+                              onUpdateVariable(variable.id, { computed: event.currentTarget.checked })
+                            }
+                          />
+                          <span>Computed</span>
+                        </label>
+                        {variable.computed && (
+                          <input
+                            class="nl-input"
+                            type="text"
+                            aria-label={`Computed expression for ${variable.name}`}
+                            placeholder="Expression (e.g. {{count}} items)"
+                            value={variable.computedExpression ?? ''}
+                            onInput={(event) =>
+                              onUpdateVariable(variable.id, { computedExpression: event.currentTarget.value })
+                            }
+                          />
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1104,7 +691,7 @@ export function NodeLogicInspector({
               </div>
             ) : (
               <p class="nl-inspector-hint">
-                Add a Page, Component, Canvas Layer, On Click, or On Hover node to trigger interactive flows here.
+                Add any Event or Element / Layer source node to trigger interactive flows here.
               </p>
             )}
 
@@ -1128,12 +715,24 @@ export function NodeLogicInspector({
                       return (
                         <div key={varId} class="nl-sim-kv">
                           <span>{varMeta?.name ?? varId}</span>
-                          <strong>{String(val)}</strong>
+                          <strong>{formatVariableValue(val)}</strong>
                         </div>
                       );
                     })}
                   </div>
                 </div>
+
+                {runtimeSnapshot.toasts && runtimeSnapshot.toasts.length > 0 && (
+                  <div class="nl-sim-toasts">
+                    <div class="nl-section-label">Toasts ({runtimeSnapshot.toasts.length})</div>
+                    {runtimeSnapshot.toasts.map((toast, idx) => (
+                      <div key={`${toast.message}-${idx}`} class={`nl-sim-toast is-${toast.tone}`}>
+                        <span>{toast.tone.toUpperCase()}</span>
+                        <strong>{toast.message}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {Object.keys(runtimeSnapshot.nodeOverrides).length > 0 && (
                   <div class="nl-sim-overrides">
@@ -1148,6 +747,10 @@ export function NodeLogicInspector({
                               override.text !== undefined ? `text: "${override.text}"` : null,
                               override.fill !== undefined ? `fill: ${override.fill}` : null,
                               override.visible !== undefined ? `visible: ${String(override.visible)}` : null,
+                              override.opacity !== undefined ? `opacity: ${override.opacity}` : null,
+                              override.transform !== undefined ? `transform: ${override.transform}` : null,
+                              override.imageUrl !== undefined ? `image: ${override.imageUrl}` : null,
+                              override.disabled !== undefined ? `disabled: ${String(override.disabled)}` : null,
                               override.variantSelection
                                 ? `variant: ${Object.values(override.variantSelection).join(', ')}`
                                 : null,
@@ -1178,6 +781,57 @@ export function NodeLogicInspector({
                     </div>
                   )}
                 </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'network' && (
+          <div class="nl-inspector-section" data-testid="nl-network-settings-panel">
+            <div class="nl-section-label">Project Network Settings</div>
+            {!graph ? (
+              <p class="nl-inspector-hint">Create a logic graph before configuring network settings.</p>
+            ) : (
+              <>
+                <p class="nl-inspector-hint">
+                  Shared by all HTTP Request, External Data, and Realtime Socket nodes in this graph.
+                </p>
+                <label class="nl-field">
+                  <span>Base URL</span>
+                  <input
+                    class="nl-input"
+                    type="text"
+                    aria-label="Network Base URL"
+                    placeholder="https://api.example.com/v1"
+                    value={networkSettings.baseUrl}
+                    onInput={(event) => onUpdateNetworkSettings({ baseUrl: event.currentTarget.value })}
+                  />
+                </label>
+                <label class="nl-field">
+                  <span>Global Headers (JSON)</span>
+                  <textarea
+                    class="nl-textarea nl-tabular"
+                    rows={3}
+                    aria-label="Network Global Headers"
+                    placeholder={'{"Accept": "application/json"}'}
+                    value={networkSettings.globalHeaders}
+                    onInput={(event) => onUpdateNetworkSettings({ globalHeaders: event.currentTarget.value })}
+                  />
+                </label>
+                <label class="nl-field">
+                  <span>Auth Token (Bearer / Env var ref)</span>
+                  <input
+                    class="nl-input"
+                    type="password"
+                    aria-label="Network Auth Token"
+                    placeholder="env:API_TOKEN or token placeholder"
+                    value={networkSettings.authToken}
+                    onInput={(event) => onUpdateNetworkSettings({ authToken: event.currentTarget.value })}
+                  />
+                </label>
+                <p class="nl-inspector-hint">
+                  Tip: Prefer an environment placeholder like <code>env:API_TOKEN</code> rather than storing live secrets in client-side <code>.flop</code> files.
+                </p>
               </>
             )}
           </div>

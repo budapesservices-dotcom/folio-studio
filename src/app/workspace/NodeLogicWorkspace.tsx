@@ -7,9 +7,12 @@ import type {
   FolioProject,
   LogicConnection,
   LogicGraph,
+  LogicNetworkSettings,
   LogicNode,
   LogicValueType,
   LogicVariableDefinition,
+  LogicVariablePersist,
+  LogicVariableScope,
   LogicVariableValue,
 } from '../../core/document/types';
 import {
@@ -54,6 +57,7 @@ import {
   removeVariableFromGraph,
   repatchConnectionInGraph,
   touchLogicGraph,
+  updateNetworkSettingsInGraph,
   updateNodeDataInGraph,
   updateVariableInGraph,
   type LogicPoint,
@@ -125,6 +129,8 @@ const CATEGORY_FILTER_OPTIONS: readonly { id: 'all' | LogicNodeCategory; label: 
   { id: 'state', label: 'State' },
   { id: 'logic', label: 'Logic' },
   { id: 'action', label: 'Actions' },
+  { id: 'flow', label: 'Flow' },
+  { id: 'network', label: 'Network' },
 ];
 
 const CATEGORY_MARKERS: Record<LogicNodeCategory | 'custom', { glyph: string; label: string }> = {
@@ -133,6 +139,8 @@ const CATEGORY_MARKERS: Record<LogicNodeCategory | 'custom', { glyph: string; la
   state: { glyph: '■', label: 'State' },
   logic: { glyph: '⬡', label: 'Logic' },
   action: { glyph: '▸', label: 'Action' },
+  flow: { glyph: '◷', label: 'Flow' },
+  network: { glyph: '⇄', label: 'Network' },
   custom: { glyph: '○', label: 'Custom' },
 };
 
@@ -410,11 +418,19 @@ export default function NodeLogicWorkspace({
       const usedElements = getUsedSourceReferenceIds(targetGraph, 'source.element');
       const firstAvailable = scopedAstNodes.find((item) => !usedElements.has(item.id));
       defaultExtras.targetNodeId = firstAvailable?.id ?? '';
+    } else if (type === 'source.context') {
+      const usedPages = getUsedSourceReferenceIds(targetGraph, 'source.context');
+      const firstAvailable = project.pages.find((page) => !usedPages.has(page.id));
+      defaultExtras.contextKind = 'page';
+      defaultExtras.pageId = firstAvailable?.id ?? '';
     } else if (type === 'source.theme') {
       const usedThemes = getUsedSourceReferenceIds(targetGraph, 'source.theme');
       const firstAvailable = designTokens.themes.find((theme) => !usedThemes.has(theme.id));
       defaultExtras.themeId = firstAvailable?.id ?? '';
     } else if (type === 'action.set-theme' && designTokens.themes[0]) {
+      defaultExtras.themeId = designTokens.themes[0].id;
+    } else if (type === 'action.system-form' && designTokens.themes[0]) {
+      defaultExtras.action = 'set-theme';
       defaultExtras.themeId = designTokens.themes[0].id;
     } else if (type === 'action.navigate') {
       defaultExtras.route = activePage.route;
@@ -988,12 +1004,12 @@ export default function NodeLogicWorkspace({
         >
           <select
             class="nl-node-select"
-            aria-label="Select canvas layer for Canvas Layer node"
+            aria-label="Select canvas layer for Element / Layer node"
             value={currentTargetId}
             onChange={(event) => {
               commitGraphUpdate(
                 updateNodeDataInGraph(activeGraph, node.id, { targetNodeId: event.currentTarget.value }),
-                'Bind Canvas Layer node',
+                'Bind Element / Layer node',
               );
             }}
           >
@@ -1006,6 +1022,59 @@ export default function NodeLogicWorkspace({
                 </option>
               );
             })}
+          </select>
+        </div>
+      );
+    }
+
+    if (node.type === 'source.context') {
+      const contextKind = typeof node.data.contextKind === 'string' ? node.data.contextKind : 'page';
+      return (
+        <div
+          class="nl-node-picker"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <select
+            class="nl-node-select"
+            aria-label="Select context kind for App / Context node"
+            value={contextKind}
+            onChange={(event) => {
+              commitGraphUpdate(
+                updateNodeDataInGraph(activeGraph, node.id, { contextKind: event.currentTarget.value }),
+                'Change App / Context source',
+              );
+            }}
+          >
+            <option value="page">Context: Page</option>
+            <option value="theme">Context: Theme</option>
+            <option value="url-params">Context: URL / Params</option>
+            <option value="viewport">Context: Viewport</option>
+            <option value="user-auth">Context: User / Auth</option>
+          </select>
+        </div>
+      );
+    }
+
+    if (node.type === 'source.external') {
+      const sourceKind = node.data.sourceKind === 'cms' ? 'cms' : 'api';
+      return (
+        <div
+          class="nl-node-picker"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <select
+            class="nl-node-select"
+            aria-label="Select external provider for External Data node"
+            value={sourceKind}
+            onChange={(event) => {
+              commitGraphUpdate(
+                updateNodeDataInGraph(activeGraph, node.id, { sourceKind: event.currentTarget.value }),
+                'Change External Data provider',
+              );
+            }}
+          >
+            <option value="api">API: {String(node.data.endpoint || '/items').slice(0, 18)}</option>
+            <option value="cms">CMS: {String(node.data.collection || 'collection').slice(0, 18)}</option>
           </select>
         </div>
       );
@@ -1713,7 +1782,15 @@ export default function NodeLogicWorkspace({
               }));
             }
           }}
-          onAddVariable={(args: { name: string; valueType: LogicValueType; initialValue: LogicVariableValue }) => {
+          onAddVariable={(args: {
+            name: string;
+            valueType: LogicValueType;
+            initialValue: LogicVariableValue;
+            scope?: LogicVariableScope;
+            persist?: LogicVariablePersist;
+            computed?: boolean;
+            computedExpression?: string;
+          }) => {
             if (!activeGraph) return;
             const { graph: nextGraph, variable } = addVariableToGraph(activeGraph, args);
             commitGraphUpdate(nextGraph, `Add logic variable "${variable.name}"`);
@@ -1726,6 +1803,10 @@ export default function NodeLogicWorkspace({
           onDeleteVariable={(variableId) => {
             if (!activeGraph) return;
             commitGraphUpdate(removeVariableFromGraph(activeGraph, variableId), 'Delete logic variable');
+          }}
+          onUpdateNetworkSettings={(patch: Partial<LogicNetworkSettings>) => {
+            if (!activeGraph) return;
+            commitGraphUpdate(updateNetworkSettingsInGraph(activeGraph, patch), 'Update project network settings');
           }}
           onRunMount={() => {
             if (!runtimeRef.current) return;

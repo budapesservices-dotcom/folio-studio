@@ -30,8 +30,10 @@ import { compileReactProjectFiles } from '../src/engines/codegen/reactCompiler';
 import { applyProjectDelta, computeProjectDelta } from '../src/engines/history';
 import {
   BUILT_IN_LOGIC_NODE_TYPES,
+  LEGACY_LOGIC_NODE_TYPES,
   LOGIC_NODE_CATALOG,
   MAX_LOGIC_EXECUTION_STEPS,
+  PRIMARY_LOGIC_NODE_TYPES,
   areLogicPortTypesCompatible,
   auditOrphanLogicReferences,
   buildLivePreviewLogicScript,
@@ -254,8 +256,10 @@ describe('Node Logic v1 — .flop v2 Backward Compatibility & Schema Validation'
 });
 
 describe('Node Logic v1 — Typed Catalog & Semantic Graph Validator', () => {
-  it('registers all 22 v1 node types (including 4 Source nodes) and enforces strict port type compatibility', () => {
-    expect(BUILT_IN_LOGIC_NODE_TYPES).toHaveLength(22);
+  it('registers all 31 primary v2 node types plus 13 legacy compatibility nodes and enforces strict port type compatibility', () => {
+    expect(PRIMARY_LOGIC_NODE_TYPES).toHaveLength(31);
+    expect(LEGACY_LOGIC_NODE_TYPES).toHaveLength(13);
+    expect(BUILT_IN_LOGIC_NODE_TYPES).toHaveLength(44);
     for (const type of BUILT_IN_LOGIC_NODE_TYPES) {
       expect(LOGIC_NODE_CATALOG[type].type).toBe(type);
       expect(LOGIC_NODE_CATALOG[type].ports.length).toBeGreaterThan(0);

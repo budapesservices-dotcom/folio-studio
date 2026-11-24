@@ -1,5 +1,6 @@
 import {
   LOGIC_NODE_CATALOG,
+  PRIMARY_LOGIC_NODE_TYPES,
   areLogicPortTypesCompatible,
   getLogicNodeDefinition,
   type BuiltInLogicNodeType,
@@ -27,28 +28,58 @@ export interface LogicNodeConnectionGuide {
 }
 
 const EXAMPLE_FLOWS: Readonly<Record<BuiltInLogicNodeType, string>> = Object.freeze({
-  'source.page': 'Page (On Load) -> Play Animation or Set Text',
+  // 1. SOURCES (3)
+  'source.element': 'Element / Layer (On Click / Property) -> Update State or Set Layer',
+  'source.context': 'App / Context (On Load / Theme ID) -> System & Form or Navigate',
+  'source.external': 'External Data (Data) -> List Processor -> Loop / Timer',
+  // 2. EVENTS (8)
+  'event.on-click': 'On Click -> Toggle State -> Branch -> Set Layer',
+  'event.on-hover': 'On Hover -> Set Layer (Fill / Opacity) or Set Variant',
+  'event.on-input': 'On Input (Value) -> Condition -> Update State -> Set Layer',
+  'event.on-key-press': 'On Key Press (Escape) -> Overlay & Toast (Close Modal)',
+  'event.on-drag': 'On Drag (X / Y) -> Math (Clamp) -> Set Layer (Transform)',
+  'event.on-scroll-view': 'On Scroll / View (Enter View) -> Media & Animation (Play)',
+  'event.on-lifecycle': 'On Lifecycle (Page Load) -> HTTP Request -> Update State',
+  'event.on-state-change': 'On State Change (Value) -> Text -> Set Layer (Text)',
+  // 3. STATE (3)
+  'state.get': 'Get State (Value) -> Condition / Math / Text / List Processor',
+  'state.toggle': 'On Click -> Toggle State -> Branch -> Set Layer (Visible)',
+  'state.update': 'On Click -> Update State (Increment / Push / Set Property) -> Set Layer',
+  // 4. LOGIC (5)
+  'logic.branch': 'Toggle State -> Branch (True -> Set Layer, Else -> Overlay & Toast)',
+  'logic.condition': 'Get State -> Condition (Compare / Regex / Is Empty) -> Branch',
+  'logic.math': 'Get State -> Math (Clamp / Map Range) -> Update State or Set Layer',
+  'logic.text': 'Get State -> Text (Template / Currency) -> Set Layer (Text)',
+  'logic.list': 'External Data -> List Processor (Filter / Sort) -> Loop / Timer',
+  // 5. ACTIONS (6)
+  'action.set-layer': 'Branch (True) -> Set Layer (Text / Fill / Visible / Opacity + Transition)',
+  'action.set-variant': 'On Click -> Set Variant (switches component axis option)',
+  'action.media-animation': 'On Scroll / View -> Media & Animation (Play / Pause / Reverse)',
+  'action.navigate': 'On Click -> Navigate (Internal Page / External URL / Scroll To)',
+  'action.overlay-toast': 'HTTP Request (Success) -> Overlay & Toast (Show Toast / Open Modal)',
+  'action.system-form': 'On Click -> System & Form (Set Theme / Clipboard / Reset Form / Storage)',
+  // 6. FLOW & TIMING (3)
+  'flow.delay': 'On Click -> Delay (300ms) -> Overlay & Toast or Set Layer',
+  'flow.loop-timer': 'List Processor -> Loop / Timer (For Each / Interval) -> Set Layer',
+  'flow.control': 'On Lifecycle -> Flow Control (Sequence / Parallel) -> HTTP Request + Animation',
+  // 7. NETWORK (3)
+  'network.http': 'On Click -> HTTP Request (Loading -> Spinner, Success -> JSON Tool -> Update State)',
+  'network.json': 'HTTP Request (Response) -> JSON Tool (Get Field/Path) -> Update State',
+  'network.socket': 'On Lifecycle -> Realtime Socket (Listen -> Message) -> Update State',
+  // Legacy v1 fallbacks
+  'source.page': 'Page (On Load) -> Media & Animation or Set Layer',
   'source.component': 'Component (On Click) -> Set Variant or Navigate',
-  'source.element': 'Canvas Layer (On Click) -> Set Fill Color or Toggle State',
-  'source.theme': 'Theme (Theme Name) -> Set Theme (Theme)',
-  'event.on-page-load': 'On Page Load -> Set Text or Play Animation',
-  'event.on-click': 'On Click -> Toggle State -> Branch -> Set Visible',
-  'event.on-hover': 'On Hover -> Set Fill Color or Set Variant',
-  'event.on-state-change': 'On State Change -> Branch -> Set Visible or Set Text',
-  'state.get': 'Get State (Value) -> Compare (Left) or Text Template (Value)',
-  'state.set': 'Component (On Click) -> Set State -> Set Text',
-  'state.toggle': 'On Click -> Toggle State -> Branch -> Set Visible',
-  'state.increment': 'On Click -> Increment State -> Text Template -> Set Text',
-  'logic.branch': 'Toggle State -> Branch (True -> Set Visible, False -> Set Fill)',
-  'logic.compare': 'Get State (Value) -> Compare (Left) -> Branch (Condition)',
-  'logic.template': 'Get State (Value) -> Text Template -> Set Text (Text)',
-  'action.set-visible': 'Branch (True) -> Set Visible (shows or hides target layer)',
-  'action.set-text': 'Text Template (Text) -> Set Text (Text) + On Click -> Exec',
-  'action.set-fill': 'On Hover -> Set Fill Color -> Next Action',
-  'action.set-variant': 'Component (On Click) -> Set Variant (switches component state)',
-  'action.navigate': 'Component (On Click) -> Navigate (jumps to target page)',
-  'action.set-theme': 'Theme (Theme Name) -> Set Theme (Theme) + On Click -> Exec',
-  'action.play-animation': 'Page (On Load) or On Click -> Play Animation',
+  'source.theme': 'Theme (Theme ID) -> System & Form (Set Theme)',
+  'event.on-page-load': 'On Page Load -> Media & Animation or Set Layer',
+  'state.set': 'On Click -> Set State -> Set Layer',
+  'state.increment': 'On Click -> Increment State -> Text -> Set Layer',
+  'logic.compare': 'Get State -> Compare -> Branch',
+  'logic.template': 'Get State -> Text Template -> Set Layer',
+  'action.set-visible': 'Branch -> Set Visible',
+  'action.set-text': 'Text -> Set Text',
+  'action.set-fill': 'On Hover -> Set Fill Color',
+  'action.set-theme': 'App / Context -> Set Theme',
+  'action.play-animation': 'On Lifecycle -> Play Animation',
 });
 
 function formatCompactNodeList(labels: readonly string[], maxVisible = 6): string {
@@ -66,15 +97,21 @@ function summarizeCompatibleSources(
     return `Triggers or previous steps: ${formatCompactNodeList(compatibleLabels, 7)}`;
   }
   if (dataType === 'boolean') {
-    return `Condition outputs: ${formatCompactNodeList(compatibleLabels, 6)}`;
+    return `Condition / Toggle outputs: ${formatCompactNodeList(compatibleLabels, 6)}`;
+  }
+  if (dataType === 'list') {
+    return `List / Array outputs: ${formatCompactNodeList(compatibleLabels, 6)}`;
+  }
+  if (dataType === 'object') {
+    return `Object / JSON outputs: ${formatCompactNodeList(compatibleLabels, 6)}`;
   }
   if (dataType === 'string') {
-    return `Text/route/theme outputs or inline value: ${formatCompactNodeList(compatibleLabels, 6)}`;
+    return `Text / Route / Key outputs or inline value: ${formatCompactNodeList(compatibleLabels, 6)}`;
   }
   if (dataType === 'number') {
-    return `Numeric/state outputs or inline number: ${formatCompactNodeList(compatibleLabels, 5)}`;
+    return `Math / Count / Scroll outputs or inline number: ${formatCompactNodeList(compatibleLabels, 5)}`;
   }
-  return `Any value output: ${formatCompactNodeList(compatibleLabels, 6)}`;
+  return `Any data output: ${formatCompactNodeList(compatibleLabels, 6)}`;
 }
 
 function summarizeCompatibleTargets(
@@ -82,24 +119,29 @@ function summarizeCompatibleTargets(
   compatibleLabels: readonly string[],
 ): string {
   if (dataType === 'exec') {
-    return `Actions, State updates, or Branch: ${formatCompactNodeList(compatibleLabels, 7)}`;
+    return `Actions, State updates, Flow, or Network: ${formatCompactNodeList(compatibleLabels, 7)}`;
   }
   if (dataType === 'boolean') {
-    return `Condition or visibility inputs: ${formatCompactNodeList(compatibleLabels, 6)}`;
+    return `Branch or Condition inputs: ${formatCompactNodeList(compatibleLabels, 6)}`;
+  }
+  if (dataType === 'list') {
+    return `List Processor, Loop / Timer, or Update State: ${formatCompactNodeList(compatibleLabels, 6)}`;
+  }
+  if (dataType === 'object') {
+    return `JSON Tool, HTTP Request, or Update State: ${formatCompactNodeList(compatibleLabels, 6)}`;
   }
   if (dataType === 'string') {
-    return `Text, Color, Route, Theme, or Compare inputs: ${formatCompactNodeList(compatibleLabels, 6)}`;
+    return `Set Layer, Navigate, Overlay & Toast, Text, or Condition: ${formatCompactNodeList(compatibleLabels, 6)}`;
   }
   if (dataType === 'number') {
-    return `Compare, Template, or Set State inputs: ${formatCompactNodeList(compatibleLabels, 5)}`;
+    return `Math, Condition, Text, or Update State: ${formatCompactNodeList(compatibleLabels, 5)}`;
   }
-  return `Logic or Action value inputs: ${formatCompactNodeList(compatibleLabels, 6)}`;
+  return `Logic, State, Action, or Network inputs: ${formatCompactNodeList(compatibleLabels, 6)}`;
 }
 
 /**
  * Dynamically computes the IN / OUT connection guide for any Node Logic node type
- * directly from LOGIC_NODE_CATALOG and areLogicPortTypesCompatible so the guide
- * always stays 100% accurate with the engine's actual wiring rules.
+ * strictly against the 31 primary canonical nodes and `areLogicPortTypesCompatible`.
  */
 export function getLogicNodeGuide(nodeType: string): LogicNodeConnectionGuide {
   const def = getLogicNodeDefinition(nodeType);
@@ -115,57 +157,57 @@ export function getLogicNodeGuide(nodeType: string): LogicNodeConnectionGuide {
     };
   }
 
-  const allDefs = Object.values(LOGIC_NODE_CATALOG);
+  const primaryDefs = PRIMARY_LOGIC_NODE_TYPES.map((type) => LOGIC_NODE_CATALOG[type]);
   const inputPorts = def.ports.filter((port) => port.direction === 'in');
   const outputPorts = def.ports.filter((port) => port.direction === 'out');
 
-  const inHints: LogicPortConnectionHint[] = inputPorts.map((inputPort) => {
-    const matchedTypes: string[] = [];
-    const matchedLabels: string[] = [];
-    for (const candidate of allDefs) {
-      if (candidate.type === def.type && inputPort.dataType === 'exec') continue;
-      const hasCompatibleOutput = candidate.ports.some(
-        (outPort) =>
-          outPort.direction === 'out' &&
-          areLogicPortTypesCompatible(outPort.dataType, inputPort.dataType),
+  const inHints: LogicPortConnectionHint[] = inputPorts.map((inPort) => {
+    const compatibleNodeTypes: string[] = [];
+    const compatibleLabels: string[] = [];
+
+    for (const candidate of primaryDefs) {
+      if (candidate.type === def.type) continue;
+      const hasMatchingOut = candidate.ports.some(
+        (p) => p.direction === 'out' && areLogicPortTypesCompatible(p.dataType, inPort.dataType),
       );
-      if (hasCompatibleOutput) {
-        matchedTypes.push(candidate.type);
-        matchedLabels.push(candidate.label);
+      if (hasMatchingOut) {
+        compatibleNodeTypes.push(candidate.type);
+        compatibleLabels.push(candidate.label);
       }
     }
+
     return {
-      portId: inputPort.id,
-      portLabel: inputPort.label,
-      dataType: inputPort.dataType,
-      compatibleNodeTypes: matchedTypes,
-      compatibleLabels: matchedLabels,
-      summary: summarizeCompatibleSources(inputPort.dataType, matchedLabels),
+      portId: inPort.id,
+      portLabel: inPort.label,
+      dataType: inPort.dataType,
+      compatibleNodeTypes,
+      compatibleLabels,
+      summary: summarizeCompatibleSources(inPort.dataType, compatibleLabels),
     };
   });
 
-  const outHints: LogicPortConnectionHint[] = outputPorts.map((outputPort) => {
-    const matchedTypes: string[] = [];
-    const matchedLabels: string[] = [];
-    for (const candidate of allDefs) {
-      if (candidate.type === def.type && outputPort.dataType === 'exec') continue;
-      const hasCompatibleInput = candidate.ports.some(
-        (inPort) =>
-          inPort.direction === 'in' &&
-          areLogicPortTypesCompatible(outputPort.dataType, inPort.dataType),
+  const outHints: LogicPortConnectionHint[] = outputPorts.map((outPort) => {
+    const compatibleNodeTypes: string[] = [];
+    const compatibleLabels: string[] = [];
+
+    for (const candidate of primaryDefs) {
+      if (candidate.type === def.type) continue;
+      const hasMatchingIn = candidate.ports.some(
+        (p) => p.direction === 'in' && areLogicPortTypesCompatible(outPort.dataType, p.dataType),
       );
-      if (hasCompatibleInput) {
-        matchedTypes.push(candidate.type);
-        matchedLabels.push(candidate.label);
+      if (hasMatchingIn) {
+        compatibleNodeTypes.push(candidate.type);
+        compatibleLabels.push(candidate.label);
       }
     }
+
     return {
-      portId: outputPort.id,
-      portLabel: outputPort.label,
-      dataType: outputPort.dataType,
-      compatibleNodeTypes: matchedTypes,
-      compatibleLabels: matchedLabels,
-      summary: summarizeCompatibleTargets(outputPort.dataType, matchedLabels),
+      portId: outPort.id,
+      portLabel: outPort.label,
+      dataType: outPort.dataType,
+      compatibleNodeTypes,
+      compatibleLabels,
+      summary: summarizeCompatibleTargets(outPort.dataType, compatibleLabels),
     };
   });
 
@@ -177,7 +219,6 @@ export function getLogicNodeGuide(nodeType: string): LogicNodeConnectionGuide {
     inHints,
     outHints,
     exampleFlow:
-      EXAMPLE_FLOWS[def.type] ??
-      'Wire matching output ports (right) into compatible input ports (left).',
+      EXAMPLE_FLOWS[def.type] ?? 'Connect an Event or Source on the left to Actions on the right.',
   };
 }

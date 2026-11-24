@@ -378,9 +378,37 @@ export function validateLogicGraphSemantics(
         break;
       }
 
+      case 'source.context': {
+        const contextKind = String(node.data.contextKind ?? 'page');
+        if (contextKind === 'page') {
+          const pageId = typeof node.data.pageId === 'string' ? node.data.pageId.trim() : '';
+          if (pageId && !pagesById.has(pageId)) {
+            push('error', 'MISSING_PAGE_REFERENCE', `App / Context node "${node.id}" references missing page "${pageId}".`, { nodeId: node.id });
+          }
+        } else if (contextKind === 'theme') {
+          const themeId = typeof node.data.themeId === 'string' ? node.data.themeId.trim() : '';
+          if (themeId && themeIds.size > 0 && !themeIds.has(themeId)) {
+            push('error', 'MISSING_THEME', `App / Context node "${node.id}" references unknown theme "${themeId}".`, { nodeId: node.id });
+          }
+        }
+        break;
+      }
+
+      case 'source.external': {
+        const endpoint = typeof node.data.endpoint === 'string' ? node.data.endpoint.trim() : '';
+        if (endpoint && /^(?:javascript|vbscript):/i.test(endpoint)) {
+          push('error', 'UNSAFE_NAVIGATE_URL', `External Data node "${node.id}" uses an unsafe endpoint protocol.`, { nodeId: node.id });
+        }
+        break;
+      }
+
       case 'event.on-click':
-      case 'event.on-hover': {
-        if (!targetNodeId || !astNodesById.has(targetNodeId)) {
+      case 'event.on-hover':
+      case 'event.on-input':
+      case 'event.on-drag':
+      case 'event.on-scroll-view': {
+        const isPageScroll = node.type === 'event.on-scroll-view' && node.data.mode === 'page-scroll';
+        if (!isPageScroll && (!targetNodeId || !astNodesById.has(targetNodeId))) {
           push(
             'error',
             'MISSING_TARGET_NODE',
@@ -399,6 +427,31 @@ export function validateLogicGraphSemantics(
             );
           }
         }
+        if (typeof node.data.debounceMs === 'number' && node.data.debounceMs < 0) {
+          push('error', 'INVALID_NODE_CONFIG', `${def.label} node "${node.id}" debounceMs must be >= 0.`, { nodeId: node.id });
+        }
+        if (typeof node.data.throttleMs === 'number' && node.data.throttleMs < 0) {
+          push('error', 'INVALID_NODE_CONFIG', `${def.label} node "${node.id}" throttleMs must be >= 0.`, { nodeId: node.id });
+        }
+        break;
+      }
+
+      case 'event.on-key-press': {
+        const keyCombo = typeof node.data.keyCombo === 'string' ? node.data.keyCombo.trim() : '';
+        if (!keyCombo) {
+          push('warning', 'INVALID_NODE_CONFIG', `On Key Press node "${node.id}" has an empty key combo.`, { nodeId: node.id });
+        }
+        break;
+      }
+
+      case 'event.on-lifecycle': {
+        const trigger = String(node.data.trigger ?? 'page-load');
+        if (trigger === 'animation-end') {
+          const clipId = typeof node.data.clipId === 'string' ? node.data.clipId.trim() : '';
+          if (clipId && !animationClipIds.has(clipId)) {
+            push('error', 'MISSING_ANIMATION_CLIP', `On Lifecycle node "${node.id}" references missing animation clip "${clipId}".`, { nodeId: node.id });
+          }
+        }
         break;
       }
 
@@ -406,7 +459,8 @@ export function validateLogicGraphSemantics(
       case 'state.get':
       case 'state.set':
       case 'state.toggle':
-      case 'state.increment': {
+      case 'state.increment':
+      case 'state.update': {
         const variable = variableId ? variablesById.get(variableId) : undefined;
         if (!variable) {
           push(
@@ -425,23 +479,23 @@ export function validateLogicGraphSemantics(
             { nodeId: node.id },
           );
         }
-        if (node.type === 'state.increment') {
+        if (node.type === 'state.increment' || (node.type === 'state.update' && node.data.operation === 'increment')) {
           if (variable.valueType !== 'number') {
             push(
               'error',
               'VARIABLE_TYPE_MISMATCH',
-              `Increment State node "${node.id}" requires a number variable, but "${variable.name}" is ${variable.valueType}.`,
+              `${def.label} node "${node.id}" increment requires a number variable, but "${variable.name}" is ${variable.valueType}.`,
               { nodeId: node.id },
             );
           }
           if (node.data.min !== null && node.data.min !== undefined && typeof node.data.min !== 'number') {
-            push('error', 'INVALID_NODE_CONFIG', `Increment State node "${node.id}" min bound must be numeric.`, { nodeId: node.id });
+            push('error', 'INVALID_NODE_CONFIG', `${def.label} node "${node.id}" min bound must be numeric.`, { nodeId: node.id });
           }
           if (node.data.max !== null && node.data.max !== undefined && typeof node.data.max !== 'number') {
-            push('error', 'INVALID_NODE_CONFIG', `Increment State node "${node.id}" max bound must be numeric.`, { nodeId: node.id });
+            push('error', 'INVALID_NODE_CONFIG', `${def.label} node "${node.id}" max bound must be numeric.`, { nodeId: node.id });
           }
           if (typeof node.data.min === 'number' && typeof node.data.max === 'number' && node.data.min > node.data.max) {
-            push('error', 'INVALID_NODE_CONFIG', `Increment State node "${node.id}" min bound cannot exceed max bound.`, { nodeId: node.id });
+            push('error', 'INVALID_NODE_CONFIG', `${def.label} node "${node.id}" min bound cannot exceed max bound.`, { nodeId: node.id });
           }
         }
         if (node.type === 'state.set' && !incomingDataPorts.has(`${node.id}:value`) && node.data.value !== null && node.data.value !== undefined) {
@@ -457,15 +511,63 @@ export function validateLogicGraphSemantics(
         break;
       }
 
-      case 'logic.compare': {
-        const operator = String(node.data.operator ?? '==');
-        if (!LOGIC_COMPARE_OPERATORS.includes(operator as (typeof LOGIC_COMPARE_OPERATORS)[number])) {
+      case 'logic.compare':
+      case 'logic.condition': {
+        const mode = node.type === 'logic.condition' ? String(node.data.mode ?? 'compare') : 'compare';
+        if (mode === 'compare') {
+          const operator = String(node.data.operator ?? '==');
+          if (!LOGIC_COMPARE_OPERATORS.includes(operator as (typeof LOGIC_COMPARE_OPERATORS)[number])) {
+            push(
+              'error',
+              'INVALID_NODE_CONFIG',
+              `${def.label} node "${node.id}" has unsupported operator "${operator}".`,
+              { nodeId: node.id },
+            );
+          }
+        } else if (mode === 'regex') {
+          const pattern = typeof node.data.pattern === 'string' ? node.data.pattern : '';
+          if (pattern) {
+            try {
+              // Verify pattern syntax safely
+              new RegExp(pattern);
+            } catch {
+              push('error', 'INVALID_NODE_CONFIG', `Condition node "${node.id}" has an invalid regular expression.`, { nodeId: node.id });
+            }
+          }
+        }
+        break;
+      }
+
+      case 'logic.math': {
+        if (node.data.operation === 'clamp' && typeof node.data.min === 'number' && typeof node.data.max === 'number' && node.data.min > node.data.max) {
+          push('error', 'INVALID_NODE_CONFIG', `Math node "${node.id}" clamp min cannot exceed max.`, { nodeId: node.id });
+        }
+        break;
+      }
+
+      case 'action.set-layer': {
+        const targetNode = targetNodeId ? astNodesById.get(targetNodeId) : undefined;
+        if (!targetNode) {
           push(
             'error',
-            'INVALID_NODE_CONFIG',
-            `Compare node "${node.id}" has unsupported operator "${operator}".`,
+            'MISSING_TARGET_NODE',
+            `Set Layer node "${node.id}" references missing AST node "${targetNodeId}".`,
             { nodeId: node.id },
           );
+          break;
+        }
+        const property = String(node.data.property ?? 'text');
+        if (property === 'fill' && !incomingDataPorts.has(`${node.id}:value`)) {
+          const fill = typeof node.data.fill === 'string' ? node.data.fill : '';
+          if (!isSafeCssColorValue(fill)) {
+            push('error', 'UNSAFE_CSS_VALUE', `Set Layer node "${node.id}" contains an invalid or unsafe CSS color value.`, { nodeId: node.id });
+          }
+        }
+        if (property === 'opacity' && typeof node.data.opacity === 'number' && (node.data.opacity < 0 || node.data.opacity > 1)) {
+          push('error', 'INVALID_NODE_CONFIG', `Set Layer node "${node.id}" opacity must be between 0 and 1.`, { nodeId: node.id });
+        }
+        if (property === 'image' && typeof node.data.imageUrl === 'string' && node.data.imageUrl.trim() && !sanitizeHref(node.data.imageUrl.trim())) {
+          push('error', 'UNSAFE_NAVIGATE_URL', `Set Layer node "${node.id}" uses an unsafe image URL.`, { nodeId: node.id });
         }
         break;
       }
@@ -587,7 +689,8 @@ export function validateLogicGraphSemantics(
       }
 
       case 'action.navigate': {
-        if (!incomingDataPorts.has(`${node.id}:route`)) {
+        const navMode = String(node.data.mode ?? 'internal');
+        if ((navMode === 'internal' || navMode === 'external') && !incomingDataPorts.has(`${node.id}:route`)) {
           const rawRoute = typeof node.data.route === 'string' ? node.data.route.trim() : '';
           if (!rawRoute) {
             push(
@@ -620,6 +723,17 @@ export function validateLogicGraphSemantics(
         break;
       }
 
+      case 'action.system-form': {
+        const sysAction = String(node.data.action ?? 'set-theme');
+        if (sysAction === 'set-theme' && !incomingDataPorts.has(`${node.id}:value`)) {
+          const themeId = typeof node.data.themeId === 'string' ? node.data.themeId.trim() : '';
+          if (!themeId || (themeIds.size > 0 && !themeIds.has(themeId))) {
+            push('error', 'MISSING_THEME', `System & Form node "${node.id}" references unknown theme "${themeId}".`, { nodeId: node.id });
+          }
+        }
+        break;
+      }
+
       case 'action.set-theme': {
         if (!incomingDataPorts.has(`${node.id}:themeId`)) {
           const themeId = typeof node.data.themeId === 'string' ? node.data.themeId.trim() : '';
@@ -628,6 +742,22 @@ export function validateLogicGraphSemantics(
               'error',
               'MISSING_THEME',
               `Set Theme node "${node.id}" references unknown theme "${themeId}".`,
+              { nodeId: node.id },
+            );
+          }
+        }
+        break;
+      }
+
+      case 'action.media-animation': {
+        const targetKind = String(node.data.targetKind ?? 'animation');
+        if (targetKind === 'animation') {
+          const clipId = typeof node.data.clipId === 'string' ? node.data.clipId.trim() : '';
+          if (!clipId || !animationClipIds.has(clipId)) {
+            push(
+              'error',
+              'MISSING_ANIMATION_CLIP',
+              `Media & Animation node "${node.id}" references missing animation clip "${clipId}".`,
               { nodeId: node.id },
             );
           }
@@ -648,9 +778,32 @@ export function validateLogicGraphSemantics(
         break;
       }
 
+      case 'flow.delay': {
+        const dur = Number(node.data.duration ?? 0);
+        if (!Number.isFinite(dur) || dur < 0) {
+          push('error', 'INVALID_NODE_CONFIG', `Delay node "${node.id}" duration must be a non-negative number.`, { nodeId: node.id });
+        }
+        break;
+      }
+
+      case 'network.http': {
+        const rawUrl = typeof node.data.url === 'string' ? node.data.url.trim() : '';
+        if (rawUrl && /^(?:javascript|vbscript):/i.test(rawUrl)) {
+          push('error', 'UNSAFE_NAVIGATE_URL', `HTTP Request node "${node.id}" uses an unsafe URL protocol.`, { nodeId: node.id });
+        }
+        break;
+      }
+
       case 'event.on-page-load':
       case 'logic.branch':
       case 'logic.template':
+      case 'logic.text':
+      case 'logic.list':
+      case 'action.overlay-toast':
+      case 'flow.loop-timer':
+      case 'flow.control':
+      case 'network.json':
+      case 'network.socket':
         break;
     }
   }

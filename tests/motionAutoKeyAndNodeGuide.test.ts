@@ -163,30 +163,30 @@ describe('Full-Snapshot Motion Auto-Key & Node Logic Connection Guide', () => {
     }
 
     // Source / Event start nodes have no incoming ports, and list valid outgoing targets
-    const pageGuide = getLogicNodeGuide('source.page');
-    expect(pageGuide.inHints).toHaveLength(0);
-    expect(pageGuide.outHints.length).toBeGreaterThan(0);
-    const pageOnLoadOut = pageGuide.outHints.find((h) => h.portId === 'onLoad');
-    expect(pageOnLoadOut?.compatibleNodeTypes).toContain('action.play-animation');
-    expect(pageOnLoadOut?.compatibleNodeTypes).toContain('action.navigate');
+    const contextGuide = getLogicNodeGuide('source.context');
+    expect(contextGuide.inHints).toHaveLength(0);
+    expect(contextGuide.outHints.length).toBeGreaterThan(0);
+    const contextOnLoadOut = contextGuide.outHints.find((h) => h.portId === 'onLoad');
+    expect(contextOnLoadOut?.compatibleNodeTypes).toContain('action.media-animation');
+    expect(contextOnLoadOut?.compatibleNodeTypes).toContain('action.navigate');
 
-    const compGuide = getLogicNodeGuide('source.component');
-    expect(compGuide.inHints).toHaveLength(0);
-    expect(compGuide.outHints.map((h) => h.portId)).toEqual(['onClick', 'onHover', 'componentId']);
+    const elementGuide = getLogicNodeGuide('source.element');
+    expect(elementGuide.inHints).toHaveLength(0);
+    expect(elementGuide.outHints.map((h) => h.portId)).toEqual(['onClick', 'onHover', 'value', 'target']);
 
     // Action nodes explain both incoming triggers/data and outgoing chainable actions
-    const setFillGuide = getLogicNodeGuide('action.set-fill');
-    const execIn = setFillGuide.inHints.find((h) => h.portId === 'exec');
-    const fillIn = setFillGuide.inHints.find((h) => h.portId === 'fill');
-    expect(execIn?.compatibleNodeTypes).toContain('source.component');
+    const setLayerGuide = getLogicNodeGuide('action.set-layer');
+    const execIn = setLayerGuide.inHints.find((h) => h.portId === 'exec');
+    const valueIn = setLayerGuide.inHints.find((h) => h.portId === 'value');
+    expect(execIn?.compatibleNodeTypes).toContain('source.element');
     expect(execIn?.compatibleNodeTypes).toContain('event.on-click');
-    expect(fillIn?.compatibleNodeTypes).toContain('state.get');
+    expect(valueIn?.compatibleNodeTypes).toContain('state.get');
 
-    // Logic branch explains condition boolean input + true/false outputs
+    // Logic branch explains condition boolean input + true/elseIf/false outputs
     const branchGuide = getLogicNodeGuide('logic.branch');
     const condIn = branchGuide.inHints.find((h) => h.portId === 'condition');
-    expect(condIn?.compatibleNodeTypes).toContain('logic.compare');
+    expect(condIn?.compatibleNodeTypes).toContain('logic.condition');
     expect(condIn?.compatibleNodeTypes).toContain('state.toggle');
-    expect(branchGuide.outHints.map((h) => h.portId)).toEqual(['true', 'false']);
+    expect(branchGuide.outHints.map((h) => h.portId)).toEqual(['true', 'elseIf', 'false']);
   });
 });

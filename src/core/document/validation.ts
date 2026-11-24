@@ -610,7 +610,9 @@ export function validateProjectV1(input: unknown): LegacyValidationResult {
   return { ok: true, project: input as unknown as FolioProjectV1 };
 }
 
-const LOGIC_VALUE_TYPES = new Set(['string', 'number', 'boolean']);
+const LOGIC_VALUE_TYPES = new Set(['string', 'number', 'boolean', 'list', 'object']);
+const LOGIC_VARIABLE_SCOPES = new Set(['local', 'global']);
+const LOGIC_VARIABLE_PERSISTS = new Set(['none', 'local', 'session']);
 
 export function isLogicVariableDefinition(value: unknown): value is import('./types').LogicVariableDefinition {
   if (!isRecord(value)) return false;
@@ -624,9 +626,34 @@ export function isLogicVariableDefinition(value: unknown): value is import('./ty
   if (value.description !== undefined && (!isString(value.description) || value.description.length > 512)) {
     return false;
   }
+  if (value.scope !== undefined && (!isString(value.scope) || !LOGIC_VARIABLE_SCOPES.has(value.scope))) {
+    return false;
+  }
+  if (value.persist !== undefined && (!isString(value.persist) || !LOGIC_VARIABLE_PERSISTS.has(value.persist))) {
+    return false;
+  }
+  if (value.computed !== undefined && typeof value.computed !== 'boolean') {
+    return false;
+  }
+  if (value.computedExpression !== undefined && (!isString(value.computedExpression) || value.computedExpression.length > 1024)) {
+    return false;
+  }
   if (value.valueType === 'string') return typeof value.initialValue === 'string';
   if (value.valueType === 'number') return isFiniteNumber(value.initialValue);
-  return typeof value.initialValue === 'boolean';
+  if (value.valueType === 'boolean') return typeof value.initialValue === 'boolean';
+  if (value.valueType === 'list') {
+    return Array.isArray(value.initialValue) || typeof value.initialValue === 'string';
+  }
+  return isRecord(value.initialValue) || typeof value.initialValue === 'string';
+}
+
+export function isLogicNetworkSettings(value: unknown): value is import('./types').LogicNetworkSettings {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.baseUrl) && value.baseUrl.length <= 2048 &&
+    isString(value.globalHeaders) && value.globalHeaders.length <= 8192 &&
+    isString(value.authToken) && value.authToken.length <= 2048
+  );
 }
 
 export function isLogicGraph(value: unknown): value is import('./types').LogicGraph {
@@ -639,6 +666,10 @@ export function isLogicGraph(value: unknown): value is import('./types').LogicGr
   }
   if (!isString(value.createdAt) || !isString(value.updatedAt)) return false;
   if (!Array.isArray(value.nodes) || !Array.isArray(value.connections)) return false;
+
+  if (value.networkSettings !== undefined && !isLogicNetworkSettings(value.networkSettings)) {
+    return false;
+  }
 
   if (value.variables !== undefined) {
     if (!Array.isArray(value.variables)) return false;

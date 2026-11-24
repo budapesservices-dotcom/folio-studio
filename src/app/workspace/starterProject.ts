@@ -56,14 +56,14 @@ export function createStarterMainPageLogicGraph(page: FolioPage): LogicGraph | n
     type: 'event.on-click',
     x: 40,
     y: 72,
-    data: { targetNodeId: visualCard.id },
+    data: { targetNodeId: visualCard.id, mode: 'click' },
   });
   const incCount = createLogicNode({
     id: 'lnode-starter-inc',
-    type: 'state.increment',
+    type: 'state.update',
     x: 320,
     y: 44,
-    data: { variableId: varClicks.id, step: 1, min: 0, max: 999 },
+    data: { variableId: varClicks.id, operation: 'increment', step: 1, min: 0, max: 999 },
   });
   const toggleAccent = createLogicNode({
     id: 'lnode-starter-toggle',
@@ -74,17 +74,17 @@ export function createStarterMainPageLogicGraph(page: FolioPage): LogicGraph | n
   });
   const template = createLogicNode({
     id: 'lnode-starter-tpl',
-    type: 'logic.template',
+    type: 'logic.text',
     x: 600,
     y: 230,
-    data: { template: 'INTERACTIONS  ·  {{clickCount}}' },
+    data: { mode: 'template', template: 'INTERACTIONS  ·  {{clickCount}}' },
   });
   const setCaption = createLogicNode({
     id: 'lnode-starter-text',
-    type: 'action.set-text',
+    type: 'action.set-layer',
     x: 890,
     y: 72,
-    data: { targetNodeId: caption.id, text: '' },
+    data: { targetNodeId: caption.id, property: 'text', text: '' },
   });
 
   const nodes: LogicNode[] = [onClick, incCount, toggleAccent, template, setCaption];
@@ -115,7 +115,7 @@ export function createStarterMainPageLogicGraph(page: FolioPage): LogicGraph | n
       sourceNodeId: template.id,
       sourcePortId: 'text',
       targetNodeId: setCaption.id,
-      targetPortId: 'text',
+      targetPortId: 'value',
     }),
   ];
 
@@ -132,21 +132,21 @@ export function createStarterMainPageLogicGraph(page: FolioPage): LogicGraph | n
       type: 'logic.branch',
       x: 1170,
       y: 72,
-      data: { condition: false },
+      data: { mode: 'if-else', condition: false },
     });
     const fillIndigo = createLogicNode({
       id: 'lnode-starter-fill-indigo',
-      type: 'action.set-fill',
+      type: 'action.set-layer',
       x: 1450,
       y: 20,
-      data: { targetNodeId: sun.id, fill: '#8B7CF6' },
+      data: { targetNodeId: sun.id, property: 'fill', fill: '#8B7CF6', transitionMs: 240 },
     });
     const fillAmber = createLogicNode({
       id: 'lnode-starter-fill-amber',
-      type: 'action.set-fill',
+      type: 'action.set-layer',
       x: 1450,
       y: 196,
-      data: { targetNodeId: sun.id, fill: '#F4B27D' },
+      data: { targetNodeId: sun.id, property: 'fill', fill: '#F4B27D', transitionMs: 240 },
     });
 
     nodes.push(getAccent, branch, fillIndigo, fillAmber);

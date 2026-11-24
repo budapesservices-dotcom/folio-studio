@@ -13,13 +13,17 @@ import type {
   FolioProject,
   LogicConnection,
   LogicGraph,
+  LogicNetworkSettings,
   LogicNode,
   LogicValueType,
   LogicVariableDefinition,
+  LogicVariablePersist,
+  LogicVariableScope,
   LogicVariableValue,
 } from '../../core/document/types';
 import {
   LOGIC_NODE_CATALOG,
+  PRIMARY_LOGIC_NODE_TYPES,
   areLogicPortTypesCompatible,
   createLogicConnection,
   createLogicGraph,
@@ -33,7 +37,7 @@ import {
   type LogicPortDefinition,
 } from '../../engines/prototype';
 
-export const LOGIC_NODE_WIDTH = 232;
+export const LOGIC_NODE_WIDTH = 236;
 export const LOGIC_NODE_HEADER_HEIGHT = 38;
 export const LOGIC_NODE_SUBTITLE_HEIGHT = 22;
 export const LOGIC_SOURCE_PICKER_HEIGHT = 34;
@@ -41,16 +45,20 @@ export const LOGIC_PORT_ROW_HEIGHT = 26;
 export const LOGIC_NODE_BODY_PAD_Y = 8;
 
 export type SourceLogicNodeType =
+  | 'source.element'
+  | 'source.context'
+  | 'source.external'
   | 'source.page'
   | 'source.component'
-  | 'source.element'
   | 'source.theme';
 
 export function isSourceLogicNodeType(type: string): type is SourceLogicNodeType {
   return (
-    type === 'source.page'
+    type === 'source.element'
+    || type === 'source.context'
+    || type === 'source.external'
+    || type === 'source.page'
     || type === 'source.component'
-    || type === 'source.element'
     || type === 'source.theme'
   );
 }
@@ -74,7 +82,11 @@ export function getUsedSourceReferenceIds(
         ? 'componentId'
         : nodeType === 'source.element'
           ? 'targetNodeId'
-          : 'themeId';
+          : nodeType === 'source.theme'
+            ? 'themeId'
+            : nodeType === 'source.context'
+              ? 'pageId'
+              : 'endpoint';
   for (const node of graph.nodes) {
     if (node.type !== nodeType) continue;
     if (excludeNodeId && node.id === excludeNodeId) continue;
@@ -108,7 +120,7 @@ export interface LogicConnectionCheckResult {
   };
 }
 
-export type LogicPresetId = 'click-counter' | 'toggle-visibility' | 'theme-switcher';
+export type LogicPresetId = 'click-counter' | 'toggle-visibility' | 'theme-switcher' | 'api-fetch-list';
 
 export interface LogicPresetMeta {
   readonly id: LogicPresetId;
@@ -120,17 +132,22 @@ export const LOGIC_PRESETS: readonly LogicPresetMeta[] = Object.freeze([
   {
     id: 'click-counter',
     name: 'Click Counter & Live Caption',
-    description: 'Counts clicks on a target layer and formats live text output.',
+    description: 'Uses On Click, Update State (Increment), Text, and Set Layer to update a live counter.',
   },
   {
     id: 'toggle-visibility',
     name: 'Toggle Layer Visibility',
-    description: 'Shows or hides a target layer whenever the trigger element is clicked.',
+    description: 'Uses On Click and Set Layer (Visible + Transition) to show or hide any target layer.',
   },
   {
     id: 'theme-switcher',
     name: 'Light / Dark Theme Switcher',
-    description: 'Toggles a boolean theme flag and switches active Design Token themes.',
+    description: 'Uses On Click, Toggle State, Branch, and System & Form (Set Theme) to switch themes.',
+  },
+  {
+    id: 'api-fetch-list',
+    name: 'API Fetch & List Flow',
+    description: 'Uses On Lifecycle, HTTP Request, JSON Tool, List Processor, and Overlay & Toast.',
   },
 ]);
 
@@ -583,9 +600,25 @@ export function repatchConnectionInGraph(
   );
 }
 
+export function getDefaultInitialValueForType(valueType: LogicValueType): LogicVariableValue {
+  if (valueType === 'number') return 0;
+  if (valueType === 'boolean') return false;
+  if (valueType === 'list') return '[]';
+  if (valueType === 'object') return '{}';
+  return '';
+}
+
 export function addVariableToGraph(
   graph: LogicGraph,
-  args: { name: string; valueType: LogicValueType; initialValue: LogicVariableValue },
+  args: {
+    name: string;
+    valueType: LogicValueType;
+    initialValue: LogicVariableValue;
+    scope?: LogicVariableScope;
+    persist?: LogicVariablePersist;
+    computed?: boolean;
+    computedExpression?: string;
+  },
 ): { graph: LogicGraph; variable: LogicVariableDefinition } {
   const trimmedName = args.name.trim() || `var${(graph.variables?.length ?? 0) + 1}`;
   const variable = createLogicVariable({
@@ -593,6 +626,9 @@ export function addVariableToGraph(
     name: trimmedName,
     valueType: args.valueType,
     initialValue: args.initialValue,
+    scope: args.scope ?? 'local',
+    persist: args.persist ?? 'none',
+    ...(args.computed ? { computed: true, computedExpression: args.computedExpression ?? '' } : {}),
   });
   return {
     variable,
@@ -606,7 +642,12 @@ export function addVariableToGraph(
 export function updateVariableInGraph(
   graph: LogicGraph,
   variableId: string,
-  patch: Partial<Pick<LogicVariableDefinition, 'name' | 'valueType' | 'initialValue'>>,
+  patch: Partial<
+    Pick<
+      LogicVariableDefinition,
+      'name' | 'valueType' | 'initialValue' | 'scope' | 'persist' | 'computed' | 'computedExpression'
+    >
+  >,
 ): LogicGraph {
   const currentVars = graph.variables ?? [];
   let changed = false;
@@ -616,13 +657,17 @@ export function updateVariableInGraph(
     const nextType = patch.valueType ?? variable.valueType;
     let nextInitial = patch.initialValue !== undefined ? patch.initialValue : variable.initialValue;
     if (patch.valueType && patch.valueType !== variable.valueType && patch.initialValue === undefined) {
-      nextInitial = nextType === 'number' ? 0 : nextType === 'boolean' ? false : '';
+      nextInitial = getDefaultInitialValueForType(nextType);
     }
     return {
       ...variable,
       ...(patch.name !== undefined ? { name: patch.name.trim() || variable.name } : {}),
       valueType: nextType,
       initialValue: nextInitial,
+      ...(patch.scope !== undefined ? { scope: patch.scope } : {}),
+      ...(patch.persist !== undefined ? { persist: patch.persist } : {}),
+      ...(patch.computed !== undefined ? { computed: patch.computed } : {}),
+      ...(patch.computedExpression !== undefined ? { computedExpression: patch.computedExpression } : {}),
     };
   });
   return changed ? touchLogicGraph({ ...graph, variables: nextVars }) : graph;
@@ -635,6 +680,25 @@ export function removeVariableFromGraph(graph: LogicGraph, variableId: string): 
   return touchLogicGraph({
     ...graph,
     variables: nextVars,
+  });
+}
+
+export function updateNetworkSettingsInGraph(
+  graph: LogicGraph,
+  patch: Partial<LogicNetworkSettings>,
+): LogicGraph {
+  const current: LogicNetworkSettings = graph.networkSettings ?? {
+    baseUrl: '',
+    globalHeaders: '',
+    authToken: '',
+  };
+  return touchLogicGraph({
+    ...graph,
+    networkSettings: {
+      baseUrl: patch.baseUrl ?? current.baseUrl,
+      globalHeaders: patch.globalHeaders ?? current.globalHeaders,
+      authToken: patch.authToken ?? current.authToken,
+    },
   });
 }
 
@@ -689,6 +753,22 @@ export function getLogicNodeSummary(
   };
 
   switch (node.type) {
+    case 'source.element':
+      return `${findNodeName(node.data.targetNodeId)} · ${String(node.data.property ?? 'value')}`;
+    case 'source.context': {
+      const kind = String(node.data.contextKind ?? 'page');
+      if (kind === 'page') {
+        const page = pages.find((p) => p.id === node.data.pageId);
+        return page ? `Page · ${page.name}` : 'App · Active Page';
+      }
+      if (kind === 'theme') {
+        const th = themes.find((t) => t.id === node.data.themeId);
+        return th ? `Theme · ${th.name}` : 'App · Active Theme';
+      }
+      return `Context · ${kind}`;
+    }
+    case 'source.external':
+      return `${String(node.data.sourceKind ?? 'api').toUpperCase()} · ${String(node.data.endpoint || node.data.collection || 'Unbound').slice(0, 24)}`;
     case 'source.page': {
       const pageId = typeof node.data.pageId === 'string' ? node.data.pageId : '';
       const page = pages.find((p) => p.id === pageId);
@@ -699,32 +779,65 @@ export function getLogicNodeSummary(
       const comp = components.find((c) => c.id === compId);
       return comp ? comp.name : 'Select a sent component';
     }
-    case 'source.element':
-      return findNodeName(node.data.targetNodeId);
     case 'source.theme': {
       const themeId = typeof node.data.themeId === 'string' ? node.data.themeId : '';
       return themes.find((t) => t.id === themeId)?.name ?? (themeId || 'Select a theme');
     }
     case 'event.on-click':
-      return findNodeName(node.data.targetNodeId);
+      return `${findNodeName(node.data.targetNodeId)} · ${String(node.data.mode ?? 'click')}`;
     case 'event.on-hover':
       return `${findNodeName(node.data.targetNodeId)} · ${node.data.phase === 'leave' ? 'leave' : 'enter'}`;
+    case 'event.on-input':
+      return `${findNodeName(node.data.targetNodeId)} · ${String(node.data.mode ?? 'change')}`;
+    case 'event.on-key-press':
+      return `${String(node.data.keyCombo ?? 'Enter')} · ${String(node.data.phase ?? 'down')}`;
+    case 'event.on-drag':
+      return `${findNodeName(node.data.targetNodeId)} · ${String(node.data.phase ?? 'start')}`;
+    case 'event.on-scroll-view':
+      return `${String(node.data.mode ?? 'enter-view')}${node.data.targetNodeId ? ` · ${findNodeName(node.data.targetNodeId)}` : ''}`;
+    case 'event.on-lifecycle':
+      return `Lifecycle · ${String(node.data.trigger ?? 'page-load')}`;
     case 'event.on-page-load':
       return 'Page mount';
     case 'event.on-state-change':
     case 'state.get':
     case 'state.toggle':
       return findVarName(node.data.variableId);
+    case 'state.update': {
+      const op = String(node.data.operation ?? 'set');
+      if (op === 'increment') {
+        const step = Number(node.data.step ?? 1);
+        return `${findVarName(node.data.variableId)} ${step >= 0 ? '+' : ''}${step}`;
+      }
+      return `${findVarName(node.data.variableId)} · ${op}`;
+    }
     case 'state.set':
       return `${findVarName(node.data.variableId)} = ${node.data.value === null || node.data.value === undefined ? 'input' : String(node.data.value)}`;
     case 'state.increment':
       return `${findVarName(node.data.variableId)} ${Number(node.data.step ?? 1) >= 0 ? '+' : ''}${String(node.data.step ?? 1)}`;
     case 'logic.branch':
-      return 'If condition → True / False';
+      return `Branch · ${String(node.data.mode ?? 'if-else')}`;
+    case 'logic.condition':
+      return node.data.mode === 'compare' || !node.data.mode
+        ? `Left ${String(node.data.operator ?? '==')} Right`
+        : `Condition · ${String(node.data.mode)}`;
     case 'logic.compare':
       return `Left ${String(node.data.operator ?? '==')} Right`;
+    case 'logic.math':
+      return `Math · ${String(node.data.operation ?? '+')}`;
+    case 'logic.text':
+      return node.data.mode === 'template' || !node.data.mode
+        ? (String(node.data.template ?? '{{value}}').slice(0, 28) || 'Empty template')
+        : `${String(node.data.mode)} (${String(node.data.currency ?? node.data.locale ?? '')})`;
     case 'logic.template':
       return String(node.data.template ?? '{{value}}').slice(0, 28) || 'Empty template';
+    case 'logic.list':
+      return `List · ${String(node.data.operation ?? 'filter')}`;
+    case 'action.set-layer': {
+      const prop = String(node.data.property ?? 'text');
+      const extra = prop === 'fill' ? ` ${String(node.data.fill ?? '')}` : prop === 'visible' ? ` ${String(node.data.visibleMode ?? 'toggle')}` : '';
+      return `${findNodeName(node.data.targetNodeId)} · ${prop}${extra}`;
+    }
     case 'action.set-visible':
       return `${findNodeName(node.data.targetNodeId)} · ${String(node.data.mode ?? 'toggle')}`;
     case 'action.set-text':
@@ -733,8 +846,23 @@ export function getLogicNodeSummary(
       return `${findNodeName(node.data.targetNodeId)} · ${String(node.data.fill ?? '')}`;
     case 'action.set-variant':
       return findNodeName(node.data.targetNodeId);
+    case 'action.media-animation': {
+      const clipId = typeof node.data.clipId === 'string' ? node.data.clipId : '';
+      const name = animations.find((clip) => clip.id === clipId)?.name ?? (clipId || findNodeName(node.data.targetNodeId));
+      return `${String(node.data.command ?? 'play')} · ${name}`;
+    }
     case 'action.navigate':
-      return String(node.data.route ?? '/');
+      return `${String(node.data.mode ?? 'internal')} · ${String(node.data.route ?? '/')}`;
+    case 'action.overlay-toast':
+      return `${String(node.data.mode ?? 'show-toast')}${node.data.mode === 'show-toast' ? ` · ${String(node.data.message ?? '').slice(0, 20)}` : ''}`;
+    case 'action.system-form': {
+      const act = String(node.data.action ?? 'set-theme');
+      if (act === 'set-theme') {
+        const themeId = typeof node.data.themeId === 'string' ? node.data.themeId : '';
+        return `Theme · ${themes.find((t) => t.id === themeId)?.name ?? (themeId || 'Select theme')}`;
+      }
+      return `System · ${act}`;
+    }
     case 'action.set-theme': {
       const themeId = typeof node.data.themeId === 'string' ? node.data.themeId : '';
       return themes.find((t) => t.id === themeId)?.name ?? (themeId || 'Unbound theme');
@@ -743,6 +871,20 @@ export function getLogicNodeSummary(
       const clipId = typeof node.data.clipId === 'string' ? node.data.clipId : '';
       return animations.find((clip) => clip.id === clipId)?.name ?? (clipId || 'Unbound clip');
     }
+    case 'flow.delay':
+      return `Wait ${String(node.data.duration ?? 300)}${String(node.data.unit ?? 'ms')}`;
+    case 'flow.loop-timer':
+      return node.data.mode === 'for-each'
+        ? 'For Each item in list'
+        : `${String(node.data.mode ?? 'interval')} · ${String(node.data.intervalMs ?? 1000)}ms`;
+    case 'flow.control':
+      return node.data.mode === 'parallel' ? 'Parallel / Wait All' : 'Sequence';
+    case 'network.http':
+      return `${String(node.data.method ?? 'GET')} ${String(node.data.url ?? '/api').slice(0, 22)}`;
+    case 'network.json':
+      return `${String(node.data.mode ?? 'get-field')}${node.data.path ? ` · ${String(node.data.path)}` : ''}`;
+    case 'network.socket':
+      return `${String(node.data.action ?? 'listen')} · #${String(node.data.channel ?? 'updates')}`;
     default:
       return node.type;
   }
@@ -779,14 +921,14 @@ export function createLogicPresetGraph(
       type: 'event.on-click',
       x: 48,
       y: 96,
-      data: { targetNodeId: firstInteractive?.id ?? '' },
+      data: { targetNodeId: firstInteractive?.id ?? '', mode: 'click' },
     });
     const toggleVis = createLogicNode({
       id: createLogicId('lnode'),
-      type: 'action.set-visible',
+      type: 'action.set-layer',
       x: 340,
       y: 96,
-      data: { targetNodeId: secondLayer?.id ?? '', mode: 'toggle' },
+      data: { targetNodeId: secondLayer?.id ?? '', property: 'visible', visibleMode: 'toggle', transitionMs: 200 },
     });
     return createLogicGraph({
       id: createLogicId('lgraph'),
@@ -812,13 +954,15 @@ export function createLogicPresetGraph(
       name: 'isDarkTheme',
       valueType: 'boolean',
       initialValue: tokens.activeThemeId === darkTheme,
+      scope: 'global',
+      persist: 'local',
     });
     const trigger = createLogicNode({
       id: createLogicId('lnode'),
       type: 'event.on-click',
       x: 40,
       y: 88,
-      data: { targetNodeId: firstInteractive?.id ?? '' },
+      data: { targetNodeId: firstInteractive?.id ?? '', mode: 'click' },
     });
     const toggle = createLogicNode({
       id: createLogicId('lnode'),
@@ -832,21 +976,21 @@ export function createLogicPresetGraph(
       type: 'logic.branch',
       x: 610,
       y: 88,
-      data: { condition: false },
+      data: { mode: 'if-else', condition: false },
     });
     const setDark = createLogicNode({
       id: createLogicId('lnode'),
-      type: 'action.set-theme',
+      type: 'action.system-form',
       x: 900,
       y: 28,
-      data: { themeId: darkTheme },
+      data: { action: 'set-theme', themeId: darkTheme },
     });
     const setLight = createLogicNode({
       id: createLogicId('lnode'),
-      type: 'action.set-theme',
+      type: 'action.system-form',
       x: 900,
-      y: 190,
-      data: { themeId: lightTheme },
+      y: 210,
+      data: { action: 'set-theme', themeId: lightTheme },
     });
     return createLogicGraph({
       id: createLogicId('lgraph'),
@@ -895,40 +1039,108 @@ export function createLogicPresetGraph(
     });
   }
 
+  if (presetId === 'api-fetch-list') {
+    const varItems = createLogicVariable({
+      id: createLogicId('lvar'),
+      name: 'items',
+      valueType: 'list',
+      initialValue: '[]',
+      scope: 'local',
+      persist: 'none',
+    });
+    const onLoad = createLogicNode({
+      id: createLogicId('lnode'),
+      type: 'event.on-lifecycle',
+      x: 40,
+      y: 96,
+      data: { trigger: 'page-load', once: true },
+    });
+    const httpReq = createLogicNode({
+      id: createLogicId('lnode'),
+      type: 'network.http',
+      x: 330,
+      y: 72,
+      data: { method: 'GET', url: '/items', useAuth: true, cache: 'default' },
+    });
+    const jsonPick = createLogicNode({
+      id: createLogicId('lnode'),
+      type: 'network.json',
+      x: 630,
+      y: 230,
+      data: { mode: 'get-field', path: 'data.items' },
+    });
+    const saveState = createLogicNode({
+      id: createLogicId('lnode'),
+      type: 'state.update',
+      x: 630,
+      y: 44,
+      data: { variableId: varItems.id, operation: 'set' },
+    });
+    const toast = createLogicNode({
+      id: createLogicId('lnode'),
+      type: 'action.overlay-toast',
+      x: 930,
+      y: 44,
+      data: { mode: 'show-toast', message: 'Items synced!', tone: 'success' },
+    });
+    return createLogicGraph({
+      id: createLogicId('lgraph'),
+      name: 'API Fetch & Sync',
+      scope: 'page',
+      targetId: page.id,
+      variables: [varItems],
+      networkSettings: {
+        baseUrl: 'https://api.example.com',
+        globalHeaders: '{"Accept":"application/json"}',
+        authToken: '',
+      },
+      nodes: [onLoad, httpReq, jsonPick, saveState, toast],
+      connections: [
+        createLogicConnection({ id: createLogicId('lconn'), sourceNodeId: onLoad.id, sourcePortId: 'exec', targetNodeId: httpReq.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: createLogicId('lconn'), sourceNodeId: httpReq.id, sourcePortId: 'success', targetNodeId: saveState.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: createLogicId('lconn'), sourceNodeId: httpReq.id, sourcePortId: 'data', targetNodeId: jsonPick.id, targetPortId: 'input' }),
+        createLogicConnection({ id: createLogicId('lconn'), sourceNodeId: jsonPick.id, sourcePortId: 'result', targetNodeId: saveState.id, targetPortId: 'value' }),
+        createLogicConnection({ id: createLogicId('lconn'), sourceNodeId: saveState.id, sourcePortId: 'next', targetNodeId: toast.id, targetPortId: 'exec' }),
+      ],
+    });
+  }
+
   // Default: click-counter
   const varCount = createLogicVariable({
     id: createLogicId('lvar'),
     name: 'counter',
     valueType: 'number',
     initialValue: 0,
+    scope: 'local',
+    persist: 'none',
   });
   const trigger = createLogicNode({
     id: createLogicId('lnode'),
     type: 'event.on-click',
     x: 40,
     y: 84,
-    data: { targetNodeId: firstInteractive?.id ?? '' },
+    data: { targetNodeId: firstInteractive?.id ?? '', mode: 'click' },
   });
   const inc = createLogicNode({
     id: createLogicId('lnode'),
-    type: 'state.increment',
+    type: 'state.update',
     x: 320,
     y: 64,
-    data: { variableId: varCount.id, step: 1, min: 0, max: 999 },
+    data: { variableId: varCount.id, operation: 'increment', step: 1, min: 0, max: 999 },
   });
   const tpl = createLogicNode({
     id: createLogicId('lnode'),
-    type: 'logic.template',
+    type: 'logic.text',
     x: 320,
     y: 236,
-    data: { template: 'Clicked {{counter}} times' },
+    data: { mode: 'template', template: 'Clicked {{counter}} times' },
   });
   const setText = createLogicNode({
     id: createLogicId('lnode'),
-    type: 'action.set-text',
+    type: 'action.set-layer',
     x: 620,
     y: 84,
-    data: { targetNodeId: firstText?.id ?? '', text: '' },
+    data: { targetNodeId: firstText?.id ?? '', property: 'text', text: '' },
   });
   return createLogicGraph({
     id: createLogicId('lgraph'),
@@ -957,7 +1169,7 @@ export function createLogicPresetGraph(
         sourceNodeId: tpl.id,
         sourcePortId: 'text',
         targetNodeId: setText.id,
-        targetPortId: 'text',
+        targetPortId: 'value',
       }),
     ],
   });
@@ -969,7 +1181,9 @@ const AUTO_ARRANGE_CATEGORY_ORDER: Record<LogicNodeCategory | 'custom', number> 
   state: 2,
   logic: 3,
   action: 4,
-  custom: 5,
+  flow: 5,
+  network: 6,
+  custom: 7,
 };
 
 const AUTO_ARRANGE_START_X = 64;
@@ -1319,4 +1533,6 @@ export function autoArrangeLogicGraph(graph: LogicGraph): LogicGraph {
   return touchLogicGraph({ ...graph, nodes: nextNodes });
 }
 
-export const LOGIC_CATALOG_LIST = Object.freeze(Object.values(LOGIC_NODE_CATALOG));
+export const LOGIC_CATALOG_LIST = Object.freeze(
+  PRIMARY_LOGIC_NODE_TYPES.map((type) => LOGIC_NODE_CATALOG[type]),
+);
