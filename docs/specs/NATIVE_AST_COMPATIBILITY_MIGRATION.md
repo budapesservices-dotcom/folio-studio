@@ -8,6 +8,8 @@
 
 > This plan is a compatibility bridge. It does not authorize a breaking AST rewrite or a .flop format change. Preserve existing projects and behavior while the native contracts are introduced incrementally.
 
+> **Historical audit snapshot:** the source baseline and branch named below describe the earlier audit that produced this plan. They are not a complete inventory of the repository as of 2026-11-24. For current implementation facts, use [Architecture](../ARCHITECTURE.md), [Native AST v1](NATIVE_AST_V1.md), [Native AST Compatibility API](NATIVE_AST_COMPATIBILITY_API.md), and [Node Logic v1](NODE_LOGIC_V1.md).
+
 ## 1. Goal
 
 Evolve the existing FOLIO project model into the Native AST architecture without losing:
