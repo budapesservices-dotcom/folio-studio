@@ -877,4 +877,430 @@ describe('Phase 2 — Component-Scoped Per-Instance Logic Execution Contract', (
     store.dispatchLegacyAction({ type: 'redo' });
     expect(store.getSnapshot().editorState.project.logicGraphs[0].name).toBe('Renamed Component Logic');
   });
+
+  it('validates and executes component-scoped action.set-variant (pipeline + self target) while respecting canonical precedence across all 3 runtimes', () => {
+    const base = createInitialProject('Component SetVariant Precedence Project');
+    const page = getActivePage(base);
+    const now = '2026-11-24T00:00:00.000Z';
+
+    const btnBg: DesignNode = {
+      ...createRectNode(1),
+      id: 'btn-bg',
+      name: 'Tone BG',
+      x: 0,
+      y: 0,
+      width: 180,
+      height: 48,
+      style: { fill: '#3B82F6', stroke: 'none', strokeWidth: 0 },
+    };
+    const btnLabel: DesignNode = {
+      ...createTextNode(2),
+      id: 'btn-label',
+      name: 'Tone Label',
+      x: 16,
+      y: 12,
+      width: 148,
+      height: 24,
+      text: 'Save',
+    };
+
+    const master: ComponentDefinition = {
+      id: 'comp-tone-btn',
+      name: 'ToneButton',
+      nodeLogicEnabled: true,
+      variants: [
+        {
+          id: 'axis-tone',
+          name: 'tone',
+          defaultOptionId: 'opt-primary',
+          options: [
+            { id: 'opt-primary', label: 'primary', overrides: {} },
+            {
+              id: 'opt-danger',
+              label: 'danger',
+              overrides: {
+                'btn-bg': { fill: '#EF4444' },
+                'btn-label': { text: 'Delete' },
+              },
+            },
+          ],
+        },
+      ],
+      slots: [
+        {
+          id: 'slot-label',
+          name: 'labelSlot',
+          targetNodeId: 'btn-label',
+        },
+      ],
+      document: {
+        id: 'doc-tone-btn',
+        name: 'ToneButton',
+        width: 180,
+        height: 48,
+        background: '#0F172A',
+        nodes: [btnBg, btnLabel],
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const instPlain: ComponentInstanceNode = {
+      id: 'inst-plain',
+      type: 'component-instance',
+      name: 'Tone Plain',
+      componentId: master.id,
+      overrides: {},
+      x: 20,
+      y: 20,
+      width: 180,
+      height: 48,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+    };
+    const instLocked: ComponentInstanceNode = {
+      id: 'inst-locked',
+      type: 'component-instance',
+      name: 'Tone Locked',
+      componentId: master.id,
+      slotAssignments: { 'slot-label': { text: 'Keep Me' } },
+      overrides: { 'btn-bg': { fill: '#111111' } },
+      x: 220,
+      y: 20,
+      width: 180,
+      height: 48,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+    };
+
+    const onClick = createLogicNode({ id: 'ev-tone', type: 'event.on-click', data: { targetNodeId: 'btn-bg' } });
+    const toggle = createLogicNode({ id: 'st-tone-tog', type: 'state.toggle', data: { variableId: '', initialValue: false } });
+    const branch = createLogicNode({ id: 'lg-tone-br', type: 'logic.branch', data: { mode: 'if-else', pipelineRef: 'step:st-tone-tog:value' } });
+    // True branch uses pipeline targetMode (falls back to owning component instance)
+    const setDanger = createLogicNode({
+      id: 'act-danger',
+      type: 'action.set-variant',
+      data: { targetMode: 'pipeline', axisId: 'axis-tone', optionId: 'opt-danger' },
+    });
+    // False branch uses explicit self-target (targetNodeId: '')
+    const setPrimary = createLogicNode({
+      id: 'act-primary',
+      type: 'action.set-variant',
+      data: { targetMode: 'override', targetNodeId: '', axisId: 'axis-tone', optionId: 'opt-primary' },
+    });
+
+    const graph = createLogicGraph({
+      id: 'graph-tone-btn',
+      name: 'ToneButton Logic',
+      scope: 'component',
+      targetId: master.id,
+      nodes: [onClick, toggle, branch, setDanger, setPrimary],
+      connections: [
+        createLogicConnection({ id: 't1', sourceNodeId: onClick.id, sourcePortId: 'exec', targetNodeId: toggle.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 't2', sourceNodeId: toggle.id, sourcePortId: 'next', targetNodeId: branch.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 't3', sourceNodeId: branch.id, sourcePortId: 'true', targetNodeId: setDanger.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 't4', sourceNodeId: branch.id, sourcePortId: 'false', targetNodeId: setPrimary.id, targetPortId: 'exec' }),
+      ],
+    });
+
+    const project: FolioProject = {
+      ...base,
+      components: [master],
+      pages: base.pages.map((p) =>
+        p.id === page.id ? { ...p, document: { ...p.document, nodes: [instPlain, instLocked] } } : p,
+      ),
+      logicGraphs: [graph],
+    };
+
+    // Validator must accept both pipeline-targeted and self-targeted action.set-variant inside component graphs
+    const validation = validateLogicGraphSemantics(graph, project);
+    expect(validation.ok).toBe(true);
+    expect(validation.errors).toEqual([]);
+
+    // 1. Headless Runtime
+    const rt = createPrototypeRuntime(project);
+    const s1 = rt.dispatchNodeEvent('inst-plain__btn-bg', 'click');
+    expect(s1.nodeOverrides['inst-plain']?.variantSelection?.['axis-tone']).toBe('opt-danger');
+    expect(s1.nodeOverrides['inst-locked']?.variantSelection).toBeUndefined();
+
+    const s2 = rt.dispatchNodeEvent('inst-plain__btn-bg', 'click');
+    expect(s2.nodeOverrides['inst-plain']?.variantSelection?.['axis-tone']).toBe('opt-primary');
+
+    const s3 = rt.dispatchNodeEvent('inst-locked__btn-bg', 'click');
+    expect(s3.nodeOverrides['inst-locked']?.variantSelection?.['axis-tone']).toBe('opt-danger');
+    expect(s3.nodeOverrides['inst-plain']?.variantSelection?.['axis-tone']).toBe('opt-primary');
+
+    // 2. Live Preview Micro-Runtime (respects canonical precedence + clean variant revert)
+    const activePage = getActivePage(project);
+    const previewScript = buildLivePreviewLogicScript(project, activePage)!;
+    const preview = createPreviewDomHarness(
+      previewScript,
+      ['inst-plain', 'inst-plain__btn-bg', 'inst-plain__btn-label', 'inst-locked', 'inst-locked__btn-bg', 'inst-locked__btn-label'],
+      {
+        initialTextById: {
+          'inst-plain__btn-label': 'Save',
+          'inst-locked__btn-label': 'Keep Me',
+        },
+        initialAttrsById: {
+          'inst-plain': { 'data-variant-tone': 'primary' },
+          'inst-locked': { 'data-variant-tone': 'primary' },
+        },
+      },
+    );
+    preview.elements.get('inst-locked__btn-bg')!.style.background = '#111111';
+
+    preview.click('inst-plain__btn-bg');
+    expect(preview.getAttr('inst-plain', 'data-variant-tone')).toBe('danger');
+    expect(preview.elements.get('inst-plain__btn-bg')?.style.background).toBe('#EF4444');
+    expect(preview.elements.get('inst-plain__btn-label')?.textContent).toBe('Delete');
+    expect(preview.getAttr('inst-locked', 'data-variant-tone')).toBe('primary');
+
+    preview.click('inst-plain__btn-bg');
+    expect(preview.getAttr('inst-plain', 'data-variant-tone')).toBe('primary');
+    expect(preview.elements.get('inst-plain__btn-bg')?.style.background).toBe('#3B82F6');
+    expect(preview.elements.get('inst-plain__btn-label')?.textContent).toBe('Save');
+
+    // Locked instance switches variant attribute without clobbering Slot text or Local fill override!
+    preview.click('inst-locked__btn-bg');
+    expect(preview.getAttr('inst-locked', 'data-variant-tone')).toBe('danger');
+    expect(preview.elements.get('inst-locked__btn-label')?.textContent).toBe('Keep Me');
+    expect(preview.elements.get('inst-locked__btn-bg')?.style.background).toBe('#111111');
+
+    // 3. Real Executed React TSX
+    const reactHarness = createReactTsxHarness(project, page.id);
+    expect(reactHarness.getAttr('inst-plain', 'data-variant-tone')).toBe('primary');
+    expect(reactHarness.getText('inst-plain__btn-label')).toBe('Save');
+    expect(reactHarness.getText('inst-locked__btn-label')).toBe('Keep Me');
+    expect(reactHarness.getStyle('inst-locked__btn-bg').background).toBe('#111111');
+
+    reactHarness.click('inst-plain__btn-bg');
+    expect(reactHarness.getAttr('inst-plain', 'data-variant-tone')).toBe('danger');
+    expect(reactHarness.getText('inst-plain__btn-label')).toBe('Delete');
+    expect(reactHarness.getAttr('inst-locked', 'data-variant-tone')).toBe('primary');
+
+    reactHarness.click('inst-plain__btn-bg');
+    expect(reactHarness.getAttr('inst-plain', 'data-variant-tone')).toBe('primary');
+    expect(reactHarness.getText('inst-plain__btn-label')).toBe('Save');
+
+    reactHarness.click('inst-locked__btn-bg');
+    expect(reactHarness.getAttr('inst-locked', 'data-variant-tone')).toBe('danger');
+    expect(reactHarness.getText('inst-locked__btn-label')).toBe('Keep Me');
+    expect(reactHarness.getStyle('inst-locked__btn-bg').background).toBe('#111111');
+  });
+
+  it('isolates component-scoped event.on-state-change and forwards outer action.set-variant to nested child components even when child nodeLogicEnabled is false', () => {
+    const base = createInitialProject('Nested Variant Forwarding + StateChange Project');
+    const page = getActivePage(base);
+    const now = '2026-11-24T00:00:00.000Z';
+
+    const pillText: DesignNode = {
+      ...createTextNode(1),
+      id: 'pill-text',
+      name: 'Pill Text',
+      x: 8,
+      y: 4,
+      width: 64,
+      height: 20,
+      text: 'Off',
+    };
+    const pillMaster: ComponentDefinition = {
+      id: 'comp-status-pill',
+      name: 'StatusPill',
+      nodeLogicEnabled: false,
+      variants: [
+        {
+          id: 'axis-state',
+          name: 'state',
+          defaultOptionId: 'opt-off',
+          options: [
+            { id: 'opt-off', label: 'off', overrides: { 'pill-text': { text: 'Off' } } },
+            { id: 'opt-on', label: 'on', overrides: { 'pill-text': { text: 'On' } } },
+          ],
+        },
+      ],
+      document: {
+        id: 'doc-pill',
+        name: 'StatusPill',
+        width: 80,
+        height: 28,
+        background: '#1E293B',
+        nodes: [pillText],
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const triggerBtn: DesignNode = {
+      ...createRectNode(2),
+      id: 'trigger-btn',
+      name: 'Switch Trigger',
+      x: 8,
+      y: 8,
+      width: 100,
+      height: 32,
+      style: { fill: '#334155', stroke: 'none', strokeWidth: 0 },
+    };
+    const childPill: ComponentInstanceNode = {
+      id: 'child-pill',
+      type: 'component-instance',
+      name: 'Child Pill',
+      componentId: pillMaster.id,
+      overrides: {},
+      x: 120,
+      y: 10,
+      width: 80,
+      height: 28,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+    };
+
+    const outerMaster: ComponentDefinition = {
+      id: 'comp-switch-row',
+      name: 'SwitchRow',
+      nodeLogicEnabled: true,
+      document: {
+        id: 'doc-row',
+        name: 'SwitchRow',
+        width: 220,
+        height: 48,
+        background: '#0F172A',
+        nodes: [triggerBtn, childPill],
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const rowA: ComponentInstanceNode = {
+      id: 'row-a',
+      type: 'component-instance',
+      name: 'Row A',
+      componentId: outerMaster.id,
+      overrides: {},
+      x: 20,
+      y: 20,
+      width: 220,
+      height: 48,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+    };
+    const rowB: ComponentInstanceNode = {
+      id: 'row-b',
+      type: 'component-instance',
+      name: 'Row B',
+      componentId: outerMaster.id,
+      overrides: {},
+      x: 20,
+      y: 80,
+      width: 220,
+      height: 48,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+    };
+
+    const activeVar = createLogicVariable({
+      id: 'var-active',
+      name: 'active',
+      valueType: 'boolean',
+      initialValue: false,
+      scope: 'local',
+    });
+
+    const onTrigger = createLogicNode({ id: 'ev-row-click', type: 'event.on-click', data: { targetNodeId: 'trigger-btn' } });
+    const togActive = createLogicNode({ id: 'st-tog-active', type: 'state.toggle', data: { variableId: activeVar.id } });
+    const onActiveChange = createLogicNode({ id: 'ev-active-chg', type: 'event.on-state-change', data: { variableId: activeVar.id } });
+    const getActive = createLogicNode({ id: 'st-get-active', type: 'state.get', data: { variableId: activeVar.id } });
+    const branch = createLogicNode({ id: 'lg-row-br', type: 'logic.branch', data: { mode: 'if-else' } });
+    const setPillOn = createLogicNode({
+      id: 'act-pill-on',
+      type: 'action.set-variant',
+      data: { targetMode: 'override', targetNodeId: 'child-pill', axisId: 'axis-state', optionId: 'opt-on' },
+    });
+    const setPillOff = createLogicNode({
+      id: 'act-pill-off',
+      type: 'action.set-variant',
+      data: { targetMode: 'override', targetNodeId: 'child-pill', axisId: 'axis-state', optionId: 'opt-off' },
+    });
+
+    const graph = createLogicGraph({
+      id: 'graph-switch-row',
+      name: 'SwitchRow Logic',
+      scope: 'component',
+      targetId: outerMaster.id,
+      variables: [activeVar],
+      nodes: [onTrigger, togActive, onActiveChange, getActive, branch, setPillOn, setPillOff],
+      connections: [
+        createLogicConnection({ id: 'r1', sourceNodeId: onTrigger.id, sourcePortId: 'exec', targetNodeId: togActive.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'r2', sourceNodeId: onActiveChange.id, sourcePortId: 'exec', targetNodeId: branch.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'rd1', sourceNodeId: getActive.id, sourcePortId: 'value', targetNodeId: branch.id, targetPortId: 'condition' }),
+        createLogicConnection({ id: 'r3', sourceNodeId: branch.id, sourcePortId: 'true', targetNodeId: setPillOn.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'r4', sourceNodeId: branch.id, sourcePortId: 'false', targetNodeId: setPillOff.id, targetPortId: 'exec' }),
+      ],
+    });
+
+    const project: FolioProject = {
+      ...base,
+      components: [pillMaster, outerMaster],
+      pages: base.pages.map((p) =>
+        p.id === page.id ? { ...p, document: { ...p.document, nodes: [rowA, rowB] } } : p,
+      ),
+      logicGraphs: [graph],
+    };
+
+    // 1. Headless Runtime
+    const rt = createPrototypeRuntime(project);
+    const s1 = rt.dispatchNodeEvent('row-a__trigger-btn', 'click');
+    expect(s1.variables['row-a::var-active']).toBe(true);
+    expect(s1.variables['row-b::var-active']).toBe(false);
+    expect(s1.nodeOverrides['row-a__child-pill']?.variantSelection?.['axis-state']).toBe('opt-on');
+    expect(s1.nodeOverrides['row-b__child-pill']?.variantSelection).toBeUndefined();
+
+    // 2. Live Preview Micro-Runtime
+    const activePage = getActivePage(project);
+    const previewScript = buildLivePreviewLogicScript(project, activePage)!;
+    const preview = createPreviewDomHarness(
+      previewScript,
+      [
+        'row-a__trigger-btn',
+        'row-a__child-pill',
+        'row-a__child-pill__pill-text',
+        'row-b__trigger-btn',
+        'row-b__child-pill',
+        'row-b__child-pill__pill-text',
+      ],
+      {
+        initialTextById: {
+          'row-a__child-pill__pill-text': 'Off',
+          'row-b__child-pill__pill-text': 'Off',
+        },
+        initialAttrsById: {
+          'row-a__child-pill': { 'data-variant-state': 'off' },
+          'row-b__child-pill': { 'data-variant-state': 'off' },
+        },
+      },
+    );
+    preview.click('row-a__trigger-btn');
+    expect(preview.getAttr('row-a__child-pill', 'data-variant-state')).toBe('on');
+    expect(preview.elements.get('row-a__child-pill__pill-text')?.textContent).toBe('On');
+    expect(preview.getAttr('row-b__child-pill', 'data-variant-state')).toBe('off');
+    expect(preview.elements.get('row-b__child-pill__pill-text')?.textContent).toBe('Off');
+
+    // 3. Real Executed React TSX
+    const reactHarness = createReactTsxHarness(project, page.id);
+    expect(reactHarness.getText('row-a__child-pill')).toBe('Off');
+    expect(reactHarness.getText('row-b__child-pill')).toBe('Off');
+    reactHarness.click('row-a__trigger-btn');
+    expect(reactHarness.getText('row-a__child-pill')).toBe('On');
+    expect(reactHarness.getText('row-b__child-pill')).toBe('Off');
+  });
 });
+

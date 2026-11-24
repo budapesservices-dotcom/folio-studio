@@ -6,6 +6,7 @@
  * Flow & Timing, Network) plus 100% backward-compatible legacy v1 nodes.
  */
 
+import { sanitizeUrlCredentials } from '../../core/document/networkSecrets';
 import { getActivePage } from '../../core/document/project';
 import { getProjectDesignTokens, isSafeCssColorValue } from '../../core/document/tokens';
 import type {
@@ -101,6 +102,7 @@ export interface PrototypeRuntimeSnapshot {
 export interface PrototypeRuntimeOptions {
   pageId?: string;
   maxSteps?: number;
+  urlParams?: Readonly<Record<string, string>>;
 }
 
 export interface PrototypeRuntime {
@@ -525,7 +527,10 @@ export function createPrototypeRuntime(
           if (kind === 'theme') return (typeof node.data.themeId === 'string' && node.data.themeId) || activeThemeId;
           if (kind === 'viewport') return node.data.viewportMetric === 'height' ? 900 : 1440;
           if (kind === 'user-auth') return node.data.authField === 'email' ? 'guest@folio.app' : false;
-          if (kind === 'url-params') return '';
+          if (kind === 'url-params') {
+            const paramKey = typeof node.data.paramKey === 'string' ? node.data.paramKey.trim() : '';
+            return paramKey && options.urlParams ? (options.urlParams[paramKey] ?? '') : '';
+          }
           const pId = typeof node.data.pageId === 'string' ? node.data.pageId : '';
           return (pId ? pagesById.get(pId)?.route : undefined) ?? activeRoute;
         }
@@ -1081,7 +1086,8 @@ export function createPrototypeRuntime(
           if (op === 'reset') {
             nextVal = variableInitialValues.get(variableId) ?? prevVal;
           } else if (op === 'increment' && expectedType === 'number') {
-            const step = Number(node.data.step ?? 1);
+            const rawStep = resolveInputValue(next.indexed, node, 'step', node.data.step ?? 1, visiting, ctx);
+            const step = Number(rawStep ?? 1);
             const prevNum = typeof prevVal === 'number' ? prevVal : 0;
             let computed = prevNum + (Number.isFinite(step) ? step : 1);
             if (typeof node.data.min === 'number' && Number.isFinite(node.data.min)) computed = Math.max(node.data.min, computed);
@@ -1218,10 +1224,10 @@ export function createPrototypeRuntime(
             const url = String(hasDynVal ? connectedVal ?? '' : node.data.imageUrl ?? '').trim();
             if (url && !sanitizeHref(url)) {
               warnings.push(`Set Layer "${node.id}" blocked unsafe image URL.`);
-              break;
+            } else {
+              ov.imageUrl = url;
+              appliedValue = url;
             }
-            ov.imageUrl = url;
-            appliedValue = url;
           } else if (property === 'disabled') {
             ov.disabled = hasDynVal ? Boolean(connectedVal) : Boolean(node.data.disabled);
             appliedValue = ov.disabled;
@@ -1334,8 +1340,19 @@ export function createPrototypeRuntime(
         }
 
         case 'action.set-variant': {
-          const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
-          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById, tokens);
+          let targetNodeId = resolvePipelineTargetLayerId(node, ctx);
+          let astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById, tokens);
+          if (
+            (!astNode || astNode.type !== 'component-instance')
+            && getNodeTargetMode(node) === 'pipeline'
+            && ctx.origin?.instanceId
+          ) {
+            const owningAst = resolveAstNodeById(ctx.origin.instanceId, astNodesById, componentsById, tokens);
+            if (owningAst && owningAst.type === 'component-instance') {
+              targetNodeId = ctx.origin.instanceId;
+              astNode = owningAst;
+            }
+          }
           if (!astNode || astNode.type !== 'component-instance') {
             warnings.push(`Set Variant "${node.id}" target "${targetNodeId}" is not a component instance.`);
             break;
@@ -1612,7 +1629,7 @@ export function createPrototypeRuntime(
 
         case 'network.http': {
           const method = String(node.data.method ?? 'GET');
-          const url = String(node.data.url ?? '/api/items');
+          const url = sanitizeUrlCredentials(String(node.data.url ?? '/api/items'));
           const simulatedPayload = { ok: true, method, url, data: { items: [] } };
           const stepPayload: PipelineStepOutput = { data: simulatedPayload, status: 200 };
           const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
@@ -1833,6 +1850,9 @@ export function createPrototypeRuntime(
               initialStepPayload: { targetLayerId: nodeId, value: payload ?? '' },
             });
           } else if (event === 'key-press' && node.type === 'event.on-key-press') {
+            const expectedCombo = typeof node.data.keyCombo === 'string' ? node.data.keyCombo.trim().toLowerCase() : '';
+            const actualCombo = typeof payload === 'string' ? payload.trim().toLowerCase() : '';
+            if (actualCombo && expectedCombo && actualCombo !== expectedCombo) continue;
             starters.push({
               indexed,
               nodeId: node.id,
@@ -1920,10 +1940,19 @@ export function createPrototypeRuntime(
         for (const indexed of indexedGraphs) {
           for (const node of indexed.graph.nodes) {
             if (node.type === 'event.on-state-change' && node.data.variableId === variableId) {
+              const stateOrigin = indexed.instanceId
+                ? buildPipelineOriginRef(
+                    indexed.instanceId,
+                    astNodesById,
+                    componentsById,
+                    project.animations,
+                    tokens,
+                  )
+                : null;
               starters.push({
                 indexed,
                 nodeId: node.id,
-                context: createPipelineContext(nextExecutionId('state'), 'state-change', null),
+                context: createPipelineContext(nextExecutionId('state'), 'state-change', stateOrigin),
                 initialStepPayload: { variableId, value: coerced },
               });
             }

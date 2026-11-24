@@ -146,8 +146,8 @@ export const NODE_RUNTIME_PARITY_MATRIX: readonly NodeRuntimeParityEntry[] = [
   { type: 'action.overlay-toast', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Open/close modal/drawer + safe zero-innerHTML toast notifications' },
   { type: 'action.system-form', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Theme switch, clipboard, focus/blur/reset form' },
   // Flow & Timing (3)
-  { type: 'flow.delay', headless: 'simulated', livePreview: 'full', reactCodegen: 'full', notes: 'Timed delay (simulated synchronously in headless, timed in browser)' },
-  { type: 'flow.loop-timer', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'For-each list iteration & interval timer management' },
+  { type: 'flow.delay', headless: 'simulated', livePreview: 'full', reactCodegen: 'simulated', notes: 'Timed delay (real setTimeout in Live Preview; deterministic synchronous execution in Headless & React TSX)' },
+  { type: 'flow.loop-timer', headless: 'simulated', livePreview: 'full', reactCodegen: 'simulated', notes: 'For-each list iteration full across all 3; interval timer real in Live Preview and single-tick simulated in Headless & React TSX' },
   { type: 'flow.control', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Sequence, parallel, debounce/throttle fan-out' },
   // Network & Backend (3)
   { type: 'network.http', headless: 'simulated', livePreview: 'simulated', reactCodegen: 'simulated', notes: 'Safe structured HTTP step payload (zero embedded secrets/tokens)' },
@@ -173,6 +173,12 @@ export interface CompiledRuntimeNodeMeta {
   readonly instanceId?: string;
   readonly animationIds?: readonly string[];
   readonly children?: readonly CompiledOriginChildMeta[];
+  readonly baseText?: string;
+  readonly baseFill?: string;
+  readonly baseVisible?: boolean;
+  readonly lockText?: boolean;
+  readonly lockFill?: boolean;
+  readonly lockVisible?: boolean;
 }
 
 export interface CompiledVariantPatch {
@@ -213,6 +219,7 @@ export interface CompiledRuntimeGraphPayload {
 export interface CompiledPageLogicRuntimeConfig {
   readonly activePageId: string;
   readonly activeRoute: string;
+  readonly activeThemeId: string;
   readonly maxSteps: number;
   readonly variables: Record<string, LogicVariableValue>;
   readonly variableInitialValues: Record<string, LogicVariableValue>;
@@ -316,6 +323,8 @@ export function compilePageLogicRuntimeConfig(
   // Populate resolved metadata for every expanded component instance (including nested instances)
   // respecting canonical precedence: Master -> Variants -> Slots -> Local Overrides -> Tokens.
   for (const instance of expandedInstances) {
+    const masterNodesById = new Map(instance.master.document.nodes.map((n) => [n.id, n]));
+    const slotByTargetId = new Map((instance.master.slots ?? []).map((s) => [s.targetNodeId, s]));
     for (const resolvedChild of instance.resolvedNodes) {
       const scopedId = `${instance.instanceId}${COMPONENT_INSTANCE_NODE_SEP}${resolvedChild.id}`;
       const childOrigin = buildPipelineOriginRef(
@@ -326,6 +335,22 @@ export function compilePageLogicRuntimeConfig(
         tokens,
       );
       const childFill = extractNodeFill(resolvedChild);
+      const masterNode = masterNodesById.get(resolvedChild.id);
+      const slotDef = slotByTargetId.get(resolvedChild.id);
+      const slotAssign = slotDef ? instance.instanceNode.slotAssignments?.[slotDef.id] : undefined;
+      const localOv = instance.instanceNode.overrides?.[resolvedChild.id];
+      const hasTokenFill = Boolean(masterNode?.tokenBindings?.fill);
+      const lockText = localOv?.text !== undefined || slotAssign?.text !== undefined;
+      const lockFill = hasTokenFill || localOv?.fill !== undefined || slotAssign?.fill !== undefined;
+      const lockVisible = slotAssign?.visible !== undefined;
+      const baseText =
+        slotDef?.defaultText !== undefined
+          ? slotDef.defaultText
+          : masterNode?.type === 'text'
+            ? masterNode.text
+            : undefined;
+      const baseFill = masterNode ? extractNodeFill(masterNode) : undefined;
+      const baseVisible = masterNode?.visible ?? resolvedChild.visible;
       nodeMeta[scopedId] = {
         name: resolvedChild.name,
         type: resolvedChild.type,
@@ -351,6 +376,12 @@ export function compilePageLogicRuntimeConfig(
               })),
             }
           : {}),
+        ...(baseText !== undefined ? { baseText } : {}),
+        ...(baseFill !== undefined ? { baseFill } : {}),
+        baseVisible,
+        ...(lockText ? { lockText: true } : {}),
+        ...(lockFill ? { lockFill: true } : {}),
+        ...(lockVisible ? { lockVisible: true } : {}),
       };
     }
   }
@@ -434,6 +465,7 @@ export function compilePageLogicRuntimeConfig(
   return {
     activePageId: page.id,
     activeRoute: page.route,
+    activeThemeId: tokens.activeThemeId,
     maxSteps: MAX_LOGIC_EXECUTION_STEPS,
     variables,
     variableInitialValues,
@@ -452,18 +484,30 @@ export function compilePageLogicRuntimeConfig(
 export interface DiscoveredReactLogicTargets {
   readonly clickNodes: ReadonlySet<string>;
   readonly doubleClickNodes: ReadonlySet<string>;
+  readonly clickOutsideNodes: ReadonlySet<string>;
   readonly hoverEnterNodes: ReadonlySet<string>;
   readonly hoverLeaveNodes: ReadonlySet<string>;
+  readonly inputChangeNodes: ReadonlySet<string>;
+  readonly inputFocusNodes: ReadonlySet<string>;
+  readonly inputBlurNodes: ReadonlySet<string>;
+  readonly inputSubmitNodes: ReadonlySet<string>;
+  readonly dragStartNodes: ReadonlySet<string>;
+  readonly dragMoveNodes: ReadonlySet<string>;
+  readonly dragDropNodes: ReadonlySet<string>;
+  readonly scrollViewTargets: ReadonlySet<string>;
   readonly visibleTargets: ReadonlySet<string>;
   readonly textTargets: ReadonlySet<string>;
   readonly fillTargets: ReadonlySet<string>;
   readonly opacityTargets: ReadonlySet<string>;
   readonly transformTargets: ReadonlySet<string>;
+  readonly imageTargets: ReadonlySet<string>;
   readonly disabledTargets: ReadonlySet<string>;
   readonly transitionTargets: ReadonlySet<string>;
   readonly variantTargets: ReadonlyMap<string, ReadonlySet<string>>;
   readonly hasPageLoad: boolean;
   readonly hasKeyPress: boolean;
+  readonly hasResize: boolean;
+  readonly hasPageScroll: boolean;
   readonly hasNavigation: boolean;
   readonly hasThemeAction: boolean;
   readonly hasAnimationAction: boolean;
@@ -497,7 +541,11 @@ function resolvePossibleActionTargetIds(
     const resolved = new Set<string>();
     for (const origin of origins) {
       if (!childId || childId === origin.layerId) {
-        resolved.add(origin.layerId);
+        if (node.type === 'action.set-variant' && origin.type !== 'component-instance' && origin.instanceId) {
+          resolved.add(origin.instanceId);
+        } else {
+          resolved.add(origin.layerId);
+        }
       } else if (origin.children?.some((c) => c.id === childId)) {
         resolved.add(childId);
       }
@@ -522,19 +570,31 @@ export function discoverDynamicReactTargets(
 ): DiscoveredReactLogicTargets {
   const clickNodes = new Set<string>();
   const doubleClickNodes = new Set<string>();
+  const clickOutsideNodes = new Set<string>();
   const hoverEnterNodes = new Set<string>();
   const hoverLeaveNodes = new Set<string>();
+  const inputChangeNodes = new Set<string>();
+  const inputFocusNodes = new Set<string>();
+  const inputBlurNodes = new Set<string>();
+  const inputSubmitNodes = new Set<string>();
+  const dragStartNodes = new Set<string>();
+  const dragMoveNodes = new Set<string>();
+  const dragDropNodes = new Set<string>();
+  const scrollViewTargets = new Set<string>();
   const visibleTargets = new Set<string>();
   const textTargets = new Set<string>();
   const fillTargets = new Set<string>();
   const opacityTargets = new Set<string>();
   const transformTargets = new Set<string>();
+  const imageTargets = new Set<string>();
   const disabledTargets = new Set<string>();
   const transitionTargets = new Set<string>();
   const variantTargets = new Map<string, Set<string>>();
 
   let hasPageLoad = false;
   let hasKeyPress = false;
+  let hasResize = false;
+  let hasPageScroll = false;
   let hasNavigation = false;
   let hasThemeAction = false;
   let hasAnimationAction = false;
@@ -551,10 +611,26 @@ export function discoverDynamicReactTargets(
       if (node.type === 'event.on-click' && targetId) {
         const mode = String(node.data.mode ?? 'click');
         if (mode === 'double-click') doubleClickNodes.add(targetId);
+        else if (mode === 'click-outside') clickOutsideNodes.add(targetId);
         else clickNodes.add(targetId);
       } else if (node.type === 'event.on-hover' && targetId) {
         if (node.data.phase === 'leave') hoverLeaveNodes.add(targetId);
         else hoverEnterNodes.add(targetId);
+      } else if (node.type === 'event.on-input' && targetId) {
+        const trig = String(node.data.mode ?? node.data.trigger ?? 'change');
+        if (trig === 'focus') inputFocusNodes.add(targetId);
+        else if (trig === 'blur') inputBlurNodes.add(targetId);
+        else if (trig === 'submit') inputSubmitNodes.add(targetId);
+        else inputChangeNodes.add(targetId);
+      } else if (node.type === 'event.on-drag' && targetId) {
+        const phase = String(node.data.phase ?? 'start');
+        if (phase === 'move') dragMoveNodes.add(targetId);
+        else if (phase === 'drop') dragDropNodes.add(targetId);
+        else dragStartNodes.add(targetId);
+      } else if (node.type === 'event.on-scroll-view') {
+        const trig = String(node.data.mode ?? node.data.trigger ?? 'enter-view');
+        if (trig === 'page-scroll') hasPageScroll = true;
+        else if (targetId) scrollViewTargets.add(targetId);
       } else if (node.type === 'event.on-key-press') {
         hasKeyPress = true;
       } else if (node.type === 'source.element' && targetId) {
@@ -582,6 +658,9 @@ export function discoverDynamicReactTargets(
         (node.type === 'event.on-lifecycle' && (!node.data.trigger || node.data.trigger === 'page-load'))
       ) {
         hasPageLoad = true;
+      }
+      if (node.type === 'event.on-lifecycle' && node.data.trigger === 'resize') {
+        hasResize = true;
       }
       if (
         (node.type === 'source.page' || node.type === 'source.context') &&
@@ -611,6 +690,7 @@ export function discoverDynamicReactTargets(
           else if (prop === 'text') textTargets.add(tid);
           else if (prop === 'opacity') opacityTargets.add(tid);
           else if (prop === 'transform') transformTargets.add(tid);
+          else if (prop === 'image') imageTargets.add(tid);
           else if (prop === 'disabled') disabledTargets.add(tid);
           if (hasTransition) transitionTargets.add(tid);
         }
@@ -646,18 +726,30 @@ export function discoverDynamicReactTargets(
   return {
     clickNodes,
     doubleClickNodes,
+    clickOutsideNodes,
     hoverEnterNodes,
     hoverLeaveNodes,
+    inputChangeNodes,
+    inputFocusNodes,
+    inputBlurNodes,
+    inputSubmitNodes,
+    dragStartNodes,
+    dragMoveNodes,
+    dragDropNodes,
+    scrollViewTargets,
     visibleTargets,
     textTargets,
     fillTargets,
     opacityTargets,
     transformTargets,
+    imageTargets,
     disabledTargets,
     transitionTargets,
     variantTargets,
     hasPageLoad,
     hasKeyPress,
+    hasResize,
+    hasPageScroll,
     hasNavigation,
     hasThemeAction,
     hasAnimationAction,

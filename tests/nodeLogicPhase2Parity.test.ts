@@ -1138,4 +1138,266 @@ describe('Phase 2 — Node Logic Parity Unification (Headless ↔ Live Preview �
     reactHarness.click(fx.triggerBtnId);
     expect(reactHarness.getText(fx.statusTextId)).toBe('Safe');
   });
+
+  it('honestly reports flow.delay and flow.loop-timer as simulated in React TSX parity matrix and executes for-each + delay consistently across all 3 runtimes', () => {
+    const byType = new Map(NODE_RUNTIME_PARITY_MATRIX.map((entry) => [entry.type, entry]));
+    expect(byType.get('flow.delay')?.headless).toBe('simulated');
+    expect(byType.get('flow.delay')?.livePreview).toBe('full');
+    expect(byType.get('flow.delay')?.reactCodegen).toBe('simulated');
+    expect(byType.get('flow.loop-timer')?.headless).toBe('simulated');
+    expect(byType.get('flow.loop-timer')?.livePreview).toBe('full');
+    expect(byType.get('flow.loop-timer')?.reactCodegen).toBe('simulated');
+
+    const fx = createParityFixture();
+    const listVar = createLogicVariable({ id: 'v-list', name: 'tags', valueType: 'list', initialValue: ['A', 'B', 'C'] });
+    const countVar = createLogicVariable({ id: 'v-loop-count', name: 'loopCount', valueType: 'number', initialValue: 0 });
+
+    const onClick = createLogicNode({ id: 'ev-loop', type: 'event.on-click', data: { targetNodeId: fx.triggerBtnId } });
+    const delayZero = createLogicNode({ id: 'fl-delay', type: 'flow.delay', data: { duration: 0, unit: 'ms' } });
+    const getList = createLogicNode({ id: 'st-get-tags', type: 'state.get', data: { variableId: listVar.id } });
+    const forEach = createLogicNode({ id: 'fl-each', type: 'flow.loop-timer', data: { mode: 'for-each' } });
+    const incCount = createLogicNode({ id: 'st-inc-loop', type: 'state.update', data: { variableId: countVar.id, operation: 'increment', step: 1 } });
+    const fmt = createLogicNode({ id: 'lg-fmt-loop', type: 'logic.text', data: { mode: 'template', template: 'Loop={{loopCount}}' } });
+    const setStatus = createLogicNode({
+      id: 'act-loop-status',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.statusTextId, property: 'text' },
+    });
+
+    const graph = createLogicGraph({
+      id: 'graph-flow-delay-loop',
+      name: 'Flow Delay & Loop Parity',
+      scope: 'page',
+      targetId: fx.pageId,
+      variables: [listVar, countVar],
+      nodes: [onClick, delayZero, getList, forEach, incCount, fmt, setStatus],
+      connections: [
+        createLogicConnection({ id: 'fl1', sourceNodeId: onClick.id, sourcePortId: 'exec', targetNodeId: delayZero.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'fl2', sourceNodeId: delayZero.id, sourcePortId: 'next', targetNodeId: forEach.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'fl3', sourceNodeId: forEach.id, sourcePortId: 'tick', targetNodeId: incCount.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'fl4', sourceNodeId: forEach.id, sourcePortId: 'done', targetNodeId: setStatus.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'fld1', sourceNodeId: getList.id, sourcePortId: 'value', targetNodeId: forEach.id, targetPortId: 'list' }),
+        createLogicConnection({ id: 'fld2', sourceNodeId: fmt.id, sourcePortId: 'text', targetNodeId: setStatus.id, targetPortId: 'value' }),
+      ],
+    });
+
+    const project: FolioProject = { ...fx.project, logicGraphs: [graph] };
+    const page = getActivePage(project);
+
+    // 1. Headless Runtime
+    const rt = createPrototypeRuntime(project);
+    const snap = rt.dispatchNodeEvent(fx.triggerBtnId, 'click');
+    expect(snap.variables[countVar.id]).toBe(3);
+    expect(snap.nodeOverrides[fx.statusTextId]?.text).toBe('Loop=3');
+
+    // 2. Live Preview Micro-Runtime
+    const script = buildLivePreviewLogicScript(project, page)!;
+    const preview = createPreviewDomHarness(script, [fx.triggerBtnId, fx.statusTextId]);
+    preview.click(fx.triggerBtnId);
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('Loop=3');
+
+    // 3. Executed React TSX
+    const reactHarness = createReactTsxHarness(project, fx.pageId);
+    reactHarness.click(fx.triggerBtnId);
+    expect(reactHarness.getText(fx.statusTextId)).toBe('Loop=3');
+  });
+
+  it('proves 3-runtime behavioral execution parity for Input, Drag, Click-Outside, Key-Press modifiers (no stale closure), Context/External sources, wired increment step, and safe image action', () => {
+    const fx = createParityFixture();
+    const inputNode: DesignNode = {
+      ...createRectNode(8),
+      id: 'inp-search',
+      name: 'Search Field',
+      semanticTag: 'input',
+      x: 40,
+      y: 540,
+      width: 200,
+      height: 36,
+    };
+    const projectBase: FolioProject = {
+      ...fx.project,
+      pages: fx.project.pages.map((p) =>
+        p.id === fx.pageId
+          ? { ...p, document: { ...p.document, nodes: [...p.document.nodes, inputNode] } }
+          : p,
+      ),
+    };
+
+    const scoreVar = createLogicVariable({ id: 'v-score', name: 'score', valueType: 'number', initialValue: 0 });
+    const tabVar = createLogicVariable({ id: 'v-tab', name: 'tab', valueType: 'string', initialValue: '' });
+    const extCountVar = createLogicVariable({ id: 'v-ext-count', name: 'extCount', valueType: 'number', initialValue: -1 });
+    const queryVar = createLogicVariable({ id: 'v-query', name: 'query', valueType: 'string', initialValue: '' });
+
+    // Key combo Ctrl+K increments score by wired math step (2 + 3 = 5) and updates status text —
+    // firing TWICE sequentially proves React TSX has zero stale closure in window keydown listener!
+    const onKeyCombo = createLogicNode({ id: 'ev-ctrl-k', type: 'event.on-key-press', data: { keyCombo: 'Ctrl+K', direction: 'down' } });
+    const mathStep = createLogicNode({ id: 'lg-step', type: 'logic.math', data: { operation: '+', a: 2, b: 3 } });
+    const incWired = createLogicNode({ id: 'st-inc-wired', type: 'state.update', data: { variableId: scoreVar.id, operation: 'increment', step: 1 } });
+    const fmtScore = createLogicNode({ id: 'lg-fmt-score', type: 'logic.text', data: { mode: 'template', template: 'Score={{score}}' } });
+    const setScoreTxt = createLogicNode({
+      id: 'act-score-txt',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.statusTextId, property: 'text' },
+    });
+
+    // Input change captures event value + updates query variable + formats into status text
+    const onInput = createLogicNode({ id: 'ev-input', type: 'event.on-input', data: { targetNodeId: inputNode.id, mode: 'change' } });
+    const setQuery = createLogicNode({ id: 'st-set-q', type: 'state.update', data: { variableId: queryVar.id, operation: 'set' } });
+    const fmtQuery = createLogicNode({ id: 'lg-fmt-q', type: 'logic.text', data: { mode: 'template', template: 'Q={{query}}' } });
+    const setQueryTxt = createLogicNode({
+      id: 'act-q-txt',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.statusTextId, property: 'text' },
+    });
+
+    // Drag start sets valid image URL on rectA; click-outside attempts unsafe javascript: URL (must be blocked) and shows modal
+    const onDrag = createLogicNode({ id: 'ev-drag', type: 'event.on-drag', data: { targetNodeId: fx.rectAId, phase: 'start' } });
+    const setSafeImg = createLogicNode({
+      id: 'act-safe-img',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.rectAId, property: 'image', imageUrl: 'https://cdn.example.com/hero.png' },
+    });
+    const onOutside = createLogicNode({ id: 'ev-outside', type: 'event.on-click', data: { targetNodeId: fx.cardBId, mode: 'click-outside' } });
+    const setUnsafeImg = createLogicNode({
+      id: 'act-unsafe-img',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.rectAId, property: 'image', imageUrl: 'javascript:alert(1)' },
+    });
+    const showModal = createLogicNode({
+      id: 'act-outside-modal',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.modalBoxId, property: 'visible', visibleMode: 'show' },
+    });
+
+    // Click button reads source.context (url-params 'tab') and source.external (count -> 0) and writes into tabVar & status
+    const onBtn = createLogicNode({ id: 'ev-ctx-btn', type: 'event.on-click', data: { targetNodeId: fx.triggerBtnId } });
+    const ctxUrl = createLogicNode({ id: 'src-url', type: 'source.context', data: { contextKind: 'url-params', paramKey: 'tab' } });
+    const extSrc = createLogicNode({ id: 'src-ext', type: 'source.external', data: { sourceName: 'products' } });
+    const setTab = createLogicNode({ id: 'st-set-tab', type: 'state.update', data: { variableId: tabVar.id, operation: 'set' } });
+    const setExtCount = createLogicNode({ id: 'st-set-ext', type: 'state.update', data: { variableId: extCountVar.id, operation: 'set' } });
+    const fmtTab = createLogicNode({ id: 'lg-fmt-tab', type: 'logic.text', data: { mode: 'template', template: '{{tab}}:{{extCount}}' } });
+    const setTabTxt = createLogicNode({
+      id: 'act-tab-txt',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.statusTextId, property: 'text' },
+    });
+
+    const graph = createLogicGraph({
+      id: 'graph-extended-parity',
+      name: 'Extended 3-Runtime Behavioral Parity',
+      scope: 'page',
+      targetId: fx.pageId,
+      variables: [scoreVar, tabVar, extCountVar, queryVar],
+      nodes: [
+        onKeyCombo, mathStep, incWired, fmtScore, setScoreTxt,
+        onInput, setQuery, fmtQuery, setQueryTxt,
+        onDrag, setSafeImg, onOutside, setUnsafeImg, showModal,
+        onBtn, ctxUrl, extSrc, setTab, setExtCount, fmtTab, setTabTxt,
+      ],
+      connections: [
+        createLogicConnection({ id: 'xk1', sourceNodeId: onKeyCombo.id, sourcePortId: 'exec', targetNodeId: incWired.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'xk2', sourceNodeId: incWired.id, sourcePortId: 'next', targetNodeId: setScoreTxt.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'xkd1', sourceNodeId: mathStep.id, sourcePortId: 'result', targetNodeId: incWired.id, targetPortId: 'step' }),
+        createLogicConnection({ id: 'xkd2', sourceNodeId: fmtScore.id, sourcePortId: 'text', targetNodeId: setScoreTxt.id, targetPortId: 'value' }),
+        createLogicConnection({ id: 'xi1', sourceNodeId: onInput.id, sourcePortId: 'exec', targetNodeId: setQuery.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'xi2', sourceNodeId: setQuery.id, sourcePortId: 'next', targetNodeId: setQueryTxt.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'xid1', sourceNodeId: onInput.id, sourcePortId: 'value', targetNodeId: setQuery.id, targetPortId: 'value' }),
+        createLogicConnection({ id: 'xid2', sourceNodeId: fmtQuery.id, sourcePortId: 'text', targetNodeId: setQueryTxt.id, targetPortId: 'value' }),
+        createLogicConnection({ id: 'xd1', sourceNodeId: onDrag.id, sourcePortId: 'exec', targetNodeId: setSafeImg.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'xo1', sourceNodeId: onOutside.id, sourcePortId: 'exec', targetNodeId: setUnsafeImg.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'xo2', sourceNodeId: setUnsafeImg.id, sourcePortId: 'next', targetNodeId: showModal.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'xb1', sourceNodeId: onBtn.id, sourcePortId: 'exec', targetNodeId: setTab.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'xb2', sourceNodeId: setTab.id, sourcePortId: 'next', targetNodeId: setExtCount.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'xb3', sourceNodeId: setExtCount.id, sourcePortId: 'next', targetNodeId: setTabTxt.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'xbd1', sourceNodeId: ctxUrl.id, sourcePortId: 'value', targetNodeId: setTab.id, targetPortId: 'value' }),
+        createLogicConnection({ id: 'xbd2', sourceNodeId: extSrc.id, sourcePortId: 'count', targetNodeId: setExtCount.id, targetPortId: 'value' }),
+        createLogicConnection({ id: 'xbd3', sourceNodeId: fmtTab.id, sourcePortId: 'text', targetNodeId: setTabTxt.id, targetPortId: 'value' }),
+      ],
+    });
+
+    const project: FolioProject = { ...projectBase, logicGraphs: [graph] };
+    const page = getActivePage(project);
+
+    // 1. Headless Runtime
+    const rt = createPrototypeRuntime(project, { urlParams: { tab: 'pricing' } });
+    // Plain 'k' without Ctrl must NOT trigger Ctrl+K
+    const sNoMod = rt.dispatchNodeEvent('', 'key-press', 'k');
+    expect(sNoMod.variables[scoreVar.id]).toBe(0);
+    // Two sequential Ctrl+K presses increment 0 -> 5 -> 10
+    const sK1 = rt.dispatchNodeEvent('', 'key-press', 'Ctrl+K');
+    expect(sK1.variables[scoreVar.id]).toBe(5);
+    expect(sK1.nodeOverrides[fx.statusTextId]?.text).toBe('Score=5');
+    const sK2 = rt.dispatchNodeEvent('', 'key-press', 'Ctrl+K');
+    expect(sK2.variables[scoreVar.id]).toBe(10);
+    expect(sK2.nodeOverrides[fx.statusTextId]?.text).toBe('Score=10');
+
+    const sInp = rt.dispatchNodeEvent(inputNode.id, 'input', 'folio');
+    expect(sInp.variables[queryVar.id]).toBe('folio');
+    expect(sInp.nodeOverrides[fx.statusTextId]?.text).toBe('Q=folio');
+
+    const sDrag = rt.dispatchNodeEvent(fx.rectAId, 'drag');
+    expect(sDrag.nodeOverrides[fx.rectAId]?.imageUrl).toBe('https://cdn.example.com/hero.png');
+
+    const sOut = rt.dispatchNodeEvent(fx.cardBId, 'click-outside');
+    expect(sOut.nodeOverrides[fx.rectAId]?.imageUrl).toBe('https://cdn.example.com/hero.png');
+    expect(sOut.nodeOverrides[fx.modalBoxId]?.visible).toBe(true);
+
+    const sCtx = rt.dispatchNodeEvent(fx.triggerBtnId, 'click');
+    expect(sCtx.variables[tabVar.id]).toBe('pricing');
+    expect(sCtx.variables[extCountVar.id]).toBe(0);
+    expect(sCtx.nodeOverrides[fx.statusTextId]?.text).toBe('pricing:0');
+
+    // 2. Live Preview Micro-Runtime
+    const script = buildLivePreviewLogicScript(project, page)!;
+    const preview = createPreviewDomHarness(
+      script,
+      [fx.statusTextId, inputNode.id, fx.rectAId, fx.cardBId, fx.modalBoxId, fx.triggerBtnId],
+      {
+        tagNameById: { [inputNode.id]: 'INPUT' },
+        initialDisplayById: { [fx.modalBoxId]: 'none' },
+      },
+    );
+    preview.keydown('k');
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('');
+    preview.keydown('k', { ctrlKey: true });
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('Score=5');
+    preview.keydown('k', { ctrlKey: true });
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('Score=10');
+
+    preview.input(inputNode.id, 'folio');
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('Q=folio');
+
+    preview.dragStart(fx.rectAId);
+    expect(preview.elements.get(fx.rectAId)?.style.backgroundImage).toContain('https://cdn.example.com/hero.png');
+
+    preview.clickOutside();
+    expect(preview.elements.get(fx.rectAId)?.style.backgroundImage).toContain('https://cdn.example.com/hero.png');
+    expect(preview.elements.get(fx.modalBoxId)?.style.display).toBe('block');
+
+    preview.click(fx.triggerBtnId);
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('pricing:0');
+
+    // 3. Real Executed React TSX
+    const reactHarness = createReactTsxHarness(project, fx.pageId);
+    reactHarness.keydown('k');
+    expect(reactHarness.getText(fx.statusTextId)).toBe('Ready');
+    reactHarness.keydown('k', { ctrlKey: true });
+    expect(reactHarness.getText(fx.statusTextId)).toBe('Score=5');
+    reactHarness.keydown('k', { ctrlKey: true });
+    expect(reactHarness.getText(fx.statusTextId)).toBe('Score=10');
+
+    reactHarness.input(inputNode.id, 'folio');
+    expect(reactHarness.getText(fx.statusTextId)).toBe('Q=folio');
+
+    reactHarness.dragStart(fx.rectAId);
+    expect(String(reactHarness.getStyle(fx.rectAId).backgroundImage ?? '')).toContain('https://cdn.example.com/hero.png');
+
+    reactHarness.clickOutside();
+    expect(String(reactHarness.getStyle(fx.rectAId).backgroundImage ?? '')).toContain('https://cdn.example.com/hero.png');
+    expect(reactHarness.getStyle(fx.modalBoxId).display).toBe('block');
+
+    reactHarness.click(fx.triggerBtnId);
+    expect(reactHarness.getText(fx.statusTextId)).toBe('pricing:0');
+  });
 });
+

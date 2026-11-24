@@ -347,7 +347,7 @@ function buildNestedInstancePropsList(
     const chosenId = node.variantSelection?.[axis.id] ?? axis.defaultOptionId;
     const opt = axis.options.find((o) => o.id === chosenId) ?? axis.options[0];
     if (opt) {
-      if (parentSupportsScopedLogic && childSupportsScopedLogic) {
+      if (parentSupportsScopedLogic) {
         const unionType = axis.options.map((o) => escapeTsString(o.label)).join(' | ') || 'string';
         instanceProps.push(
           `${propName}={(logicOverrides?.[scopedId(${escapeTsString(node.id)})]?.variants?.[${escapeTsString(axis.id)}] ?? ${escapeTsString(opt.label)}) as ${unionType}}`,
@@ -522,10 +522,10 @@ function buildComponentFiles(
   if (supportsScopedLogic) {
     propLines.push('  instanceId?: string;');
     propLines.push(
-      '  logicOverrides?: Record<string, { visible?: boolean; text?: string; fill?: string; opacity?: number; transform?: string; disabled?: boolean; transitionMs?: number; variants?: Record<string, string> }>;',
+      '  logicOverrides?: Record<string, { visible?: boolean; text?: string; fill?: string; opacity?: number; transform?: string; imageUrl?: string; disabled?: boolean; transitionMs?: number; variants?: Record<string, string> }>;',
     );
     propLines.push(
-      '  onLogicEvent?: (kind: "click" | "double-click" | "hover-enter" | "hover-leave", targetId: string) => void;',
+      '  onLogicEvent?: (kind: "click" | "double-click" | "hover-enter" | "hover-leave" | "input-change" | "input-focus" | "input-blur" | "input-submit" | "drag-start" | "drag-move" | "drag-drop", targetId: string, payload?: Record<string, unknown>) => void;',
     );
   }
   propLines.push('  className?: string;');
@@ -566,6 +566,7 @@ function buildComponentFiles(
 
   const rootAttrs: string[] = [
     `className={[${escapeTsString(rootClass)}, className].filter(Boolean).join(' ')}`,
+    ...(supportsScopedLogic ? ['data-folio-id={instanceId}'] : []),
     `data-folio-component=${escapeTsString(component.id)}`,
   ];
   for (const axisMeta of variantAxes) {
@@ -610,6 +611,12 @@ function buildComponentFiles(
       attrs.push(`onDoubleClick={onLogicEvent ? () => onLogicEvent("double-click", ${scopedIdExpr}) : undefined}`);
       attrs.push(`onMouseEnter={onLogicEvent ? () => onLogicEvent("hover-enter", ${scopedIdExpr}) : undefined}`);
       attrs.push(`onMouseLeave={onLogicEvent ? () => onLogicEvent("hover-leave", ${scopedIdExpr}) : undefined}`);
+      attrs.push(`onChange={onLogicEvent ? (ev) => onLogicEvent("input-change", ${scopedIdExpr}, { value: (ev.currentTarget as unknown as { value?: string }).value ?? ev.currentTarget.textContent ?? "" }) : undefined}`);
+      attrs.push(`onFocus={onLogicEvent ? (ev) => onLogicEvent("input-focus", ${scopedIdExpr}, { value: (ev.currentTarget as unknown as { value?: string }).value ?? ev.currentTarget.textContent ?? "" }) : undefined}`);
+      attrs.push(`onBlur={onLogicEvent ? (ev) => onLogicEvent("input-blur", ${scopedIdExpr}, { value: (ev.currentTarget as unknown as { value?: string }).value ?? ev.currentTarget.textContent ?? "" }) : undefined}`);
+      attrs.push(`onPointerDown={onLogicEvent ? (ev) => onLogicEvent("drag-start", ${scopedIdExpr}, { x: ev.clientX ?? 0, y: ev.clientY ?? 0 }) : undefined}`);
+      attrs.push(`onPointerMove={onLogicEvent ? (ev) => onLogicEvent("drag-move", ${scopedIdExpr}, { x: ev.clientX ?? 0, y: ev.clientY ?? 0 }) : undefined}`);
+      attrs.push(`onPointerUp={onLogicEvent ? (ev) => onLogicEvent("drag-drop", ${scopedIdExpr}, { x: ev.clientX ?? 0, y: ev.clientY ?? 0 }) : undefined}`);
       attrs.push(`aria-disabled={${dynOvExpr}?.disabled ? "true" : undefined}`);
       if (tag === 'button') {
         attrs.push(`disabled={Boolean(${dynOvExpr}?.disabled)}`);
@@ -661,6 +668,11 @@ function buildComponentFiles(
       styleParts.push(
         `...(${dynOvExpr}?.transform ? { transform: ${dynOvExpr}?.transform } : {})`,
       );
+      if (node.type !== 'image') {
+        styleParts.push(
+          `...(${dynOvExpr}?.imageUrl ? { backgroundImage: \`url(\${JSON.stringify(${dynOvExpr}?.imageUrl)})\` } : {})`,
+        );
+      }
       styleParts.push(
         `...(${dynOvExpr}?.transitionMs ? { transition: \`all \${${dynOvExpr}?.transitionMs}ms ease\` } : {})`,
       );
@@ -714,7 +726,10 @@ function buildComponentFiles(
       const asset = assetsById.get(node.assetId);
       const src = asset ? `/${getAssetBundlePath(asset)}` : '';
       const alt = node.alt ?? node.name;
-      lines.push(`${indent}<img ${attrs.join(' ')} src=${escapeTsString(src)} alt=${escapeTsString(alt)} />`);
+      const srcAttr = supportsScopedLogic
+        ? `src={${dynOvExpr}?.imageUrl || ${escapeTsString(src)}}`
+        : `src=${escapeTsString(src)}`;
+      lines.push(`${indent}<img ${attrs.join(' ')} ${srcAttr} alt=${escapeTsString(alt)} />`);
     } else if (node.type === 'text') {
       const variantTextVar = variantTextVarByNodeId.get(node.id);
       const fallbackText =
@@ -1051,6 +1066,11 @@ function buildPageReactFile(
         `...(logicOverrides[${escapeTsString(node.id)}]?.transform ? { transform: logicOverrides[${escapeTsString(node.id)}]?.transform } : {})`,
       );
     }
+    if (logicPlan.hasDynamicImage(node.id) && node.type !== 'image') {
+      logicStyleParts.push(
+        `...(logicOverrides[${escapeTsString(node.id)}]?.imageUrl ? { backgroundImage: \`url(\${JSON.stringify(logicOverrides[${escapeTsString(node.id)}]?.imageUrl)})\` } : {})`,
+      );
+    }
     if (logicPlan.hasDynamicTransition(node.id)) {
       logicStyleParts.push(
         `...(logicOverrides[${escapeTsString(node.id)}]?.transitionMs ? { transition: \`all \${logicOverrides[${escapeTsString(node.id)}]?.transitionMs}ms ease\` } : {})`,
@@ -1074,7 +1094,10 @@ function buildPageReactFile(
       const asset = assetsById.get(node.assetId);
       const src = asset ? `/${getAssetBundlePath(asset)}` : '';
       const alt = node.alt ?? node.name;
-      lines.push(`${indent}<img ${attrs.join(' ')} src=${escapeTsString(src)} alt=${escapeTsString(alt)} />`);
+      const srcAttr = logicPlan.hasDynamicImage(node.id)
+        ? `src={logicOverrides[${escapeTsString(node.id)}]?.imageUrl || ${escapeTsString(src)}}`
+        : `src=${escapeTsString(src)}`;
+      lines.push(`${indent}<img ${attrs.join(' ')} ${srcAttr} alt=${escapeTsString(alt)} />`);
     } else if (node.type === 'path') {
       const dynamicPathFill = logicPlan.hasDynamicFill(node.id)
         ? `logicOverrides[${escapeTsString(node.id)}]?.fill`

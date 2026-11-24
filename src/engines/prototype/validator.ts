@@ -840,20 +840,46 @@ export function validateLogicGraphSemantics(
       }
 
       case 'action.set-variant': {
-        const { targetNode, failed } = resolveActionTarget('Set Variant');
-        if (failed || !targetNode) {
-          break;
+        const targetMode = getNodeTargetMode(node);
+        const rawTargetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId.trim() : '';
+        let master: ComponentDefinition | undefined;
+
+        if (
+          graph.scope === 'component'
+          && targetMode === 'override'
+          && (!rawTargetId || rawTargetId === graph.targetId)
+        ) {
+          master = graph.targetId ? componentsById.get(graph.targetId) : undefined;
+          if (!master) {
+            push(
+              'error',
+              'MISSING_TARGET_NODE',
+              `Set Variant node "${node.id}" references missing component master "${graph.targetId ?? ''}".`,
+              { nodeId: node.id },
+            );
+            break;
+          }
+        } else {
+          const { targetNode, failed } = resolveActionTarget('Set Variant');
+          if (failed || !targetNode) {
+            break;
+          }
+          if (targetNode.type === 'component-instance') {
+            master = componentsById.get(targetNode.componentId);
+          } else if (graph.scope === 'component' && targetMode === 'pipeline' && graph.targetId) {
+            // Component-scoped pipeline trigger on an internal child layer resolves to the owning component instance
+            master = componentsById.get(graph.targetId);
+          } else {
+            push(
+              'error',
+              'INCOMPATIBLE_TARGET_NODE',
+              `Set Variant node "${node.id}" must target a component instance.`,
+              { nodeId: node.id },
+            );
+            break;
+          }
         }
-        if (targetNode.type !== 'component-instance') {
-          push(
-            'error',
-            'INCOMPATIBLE_TARGET_NODE',
-            `Set Variant node "${node.id}" must target a component instance.`,
-            { nodeId: node.id },
-          );
-          break;
-        }
-        const master = componentsById.get(targetNode.componentId);
+
         const axisId = typeof node.data.axisId === 'string' ? node.data.axisId.trim() : '';
         const optionId = typeof node.data.optionId === 'string' ? node.data.optionId.trim() : '';
         const axis = master?.variants?.find((item) => item.id === axisId);

@@ -36,12 +36,19 @@ import {
   compileFolioProject,
   parseZipArchive,
 } from '../src/engines/codegen';
+import { compilePageHtmlCss } from '../src/engines/codegen/htmlCssCompiler';
 import { compileReactProjectFiles } from '../src/engines/codegen/reactCompiler';
 import {
   buildLivePreviewLogicScript,
   buildReactPageLogicPlan,
 } from '../src/engines/prototype/codegen';
 import { createLogicGraph, createLogicNode } from '../src/engines/prototype/catalog';
+import {
+  createLogicFramePresetFromFrame,
+  loadStoredLogicFramePresets,
+  saveStoredLogicFramePresets,
+} from '../src/engines/prototype/frames';
+import { createPrototypeRuntime } from '../src/engines/prototype/runtime';
 import { validateLogicGraphSemantics } from '../src/engines/prototype/validator';
 
 const RAW_SECRETS = {
@@ -506,6 +513,172 @@ describe('P0 Security Hardening — Centralized globalHeaders & Network Secret S
         .join('\n');
       assertContainsZeroSecrets(bundleText, `ZIP bundle (${target})`);
     }
+  });
+
+  it('blocks multi-header malformed bypasses and nested JSON object/array secret bypasses', () => {
+    // 1. Safe sensitive header first, raw sensitive header second in malformed/non-JSON string
+    const multiLineBypass = `Authorization: Bearer env:SAFE_TOKEN\nX-API-Key: ${RAW_SECRETS.apiKey}`;
+    expect(detectInlineSecretHeaders(multiLineBypass).length).toBeGreaterThan(0);
+    expect(sanitizeGlobalHeadersForPersistence(multiLineBypass)).toBe('');
+
+    const brokenJsonBypass = `{"Authorization": "Bearer env:SAFE_TOKEN", "Cookie": "${RAW_SECRETS.cookie}"`;
+    expect(detectInlineSecretHeaders(brokenJsonBypass).length).toBeGreaterThan(0);
+    expect(sanitizeGlobalHeadersForPersistence(brokenJsonBypass)).toBe('');
+
+    // 2. Nested JSON object/array values hiding credentials under non-sensitive keys
+    const nestedSecretHeaders = JSON.stringify({
+      Accept: 'application/json',
+      'X-Nested-Object': {
+        Authorization: RAW_SECRETS.bearer,
+      },
+      'X-Nested-Array': [{ Cookie: RAW_SECRETS.cookie }],
+      'X-Nested-Token': {
+        deep: [RAW_SECRETS.jwt],
+      },
+    });
+    const flaggedNested = detectInlineSecretHeaders(nestedSecretHeaders);
+    expect(flaggedNested).toEqual(
+      expect.arrayContaining(['X-Nested-Object', 'X-Nested-Array', 'X-Nested-Token']),
+    );
+    expect(flaggedNested).not.toContain('Accept');
+
+    const sanitizedNested = sanitizeGlobalHeadersForPersistence(nestedSecretHeaders);
+    expect(JSON.parse(sanitizedNested)).toEqual({ Accept: 'application/json' });
+    assertContainsZeroSecrets(sanitizedNested, 'sanitized nested globalHeaders');
+  });
+
+  it('never leaks raw credentials through logicFramePresets in .flop, migrations, IndexedDB, or localStorage', async () => {
+    activeFakeDb = installFakeIndexedDb();
+    const { project, graph } = buildSecretLadenProject();
+    const poisonedFrame = {
+      id: 'frame-sec-1',
+      title: 'Auth Fetch Frame',
+      color: 'blue',
+      bounds: { x: 80, y: 80, width: 480, height: 260 },
+      childNodeIds: graph.nodes.map((n) => n.id),
+      isBaked: false,
+    };
+    const graphWithFrame: LogicGraph = {
+      ...graph,
+      frames: [poisonedFrame],
+    };
+
+    // Preset created directly from a frame with secret-laden nodes must already be sanitized
+    const createdPreset = createLogicFramePresetFromFrame(
+      graphWithFrame,
+      poisonedFrame,
+      'Poisoned Preset',
+      'Test preset',
+    );
+    assertContainsZeroSecrets(JSON.stringify(createdPreset), 'createLogicFramePresetFromFrame');
+
+    // Manually construct an unsanitized preset on the project to test persistence hard gates
+    const rawUnsanitizedPreset = {
+      ...createdPreset,
+      nodes: graph.nodes.map((n) => ({
+        ...n,
+        data: { ...n.data },
+      })),
+    };
+    const projectWithRawPreset: FolioProject = {
+      ...project,
+      logicFramePresets: [rawUnsanitizedPreset],
+    };
+
+    const flopJson = serializeProjectToFlopJson(projectWithRawPreset);
+    assertContainsZeroSecrets(flopJson, '.flop logicFramePresets');
+
+    const migrated = migrateProjectToV2(JSON.parse(JSON.stringify(projectWithRawPreset)));
+    assertContainsZeroSecrets(JSON.stringify(migrated), 'migrateProjectToV2 logicFramePresets');
+
+    await saveProject(projectWithRawPreset);
+    const saved = activeFakeDb.records.get('projects')?.get(projectWithRawPreset.metadata.id);
+    assertContainsZeroSecrets(JSON.stringify(saved), 'IndexedDB logicFramePresets');
+
+    // Verify localStorage preset helpers sanitize on both write and read
+    const store = new Map<string, string>();
+    const fakeStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+      clear: () => store.clear(),
+      key: (index: number) => Array.from(store.keys())[index] ?? null,
+      get length() {
+        return store.size;
+      },
+    };
+    const originalStorage = globalThis.localStorage;
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      writable: true,
+      value: fakeStorage,
+    });
+    try {
+      saveStoredLogicFramePresets([rawUnsanitizedPreset]);
+      const storedRaw = Array.from(store.values()).join('\n');
+      assertContainsZeroSecrets(storedRaw, 'localStorage saveStoredLogicFramePresets');
+
+      // Even if localStorage was tampered with raw secrets directly, loadStoredLogicFramePresets sanitizes on load
+      store.set('folio.nodeLogic.framePresets.v1', JSON.stringify([rawUnsanitizedPreset]));
+      const loaded = loadStoredLogicFramePresets();
+      expect(loaded).toHaveLength(1);
+      assertContainsZeroSecrets(JSON.stringify(loaded), 'localStorage loadStoredLogicFramePresets');
+    } finally {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        writable: true,
+        value: originalStorage,
+      });
+    }
+  });
+
+  it('hard-gates direct compilePageHtmlCss and headless runtime HTTP traces against embedded URL credentials', () => {
+    const { project } = buildSecretLadenProject();
+    const activePage = project.pages[0];
+
+    const compiledHtmlCss = compilePageHtmlCss(project, activePage);
+    assertContainsZeroSecrets(
+      `${compiledHtmlCss.htmlFile.content}\n${compiledHtmlCss.cssFile.content}`,
+      'compilePageHtmlCss direct output',
+    );
+
+    // Wire an event -> network.http connection so headless runtime executes the network node
+    const targetNodeId = activePage.document.nodes[0]?.id ?? 'node-1';
+    const triggerNode = createLogicNode({
+      id: 'node-click-http',
+      type: 'event.on-click',
+      x: 20,
+      y: 120,
+      data: { targetNodeId },
+    });
+    const graph = project.logicGraphs[0];
+    const wiredProject: FolioProject = {
+      ...project,
+      logicGraphs: [
+        {
+          ...graph,
+          nodes: [triggerNode, ...graph.nodes],
+          connections: [
+            {
+              id: 'conn-click-http',
+              sourceNodeId: triggerNode.id,
+              sourcePortId: 'flow',
+              targetNodeId: 'node-http-sec',
+              targetPortId: 'flow',
+            },
+          ],
+        },
+      ],
+    };
+
+    const runtime = createPrototypeRuntime(wiredProject, { pageId: activePage.id });
+    const snapshot = runtime.dispatchNodeEvent(targetNodeId, 'click');
+    assertContainsZeroSecrets(JSON.stringify(snapshot.trace), 'headless runtime HTTP trace');
+    assertContainsZeroSecrets(JSON.stringify(runtime.getSnapshot()), 'headless runtime HTTP snapshot');
   });
 
   it('preserves referential equality in sanitizeProjectNetworkSecrets when a project is already clean', () => {

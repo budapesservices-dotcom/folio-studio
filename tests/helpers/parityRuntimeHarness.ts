@@ -30,10 +30,19 @@ export interface MockToastElement {
   remove: () => void;
 }
 
+export interface KeyEventMods {
+  readonly ctrlKey?: boolean;
+  readonly shiftKey?: boolean;
+  readonly altKey?: boolean;
+  readonly metaKey?: boolean;
+}
+
 export interface PreviewHarnessOptions {
   readonly initialTextById?: Readonly<Record<string, string>>;
   readonly initialValueById?: Readonly<Record<string, string>>;
   readonly initialDisplayById?: Readonly<Record<string, string>>;
+  readonly tagNameById?: Readonly<Record<string, string>>;
+  readonly initialAttrsById?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   readonly fetchMock?: (url: string, init?: Record<string, unknown>) => Promise<{
     ok: boolean;
     status: number;
@@ -52,13 +61,13 @@ export function createPreviewDomHarness(
     const initialDisplay = options.initialDisplayById?.[id];
     const el: MockDomElement = {
       id,
-      tagName: 'DIV',
+      tagName: options.tagNameById?.[id] ?? 'DIV',
       textContent: options.initialTextById?.[id] ?? '',
       value: options.initialValueById?.[id] ?? '',
       disabled: false,
       style: initialDisplay ? { display: initialDisplay } : {},
       listeners: {},
-      attributes: { 'data-folio-id': id },
+      attributes: { 'data-folio-id': id, ...(options.initialAttrsById?.[id] ?? {}) },
       addEventListener(type, cb) {
         if (!this.listeners[type]) this.listeners[type] = [];
         this.listeners[type].push(cb);
@@ -216,15 +225,61 @@ export function createPreviewDomHarness(
       const el = elements.get(id);
       if (!el) return;
       el.value = value;
-      el.dispatch('input', { target: el });
+      el.dispatch('input', { target: el, currentTarget: el });
     },
-    keydown(key: string) {
+    focus(id: string) {
+      elements.get(id)?.dispatch('focus');
+    },
+    blur(id: string) {
+      elements.get(id)?.dispatch('blur');
+    },
+    dragStart(id: string, coords: { x?: number; y?: number } = {}) {
+      elements.get(id)?.dispatch('pointerdown', { clientX: coords.x ?? 10, clientY: coords.y ?? 20 });
+    },
+    dragMove(id: string, coords: { x?: number; y?: number } = {}) {
+      elements.get(id)?.dispatch('pointermove', { clientX: coords.x ?? 30, clientY: coords.y ?? 40 });
+    },
+    dragDrop(id: string, coords: { x?: number; y?: number } = {}) {
+      elements.get(id)?.dispatch('pointerup', { clientX: coords.x ?? 50, clientY: coords.y ?? 60 });
+    },
+    clickOutside() {
+      const outsideTarget = { id: '__outside__' };
+      for (const cb of docListeners.click ?? []) {
+        cb({ target: outsideTarget, currentTarget: mockDocument });
+      }
+    },
+    keydown(key: string, mods: KeyEventMods = {}) {
+      const ev = {
+        key,
+        ctrlKey: Boolean(mods.ctrlKey),
+        shiftKey: Boolean(mods.shiftKey),
+        altKey: Boolean(mods.altKey),
+        metaKey: Boolean(mods.metaKey),
+      };
       for (const cb of docListeners.keydown ?? []) {
-        cb({ key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false });
+        cb(ev);
       }
       for (const cb of winListeners.keydown ?? []) {
-        cb({ key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false });
+        cb(ev);
       }
+    },
+    keyup(key: string, mods: KeyEventMods = {}) {
+      const ev = {
+        key,
+        ctrlKey: Boolean(mods.ctrlKey),
+        shiftKey: Boolean(mods.shiftKey),
+        altKey: Boolean(mods.altKey),
+        metaKey: Boolean(mods.metaKey),
+      };
+      for (const cb of docListeners.keyup ?? []) {
+        cb(ev);
+      }
+      for (const cb of winListeners.keyup ?? []) {
+        cb(ev);
+      }
+    },
+    getAttr(id: string, attr: string): string | null {
+      return elements.get(id)?.getAttribute(attr) ?? null;
     },
   };
 }
@@ -382,10 +437,14 @@ export function createReactTsxHarness(
   let effectCursor = 0;
   let stateDirty = false;
 
+  const docListeners: Record<string, Array<(ev: unknown) => void>> = {};
   const winListeners: Record<string, Array<(ev: unknown) => void>> = {};
   const docElementAttrs: Record<string, string> = {};
   const docClassList = new Set<string>();
   const navigatedRoutes: string[] = [];
+
+  let currentTree: RenderedVNode | null = null;
+  const mockDomCache = new Map<string, { id: string; contains: (other: unknown) => boolean }>();
 
   const mockDocument = {
     documentElement: {
@@ -406,7 +465,32 @@ export function createReactTsxHarness(
       },
       getAttribute: (k: string) => docElementAttrs[k] ?? null,
     },
-    querySelector: () => null,
+    addEventListener: (type: string, cb: (ev: unknown) => void) => {
+      if (!docListeners[type]) docListeners[type] = [];
+      docListeners[type].push(cb);
+    },
+    removeEventListener: (type: string, cb: (ev: unknown) => void) => {
+      if (!docListeners[type]) return;
+      docListeners[type] = docListeners[type].filter((fn) => fn !== cb);
+    },
+    querySelector: (selector: string) => {
+      const match = /\[data-folio-id="([^"]+)"\]/.exec(selector);
+      if (!match) return null;
+      const targetId = match[1];
+      const found = findNodeByPredicate(currentTree, (node) => node.props['data-folio-id'] === targetId);
+      if (!found) return null;
+      let el = mockDomCache.get(targetId);
+      if (!el) {
+        el = {
+          id: targetId,
+          contains(other: unknown) {
+            return other === this;
+          },
+        };
+        mockDomCache.set(targetId, el);
+      }
+      return el;
+    },
     querySelectorAll: () => [],
   };
 
@@ -532,8 +616,6 @@ export function createReactTsxHarness(
     throw new Error(`No exported React component found in ${pageFile.path}`);
   }
 
-  let currentTree: RenderedVNode | null = null;
-
   const rerender = (): RenderedVNode | null => {
     stateCursor = 0;
     refCursor = 0;
@@ -614,6 +696,21 @@ export function createReactTsxHarness(
         tone: String(node.props['data-folio-toast']),
       }));
     },
+    getAttr(id: string, attr: string): string | null {
+      const node = getByFolioId(id);
+      if (!node) return null;
+      const direct = node.props[attr];
+      if (direct !== undefined && direct !== null) {
+        return typeof direct === 'string' ? direct : String(direct);
+      }
+      if (attr.startsWith('data-variant-') && node.children.length === 1 && typeof node.children[0] !== 'string') {
+        const inner = node.children[0].props[attr];
+        if (inner !== undefined && inner !== null) {
+          return typeof inner === 'string' ? inner : String(inner);
+        }
+      }
+      return null;
+    },
     click(id: string) {
       invokeHandler(id, 'onClick');
     },
@@ -627,11 +724,56 @@ export function createReactTsxHarness(
       invokeHandler(id, 'onMouseLeave');
     },
     input(id: string, value: string) {
-      invokeHandler(id, 'onChange', { target: { value } });
+      const target = { value, textContent: value };
+      invokeHandler(id, 'onChange', { target, currentTarget: target });
     },
-    keydown(key: string) {
+    focus(id: string, value = '') {
+      const target = { value, textContent: value };
+      invokeHandler(id, 'onFocus', { target, currentTarget: target });
+    },
+    blur(id: string, value = '') {
+      const target = { value, textContent: value };
+      invokeHandler(id, 'onBlur', { target, currentTarget: target });
+    },
+    dragStart(id: string, coords: { x?: number; y?: number } = {}) {
+      invokeHandler(id, 'onPointerDown', { clientX: coords.x ?? 10, clientY: coords.y ?? 20 });
+    },
+    dragMove(id: string, coords: { x?: number; y?: number } = {}) {
+      invokeHandler(id, 'onPointerMove', { clientX: coords.x ?? 30, clientY: coords.y ?? 40 });
+    },
+    dragDrop(id: string, coords: { x?: number; y?: number } = {}) {
+      invokeHandler(id, 'onPointerUp', { clientX: coords.x ?? 50, clientY: coords.y ?? 60 });
+    },
+    clickOutside() {
+      const outsideTarget = { id: '__outside__' };
+      for (const cb of docListeners.click ?? []) {
+        cb({ target: outsideTarget, currentTarget: mockDocument });
+      }
+      rerender();
+    },
+    keydown(key: string, mods: KeyEventMods = {}) {
+      const ev = {
+        key,
+        ctrlKey: Boolean(mods.ctrlKey),
+        shiftKey: Boolean(mods.shiftKey),
+        altKey: Boolean(mods.altKey),
+        metaKey: Boolean(mods.metaKey),
+      };
       for (const cb of winListeners.keydown ?? []) {
-        cb({ key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false });
+        cb(ev);
+      }
+      rerender();
+    },
+    keyup(key: string, mods: KeyEventMods = {}) {
+      const ev = {
+        key,
+        ctrlKey: Boolean(mods.ctrlKey),
+        shiftKey: Boolean(mods.shiftKey),
+        altKey: Boolean(mods.altKey),
+        metaKey: Boolean(mods.metaKey),
+      };
+      for (const cb of winListeners.keyup ?? []) {
+        cb(ev);
       }
       rerender();
     },

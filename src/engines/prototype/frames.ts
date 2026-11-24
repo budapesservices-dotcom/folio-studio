@@ -9,6 +9,10 @@
  * - Unit Tests (`tests/nodeLogicFrames.test.ts`)
  */
 
+import {
+  sanitizeLogicFramePresetNetworkSecrets,
+  sanitizeLogicNodeDataRecord,
+} from '../../core/document/networkSecrets';
 import type {
   FolioProject,
   LogicConnection,
@@ -872,7 +876,7 @@ export function createLogicFramePresetFromFrame(
       type: node.type,
       x: Math.round(node.x - originX),
       y: Math.round(node.y - originY),
-      data: { ...node.data },
+      data: { ...sanitizeLogicNodeDataRecord(node.type, node.data) },
     }));
 
   const clonedConnections: LogicConnection[] = graph.connections
@@ -1047,15 +1051,17 @@ export function loadStoredLogicFramePresets(): LogicFramePreset[] {
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is LogicFramePreset =>
-        Boolean(item) &&
-        typeof item === 'object' &&
-        typeof (item as LogicFramePreset).id === 'string' &&
-        typeof (item as LogicFramePreset).name === 'string' &&
-        Array.isArray((item as LogicFramePreset).nodes) &&
-        Array.isArray((item as LogicFramePreset).connections),
-    );
+    return parsed
+      .filter(
+        (item): item is LogicFramePreset =>
+          Boolean(item) &&
+          typeof item === 'object' &&
+          typeof (item as LogicFramePreset).id === 'string' &&
+          typeof (item as LogicFramePreset).name === 'string' &&
+          Array.isArray((item as LogicFramePreset).nodes) &&
+          Array.isArray((item as LogicFramePreset).connections),
+      )
+      .map((preset) => sanitizeLogicFramePresetNetworkSecrets(preset));
   } catch {
     return [];
   }
@@ -1064,7 +1070,8 @@ export function loadStoredLogicFramePresets(): LogicFramePreset[] {
 export function saveStoredLogicFramePresets(presets: readonly LogicFramePreset[]): void {
   try {
     if (typeof globalThis.localStorage === 'undefined') return;
-    globalThis.localStorage.setItem(FRAME_PRESETS_STORAGE_KEY, JSON.stringify(presets));
+    const sanitized = presets.map((preset) => sanitizeLogicFramePresetNetworkSecrets(preset));
+    globalThis.localStorage.setItem(FRAME_PRESETS_STORAGE_KEY, JSON.stringify(sanitized));
   } catch {
     // Ignore quota or storage restriction errors cleanly
   }

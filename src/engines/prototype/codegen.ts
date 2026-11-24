@@ -14,6 +14,7 @@
  * Prototype Simulation, Live Preview, and Exported React TSX stay unified.
  */
 
+import { sanitizeProjectNetworkSecrets } from '../../core/document/networkSecrets';
 import type { FolioPage, FolioProject, LogicGraph } from '../../core/document/types';
 import { sanitizeJsText } from '../codegen/sanitize';
 import { isBuiltInLogicNodeType } from './catalog';
@@ -40,9 +41,10 @@ export function getActiveBuiltInPageLogicGraphs(
  * zero embedded credentials.
  */
 export function buildLivePreviewLogicScript(
-  project: FolioProject,
+  inputProject: FolioProject,
   page: FolioPage,
 ): string | null {
+  const project = sanitizeProjectNetworkSecrets(inputProject);
   const graphs = getActiveBuiltInPageLogicGraphs(project, page.id);
   if (graphs.length === 0) return null;
 
@@ -51,6 +53,7 @@ export function buildLivePreviewLogicScript(
   const payload = {
     activePageId: config.activePageId,
     activeRoute: config.activeRoute,
+    activeThemeId: config.activeThemeId,
     maxSteps: config.maxSteps,
     variables: config.variables,
     variableInitialValues: config.variableInitialValues,
@@ -76,6 +79,7 @@ export function buildLivePreviewLogicScript(
     '  var activeTimers = Object.create(null);',
     '  var visibleState = {};',
     '  var activeRoute = CONFIG.activeRoute || "/";',
+    '  var activeThemeId = CONFIG.activeThemeId || "";',
     '  var execCounter = 0;',
     '  var SAFE_COLOR = /^(?:#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})|transparent|currentcolor|inherit|(?:rgba?|hsla?)\\(\\s*[0-9.%,\\s/+-]+\\s*\\)|[a-z]{3,24})$/i;',
     '  var SAFE_HREF = /^(?:https?:\\/\\/|mailto:|\\/|#)/i;',
@@ -322,7 +326,7 @@ export function buildLivePreviewLogicScript(
     '      } else if (n.type === "source.context") {',
     '        var ctxKind = String(n.data.contextKind || n.data.contextType || "page");',
     '        if (portId === "route") res = (CONFIG.pageRouteById && CONFIG.pageRouteById[n.data.pageId]) || activeRoute;',
-    '        else if (portId === "themeId" || ctxKind === "theme") res = n.data.themeId || "";',
+    '        else if (portId === "themeId" || ctxKind === "theme") res = n.data.themeId || activeThemeId || "";',
     '        else if (ctxKind === "viewport") res = n.data.viewportMetric === "height" ? (window.innerHeight || 900) : (window.innerWidth || 1440);',
     '        else if (ctxKind === "url-params") {',
     '          var paramKey = String(n.data.paramKey || "");',
@@ -347,8 +351,8 @@ export function buildLivePreviewLogicScript(
     '          if (prop === "visible") res = Object.prototype.hasOwnProperty.call(visibleState, elId) ? visibleState[elId] : (meta ? meta.visible : true);',
     '          else if (prop === "fill") res = (domEl && domEl.style && (domEl.style.background || domEl.style.color)) || (meta && meta.fill) || "";',
     '          else if (prop === "opacity") res = domEl && domEl.style && domEl.style.opacity !== "" && domEl.style.opacity !== undefined ? Number(domEl.style.opacity) : (meta && meta.opacity != null ? meta.opacity : 1);',
-    '          else if (prop === "componentId") res = (meta && meta.componentId) || "";',
-    '          else res = domEl ? (typeof domEl.value === "string" ? domEl.value : (domEl.textContent || "")) : ((meta && meta.text) || "");',
+    '          else if (prop === "componentId") res = n.data.componentId || (meta && meta.componentId) || "";',
+    '          else res = domEl ? ((domEl.tagName === "INPUT" || domEl.tagName === "TEXTAREA" || domEl.tagName === "SELECT") ? String(domEl.value || "") : (domEl.textContent || (meta && meta.text) || "")) : ((meta && meta.text) || "");',
     '        }',
     '      } else if (n.type === "source.theme") {',
     '        res = n.data.themeId || "";',
@@ -656,22 +660,45 @@ export function buildLivePreviewLogicScript(
     '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: fillTarget, fill: fillVal.trim() }));',
     '        }',
     '      } else if (n.type === "action.set-variant") {',
-    '        var varTarget = resolveTargetId(n, ctx); var varEl = findEl(varTarget); var vMeta = CONFIG.nodeMeta[varTarget];',
+    '        var varTarget = resolveTargetId(n, ctx);',
+    '        var vMeta = CONFIG.nodeMeta[varTarget];',
+    '        if ((!vMeta || !vMeta.componentId) && n.data && n.data.targetMode === "pipeline" && ctx && ctx.origin && ctx.origin.instanceId) {',
+    '          varTarget = ctx.origin.instanceId;',
+    '          vMeta = CONFIG.nodeMeta[varTarget];',
+    '        }',
+    '        var varEl = findEl(varTarget);',
     '        var optId = resolveIn(g, n, "optionId", n.data.optionId, v, ctx, "pipelineRef");',
     '        var compAxes = vMeta && vMeta.componentId ? CONFIG.componentVariants[vMeta.componentId] : null;',
     '        var axisDef = compAxes ? compAxes[n.data.axisId] : null;',
     '        var optDef = axisDef ? axisDef.options[String(optId || "")] : null;',
     '        if (varEl && axisDef && optDef) {',
     '          varEl.setAttribute(axisDef.dataAttr, optDef.label);',
-    '          Object.keys(optDef.overrides).forEach(function (childId) {',
-    '            var childEl = findEl(varTarget + "__" + childId);',
-    '            var patch = optDef.overrides[childId];',
-    '            if (!childEl || !patch) return;',
-    '            if (typeof patch.visible === "boolean") childEl.style.display = patch.visible ? "" : "none";',
-    '            if (typeof patch.text === "string") childEl.textContent = patch.text;',
-    '            if (typeof patch.fill === "string" && isSafeColor(patch.fill)) {',
-    '              if (childEl.tagName === "P" || childEl.tagName === "H1" || childEl.tagName === "H2" || childEl.tagName === "H3" || childEl.tagName === "SPAN") childEl.style.color = patch.fill;',
-    '              else childEl.style.background = patch.fill;',
+    '          var affectedChildIds = {};',
+    '          Object.keys(axisDef.options).forEach(function (oid) {',
+    '            var oDef = axisDef.options[oid];',
+    '            if (oDef && oDef.overrides) Object.keys(oDef.overrides).forEach(function (cid) { affectedChildIds[cid] = true; });',
+    '          });',
+    '          Object.keys(affectedChildIds).forEach(function (childId) {',
+    '            var scopedChildId = varTarget + "__" + childId;',
+    '            var childEl = findEl(scopedChildId);',
+    '            var cMeta = CONFIG.nodeMeta[scopedChildId];',
+    '            var patch = optDef.overrides[childId] || null;',
+    '            if (!childEl) return;',
+    '            if (!cMeta || !cMeta.lockVisible) {',
+    '              var targetVis = patch && typeof patch.visible === "boolean" ? patch.visible : (cMeta && typeof cMeta.baseVisible === "boolean" ? cMeta.baseVisible : true);',
+    '              visibleState[scopedChildId] = targetVis;',
+    '              childEl.style.display = targetVis ? (cMeta ? cMeta.display : "") : "none";',
+    '            }',
+    '            if (!cMeta || !cMeta.lockText) {',
+    '              if (patch && typeof patch.text === "string") childEl.textContent = patch.text;',
+    '              else if (cMeta && typeof cMeta.baseText === "string") childEl.textContent = cMeta.baseText;',
+    '            }',
+    '            if (!cMeta || !cMeta.lockFill) {',
+    '              var nextFill = patch && typeof patch.fill === "string" ? patch.fill : (cMeta && typeof cMeta.baseFill === "string" ? cMeta.baseFill : "");',
+    '              if (nextFill && isSafeColor(nextFill)) {',
+    '                if ((cMeta && cMeta.type === "text") || childEl.tagName === "P" || childEl.tagName === "H1" || childEl.tagName === "H2" || childEl.tagName === "H3" || childEl.tagName === "SPAN") childEl.style.color = nextFill;',
+    '                else childEl.style.background = nextFill;',
+    '              }',
     '            }',
     '          });',
     '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: varTarget, optionId: String(optId || "") }));',
@@ -699,6 +726,7 @@ export function buildLivePreviewLogicScript(
     '        if (sysAct === "set-theme") {',
     '          var tid = String(resolveIn(g, n, n.type === "action.set-theme" ? "themeId" : "value", n.data.themeId, v, ctx, "pipelineRef") || "");',
     '          if (Object.prototype.hasOwnProperty.call(CONFIG.themeSlugById, tid)) {',
+    '            activeThemeId = tid;',
     '            var slug = CONFIG.themeSlugById[tid];',
     '            if (document.documentElement && typeof document.documentElement.setAttribute === "function") {',
     '              if (slug) document.documentElement.setAttribute("data-theme", slug);',
@@ -993,6 +1021,7 @@ export interface ReactPageLogicPlan {
   hasDynamicFill(nodeId: string): boolean;
   hasDynamicOpacity(nodeId: string): boolean;
   hasDynamicTransform(nodeId: string): boolean;
+  hasDynamicImage(nodeId: string): boolean;
   hasDynamicDisabled(nodeId: string): boolean;
   hasDynamicTransition(nodeId: string): boolean;
   hasDynamicVariant(nodeId: string, axisId?: string): boolean;
@@ -1010,9 +1039,10 @@ export interface ReactPageLogicPlan {
  * Returns `hasLogic: false` for static pages so generated TSX stays unchanged.
  */
 export function buildReactPageLogicPlan(
-  project: FolioProject,
+  inputProject: FolioProject,
   page: FolioPage,
 ): ReactPageLogicPlan {
+  const project = sanitizeProjectNetworkSecrets(inputProject);
   const graphs = getActiveBuiltInPageLogicGraphs(project, page.id);
   if (graphs.length === 0) {
     return {
@@ -1028,6 +1058,7 @@ export function buildReactPageLogicPlan(
       hasDynamicFill: () => false,
       hasDynamicOpacity: () => false,
       hasDynamicTransform: () => false,
+      hasDynamicImage: () => false,
       hasDynamicDisabled: () => false,
       hasDynamicTransition: () => false,
       hasDynamicVariant: () => false,
@@ -1048,12 +1079,14 @@ export function buildReactPageLogicPlan(
   }
 
   const overrideType =
-    '{ visible?: boolean; text?: string; fill?: string; opacity?: number; transform?: string; disabled?: boolean; transitionMs?: number; variants?: Record<string, string> }';
+    '{ visible?: boolean; text?: string; fill?: string; opacity?: number; transform?: string; imageUrl?: string; disabled?: boolean; transitionMs?: number; variants?: Record<string, string> }';
   const varValType = 'string | number | boolean | unknown[] | Record<string, unknown>';
   const graphArrayType =
     'Array<{ id: string; instanceId?: string; nodes: Array<{ id: string; type: string; data: Record<string, unknown> }>; connections: Array<{ sourceNodeId: string; sourcePortId: string; targetNodeId: string; targetPortId: string }>; bakedFrames: Array<{ id: string; title: string; childNodeIds: string[]; compiledPlan: { entryNodeIds: string[]; steps: Array<{ nodeId: string; nextByPort: Record<string, Array<{ targetNodeId: string; targetPort: string }>>; dataInputs: Record<string, { sourceNodeId: string; sourcePort: string }> }> } }> }>';
   const nodeMetaType =
     'Record<string, { name: string; type: string; visible: boolean; display: string; text?: string; fill?: string; opacity?: number; componentId?: string; instanceId?: string; animationIds?: string[]; children?: Array<{ id: string; name: string; type: string }> }>';
+  const triggerKindUnion =
+    '"click" | "double-click" | "click-outside" | "hover-enter" | "hover-leave" | "input-change" | "input-focus" | "input-blur" | "input-submit" | "drag-start" | "drag-move" | "drag-drop" | "enter-view" | "leave-view" | "page-scroll" | "resize" | "page-load" | "key-down" | "key-up"';
 
   const hookLines: string[] = [
     `  const [logicState, setLogicState] = useState<Record<string, ${varValType}>>(${JSON.stringify(config.variables)});`,
@@ -1061,6 +1094,10 @@ export function buildReactPageLogicPlan(
     ...(targets.hasToastAction
       ? ['  const [logicToasts, setLogicToasts] = useState<Array<{ id: string; message: string; tone: string }>>([]);']
       : []),
+    `  const logicStateRef = React.useRef<Record<string, ${varValType}>>(logicState);`,
+    `  const logicOverridesRef = React.useRef<Record<string, ${overrideType}>>(logicOverrides);`,
+    `  const logicRouteRef = React.useRef<string>(${JSON.stringify(config.activeRoute)});`,
+    `  const logicThemeRef = React.useRef<string>(${JSON.stringify(config.activeThemeId)});`,
     '  const logicPrivateMemoryRef = React.useRef<Record<string, boolean>>({});',
     '  const logicFiredOnceRef = React.useRef<Record<string, boolean>>({});',
     '  const logicExecCounterRef = React.useRef<number>(0);',
@@ -1085,9 +1122,9 @@ export function buildReactPageLogicPlan(
       ? [`  const logicAnimationClassById: Record<string, string> = ${JSON.stringify(config.animationClassById)};`]
       : []),
     '',
-    '  const runLogicTrigger = (triggerKind: "click" | "double-click" | "hover-enter" | "hover-leave" | "page-load" | "key-down", targetNodeId?: string, extraPayload?: Record<string, unknown>) => {',
-    `    const nextVars: Record<string, ${varValType}> = { ...logicState };`,
-    `    const nextOverrides: Record<string, ${overrideType}> = { ...logicOverrides };`,
+    `  const runLogicTrigger = (triggerKind: ${triggerKindUnion}, targetNodeId?: string, extraPayload?: Record<string, unknown>) => {`,
+    `    const nextVars: Record<string, ${varValType}> = { ...logicStateRef.current };`,
+    `    const nextOverrides: Record<string, ${overrideType}> = { ...logicOverridesRef.current };`,
     '    const privateMemory = logicPrivateMemoryRef.current;',
     '    const firedOnce = logicFiredOnceRef.current;',
     ...(targets.hasToastAction
@@ -1206,17 +1243,38 @@ export function buildReactPageLogicPlan(
     '      }',
     '      return { graph: g, bakedByNode, stepByNode };',
     '    });',
+    '    const matchKeyCombo = (payload: Record<string, unknown> | undefined, combo: unknown): boolean => {',
+    '      if (!combo) return true;',
+    '      const parts = String(combo).toLowerCase().split("+").map((s) => s.trim()).filter(Boolean);',
+    '      const key = String(payload?.key ?? "").toLowerCase();',
+    '      for (const p of parts) {',
+    '        if (p === "ctrl" || p === "control") { if (!payload?.ctrlKey) return false; }',
+    '        else if (p === "meta" || p === "cmd") { if (!payload?.metaKey) return false; }',
+    '        else if (p === "shift") { if (!payload?.shiftKey) return false; }',
+    '        else if (p === "alt") { if (!payload?.altKey) return false; }',
+    '        else if (p === "esc") { if (key !== "escape" && key !== "esc") return false; }',
+    '        else if (p === "space") { if (key !== " " && key !== "space") return false; }',
+    '        else if (key !== p) return false;',
+    '      }',
+    '      return true;',
+    '    };',
     '    const queue: Array<{ ig: (typeof indexedGraphs)[number]; nodeId: string; outPortId?: string; ctx: PipelineCtx; initPayload?: Record<string, unknown> }> = [];',
     '    const targetCompId = targetNodeId ? logicInstanceComponentById[targetNodeId] : undefined;',
     '    for (const ig of indexedGraphs) {',
     '      for (const n of ig.graph.nodes) {',
     '        if (triggerKind === "page-load" && (n.type === "event.on-page-load" || (n.type === "event.on-lifecycle" && (!n.data.trigger || n.data.trigger === "page-load")))) queue.push({ ig, nodeId: n.id, ctx: createCtx("page-load", ig.graph.instanceId) });',
+    '        else if (triggerKind === "resize" && n.type === "event.on-lifecycle" && n.data.trigger === "resize") queue.push({ ig, nodeId: n.id, ctx: createCtx("resize", ig.graph.instanceId), initPayload: extraPayload });',
     '        else if (triggerKind === "page-load" && (n.type === "source.page" || n.type === "source.context") && (!n.data.pageId || n.data.pageId === logicActivePageId)) queue.push({ ig, nodeId: n.id, outPortId: "onLoad", ctx: createCtx("page-load", ig.graph.instanceId) });',
     '        else if (triggerKind === "click" && n.type === "event.on-click" && n.data.targetNodeId === targetNodeId && (!n.data.mode || n.data.mode === "click")) queue.push({ ig, nodeId: n.id, ctx: createCtx("click", targetNodeId), initPayload: { targetLayerId: targetNodeId } });',
     '        else if (triggerKind === "double-click" && n.type === "event.on-click" && n.data.targetNodeId === targetNodeId && n.data.mode === "double-click") queue.push({ ig, nodeId: n.id, ctx: createCtx("double-click", targetNodeId), initPayload: { targetLayerId: targetNodeId } });',
+    '        else if (triggerKind === "click-outside" && n.type === "event.on-click" && n.data.targetNodeId === targetNodeId && n.data.mode === "click-outside") queue.push({ ig, nodeId: n.id, ctx: createCtx("click-outside", targetNodeId), initPayload: { targetLayerId: targetNodeId } });',
     '        else if (triggerKind === "hover-enter" && n.type === "event.on-hover" && n.data.targetNodeId === targetNodeId && (!n.data.phase || n.data.phase === "enter")) queue.push({ ig, nodeId: n.id, ctx: createCtx("hover-enter", targetNodeId), initPayload: { targetLayerId: targetNodeId, isHovered: true } });',
     '        else if (triggerKind === "hover-leave" && n.type === "event.on-hover" && n.data.targetNodeId === targetNodeId && n.data.phase === "leave") queue.push({ ig, nodeId: n.id, ctx: createCtx("hover-leave", targetNodeId), initPayload: { targetLayerId: targetNodeId, isHovered: false } });',
-    '        else if (triggerKind === "key-down" && n.type === "event.on-key-press" && (!n.data.keyCombo || String(n.data.keyCombo).toLowerCase() === String(extraPayload?.key ?? "").toLowerCase())) queue.push({ ig, nodeId: n.id, ctx: createCtx("key-down", ig.graph.instanceId), initPayload: extraPayload });',
+    '        else if (triggerKind.startsWith("input-") && n.type === "event.on-input" && n.data.targetNodeId === targetNodeId && String(n.data.mode ?? n.data.trigger ?? "change") === triggerKind.slice(6)) queue.push({ ig, nodeId: n.id, ctx: createCtx(triggerKind, targetNodeId), initPayload: { targetLayerId: targetNodeId, ...(extraPayload ?? {}) } });',
+    '        else if (triggerKind.startsWith("drag-") && n.type === "event.on-drag" && n.data.targetNodeId === targetNodeId && String(n.data.phase ?? "start") === triggerKind.slice(5)) queue.push({ ig, nodeId: n.id, ctx: createCtx(triggerKind, targetNodeId), initPayload: { targetLayerId: targetNodeId, ...(extraPayload ?? {}) } });',
+    '        else if ((triggerKind === "enter-view" || triggerKind === "leave-view") && n.type === "event.on-scroll-view" && n.data.targetNodeId === targetNodeId && String(n.data.mode ?? n.data.trigger ?? "enter-view") === triggerKind) queue.push({ ig, nodeId: n.id, ctx: createCtx(triggerKind, targetNodeId), initPayload: { targetLayerId: targetNodeId } });',
+    '        else if (triggerKind === "page-scroll" && n.type === "event.on-scroll-view" && String(n.data.mode ?? n.data.trigger ?? "") === "page-scroll") queue.push({ ig, nodeId: n.id, ctx: createCtx("page-scroll", ig.graph.instanceId), initPayload: extraPayload });',
+    '        else if ((triggerKind === "key-down" || triggerKind === "key-up") && n.type === "event.on-key-press" && String(n.data.direction ?? "down") === (triggerKind === "key-up" ? "up" : "down") && matchKeyCombo(extraPayload, n.data.keyCombo)) queue.push({ ig, nodeId: n.id, ctx: createCtx(triggerKind, ig.graph.instanceId), initPayload: extraPayload });',
     '        else if (n.type === "source.element" && n.data.targetNodeId === targetNodeId) {',
     '          if (triggerKind === "click") queue.push({ ig, nodeId: n.id, outPortId: "onClick", ctx: createCtx("click", targetNodeId) });',
     '          else if (triggerKind === "hover-enter") queue.push({ ig, nodeId: n.id, outPortId: "onHover", ctx: createCtx("hover-enter", targetNodeId) });',
@@ -1265,13 +1323,18 @@ export function buildReactPageLogicPlan(
     '        if (n.type === "source.page") return logicPageRouteById[String(n.data.pageId ?? "")] ?? "";',
     '        if (n.type === "source.context") {',
     '          const ctxKind = String(n.data.contextKind ?? n.data.contextType ?? "page");',
-    '          if (portId === "route") return logicPageRouteById[String(n.data.pageId ?? "")] ?? "/";',
-    '          if (portId === "themeId" || ctxKind === "theme") return String(n.data.themeId ?? "");',
+    '          if (portId === "route") return logicPageRouteById[String(n.data.pageId ?? "")] ?? logicRouteRef.current;',
+    '          if (portId === "themeId" || ctxKind === "theme") return String(n.data.themeId || logicThemeRef.current || "");',
     '          if (ctxKind === "viewport") return n.data.viewportMetric === "height" ? (typeof window !== "undefined" ? (window.innerHeight || 900) : 900) : (typeof window !== "undefined" ? (window.innerWidth || 1440) : 1440);',
     '          if (ctxKind === "user-auth") return n.data.authField === "email" ? "guest@folio.app" : false;',
-    '          if (ctxKind === "url-params") return "";',
-    '          return logicPageRouteById[String(n.data.pageId ?? "")] ?? "/";',
+    '          if (ctxKind === "url-params") {',
+    '            const pk = String(n.data.paramKey ?? "");',
+    '            if (!pk || typeof window === "undefined") return "";',
+    '            try { return new URLSearchParams(window.location?.search ?? "").get(pk) ?? ""; } catch { return ""; }',
+    '          }',
+    '          return logicPageRouteById[String(n.data.pageId ?? "")] ?? logicRouteRef.current;',
     '        }',
+    '        if (n.type === "source.external") return portId === "count" ? 0 : [];',
     '        if (n.type === "source.component") return String(n.data.componentId ?? "");',
     '        if (n.type === "source.element") {',
     '          const elId = String(n.data.targetNodeId ?? "");',
@@ -1281,6 +1344,7 @@ export function buildReactPageLogicPlan(
     '          if (prop === "visible") return ov?.visible ?? meta?.visible ?? true;',
     '          if (prop === "fill") return ov?.fill ?? meta?.fill ?? "";',
     '          if (prop === "opacity") return ov?.opacity ?? meta?.opacity ?? 1;',
+    '          if (prop === "componentId") return String(n.data.componentId ?? meta?.componentId ?? "");',
     '          return ov?.text ?? meta?.text ?? "";',
     '        }',
     '        if (n.type === "source.theme") return String(n.data.themeId ?? "");',
@@ -1440,7 +1504,8 @@ export function buildReactPageLogicPlan(
     `          let coercedVal: ${varValType} = prevVal;`,
     '          if (op === "reset") coercedVal = Object.prototype.hasOwnProperty.call(logicInitialVars, vid) ? logicInitialVars[vid] : prevVal;',
     '          else if (op === "increment" && t === "number") {',
-    '            const stepVal = Number(n.data.step ?? 1);',
+    '            const rawStep = resolveIn(step.ig, n, "step", n.data.step ?? 1, seen, ctx);',
+    '            const stepVal = Number(rawStep ?? 1);',
     '            let numVal = (typeof prevVal === "number" ? prevVal : 0) + (Number.isFinite(stepVal) ? stepVal : 1);',
     '            if (typeof n.data.min === "number") numVal = Math.max(n.data.min, numVal);',
     '            if (typeof n.data.max === "number") numVal = Math.min(n.data.max, numVal);',
@@ -1499,12 +1564,17 @@ export function buildReactPageLogicPlan(
     '          } else if (prop === "transform") {',
     '            const tr = String(hasVal ? (val ?? "") : (n.data.transform ?? ""));',
     '            nextOverrides[tid] = { ...baseOv, transform: tr }; applied = tr;',
+    '          } else if (prop === "image") {',
+    '            const imgUrl = String(hasVal ? (val ?? "") : (n.data.imageUrl ?? "")).trim();',
+    '            if (!imgUrl || /^(?:https?:\\/\\/|mailto:|\\/|#)/i.test(imgUrl)) {',
+    '              nextOverrides[tid] = { ...baseOv, imageUrl: imgUrl }; applied = imgUrl;',
+    '            }',
     '          } else if (prop === "disabled") {',
     '            const dis = hasVal ? Boolean(val) : Boolean(n.data.disabled);',
     '            nextOverrides[tid] = { ...baseOv, disabled: dis }; applied = dis;',
     '          }',
+    '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: tid, property: prop, value: applied }));',
     '        }',
-    '        enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: tid, property: prop, value: applied }));',
     '      } else if (n.type === "action.set-visible") {',
     '        const tid = resolveTargetId(n, ctx);',
     '        if (tid) {',
@@ -1531,7 +1601,10 @@ export function buildReactPageLogicPlan(
     ...(targets.variantTargets.size > 0
       ? [
           '      } else if (n.type === "action.set-variant") {',
-          '        const tid = resolveTargetId(n, ctx);',
+          '        let tid = resolveTargetId(n, ctx);',
+          '        if (!logicInstanceComponentById[tid] && n.data.targetMode === "pipeline" && ctx.origin?.instanceId) {',
+          '          tid = ctx.origin.instanceId;',
+          '        }',
           '        const axisId = String(n.data.axisId ?? "");',
           '        const optId = String(resolveIn(step.ig, n, "optionId", n.data.optionId ?? "", seen, ctx, "pipelineRef") ?? "");',
           '        const compId = logicInstanceComponentById[tid];',
@@ -1565,6 +1638,7 @@ export function buildReactPageLogicPlan(
           '      } else if (n.type === "action.set-theme" || (n.type === "action.system-form" && n.data.action === "set-theme")) {',
           '        const themeId = String(resolveIn(step.ig, n, n.type === "action.set-theme" ? "themeId" : "value", n.data.themeId ?? "", seen, ctx, "pipelineRef") ?? "");',
           '        if (Object.prototype.hasOwnProperty.call(logicThemeSlugById, themeId)) {',
+          '          logicThemeRef.current = themeId;',
           '          if (typeof document !== "undefined") {',
           '            const slug = logicThemeSlugById[themeId];',
           '            if (slug) document.documentElement.setAttribute("data-theme", slug);',
@@ -1585,6 +1659,7 @@ export function buildReactPageLogicPlan(
           '        } else {',
           '          const nextRoute = String(resolveIn(step.ig, n, "route", n.data.route ?? "", seen, ctx, "pipelineRef") ?? "").trim();',
           '          if (/^(?:https?:\\/\\/|mailto:|\\/|#)/i.test(nextRoute)) {',
+          '            logicRouteRef.current = nextRoute;',
           '            if (typeof document !== "undefined") document.documentElement.setAttribute("data-folio-route", nextRoute);',
           '            onNavigate?.(nextRoute);',
           '            enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { mode: navMode, route: nextRoute }));',
@@ -1639,6 +1714,8 @@ export function buildReactPageLogicPlan(
     '        if (sockAct === "listen" || sockAct === "connect") enqueueOut(step.ig, n.id, "onMessage", cloneCtx(ctx, n.id, { action: sockAct, channel: String(n.data.channel ?? "updates"), connected: true }));',
     '      }',
     '    }',
+    '    logicStateRef.current = nextVars;',
+    '    logicOverridesRef.current = nextOverrides;',
     '    setLogicState(nextVars);',
     '    setLogicOverrides(nextOverrides);',
     ...(targets.hasToastAction
@@ -1647,19 +1724,47 @@ export function buildReactPageLogicPlan(
     '  };',
   ];
 
+  const needsUseEffect =
+    targets.hasPageLoad
+    || targets.hasKeyPress
+    || targets.hasResize
+    || targets.hasPageScroll
+    || targets.clickOutsideNodes.size > 0
+    || targets.scrollViewTargets.size > 0;
+
   if (targets.hasPageLoad) {
     hookLines.push('  useEffect(() => { runLogicTrigger("page-load"); }, []);');
   }
   if (targets.hasKeyPress) {
     hookLines.push(
-      '  useEffect(() => { const onKey = (ev: KeyboardEvent) => runLogicTrigger("key-down", undefined, { key: ev.key }); window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, []);',
+      '  useEffect(() => { const onDown = (ev: KeyboardEvent) => runLogicTrigger("key-down", undefined, { key: ev.key, ctrlKey: ev.ctrlKey, metaKey: ev.metaKey, shiftKey: ev.shiftKey, altKey: ev.altKey }); const onUp = (ev: KeyboardEvent) => runLogicTrigger("key-up", undefined, { key: ev.key, ctrlKey: ev.ctrlKey, metaKey: ev.metaKey, shiftKey: ev.shiftKey, altKey: ev.altKey }); window.addEventListener("keydown", onDown); window.addEventListener("keyup", onUp); return () => { window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); }; }, []);',
+    );
+  }
+  if (targets.clickOutsideNodes.size > 0) {
+    hookLines.push(
+      `  useEffect(() => { const watchedIds = ${JSON.stringify(Array.from(targets.clickOutsideNodes))}; const onDocClick = (ev: MouseEvent) => { const tgt = ev.target as Node | null; for (const wid of watchedIds) { const el = document.querySelector(\`[data-folio-id="\${wid}"]\`); if (el && tgt !== el && !el.contains(tgt)) runLogicTrigger("click-outside", wid); } }; document.addEventListener("click", onDocClick); return () => document.removeEventListener("click", onDocClick); }, []);`,
+    );
+  }
+  if (targets.hasResize) {
+    hookLines.push(
+      '  useEffect(() => { const onResize = () => runLogicTrigger("resize", undefined, { width: window.innerWidth || 0, height: window.innerHeight || 0 }); window.addEventListener("resize", onResize); return () => window.removeEventListener("resize", onResize); }, []);',
+    );
+  }
+  if (targets.hasPageScroll) {
+    hookLines.push(
+      '  useEffect(() => { const onScroll = () => runLogicTrigger("page-scroll", undefined, { scrollY: window.scrollY || 0 }); window.addEventListener("scroll", onScroll); return () => window.removeEventListener("scroll", onScroll); }, []);',
+    );
+  }
+  if (targets.scrollViewTargets.size > 0) {
+    hookLines.push(
+      `  useEffect(() => { if (typeof IntersectionObserver !== "function") return; const watchedIds = ${JSON.stringify(Array.from(targets.scrollViewTargets))}; const observers: IntersectionObserver[] = []; for (const wid of watchedIds) { const el = document.querySelector(\`[data-folio-id="\${wid}"]\`); if (!el) continue; const obs = new IntersectionObserver((entries) => { for (const ent of entries) runLogicTrigger(ent.isIntersecting ? "enter-view" : "leave-view", wid); }); obs.observe(el); observers.push(obs); } return () => observers.forEach((obs) => obs.disconnect()); }, []);`,
     );
   }
   hookLines.push('');
 
   return {
     hasLogic: true,
-    needsUseEffect: targets.hasPageLoad || targets.hasKeyPress,
+    needsUseEffect,
     hasNavigation: targets.hasNavigation,
     hasToastAction: targets.hasToastAction,
     hookLines,
@@ -1677,6 +1782,41 @@ export function buildReactPageLogicPlan(
       if (targets.hoverLeaveNodes.has(nodeId)) {
         attrs.push(`onMouseLeave={() => runLogicTrigger("hover-leave", ${JSON.stringify(nodeId)})}`);
       }
+      if (targets.inputChangeNodes.has(nodeId)) {
+        attrs.push(
+          `onChange={(ev) => runLogicTrigger("input-change", ${JSON.stringify(nodeId)}, { value: (ev.currentTarget as unknown as { value?: string }).value ?? ev.currentTarget.textContent ?? "" })}`,
+        );
+      }
+      if (targets.inputFocusNodes.has(nodeId)) {
+        attrs.push(
+          `onFocus={(ev) => runLogicTrigger("input-focus", ${JSON.stringify(nodeId)}, { value: (ev.currentTarget as unknown as { value?: string }).value ?? ev.currentTarget.textContent ?? "" })}`,
+        );
+      }
+      if (targets.inputBlurNodes.has(nodeId)) {
+        attrs.push(
+          `onBlur={(ev) => runLogicTrigger("input-blur", ${JSON.stringify(nodeId)}, { value: (ev.currentTarget as unknown as { value?: string }).value ?? ev.currentTarget.textContent ?? "" })}`,
+        );
+      }
+      if (targets.inputSubmitNodes.has(nodeId)) {
+        attrs.push(
+          `onSubmit={(ev) => { ev.preventDefault(); runLogicTrigger("input-submit", ${JSON.stringify(nodeId)}, { value: (ev.currentTarget as unknown as { value?: string }).value ?? ev.currentTarget.textContent ?? "" }); }}`,
+        );
+      }
+      if (targets.dragStartNodes.has(nodeId)) {
+        attrs.push(
+          `onPointerDown={(ev) => runLogicTrigger("drag-start", ${JSON.stringify(nodeId)}, { x: ev.clientX ?? 0, y: ev.clientY ?? 0 })}`,
+        );
+      }
+      if (targets.dragMoveNodes.has(nodeId)) {
+        attrs.push(
+          `onPointerMove={(ev) => runLogicTrigger("drag-move", ${JSON.stringify(nodeId)}, { x: ev.clientX ?? 0, y: ev.clientY ?? 0 })}`,
+        );
+      }
+      if (targets.dragDropNodes.has(nodeId)) {
+        attrs.push(
+          `onPointerUp={(ev) => runLogicTrigger("drag-drop", ${JSON.stringify(nodeId)}, { x: ev.clientX ?? 0, y: ev.clientY ?? 0 })}`,
+        );
+      }
       return attrs;
     },
     hasDynamicOverride: (nodeId: string) =>
@@ -1685,6 +1825,7 @@ export function buildReactPageLogicPlan(
       || targets.fillTargets.has(nodeId)
       || targets.opacityTargets.has(nodeId)
       || targets.transformTargets.has(nodeId)
+      || targets.imageTargets.has(nodeId)
       || targets.disabledTargets.has(nodeId)
       || targets.transitionTargets.has(nodeId)
       || targets.variantTargets.has(nodeId),
@@ -1693,6 +1834,7 @@ export function buildReactPageLogicPlan(
     hasDynamicFill: (nodeId: string) => targets.fillTargets.has(nodeId),
     hasDynamicOpacity: (nodeId: string) => targets.opacityTargets.has(nodeId),
     hasDynamicTransform: (nodeId: string) => targets.transformTargets.has(nodeId),
+    hasDynamicImage: (nodeId: string) => targets.imageTargets.has(nodeId),
     hasDynamicDisabled: (nodeId: string) => targets.disabledTargets.has(nodeId),
     hasDynamicTransition: (nodeId: string) => targets.transitionTargets.has(nodeId),
     hasDynamicVariant: (nodeId: string, axisId?: string) => {
@@ -1705,13 +1847,23 @@ export function buildReactPageLogicPlan(
       const sets: ReadonlyArray<ReadonlySet<string>> = [
         targets.clickNodes,
         targets.doubleClickNodes,
+        targets.clickOutsideNodes,
         targets.hoverEnterNodes,
         targets.hoverLeaveNodes,
+        targets.inputChangeNodes,
+        targets.inputFocusNodes,
+        targets.inputBlurNodes,
+        targets.inputSubmitNodes,
+        targets.dragStartNodes,
+        targets.dragMoveNodes,
+        targets.dragDropNodes,
+        targets.scrollViewTargets,
         targets.visibleTargets,
         targets.textTargets,
         targets.fillTargets,
         targets.opacityTargets,
         targets.transformTargets,
+        targets.imageTargets,
         targets.disabledTargets,
         targets.transitionTargets,
       ];

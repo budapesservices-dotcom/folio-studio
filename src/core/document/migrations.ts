@@ -44,73 +44,111 @@ export function migrateProjectV1ToV2(input: FolioProjectV1): FolioProject {
   };
 }
 
+function sanitizeRawLogicNodesArray(rawNodes: unknown): { readonly nodes: unknown; readonly mutated: boolean } {
+  if (!Array.isArray(rawNodes)) return { nodes: rawNodes, mutated: false };
+  let nodesMutated = false;
+  const mappedNodes = rawNodes.map((nodeEntry) => {
+    if (typeof nodeEntry !== 'object' || nodeEntry === null || Array.isArray(nodeEntry)) {
+      return nodeEntry;
+    }
+    const nodeRecord = nodeEntry as Record<string, unknown>;
+    const nodeType = typeof nodeRecord.type === 'string' ? nodeRecord.type : '';
+    const nodeData = nodeRecord.data;
+    if (typeof nodeData !== 'object' || nodeData === null || Array.isArray(nodeData)) {
+      return nodeEntry;
+    }
+    const cleanData = sanitizeLogicNodeDataRecord(nodeType, nodeData as Record<string, unknown>);
+    if (cleanData === nodeData) return nodeEntry;
+    nodesMutated = true;
+    return { ...nodeRecord, data: cleanData };
+  });
+  return nodesMutated ? { nodes: mappedNodes, mutated: true } : { nodes: rawNodes, mutated: false };
+}
+
 function normalizeLegacyNetworkSettingsOnGraphs(
   candidate: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (!Array.isArray(candidate.logicGraphs)) return candidate;
   let mutated = false;
-  const nextGraphs = candidate.logicGraphs.map((entry) => {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-      return entry;
-    }
-    const graphRecord = entry as Record<string, unknown>;
-    let graphMutated = false;
-    let nextSettings = graphRecord.networkSettings;
+  let nextGraphs = candidate.logicGraphs;
 
-    if (
-      typeof nextSettings === 'object'
-      && nextSettings !== null
-      && !Array.isArray(nextSettings)
-    ) {
-      const settingsRecord = nextSettings as Record<string, unknown>;
-      const sanitized = sanitizeNetworkSettingsForPersistence(settingsRecord);
-      const hasExtraKeys = Object.keys(settingsRecord).some(
-        (key) => key !== 'baseUrl' && key !== 'globalHeaders' && key !== 'authSecretRef',
-      );
+  if (Array.isArray(candidate.logicGraphs)) {
+    let graphsMutated = false;
+    const mappedGraphs = candidate.logicGraphs.map((entry) => {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+        return entry;
+      }
+      const graphRecord = entry as Record<string, unknown>;
+      let graphMutated = false;
+      let nextSettings = graphRecord.networkSettings;
+
       if (
-        hasExtraKeys
-        || sanitized.baseUrl !== settingsRecord.baseUrl
-        || sanitized.globalHeaders !== settingsRecord.globalHeaders
-        || sanitized.authSecretRef !== settingsRecord.authSecretRef
+        typeof nextSettings === 'object'
+        && nextSettings !== null
+        && !Array.isArray(nextSettings)
       ) {
-        nextSettings = sanitized;
+        const settingsRecord = nextSettings as Record<string, unknown>;
+        const sanitized = sanitizeNetworkSettingsForPersistence(settingsRecord);
+        const hasExtraKeys = Object.keys(settingsRecord).some(
+          (key) => key !== 'baseUrl' && key !== 'globalHeaders' && key !== 'authSecretRef',
+        );
+        if (
+          hasExtraKeys
+          || sanitized.baseUrl !== settingsRecord.baseUrl
+          || sanitized.globalHeaders !== settingsRecord.globalHeaders
+          || sanitized.authSecretRef !== settingsRecord.authSecretRef
+        ) {
+          nextSettings = sanitized;
+          graphMutated = true;
+        }
+      }
+
+      const nodesRes = sanitizeRawLogicNodesArray(graphRecord.nodes);
+      if (nodesRes.mutated) {
         graphMutated = true;
       }
-    }
 
-    let nextNodes = graphRecord.nodes;
-    if (Array.isArray(graphRecord.nodes)) {
-      let nodesMutated = false;
-      const mappedNodes = graphRecord.nodes.map((nodeEntry) => {
-        if (typeof nodeEntry !== 'object' || nodeEntry === null || Array.isArray(nodeEntry)) {
-          return nodeEntry;
-        }
-        const nodeRecord = nodeEntry as Record<string, unknown>;
-        const nodeType = typeof nodeRecord.type === 'string' ? nodeRecord.type : '';
-        const nodeData = nodeRecord.data;
-        if (typeof nodeData !== 'object' || nodeData === null || Array.isArray(nodeData)) {
-          return nodeEntry;
-        }
-        const cleanData = sanitizeLogicNodeDataRecord(nodeType, nodeData as Record<string, unknown>);
-        if (cleanData === nodeData) return nodeEntry;
-        nodesMutated = true;
-        return { ...nodeRecord, data: cleanData };
-      });
-      if (nodesMutated) {
-        nextNodes = mappedNodes;
-        graphMutated = true;
+      if (!graphMutated) return entry;
+      graphsMutated = true;
+      return {
+        ...graphRecord,
+        ...(nextSettings !== undefined ? { networkSettings: nextSettings } : {}),
+        ...(nodesRes.nodes !== undefined ? { nodes: nodesRes.nodes } : {}),
+      };
+    });
+    if (graphsMutated) {
+      nextGraphs = mappedGraphs;
+      mutated = true;
+    }
+  }
+
+  let nextPresets = candidate.logicFramePresets;
+  if (Array.isArray(candidate.logicFramePresets)) {
+    let presetsMutated = false;
+    const mappedPresets = candidate.logicFramePresets.map((presetEntry) => {
+      if (typeof presetEntry !== 'object' || presetEntry === null || Array.isArray(presetEntry)) {
+        return presetEntry;
       }
+      const presetRecord = presetEntry as Record<string, unknown>;
+      const nodesRes = sanitizeRawLogicNodesArray(presetRecord.nodes);
+      if (!nodesRes.mutated) return presetEntry;
+      presetsMutated = true;
+      return {
+        ...presetRecord,
+        nodes: nodesRes.nodes,
+      };
+    });
+    if (presetsMutated) {
+      nextPresets = mappedPresets;
+      mutated = true;
     }
+  }
 
-    if (!graphMutated) return entry;
-    mutated = true;
-    return {
-      ...graphRecord,
-      ...(nextSettings !== undefined ? { networkSettings: nextSettings } : {}),
-      ...(nextNodes !== undefined ? { nodes: nextNodes } : {}),
-    };
-  });
-  return mutated ? { ...candidate, logicGraphs: nextGraphs } : candidate;
+  if (!mutated) return candidate;
+  return {
+    ...candidate,
+    ...(nextGraphs !== candidate.logicGraphs ? { logicGraphs: nextGraphs } : {}),
+    ...(nextPresets !== candidate.logicFramePresets ? { logicFramePresets: nextPresets } : {}),
+  };
 }
 
 /** Normalize any supported native project version to the current v2 schema. */

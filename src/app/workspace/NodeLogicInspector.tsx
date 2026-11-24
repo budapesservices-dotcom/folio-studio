@@ -173,7 +173,8 @@ export function NodeLogicInspector({
   const networkDiagnostics = diagnostics.filter(
     (item) =>
       item.code === 'UNSAFE_AUTH_SECRET_REF' ||
-      item.code === 'HARDCODED_SECRET_HEADER',
+      item.code === 'HARDCODED_SECRET_HEADER' ||
+      item.code === 'UNSAFE_NETWORK_URL_CREDENTIALS',
   );
 
   const graphVariables = graph?.variables ?? [];

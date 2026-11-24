@@ -20,6 +20,7 @@
 
 import type {
   FolioProject,
+  LogicFramePreset,
   LogicGraph,
   LogicNetworkSettings,
   LogicNode,
@@ -50,13 +51,15 @@ const RAW_SECRET_REF_INDICATORS: readonly RegExp[] = [
   /^token\s+/i,
   /\bsk-(?:live|test|proj|ant|or)?[-_a-z0-9]{8,}/i,
   /\bsk-[a-z0-9_-]{8,}/i,
-  /\bpk_(?:live|test)_[0-9A-Za-z]{12,}/,
+  /\b[pr]k_(?:live|test)_[0-9A-Za-z]{12,}/,
   /\bgh[pousr]_[A-Za-z0-9]{12,}/,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/,
   /\bAIza[0-9A-Za-z_-]{20,}/,
   /\bxox[baprs]-[0-9A-Za-z-]{10,}/,
   /\bAKIA[0-9A-Z]{16}\b/,
   /\bglpat-[0-9A-Za-z_-]{12,}/,
+  /\bnpm_[A-Za-z0-9]{20,}/,
+  /\bhf_[A-Za-z0-9]{20,}/,
   /^eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
   /\s/,
 ];
@@ -69,19 +72,21 @@ const RAW_SECRET_VALUE_PATTERNS: readonly RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)?/,
   /\bsk-(?:live|test|proj|ant|or)?[-_a-z0-9]{8,}/i,
   /\bsk-[a-z0-9_-]{8,}/i,
-  /\bpk_(?:live|test)_[0-9A-Za-z]{12,}/,
+  /\b[pr]k_(?:live|test)_[0-9A-Za-z]{12,}/,
   /\bgh[pousr]_[A-Za-z0-9]{12,}/,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/,
   /\bAIza[0-9A-Za-z_-]{20,}/,
   /\bxox[baprs]-[0-9A-Za-z-]{10,}/,
   /\bAKIA[0-9A-Z]{16}\b/,
   /\bglpat-[0-9A-Za-z_-]{12,}/,
+  /\bnpm_[A-Za-z0-9]{20,}/,
+  /\bhf_[A-Za-z0-9]{20,}/,
   /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/,
 ];
 
-/** Detects malformed/non-JSON strings assigning sensitive headers (e.g. raw HTTP header lines). */
+/** Detects malformed/non-JSON strings assigning sensitive headers (global scan across all lines/entries). */
 const RAW_SENSITIVE_HEADER_LINE_PATTERN =
-  /(?:^|[\s,{'"`])(authorization|proxy-authorization|x-api-key|api-key|x-auth-token|cookie|set-cookie)\s*["']?\s*[:=]\s*([^\r\n,}]+)/i;
+  /(?:^|[\s,{'"`[])(authorization|proxy-authorization|x-api-key|api-key|x-auth-token|cookie|set-cookie)\s*["']?\s*[:=]\s*([^\r\n,}\]]+)/gi;
 
 /** Prototype-pollution keys stripped when parsing untrusted header JSON. */
 const FORBIDDEN_OBJECT_KEYS: ReadonlySet<string> = new Set([
@@ -93,9 +98,11 @@ const FORBIDDEN_OBJECT_KEYS: ReadonlySet<string> = new Set([
 /** Node data keys that must never carry raw credentials into persistence or exports. */
 const FORBIDDEN_NODE_SECRET_DATA_KEYS: ReadonlySet<string> = new Set([
   'authtoken',
+  'auth_token',
   'apikey',
   'api_key',
   'x-api-key',
+  'x_api_key',
   'api-key',
   'secret',
   'clientsecret',
@@ -104,9 +111,12 @@ const FORBIDDEN_NODE_SECRET_DATA_KEYS: ReadonlySet<string> = new Set([
   'passwd',
   'authorization',
   'proxy-authorization',
+  'proxy_authorization',
   'x-auth-token',
+  'x_auth_token',
   'cookie',
   'set-cookie',
+  'set_cookie',
   'privatekey',
   'private_key',
   'accesstoken',
@@ -115,6 +125,10 @@ const FORBIDDEN_NODE_SECRET_DATA_KEYS: ReadonlySet<string> = new Set([
   'refresh_token',
   'bearertoken',
   'bearer_token',
+  'sessiontoken',
+  'session_token',
+  'idtoken',
+  'id_token',
 ]);
 
 const URL_DATA_KEYS: ReadonlySet<string> = new Set([
@@ -122,6 +136,10 @@ const URL_DATA_KEYS: ReadonlySet<string> = new Set([
   'endpoint',
   'baseurl',
   'socketurl',
+  'wsurl',
+  'websocketurl',
+  'webhookurl',
+  'requesturl',
 ]);
 
 const HEADER_DATA_KEYS: ReadonlySet<string> = new Set([
@@ -236,7 +254,26 @@ function serializeCandidateValue(value: unknown): string {
   }
 }
 
-function isDisallowedHeaderEntry(key: string, value: unknown): boolean {
+function containsDisallowedNestedHeaderValue(value: unknown, depth = 0): boolean {
+  if (depth > 8 || value === null || value === undefined) return false;
+  if (typeof value === 'string') {
+    return containsRawSecretPattern(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => containsDisallowedNestedHeaderValue(item, depth + 1));
+  }
+  if (isPlainRecord(value)) {
+    for (const [nestedKey, nestedVal] of Object.entries(value)) {
+      if (isDisallowedHeaderEntry(nestedKey, nestedVal, depth + 1)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return containsRawSecretPattern(serializeCandidateValue(value));
+}
+
+function isDisallowedHeaderEntry(key: string, value: unknown, depth = 0): boolean {
   if (FORBIDDEN_OBJECT_KEYS.has(key)) return true;
   if (isSensitiveHeaderName(key)) {
     if (typeof value !== 'string') {
@@ -246,6 +283,9 @@ function isDisallowedHeaderEntry(key: string, value: unknown): boolean {
     if (!trimmed) return false;
     return !isSafeHeaderPlaceholder(trimmed);
   }
+  if (Array.isArray(value) || isPlainRecord(value)) {
+    return containsDisallowedNestedHeaderValue(value, depth + 1);
+  }
   const serialized = serializeCandidateValue(value);
   return containsRawSecretPattern(serialized);
 }
@@ -254,7 +294,7 @@ function isDisallowedHeaderEntry(key: string, value: unknown): boolean {
  * Inspects a `globalHeaders` (or node `headers`) JSON string and returns any
  * header keys that embed raw credentials directly instead of safe placeholders.
  * Also flags malformed/non-JSON strings that contain raw secret patterns or
- * sensitive header assignments.
+ * any sensitive header assignment across the entire string.
  */
 export function detectInlineSecretHeaders(globalHeadersJson: string): string[] {
   const trimmed = globalHeadersJson.trim();
@@ -262,15 +302,27 @@ export function detectInlineSecretHeaders(globalHeadersJson: string): string[] {
 
   const parsedResult = safeParseJson(trimmed);
   if (!parsedResult.ok || !isPlainRecord(parsedResult.value)) {
+    const flagged: string[] = [];
+    const seen = new Set<string>();
+    const scanner = new RegExp(RAW_SENSITIVE_HEADER_LINE_PATTERN.source, 'gi');
+    let rawMatch = scanner.exec(trimmed);
+    while (rawMatch !== null) {
+      const headerName = rawMatch[1];
+      const assigned = rawMatch[2].trim().replace(/^["'`]|["'`]$/g, '').trim();
+      if (assigned && !isSafeHeaderPlaceholder(assigned)) {
+        const lower = headerName.toLowerCase();
+        if (!seen.has(lower)) {
+          seen.add(lower);
+          flagged.push(headerName);
+        }
+      }
+      rawMatch = scanner.exec(trimmed);
+    }
+    if (flagged.length > 0) {
+      return flagged;
+    }
     if (containsRawSecretPattern(trimmed)) {
       return ['globalHeaders'];
-    }
-    const rawMatch = RAW_SENSITIVE_HEADER_LINE_PATTERN.exec(trimmed);
-    if (rawMatch) {
-      const assigned = rawMatch[2].trim().replace(/^["']|["']$/g, '').trim();
-      if (assigned && !isSafeHeaderPlaceholder(assigned)) {
-        return [rawMatch[1]];
-      }
     }
     return [];
   }
@@ -287,8 +339,8 @@ export function detectInlineSecretHeaders(globalHeadersJson: string): string[] {
 
 /**
  * Hard-gates a header record object, stripping any sensitive header unless its
- * value is an allowed placeholder and stripping any header whose value contains
- * a raw secret/token pattern.
+ * value is an allowed placeholder and stripping any header whose value (or nested
+ * object/array value) contains a sensitive header entry or raw secret/token pattern.
  */
 export function sanitizeHeaderRecordForPersistence(
   record: Record<string, unknown>,
@@ -307,6 +359,14 @@ export function sanitizeHeaderRecordForPersistence(
       } else {
         mutated = true;
       }
+      continue;
+    }
+    if (Array.isArray(val) || isPlainRecord(val)) {
+      if (containsDisallowedNestedHeaderValue(val, 1)) {
+        mutated = true;
+        continue;
+      }
+      clean[key] = val;
       continue;
     }
     const serialized = serializeCandidateValue(val);
@@ -437,10 +497,18 @@ export function sanitizeLogicNodeDataRecord<T extends Record<string, unknown>>(
       continue;
     }
 
-    if (isNetworkNode && typeof value === 'string' && containsRawSecretPattern(value)) {
-      mutated = true;
-      clean[key] = '';
-      continue;
+    if (isNetworkNode && typeof value === 'string') {
+      if (hasEmbeddedUrlCredentials(value)) {
+        const nextUrl = sanitizeUrlCredentials(value);
+        if (nextUrl !== value) mutated = true;
+        clean[key] = nextUrl;
+        continue;
+      }
+      if (containsRawSecretPattern(value)) {
+        mutated = true;
+        clean[key] = '';
+        continue;
+      }
     }
 
     clean[key] = value;
@@ -487,21 +555,54 @@ export function sanitizeLogicGraphNetworkSecrets(graph: LogicGraph): LogicGraph 
   };
 }
 
+/** Sanitizes node data within one `LogicFramePreset` (no-op when clean). */
+export function sanitizeLogicFramePresetNetworkSecrets(
+  preset: LogicFramePreset,
+): LogicFramePreset {
+  if (!Array.isArray(preset.nodes) || preset.nodes.length === 0) {
+    return preset;
+  }
+  let nodesMutated = false;
+  const nextNodes: LogicNode[] = preset.nodes.map((node) => {
+    const cleanData = sanitizeLogicNodeDataRecord(node.type, node.data);
+    if (cleanData === node.data) return node;
+    nodesMutated = true;
+    return { ...node, data: cleanData };
+  });
+  return nodesMutated ? { ...preset, nodes: nextNodes } : preset;
+}
+
 /**
- * Sanitizes all network settings and logic node payloads across a `FolioProject`.
- * Guarantees zero raw credentials in `globalHeaders`, `authSecretRef`, URLs, or
- * network node data before writing to `.flop`, IndexedDB, Live Preview, or code exports.
- * Preserves referential equality when already clean.
+ * Sanitizes all network settings, logic graphs, and logic frame presets across a
+ * `FolioProject`. Guarantees zero raw credentials in `globalHeaders`, `authSecretRef`,
+ * URLs, or network node data before writing to `.flop`, IndexedDB, Live Preview, or
+ * code exports. Preserves referential equality when already clean.
  */
 export function sanitizeProjectNetworkSecrets(project: FolioProject): FolioProject {
-  if (!Array.isArray(project.logicGraphs) || project.logicGraphs.length === 0) {
-    return project;
+  let graphsMutated = false;
+  let nextGraphs = project.logicGraphs;
+  if (Array.isArray(project.logicGraphs) && project.logicGraphs.length > 0) {
+    nextGraphs = project.logicGraphs.map((graph) => {
+      const cleanGraph = sanitizeLogicGraphNetworkSecrets(graph);
+      if (cleanGraph !== graph) graphsMutated = true;
+      return cleanGraph;
+    });
   }
-  let mutated = false;
-  const nextGraphs = project.logicGraphs.map((graph) => {
-    const cleanGraph = sanitizeLogicGraphNetworkSecrets(graph);
-    if (cleanGraph !== graph) mutated = true;
-    return cleanGraph;
-  });
-  return mutated ? { ...project, logicGraphs: nextGraphs } : project;
+
+  let presetsMutated = false;
+  let nextPresets = project.logicFramePresets;
+  if (Array.isArray(project.logicFramePresets) && project.logicFramePresets.length > 0) {
+    nextPresets = project.logicFramePresets.map((preset) => {
+      const cleanPreset = sanitizeLogicFramePresetNetworkSecrets(preset);
+      if (cleanPreset !== preset) presetsMutated = true;
+      return cleanPreset;
+    });
+  }
+
+  if (!graphsMutated && !presetsMutated) return project;
+  return {
+    ...project,
+    ...(graphsMutated ? { logicGraphs: nextGraphs } : {}),
+    ...(presetsMutated ? { logicFramePresets: nextPresets } : {}),
+  };
 }

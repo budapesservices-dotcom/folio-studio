@@ -455,10 +455,11 @@ export interface CompilePageHtmlCssOptions {
 }
 
 export function compilePageHtmlCss(
-  project: FolioProject,
+  inputProject: FolioProject,
   page: FolioPage,
   options: CompilePageHtmlCssOptions = {},
 ): CompiledPageArtifacts {
+  const project = sanitizeProjectNetworkSecrets(inputProject);
   const assetMode = options.assetMode ?? 'bundle';
   const tokens = getProjectDesignTokens(project);
   const slug = toPageFileSlug(page.route, page.name);
