@@ -278,6 +278,89 @@ The actual modal is also browser-tested: initial focus enters the safe dialog ac
 - **Pending / Not Claimed:**
   - External Git commit/push, GitHub Actions CI run on a pushed branch, Cloudflare Pages deploy, and human manual browser acceptance remain **pending** outside this local workspace.
 
+---
+
+### Phase 1 & Phase 2 Hardening Pass — Network Secret Hard-Gate, CI Green, Component-Scoped Logic & 3-Runtime Behavioral Parity (2026-11-24)
+
+- **Implementation status:**
+  - **Verified (local automated & Chromium suites):**
+    1. **Phase 1 — Central Network Credential Hard-Gate (`src/core/document/networkSecrets.ts`, `projectFile.ts`, `indexedDb.ts`, `parity.ts`, `codegen.ts`, `reactCompiler.ts`, `projectBundle.ts`):** Blocks/strips case-insensitive sensitive headers (`authorization`, `proxy-authorization`, `x-api-key`, `api-key`, `x-auth-token`, `cookie`, `set-cookie`), raw secret/token patterns (`Bearer`, `Basic`, `Token`, JWT `eyJ...`, `sk-...`, `pk_live_...`, `gh*_...`, `AIza...`, `xox*-...`, `AKIA...`, `glpat-...`, `npm_...`, `hf_...`, PEM private keys), embedded URL `user:pass@` credentials, legacy `authToken` fields, and malformed non-JSON `globalHeaders` strings (fail-closed) across `.flop` JSON v2 serialization, IndexedDB persistence, Live Preview payloads, and HTML/React/ZIP exports — preserving only explicit safe placeholders (`env:VAR_NAME`, `{{VAR_NAME}}`) and `authSecretRef`.
+    2. **Phase 1 — CI Run #638 Root-Cause Fixes (`package.json`, `package-lock.json`, starter Node Logic & Motion Timeline):** Aligned `"packageManager": "npm@10.9.9"` with canonical `lockfileVersion: 3` `package-lock.json`, resolved starter Node Logic interaction regression, and aligned Motion Timeline default tracks.
+    3. **Phase 2 — Component-Scoped Per-Instance Node Logic (`src/engines/prototype/componentScope.ts`, `validator.ts`, `runtime.ts`, `parity.ts`, `codegen.ts`, `src/engines/codegen/reactCompiler.ts`):** Per-instance expansion honoring `component.nodeLogicEnabled` and canonical precedence (`Master -> Variants -> Slots -> Local Overrides -> Tokens`), scoped targets (`<instanceId>__<localNodeId>`), isolated per-instance local variables (`<instanceId>::<varId>`) and private memory (`<instanceId>:<frameId>:<nodeId>:<originLayerId>`), accurate `PipelineContext.origin` propagation including nested component instances, component-scoped `action.set-variant` (both pipeline owning-instance fallback and explicit self-target without clobbering Slot/Local overrides), nested child variant prop forwarding even when child `nodeLogicEnabled: false`, and isolated component-scoped `event.on-state-change`. Expanded graphs remain runtime-only and never leak into `.flop` JSON v2.
+    4. **Phase 2 — 3-Runtime Behavioral Parity (`tests/helpers/parityRuntimeHarness.ts`, `tests/componentLogicContract.test.ts`, `tests/nodeLogicPhase2Parity.test.ts`):** Real 3-way execution assertions across Headless `PrototypeRuntime`, Live Preview DOM harness, and compiled+executed React TSX VDOM covering Sources, Events (`click`, `double-click`, `click-outside`, `hover`, `input`, `drag`, `key-press` modifiers with zero stale closures, `lifecycle`, `state-change`), State (`get`, `toggle`, `update` including wired `step`), Logic (`branch`, `condition`, `math`, `text`, `list`), Actions (`set-layer` including safe `imageUrl` guard, `set-variant`, `media-animation`, `navigate`, `overlay-toast`, `system-form`), Flow (`control`, `delay`, `loop-timer`), Network (`json`, simulated `http`/`socket`), Legacy v1 migration (13 types), Baked Logic Frames, and Component Instances.
+    5. **Quick Interaction Management (`src/app/workspace/quickInteractions.ts`, `src/app/workspace/InspectorInteractionsSection.tsx`):** Verified Inspector ↔ Node Logic authoring routed through `logic.create-graph` / `logic.update-graph` Native Commands with Undo/Redo (`tests/quickInteractions.test.ts`).
+  - **Implemented (Simulated/Partial):**
+    - `source.external`, `network.http`, and `network.socket` execute as deterministic zero-secret simulations across all 3 runtimes (no real backend execution).
+    - `flow.delay` and `flow.loop-timer` run live timers in Live Preview (`full`) and synchronous deterministic simulation in Headless & React TSX (`simulated`), reflected truthfully in `NODE_RUNTIME_PARITY_MATRIX`.
+  - **Open:**
+    - `variable.persist` and `variable.computed` remain `unsupported` metadata-only across all 3 runtimes (`RUNTIME_FEATURE_PARITY_MATRIX`), emit `UNSUPPORTED_VARIABLE_PERSIST` / `UNSUPPORTED_COMPUTED_VARIABLE` validator warnings, and display *"Metadata only"* hints in `NodeLogicInspector.tsx`.
+    - Full arbitrary third-party code visual round-trip, Multi-Application projects, archive-based `.flop` ZIP containers, real backend runtime, AI project control, and multiplayer collaboration remain out of scope / **Agreed (Roadmap)**.
+- **Local Automated Gate (2026-11-24):**
+  - `npm run check` (`tsc --noEmit`): **PASS** (0 errors; strict TypeScript, zero `any`).
+  - `npm run test:unit`: **PASS** (**60 test files / 629 tests passed**, including `tests/networkSecretsSecurity.test.ts` 12/12, `tests/componentLogicContract.test.ts` 6/6, `tests/nodeLogicPhase2Parity.test.ts` 11/11, `tests/quickInteractions.test.ts` 4/4, `tests/p12QualityFoundation.test.ts` 5/5).
+  - `CHROMIUM_BIN=/ms-playwright/chromium_headless_shell-1247/chrome-headless-shell-linux64/chrome-headless-shell npm run test:browser`: **PASS** (**4 test files / 11 Chromium tests passed** — `componentRecovery.browser.test.mjs` 5/5, `workspaceGeometry.browser.test.mjs` 1/1, `mergeReadiness.browser.test.mjs` 4/4, `nativePersistence.browser.test.mjs` 1/1).
+  - `npm run build` (`tsc --noEmit && vite build`): **PASS** (`dist/` compiled cleanly with 0 chunk-size warnings).
+- **Pending / Not Claimed:**
+  - External Git commit/push to `codex/pr1-main-reconciliation-20261122`, GitHub Actions CI run on the new pushed HEAD, deployment workflow branch verification, and human manual browser acceptance below remain **pending**.
+
+---
+
+## Consolidated Manual Browser Acceptance Checklist (PR #17 Readiness)
+
+Execute on the target desktop browser (Chrome/Edge on Windows 10) against a fresh `npm run dev` or `npm run build && npm run preview` session. Record **PASS / FAIL** per item before approving merge of PR #17 into `main`.
+
+### 1. Main Canvas
+- [ ] Initial starter project renders cleanly with zero console errors or page exceptions.
+- [ ] Create Rectangle (`R`), Ellipse (`O`), Text (`T`), and Vector/Path shapes; verify drag snapping guides, 8-handle resize, multi-selection align/distribute, `Space` + drag pan, and zoom (`Ctrl/Cmd + Wheel` / Scrubby Zoom).
+- [ ] Switch responsive breakpoints (`Desktop` / `Tablet` / `Mobile`) and confirm Auto-Layout & breakpoint overrides update without corrupting base desktop geometry.
+- [ ] Toggle Canvas renderer mode (`Auto` / `GPU` / `SVG`) on a dense scene (`>= 250` nodes) and confirm crisp overlays, hit-testing, and zero visual glitches.
+
+### 2. Component Canvas
+- [ ] Create a Master Component from a multi-layer selection (including a Group or Clipping Mask), verify a live proportional SVG preview appears in Component Rack, and edit the master in Component Canvas (`420×280` centered placement & readable contrast).
+- [ ] Update the master in place via the master Save action and confirm Component Rack count does not duplicate; confirm explicit Save-as-New creates a distinct master.
+- [ ] Configure a Variant Axis and Named Slot on the master, place an instance on Main Canvas with Slot + Local Override values, and confirm `Master -> Variants -> Slots -> Local Overrides -> Tokens` precedence visually.
+- [ ] Test active master deletion with unsaved Component Canvas edits: verify `Cancel`, `Save buffer as a new component`, and `Discard buffer and delete` keyboard focus trapping (`Tab`/`Shift+Tab`/`Escape`) and reload durability.
+
+### 3. Component-Scoped Node Logic (Multi-Instance)
+- [ ] Enable `nodeLogicEnabled` on a master component with an internal button + label and create a component-scoped Node Logic graph (`event.on-click` -> `state.toggle` / `state.update` / `action.set-layer` / `action.set-variant`).
+- [ ] Place **2+ instances** (Instance A and Instance B) of that master on the same page; apply a Slot text override and Local fill override on Instance B.
+- [ ] Launch Live Preview (and inspect Simulate): click Instance A and confirm **only Instance A** updates its state, label, fill, and variant; Instance B remains untouched.
+- [ ] Click Instance B and confirm its variant attribute switches without clobbering its Slot text or Local fill override.
+- [ ] Place a nested component instance inside an outer master and confirm outer logic targeting the child updates only the clicked outer instance's child.
+
+### 4. Node Logic Studio + Smart Logic Frames + Security
+- [ ] Open Node Logic Workspace, drag nodes from the 7-category catalog (31 primary nodes), connect `execution` and `data` wires, and confirm invalid port combinations or dataflow cycles are rejected with clear feedback.
+- [ ] Wrap a toggle sub-graph in a Smart Logic Frame, click **Bake**, instantiate it as a reusable Frame Preset on a second target, and verify independent per-frame private memory in Simulate & Live Preview.
+- [ ] In Network Settings, enter an `authSecretRef` (`API_TOKEN`) and attempt to paste a raw `Authorization: Bearer sk-live-...` entry into `globalHeaders`; confirm validator flags it AND confirm exported `.flop` JSON, Live Preview HTML, and React TSX contain **zero** raw tokens/sensitive header values.
+- [ ] Toggle `persist` or `computed` on a graph variable and confirm the Inspector displays *"Metadata only"* and Diagnostics emits non-fatal warnings without throwing runtime/storage errors.
+
+### 5. Quick Interactions (Inspector ↔ Node Logic)
+- [ ] Select a layer on Main Canvas, open the Inspector **Interactions** section, and create a Quick Interaction (e.g., `On Click -> Toggle Visibility` or `Show Toast`).
+- [ ] Confirm the generated trigger + action nodes appear in Node Logic Workspace via **Jump to Graph**, edit the Quick Interaction from the Inspector, verify in Live Preview, then press `Ctrl+Z` / `Ctrl+Shift+Z` to confirm clean Undo/Redo through Native Commands.
+
+### 6. Motion Timeline Studio
+- [ ] Dock/open Motion Timeline, inspect the starter `Hero Entrance` clip (verifying >= 4 default tracks), scrub the playhead across `0.0s..1.2s`, and confirm live non-destructive Canvas pose updates.
+- [ ] Add/edit a keyframe, trigger playback in Live Preview, and confirm compiled CSS includes `@keyframes` and `@media (prefers-reduced-motion: reduce)`.
+
+### 7. Code & Preview Studio / Accessibility / Export ZIP
+- [ ] Switch between `HTML / CSS` and `React TSX` tabs, open Live Preview, and confirm interactive behavior matches Headless Simulate.
+- [ ] Open the Accessibility Audit drawer, run **`Fix All`**, confirm score improves, and press `Ctrl+Z` to confirm 1-step atomic Undo restores prior state.
+- [ ] Edit a Custom/Extension code module, verify consecutive keystrokes coalesce into 1 Undo step, and verify canvas edits preserve the custom module.
+- [ ] Click **`Export ZIP`** for both `HTML / CSS` and `React TSX`; extract the React ZIP locally and spot-check `npm install && npm run build` succeeds cleanly.
+
+### 8. `.flop` Save/Reload & Persistence
+- [ ] Choose `File -> Export Project` to download a `.flop` file; inspect the JSON to confirm `format: "folio-project"`, `formatVersion: 2`, zero raw credentials in `globalHeaders`/`networkSettings`, and zero leaked expanded component-instance graph IDs (`__inst::` / `inst__child`).
+- [ ] Reload the browser and verify IndexedDB restores the latest durable project automatically; open the exported `.flop` via `File -> Open Project`, cancel once (confirm no state change), then import and confirm all pages, components, tokens, animations, code modules, and logic graphs restore identically.
+
+### 9. Undo/Redo & Cross-Studio Integrity
+- [ ] Perform sequential edits across Canvas transform, Component Contract, Node Logic, Motion Timeline, and Code Editor; step backward (`Ctrl+Z`) and forward (`Ctrl+Shift+Z`) across all changes and confirm no orphaned references or state drift.
+- [ ] Delete a layer referenced by Node Logic, Motion Timeline, and a Code Extension anchor; confirm warning badge/toast appears and 1-step `Ctrl+Z` restores both the layer and all cross-studio references atomically.
+
+### 10. Low-Resource Device Performance Check
+- [ ] Test on the target Windows 10 laptop (or Chrome DevTools **4× CPU throttle** + **Slow 3G / cache disabled** cold load): confirm shell boots cleanly with zero uncaught errors and interactive lag stays acceptable during pan/zoom/drag.
+- [ ] Open `Help -> Scene Profiler & Health`, click **`Run Live Profile`**, and verify all 8 engine stages report healthy timings without freezing the UI; optionally run `npm run benchmark -- --scale=medium` locally to record baseline numbers.
+
+
 
 
 

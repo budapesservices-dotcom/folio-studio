@@ -252,7 +252,7 @@ Every token has a stable ID independent of its editable name. Renaming must not 
 - A literal hard-coded value is not silently converted into a token. FOLIO may suggest tokenization; the user chooses.
 - Local one-off values remain allowed and can later be promoted to tokens.
 
-**Status:** Proposed architecture, not implemented or verified.
+**Status:** Project-level Primitive/Semantic Design Tokens, Light/Dark themes, CSS custom-property output, and token-binding validation are **Implemented & Verified locally** (`src/core/document/tokens.ts`); Application-level token overrides and Multi-Application token scopes remain **Agreed (Roadmap)**.
 
 ## 11. AI and collaboration guardrails
 
@@ -316,9 +316,14 @@ Milestones must be implemented and verified incrementally. Do not begin a later 
 
 ## 13. Current implementation reality
 
-The repository contains an evolving implementation with a TypeScript, Vite, Preact, DOM/SVG stack and an existing JSON-based \`.flop\` persistence model documented in \`docs/ARCHITECTURE.md\`. That document and the source/tests describe the current implementation.
+The repository contains an evolving implementation on a TypeScript, Vite, Preact, DOM/SVG (+ optional Hybrid GPU) stack with a versioned UTF-8 JSON `.flop` v2 persistence model documented in [Architecture](ARCHITECTURE.md). That document, current source code, and [Acceptance Tests](ACCEPTANCE_TESTS.md) describe the actual implementation.
 
-This blueprint describes agreed product direction and target architecture. It does not claim that multi-application projects, the complete component contract, Node Logic runtime, full code mapping, archive-based container, realtime collaboration, AI project control, backend workspace, or deployment infrastructure are already implemented.
+As of the current repository revision (2026-11-24):
+
+- **Verified (local automated & Chromium suites):** Unified `.flop` v2 multi-page project aggregate, 39-command zero-bypass Native Command Engine, Delta History Engine, dual-workspace Main/Component Canvas with Variants/Slots/Local Overrides/Nested Instances, Project-level Design Tokens & Auto-Layout, 4-category Code Engine (HTML/CSS, React TSX, Live Preview, WCAG 2.1 AA audit, runnable output ZIP export), Stage 8 Motion Timeline (`@keyframes` + `prefers-reduced-motion`), and Node Logic Studio (31 primary nodes + 13 backward-compatible legacy v1 nodes, Component-Scoped per-instance logic execution, Smart Logic Frames, Quick Interactions via Native Commands, and hard-gated `authSecretRef`/`globalHeaders` credential sanitization across `.flop`, IndexedDB, Preview, and Export).
+- **Implemented (Simulated/Partial):** `source.external`, `network.http`, and `network.socket` execute as deterministic zero-secret simulations across all 3 runtimes; `flow.delay` and `flow.loop-timer` run live timers in Live Preview and deterministic synchronous simulation in Headless and React TSX; Code → AST editing covers mapped FOLIO structures while preserving `custom`/`extension` modules without claiming full arbitrary code visual round-trip.
+- **Open:** Runtime execution for `variable.persist` and `variable.computed` (currently stored as `.flop` v2 metadata only, marked `unsupported` in `RUNTIME_FEATURE_PARITY_MATRIX` with validator warnings and zero `eval`/storage) and arbitrary third-party code visual round-trip.
+- **Agreed (Roadmap — not implemented):** Multi-Application projects, application-scoped Local Components, archive-based `.flop` ZIP containers, real backend/database/auth runtime execution, plugin runtime, realtime multiplayer collaboration, AI project control, and hosted backend deployment infrastructure.
 
 When target direction and current source differ, document the gap and plan a deliberate migration. Never silently replace working behavior or project files.
 

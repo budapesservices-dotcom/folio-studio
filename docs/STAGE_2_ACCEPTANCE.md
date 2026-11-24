@@ -25,13 +25,14 @@ npm run check && npm run test && npm run build
 
 ## Browser fullscreen checks
 
-- The fullscreen entry/exit control is temporarily unplaced because the former top toolbar has been removed for redesign.
+- The Fullscreen API toggle is exposed in the right-side workspace group of `GlobalToolbar` (`src/app/workspace/GlobalToolbar.tsx`). Status: **Implemented**; human manual browser acceptance remains **pending**.
 - Do not treat browser F11 as FOLIO's Fullscreen API implementation; it is browser-managed fullscreen.
-- Once the redesigned global controls expose the command again, verify entry through a direct user action, browser chrome hiding, Escape exit, state synchronization, and a visible fallback when the API is unavailable.
+- Verify entry through direct user click on the toolbar fullscreen toggle, browser chrome hiding, Escape exit, toolbar active-state synchronization, and graceful fallback when the Fullscreen API is unavailable.
 
 ## Regression gate
 
 - Existing snapping guides and selection behavior continue to work.
 - Canvas pan does not alter document geometry or create an undo history entry.
 - Distribution changes position only; dimensions and appearance remain unchanged.
-- Do not begin the next engine until the automated checks and manual checks pass in the target browser.
+- Do not begin the next engine until the automated checks and manual checks pass in the target browser. See also the [Consolidated Manual Browser Acceptance Checklist](ACCEPTANCE_TESTS.md#consolidated-manual-browser-acceptance-checklist-pr-17-readiness).
+
