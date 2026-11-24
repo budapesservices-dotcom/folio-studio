@@ -57,15 +57,15 @@ The current document node list is flat. Layer parentage is represented with pare
 
 The repository does not yet implement:
 - Multi-Application ownership inside the project model.
-- The complete Native Component Contract.
-- A typed property schema or property-level stable IDs.
-- A complete Design System/token reference model.
-- A Code Mapping model or round-trip compiler.
-- A full Node Logic runtime and Motion engine.
-- An archive/container-based .flop format.
-- A general unknown-node preservation mechanism.
+- The complete Native Component Contract; current component variants/slots exist, but instance overrides remain limited (not a full typed property-path contract).
+- Property-level stable IDs and a universal typed property schema.
+- The full long-term Design System/token scope and resolution model.
+- A complete Code Mapping model or general bidirectional round-trip compiler.
+- Full Node Logic parity across headless simulation, Live Preview, and React export; the current graph/catalog/runtime baseline is described in [Node Logic v1](NODE_LOGIC_V1.md), while real network execution, variable persistence/computed expressions, and complete component-scope runtime integration remain open.
+- An archive/container-based .flop format; the current .flop v2 is JSON.
+- General unknown native AST-node preservation as unresolved/read-only records.
 
-These are target capabilities, not existing features.
+These are target capabilities or incomplete areas, not existing complete features.
 
 ## 4. Target semantic hierarchy
 
@@ -114,11 +114,11 @@ The current NodeBase already contains most of the initial geometry and editor-st
 | rect | Rectangle geometry with shape style | Implemented |
 | ellipse | Ellipse geometry with shape style | Implemented |
 | text | Text content and typography style | Implemented |
-| component-instance | Reference to a reusable component definition | Implemented, limited contract |
-| path / vector geometry | Editable vector path and bezier data | Planned |
-| image | Asset-backed image node | Planned |
-| frame | Layout/container boundary with its own canvas bounds | Planned |
-| slot / component part | Explicit component content insertion point | Planned |
+| component-instance | Reference to a reusable component definition | Implemented; current override contract remains limited |
+| path | Editable cubic-Bezier/vector path, compound subpaths, and shape metadata | Implemented |
+| image | Asset-backed image node with alt/style metadata | Implemented |
+| frame | Layout/container boundary with its own canvas bounds and optional clipping | Implemented |
+| slot / component part | Structured content insertion point in a component definition | Slot metadata and assignments implemented; not a separate DesignNode type |
 
 New node types must be added through typed schemas and validation. Do not represent unrelated native types as arbitrary unvalidated records.
 
@@ -256,14 +256,21 @@ The specification is ready for implementation when:
 
 **Proposed in this draft:** the detailed node contract, hierarchy invariants, reference policy, tolerant unknown-node handling, and command boundary.
 
-**Implemented baseline:** the existing TypeScript document/project types and validator in src/core/document/.
+**Implemented baseline (source snapshot 2026-11-24):**
+- Typed .flop v2 document/project model and runtime validation in src/core/document/types.ts and validation.ts.
+- Current DesignNode families listed in §5.2, including Frame, Path, Image, Group, Rect, Ellipse, Text, and ComponentInstance.
+- Flat document node storage with parentId relationships and document-local node identity.
+- Read-only scoped NativeAstDocumentView facade in src/core/document/ast.ts; see [Native AST Compatibility API](NATIVE_AST_COMPATIBILITY_API.md).
+- Native Command Engine and structural history integration are present in the current architecture; the target contract below must still be distinguished from implemented details.
 
-**Not yet implemented or verified:** this full Native AST v1 contract.
+**Still proposed or incomplete:** project-wide/application-aware identity, property-level identity, complete component override semantics, complete Design System contract, code mapping round-trip, and general tolerant unknown-AST-node import. Node Logic and Motion have implemented baselines, but their broader cross-runtime contracts remain incomplete.
 
 Next steps:
-1. Review and agree this specification.
-2. Compare it against current reducers, layer operations, component behavior, and tests.
-3. Produce a field-by-field compatibility/migration plan.
-4. Only then implement the smallest AST foundation change with tests.
+1. Keep the current .flop v2 and flat node[] compatibility contract stable.
+2. Extend scoped references only through explicit, versioned compatibility rules.
+3. Close the typed property, component, and unknown-node gaps with field-by-field tests before any breaking AST migration.
+4. Preserve the distinction between native AST state and transient editor/runtime overlays.
+
+Do not begin a breaking AST refactor from this draft alone.
 
 Do not begin a breaking AST refactor from this draft alone.
