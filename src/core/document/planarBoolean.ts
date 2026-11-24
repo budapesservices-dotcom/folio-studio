@@ -8,6 +8,8 @@
  *    clickable/draggable planar faces for live drag-to-merge and Alt+drag-to-punch.
  */
 
+import { findOverlappingSegmentPairsWasm } from '../kernels/wasmGeometryKernel';
+
 export interface PlanarPoint {
   x: number;
   y: number;
@@ -264,39 +266,78 @@ export function buildPlanarArrangement(shapes: readonly PlanarShapeInput[]): Pla
 
   const splitParams: number[][] = rawSegments.map(() => []);
 
-  // Precompute bounding boxes for fast rejection
-  const bboxes = rawSegments.map((seg) => ({
-    minX: Math.min(seg.a.x, seg.b.x) - 0.1,
-    maxX: Math.max(seg.a.x, seg.b.x) + 0.1,
-    minY: Math.min(seg.a.y, seg.b.y) - 0.1,
-    maxY: Math.max(seg.a.y, seg.b.y) + 0.1,
-  }));
+  // Precompute segment AABBs sorted ascending by minX for O(N log N + k) sweep-line broad-phase
+  const segCount = rawSegments.length;
+  const order = new Int32Array(segCount);
+  const rawMinX = new Float64Array(segCount);
+  const rawMinY = new Float64Array(segCount);
+  const rawMaxX = new Float64Array(segCount);
+  const rawMaxY = new Float64Array(segCount);
+  for (let i = 0; i < segCount; i += 1) {
+    const seg = rawSegments[i];
+    order[i] = i;
+    rawMinX[i] = (seg.a.x < seg.b.x ? seg.a.x : seg.b.x) - 0.1;
+    rawMaxX[i] = (seg.a.x > seg.b.x ? seg.a.x : seg.b.x) + 0.1;
+    rawMinY[i] = (seg.a.y < seg.b.y ? seg.a.y : seg.b.y) - 0.1;
+    rawMaxY[i] = (seg.a.y > seg.b.y ? seg.a.y : seg.b.y) + 0.1;
+  }
+  order.sort((a, b) => rawMinX[a] - rawMinX[b]);
 
-  for (let i = 0; i < rawSegments.length; i += 1) {
-    const bi = bboxes[i];
-    for (let j = i + 1; j < rawSegments.length; j += 1) {
-      const bj = bboxes[j];
-      if (bi.maxX < bj.minX || bj.maxX < bi.minX || bi.maxY < bj.minY || bj.maxY < bi.minY) {
-        continue;
+  const sortedAabbs = new Float64Array(segCount * 4);
+  for (let s = 0; s < segCount; s += 1) {
+    const idx = order[s];
+    const base = s * 4;
+    sortedAabbs[base] = rawMinX[idx];
+    sortedAabbs[base + 1] = rawMinY[idx];
+    sortedAabbs[base + 2] = rawMaxX[idx];
+    sortedAabbs[base + 3] = rawMaxY[idx];
+  }
+
+  const wasmPairs = segCount >= 24 ? findOverlappingSegmentPairsWasm(sortedAabbs, segCount) : null;
+  if (wasmPairs) {
+    const { pairCount, pairsView } = wasmPairs;
+    for (let p = 0; p < pairCount; p += 1) {
+      const idxA = order[pairsView[p * 2]];
+      const idxB = order[pairsView[p * 2 + 1]];
+      findSegmentIntersections(rawSegments[idxA], rawSegments[idxB], splitParams[idxA], splitParams[idxB]);
+    }
+  } else {
+    for (let i = 0; i < segCount; i += 1) {
+      const baseI = i * 4;
+      const maxXI = sortedAabbs[baseI + 2];
+      const minYI = sortedAabbs[baseI + 1];
+      const maxYI = sortedAabbs[baseI + 3];
+      const idxA = order[i];
+      for (let j = i + 1; j < segCount; j += 1) {
+        const baseJ = j * 4;
+        if (sortedAabbs[baseJ] > maxXI) break;
+        if (sortedAabbs[baseJ + 3] < minYI || sortedAabbs[baseJ + 1] > maxYI) continue;
+        const idxB = order[j];
+        findSegmentIntersections(rawSegments[idxA], rawSegments[idxB], splitParams[idxA], splitParams[idxB]);
       }
-      findSegmentIntersections(rawSegments[i], rawSegments[j], splitParams[i], splitParams[j]);
     }
   }
 
-  // Vertex deduplication via spatial hashing
+  // Vertex deduplication via zero-allocation packed-integer spatial hashing
   const vertices: PlanarPoint[] = [];
-  const vertexBuckets = new Map<string, number[]>();
+  const vertexBuckets = new Map<number, number[]>();
+  const SNAP_TOL_SQ = (SNAP_GRID * 1.5) * (SNAP_GRID * 1.5);
+  const CELL_BIAS = 16777216; // 2^24 -> safe exact 53-bit integer key up to +-838,860 px
+  const CELL_STRIDE = 33554432; // 2^25
+  const packCell = (gx: number, gy: number): number => (gx + CELL_BIAS) * CELL_STRIDE + (gy + CELL_BIAS);
 
   const getVertexId = (pt: PlanarPoint): number => {
     const gx = Math.round(pt.x / SNAP_GRID);
     const gy = Math.round(pt.y / SNAP_GRID);
     for (let dx = -1; dx <= 1; dx += 1) {
       for (let dy = -1; dy <= 1; dy += 1) {
-        const bucket = vertexBuckets.get(`${gx + dx},${gy + dy}`);
+        const bucket = vertexBuckets.get(packCell(gx + dx, gy + dy));
         if (!bucket) continue;
         for (const id of bucket) {
           const existing = vertices[id];
-          if (Math.hypot(existing.x - pt.x, existing.y - pt.y) <= SNAP_GRID * 1.5) {
+          const ex = existing.x - pt.x;
+          const ey = existing.y - pt.y;
+          if (ex * ex + ey * ey <= SNAP_TOL_SQ) {
             return id;
           }
         }
@@ -307,7 +348,7 @@ export function buildPlanarArrangement(shapes: readonly PlanarShapeInput[]): Pla
       x: Math.round(pt.x * 1000) / 1000,
       y: Math.round(pt.y * 1000) / 1000,
     });
-    const key = `${gx},${gy}`;
+    const key = packCell(gx, gy);
     const list = vertexBuckets.get(key);
     if (list) list.push(id);
     else vertexBuckets.set(key, [id]);

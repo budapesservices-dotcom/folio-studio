@@ -40,6 +40,9 @@ export default defineConfig(({ command }) => {
           if (id.includes('/src/core/document/planarBoolean') || id.includes('/src/core/document/vector')) {
             return 'vector-engine';
           }
+          if (id.includes('/src/core/document/templates.ts')) {
+            return 'templates-catalog';
+          }
           if (
             id.includes('/src/core/document/')
             || id.includes('/src/core/commands/')

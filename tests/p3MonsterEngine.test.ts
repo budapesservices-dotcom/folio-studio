@@ -22,7 +22,12 @@ import {
   createWasmSpatialIndexKernel,
   isWebAssemblySupported,
   WASM_SPATIAL_MODULE_BYTES,
+  WasmAcceleratedSpatialIndex,
 } from '../src/core/kernels/wasmSpatialKernel';
+import {
+  findOverlappingSegmentPairsWasm,
+  WASM_GEOMETRY_MODULE_BYTES,
+} from '../src/core/kernels/wasmGeometryKernel';
 import { handleComputeWorkerMessage } from '../src/core/kernels/compute.worker';
 import { ComputeWorkerClient } from '../src/core/kernels/workerBridge';
 import {
@@ -191,6 +196,92 @@ describe('Prioritas 3 — Hybrid GPU Viewport + WASM/Worker Compute Kernels', ()
       resetComputeKernels();
       expect(getComputeKernels().spatial.backend).toBe('ts-default');
       expect(getComputeKernelRuntimeStatus().spatialBackend).toBe('ts-default');
+    });
+
+    it('reuses persistent WASM linear memory with zero memcpy across repeated pan/zoom queries', () => {
+      const wasmKernel = createWasmSpatialIndexKernel();
+      expect(wasmKernel).not.toBeNull();
+      const entries: SpatialBoundsEntry[] = Array.from({ length: 2000 }, (_, i) => ({
+        id: `z-${i}`,
+        minX: (i % 50) * 100,
+        minY: Math.floor(i / 50) * 80,
+        maxX: (i % 50) * 100 + 80,
+        maxY: Math.floor(i / 50) * 80 + 60,
+        zIndex: i,
+      }));
+      const index = wasmKernel!.buildIndex(entries) as WasmAcceleratedSpatialIndex;
+      const before = index.getRuntimeStats();
+
+      // Simulate 12 consecutive viewport pan frames on the same unchanged scene
+      for (let frame = 0; frame < 12; frame += 1) {
+        const hits = index.queryRect({
+          minX: frame * 120,
+          minY: 100,
+          maxX: frame * 120 + 800,
+          maxY: 700,
+        });
+        expect(hits.length).toBeGreaterThan(0);
+      }
+
+      const after = index.getRuntimeStats();
+      // Only 1 initial linear-memory upload; all 11 subsequent frames must be zero-copy hits!
+      expect(after.uploadCount - before.uploadCount).toBe(1);
+      expect(after.zeroCopyHits - before.zeroCopyHits).toBe(11);
+    });
+
+    it('validates the ~250-byte WebAssembly sweep-line geometry kernel and matches O(N^2) brute-force 100% across 500 segments', () => {
+      expect(WebAssembly.validate(WASM_GEOMETRY_MODULE_BYTES as BufferSource)).toBe(true);
+      expect(WASM_GEOMETRY_MODULE_BYTES.byteLength).toBeLessThan(320);
+
+      // Deterministic PRNG for 500 overlapping & non-overlapping segment AABBs
+      let seed = 1337;
+      const rand = () => {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        return seed / 4294967296;
+      };
+      const count = 500;
+      const boxes = Array.from({ length: count }, () => {
+        const x0 = rand() * 800;
+        const y0 = rand() * 800;
+        const w = 10 + rand() * 90;
+        const h = 10 + rand() * 90;
+        return { minX: x0, minY: y0, maxX: x0 + w, maxY: y0 + h };
+      });
+      boxes.sort((a, b) => a.minX - b.minX);
+
+      const packed = new Float64Array(count * 4);
+      for (let i = 0; i < count; i += 1) {
+        packed[i * 4] = boxes[i].minX;
+        packed[i * 4 + 1] = boxes[i].minY;
+        packed[i * 4 + 2] = boxes[i].maxX;
+        packed[i * 4 + 3] = boxes[i].maxY;
+      }
+
+      const wasmResult = findOverlappingSegmentPairsWasm(packed, count);
+      expect(wasmResult).not.toBeNull();
+
+      const wasmPairs: string[] = [];
+      for (let p = 0; p < wasmResult!.pairCount; p += 1) {
+        wasmPairs.push(`${wasmResult!.pairsView[p * 2]}:${wasmResult!.pairsView[p * 2 + 1]}`);
+      }
+
+      // Ground-truth brute-force O(N^2) overlap detection
+      const expectedPairs: string[] = [];
+      for (let i = 0; i < count; i += 1) {
+        for (let j = i + 1; j < count; j += 1) {
+          if (
+            boxes[i].maxX >= boxes[j].minX &&
+            boxes[j].maxX >= boxes[i].minX &&
+            boxes[i].maxY >= boxes[j].minY &&
+            boxes[j].maxY >= boxes[i].minY
+          ) {
+            expectedPairs.push(`${i}:${j}`);
+          }
+        }
+      }
+
+      expect(wasmPairs.length).toBeGreaterThan(200);
+      expect(wasmPairs).toEqual(expectedPairs);
     });
   });
 

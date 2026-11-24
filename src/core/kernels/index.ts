@@ -11,6 +11,7 @@ import {
   createWasmSpatialIndexKernelAsync,
   isWebAssemblySupported,
 } from './wasmSpatialKernel';
+import { warmupWasmGeometryKernelAsync } from './wasmGeometryKernel';
 import { getComputeWorkerClient } from './workerBridge';
 import type {
   A11yAuditKernel,
@@ -84,7 +85,10 @@ export function resetComputeKernels(): ComputeKernelRegistry {
  * warms up the off-main-thread Compute Web Worker in browser environments.
  */
 export async function bootMonsterComputeKernels(): Promise<ComputeKernelRuntimeStatus> {
-  const wasmSpatial = await createWasmSpatialIndexKernelAsync();
+  const [wasmSpatial] = await Promise.all([
+    createWasmSpatialIndexKernelAsync(),
+    warmupWasmGeometryKernelAsync(),
+  ]);
   if (wasmSpatial) {
     registerComputeKernel({ spatial: wasmSpatial });
   }
@@ -115,7 +119,14 @@ export {
   createWasmSpatialIndexKernel,
   createWasmSpatialIndexKernelAsync,
   isWebAssemblySupported,
+  type WasmSpatialRuntimeStats,
 } from './wasmSpatialKernel';
+export {
+  WASM_GEOMETRY_MODULE_BYTES,
+  findOverlappingSegmentPairsWasm,
+  warmupWasmGeometryKernelAsync,
+  type WasmSweepResult,
+} from './wasmGeometryKernel';
 export { ComputeWorkerClient, getComputeWorkerClient, type ComputeWorkerStats } from './workerBridge';
 export type {
   A11yAuditKernel,

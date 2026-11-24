@@ -40,7 +40,7 @@ import { useMotionPlayback } from './workspace/useMotionPlayback';
 import { useMediaAndFontsLifecycle } from './workspace/useMediaAndFontsLifecycle';
 import { GlobalToolbar, WorkspacePreferencesRecoveryBanner, type TopMenuId } from './workspace/GlobalToolbar';
 import { buildGlobalToolbarMenuActions } from './workspace/globalMenuActions';
-import { createInteractiveStarterProject } from './workspace/nodeLogicGraphHelpers';
+import { createInteractiveStarterProject } from './workspace/starterProject';
 import type { CodeWorkspaceViewMode } from './workspace/useCodeWorkspace';
 import { ToolRail } from './workspace/ToolRail';
 import { LayersPanel } from './workspace/LayersPanel';
