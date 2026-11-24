@@ -10,6 +10,105 @@ const PROJECT_STORE = 'projects';
 const APP_STATE_STORE = 'app-state';
 const ACTIVE_PROJECT_RECORD_KEY = 'active-project';
 const RESERVED_COMPONENT_PROJECT_ID = 'folio-component-canvas';
+const CROSS_TAB_LOCK_NAME = 'folio-studio:indexeddb-write';
+const CROSS_TAB_CHANNEL_NAME = 'folio-studio:persistence-sync';
+
+const TAB_SESSION_ID = `folio-tab-${
+  typeof globalThis.crypto?.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}`;
+
+export interface ExternalPersistenceEvent {
+  readonly type: 'project-saved';
+  readonly projectId: string;
+  readonly updatedAt: string;
+  readonly tabId: string;
+  readonly activated: boolean;
+}
+
+/** Detects browser storage quota exhaustion errors across Chromium, Firefox, and Safari. */
+export function isStorageQuotaExceededError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { name?: unknown; message?: unknown; code?: unknown };
+  if (
+    candidate.name === 'QuotaExceededError' ||
+    candidate.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    candidate.code === 22 ||
+    candidate.code === 1014
+  ) {
+    return true;
+  }
+  return typeof candidate.message === 'string' && /quota/i.test(candidate.message);
+}
+
+let sharedBroadcastChannel: BroadcastChannel | null = null;
+
+function getPersistenceChannel(): BroadcastChannel | null {
+  if (typeof BroadcastChannel !== 'function') return null;
+  if (!sharedBroadcastChannel) {
+    try {
+      sharedBroadcastChannel = new BroadcastChannel(CROSS_TAB_CHANNEL_NAME);
+    } catch {
+      return null;
+    }
+  }
+  return sharedBroadcastChannel;
+}
+
+function broadcastProjectSaved(project: FolioProject, activated: boolean): void {
+  if (project.metadata.id === RESERVED_COMPONENT_PROJECT_ID) return;
+  const channel = getPersistenceChannel();
+  if (!channel) return;
+  try {
+    const payload: ExternalPersistenceEvent = {
+      type: 'project-saved',
+      projectId: project.metadata.id,
+      updatedAt: project.metadata.updatedAt,
+      tabId: TAB_SESSION_ID,
+      activated,
+    };
+    channel.postMessage(payload);
+  } catch {
+    // Ignore detached or unavailable BroadcastChannel environments.
+  }
+}
+
+/**
+ * Subscribes to IndexedDB project commits originating from OTHER open browser tabs.
+ * Never fires for writes committed by the current tab.
+ */
+export function subscribeExternalPersistenceSync(
+  listener: (event: ExternalPersistenceEvent) => void,
+): () => void {
+  if (typeof BroadcastChannel !== 'function') return () => undefined;
+  let channel: BroadcastChannel;
+  try {
+    channel = new BroadcastChannel(CROSS_TAB_CHANNEL_NAME);
+  } catch {
+    return () => undefined;
+  }
+  const onMessage = (messageEvent: MessageEvent<unknown>) => {
+    const data = messageEvent.data;
+    if (!data || typeof data !== 'object') return;
+    const record = data as Record<string, unknown>;
+    if (
+      record.type === 'project-saved' &&
+      typeof record.projectId === 'string' &&
+      typeof record.updatedAt === 'string' &&
+      typeof record.tabId === 'string' &&
+      typeof record.activated === 'boolean' &&
+      record.tabId !== TAB_SESSION_ID
+    ) {
+      listener(record as unknown as ExternalPersistenceEvent);
+    }
+  };
+  channel.addEventListener('message', onMessage);
+  return () => {
+    channel.removeEventListener('message', onMessage);
+    channel.close();
+  };
+}
 
 function openDatabase(): Promise<IDBDatabase> {
   if (!('indexedDB' in globalThis)) {
@@ -38,8 +137,16 @@ function openDatabase(): Promise<IDBDatabase> {
 let projectWriteQueue: Promise<void> = Promise.resolve();
 const persistedProjectRevisions = new Map<string, number>();
 
+function runWithCrossTabLock<T>(operation: () => Promise<T>): Promise<T> {
+  const locks = (globalThis.navigator as { locks?: { request: <R>(name: string, cb: () => Promise<R>) => Promise<R> } } | undefined)?.locks;
+  if (locks && typeof locks.request === 'function') {
+    return locks.request(CROSS_TAB_LOCK_NAME, operation);
+  }
+  return operation();
+}
+
 function enqueueProjectWrite<T>(operation: () => Promise<T>): Promise<T> {
-  const result = projectWriteQueue.then(operation);
+  const result = projectWriteQueue.then(() => runWithCrossTabLock(operation));
   projectWriteQueue = result.then(() => undefined, () => undefined);
   return result;
 }
@@ -122,6 +229,9 @@ async function persistProjectUnlocked(
         });
       }
     });
+    if (!revisionInvalidated) {
+      broadcastProjectSaved(project, activate);
+    }
     return !revisionInvalidated;
   } finally {
     unsubscribe();

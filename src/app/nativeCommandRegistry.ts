@@ -4,6 +4,7 @@ import {
   validateAnimationCreateClipPayload,
   validateAnimationDeleteClipPayload,
   validateAnimationUpdateClipPayload,
+  validateAssetUpsertPayload,
   validateCodeUpdateModulesPayload,
   validateComponentCreatePayload,
   validateComponentDeletePayload,
@@ -493,6 +494,20 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
       return [{
         type: 'delete-animation-clip',
         clipId: command.payload.clipId,
+      }];
+    },
+  }),
+  'asset.upsert': Object.freeze({
+    type: 'asset.upsert' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'asset.update',
+    validatePayload: validateAssetUpsertPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'asset.upsert') return [];
+      return [{
+        type: 'upsert-asset',
+        asset: command.payload.asset,
       }];
     },
   }),

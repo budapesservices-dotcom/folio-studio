@@ -2,6 +2,7 @@ import type { DocumentAddress, NativeNodeRef } from '../document/ast';
 import type { LayerDropPosition } from '../document/layers';
 import type {
   AnimationClip,
+  AssetReference,
   CodeModuleRecord,
   ComponentDefinition,
   ComponentSlotDefinition,
@@ -56,6 +57,7 @@ export type NativePermission =
   | 'code.update'
   | 'logic.update'
   | 'animation.update'
+  | 'asset.update'
   | 'selection.update'
   | 'history.execute';
 
@@ -182,6 +184,10 @@ export interface AnimationDeleteClipPayload {
   clipId: string;
 }
 
+export interface AssetUpsertPayload {
+  asset: AssetReference;
+}
+
 export interface NodeCreatePayload {
   nodes: DesignNode[];
 }
@@ -301,6 +307,7 @@ export type LogicDeleteGraphCommand = NativeCommandEnvelope<'logic.delete-graph'
 export type AnimationCreateClipCommand = NativeCommandEnvelope<'animation.create-clip', AnimationCreateClipPayload>;
 export type AnimationUpdateClipCommand = NativeCommandEnvelope<'animation.update-clip', AnimationUpdateClipPayload>;
 export type AnimationDeleteClipCommand = NativeCommandEnvelope<'animation.delete-clip', AnimationDeleteClipPayload>;
+export type AssetUpsertCommand = NativeCommandEnvelope<'asset.upsert', AssetUpsertPayload>;
 export type NodeCreateCommand = NativeCommandEnvelope<'node.create', NodeCreatePayload>;
 export type NodeReplaceCommand = NativeCommandEnvelope<'node.replace', NodeReplacePayload>;
 export type NodeReplaceManyCommand = NativeCommandEnvelope<'node.replace-many', NodeReplaceManyPayload>;
@@ -356,6 +363,7 @@ export type ExtendedNativeCommand =
   | AnimationCreateClipCommand
   | AnimationUpdateClipCommand
   | AnimationDeleteClipCommand
+  | AssetUpsertCommand
   | NodeReplaceManyCommand
   | NodeSplitCommand
   | NodeUpdateManyCommand
@@ -383,6 +391,7 @@ export type NativeCommandPayload =
   | AnimationCreateClipPayload
   | AnimationUpdateClipPayload
   | AnimationDeleteClipPayload
+  | AssetUpsertPayload
   | NodeCreatePayload
   | NodeReplacePayload
   | NodeReplaceManyPayload

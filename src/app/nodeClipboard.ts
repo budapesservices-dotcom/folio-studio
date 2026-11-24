@@ -76,26 +76,51 @@ function cloneSubpath(subpath: VectorSubpath): VectorSubpath {
 
 /** Deep-clones a DesignNode so mutations never alias shared style/points/override objects. */
 export function deepCloneNode(node: DesignNode): DesignNode {
+  const clonedEffects = node.effects ? node.effects.map((effect) => ({ ...effect })) : undefined;
+  const cloneFills = (fills: readonly import('../core/document/types').FillPaint[] | undefined) =>
+    fills
+      ? fills.map((fill) =>
+          fill.type === 'solid'
+            ? { ...fill }
+            : { ...fill, stops: fill.stops.map((stop) => ({ ...stop })) },
+        )
+      : undefined;
+
   switch (node.type) {
     case 'group':
-      return { ...node };
+      return { ...node, ...(clonedEffects ? { effects: clonedEffects } : {}) };
     case 'frame':
     case 'rect':
     case 'ellipse':
       return {
         ...node,
-        style: { ...node.style },
+        ...(clonedEffects ? { effects: clonedEffects } : {}),
+        style: {
+          ...node.style,
+          ...(node.style.fills ? { fills: cloneFills(node.style.fills) } : {}),
+        },
       };
     case 'text':
       return {
         ...node,
+        ...(clonedEffects ? { effects: clonedEffects } : {}),
+        style: { ...node.style },
+      };
+    case 'image':
+      return {
+        ...node,
+        ...(clonedEffects ? { effects: clonedEffects } : {}),
         style: { ...node.style },
       };
     case 'path': {
       const cloned: PathNode = {
         ...node,
+        ...(clonedEffects ? { effects: clonedEffects } : {}),
         points: node.points.map(cloneAnchorPoint),
-        style: { ...node.style },
+        style: {
+          ...node.style,
+          ...(node.style.fills ? { fills: cloneFills(node.style.fills) } : {}),
+        },
       };
       if (node.subpaths) cloned.subpaths = node.subpaths.map(cloneSubpath);
       if (node.shapeMeta) cloned.shapeMeta = { ...node.shapeMeta };
@@ -108,6 +133,7 @@ export function deepCloneNode(node: DesignNode): DesignNode {
       }
       return {
         ...node,
+        ...(clonedEffects ? { effects: clonedEffects } : {}),
         overrides,
       };
     }

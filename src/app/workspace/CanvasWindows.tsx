@@ -1,9 +1,10 @@
 import { lazy, Suspense } from 'preact/compat';
 import { useState } from 'preact/hooks';
-import type { BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument, FolioProject } from '../../core/document/types';
+import type { AssetReference, BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument, FolioProject } from '../../core/document/types';
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { CanvasToolId, CanvasToolOptions } from '../../core/tools/operationContract';
 import { Canvas } from '../../engines/canvas/Canvas';
+import type { GpuSceneMetrics, ViewportRendererMode } from '../../engines/canvas/gpu/types';
 import type { Alignment, DistributionAxis } from '../../engines/canvas/geometry';
 import type { ValidatedToolOperation } from '../../engines/canvas/geometryEngine';
 import { FloatingWindow } from '../FloatingWindow';
@@ -48,6 +49,7 @@ export interface MainCanvasWindowProps {
   document: FolioDocument;
   components: ComponentDefinition[];
   designTokens: DesignTokenCollection;
+  assets?: readonly AssetReference[];
   activeBreakpoint: BreakpointId;
   selectedNodeIds: string[];
   selectedNodes: DesignNode[];
@@ -84,6 +86,7 @@ export interface MainCanvasWindowProps {
   onToolOperation: (operation: ValidatedToolOperation) => void;
   onToolOperationBatch: (operations: readonly ValidatedToolOperation[]) => void;
   onLayerDrop: (nodeIds: string[]) => void;
+  onDropImageFiles?: (files: readonly File[], point: { x: number; y: number }) => void;
 }
 
 export function MainCanvasWindow({
@@ -97,6 +100,7 @@ export function MainCanvasWindow({
   document,
   components,
   designTokens,
+  assets,
   activeBreakpoint,
   selectedNodeIds,
   selectedNodes,
@@ -133,7 +137,11 @@ export function MainCanvasWindow({
   onToolOperation,
   onToolOperationBatch,
   onLayerDrop,
+  onDropImageFiles,
 }: MainCanvasWindowProps) {
+  const [rendererMode, setRendererMode] = useState<ViewportRendererMode>('auto');
+  const [gpuMetrics, setGpuMetrics] = useState<GpuSceneMetrics | null>(null);
+
   return (
     <>
       {visible && (
@@ -171,6 +179,33 @@ export function MainCanvasWindow({
                   >
                     <StudioIcon name={bp.icon} />
                     <span>{bp.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div
+                class="renderer-mode-switcher"
+                role="group"
+                aria-label="Canvas viewport renderer"
+                title={
+                  gpuMetrics
+                    ? `Hybrid GPU (${gpuMetrics.backend}) · ${gpuMetrics.instancedPrimitives} instanced · ${gpuMetrics.richNodes} tiled · ${gpuMetrics.lastFrameMs.toFixed(1)} ms`
+                    : 'Auto switches to Hybrid GPU + Tile Cache at 250+ layers'
+                }
+              >
+                {([
+                  { id: 'auto', label: 'Auto', tip: 'Auto: SVG < 250 nodes, Hybrid GPU >= 250 nodes' },
+                  { id: 'gpu-hybrid', label: 'GPU', tip: 'Force Hybrid GPU (WebGL2 SDF + 512px Tile Cache)' },
+                  { id: 'svg-dom', label: 'SVG', tip: 'Force SVG DOM renderer' },
+                ] as const).map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    class={`renderer-mode-btn${rendererMode === mode.id ? ' is-active' : ''}`}
+                    title={mode.tip}
+                    aria-pressed={rendererMode === mode.id}
+                    onClick={() => setRendererMode(mode.id)}
+                  >
+                    {mode.label}
                   </button>
                 ))}
               </div>
@@ -234,6 +269,7 @@ export function MainCanvasWindow({
               document={document}
               components={components}
               designTokens={designTokens}
+              assets={assets}
               activeBreakpoint={activeBreakpoint}
               selectedNodeIds={selectedNodeIds as string[]}
               toolId={toolId}
@@ -244,6 +280,9 @@ export function MainCanvasWindow({
               onToolOperation={onToolOperation}
               onToolOperationBatch={onToolOperationBatch}
               onLayerDrop={onLayerDrop}
+              onDropImageFiles={onDropImageFiles}
+              rendererMode={rendererMode}
+              onGpuMetrics={setGpuMetrics}
             />
           </div>
         </FloatingWindow>
@@ -292,6 +331,7 @@ export interface ComponentCanvasWindowProps {
   document: FolioDocument | null;
   components: ComponentDefinition[];
   designTokens: DesignTokenCollection;
+  assets?: readonly AssetReference[];
   editingComponent: ComponentDefinition | null;
   selectedNodeIds: string[];
   selectedComponentNodes: DesignNode[];
@@ -337,6 +377,7 @@ export interface ComponentCanvasWindowProps {
   onToolOperation: (operation: ValidatedToolOperation) => void;
   onToolOperationBatch: (operations: readonly ValidatedToolOperation[]) => void;
   onLayerDrop: (nodeIds: string[]) => void;
+  onDropImageFiles?: (files: readonly File[], point: { x: number; y: number }) => void;
 }
 
 export function ComponentCanvasWindow({
@@ -350,6 +391,7 @@ export function ComponentCanvasWindow({
   document,
   components,
   designTokens,
+  assets,
   editingComponent,
   selectedNodeIds,
   selectedComponentNodes,
@@ -395,6 +437,7 @@ export function ComponentCanvasWindow({
   onToolOperation,
   onToolOperationBatch,
   onLayerDrop,
+  onDropImageFiles,
 }: ComponentCanvasWindowProps) {
   const safeDocument = normalizeCanvasDocument(document);
   const safeNodes = safeDocument?.nodes ?? [];
@@ -552,6 +595,7 @@ export function ComponentCanvasWindow({
                 document={safeDocument}
                 components={components}
                 designTokens={designTokens}
+                assets={assets}
                 selectedNodeIds={safeSelectedNodeIds}
                 toolId={toolId}
                 workspace="component"
@@ -561,6 +605,7 @@ export function ComponentCanvasWindow({
                 onToolOperation={onToolOperation}
                 onToolOperationBatch={onToolOperationBatch}
                 onLayerDrop={onLayerDrop}
+                onDropImageFiles={onDropImageFiles}
               />
             ) : (
               <div class="component-canvas-empty" role="status">

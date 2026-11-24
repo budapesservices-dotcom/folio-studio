@@ -1,4 +1,5 @@
 import type {
+  AnimationClip,
   AssetReference,
   CodeModuleRecord,
   ComponentDefinition,
@@ -72,6 +73,9 @@ export interface ProjectDelta {
   readonly assetsChanged?: boolean;
   readonly assetsBefore?: readonly AssetReference[];
   readonly assetsAfter?: readonly AssetReference[];
+  readonly animationsChanged?: boolean;
+  readonly animationsBefore?: readonly AnimationClip[];
+  readonly animationsAfter?: readonly AnimationClip[];
 }
 
 export interface DeltaHistoryTimeline {
@@ -192,7 +196,8 @@ export function isProjectDeltaEmpty(delta: ProjectDelta): boolean {
     !delta.designTokensChanged &&
     !delta.codeModulesChanged &&
     !delta.logicGraphsChanged &&
-    !delta.assetsChanged
+    !delta.assetsChanged &&
+    !delta.animationsChanged
   );
 }
 
@@ -314,6 +319,13 @@ export function computeProjectDelta(
           assetsAfter: after.assets,
         }
       : {}),
+    ...(before.animations !== after.animations
+      ? {
+          animationsChanged: true,
+          animationsBefore: before.animations,
+          animationsAfter: after.animations,
+        }
+      : {}),
   };
 }
 
@@ -431,6 +443,12 @@ export function applyProjectDelta(
     else nextProject.codeModules = [...nextModules];
   }
 
+  if (delta.animationsChanged) {
+    const nextAnimations = direction === 'forward' ? delta.animationsAfter : delta.animationsBefore;
+    if (nextAnimations === undefined) delete nextProject.animations;
+    else nextProject.animations = [...nextAnimations];
+  }
+
   return nextProject;
 }
 
@@ -544,4 +562,59 @@ export function countDeltaTouchedNodes(delta: ProjectDelta): number {
     }
   }
   return count;
+}
+
+/**
+ * Validates that a candidate history entry is a well-formed ProjectDelta
+ * and does not smuggle a disallowed project identity (e.g. Component Canvas buffer).
+ */
+export function isProjectDeltaEntry(
+  value: unknown,
+  options?: { disallowedProjectId?: string },
+): value is ProjectDelta {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.id !== 'string' || candidate.id.length === 0) return false;
+  if (!Array.isArray(candidate.pages) || !Array.isArray(candidate.components)) return false;
+  // Reject full FolioProject snapshots passed into delta stacks.
+  if ('format' in candidate || 'formatVersion' in candidate) return false;
+
+  const disallowedId = options?.disallowedProjectId;
+  const isValidMeta = (meta: unknown): boolean => {
+    if (meta === undefined) return true;
+    if (typeof meta !== 'object' || meta === null || Array.isArray(meta)) return false;
+    const record = meta as Record<string, unknown>;
+    if (typeof record.id !== 'string' || record.id.length === 0) return false;
+    if (disallowedId && record.id === disallowedId) return false;
+    return typeof record.name === 'string' && typeof record.createdAt === 'string' && typeof record.updatedAt === 'string';
+  };
+  if (!isValidMeta(candidate.metadataBefore) || !isValidMeta(candidate.metadataAfter)) {
+    return false;
+  }
+
+  for (const entry of candidate.pages) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
+    const item = entry as Record<string, unknown>;
+    if (
+      (item.kind !== 'added' && item.kind !== 'removed' && item.kind !== 'updated') ||
+      typeof item.pageId !== 'string' ||
+      item.pageId.length === 0
+    ) {
+      return false;
+    }
+  }
+
+  for (const entry of candidate.components) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
+    const item = entry as Record<string, unknown>;
+    if (
+      (item.kind !== 'added' && item.kind !== 'removed' && item.kind !== 'updated') ||
+      typeof item.componentId !== 'string' ||
+      item.componentId.length === 0
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }

@@ -11,7 +11,7 @@ import {
   simplifyPathNode,
   type PathfinderOperation,
 } from '../../core/document/vector';
-import { getComputeKernels } from '../../core/kernels';
+import { getComputeKernels, getComputeWorkerClient } from '../../core/kernels';
 import { alignNodes, distributeNodes, type Alignment, type DistributionAxis } from '../../engines/canvas/geometry';
 import type { CanvasToolId, CanvasToolOptions } from '../../engines/canvas/tools/types';
 import { getActiveEditorContext, getTransformableNodes, type EditorTarget } from '../editorContext';
@@ -183,13 +183,46 @@ export function useSelectionAndVectorActions({
       return;
     }
     const newId = globalThis.crypto?.randomUUID?.() ?? `pathfinder-${Date.now()}`;
+    const totalPathPoints = candidates.reduce(
+      (sum, node) => sum + (node.type === 'path' ? node.points.length : 4),
+      0,
+    );
+    const shouldOffloadWorker = candidates.length >= 3 || totalPathPoints >= 60;
+    const candidateIds = candidates.map((node) => node.id);
+
+    if (shouldOffloadWorker) {
+      setNotice(`Computing Pathfinder ${operation} in background worker…`);
+      void getComputeWorkerClient()
+        .applyPathfinderAsync(candidates, operation, newId)
+        .then((result) => {
+          if (!result) {
+            setNotice(`Pathfinder ${operation} produced an empty region. Make sure shapes overlap.`);
+            return;
+          }
+          selectionSourceRef.current = 'canvas';
+          getCommandClient(target).replaceNodes(candidateIds, [result], 'Replace vector nodes');
+          setNotice(`Pathfinder ${operation} created “${result.name}”.`);
+        })
+        .catch(() => {
+          const fallback = getComputeKernels().vector.applyPathfinder(candidates, operation, newId);
+          if (!fallback) {
+            setNotice(`Pathfinder ${operation} produced an empty region. Make sure shapes overlap.`);
+            return;
+          }
+          selectionSourceRef.current = 'canvas';
+          getCommandClient(target).replaceNodes(candidateIds, [fallback], 'Replace vector nodes');
+          setNotice(`Pathfinder ${operation} created “${fallback.name}”.`);
+        });
+      return;
+    }
+
     const result = getComputeKernels().vector.applyPathfinder(candidates, operation, newId);
     if (!result) {
       setNotice(`Pathfinder ${operation} produced an empty region. Make sure shapes overlap.`);
       return;
     }
     selectionSourceRef.current = 'canvas';
-    getCommandClient(target).replaceNodes(candidates.map((node) => node.id), [result], 'Replace vector nodes');
+    getCommandClient(target).replaceNodes(candidateIds, [result], 'Replace vector nodes');
     setNotice(`Pathfinder ${operation} created “${result.name}”.`);
   };
 

@@ -245,5 +245,40 @@ The actual modal is also browser-tested: initial focus enters the safe dialog ac
 - **Pending / Not Claimed:**
   - External Git commit/push, GitHub Actions CI run on a pushed branch, Cloudflare Pages deploy, and human manual browser acceptance remain **pending** outside this local workspace (no `.git` remote in this sandbox).
 
+### Priority B (P1) Hardening Pass — Bundle Chunk Splitting, Multi-File ZIP Export, WCAG 2.1 AA Accessibility Audit & `App.tsx` Modularity
+
+- **Implementation status:** **Implemented** and **Verified locally** (2026-11-23).
+- **Implemented scope:**
+  1. **P1-1 Bundle Architecture & Chunk Splitting (`vite.config.ts`):** Added architectural `build.rollupOptions.output.manualChunks` separating `vendor-preact`, `core-engine`, `canvas-engine`, and `studio-engines` alongside lazy workspace chunks, reducing main entry `dist/assets/index-*.js` from `723.63 kB` to `400.82 kB` (`98.18 kB` gzip) with **0 Vite `> 500 kB` chunk-size warnings**.
+  2. **P1-2 Zero-Dependency Multi-File ZIP Project Export (`src/engines/codegen/zipArchive.ts`, `projectBundle.ts`, `index.ts`, `useCodeWorkspace.ts`, `CodeWorkspacePanel.tsx`):** Implemented a deterministic PKZIP 2.0 Store-mode archive writer/parser (`buildZipArchive`, `parseZipArchive`, `computeCrc32`) with strict path-traversal and duplicate-entry rejection, plus `buildCompiledProjectBundle()` generating runnable Vite + React + TypeScript scaffolds (`package.json`, `tsconfig.json`, `vite.config.ts`, `index.html`, `src/main.tsx`, `README.md`, compiled pages/components/styles, custom modules) and static HTML/CSS site bundles via Code & Preview Studio's **`Export ZIP`** button.
+  3. **P1-3 Built-In WCAG 2.1 AA Accessibility & Semantic HTML Audit (`src/engines/codegen/a11yAudit.ts`, `CodeWorkspacePanel.tsx`, `useCodeWorkspace.ts`, `src/styles/global.css`):** Implemented pure color-contrast (`4.5:1` normal / `3.0:1` large text against parent/painted backdrop + Design Tokens), heading-hierarchy (`MISSING_H1`, `MULTIPLE_H1`, `SKIPPED_HEADING_LEVEL`), interactive accessible-name, safe `href`, and empty-text auditing surfaced in a collapsible `.code-a11y-drawer` with score, severity badges, and 1-click **Focus** jump-to-canvas.
+  4. **P1-4 `App.tsx` Modularity Headroom (`src/app/workspace/useWorkspaceChromeEffects.ts`, `src/app/App.tsx`):** Extracted toast auto-dismiss, menu/tool-rack outside-click & Escape dismissal, viewport resize recovery, and shortcuts modal focus-trapping effects into `useWorkspaceChromeEffects`, reducing `src/app/App.tsx` from `1,184` to `1,110` lines while preserving all `tests/workspaceModules.test.ts` architectural boundary invariants.
+- **Local Automated Gate (2026-11-23):**
+  - `npm run check` (`tsc --noEmit`): **PASS** (0 errors).
+  - `npm run test:unit`: **PASS** (**46 test files / 531 tests passed**, including new `tests/a11yAudit.test.ts` 3/3, expanded `tests/codeEngineAndMapping.test.ts` 11/11 covering deterministic ZIP output, CRC-32 parsing & path traversal guards, and `tests/workspaceModules.test.ts` 11/11).
+  - `npm run build` / `compile_applet`: **PASS** (`dist/` compiled cleanly in ~660ms; largest JS chunk `index-*.js` is `400.82 kB`, 0 chunk-size warnings).
+  - Live headless Chromium verification (`playwright-cli` against `http://localhost:3000/folio-studio/` at `1440×900`): **PASS** — verified Code & Preview Studio header layout (`A11y · 2`, `Export ZIP`, zero overflow/clipping), collapsible Accessibility Audit drawer (`Score 89/100`, `WARN` low contrast `4.30:1` on `Eyebrow`, `INFO` skipped heading `h1 -> h3` on `Description`, `Focus` button), real browser `.zip` downloads for both `HTML / CSS` (`first-canvas-html-css.zip`, 5 files) and `React TSX` (`first-canvas-react-ts.zip`, 10 files) validated cleanly with `python3 -m zipfile -t`, and **0 console errors / 0 warnings**.
+- **Pending / Not Claimed:**
+  - External Git commit/push, GitHub Actions CI run on a pushed branch, Cloudflare Pages deploy, and human manual browser acceptance remain **pending** outside this local workspace.
+
+### Priority C (P2) Professional Polish — Atomic Accessibility Auto-Fix, Studio Scene Profiler & Full Chromium Browser Gate
+
+- **Implementation status:** **Implemented** and **Verified locally** (2026-11-23).
+- **Implemented scope:**
+  1. **P2-1 Atomic 1-Click WCAG 2.1 AA Auto-Fix (`src/engines/codegen/a11yAudit.ts`, `index.ts`, `useCodeWorkspace.ts`, `CodeWorkspacePanel.tsx`):** Added `suggestAccessibleForegroundColor()` (hue-preserving minimal-drift binary search toward black/white meeting WCAG AA `4.5:1` / `3.0:1`), `applyA11yQuickFixToNode()` (stripping conflicting `fill` token bindings), per-issue **`Fix`** buttons (`Fix (#RRGGBB)`, `Set <h2>`, `Add Label`), and atomic **`Fix All (N)`** via `mainCommandClient.executeTransaction(...)` so all fixes apply and undo in 1 atomic `Ctrl+Z` step.
+  2. **P2-2 On-Demand Studio Scene Profiler & Project Health (`src/engines/diagnostics/studioProfiler.ts`, `src/app/workspace/DiagnosticsModal.tsx`, `GlobalToolbar.tsx`, `App.tsx`, `src/styles/global.css`):** Added framework-independent `analyzeProjectHealth()` and `runLiveSceneProfile()` (8 runtime engine stages: AST, Layer Tree, Auto-Layout, FlatGrid Spatial Index, A11y Audit, HTML/CSS Compiler, React TSX Compiler, Incremental Validation) surfaced in a focus-trapped, lazy-loaded modal (`dist/assets/DiagnosticsModal-*.js` ~15.58 kB) accessible via `Help -> Scene Profiler & Health`.
+  3. **P2-3 Unit & Regression Coverage (`tests/a11yAudit.test.ts`, `tests/studioProfiler.test.ts`):** Added contrast suggestion, starter-page `100/100` auto-fix round-trip, health check, spatial-culling activation, deep nesting, and 8-stage live profiler tests.
+  4. **P2-4 Full Automated Browser Acceptance Gate (`npm run test:browser`):** Executed all 4 real Chromium browser acceptance suites sequentially (`--fileParallelism=false`) with 100% pass rate.
+- **Local Automated Gate (2026-11-23):**
+  - `npm run check` (`tsc --noEmit`): **PASS** (0 errors).
+  - `npm run test:unit`: **PASS** (**47 test files / 535 tests passed**, including `tests/a11yAudit.test.ts` 4/4, `tests/studioProfiler.test.ts` 3/3, and `tests/workspaceModules.test.ts` 11/11).
+  - `CHROMIUM_BIN=... npm run test:browser`: **PASS** (**4 test files / 11 tests passed** in 70.54s — `mergeReadiness.browser.test.mjs` 4/4, `workspaceGeometry.browser.test.mjs` 1/1, `componentRecovery.browser.test.mjs` 5/5, `nativePersistence.browser.test.mjs` 1/1).
+  - `npm run build` / `compile_applet`: **PASS** (`dist/` compiled cleanly; `index-*.js` = `401.65 kB` / `98.43 kB` gzip, lazy `DiagnosticsModal` = `15.58 kB`, 0 chunk-size warnings).
+  - Live headless Chromium verification (`playwright-cli` against `http://localhost:3000/folio-studio/` at `1440×900`): **PASS** — verified `Fix All (2)` elevating starter page from `Score 89/100` (`A11y · 2`) to `Score 100/100` (`A11y · Pass`), 1-step `Ctrl+Z` atomic Undo restoring `A11y · 2` & `Delta History: 0 / 1`, `Help -> Scene Profiler & Health` modal + **`Run Live Profile`** (`Total pass: 4.20 ms · FAST`, 8 stages), `Escape` clean close, and **0 console errors / 0 warnings**.
+- **Pending / Not Claimed:**
+  - External Git commit/push, GitHub Actions CI run on a pushed branch, Cloudflare Pages deploy, and human manual browser acceptance remain **pending** outside this local workspace.
+
+
+
 
 

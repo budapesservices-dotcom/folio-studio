@@ -81,6 +81,7 @@ export interface GlobalToolbarProps {
   onExportActiveCanvasPng: () => void;
   onResetWindowLayout: () => void;
   onOpenShortcutsModal: () => void;
+  onOpenDiagnosticsModal?: () => void;
   onStartProjectRename: () => void;
   onProjectNameDraftChange: (value: string) => void;
   onCommitProjectRename: () => void;
@@ -150,6 +151,7 @@ export function GlobalToolbar({
   onExportActiveCanvasPng,
   onResetWindowLayout,
   onOpenShortcutsModal,
+  onOpenDiagnosticsModal,
   onStartProjectRename,
   onProjectNameDraftChange,
   onCommitProjectRename,
@@ -477,6 +479,19 @@ export function GlobalToolbar({
                     <span>Keyboard Shortcuts</span>
                     <kbd class="global-menu-shortcut">?</kbd>
                   </button>
+                  {onOpenDiagnosticsModal && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onCloseMenus();
+                        onOpenDiagnosticsModal();
+                      }}
+                      disabled={isHydrating}
+                    >
+                      Scene Profiler &amp; Health
+                    </button>
+                  )}
                 </div>
               )}
             </div>

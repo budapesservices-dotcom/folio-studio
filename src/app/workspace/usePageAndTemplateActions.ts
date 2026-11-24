@@ -1,6 +1,6 @@
 import { useRef, useState } from 'preact/hooks';
 import { createEmptyDocument, createNodeForDocument } from '../../core/document/factory';
-import { createComponentInstance } from '../../core/document/components';
+import { createComponentInstance, wouldCreateComponentCycle } from '../../core/document/components';
 import type { ComponentDefinition, FolioDocument, FolioPage, FolioProject } from '../../core/document/types';
 import type { StudioTemplateDefinition, TemplateInsertMode } from '../../core/document/templates';
 import type { CanvasToolId } from '../../engines/canvas/tools/types';
@@ -12,6 +12,7 @@ let cachedTemplatesModule: typeof import('../../core/document/templates') | null
 export interface UsePageAndTemplateActionsOptions {
   project: FolioProject;
   activeEditorId: EditorTarget;
+  editingComponentId?: string | null;
   activeDocument: FolioDocument;
   focusedDocument: FolioDocument;
   isHydrating: boolean;
@@ -29,6 +30,7 @@ export interface UsePageAndTemplateActionsOptions {
 export function usePageAndTemplateActions({
   project,
   activeEditorId,
+  editingComponentId = null,
   activeDocument,
   focusedDocument,
   isHydrating,
@@ -153,6 +155,19 @@ export function usePageAndTemplateActions({
 
   const insertOwnedComponent = (component: ComponentDefinition) => {
     if (isHydrating) return;
+    if (activeEditorId === 'component' && editingComponentId && editingComponentId !== component.id) {
+      if (wouldCreateComponentCycle(project.components, editingComponentId, component.id)) {
+        setNotice(`Cannot nest “${component.name}” here: circular component dependency detected.`);
+        return;
+      }
+      const offset = focusedDocument.nodes.length;
+      const instance = createComponentInstance(component, 24 + (offset % 4) * 20, 24 + (offset % 4) * 20);
+      const result = focusedCommandClient.createNodes([instance], 'Insert nested component instance');
+      if (result.status !== 'applied') return;
+      setInspectorVisible(true);
+      setNotice(`Nested instance of “${component.name}” added to Component Canvas.`);
+      return;
+    }
     const offset = project.pages.find((page) => page.id === project.activePageId)?.document.nodes.length ?? 0;
     const instance = createComponentInstance(component, 150 + (offset % 4) * 28, 130 + (offset % 4) * 28);
     const result = mainCommandClient.createNodes([instance], 'Insert component instance');

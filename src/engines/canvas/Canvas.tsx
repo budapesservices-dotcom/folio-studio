@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type {
+  AssetReference,
   BreakpointId,
   ComponentDefinition,
   DesignNode,
@@ -32,6 +33,12 @@ import {
 } from './canvasHelpers';
 import { CanvasInteractiveOverlays } from './CanvasOverlays';
 import { CanvasSceneLayer } from './CanvasSceneLayer';
+import { GpuViewportLayer } from './gpu/GpuViewportLayer';
+import {
+  GPU_HYBRID_AUTO_THRESHOLD,
+  type GpuSceneMetrics,
+  type ViewportRendererMode,
+} from './gpu/types';
 import { computeSpacingRedlines, getBounds, type Bounds, type SnapGuide } from './geometry';
 import {
   evaluateToolOperation,
@@ -55,6 +62,7 @@ import './canvas.css';
 interface CanvasProps {
   document: FolioDocument;
   components?: ComponentDefinition[];
+  assets?: readonly AssetReference[];
   designTokens?: DesignTokenCollection;
   activeBreakpoint?: BreakpointId;
   selectedNodeIds: string[];
@@ -72,6 +80,7 @@ interface CanvasProps {
   onSelectionChange?: (nodeIds: string[]) => void;
   onTransformCommit?: (nodes: DesignNode[]) => void;
   onLayerDrop: (nodeIds: string[]) => void;
+  onDropImageFiles?: (files: readonly File[], canvasPoint: { x: number; y: number }) => void;
   onCreateNodes?: (nodes: DesignNode[]) => void;
   onReplaceNodeWithNodes?: (nodeId: string, nodes: DesignNode[]) => void;
   onReplaceNodes?: (removeIds: string[], insertNodes: DesignNode[]) => void;
@@ -79,6 +88,8 @@ interface CanvasProps {
   onToolChange?: (toolId: CanvasToolId) => void;
   onToolNotice?: (message: string) => void;
   onInlineTextCommit?: (nodeId: string, text: string) => void;
+  rendererMode?: ViewportRendererMode;
+  onGpuMetrics?: (metrics: GpuSceneMetrics | null) => void;
 }
 
 interface PanSession {
@@ -105,6 +116,7 @@ const VECTOR_OVERLAY_TOOLS = new Set<CanvasToolId>([
 export function Canvas({
   document,
   components = [],
+  assets = [],
   designTokens,
   activeBreakpoint = 'desktop',
   selectedNodeIds,
@@ -120,6 +132,7 @@ export function Canvas({
   onSelectionChange,
   onTransformCommit,
   onLayerDrop,
+  onDropImageFiles,
   onCreateNodes,
   onReplaceNodeWithNodes,
   onReplaceNodes,
@@ -127,6 +140,8 @@ export function Canvas({
   onToolChange,
   onToolNotice,
   onInlineTextCommit,
+  rendererMode = 'auto',
+  onGpuMetrics,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -135,6 +150,8 @@ export function Canvas({
   const [previewNodes, setPreviewNodes] = useState<DesignNode[] | null>(null);
   const [previewCreateNodes, setPreviewCreateNodes] = useState<DesignNode[] | null>(null);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
+  const [isImageFileDragOver, setIsImageFileDragOver] = useState(false);
+  const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
   const panRef = useRef<PanSession | null>(null);
   const toolSessionRef = useRef<CanvasToolSession | null>(null);
   const [toolSession, setToolSession] = useState<CanvasToolSession | null>(null);
@@ -156,6 +173,42 @@ export function Canvas({
   const pendingInlineEditRef = useRef<InlineTextEditState | null>(null);
   const prevDocumentIdRef = useRef<string>(document.id);
   const [renderedSvgWidth, setRenderedSvgWidth] = useState<number>(0);
+
+  // High-frequency pointer/pan/wheel RAF coalescing refs (120Hz–240Hz input protection)
+  const panRafRef = useRef<number | null>(null);
+  const pendingPanRef = useRef<{ x: number; y: number } | null>(null);
+  const wheelPanRafRef = useRef<number | null>(null);
+  const pendingWheelDeltaRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const pointerMoveRafRef = useRef<number | null>(null);
+  const pendingPointerMoveRef = useRef<{
+    input: CanvasToolPointerInput;
+    svg: SVGSVGElement;
+    pointerId: number;
+  } | null>(null);
+  const latestPanRef = useRef(pan);
+  latestPanRef.current = pan;
+  const emitViewportUpdateRef = useRef<(update: { pan?: { x: number; y: number }; zoom?: number }) => void>(() => {});
+  const processPointerMoveRef = useRef<(
+    input: CanvasToolPointerInput,
+    svg: SVGSVGElement,
+    pointerId: number,
+  ) => void>(() => {});
+
+  const cancelPendingMotionFrames = () => {
+    if (typeof cancelAnimationFrame === 'function') {
+      if (panRafRef.current !== null) cancelAnimationFrame(panRafRef.current);
+      if (wheelPanRafRef.current !== null) cancelAnimationFrame(wheelPanRafRef.current);
+      if (pointerMoveRafRef.current !== null) cancelAnimationFrame(pointerMoveRafRef.current);
+    }
+    panRafRef.current = null;
+    pendingPanRef.current = null;
+    wheelPanRafRef.current = null;
+    pendingWheelDeltaRef.current = { dx: 0, dy: 0 };
+    pointerMoveRafRef.current = null;
+    pendingPointerMoveRef.current = null;
+  };
+
+  useEffect(() => () => cancelPendingMotionFrames(), []);
 
   const releaseCapturedPointer = () => {
     const captured = capturedPointerRef.current;
@@ -345,6 +398,66 @@ export function Canvas({
     [document.nodes, activeBreakpoint, designTokens, effectiveDocWidth],
   );
 
+  // Static scene structures depend ONLY on committed layout nodes (not active drag preview),
+  // so 1,500+ idle nodes keep stable references and skip reconciliation during drags.
+  const staticCanvasNodes = useMemo(
+    () => resolvedLayoutNodes.filter((node) => node.onCanvas !== false),
+    [resolvedLayoutNodes],
+  );
+
+  const staticSceneData = useMemo(() => {
+    const byId = new Map(staticCanvasNodes.map((node) => [node.id, node]));
+    const states = getEffectiveLayerStates(staticCanvasNodes);
+    const masks = buildLayerClipMaskMap(staticCanvasNodes, byId);
+    const frameClips = buildFrameClipAncestorMap(staticCanvasNodes, byId);
+    const clipMaskBaseIds = new Set<string>();
+    for (const baseIds of masks.values()) {
+      for (const baseId of baseIds) clipMaskBaseIds.add(baseId);
+    }
+    const renderNodes = getLayerRenderOrder(staticCanvasNodes).filter((node) => {
+      const state = states.get(node.id);
+      if (!state?.visible) return false;
+      const baseIds = masks.get(node.id) ?? [];
+      return baseIds.every((baseId) => states.get(baseId)?.visible);
+    });
+    return {
+      nodeById: byId,
+      layerStates: states,
+      clipMaskMap: masks,
+      frameClipMap: frameClips,
+      clipMaskBaseIds,
+      visibleRenderNodes: renderNodes,
+      spatialIndex: buildSpatialIndexForNodes(renderNodes),
+    };
+  }, [staticCanvasNodes]);
+
+  // Isolate dragged preview nodes onto the active overlay whenever they are not
+  // acting as clip-mask bases or clipping frames for non-dragged children.
+  const canIsolatePreviewNodes = useMemo(() => {
+    if (!previewNodes || previewNodes.length === 0) return false;
+    const previewIds = new Set(previewNodes.map((node) => node.id));
+    for (const node of previewNodes) {
+      if (staticSceneData.clipMaskBaseIds.has(node.id)) return false;
+      if (node.type === 'frame' && node.clipContent) return false;
+    }
+    for (const node of staticCanvasNodes) {
+      if (!previewIds.has(node.id) && node.parentId && previewIds.has(node.parentId)) {
+        return false;
+      }
+    }
+    return true;
+  }, [previewNodes, staticSceneData.clipMaskBaseIds, staticCanvasNodes]);
+
+  // Key-stabilized Set so CanvasSceneLayer receives the exact same Set reference on frames 2..N of a drag.
+  const isolatedPreviewKey = canIsolatePreviewNodes && previewNodes
+    ? previewNodes.map((node) => node.id).join(',')
+    : '';
+  const isolatedPreviewIdSet = useMemo<ReadonlySet<string> | null>(
+    () => (isolatedPreviewKey ? new Set(isolatedPreviewKey.split(',')) : null),
+    [isolatedPreviewKey],
+  );
+  const isolatedPreviewNodes = canIsolatePreviewNodes ? previewNodes : null;
+
   const displayedNodes = useMemo(() => {
     if (!previewNodes || previewNodes.length === 0) return resolvedLayoutNodes;
     const previewById = new Map(previewNodes.map((node) => [node.id, node]));
@@ -352,11 +465,12 @@ export function Canvas({
   }, [resolvedLayoutNodes, previewNodes]);
 
   const canvasNodes = useMemo(
-    () => displayedNodes.filter((node) => node.onCanvas !== false),
-    [displayedNodes],
+    () => (previewNodes && previewNodes.length > 0 ? displayedNodes.filter((node) => node.onCanvas !== false) : staticCanvasNodes),
+    [displayedNodes, previewNodes, staticCanvasNodes],
   );
 
-  // Precompute lookup maps, layer states, and WASM-ready spatial index once per scene change.
+  // When drag preview is isolated, reuse static scene maps for CanvasSceneLayer while
+  // keeping interaction nodeById/selectionBounds synchronized with live preview coordinates.
   const {
     nodeById,
     layerStates,
@@ -366,6 +480,21 @@ export function Canvas({
     selectableNodes,
     spatialIndex,
   } = useMemo(() => {
+    if (!previewNodes || previewNodes.length === 0) {
+      const selectable = staticCanvasNodes.filter((node) => {
+        const effective = staticSceneData.layerStates.get(node.id);
+        return effective?.visible && !effective.locked;
+      });
+      return {
+        nodeById: staticSceneData.nodeById,
+        layerStates: staticSceneData.layerStates,
+        clipMaskMap: staticSceneData.clipMaskMap,
+        frameClipMap: staticSceneData.frameClipMap,
+        visibleRenderNodes: staticSceneData.visibleRenderNodes,
+        selectableNodes: selectable,
+        spatialIndex: staticSceneData.spatialIndex,
+      };
+    }
     const byId = new Map(canvasNodes.map((node) => [node.id, node]));
     const states = getEffectiveLayerStates(canvasNodes);
     const masks = buildLayerClipMaskMap(canvasNodes, byId);
@@ -389,34 +518,66 @@ export function Canvas({
       selectableNodes: selectable,
       spatialIndex: buildSpatialIndexForNodes(renderNodes),
     };
-  }, [canvasNodes]);
+  }, [canvasNodes, previewNodes, staticCanvasNodes, staticSceneData]);
 
-  const culledRenderNodes = useMemo(() => {
-    const viewportRect = computeVisibleArtboardRect(
-      scrollAreaRef.current,
-      svgRef.current,
-      effectiveDocWidth,
-      document.height,
-    );
-    return cullVisibleRenderNodes(
-      visibleRenderNodes,
-      spatialIndex,
-      viewportRect,
+  const sceneCanvasNodes = canIsolatePreviewNodes ? staticCanvasNodes : canvasNodes;
+  const sceneNodeById = canIsolatePreviewNodes ? staticSceneData.nodeById : nodeById;
+  const sceneClipMaskMap = canIsolatePreviewNodes ? staticSceneData.clipMaskMap : clipMaskMap;
+  const sceneFrameClipMap = canIsolatePreviewNodes ? staticSceneData.frameClipMap : frameClipMap;
+  const sceneVisibleRenderNodes = canIsolatePreviewNodes ? staticSceneData.visibleRenderNodes : visibleRenderNodes;
+  const sceneSpatialIndex = canIsolatePreviewNodes ? staticSceneData.spatialIndex : spatialIndex;
+
+  const visibleArtboardRect = useMemo(
+    () =>
+      computeVisibleArtboardRect(
+        scrollAreaRef.current,
+        svgRef.current,
+        effectiveDocWidth,
+        document.height,
+      ),
+    [effectiveDocWidth, document.height, zoom, pan.x, pan.y, renderedSvgWidth],
+  );
+
+  const culledRenderNodes = useMemo(
+    () =>
+      cullVisibleRenderNodes(
+        sceneVisibleRenderNodes,
+        sceneSpatialIndex,
+        visibleArtboardRect,
+        selectedNodeIds,
+        sceneNodeById,
+      ),
+    [
+      sceneVisibleRenderNodes,
+      sceneSpatialIndex,
+      visibleArtboardRect,
       selectedNodeIds,
-      nodeById,
-    );
-  }, [
-    visibleRenderNodes,
-    spatialIndex,
-    effectiveDocWidth,
-    document.height,
-    zoom,
-    pan.x,
-    pan.y,
-    renderedSvgWidth,
-    selectedNodeIds,
-    nodeById,
-  ]);
+      sceneNodeById,
+    ],
+  );
+
+  const gpuHybridActive =
+    rendererMode === 'gpu-hybrid' ||
+    (rendererMode === 'auto' && sceneCanvasNodes.length >= GPU_HYBRID_AUTO_THRESHOLD);
+
+  useEffect(() => {
+    if (!gpuHybridActive) {
+      onGpuMetrics?.(null);
+    }
+  }, [gpuHybridActive, onGpuMetrics]);
+
+  const gpuViewportRect = useMemo(
+    () =>
+      visibleArtboardRect
+        ? {
+            x: visibleArtboardRect.minX,
+            y: visibleArtboardRect.minY,
+            width: Math.max(1, visibleArtboardRect.maxX - visibleArtboardRect.minX),
+            height: Math.max(1, visibleArtboardRect.maxY - visibleArtboardRect.minY),
+          }
+        : null,
+    [visibleArtboardRect],
+  );
 
   const componentById = useMemo(
     () => new Map(components.map((component) => [component.id, component])),
@@ -597,6 +758,57 @@ export function Canvas({
       ),
     );
   };
+  emitViewportUpdateRef.current = emitViewportUpdate;
+
+  const flushPendingPan = () => {
+    if (panRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(panRafRef.current);
+      panRafRef.current = null;
+    }
+    const nextPan = pendingPanRef.current;
+    pendingPanRef.current = null;
+    if (nextPan) {
+      emitViewportUpdateRef.current({ pan: nextPan });
+    }
+  };
+
+  const schedulePanUpdate = (nextPan: { x: number; y: number }) => {
+    if (typeof requestAnimationFrame !== 'function') {
+      emitViewportUpdate({ pan: nextPan });
+      return;
+    }
+    pendingPanRef.current = nextPan;
+    if (panRafRef.current !== null) return;
+    panRafRef.current = requestAnimationFrame(() => {
+      panRafRef.current = null;
+      const queued = pendingPanRef.current;
+      pendingPanRef.current = null;
+      if (queued) emitViewportUpdateRef.current({ pan: queued });
+    });
+  };
+
+  const scheduleWheelPanDelta = (dx: number, dy: number) => {
+    if (typeof requestAnimationFrame !== 'function') {
+      emitViewportUpdate({ pan: { x: latestPanRef.current.x - dx, y: latestPanRef.current.y - dy } });
+      return;
+    }
+    pendingWheelDeltaRef.current.dx += dx;
+    pendingWheelDeltaRef.current.dy += dy;
+    if (wheelPanRafRef.current !== null) return;
+    wheelPanRafRef.current = requestAnimationFrame(() => {
+      wheelPanRafRef.current = null;
+      const { dx: accumX, dy: accumY } = pendingWheelDeltaRef.current;
+      pendingWheelDeltaRef.current = { dx: 0, dy: 0 };
+      if (accumX !== 0 || accumY !== 0) {
+        emitViewportUpdateRef.current({
+          pan: {
+            x: latestPanRef.current.x - accumX,
+            y: latestPanRef.current.y - accumY,
+          },
+        });
+      }
+    });
+  };
 
   const commitInlineText = () => {
     if (!inlineTextEdit) return;
@@ -644,11 +856,11 @@ export function Canvas({
 
     if (event.shiftKey) {
       const delta = deltaX !== 0 ? deltaX : deltaY;
-      emitViewportUpdate({ pan: { ...pan, x: pan.x - delta } });
+      scheduleWheelPanDelta(delta, 0);
       return;
     }
 
-    emitViewportUpdate({ pan: { ...pan, y: pan.y - deltaY } });
+    scheduleWheelPanDelta(0, deltaY);
   };
 
   const handlePanPointerDown = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
@@ -683,11 +895,9 @@ export function Canvas({
     const session = panRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
 
-    emitViewportUpdate({
-      pan: {
-        x: session.startPan.x + event.clientX - session.startClientX,
-        y: session.startPan.y + event.clientY - session.startClientY,
-      },
+    schedulePanUpdate({
+      x: session.startPan.x + event.clientX - session.startClientX,
+      y: session.startPan.y + event.clientY - session.startClientY,
     });
     event.preventDefault();
   };
@@ -695,6 +905,7 @@ export function Canvas({
   const finishPan = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
     const session = panRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
+    flushPendingPan();
     panRef.current = null;
     setIsPanning(false);
     event.preventDefault();
@@ -703,6 +914,11 @@ export function Canvas({
   const cancelPan = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
     const session = panRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
+    if (panRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(panRafRef.current);
+      panRafRef.current = null;
+    }
+    pendingPanRef.current = null;
     emitViewportUpdate({ pan: session.startPan });
     panRef.current = null;
     setIsPanning(false);
@@ -711,26 +927,89 @@ export function Canvas({
 
   const handleLayerDragOver = (event: JSX.TargetedDragEvent<HTMLDivElement>) => {
     const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : [];
-    if (!types.includes('application/x-folio-layer-ids')) return;
-    event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-  };
-
-  const handleLayerDrop = (event: JSX.TargetedDragEvent<HTMLDivElement>) => {
-    const payload = event.dataTransfer?.getData('application/x-folio-layer-ids');
-    if (!payload) return;
-    event.preventDefault();
-    try {
-      const parsed: unknown = JSON.parse(payload);
-      if (!Array.isArray(parsed) || !parsed.every((id) => typeof id === 'string')) return;
-      onLayerDrop(parsed);
-    } catch {
-      // Ignore malformed drag payloads instead of creating or moving arbitrary nodes.
+    if (types.includes('application/x-folio-layer-ids')) {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      return;
+    }
+    if (onDropImageFiles && types.includes('Files')) {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+      if (!isImageFileDragOver) setIsImageFileDragOver(true);
     }
   };
 
-  const createPointerInput = (event: JSX.TargetedPointerEvent<SVGSVGElement>): CanvasToolPointerInput =>
-    buildCanvasPointerInput(event, scrollAreaRef.current);
+  const handleLayerDragLeave = (event: JSX.TargetedDragEvent<HTMLDivElement>) => {
+    if (!isImageFileDragOver) return;
+    const related = event.relatedTarget as Node | null;
+    if (!related || !event.currentTarget.contains(related)) {
+      setIsImageFileDragOver(false);
+    }
+  };
+
+  const handleLayerDrop = (event: JSX.TargetedDragEvent<HTMLDivElement>) => {
+    setIsImageFileDragOver(false);
+    const payload = event.dataTransfer?.getData('application/x-folio-layer-ids');
+    if (payload) {
+      event.preventDefault();
+      try {
+        const parsed: unknown = JSON.parse(payload);
+        if (!Array.isArray(parsed) || !parsed.every((id) => typeof id === 'string')) return;
+        onLayerDrop(parsed);
+      } catch {
+        // Ignore malformed drag payloads instead of creating or moving arbitrary nodes.
+      }
+      return;
+    }
+
+    if (onDropImageFiles && event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
+      const files = Array.from(event.dataTransfer.files);
+      event.preventDefault();
+      let canvasX = effectiveDocWidth * 0.5;
+      let canvasY = document.height * 0.5;
+      const svg = svgRef.current;
+      if (svg) {
+        const rect = svg.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          canvasX = ((event.clientX - rect.left) / rect.width) * effectiveDocWidth;
+          canvasY = ((event.clientY - rect.top) / rect.height) * document.height;
+        }
+      }
+      onDropImageFiles(files, { x: canvasX, y: canvasY });
+    }
+  };
+
+  const resolveGpuHitNodeId = (point: { x: number; y: number }): string | null => {
+    const hits = spatialIndex.queryPoint(point.x, point.y, 4 * invZoom);
+    for (let i = 0; i < hits.length; i += 1) {
+      const hitId = hits[i].id;
+      const node = nodeById.get(hitId);
+      if (!node || node.type === 'group') continue;
+      const state = layerStates.get(hitId);
+      if (!state?.visible) continue;
+      return hitId;
+    }
+    return null;
+  };
+
+  const createPointerInput = (event: JSX.TargetedPointerEvent<SVGSVGElement>): CanvasToolPointerInput => {
+    const raw = buildCanvasPointerInput(event, scrollAreaRef.current);
+    if (
+      gpuHybridActive &&
+      raw.targetNodeId === null &&
+      raw.resizeHandle === null &&
+      raw.rotateZone === null &&
+      raw.smartHandle === null &&
+      raw.anchorHit === null &&
+      !raw.pivotHit
+    ) {
+      const hitNodeId = resolveGpuHitNodeId(raw.point);
+      if (hitNodeId) {
+        return { ...raw, targetNodeId: hitNodeId };
+      }
+    }
+    return raw;
+  };
 
   const applyToolTransition = (
     transition: CanvasToolTransition,
@@ -788,8 +1067,11 @@ export function Canvas({
     applyToolTransition(transition, event.currentTarget, event.pointerId, event);
   };
 
-  const handlePointerMove = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
-    const input = createPointerInput(event);
+  const processPointerMove = (
+    input: CanvasToolPointerInput,
+    svg: SVGSVGElement,
+    pointerId: number,
+  ) => {
     lastPointerRef.current = { point: input.point, nodeId: input.targetNodeId };
     if (toolSessionRef.current) {
       lastActivePointerInputRef.current = input;
@@ -799,16 +1081,58 @@ export function Canvas({
       setHoverNodeId((prev) => (prev === input.targetNodeId ? prev : input.targetNodeId));
     }
     const transition = activeTool.onPointerMove(input, createToolContext());
-    applyToolTransition(transition, event.currentTarget, event.pointerId, event);
+    applyToolTransition(transition, svg, pointerId);
+  };
+  processPointerMoveRef.current = processPointerMove;
+
+  const flushPendingPointerMove = () => {
+    if (pointerMoveRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(pointerMoveRafRef.current);
+      pointerMoveRafRef.current = null;
+    }
+    const queued = pendingPointerMoveRef.current;
+    pendingPointerMoveRef.current = null;
+    if (queued) {
+      processPointerMoveRef.current(queued.input, queued.svg, queued.pointerId);
+    }
+  };
+
+  const handlePointerMove = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    const input = createPointerInput(event);
+    const svg = event.currentTarget;
+    const pointerId = event.pointerId;
+    if (toolSessionRef.current) {
+      event.preventDefault();
+    }
+    if (typeof requestAnimationFrame !== 'function') {
+      processPointerMove(input, svg, pointerId);
+      return;
+    }
+    pendingPointerMoveRef.current = { input, svg, pointerId };
+    if (pointerMoveRafRef.current !== null) return;
+    pointerMoveRafRef.current = requestAnimationFrame(() => {
+      pointerMoveRafRef.current = null;
+      const queued = pendingPointerMoveRef.current;
+      pendingPointerMoveRef.current = null;
+      if (queued) {
+        processPointerMoveRef.current(queued.input, queued.svg, queued.pointerId);
+      }
+    });
   };
 
   const handlePointerLeave = () => {
+    if (pointerMoveRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(pointerMoveRafRef.current);
+      pointerMoveRafRef.current = null;
+    }
+    pendingPointerMoveRef.current = null;
     lastPointerRef.current = { point: null, nodeId: null };
     setHoverPoint((prev) => (prev === null ? prev : null));
     setHoverNodeId((prev) => (prev === null ? prev : null));
   };
 
   const finishPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    flushPendingPointerMove();
     const input = createPointerInput(event);
     const transition = activeTool.onPointerUp(input, createToolContext());
     applyToolTransition(transition, event.currentTarget, event.pointerId, event);
@@ -819,6 +1143,11 @@ export function Canvas({
   };
 
   const cancelPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    if (pointerMoveRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(pointerMoveRafRef.current);
+      pointerMoveRafRef.current = null;
+    }
+    pendingPointerMoveRef.current = null;
     const input = createPointerInput(event);
     const transition = activeTool.onPointerCancel(input, createToolContext());
     applyToolTransition(transition, event.currentTarget, event.pointerId, event);
@@ -846,7 +1175,17 @@ export function Canvas({
     if (toolId !== 'select' && toolId !== 'direct-selection') return;
     const target = event.target as Element;
     if (target.closest('[data-smart-handle]')) return;
-    const nodeId = target.closest('[data-node-id]')?.getAttribute('data-node-id');
+    let nodeId = target.closest('[data-node-id]')?.getAttribute('data-node-id') ?? null;
+    if (!nodeId && gpuHybridActive) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        const pt = {
+          x: ((event.clientX - rect.left) / rect.width) * effectiveDocWidth,
+          y: ((event.clientY - rect.top) / rect.height) * document.height,
+        };
+        nodeId = resolveGpuHitNodeId(pt);
+      }
+    }
     if (!nodeId) return;
     const node = nodeById.get(nodeId);
     if (!node || node.type !== 'text') return;
@@ -1003,10 +1342,12 @@ export function Canvas({
         'canvas-scroll-area' +
         (workspace === 'component' ? ' is-component-studio' : '') +
         (spaceHeld ? ' canvas-pan-ready' : '') +
-        (isPanning ? ' canvas-panning' : '')
+        (isPanning ? ' canvas-panning' : '') +
+        (isImageFileDragOver ? ' is-file-drop-active' : '')
       }
       onWheel={handleWheel}
       onDragOver={handleLayerDragOver}
+      onDragLeave={handleLayerDragLeave}
       onDrop={handleLayerDrop}
       onPointerDown={handlePanPointerDown}
       onPointerMove={handlePanPointerMove}
@@ -1031,39 +1372,66 @@ export function Canvas({
           </span>
           <span>{effectiveDocWidth} × {document.height}</span>
         </div>
-        <svg
-          ref={svgRef}
-          class="artboard"
-          data-tool={toolId}
-          data-workspace={workspace}
-          data-breakpoint={activeBreakpoint}
-          style={{ cursor: toolCursor }}
-          viewBox={'0 0 ' + effectiveDocWidth + ' ' + document.height}
-          role="application"
-          aria-label="Folio design artboard. Use the active Tool Rack tool to select, draw, edit vector paths, navigate, or inspect artwork."
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerLeave={handlePointerLeave}
-          onPointerUp={finishPointer}
-          onPointerCancel={cancelPointer}
-          onDblClick={handleDoubleClick}
-        >
-          <CanvasSceneLayer
-            width={effectiveDocWidth}
-            height={document.height}
+        <div class="artboard-stack">
+          <GpuViewportLayer
+            active={gpuHybridActive}
+            docWidth={effectiveDocWidth}
+            docHeight={document.height}
             background={document.background}
-            canvasNodes={canvasNodes}
-            renderNodes={culledRenderNodes}
-            inlineEditNodeId={inlineEditNode?.id ?? null}
+            canvasNodes={sceneCanvasNodes}
+            renderNodes={sceneVisibleRenderNodes}
+            viewportRect={gpuViewportRect}
+            zoom={zoom}
             components={components}
-            maskPrefix={maskPrefix}
-            nodeById={nodeById}
-            clipMaskMap={clipMaskMap}
-            frameClipMap={frameClipMap}
+            assets={assets}
+            nodeById={sceneNodeById}
+            clipMaskMap={sceneClipMaskMap}
+            frameClipMap={sceneFrameClipMap}
             componentById={componentById}
+            assetById={assetById}
             tokens={designTokens}
-            patternScale={toolId === 'shape-builder' ? invZoom : 1}
+            hiddenNodeIds={isolatedPreviewIdSet}
+            inlineEditNodeId={inlineEditNode?.id ?? null}
+            onMetrics={onGpuMetrics}
           />
+          <svg
+            ref={svgRef}
+            class={`artboard${gpuHybridActive ? ' is-gpu-hybrid' : ''}`}
+            data-tool={toolId}
+            data-workspace={workspace}
+            data-breakpoint={activeBreakpoint}
+            data-renderer={gpuHybridActive ? 'gpu-hybrid' : 'svg-dom'}
+            style={{ cursor: toolCursor }}
+            viewBox={'0 0 ' + effectiveDocWidth + ' ' + document.height}
+            role="application"
+            aria-label="Folio design artboard. Use the active Tool Rack tool to select, draw, edit vector paths, navigate, or inspect artwork."
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerLeave={handlePointerLeave}
+            onPointerUp={finishPointer}
+            onPointerCancel={cancelPointer}
+            onDblClick={handleDoubleClick}
+          >
+            {!gpuHybridActive && (
+              <CanvasSceneLayer
+                width={effectiveDocWidth}
+                height={document.height}
+                background={document.background}
+                canvasNodes={sceneCanvasNodes}
+                renderNodes={culledRenderNodes}
+                inlineEditNodeId={inlineEditNode?.id ?? null}
+                components={components}
+                assets={assets}
+                maskPrefix={maskPrefix}
+                nodeById={sceneNodeById}
+                clipMaskMap={sceneClipMaskMap}
+                frameClipMap={sceneFrameClipMap}
+                componentById={componentById}
+                assetById={assetById}
+                tokens={designTokens}
+                hiddenNodeIds={isolatedPreviewIdSet}
+              />
+            )}
 
           <CanvasInteractiveOverlays
             docWidth={effectiveDocWidth}
@@ -1082,12 +1450,15 @@ export function Canvas({
             vectorAnchorsInteractive={vectorAnchorsInteractive}
             activeAnchor={activeAnchor}
             previewCreateNodes={previewCreateNodes}
+            isolatedPreviewNodes={isolatedPreviewNodes}
             canvasNodes={canvasNodes}
             components={components}
+            assets={assets}
             maskPrefix={maskPrefix}
             clipMaskMap={clipMaskMap}
             frameClipMap={frameClipMap}
             componentById={componentById}
+            assetById={assetById}
             designTokens={designTokens}
             shapeBuilderHoverArrangement={shapeBuilderHoverArrangement}
             shapeBuilderHoveredFace={shapeBuilderHoveredFace}
@@ -1140,6 +1511,7 @@ export function Canvas({
             </foreignObject>
           )}
         </svg>
+        </div>
       </div>
     </div>
   );

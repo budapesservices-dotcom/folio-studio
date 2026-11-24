@@ -117,7 +117,7 @@ describe('Stage 8 — Motion & Animation Engine', () => {
     const previewCard = previewDoc.nodes.find((n) => n.id === card.id)!;
     expect(previewCard.width).toBeCloseTo(baseWidth * 1.5, 1);
     expect(previewCard.height).toBeCloseTo(baseHeight * 1.5, 1);
-    if ('style' in previewCard) {
+    if ('style' in previewCard && 'fill' in previewCard.style) {
       expect(previewCard.style.fill).toBe('#808080');
     }
     expect(card.y).toBe(baseY);

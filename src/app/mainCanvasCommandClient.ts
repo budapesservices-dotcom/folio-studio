@@ -4,6 +4,7 @@ import { getActivePage } from '../core/document/project';
 import type { LayerDropPosition } from '../core/document/layers';
 import type {
   AnimationClip,
+  AssetReference,
   CodeModuleRecord,
   ComponentDefinition,
   ComponentInstanceNode,
@@ -14,6 +15,7 @@ import type {
   FolioDocument,
   FolioPage,
   FolioProject,
+  ImageNode,
   LogicGraph,
 } from '../core/document/types';
 import type {
@@ -48,6 +50,7 @@ export const WORKSPACE_USER_CAPABILITIES: readonly NativePermission[] = Object.f
   'code.update',
   'logic.update',
   'animation.update',
+  'asset.update',
   'selection.update',
   'history.execute',
 ]);
@@ -191,6 +194,12 @@ export interface MainCanvasCommandClient {
   createAnimationClip(clip: AnimationClip, description?: string): NativeCommandResult;
   updateAnimationClip(clip: AnimationClip, description?: string): NativeCommandResult;
   deleteAnimationClip(clipId: string, description?: string): NativeCommandResult;
+  upsertAsset(asset: AssetReference, description?: string): NativeCommandResult;
+  insertImageWithAsset(
+    asset: AssetReference,
+    imageNode: ImageNode,
+    description?: string,
+  ): NativeCommandTransactionResult;
   createNodes(nodes: readonly DesignNode[], description?: string): NativeCommandResult;
   replaceNode(node: DesignNode, description?: string): NativeCommandResult;
   replaceNodes(
@@ -555,6 +564,53 @@ export function createWorkspaceCommandClient(
         { clipId },
         description,
       );
+    },
+
+    upsertAsset(asset, description = 'Add binary asset') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'asset.upsert',
+        { kind: 'project', projectId },
+        { asset: stripUndefinedEntries(asset) },
+        description,
+      );
+    },
+
+    insertImageWithAsset(asset, imageNode, description = 'Insert image layer') {
+      const astView = getActiveAstView();
+      const project = store.getSnapshot().editorState.project;
+      const projectId = project.metadata.id;
+      const transactionId = createCommandId();
+      const alreadyExists = project.assets.some(
+        (item) => item.id === asset.id || (asset.sha256 && item.sha256 === asset.sha256),
+      );
+      const commands: NativeCommandEnvelope<string, unknown>[] = [];
+      if (!alreadyExists) {
+        commands.push(
+          createEnvelope(
+            'asset.upsert',
+            { kind: 'project', projectId },
+            { asset: stripUndefinedEntries(asset) },
+            description,
+            transactionId,
+          ),
+        );
+      }
+      commands.push(
+        createEnvelope(
+          'node.create',
+          { kind: 'document', address: astView.address },
+          { nodes: [stripUndefinedEntries(imageNode)] },
+          description,
+          transactionId,
+        ),
+      );
+      const result = executeNativeCommandTransaction(store, commands, buildContext());
+      if (result.status === 'rejected' && result.commandResults.length > 0) {
+        const failed = result.commandResults[result.failedCommandIndex ?? result.commandResults.length - 1];
+        if (failed) options.onRejected?.(failed);
+      }
+      return result;
     },
 
     createNodes(nodes, description = 'Create nodes') {

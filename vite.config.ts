@@ -29,6 +29,26 @@ export default defineConfig({
           if (id.includes('/src/core/document/planarBoolean') || id.includes('/src/core/document/vector')) {
             return 'vector-engine';
           }
+          if (
+            id.includes('/src/core/document/')
+            || id.includes('/src/core/commands/')
+            || id.includes('/src/core/kernels/')
+            || id.includes('/src/core/tools/')
+            || id.includes('/src/core/persistence/')
+          ) {
+            return 'core-engine';
+          }
+          if (id.includes('/src/engines/canvas/')) {
+            return 'canvas-engine';
+          }
+          if (
+            id.includes('/src/engines/layout/')
+            || id.includes('/src/engines/history/')
+            || id.includes('/src/engines/prototype/')
+            || id.includes('/src/engines/animation/')
+          ) {
+            return 'studio-engines';
+          }
           return undefined;
         },
       },

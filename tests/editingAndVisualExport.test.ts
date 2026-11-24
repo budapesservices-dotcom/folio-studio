@@ -275,7 +275,7 @@ describe('editing bug fixes, Frame clipContent, atomic undo, and visual SVG expo
       name: 'Headline',
       x: 60,
       y: 400,
-      width: 300,
+      width: 440,
       height: 60,
       rotation: 0,
       opacity: 0.9,

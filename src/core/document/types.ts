@@ -26,7 +26,8 @@ export type SemanticHtmlTag =
   | 'ul'
   | 'li'
   | 'form'
-  | 'input';
+  | 'input'
+  | 'img';
 
 export type BreakpointId = 'desktop' | 'tablet' | 'mobile';
 
@@ -94,6 +95,94 @@ export interface NodeTokenBindings {
   fontSize?: string;
 }
 
+export type BlendMode =
+  | 'normal'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'color-dodge'
+  | 'color-burn'
+  | 'hard-light'
+  | 'soft-light'
+  | 'difference'
+  | 'exclusion'
+  | 'hue'
+  | 'saturation'
+  | 'color'
+  | 'luminosity';
+
+export interface GradientStop {
+  /** Stop position along gradient axis in [0, 1]. */
+  offset: number;
+  color: string;
+  opacity?: number;
+}
+
+export type FillPaint =
+  | {
+      id: string;
+      type: 'solid';
+      color: string;
+      opacity?: number;
+      visible?: boolean;
+    }
+  | {
+      id: string;
+      type: 'linear-gradient';
+      /** CSS gradient angle in degrees (0 = bottom-to-top, 90 = left-to-right, 135 = diagonal). */
+      angle: number;
+      stops: GradientStop[];
+      opacity?: number;
+      visible?: boolean;
+    }
+  | {
+      id: string;
+      type: 'radial-gradient';
+      /** Normalized center coordinates & radius in [0, 1] (default 0.5, 0.5, 0.5). */
+      cx?: number;
+      cy?: number;
+      r?: number;
+      stops: GradientStop[];
+      opacity?: number;
+      visible?: boolean;
+    };
+
+export type VisualEffect =
+  | {
+      id: string;
+      type: 'drop-shadow';
+      x: number;
+      y: number;
+      blur: number;
+      spread?: number;
+      color: string;
+      visible?: boolean;
+    }
+  | {
+      id: string;
+      type: 'inner-shadow';
+      x: number;
+      y: number;
+      blur: number;
+      spread?: number;
+      color: string;
+      visible?: boolean;
+    }
+  | {
+      id: string;
+      type: 'layer-blur';
+      radius: number;
+      visible?: boolean;
+    }
+  | {
+      id: string;
+      type: 'backdrop-blur';
+      radius: number;
+      visible?: boolean;
+    };
+
 export interface NodeBase {
   id: string;
   name: string;
@@ -127,6 +216,10 @@ export interface NodeBase {
   responsive?: Partial<Record<BreakpointId, ResponsiveNodeOverride>>;
   /** Optional explicit Design Token ID bindings (literals remain untouched unless bound). */
   tokenBindings?: NodeTokenBindings;
+  /** Optional CSS mix-blend-mode compositing mode (default 'normal'). */
+  blendMode?: BlendMode;
+  /** Optional visual effects stack (Drop Shadow, Inner Shadow, Layer Blur, Backdrop Blur). */
+  effects?: VisualEffect[];
 }
 
 export interface ShapeStyle {
@@ -134,6 +227,8 @@ export interface ShapeStyle {
   stroke: string;
   strokeWidth: number;
   radius?: number;
+  /** Optional ordered multi-fill paint stack (bottom-to-top; falls back to `fill` when omitted). */
+  fills?: FillPaint[];
 }
 
 export interface VectorPointHandle {
@@ -171,6 +266,8 @@ export interface PathStyle {
   fillRule?: 'nonzero' | 'evenodd';
   arrowStart?: boolean;
   arrowEnd?: boolean;
+  /** Optional ordered multi-fill paint stack (bottom-to-top; falls back to `fill` when omitted). */
+  fills?: FillPaint[];
 }
 
 export type VectorPathKind =
@@ -221,6 +318,11 @@ export interface PathNode extends NodeBase {
   shapeMeta?: VectorShapeMeta;
 }
 
+export type TextAlign = 'left' | 'center' | 'right';
+export type TextWrapMode = 'wrap' | 'nowrap';
+export type TextTransform = 'none' | 'uppercase' | 'lowercase' | 'capitalize';
+export type TextDecoration = 'none' | 'underline' | 'line-through';
+
 export interface TextNode extends NodeBase {
   type: 'text';
   text: string;
@@ -231,7 +333,31 @@ export interface TextNode extends NodeBase {
     fontWeight: number;
     letterSpacing: number;
     lineHeight: number;
+    textAlign?: TextAlign;
+    textWrap?: TextWrapMode;
+    textTransform?: TextTransform;
+    textDecoration?: TextDecoration;
   };
+}
+
+export type ImageFitMode = 'cover' | 'contain' | 'fill';
+
+export interface ImageStyle {
+  fit: ImageFitMode;
+  radius?: number;
+  stroke?: string;
+  strokeWidth?: number;
+}
+
+export interface ImageNode extends NodeBase {
+  type: 'image';
+  /** References an AssetReference.id inside project.assets. */
+  assetId: string;
+  /** Accessible alternative text for semantic <img> export. */
+  alt?: string;
+  naturalWidth?: number;
+  naturalHeight?: number;
+  style: ImageStyle;
 }
 
 export interface ComponentNodeOverride {
@@ -264,6 +390,7 @@ export type DesignNode =
   | EllipseNode
   | PathNode
   | TextNode
+  | ImageNode
   | ComponentInstanceNode;
 
 export interface FolioDocument {
@@ -413,6 +540,13 @@ export interface AssetReference {
   mimeType: string;
   source: string;
   createdAt: string;
+  /** Optional SHA-256 content hash for deduplicated IndexedDB binary blob storage. */
+  sha256?: string;
+  /** Optional decoded binary byte length. */
+  byteLength?: number;
+  /** Optional natural pixel width/height for image assets. */
+  width?: number;
+  height?: number;
 }
 
 /** Legacy single-document project accepted only at migration boundaries. */

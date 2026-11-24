@@ -10,6 +10,7 @@ import {
   type FolioProjectV1,
 } from './types';
 import { isOverrideFieldCompatibleWithNodeType } from './components';
+import { isBlendMode, isFillPaint, isVisualEffect } from './styling';
 import { validateDesignTokenCollection, validateNodeTokenBindings } from './tokens';
 
 export interface ValidationResult {
@@ -38,7 +39,7 @@ const validatedFrozenCodeModules = new WeakSet<object>();
 const validatedFrozenLogicGraphsContext = new WeakMap<object, { pages: unknown; components: unknown }>();
 const validatedFrozenAnimationsContext = new WeakMap<object, unknown>();
 const validatedFrozenAssets = new WeakSet<object>();
-const validatedFrozenComponentsContext = new WeakMap<object, unknown>();
+const validatedFrozenComponentsContext = new WeakMap<object, { tokens: unknown; components: unknown }>();
 const validatedFrozenPagesContext = new WeakMap<object, { tokens: unknown; components: unknown }>();
 
 export function isDeeplyFrozenGraph(value: unknown): boolean {
@@ -83,8 +84,16 @@ function isValidatedDesignNode(value: unknown): value is DesignNode {
 
 export const SEMANTIC_HTML_TAGS = new Set([
   'div', 'section', 'header', 'footer', 'nav', 'main', 'article', 'aside',
-  'button', 'a', 'h1', 'h2', 'h3', 'p', 'span', 'ul', 'li', 'form', 'input',
+  'button', 'a', 'h1', 'h2', 'h3', 'p', 'span', 'ul', 'li', 'form', 'input', 'img',
 ]);
+
+const TEXT_ALIGN_VALUES = new Set(['left', 'center', 'right']);
+const TEXT_WRAP_VALUES = new Set(['wrap', 'nowrap']);
+const TEXT_TRANSFORM_VALUES = new Set(['none', 'uppercase', 'lowercase', 'capitalize']);
+const TEXT_DECORATION_VALUES = new Set(['none', 'underline', 'line-through']);
+const IMAGE_FIT_VALUES = new Set(['cover', 'contain', 'fill']);
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/i;
+const MAX_COMPONENT_NESTING_DEPTH = 16;
 
 const BREAKPOINT_IDS = new Set(['desktop', 'tablet', 'mobile']);
 const LAYOUT_MODES = new Set(['none', 'flex', 'grid']);
@@ -348,7 +357,9 @@ function isCommonNode(value: Record<string, unknown>): boolean {
     (value.layout === undefined || isNodeLayoutConfig(value.layout)) &&
     (value.layoutChild === undefined || isNodeLayoutChildConfig(value.layoutChild)) &&
     (value.responsive === undefined || isResponsiveOverrides(value.responsive)) &&
-    (value.tokenBindings === undefined || isNodeTokenBindings(value.tokenBindings))
+    (value.tokenBindings === undefined || isNodeTokenBindings(value.tokenBindings)) &&
+    (value.blendMode === undefined || isBlendMode(value.blendMode)) &&
+    (value.effects === undefined || (Array.isArray(value.effects) && value.effects.length <= 16 && value.effects.every(isVisualEffect)))
   );
 }
 
@@ -358,7 +369,8 @@ function isShapeStyle(value: unknown): boolean {
     isString(value.fill) &&
     isString(value.stroke) &&
     isFiniteNumber(value.strokeWidth) && value.strokeWidth >= 0 &&
-    (value.radius === undefined || (isFiniteNumber(value.radius) && value.radius >= 0))
+    (value.radius === undefined || (isFiniteNumber(value.radius) && value.radius >= 0)) &&
+    (value.fills === undefined || (Array.isArray(value.fills) && value.fills.length <= 16 && value.fills.every(isFillPaint)))
   );
 }
 
@@ -399,7 +411,8 @@ function isPathStyle(value: unknown): boolean {
     (value.strokeDasharray === undefined || isString(value.strokeDasharray)) &&
     (value.fillRule === undefined || value.fillRule === 'nonzero' || value.fillRule === 'evenodd') &&
     (value.arrowStart === undefined || typeof value.arrowStart === 'boolean') &&
-    (value.arrowEnd === undefined || typeof value.arrowEnd === 'boolean')
+    (value.arrowEnd === undefined || typeof value.arrowEnd === 'boolean') &&
+    (value.fills === undefined || (Array.isArray(value.fills) && value.fills.length <= 16 && value.fills.every(isFillPaint)))
   );
 }
 
@@ -457,7 +470,30 @@ function isDesignNode(value: unknown): value is DesignNode {
       isString(style.fontFamily) &&
       isFiniteNumber(style.fontWeight) &&
       isFiniteNumber(style.letterSpacing) &&
-      isFiniteNumber(style.lineHeight) && style.lineHeight > 0
+      isFiniteNumber(style.lineHeight) && style.lineHeight > 0 &&
+      (style.textAlign === undefined || TEXT_ALIGN_VALUES.has(String(style.textAlign))) &&
+      (style.textWrap === undefined || TEXT_WRAP_VALUES.has(String(style.textWrap))) &&
+      (style.textTransform === undefined || TEXT_TRANSFORM_VALUES.has(String(style.textTransform))) &&
+      (style.textDecoration === undefined || TEXT_DECORATION_VALUES.has(String(style.textDecoration)))
+    );
+  }
+
+  if (value.type === 'image') {
+    if (
+      !isString(value.assetId) || !value.assetId.trim() ||
+      (value.alt !== undefined && !isString(value.alt)) ||
+      (value.naturalWidth !== undefined && (!isFiniteNumber(value.naturalWidth) || value.naturalWidth <= 0)) ||
+      (value.naturalHeight !== undefined && (!isFiniteNumber(value.naturalHeight) || value.naturalHeight <= 0)) ||
+      !isRecord(value.style)
+    ) {
+      return false;
+    }
+    const style = value.style;
+    return (
+      IMAGE_FIT_VALUES.has(String(style.fit)) &&
+      (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
+      (style.stroke === undefined || isString(style.stroke)) &&
+      (style.strokeWidth === undefined || (isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0))
     );
   }
 
@@ -643,12 +679,26 @@ export function isLogicGraph(value: unknown): value is import('./types').LogicGr
   return true;
 }
 
+function isSafeAssetSource(source: string): boolean {
+  const trimmed = source.trim();
+  if (!trimmed) return true;
+  if (/^(?:javascript|vbscript):/i.test(trimmed)) return false;
+  if (/^data:\s*text\/html/i.test(trimmed)) return false;
+  return true;
+}
+
 function isAssetReference(value: unknown): boolean {
   return isRecord(value) &&
-    isString(value.id) && isString(value.name) &&
+    isString(value.id) && value.id.trim().length > 0 &&
+    isString(value.name) &&
     ['image', 'font', 'file'].includes(String(value.kind)) &&
-    isString(value.mimeType) && isString(value.source) &&
-    isString(value.createdAt);
+    isString(value.mimeType) &&
+    isString(value.source) && isSafeAssetSource(value.source) &&
+    isString(value.createdAt) &&
+    (value.sha256 === undefined || (isString(value.sha256) && SHA256_HEX_PATTERN.test(value.sha256))) &&
+    (value.byteLength === undefined || (isFiniteNumber(value.byteLength) && value.byteLength >= 0)) &&
+    (value.width === undefined || (isFiniteNumber(value.width) && value.width > 0)) &&
+    (value.height === undefined || (isFiniteNumber(value.height) && value.height > 0));
 }
 
 const CODE_MODULE_LANGUAGES = new Set(['html', 'css', 'tsx', 'ts', 'js']);
@@ -774,21 +824,140 @@ export function isAnimationClipList(value: unknown): value is import('./types').
   return true;
 }
 
+function validateComponentInstanceReference(
+  node: Extract<DesignNode, { type: 'component-instance' }>,
+  ownerLabel: string,
+  componentsById: ReadonlyMap<string, ComponentDefinition>,
+  masterNodesCache: Map<string, Map<string, DesignNode>>,
+): string | null {
+  const master = componentsById.get(node.componentId);
+  if (!master) {
+    return `${ownerLabel} references missing component: ${node.componentId}.`;
+  }
+  let masterNodesById = masterNodesCache.get(master.id);
+  if (!masterNodesById) {
+    masterNodesById = new Map(master.document.nodes.map((child) => [child.id, child]));
+    masterNodesCache.set(master.id, masterNodesById);
+  }
+  for (const [childId, override] of Object.entries(node.overrides)) {
+    const targetNode = masterNodesById.get(childId);
+    if (!targetNode) {
+      return `An instance of ${node.componentId} contains an override for a missing master layer.`;
+    }
+    if (override.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
+      return `An instance of ${node.componentId} overrides "text" on incompatible ${targetNode.type} layer "${targetNode.name}".`;
+    }
+    if (override.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
+      return `An instance of ${node.componentId} overrides "fill" on incompatible ${targetNode.type} layer "${targetNode.name}".`;
+    }
+  }
+  if (node.variantSelection) {
+    const axisById = new Map((master.variants ?? []).map((axis) => [axis.id, axis]));
+    for (const [axisId, optionId] of Object.entries(node.variantSelection)) {
+      const axis = axisById.get(axisId);
+      if (!axis) {
+        return `An instance of ${node.componentId} selects unknown variant axis "${axisId}".`;
+      }
+      if (!axis.options.some((opt) => opt.id === optionId)) {
+        return `An instance of ${node.componentId} selects unknown option "${optionId}" for variant axis "${axis.name}".`;
+      }
+    }
+  }
+  if (node.slotAssignments) {
+    const slotById = new Map((master.slots ?? []).map((slot) => [slot.id, slot]));
+    for (const [slotId, assignment] of Object.entries(node.slotAssignments)) {
+      const slot = slotById.get(slotId);
+      if (!slot) {
+        return `An instance of ${node.componentId} assigns unknown slot "${slotId}".`;
+      }
+      const targetNode = masterNodesById.get(slot.targetNodeId);
+      if (!targetNode) {
+        return `Slot "${slot.name}" on ${node.componentId} references missing master layer "${slot.targetNodeId}".`;
+      }
+      if (assignment.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
+        return `Slot "${slot.name}" on ${node.componentId} cannot assign "text" to ${targetNode.type} layer "${targetNode.name}".`;
+      }
+      if (assignment.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
+        return `Slot "${slot.name}" on ${node.componentId} cannot assign "fill" to ${targetNode.type} layer "${targetNode.name}".`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Enforces that nested component instances form a strict Directed Acyclic Graph (DAG)
+ * with bounded nesting depth (<= MAX_COMPONENT_NESTING_DEPTH).
+ */
+export function validateComponentGraphAcyclic(
+  components: readonly ComponentDefinition[],
+): string | null {
+  const byId = new Map(components.map((c) => [c.id, c]));
+  // 0 = unvisited, 1 = visiting (active recursion stack), 2 = verified acyclic
+  const state = new Map<string, number>();
+
+  const dfs = (compId: string, depth: number, chain: string[]): string | null => {
+    if (depth > MAX_COMPONENT_NESTING_DEPTH) {
+      return `Component nesting exceeds maximum allowed depth (${MAX_COMPONENT_NESTING_DEPTH}): ${chain.join(' -> ')}.`;
+    }
+    const status = state.get(compId) ?? 0;
+    if (status === 1) {
+      return `Circular component nesting detected: ${[...chain, compId].join(' -> ')}.`;
+    }
+    if (status === 2) return null;
+
+    state.set(compId, 1);
+    const comp = byId.get(compId);
+    if (comp) {
+      for (const node of comp.document.nodes) {
+        if (node.type === 'component-instance') {
+          if (node.componentId === compId) {
+            return `Circular component nesting detected: component "${comp.name}" cannot contain an instance of itself.`;
+          }
+          const err = dfs(node.componentId, depth + 1, [...chain, compId]);
+          if (err) return err;
+        }
+      }
+    }
+    state.set(compId, 2);
+    return null;
+  };
+
+  for (const comp of components) {
+    const err = dfs(comp.id, 0, []);
+    if (err) return err;
+  }
+  return null;
+}
+
 function validateComponentCrossChecks(
   component: ComponentDefinition,
   projectDesignTokens: DesignTokenCollection | undefined,
+  componentsRef: readonly ComponentDefinition[],
+  componentsById: ReadonlyMap<string, ComponentDefinition>,
+  masterNodesCache: Map<string, Map<string, DesignNode>>,
 ): string | null {
   const tokenKey = projectDesignTokens ?? null;
   const isFrozen = deeplyFrozenObjects.has(component as unknown as object);
   const tokensFrozen = projectDesignTokens === undefined || deeplyFrozenObjects.has(projectDesignTokens as unknown as object);
-  if (isFrozen && tokensFrozen && validatedFrozenComponentsContext.get(component as unknown as object) === tokenKey) {
-    return null;
+  const componentsFrozen = deeplyFrozenObjects.has(componentsRef as unknown as object);
+  if (isFrozen && tokensFrozen && componentsFrozen) {
+    const cached = validatedFrozenComponentsContext.get(component as unknown as object);
+    if (cached && cached.tokens === tokenKey && cached.components === componentsRef) {
+      return null;
+    }
   }
 
   for (let i = 0; i < component.document.nodes.length; i += 1) {
     const node = component.document.nodes[i];
     if (node.type === 'component-instance') {
-      return 'Nested component instances are not supported inside master definitions.';
+      const refErr = validateComponentInstanceReference(
+        node,
+        `Component "${component.name}"`,
+        componentsById,
+        masterNodesCache,
+      );
+      if (refErr) return refErr;
     }
     const tokenCheck = validateNodeTokenBindings(node, projectDesignTokens);
     if (!tokenCheck.ok) {
@@ -796,8 +965,11 @@ function validateComponentCrossChecks(
     }
   }
 
-  if (isFrozen && tokensFrozen) {
-    validatedFrozenComponentsContext.set(component as unknown as object, tokenKey);
+  if (isFrozen && tokensFrozen && componentsFrozen) {
+    validatedFrozenComponentsContext.set(component as unknown as object, {
+      tokens: tokenKey,
+      components: componentsRef,
+    });
   }
   return null;
 }
@@ -830,58 +1002,13 @@ function validatePageCrossChecks(
       }
     }
     if (node.type === 'component-instance') {
-      const master = componentsById.get(node.componentId);
-      if (!master) {
-        return `A page references missing component: ${node.componentId}.`;
-      }
-      let masterNodesById = masterNodesCache.get(master.id);
-      if (!masterNodesById) {
-        masterNodesById = new Map(master.document.nodes.map((child) => [child.id, child]));
-        masterNodesCache.set(master.id, masterNodesById);
-      }
-      for (const [childId, override] of Object.entries(node.overrides)) {
-        const targetNode = masterNodesById.get(childId);
-        if (!targetNode) {
-          return `An instance of ${node.componentId} contains an override for a missing master layer.`;
-        }
-        if (override.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
-          return `An instance of ${node.componentId} overrides "text" on incompatible ${targetNode.type} layer "${targetNode.name}".`;
-        }
-        if (override.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
-          return `An instance of ${node.componentId} overrides "fill" on incompatible ${targetNode.type} layer "${targetNode.name}".`;
-        }
-      }
-      if (node.variantSelection) {
-        const axisById = new Map((master.variants ?? []).map((axis) => [axis.id, axis]));
-        for (const [axisId, optionId] of Object.entries(node.variantSelection)) {
-          const axis = axisById.get(axisId);
-          if (!axis) {
-            return `An instance of ${node.componentId} selects unknown variant axis "${axisId}".`;
-          }
-          if (!axis.options.some((opt) => opt.id === optionId)) {
-            return `An instance of ${node.componentId} selects unknown option "${optionId}" for variant axis "${axis.name}".`;
-          }
-        }
-      }
-      if (node.slotAssignments) {
-        const slotById = new Map((master.slots ?? []).map((slot) => [slot.id, slot]));
-        for (const [slotId, assignment] of Object.entries(node.slotAssignments)) {
-          const slot = slotById.get(slotId);
-          if (!slot) {
-            return `An instance of ${node.componentId} assigns unknown slot "${slotId}".`;
-          }
-          const targetNode = masterNodesById.get(slot.targetNodeId);
-          if (!targetNode) {
-            return `Slot "${slot.name}" on ${node.componentId} references missing master layer "${slot.targetNodeId}".`;
-          }
-          if (assignment.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
-            return `Slot "${slot.name}" on ${node.componentId} cannot assign "text" to ${targetNode.type} layer "${targetNode.name}".`;
-          }
-          if (assignment.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
-            return `Slot "${slot.name}" on ${node.componentId} cannot assign "fill" to ${targetNode.type} layer "${targetNode.name}".`;
-          }
-        }
-      }
+      const refErr = validateComponentInstanceReference(
+        node,
+        'A page',
+        componentsById,
+        masterNodesCache,
+      );
+      if (refErr) return refErr;
     }
   }
 
@@ -970,10 +1097,16 @@ export function validateProject(input: unknown): ValidationResult {
 
     const compFrozen = deeplyFrozenObjects.has(component as object);
     const tokensFrozen = projectDesignTokens === undefined || deeplyFrozenObjects.has(projectDesignTokens as unknown as object);
-    const cachedCompValid =
+    const componentsFrozen = deeplyFrozenObjects.has(componentsArray as unknown as object);
+    const cachedCompEntry = compFrozen ? validatedFrozenComponentsContext.get(component as object) : undefined;
+    const cachedCompValid = Boolean(
       compFrozen &&
       tokensFrozen &&
-      validatedFrozenComponentsContext.get(component as object) === (projectDesignTokens ?? null);
+      componentsFrozen &&
+      cachedCompEntry &&
+      cachedCompEntry.tokens === (projectDesignTokens ?? null) &&
+      cachedCompEntry.components === componentsArray,
+    );
 
     if (!cachedCompValid) {
       const masterNodesById = new Map((component.document as FolioDocument).nodes.map((node) => [node.id, node]));
@@ -990,9 +1123,18 @@ export function validateProject(input: unknown): ValidationResult {
 
   const componentsById = new Map(componentsArray.map((component) => [component.id, component]));
   for (let i = 0; i < componentsArray.length; i += 1) {
-    const compErr = validateComponentCrossChecks(componentsArray[i], projectDesignTokens);
+    const compErr = validateComponentCrossChecks(
+      componentsArray[i],
+      projectDesignTokens,
+      componentsArray,
+      componentsById,
+      masterNodesCache,
+    );
     if (compErr) return { ok: false, error: compErr };
   }
+
+  const dagError = validateComponentGraphAcyclic(componentsArray);
+  if (dagError) return { ok: false, error: dagError };
 
   const pagesArray = input.pages as Array<{ name: string; document: FolioDocument }>;
   for (let i = 0; i < pagesArray.length; i += 1) {

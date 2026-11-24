@@ -65,8 +65,8 @@ export const TOKEN_BINDING_CATEGORY_MAP: Record<keyof NodeTokenBindings, DesignT
 
 export const TOKEN_BINDING_ALLOWED_NODE_TYPES: Record<keyof NodeTokenBindings, ReadonlySet<DesignNode['type']>> = {
   fill: new Set(['frame', 'rect', 'ellipse', 'path', 'text']),
-  stroke: new Set(['frame', 'rect', 'ellipse', 'path']),
-  radius: new Set(['frame', 'rect']),
+  stroke: new Set(['frame', 'rect', 'ellipse', 'path', 'image']),
+  radius: new Set(['frame', 'rect', 'image']),
   gap: new Set(['frame', 'group']),
   padding: new Set(['frame', 'group']),
   fontSize: new Set(['text']),

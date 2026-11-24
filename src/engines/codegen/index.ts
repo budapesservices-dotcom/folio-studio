@@ -26,17 +26,64 @@ import type {
   MappedNodeEditPatch,
 } from './types';
 
+import {
+  applyA11yQuickFixToNode,
+  auditPageAccessibility,
+  computeContrastRatio,
+  parseCssColorToRgba,
+  suggestAccessibleForegroundColor,
+  type A11yAuditIssue,
+  type A11yAuditReport,
+  type A11yIssueCode,
+  type A11yIssueSeverity,
+  type A11yQuickFix,
+} from './a11yAudit';
+import {
+  buildCompiledProjectBundle,
+  type CompiledProjectBundle,
+} from './projectBundle';
+import {
+  buildZipArchive,
+  computeCrc32,
+  normalizeArchiveEntryPath,
+  parseZipArchive,
+  type ParsedZipEntry,
+  type ZipArchiveEntry,
+} from './zipArchive';
+
 export type {
+  A11yAuditIssue,
+  A11yAuditReport,
+  A11yIssueCode,
+  A11yIssueSeverity,
+  A11yQuickFix,
   CodegenOptions,
   CodeMappingEntry,
   CodeOutputTarget,
   CompiledCodeFile,
+  CompiledProjectBundle,
   CompiledProjectOutput,
   LivePreviewOptions,
   MappedEditResult,
   MappedNodeEditPatch,
+  ParsedZipEntry,
+  ZipArchiveEntry,
 };
-export { applyMappedNodeEdit, buildLivePreviewHtml, resolveSemanticTag };
+export {
+  applyA11yQuickFixToNode,
+  applyMappedNodeEdit,
+  auditPageAccessibility,
+  buildCompiledProjectBundle,
+  buildLivePreviewHtml,
+  buildZipArchive,
+  computeContrastRatio,
+  computeCrc32,
+  normalizeArchiveEntryPath,
+  parseCssColorToRgba,
+  parseZipArchive,
+  resolveSemanticTag,
+  suggestAccessibleForegroundColor,
+};
 
 /**
  * Compiles the unified Folio `.flop` v2 project into deterministic, explicitly

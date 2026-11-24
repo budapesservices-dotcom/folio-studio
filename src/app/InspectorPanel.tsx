@@ -1,5 +1,7 @@
 import type { JSX, RefObject } from 'preact';
+import { CURATED_FONT_FAMILIES } from '../core/document/fonts';
 import type {
+  AssetReference,
   BreakpointId,
   ComponentDefinition,
   ComponentSlotDefinition,
@@ -8,6 +10,7 @@ import type {
   DesignTokenCollection,
   EllipseNode,
   FrameNode,
+  ImageFitMode,
   PathNode,
   RectNode,
   TextNode,
@@ -18,14 +21,12 @@ import type { EditorTarget } from './editorContext';
 import type { CanvasToolId } from '../core/tools/operationContract';
 import { InspectorWebLayoutSection } from './workspace/InspectorWebLayoutSection';
 import { InspectorComponentContractSection } from './workspace/InspectorComponentContractSection';
+import { InspectorEffectsAndStyleSection } from './workspace/InspectorEffectsAndStyleSection';
 
-export const INSPECTOR_FONT_FAMILIES = [
-  { label: 'Inter (UI Sans)', value: 'Inter, system-ui, sans-serif' },
-  { label: 'System UI', value: 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif' },
-  { label: 'Space Grotesk', value: '"Space Grotesk", Inter, system-ui, sans-serif' },
-  { label: 'Georgia (Editorial Serif)', value: 'Georgia, "Times New Roman", serif' },
-  { label: 'JetBrains Mono', value: '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace' },
-] as const;
+export const INSPECTOR_FONT_FAMILIES = CURATED_FONT_FAMILIES.map((entry) => ({
+  label: entry.label,
+  value: entry.value,
+}));
 
 export interface InspectorOverrideTargets {
   fillNode?: FrameNode | RectNode | EllipseNode | PathNode | TextNode | null;
@@ -47,6 +48,7 @@ export interface InspectorPanelProps {
   instanceOverrideTargets: InspectorOverrideTargets | null;
   activeBreakpoint: BreakpointId;
   designTokens: DesignTokenCollection;
+  assets?: readonly AssetReference[];
   defaultFillColor: string;
   renderIcon: (name: 'trash' | 'layers' | 'cursor') => JSX.Element;
   onStartResize: (panel: ResizablePanelId, event: JSX.TargetedMouseEvent<HTMLDivElement>) => void;
@@ -72,6 +74,7 @@ export interface InspectorPanelProps {
   onSimplifyPath: (target: EditorTarget) => void;
   onChooseTool: (toolId: CanvasToolId, target: EditorTarget) => void;
   onQuickAdd: (type: 'rect' | 'text') => void;
+  onInsertImageFiles?: (files: readonly File[]) => void;
   onDuplicateSelection: () => void;
   onCopySelection: () => void;
 }
@@ -98,6 +101,7 @@ export function InspectorPanel({
   instanceOverrideTargets,
   activeBreakpoint,
   designTokens,
+  assets = [],
   defaultFillColor,
   renderIcon,
   onStartResize,
@@ -120,9 +124,15 @@ export function InspectorPanel({
   onSimplifyPath,
   onChooseTool,
   onQuickAdd,
+  onInsertImageFiles,
   onDuplicateSelection,
   onCopySelection,
 }: InspectorPanelProps) {
+  const triggerImagePicker = () => {
+    if (typeof document === 'undefined') return;
+    const input = document.getElementById('folio-inspector-image-input') as HTMLInputElement | null;
+    input?.click();
+  };
   const safeSelectedNodes = Array.isArray(selectedNodes) ? selectedNodes : [];
   const effectiveSelectedCount = Math.min(selectedCount, safeSelectedNodes.length);
   const hasConvertibleInMulti = safeSelectedNodes.some(
@@ -173,6 +183,20 @@ export function InspectorPanel({
         onMouseDown={(event) => onStartResize('inspector', event)}
         onDblClick={(event) => onResizeDoubleClick('inspector', event)}
         onKeyDown={(event) => onResizeKeyDown('inspector', event)}
+      />
+      <input
+        id="folio-inspector-image-input"
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/svg+xml"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(event) => {
+          const fileList = event.currentTarget.files;
+          if (fileList && fileList.length > 0 && onInsertImageFiles) {
+            onInsertImageFiles(Array.from(fileList));
+          }
+          event.currentTarget.value = '';
+        }}
       />
       <div class="panel-heading inspector-heading">
         <div>
@@ -373,6 +397,91 @@ export function InspectorPanel({
               </>
             ) : selectedNode.type === 'group' ? (
               <span class="field-help">GROUP CONTAINER · Holds child layers as one hierarchy.</span>
+            ) : selectedNode.type === 'image' ? (
+              <>
+                {(() => {
+                  const linkedAsset = assets.find((item) => item.id === selectedNode.assetId);
+                  return (
+                    <div class="vector-meta-row">
+                      <span>Image Asset</span>
+                      <strong>
+                        {linkedAsset?.width && linkedAsset?.height
+                          ? `${linkedAsset.width}×${linkedAsset.height}px`
+                          : (linkedAsset?.name ?? selectedNode.assetId)}
+                      </strong>
+                    </div>
+                  );
+                })()}
+                <label class="field-label range-label">
+                  Object fit
+                  <select
+                    class="select-field"
+                    aria-label="Image fit mode"
+                    value={selectedNode.style.fit}
+                    onChange={(event) =>
+                      onUpdateSelectedStyle({ fit: event.currentTarget.value as ImageFitMode })
+                    }
+                  >
+                    <option value="cover">Cover (Crop to fill)</option>
+                    <option value="contain">Contain (Fit inside)</option>
+                    <option value="fill">Fill (Stretch)</option>
+                  </select>
+                </label>
+                <label class="field-label range-label">
+                  Alt text
+                  <input
+                    class="text-field"
+                    placeholder="Describe this image for accessibility"
+                    value={selectedNode.alt ?? ''}
+                    onInput={(event) => onUpdateSelected({ alt: event.currentTarget.value } as Partial<DesignNode>)}
+                  />
+                </label>
+                <label class="field-label range-label">Stroke</label>
+                <div class="color-field-wrap">
+                  <input
+                    class="color-swatch"
+                    type="color"
+                    value={
+                      selectedNode.style.stroke && selectedNode.style.stroke.startsWith('#') && selectedNode.style.stroke.length >= 7
+                        ? selectedNode.style.stroke.slice(0, 7)
+                        : '#20212A'
+                    }
+                    onInput={(event) =>
+                      onUpdateSelectedStyle({
+                        stroke: event.currentTarget.value,
+                        strokeWidth: Math.max(1, selectedNode.style.strokeWidth ?? 0),
+                      })
+                    }
+                  />
+                  <span class="color-value">{(selectedNode.style.stroke ?? 'none').toUpperCase()}</span>
+                  <input
+                    class="number-field inspector-stroke-width"
+                    type="number"
+                    min="0"
+                    max="32"
+                    step="0.5"
+                    aria-label="Stroke width"
+                    value={selectedNode.style.strokeWidth ?? 0}
+                    onInput={(event) => {
+                      const value = parseNumericInput(event.currentTarget.value);
+                      if (value !== null) onUpdateSelectedStyle({ strokeWidth: Math.max(0, value) });
+                    }}
+                  />
+                </div>
+                <label class="field-label range-label">
+                  Corner radius
+                  <input
+                    class="number-field"
+                    type="number"
+                    min="0"
+                    value={selectedNode.style.radius ?? 0}
+                    onInput={(event) => {
+                      const value = parseNumericInput(event.currentTarget.value);
+                      if (value !== null) onUpdateSelectedStyle({ radius: Math.max(0, value) });
+                    }}
+                  />
+                </label>
+              </>
             ) : (
               <>
                 <label class="field-label range-label">Fill</label>
@@ -632,11 +741,75 @@ export function InspectorPanel({
                         />
                       </label>
                     </div>
+                    <div class="field-label range-label">
+                      Alignment &amp; Wrap
+                      <div class="style-segmented-row" role="group" aria-label="Text alignment">
+                        {(['left', 'center', 'right'] as const).map((align) => (
+                          <button
+                            key={align}
+                            type="button"
+                            class={`style-seg-btn${(selectedNode.style.textAlign ?? 'left') === align ? ' is-active' : ''}`}
+                            aria-pressed={(selectedNode.style.textAlign ?? 'left') === align}
+                            onClick={() => onUpdateSelectedStyle({ textAlign: align })}
+                          >
+                            {align === 'left' ? 'Left' : align === 'center' ? 'Center' : 'Right'}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          class={`style-seg-btn${(selectedNode.style.textWrap ?? 'wrap') === 'wrap' ? ' is-active' : ''}`}
+                          aria-pressed={(selectedNode.style.textWrap ?? 'wrap') === 'wrap'}
+                          title="Toggle automatic text wrapping inside width"
+                          onClick={() =>
+                            onUpdateSelectedStyle({
+                              textWrap: (selectedNode.style.textWrap ?? 'wrap') === 'wrap' ? 'nowrap' : 'wrap',
+                            })
+                          }
+                        >
+                          {(selectedNode.style.textWrap ?? 'wrap') === 'wrap' ? 'Wrap' : 'No Wrap'}
+                        </button>
+                      </div>
+                    </div>
+                    <div class="field-grid single-row">
+                      <label class="field-label">
+                        Case
+                        <select
+                          class="select-field"
+                          aria-label="Text transform"
+                          value={selectedNode.style.textTransform ?? 'none'}
+                          onChange={(event) => onUpdateSelectedStyle({ textTransform: event.currentTarget.value })}
+                        >
+                          <option value="none">Normal</option>
+                          <option value="uppercase">UPPERCASE</option>
+                          <option value="lowercase">lowercase</option>
+                          <option value="capitalize">Title Case</option>
+                        </select>
+                      </label>
+                      <label class="field-label">
+                        Decoration
+                        <select
+                          class="select-field"
+                          aria-label="Text decoration"
+                          value={selectedNode.style.textDecoration ?? 'none'}
+                          onChange={(event) => onUpdateSelectedStyle({ textDecoration: event.currentTarget.value })}
+                        >
+                          <option value="none">None</option>
+                          <option value="underline">Underline</option>
+                          <option value="line-through">Strike</option>
+                        </select>
+                      </label>
+                    </div>
                   </>
                 )}
               </>
             )}
           </section>
+
+          <InspectorEffectsAndStyleSection
+            selectedNode={selectedNode}
+            defaultFillColor={defaultFillColor}
+            onUpdateSelected={onUpdateSelected}
+          />
 
           <InspectorWebLayoutSection
             selectedNode={selectedNode}
@@ -742,6 +915,9 @@ export function InspectorPanel({
             <div class="quick-add">
               <button type="button" onClick={() => onQuickAdd('rect')}>+ Rectangle</button>
               <button type="button" onClick={() => onQuickAdd('text')}>+ Text</button>
+              {onInsertImageFiles && (
+                <button type="button" onClick={triggerImagePicker}>+ Image</button>
+              )}
             </div>
           </div>
         </div>
@@ -753,6 +929,9 @@ export function InspectorPanel({
           <div class="quick-add">
             <button type="button" onClick={() => onQuickAdd('rect')}>+ Rectangle</button>
             <button type="button" onClick={() => onQuickAdd('text')}>+ Text</button>
+            {onInsertImageFiles && (
+              <button type="button" onClick={triggerImagePicker}>+ Image</button>
+            )}
           </div>
         </div>
       )}

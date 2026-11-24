@@ -13,10 +13,10 @@ function parseArgs(argv) {
       args.json = true;
     } else if (raw.startsWith('--scale=')) {
       const value = raw.slice('--scale='.length);
-      if (value === 'small' || value === 'medium' || value === 'large' || value === 'xlarge') {
+      if (value === 'small' || value === 'medium' || value === 'large' || value === 'xlarge' || value === 'monster') {
         args.scale = value;
       } else {
-        throw new Error(`Unsupported --scale value "${value}". Expected small, medium, large, or xlarge.`);
+        throw new Error(`Unsupported --scale value "${value}". Expected small, medium, large, xlarge, or monster.`);
       }
     } else if (raw.startsWith('--nodes=')) {
       const parsed = Number(raw.slice('--nodes='.length));

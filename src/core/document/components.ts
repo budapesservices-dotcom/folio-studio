@@ -105,8 +105,8 @@ export const OVERRIDE_FIELD_ALLOWED_NODE_TYPES: Record<
 > = {
   text: new Set(['text']),
   fill: new Set(['frame', 'rect', 'ellipse', 'path', 'text']),
-  stroke: new Set(['frame', 'rect', 'ellipse', 'path']),
-  visible: new Set(['frame', 'rect', 'ellipse', 'path', 'text', 'group']),
+  stroke: new Set(['frame', 'rect', 'ellipse', 'path', 'image']),
+  visible: new Set(['frame', 'rect', 'ellipse', 'path', 'text', 'group', 'image', 'component-instance']),
 };
 
 export function isOverrideFieldCompatibleWithNodeType(
@@ -319,8 +319,38 @@ export function detachComponentInstance(
 }
 
 /**
+ * Returns true if placing an instance of `childComponentId` inside `parentComponentId`
+ * would introduce a circular dependency (direct self-nesting or transitive cycle).
+ */
+export function wouldCreateComponentCycle(
+  components: readonly ComponentDefinition[],
+  parentComponentId: string,
+  childComponentId: string,
+): boolean {
+  if (parentComponentId === childComponentId) return true;
+  const byId = new Map(components.map((c) => [c.id, c]));
+  const visited = new Set<string>();
+  const stack = [childComponentId];
+  while (stack.length > 0) {
+    const currentId = stack.pop()!;
+    if (currentId === parentComponentId) return true;
+    if (visited.has(currentId)) continue;
+    visited.add(currentId);
+    const comp = byId.get(currentId);
+    if (!comp) continue;
+    for (const node of comp.document.nodes) {
+      if (node.type === 'component-instance') {
+        stack.push(node.componentId);
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Builds a clean, self-contained ComponentDefinition from selected document
- * layers while preserving nested Group hierarchy and clipping-mask links.
+ * layers while preserving nested Group hierarchy, nested Component Instances
+ * (DAG-safe: excluding self-references), and clipping-mask links.
  * Any parentId or clipMaskBaseId pointing outside the saved subset is safely
  * stripped so the resulting master document always passes hierarchy validation.
  */
@@ -331,8 +361,11 @@ export function buildComponentDefinitionFromNodes(
   options: { id?: string; now?: string } = {},
 ): ComponentDefinition | null {
   const expandedIds = new Set(expandSelectedLayerIds(sourceNodes, selectedNodeIds));
+  const candidateId = options.id ?? (globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`);
   const reusableNodes = sourceNodes.filter(
-    (node) => expandedIds.has(node.id) && node.type !== 'component-instance',
+    (node) =>
+      expandedIds.has(node.id) &&
+      !(node.type === 'component-instance' && node.componentId === candidateId),
   );
   if (reusableNodes.length === 0) return null;
 
@@ -364,7 +397,7 @@ export function buildComponentDefinitionFromNodes(
   });
 
   return {
-    id: options.id ?? (globalThis.crypto?.randomUUID?.() ?? `component-${Date.now()}`),
+    id: candidateId,
     name,
     document: {
       ...createEmptyDocument(name, Math.max(1, maxX - minX), Math.max(1, maxY - minY)),

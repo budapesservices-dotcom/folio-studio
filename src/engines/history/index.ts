@@ -6,6 +6,7 @@ export {
   countDeltaTouchedNodes,
   createDeltaHistoryTimeline,
   isProjectDeltaEmpty,
+  isProjectDeltaEntry,
   pushProjectDelta,
   redoProjectDelta,
   undoProjectDelta,

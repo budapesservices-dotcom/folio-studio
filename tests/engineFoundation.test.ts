@@ -380,8 +380,8 @@ describe('Tahap A — Native Foundation Engine Hardening', () => {
     const store = createCanonicalEditorStore(createEditorState(largeProject));
     const startMs = performance.now();
 
-    // Fill the full 60-entry history buffer via rapid commits
-    for (let i = 0; i < 65; i++) {
+    // Fill the full 200-entry delta history buffer via rapid commits
+    for (let i = 0; i < 205; i++) {
       const res = store.dispatchLegacyAction({
         type: 'rename-project',
         name: `Revision ${i + 1}`,
@@ -390,9 +390,9 @@ describe('Tahap A — Native Foundation Engine Hardening', () => {
     }
 
     const elapsedMs = performance.now() - startMs;
-    expect(store.getSnapshot().editorState.past.length).toBe(60);
-    expect(store.getSnapshot().projectRevision).toBe(65);
-    // 65 commits with 60 frozen historical snapshots of 200+ nodes should be comfortably fast
+    expect(store.getSnapshot().editorState.past.length).toBe(200);
+    expect(store.getSnapshot().projectRevision).toBe(205);
+    // 205 commits with 200 O(delta) historical entries of 200+ nodes should be comfortably fast
     expect(elapsedMs).toBeLessThan(2000);
 
     // No-op transition does not bump projectRevision
@@ -423,20 +423,22 @@ describe('Tahap A — Native Foundation Engine Hardening', () => {
       expect(tamperedRes.errorCode).toBe('INVALID_EDITOR_STATE');
     }
 
-    // Tampered historical entry inside `past` (reserved Component Canvas ID) MUST be rejected
-    const badHistoryProject = {
-      ...beforeNoop.editorState.project,
-      metadata: {
+    // Tampered historical delta entry inside `past` (smuggling reserved Component Canvas ID) MUST be rejected
+    const badHistoryDelta = {
+      id: 'delta-tampered',
+      metadataBefore: {
         ...beforeNoop.editorState.project.metadata,
         id: 'folio-component-canvas',
       },
+      pages: [],
+      components: [],
     };
     const badHistoryRes = store.commitEditorTransition({
       expectedProjectRevision: beforeNoop.projectRevision,
       expectedEditorState: beforeNoop.editorState,
       candidateState: {
         ...beforeNoop.editorState,
-        past: [...beforeNoop.editorState.past.slice(1), badHistoryProject],
+        past: [...beforeNoop.editorState.past.slice(1), badHistoryDelta],
       },
     });
     expect(badHistoryRes.status).toBe('failed');

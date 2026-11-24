@@ -31,9 +31,8 @@ import {
   type CanonicalEditorStoreSnapshot,
   type ComponentSyncCommitGuard,
 } from './editorStore';
-import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
-
-const EDITOR_HISTORY_LIMIT = 60;
+import { EDITOR_HISTORY_LIMIT, editorReducer, type EditorAction, type EditorState } from './editorReducer';
+import { computeProjectDelta, isProjectDeltaEmpty } from '../engines/history/deltaHistory';
 
 const KNOWN_NATIVE_PERMISSIONS = new Set([
   'project.read',
@@ -55,6 +54,7 @@ const KNOWN_NATIVE_PERMISSIONS = new Set([
   'code.update',
   'logic.update',
   'animation.update',
+  'asset.update',
   'selection.update',
   'history.execute',
 ]);
@@ -294,6 +294,7 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'animation.create-clip':
     case 'animation.update-clip':
     case 'animation.delete-clip':
+    case 'asset.upsert':
     case 'node.create':
     case 'node.replace-many':
     case 'node.split':
@@ -345,6 +346,7 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'animation.create-clip':
     case 'animation.update-clip':
     case 'animation.delete-clip':
+    case 'asset.upsert':
     case 'node.create':
     case 'node.set-properties':
     case 'selection.set':
@@ -571,7 +573,9 @@ function computeProjectChangeDraft(
     (beforeProject.designTokens !== afterProject.designTokens &&
       JSON.stringify(beforeProject.designTokens ?? null) !== JSON.stringify(afterProject.designTokens ?? null)) ||
     (beforeProject.codeModules !== afterProject.codeModules &&
-      JSON.stringify(beforeProject.codeModules ?? []) !== JSON.stringify(afterProject.codeModules ?? []));
+      JSON.stringify(beforeProject.codeModules ?? []) !== JSON.stringify(afterProject.codeModules ?? [])) ||
+    (beforeProject.assets !== afterProject.assets &&
+      JSON.stringify(beforeProject.assets) !== JSON.stringify(afterProject.assets));
 
   const changeDraft: NativeChangeSetDraft = {
     projectId,
@@ -1462,12 +1466,19 @@ export function executeNativeCommandTransaction(
   );
   const finalCandidateState: EditorState = freezeGraph(
     projectMutated && !resetsHistory && !includesDirectHistoryStep
-      ? {
-          ...workingState,
-          past: [...beforeSnapshot.editorState.past, beforeSnapshot.editorState.project].slice(-EDITOR_HISTORY_LIMIT),
-          future: [],
-          historyGroup: null,
-        }
+      ? (() => {
+          const txDelta = computeProjectDelta(beforeSnapshot.editorState.project, workingState.project, {
+            label: 'Transaction',
+          });
+          return {
+            ...workingState,
+            past: isProjectDeltaEmpty(txDelta)
+              ? beforeSnapshot.editorState.past
+              : [...beforeSnapshot.editorState.past, txDelta].slice(-EDITOR_HISTORY_LIMIT),
+            future: [],
+            historyGroup: null,
+          };
+        })()
       : workingState,
   );
 

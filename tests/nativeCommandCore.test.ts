@@ -630,13 +630,13 @@ describe('Reducer parity, history and canonical revision', () => {
     expect(fixture.store.getSnapshot().editorState.past).toHaveLength(0);
   });
 
-  it('keeps the existing 60-snapshot history limit', () => {
+  it('keeps the 200-entry delta history limit', () => {
     const fixture = createFixture();
-    for (let index = 0; index < 65; index += 1) {
+    for (let index = 0; index < 205; index += 1) {
       fixture.store.dispatchLegacyAction({ type: 'rename-project', name: `Rename ${index}` });
     }
-    expect(fixture.store.getSnapshot().editorState.past).toHaveLength(60);
-    expect(fixture.store.getSnapshot().projectRevision).toBe(65);
+    expect(fixture.store.getSnapshot().editorState.past).toHaveLength(200);
+    expect(fixture.store.getSnapshot().projectRevision).toBe(205);
   });
 });
 

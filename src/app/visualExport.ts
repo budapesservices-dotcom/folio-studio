@@ -1,13 +1,30 @@
 import type {
+  AssetReference,
+  BreakpointId,
   ComponentDefinition,
   ComponentInstanceNode,
   DesignNode,
+  DesignTokenCollection,
+  FillPaint,
   FolioDocument,
   FrameNode,
+  ImageFitMode,
+  ImageNode,
   PathNode,
 } from '../core/document/types';
 import { resolveComponentInstanceNodes } from '../core/document/components';
+import {
+  buildSvgFilterId,
+  buildSvgPaintId,
+  getBackdropBlurRadius,
+  getVisibleFillPaints,
+  hasSvgFilterEffects,
+  sanitizeStyleColor,
+  serializeNodeSvgStyleDefs,
+} from '../core/document/styling';
+import { getSvgTextAnchorAndX, wrapTextLines } from '../core/document/typography';
 import { serializePathPointsToSvgD } from '../core/document/vector';
+import { resolveAssetDisplayUrl } from '../core/persistence/assetStore';
 import {
   buildFrameClipAncestorMap,
   buildLayerClipMaskMap,
@@ -15,8 +32,18 @@ import {
   getLayerDescendantIds,
   getLayerRenderOrder,
 } from '../core/document/layers';
+import { computeAutoLayoutNodes, getBreakpointCanvasWidth } from '../engines/layout/autoLayout';
 
 type PrimitiveNode = Exclude<DesignNode, ComponentInstanceNode>;
+
+const MAX_COMPONENT_RECURSION_DEPTH = 16;
+
+export interface VisualExportOptions {
+  title?: string;
+  designTokens?: DesignTokenCollection;
+  breakpoint?: BreakpointId;
+  assets?: readonly AssetReference[];
+}
 
 function escapeXml(value: string): string {
   return value
@@ -37,6 +64,16 @@ function maskId(prefix: string, baseId: string): string {
 
 function frameClipId(prefix: string, frameId: string): string {
   return `${prefix}--clip--${sanitizeIdSegment(frameId)}`;
+}
+
+function imageClipId(prefix: string, imageId: string): string {
+  return `${prefix}--imgclip--${sanitizeIdSegment(imageId)}`;
+}
+
+function imageFitToPreserveAspectRatio(fit: ImageFitMode): string {
+  if (fit === 'contain') return 'xMidYMid meet';
+  if (fit === 'fill') return 'none';
+  return 'xMidYMid slice';
 }
 
 function formatRotationTransform(node: Pick<DesignNode, 'x' | 'y' | 'width' | 'height' | 'rotation'>): string {
@@ -89,55 +126,175 @@ function serializeArrowheads(node: PathNode, mask: boolean): string {
   return parts.join('');
 }
 
-function serializePrimitiveNode(node: PrimitiveNode, mask: boolean): string {
+function serializePaintFillAttr(
+  paint: FillPaint,
+  nodeId: string,
+  index: number,
+  prefix: string,
+): string {
+  const opacity = paint.opacity ?? 1;
+  const opacityAttr = opacity < 1 ? ` fill-opacity="${opacity}"` : '';
+  if (paint.type === 'solid') {
+    return ` fill="${escapeXml(sanitizeStyleColor(paint.color))}"${opacityAttr}`;
+  }
+  return ` fill="url(#${buildSvgPaintId(prefix, nodeId, index)})"${opacityAttr}`;
+}
+
+function serializeBackdropBlur(
+  node: PrimitiveNode,
+  mask: boolean,
+  radius: number,
+  isEllipse = false,
+): string {
+  if (mask) return '';
+  const blurRadius = getBackdropBlurRadius(node);
+  if (blurRadius <= 0 || node.width <= 0 || node.height <= 0) return '';
+  const borderRadius = isEllipse ? '50%' : `${radius}px`;
+  return `<foreignObject x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"><div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;border-radius:${borderRadius};backdrop-filter:blur(${blurRadius}px);-webkit-backdrop-filter:blur(${blurRadius}px);background:transparent;"></div></foreignObject>`;
+}
+
+function serializePrimitiveNode(
+  node: PrimitiveNode,
+  mask: boolean,
+  prefix: string,
+  assetById: ReadonlyMap<string, AssetReference>,
+): string {
   if (node.type === 'group') return '';
   const transformAttr = formatRotationTransform(node);
   const opacityAttr = node.opacity < 1 ? ` opacity="${node.opacity}"` : '';
+  const filterAttr = !mask && hasSvgFilterEffects(node)
+    ? ` filter="url(#${buildSvgFilterId(prefix, node.id)})"`
+    : '';
+  const blendAttr = !mask && node.blendMode && node.blendMode !== 'normal'
+    ? ` style="mix-blend-mode:${node.blendMode}"`
+    : '';
 
   let inner = '';
   if (node.type === 'frame' || node.type === 'rect') {
-    const fill = mask ? (node.style.fill === 'none' ? 'none' : '#fff') : node.style.fill;
-    const stroke = mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke;
-    const rxAttr = node.style.radius ? ` rx="${node.style.radius}"` : '';
+    const fills = getVisibleFillPaints(node);
+    const rx = node.style.radius ?? 0;
+    const rxAttr = rx ? ` rx="${rx}"` : '';
     const dashAttr = node.type === 'frame' && node.isSection && !mask ? ' stroke-dasharray="6 4"' : '';
-    inner = `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"${rxAttr} fill="${escapeXml(fill)}" stroke="${escapeXml(stroke)}" stroke-width="${node.style.strokeWidth}"${dashAttr} />`;
+    const backdrop = serializeBackdropBlur(node, mask, rx);
+    if (mask || fills.length <= 1) {
+      const fillAttr = mask
+        ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff'}"`
+        : fills.length === 1
+          ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
+          : ' fill="none"';
+      const stroke = mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke;
+      inner = `${backdrop}<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"${rxAttr}${fillAttr} stroke="${escapeXml(stroke)}" stroke-width="${node.style.strokeWidth}"${dashAttr} />`;
+    } else {
+      const fillRects = fills
+        .map((paint, idx) => `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"${rxAttr}${serializePaintFillAttr(paint, node.id, idx, prefix)} stroke="none" />`)
+        .join('');
+      const strokeRect = node.style.strokeWidth > 0 && node.style.stroke !== 'none'
+        ? `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"${rxAttr} fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${node.style.strokeWidth}"${dashAttr} />`
+        : '';
+      inner = `${backdrop}${fillRects}${strokeRect}`;
+    }
   } else if (node.type === 'ellipse') {
-    const fill = mask ? (node.style.fill === 'none' ? 'none' : '#fff') : node.style.fill;
-    const stroke = mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke;
+    const fills = getVisibleFillPaints(node);
     const cx = node.x + node.width / 2;
     const cy = node.y + node.height / 2;
-    inner = `<ellipse cx="${cx}" cy="${cy}" rx="${node.width / 2}" ry="${node.height / 2}" fill="${escapeXml(fill)}" stroke="${escapeXml(stroke)}" stroke-width="${node.style.strokeWidth}" />`;
+    const backdrop = serializeBackdropBlur(node, mask, 0, true);
+    if (mask || fills.length <= 1) {
+      const fillAttr = mask
+        ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff'}"`
+        : fills.length === 1
+          ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
+          : ' fill="none"';
+      const stroke = mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke;
+      inner = `${backdrop}<ellipse cx="${cx}" cy="${cy}" rx="${node.width / 2}" ry="${node.height / 2}"${fillAttr} stroke="${escapeXml(stroke)}" stroke-width="${node.style.strokeWidth}" />`;
+    } else {
+      const fillEllipses = fills
+        .map((paint, idx) => `<ellipse cx="${cx}" cy="${cy}" rx="${node.width / 2}" ry="${node.height / 2}"${serializePaintFillAttr(paint, node.id, idx, prefix)} stroke="none" />`)
+        .join('');
+      const strokeEllipse = node.style.strokeWidth > 0 && node.style.stroke !== 'none'
+        ? `<ellipse cx="${cx}" cy="${cy}" rx="${node.width / 2}" ry="${node.height / 2}" fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${node.style.strokeWidth}" />`
+        : '';
+      inner = `${backdrop}${fillEllipses}${strokeEllipse}`;
+    }
   } else if (node.type === 'path') {
     const pathD = serializePathPointsToSvgD(node.points, node.closed, node.subpaths);
-    const fill = mask ? (node.style.fill === 'none' ? 'none' : '#fff') : node.style.fill;
-    const stroke = mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke;
+    const fills = getVisibleFillPaints(node);
     const fillRule = node.style.fillRule ?? 'nonzero';
     const linecap = node.style.strokeLinecap ?? 'round';
     const linejoin = node.style.strokeLinejoin ?? 'round';
     const dashAttr = node.style.strokeDasharray ? ` stroke-dasharray="${escapeXml(node.style.strokeDasharray)}"` : '';
     const arrows = serializeArrowheads(node, mask);
-    inner = `<g transform="translate(${node.x} ${node.y})"><path d="${escapeXml(pathD)}" fill="${escapeXml(fill)}" fill-rule="${fillRule}" stroke="${escapeXml(stroke)}" stroke-width="${node.style.strokeWidth}" stroke-linecap="${linecap}" stroke-linejoin="${linejoin}"${dashAttr} />${arrows}</g>`;
+    if (mask || fills.length <= 1) {
+      const fillAttr = mask
+        ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff'}"`
+        : fills.length === 1
+          ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
+          : ' fill="none"';
+      const stroke = mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke;
+      inner = `<g transform="translate(${node.x} ${node.y})"><path d="${escapeXml(pathD)}"${fillAttr} fill-rule="${fillRule}" stroke="${escapeXml(stroke)}" stroke-width="${node.style.strokeWidth}" stroke-linecap="${linecap}" stroke-linejoin="${linejoin}"${dashAttr} />${arrows}</g>`;
+    } else {
+      const fillPaths = fills
+        .map((paint, idx) => `<path d="${escapeXml(pathD)}"${serializePaintFillAttr(paint, node.id, idx, prefix)} fill-rule="${fillRule}" stroke="none" />`)
+        .join('');
+      const strokePath = node.style.strokeWidth > 0 && node.style.stroke !== 'none'
+        ? `<path d="${escapeXml(pathD)}" fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${node.style.strokeWidth}" stroke-linecap="${linecap}" stroke-linejoin="${linejoin}"${dashAttr} />`
+        : '';
+      inner = `<g transform="translate(${node.x} ${node.y})">${fillPaths}${strokePath}${arrows}</g>`;
+    }
   } else if (node.type === 'text') {
     const fill = mask ? '#fff' : node.style.fill;
-    const lines = node.text.split(/\r?\n/);
+    const lines = wrapTextLines(node.text, {
+      maxWidth: node.width,
+      fontSize: node.style.fontSize,
+      fontFamily: node.style.fontFamily,
+      fontWeight: node.style.fontWeight,
+      letterSpacing: node.style.letterSpacing,
+      textWrap: node.style.textWrap,
+      textTransform: node.style.textTransform,
+    });
+    const { anchor, xPos } = getSvgTextAnchorAndX(node.x, node.width, node.style.textAlign);
+    const decorationAttr = node.style.textDecoration && node.style.textDecoration !== 'none'
+      ? ` text-decoration="${node.style.textDecoration}"`
+      : '';
     const tspans = lines
       .map((line, index) => {
         const dy = index === 0 ? 0 : node.style.fontSize * node.style.lineHeight;
-        return `<tspan x="${node.x}" dy="${dy}">${escapeXml(line || ' ')}</tspan>`;
+        return `<tspan x="${xPos}" dy="${dy}">${escapeXml(line || ' ')}</tspan>`;
       })
       .join('');
-    inner = `<text x="${node.x}" y="${node.y}" fill="${escapeXml(fill)}" font-size="${node.style.fontSize}" font-family="${escapeXml(node.style.fontFamily)}" font-weight="${node.style.fontWeight}" letter-spacing="${node.style.letterSpacing}" dominant-baseline="hanging">${tspans}</text>`;
+    inner = `<text x="${xPos}" y="${node.y}" fill="${escapeXml(fill)}" font-size="${node.style.fontSize}" font-family="${escapeXml(node.style.fontFamily)}" font-weight="${node.style.fontWeight}" letter-spacing="${node.style.letterSpacing}" text-anchor="${anchor}"${decorationAttr} dominant-baseline="hanging">${tspans}</text>`;
+  } else if (node.type === 'image') {
+    const imgNode = node as ImageNode;
+    const rx = imgNode.style.radius ?? 0;
+    const rxAttr = rx ? ` rx="${rx}"` : '';
+    if (mask) {
+      inner = `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="#fff" />`;
+    } else {
+      const asset = assetById.get(imgNode.assetId);
+      const href = resolveAssetDisplayUrl(asset);
+      const clipAttr = rx > 0 ? ` clip-path="url(#${imageClipId(prefix, imgNode.id)})"` : '';
+      const imgMarkup = href
+        ? `<image href="${escapeXml(href)}" x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}" preserveAspectRatio="${imageFitToPreserveAspectRatio(imgNode.style.fit)}"${clipAttr} />`
+        : `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="#1E2534" stroke="#4B5A78" stroke-width="1.5" stroke-dasharray="6 4" />`;
+      const strokeMarkup = imgNode.style.stroke && imgNode.style.stroke !== 'none' && (imgNode.style.strokeWidth ?? 0) > 0
+        ? `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="none" stroke="${escapeXml(imgNode.style.stroke)}" stroke-width="${imgNode.style.strokeWidth}" />`
+        : '';
+      inner = `${imgMarkup}${strokeMarkup}`;
+    }
   }
 
-  return `<g${transformAttr}${opacityAttr}>${inner}</g>`;
+  return `<g${transformAttr}${opacityAttr}${filterAttr}${blendAttr}>${inner}</g>`;
 }
 
 function serializeClipMaskArtwork(
   node: DesignNode,
   nodes: readonly DesignNode[],
   componentById: ReadonlyMap<string, ComponentDefinition>,
+  assetById: ReadonlyMap<string, AssetReference>,
   prefix: string,
   nodeById: ReadonlyMap<string, DesignNode>,
+  tokens: DesignTokenCollection | undefined,
+  visitedComponentIds: ReadonlySet<string>,
+  depth: number,
 ): string {
   if (node.type === 'group') {
     const states = getEffectiveLayerStates(nodes);
@@ -147,30 +304,42 @@ function serializeClipMaskArtwork(
     if (descendants.length === 0) {
       return `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="#fff" opacity="${node.opacity}" />`;
     }
-    return `<g>${descendants.map((child) => serializeClipMaskArtwork(child, nodes, componentById, prefix, nodeById)).join('')}</g>`;
+    return `<g>${descendants.map((child) => serializeClipMaskArtwork(child, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth)).join('')}</g>`;
   }
 
   if (node.type === 'component-instance') {
     const component = componentById.get(node.componentId);
-    if (!component) {
+    if (!component || visitedComponentIds.has(node.componentId) || depth >= MAX_COMPONENT_RECURSION_DEPTH) {
       return `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="#fff" opacity="${node.opacity}"${formatRotationTransform(node)} />`;
     }
     const scaleX = node.width / Math.max(1, component.document.width);
     const scaleY = node.height / Math.max(1, component.document.height);
-    const resolved = resolveComponentInstanceNodes(node, component).filter((child) => child.onCanvas !== false);
+    const resolvedRaw = resolveComponentInstanceNodes(node, component, tokens);
+    const laidOut = computeAutoLayoutNodes(resolvedRaw, {
+      breakpoint: 'desktop',
+      tokens,
+      canvasWidth: component.document.width,
+    });
+    const resolved = laidOut.filter((child) => child.onCanvas !== false);
     const childPrefix = `${prefix}-instmask-${sanitizeIdSegment(node.id)}`;
+    const nextVisited = new Set(visitedComponentIds);
+    nextVisited.add(node.componentId);
     const content = serializeNodesBlock(
       resolved,
       component.document.width,
       component.document.height,
       componentById,
+      assetById,
       childPrefix,
       true,
+      tokens,
+      nextVisited,
+      depth + 1,
     );
     return `<g${formatRotationTransform(node)} opacity="${node.opacity}"><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${content}</g></g>`;
   }
 
-  return serializePrimitiveNode(node, true);
+  return serializePrimitiveNode(node, true, prefix, assetById);
 }
 
 function serializeDefs(
@@ -178,27 +347,39 @@ function serializeDefs(
   width: number,
   height: number,
   componentById: ReadonlyMap<string, ComponentDefinition>,
+  assetById: ReadonlyMap<string, AssetReference>,
   prefix: string,
   nodeById: ReadonlyMap<string, DesignNode>,
   clipMaskMap: ReadonlyMap<string, string[]>,
   frameClipMap: ReadonlyMap<string, string[]>,
+  mask: boolean,
+  tokens: DesignTokenCollection | undefined,
+  visitedComponentIds: ReadonlySet<string>,
+  depth: number,
 ): string {
   const referencedMasks = new Set<string>();
   const referencedFrames = new Set<string>();
+  const defsParts: string[] = [];
 
   for (const node of nodes) {
     for (const baseId of clipMaskMap.get(node.id) ?? []) referencedMasks.add(baseId);
     for (const fId of frameClipMap.get(node.id) ?? []) referencedFrames.add(fId);
+
+    if (!mask) {
+      const styleDefs = serializeNodeSvgStyleDefs(node, prefix);
+      if (styleDefs) defsParts.push(styleDefs);
+      if (node.type === 'image' && (node.style.radius ?? 0) > 0) {
+        defsParts.push(
+          `<clipPath id="${imageClipId(prefix, node.id)}" clipPathUnits="userSpaceOnUse"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="${node.style.radius ?? 0}" /></clipPath>`,
+        );
+      }
+    }
   }
-
-  if (referencedMasks.size === 0 && referencedFrames.size === 0) return '';
-
-  const defsParts: string[] = [];
 
   for (const baseId of referencedMasks) {
     const base = nodeById.get(baseId);
     if (!base) continue;
-    const artwork = serializeClipMaskArtwork(base, nodes, componentById, prefix, nodeById);
+    const artwork = serializeClipMaskArtwork(base, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth);
     defsParts.push(
       `<mask id="${maskId(prefix, baseId)}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}"><rect x="0" y="0" width="${width}" height="${height}" fill="#000" />${artwork}</mask>`,
     );
@@ -223,15 +404,33 @@ function serializeNodesBlock(
   width: number,
   height: number,
   componentById: ReadonlyMap<string, ComponentDefinition>,
+  assetById: ReadonlyMap<string, AssetReference>,
   prefix: string,
   mask: boolean,
+  tokens: DesignTokenCollection | undefined,
+  visitedComponentIds: ReadonlySet<string>,
+  depth: number,
 ): string {
   const nodeById = new Map(canvasNodes.map((node) => [node.id, node]));
   const clipMaskMap = buildLayerClipMaskMap(canvasNodes, nodeById);
   const frameClipMap = buildFrameClipAncestorMap(canvasNodes, nodeById);
   const states = getEffectiveLayerStates(canvasNodes);
 
-  const defs = serializeDefs(canvasNodes, width, height, componentById, prefix, nodeById, clipMaskMap, frameClipMap);
+  const defs = serializeDefs(
+    canvasNodes,
+    width,
+    height,
+    componentById,
+    assetById,
+    prefix,
+    nodeById,
+    clipMaskMap,
+    frameClipMap,
+    mask,
+    tokens,
+    visitedComponentIds,
+    depth,
+  );
 
   const renderedNodes = getLayerRenderOrder(canvasNodes)
     .filter((node) => {
@@ -245,28 +444,47 @@ function serializeNodesBlock(
       let markup = '';
       if (node.type === 'component-instance') {
         const component = componentById.get(node.componentId);
-        if (!component) {
+        const blockedByCycle = visitedComponentIds.has(node.componentId) || depth >= MAX_COMPONENT_RECURSION_DEPTH;
+        if (!component || blockedByCycle) {
           markup = mask
             ? `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="#fff" opacity="${node.opacity}"${formatRotationTransform(node)} />`
             : `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="none" stroke="#D45B5B" stroke-dasharray="6 4" stroke-width="2"${formatRotationTransform(node)} />`;
         } else {
           const scaleX = node.width / Math.max(1, component.document.width);
           const scaleY = node.height / Math.max(1, component.document.height);
-          const resolvedChildren = resolveComponentInstanceNodes(node, component).filter((child) => child.onCanvas !== false);
+          const resolvedRaw = resolveComponentInstanceNodes(node, component, tokens);
+          const laidOut = computeAutoLayoutNodes(resolvedRaw, {
+            breakpoint: 'desktop',
+            tokens,
+            canvasWidth: component.document.width,
+          });
+          const resolvedChildren = laidOut.filter((child) => child.onCanvas !== false);
           const instPrefix = `${prefix}-inst-${sanitizeIdSegment(node.id)}`;
+          const nextVisited = new Set(visitedComponentIds);
+          nextVisited.add(node.componentId);
           const inner = serializeNodesBlock(
             resolvedChildren,
             component.document.width,
             component.document.height,
             componentById,
+            assetById,
             instPrefix,
             mask,
+            tokens,
+            nextVisited,
+            depth + 1,
           );
           const opacityAttr = node.opacity < 1 ? ` opacity="${node.opacity}"` : '';
-          markup = `<g${formatRotationTransform(node)}${opacityAttr}><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${inner}</g></g>`;
+          const filterAttr = !mask && hasSvgFilterEffects(node)
+            ? ` filter="url(#${buildSvgFilterId(prefix, node.id)})"`
+            : '';
+          const blendAttr = !mask && node.blendMode && node.blendMode !== 'normal'
+            ? ` style="mix-blend-mode:${node.blendMode}"`
+            : '';
+          markup = `<g${formatRotationTransform(node)}${opacityAttr}${filterAttr}${blendAttr}><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${inner}</g></g>`;
         }
       } else {
-        markup = serializePrimitiveNode(node, mask);
+        markup = serializePrimitiveNode(node, mask, prefix, assetById);
       }
 
       if (!markup) return '';
@@ -288,16 +506,29 @@ function serializeNodesBlock(
   return `${defs}${renderedNodes}`;
 }
 
-/** Serializes a FolioDocument into a clean, self-contained standalone SVG document string. */
+/**
+ * Serializes a FolioDocument into a clean, self-contained standalone SVG document string.
+ * Respects active Design Tokens/Themes, Flex/Grid Auto-Layout, Responsive Breakpoints,
+ * Multi-Fills/Gradients, Effects, Blend Modes, ImageNodes, Auto Text-Wrapping,
+ * and guards against cyclic or overly deep component recursion.
+ */
 export function serializeDocumentToSvgString(
   doc: FolioDocument,
   components: readonly ComponentDefinition[] = [],
-  options: { title?: string } = {},
+  options: VisualExportOptions = {},
 ): string {
-  const width = Math.max(1, Math.round(doc.width));
+  const breakpoint = options.breakpoint ?? 'desktop';
+  const effectiveDocWidth = getBreakpointCanvasWidth(doc.width, breakpoint);
+  const width = Math.max(1, Math.round(effectiveDocWidth));
   const height = Math.max(1, Math.round(doc.height));
-  const canvasNodes = doc.nodes.filter((node) => node.onCanvas !== false);
+  const resolvedNodes = computeAutoLayoutNodes(doc.nodes, {
+    breakpoint,
+    tokens: options.designTokens,
+    canvasWidth: effectiveDocWidth,
+  });
+  const canvasNodes = resolvedNodes.filter((node) => node.onCanvas !== false);
   const componentById = new Map(components.map((component) => [component.id, component]));
+  const assetById = new Map((options.assets ?? []).map((asset) => [asset.id, asset]));
   const prefix = `folio-export-${sanitizeIdSegment(doc.id)}`;
 
   const titleMarkup = options.title ? `<title>${escapeXml(options.title)}</title>` : '';
@@ -311,7 +542,18 @@ export function serializeDocumentToSvgString(
     ? `<rect x="0" y="0" width="${width}" height="${height}" fill="${escapeXml(doc.background)}" />`
     : '';
 
-  const content = serializeNodesBlock(canvasNodes, width, height, componentById, prefix, false);
+  const content = serializeNodesBlock(
+    canvasNodes,
+    width,
+    height,
+    componentById,
+    assetById,
+    prefix,
+    false,
+    options.designTokens,
+    new Set<string>(),
+    0,
+  );
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -350,8 +592,9 @@ export function downloadSvgDocument(
   doc: FolioDocument,
   components: readonly ComponentDefinition[],
   filenameBase: string,
+  options: VisualExportOptions = {},
 ): string {
-  const svg = serializeDocumentToSvgString(doc, components, { title: filenameBase });
+  const svg = serializeDocumentToSvgString(doc, components, { ...options, title: options.title ?? filenameBase });
   const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
   triggerBlobDownload(blob, createVisualExportFilename(filenameBase, 'svg'));
   return svg;
@@ -363,11 +606,13 @@ export async function downloadPngDocument(
   components: readonly ComponentDefinition[],
   filenameBase: string,
   scale = 2,
+  options: VisualExportOptions = {},
 ): Promise<{ width: number; height: number }> {
   const safeScale = Math.max(1, Math.min(4, scale));
-  const width = Math.max(1, Math.round(doc.width * safeScale));
+  const effectiveDocWidth = getBreakpointCanvasWidth(doc.width, options.breakpoint ?? 'desktop');
+  const width = Math.max(1, Math.round(effectiveDocWidth * safeScale));
   const height = Math.max(1, Math.round(doc.height * safeScale));
-  const svg = serializeDocumentToSvgString(doc, components, { title: filenameBase });
+  const svg = serializeDocumentToSvgString(doc, components, { ...options, title: options.title ?? filenameBase });
   const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
   const svgUrl = URL.createObjectURL(svgBlob);
 

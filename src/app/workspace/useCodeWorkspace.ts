@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getActivePage } from '../../core/document/project';
+import { getComputeWorkerClient } from '../../core/kernels';
 import { getProjectDesignTokens } from '../../core/document/tokens';
 import type {
   BreakpointId,
@@ -8,18 +9,23 @@ import type {
   FolioProject,
 } from '../../core/document/types';
 import {
+  applyA11yQuickFixToNode,
   applyMappedNodeEdit,
+  auditPageAccessibility,
+  buildCompiledProjectBundle,
   buildLivePreviewHtml,
   compileFolioProject,
   createCustomCodeModule,
   createNodeExtensionModule,
+  type A11yAuditReport,
+  type A11yQuickFix,
   type CodeOutputTarget,
   type CompiledCodeFile,
   type CompiledProjectOutput,
   type MappedNodeEditPatch,
 } from '../../engines/codegen';
 import { toPageFileSlug } from '../../engines/codegen/sanitize';
-import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
+import { stripUndefinedEntries, type MainCanvasCommandClient } from '../mainCanvasCommandClient';
 
 export type CodeWorkspaceViewMode = 'split' | 'code' | 'preview';
 
@@ -58,6 +64,7 @@ export interface UseCodeWorkspaceResult {
   mappedTargetNode: DesignNode | null;
   previewPageNodes: readonly DesignNode[];
   mappedFeedback: MappedSyncFeedback | null;
+  a11yReport: A11yAuditReport;
   toggleOpen: () => void;
   close: () => void;
   setViewMode: (mode: CodeWorkspaceViewMode) => void;
@@ -78,6 +85,9 @@ export interface UseCodeWorkspaceResult {
   focusNodeInCanvas: (nodeId: string) => void;
   copySelectedFile: () => void;
   downloadPreviewHtml: () => void;
+  downloadProjectZip: () => void;
+  applyA11yFix: (fix: A11yQuickFix) => void;
+  applyAllA11yFixes: () => void;
 }
 
 export function useCodeWorkspace({
@@ -188,6 +198,57 @@ export function useCodeWorkspace({
           })
         : '',
     [open, project, previewPage.id, previewThemeId, includeCustomScripts],
+  );
+
+  const WORKER_A11Y_NODE_THRESHOLD = 100;
+  const shouldOffloadA11y = previewPage.document.nodes.length >= WORKER_A11Y_NODE_THRESHOLD;
+
+  const syncA11yReport = useMemo(
+    () => (shouldOffloadA11y ? null : auditPageAccessibility(project, previewPage, previewThemeId)),
+    [shouldOffloadA11y, project, previewPage, previewThemeId],
+  );
+
+  const [asyncA11yReport, setAsyncA11yReport] = useState<A11yAuditReport | null>(null);
+  const a11yRequestSeqRef = useRef(0);
+
+  useEffect(() => {
+    if (!shouldOffloadA11y) {
+      setAsyncA11yReport(null);
+      return;
+    }
+    const seq = ++a11yRequestSeqRef.current;
+    let cancelled = false;
+    void getComputeWorkerClient()
+      .auditAccessibilityAsync(project, previewPage.id, previewThemeId)
+      .then((report) => {
+        if (!cancelled && a11yRequestSeqRef.current === seq) {
+          setAsyncA11yReport(report);
+        }
+      })
+      .catch(() => {
+        if (!cancelled && a11yRequestSeqRef.current === seq) {
+          setAsyncA11yReport(auditPageAccessibility(project, previewPage, previewThemeId));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldOffloadA11y, project, previewPage, previewThemeId]);
+
+  const a11yReport = useMemo<A11yAuditReport>(
+    () =>
+      syncA11yReport ??
+      asyncA11yReport ?? {
+        pageId: previewPage.id,
+        pageName: previewPage.name,
+        score: 100,
+        passedChecks: 0,
+        errorCount: 0,
+        warningCount: 0,
+        infoCount: 0,
+        issues: [],
+      },
+    [syncA11yReport, asyncA11yReport, previewPage.id, previewPage.name],
   );
 
   const mappedTargetNode = useMemo(
@@ -347,6 +408,81 @@ export function useCodeWorkspace({
     onNotice(`Exported standalone HTML (${anchor.download}).`);
   };
 
+  const downloadProjectZip = () => {
+    if (typeof document === 'undefined' || typeof URL === 'undefined') return;
+    const bundle = buildCompiledProjectBundle(project, {
+      target: outputTarget,
+      pageId: previewPage.id,
+      themeId: previewThemeId,
+    });
+    const zipBuffer = new Uint8Array(bundle.zipBytes).buffer;
+    const blob = new Blob([zipBuffer], { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = bundle.fileName;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    onNotice(`Exported ${bundle.fileName} (${bundle.entries.length} files).`);
+  };
+
+  const applyA11yFix = (fix: A11yQuickFix) => {
+    const targetNode = previewPage.document.nodes.find((item) => item.id === fix.nodeId);
+    if (!targetNode) {
+      onNotice('Target layer no longer exists on this page.');
+      return;
+    }
+    ensurePreviewPageActive();
+    const updatedNode = applyA11yQuickFixToNode(targetNode, fix);
+    const result = mainCommandClient.replaceNode(updatedNode, fix.description);
+    if (result.status === 'rejected') {
+      onNotice(result.message);
+      return;
+    }
+    onNotice(`${fix.description}.`);
+  };
+
+  const applyAllA11yFixes = () => {
+    const fixes = a11yReport.issues
+      .map((issue) => issue.fix)
+      .filter((fix): fix is A11yQuickFix => Boolean(fix));
+    if (fixes.length === 0) return;
+
+    ensurePreviewPageActive();
+    const mergedNodesById = new Map<string, DesignNode>();
+    for (const fix of fixes) {
+      const existing =
+        mergedNodesById.get(fix.nodeId)
+        ?? previewPage.document.nodes.find((item) => item.id === fix.nodeId);
+      if (!existing) continue;
+      mergedNodesById.set(fix.nodeId, applyA11yQuickFixToNode(existing, fix));
+    }
+    if (mergedNodesById.size === 0) return;
+
+    const astView = mainCommandClient.getActiveAstView();
+    const transactionId = globalThis.crypto?.randomUUID?.() ?? `a11y-fix-${Date.now().toString(36)}`;
+    const envelopes = [...mergedNodesById.values()].map((updatedNode) => {
+      const ref = astView.getNodeRef(updatedNode.id) ?? {
+        document: astView.address,
+        nodeId: updatedNode.id,
+      };
+      return mainCommandClient.createEnvelope(
+        'node.replace',
+        { kind: 'node', ref },
+        { node: stripUndefinedEntries(updatedNode) },
+        'Auto-fix accessibility issues',
+        transactionId,
+      );
+    });
+
+    const txResult = mainCommandClient.executeTransaction(envelopes);
+    if (txResult.status === 'rejected') {
+      onNotice(txResult.message);
+      return;
+    }
+    onNotice(`Applied ${fixes.length} accessibility fix${fixes.length === 1 ? '' : 'es'}.`);
+  };
+
   return {
     open,
     viewMode,
@@ -364,6 +500,7 @@ export function useCodeWorkspace({
     mappedTargetNode,
     previewPageNodes,
     mappedFeedback,
+    a11yReport,
     toggleOpen: () => {
       if (controlledOpen !== undefined) {
         if (controlledOpen) onControlledClose?.();
@@ -403,5 +540,8 @@ export function useCodeWorkspace({
     focusNodeInCanvas,
     copySelectedFile,
     downloadPreviewHtml,
+    downloadProjectZip,
+    applyA11yFix,
+    applyAllA11yFixes,
   };
 }

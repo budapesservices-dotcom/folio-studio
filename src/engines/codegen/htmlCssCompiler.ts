@@ -1,5 +1,14 @@
 import { resolveComponentInstanceNodes } from '../../core/document/components';
+import {
+  buildCustomFontFaceCss,
+  buildGoogleFontsStylesheetUrl,
+  collectProjectGoogleFonts,
+} from '../../core/document/fonts';
 import { getActivePage } from '../../core/document/project';
+import {
+  buildCssBackgroundFromFills,
+  buildCssEffectsAndBlendDeclarations,
+} from '../../core/document/styling';
 import {
   generateDesignTokensCss,
   getProjectDesignTokens,
@@ -7,6 +16,7 @@ import {
   toDesignTokenThemeSlug,
 } from '../../core/document/tokens';
 import type {
+  AssetReference,
   CodeModuleRecord,
   ComponentDefinition,
   DesignNode,
@@ -19,6 +29,7 @@ import type {
   SemanticHtmlTag,
 } from '../../core/document/types';
 import { serializePathPointsToSvgD } from '../../core/document/vector';
+import { getAssetBundlePath, resolveAssetDisplayUrl } from '../../core/persistence/assetStore';
 import {
   escapeAttr,
   escapeHtml,
@@ -83,6 +94,7 @@ export function resolveTokenCssVar(
 
 export function resolveSemanticTag(node: DesignNode): SemanticHtmlTag {
   if (node.semanticTag) return node.semanticTag;
+  if (node.type === 'image') return 'img';
   if (node.type === 'text') {
     if (node.style.fontSize >= 36) return 'h1';
     if (node.style.fontSize >= 26) return 'h2';
@@ -175,6 +187,12 @@ export function compileTokensCssFile(project: FolioProject): CompiledCodeFile {
   ];
   for (const theme of tokens.themes) {
     blocks.push(generateDesignTokensCss(tokens, theme.id));
+    blocks.push('');
+  }
+  const customFontFaceCss = buildCustomFontFaceCss(project.assets);
+  if (customFontFaceCss) {
+    blocks.push('/* Project Custom @font-face Rules */');
+    blocks.push(customFontFaceCss);
     blocks.push('');
   }
   const content = `${blocks.join('\n').trimEnd()}\n`;
@@ -318,7 +336,12 @@ export function buildNodeCssDeclarations(
     const fillVar = resolveTokenCssVar(tokens, node.tokenBindings?.fill);
     const strokeVar = resolveTokenCssVar(tokens, node.tokenBindings?.stroke);
     const radiusVar = resolveTokenCssVar(tokens, node.tokenBindings?.radius);
-    const fillVal = fillVar ?? sanitizeCssValue(node.style.fill, 'transparent');
+    const hasExplicitFills = Array.isArray(node.style.fills) && node.style.fills.length > 0;
+    const multiFillBg = hasExplicitFills ? buildCssBackgroundFromFills(node.style.fills, node.style.fill) : null;
+    const fillVal =
+      multiFillBg && (!fillVar || (node.style.fills?.length ?? 0) > 1 || node.style.fills?.[0]?.type !== 'solid')
+        ? multiFillBg
+        : (fillVar ?? sanitizeCssValue(node.style.fill, 'transparent'));
     if (fillVal && fillVal !== 'none') {
       declarations.push(`background: ${fillVal};`);
     }
@@ -336,6 +359,21 @@ export function buildNodeCssDeclarations(
     if (node.type === 'frame' && node.clipContent) {
       declarations.push('overflow: hidden;');
     }
+  } else if (node.type === 'image') {
+    const strokeVar = resolveTokenCssVar(tokens, node.tokenBindings?.stroke);
+    const radiusVar = resolveTokenCssVar(tokens, node.tokenBindings?.radius);
+    declarations.push('display: block;');
+    declarations.push(`object-fit: ${node.style.fit};`);
+    const imgStrokeWidth = node.style.strokeWidth ?? 0;
+    if (imgStrokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
+      const strokeVal = strokeVar ?? sanitizeCssValue(node.style.stroke, 'transparent');
+      declarations.push(`border: ${roundCss(imgStrokeWidth)}px solid ${strokeVal};`);
+    }
+    if (radiusVar) {
+      declarations.push(`border-radius: ${radiusVar};`);
+    } else if (node.style.radius !== undefined && node.style.radius > 0) {
+      declarations.push(`border-radius: ${roundCss(node.style.radius)}px;`);
+    }
   } else if (node.type === 'text') {
     const fillVar = resolveTokenCssVar(tokens, node.tokenBindings?.fill);
     const fontSizeVar = resolveTokenCssVar(tokens, node.tokenBindings?.fontSize);
@@ -347,10 +385,29 @@ export function buildNodeCssDeclarations(
     if (Math.abs(node.style.letterSpacing) > 0.01) {
       declarations.push(`letter-spacing: ${roundCss(node.style.letterSpacing)}px;`);
     }
+    if (node.style.textAlign && node.style.textAlign !== 'left') {
+      declarations.push(`text-align: ${node.style.textAlign};`);
+    }
+    if (node.style.textTransform && node.style.textTransform !== 'none') {
+      declarations.push(`text-transform: ${node.style.textTransform};`);
+    }
+    if (node.style.textDecoration && node.style.textDecoration !== 'none') {
+      declarations.push(`text-decoration: ${node.style.textDecoration};`);
+    }
     declarations.push('margin: 0;');
-    declarations.push('white-space: pre-wrap;');
+    if (node.style.textWrap === 'nowrap') {
+      declarations.push('white-space: pre;');
+    } else {
+      declarations.push('white-space: pre-wrap;');
+      declarations.push('overflow-wrap: break-word;');
+    }
   } else if (node.type === 'component-instance') {
     declarations.push('overflow: visible;');
+  }
+
+  const effectAndBlendDecls = buildCssEffectsAndBlendDeclarations(node);
+  if (effectAndBlendDecls.length > 0) {
+    declarations.push(...effectAndBlendDecls);
   }
 
   return declarations;
@@ -390,14 +447,25 @@ function pushCssRule(
   }
 }
 
+const MAX_COMPONENT_RENDER_DEPTH = 16;
+
+export interface CompilePageHtmlCssOptions {
+  assetMode?: 'bundle' | 'inline';
+}
+
 export function compilePageHtmlCss(
   project: FolioProject,
   page: FolioPage,
+  options: CompilePageHtmlCssOptions = {},
 ): CompiledPageArtifacts {
+  const assetMode = options.assetMode ?? 'bundle';
   const tokens = getProjectDesignTokens(project);
   const slug = toPageFileSlug(page.route, page.name);
   const componentsById = new Map<string, ComponentDefinition>(
     project.components.map((component) => [component.id, component]),
+  );
+  const assetsById = new Map<string, AssetReference>(
+    project.assets.map((asset) => [asset.id, asset]),
   );
 
   const { roots, childrenByParent } = buildChildrenMap(page.document.nodes);
@@ -495,6 +563,8 @@ export function compilePageHtmlCss(
     htmlLineOffset: number,
     activeChildrenByParent: Map<string, DesignNode[]>,
     idPrefix: string,
+    visitedComponentIds: ReadonlySet<string>,
+    componentDepth: number,
   ) => {
     const indent = '  '.repeat(depth);
     const emittedId = idPrefix ? `${idPrefix}${node.id}` : node.id;
@@ -524,13 +594,26 @@ export function compilePageHtmlCss(
 
     if (node.type === 'text') {
       htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}>${escapeHtml(node.text)}</${tag}>`);
+    } else if (node.type === 'image') {
+      const asset = assetsById.get(node.assetId);
+      const src = asset
+        ? assetMode === 'inline'
+          ? (resolveAssetDisplayUrl(asset) ?? '')
+          : `../${getAssetBundlePath(asset)}`
+        : '';
+      const alt = node.alt ?? node.name;
+      htmlBodyLines.push(
+        `${indent}<img ${attrs.join(' ')} src="${escapeAttr(src)}" alt="${escapeAttr(alt)}" />`,
+      );
     } else if (node.type === 'path') {
       htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
       htmlBodyLines.push(...buildInlineSvgMarkup(node, tokens, `${indent}  `));
       htmlBodyLines.push(`${indent}</${tag}>`);
     } else if (node.type === 'component-instance') {
       const master = componentsById.get(node.componentId);
-      if (master) {
+      if (master && !visitedComponentIds.has(master.id) && componentDepth < MAX_COMPONENT_RENDER_DEPTH) {
+        const nextVisited = new Set(visitedComponentIds);
+        nextVisited.add(master.id);
         const resolvedChildren = resolveComponentInstanceNodes(node, master, tokens);
         const childMap = buildChildrenMap(resolvedChildren);
         const masterW = Math.max(1, master.document.width);
@@ -561,6 +644,8 @@ export function compilePageHtmlCss(
               htmlLineOffset,
               childMap.childrenByParent,
               childPrefix,
+              nextVisited,
+              componentDepth + 1,
             );
           }
           htmlBodyLines.push(`${indent}  </div>`);
@@ -576,6 +661,8 @@ export function compilePageHtmlCss(
               htmlLineOffset,
               childMap.childrenByParent,
               childPrefix,
+              nextVisited,
+              componentDepth + 1,
             );
           }
         }
@@ -602,6 +689,8 @@ export function compilePageHtmlCss(
             htmlLineOffset,
             activeChildrenByParent,
             idPrefix,
+            visitedComponentIds,
+            componentDepth,
           );
         }
         htmlBodyLines.push(`${indent}</${tag}>`);
@@ -622,6 +711,8 @@ export function compilePageHtmlCss(
     }
   };
 
+  const googleFontsUrl = buildGoogleFontsStylesheetUrl(collectProjectGoogleFonts(project));
+
   const htmlPreambleLines = [
     '<!DOCTYPE html>',
     '<html lang="en">',
@@ -629,6 +720,13 @@ export function compilePageHtmlCss(
     '  <meta charset="UTF-8" />',
     '  <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
     `  <title>${escapeHtml(project.metadata.name)} — ${escapeHtml(page.name)}</title>`,
+    ...(googleFontsUrl
+      ? [
+          '  <link rel="preconnect" href="https://fonts.googleapis.com" />',
+          '  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />',
+          `  <link rel="stylesheet" href="${escapeAttr(googleFontsUrl)}" />`,
+        ]
+      : []),
     '  <link rel="stylesheet" href="../styles/tokens.css" />',
     `  <link rel="stylesheet" href="../styles/${slug}.css" />`,
   ];
@@ -647,8 +745,21 @@ export function compilePageHtmlCss(
   );
 
   const htmlLineOffset = htmlPreambleLines.length;
+  const emptyVisited = new Set<string>();
   for (const root of roots) {
-    emitNodeHtml(root, null, 2, false, false, { x: 0, y: 0 }, htmlLineOffset, childrenByParent, '');
+    emitNodeHtml(
+      root,
+      null,
+      2,
+      false,
+      false,
+      { x: 0, y: 0 },
+      htmlLineOffset,
+      childrenByParent,
+      '',
+      emptyVisited,
+      0,
+    );
   }
 
   if (tabletRules.length > 0) {
@@ -720,13 +831,26 @@ export interface LivePreviewOptions {
   includeLogicRuntime?: boolean;
 }
 
+function sanitizeCommentLabel(value: string): string {
+  return value
+    .replace(/\*\//g, '* /')
+    .replace(/<\/style/gi, '<\\/style')
+    .replace(/<\/script/gi, '<\\/script')
+    .replace(/[\r\n]+/g, ' ');
+}
+
+export const LIVE_PREVIEW_CSP =
+  "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; script-src 'unsafe-inline'; img-src data: blob:; font-src data: https://fonts.gstatic.com;";
+
 /**
  * Compiles a complete, self-contained HTML5 document for Folio's sandboxed
  * Live Preview (`<iframe sandbox="allow-scripts">`).
  *
  * Security guarantees:
+ * - Strict CSP blocks outbound network requests (fetch/XHR/beacons/external scripts/images)
+ *   while allowing curated Google Fonts stylesheets/woff2 assets.
  * - All AST text/attributes are HTML-escaped; URLs are protocol-allowlisted.
- * - All CSS blocks neutralize `</style` breakout.
+ * - All CSS blocks & module comments neutralize `</style` breakout.
  * - Custom JS is optional and neutralizes `</script` breakout; host iframe
  *   NEVER grants `allow-same-origin`.
  */
@@ -746,16 +870,17 @@ export function buildLivePreviewHtml(
       : '';
 
   const tokensCss = compileTokensCssFile(project).content;
-  const compiledPage = compilePageHtmlCss(project, page);
+  const compiledPage = compilePageHtmlCss(project, page, { assetMode: 'inline' });
+  const googleFontsUrl = buildGoogleFontsStylesheetUrl(collectProjectGoogleFonts(project));
 
   const modules: readonly CodeModuleRecord[] = project.codeModules ?? [];
   const customCssBlocks = modules
     .filter((mod) => mod.language === 'css' && mod.mapping === 'custom' && (!mod.targetPageId || mod.targetPageId === page.id))
-    .map((mod) => `/* Custom Module: ${mod.path} */\n${sanitizeCssText(mod.content)}`);
+    .map((mod) => `/* Custom Module: ${sanitizeCommentLabel(mod.path)} */\n${sanitizeCssText(mod.content)}`);
 
   const extensionCssBlocks = modules
     .filter((mod) => mod.language === 'css' && mod.mapping === 'extension' && (!mod.targetPageId || mod.targetPageId === page.id))
-    .map((mod) => `/* Node Extension: ${mod.path} */\n${sanitizeCssText(mod.content)}`);
+    .map((mod) => `/* Node Extension: ${sanitizeCommentLabel(mod.path)} */\n${sanitizeCssText(mod.content)}`);
 
   const logicScript =
     options.includeLogicRuntime !== false
@@ -765,7 +890,7 @@ export function buildLivePreviewHtml(
   const customJsBlocks = options.includeCustomScripts
     ? modules
         .filter((mod) => mod.language === 'js' && (!mod.targetPageId || mod.targetPageId === page.id))
-        .map((mod) => `/* Custom Script: ${mod.path} */\n${sanitizeJsText(mod.content)}`)
+        .map((mod) => `/* Custom Script: ${sanitizeCommentLabel(mod.path)} */\n${sanitizeJsText(mod.content)}`)
     : [];
 
   const allScriptBlocks = [
@@ -798,7 +923,11 @@ export function buildLivePreviewHtml(
     '<head>',
     '  <meta charset="UTF-8" />',
     '  <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
+    `  <meta http-equiv="Content-Security-Policy" content="${LIVE_PREVIEW_CSP}" />`,
     `  <title>${escapeHtml(project.metadata.name)} — ${escapeHtml(page.name)}</title>`,
+    ...(googleFontsUrl
+      ? [`  <link rel="stylesheet" href="${escapeAttr(googleFontsUrl)}" />`]
+      : []),
     '  <style>',
     combinedStyles,
     '  </style>',

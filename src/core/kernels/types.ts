@@ -2,11 +2,14 @@ import type {
   BreakpointId,
   DesignNode,
   FolioDocument,
+  FolioPage,
+  FolioProject,
   PathNode,
 } from '../document/types';
 import type { PathfinderOperation, PlanarArrangement, PlanarFace } from '../document/vector';
+import type { A11yAuditReport } from '../../engines/codegen/a11yAudit';
 
-export type ComputeKernelBackend = 'ts-default' | 'wasm';
+export type ComputeKernelBackend = 'ts-default' | 'wasm' | 'worker';
 
 export interface SpatialBoundsEntry {
   readonly id: string;
@@ -26,7 +29,7 @@ export interface SpatialQueryRect {
 
 /**
  * Flat, typed-array-friendly spatial index interface designed to drop in a
- * Rust -> WASM R-tree/BVH implementation behind the exact same contract.
+ * Rust -> WASM R-tree/BVH or linear-memory WASM AABB kernel behind the exact same contract.
  */
 export interface SpatialIndexHandle {
   readonly count: number;
@@ -64,8 +67,27 @@ export interface LayoutComputeKernel {
   ): DesignNode[];
 }
 
+export interface A11yAuditKernel {
+  readonly backend: ComputeKernelBackend;
+  auditPage(project: FolioProject, page: FolioPage): A11yAuditReport;
+}
+
 export interface ComputeKernelRegistry {
   readonly spatial: SpatialIndexKernel;
   readonly vector: VectorGeometryKernel;
   readonly layout: LayoutComputeKernel;
+  readonly a11y: A11yAuditKernel;
+}
+
+export interface ComputeKernelRuntimeStatus {
+  readonly spatialBackend: ComputeKernelBackend;
+  readonly vectorBackend: ComputeKernelBackend;
+  readonly layoutBackend: ComputeKernelBackend;
+  readonly a11yBackend: ComputeKernelBackend;
+  readonly wasmSupported: boolean;
+  readonly wasmSpatialActive: boolean;
+  readonly wasmModuleBytes: number;
+  readonly workerSupported: boolean;
+  readonly workerActive: boolean;
+  readonly workerCompletedJobs: number;
 }

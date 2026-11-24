@@ -23,10 +23,13 @@ import type { CodeModuleRecord, FrameNode, PathNode, TextNode } from '../src/cor
 import { validateProject } from '../src/core/document/validation';
 import {
   applyMappedNodeEdit,
+  buildCompiledProjectBundle,
   buildLivePreviewHtml,
+  buildZipArchive,
   compileFolioProject,
   createCustomCodeModule,
   createNodeExtensionModule,
+  parseZipArchive,
 } from '../src/engines/codegen';
 import {
   escapeAttr,
@@ -471,7 +474,7 @@ describe('Tahap 3 — Mapped Round-Trip Sync & Custom Code Preservation via Nati
 
   it('persists Custom & Extension codeModules via code.update-modules with Undo/Redo and preserves them across Canvas visual edits', () => {
     expect(Object.keys(NATIVE_COMMAND_REGISTRY).length).toBe(14);
-    expect(Object.keys(ALL_NATIVE_COMMAND_REGISTRY).length).toBe(38);
+    expect(Object.keys(ALL_NATIVE_COMMAND_REGISTRY).length).toBe(39);
 
     const project = createInitialProject('Sync Demo');
     const store = createCanonicalEditorStore(createEditorState(project));
@@ -570,5 +573,57 @@ describe('Tahap 3 — Mapped Round-Trip Sync & Custom Code Preservation via Nati
     });
     expect(rejected.status).toBe('rejected');
     expect(rejected.code).toBe('INVALID_PAYLOAD');
+  });
+
+  it('builds deterministic, CRC-32 verified multi-file ZIP bundles for both React TSX and HTML/CSS targets and rejects path traversal', () => {
+    const project = createInitialProject('Bundle Studio');
+    const customCss = createCustomCodeModule([], 'css');
+    customCss.content = '.hero-accent { letter-spacing: 0.04em; }\n';
+    project.codeModules = [customCss];
+
+    // 1. React + TypeScript runnable project ZIP
+    const reactBundleA = buildCompiledProjectBundle(project, { target: 'react' });
+    const reactBundleB = buildCompiledProjectBundle(project, { target: 'react' });
+    expect(reactBundleA.fileName).toBe('bundle-studio-react-ts.zip');
+    // Byte-for-byte deterministic output
+    expect(Array.from(reactBundleA.zipBytes)).toEqual(Array.from(reactBundleB.zipBytes));
+
+    const reactParsed = parseZipArchive(reactBundleA.zipBytes);
+    const reactPaths = new Set(reactParsed.map((e) => e.path));
+    expect(reactPaths.has('package.json')).toBe(true);
+    expect(reactPaths.has('tsconfig.json')).toBe(true);
+    expect(reactPaths.has('vite.config.ts')).toBe(true);
+    expect(reactPaths.has('index.html')).toBe(true);
+    expect(reactPaths.has('src/main.tsx')).toBe(true);
+    expect(reactPaths.has('src/App.tsx')).toBe(true);
+    expect(reactPaths.has('src/styles/tokens.css')).toBe(true);
+    expect(reactPaths.has(customCss.path)).toBe(true);
+
+    const decoder = new TextDecoder();
+    const pkgEntry = reactParsed.find((e) => e.path === 'package.json')!;
+    const pkgJson = JSON.parse(decoder.decode(pkgEntry.data)) as { name: string; dependencies: Record<string, string> };
+    expect(pkgJson.name).toBe('bundle-studio');
+    expect(pkgJson.dependencies.react).toBeTruthy();
+
+    // 2. HTML5 + CSS static project ZIP
+    const htmlBundle = buildCompiledProjectBundle(project, { target: 'html-css' });
+    expect(htmlBundle.fileName).toBe('bundle-studio-html-css.zip');
+    const htmlParsed = parseZipArchive(htmlBundle.zipBytes);
+    const htmlPaths = new Set(htmlParsed.map((e) => e.path));
+    expect(htmlPaths.has('index.html')).toBe(true);
+    expect(htmlPaths.has('pages/index.html')).toBe(true);
+    expect(htmlPaths.has('styles/index.css')).toBe(true);
+    expect(htmlPaths.has('styles/tokens.css')).toBe(true);
+    expect(htmlPaths.has(customCss.path)).toBe(true);
+
+    // 3. Rejects directory traversal and duplicate paths in ZIP entries
+    expect(() => buildZipArchive([{ path: '../evil.txt', content: 'nope' }])).toThrow();
+    expect(() => buildZipArchive([{ path: '/etc/passwd', content: 'nope' }])).toThrow();
+    expect(() =>
+      buildZipArchive([
+        { path: 'dup.txt', content: 'a' },
+        { path: 'dup.txt', content: 'b' },
+      ]),
+    ).toThrow();
   });
 });

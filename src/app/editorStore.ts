@@ -7,14 +7,20 @@ import {
   validateProjectIncremental,
 } from '../core/document/validation';
 import { getNativeCommandCommitAuthorization } from './nativeCommandExecutor';
-import { editorReducer, type EditorAction, type EditorState } from './editorReducer';
+import {
+  EDITOR_HISTORY_LIMIT,
+  editorReducer,
+  type EditorAction,
+  type EditorState,
+} from './editorReducer';
+import { isProjectDeltaEntry } from '../engines/history/deltaHistory';
 
 const RESERVED_COMPONENT_CANVAS_ID = 'folio-component-canvas';
-const EDITOR_HISTORY_LIMIT = 60;
 const storeIdentities = new WeakMap<object, object>();
 const snapshotOwners = new WeakMap<object, object>();
 const snapshotWorkspaces = new WeakMap<object, CanonicalEditorStoreWorkspace>();
 const validatedFrozenProjects = new WeakSet<object>();
+const validatedFrozenDeltas = new WeakSet<object>();
 
 export type CanonicalEditorStoreWorkspace = 'main' | 'component';
 
@@ -94,23 +100,26 @@ function isValidatedProject(
   return true;
 }
 
-function isHistoricalProject(value: unknown, workspace: CanonicalEditorStoreWorkspace): boolean {
+function isHistoricalDelta(value: unknown, workspace: CanonicalEditorStoreWorkspace): boolean {
   try {
     if (typeof value !== 'object' || value === null) return false;
-    const project = value as EditorState['project'];
-    if (workspace === 'main' && project.metadata.id === RESERVED_COMPONENT_CANVAS_ID) {
-      return false;
-    }
-    if (validatedFrozenProjects.has(project as object)) {
+    if (validatedFrozenDeltas.has(value as object)) {
       return true;
     }
-    return isValidatedProject(project);
+    const valid = isProjectDeltaEntry(
+      value,
+      workspace === 'main' ? { disallowedProjectId: RESERVED_COMPONENT_CANVAS_ID } : undefined,
+    );
+    if (valid && isDeeplyFrozenGraph(value)) {
+      validatedFrozenDeltas.add(value as object);
+    }
+    return valid;
   } catch {
     return false;
   }
 }
 
-/** Validate the current project, every historical project, and selection against the active document. */
+/** Validate the current project, every historical delta entry, and selection against the active document. */
 function isEditorState(
   value: unknown,
   workspace: CanonicalEditorStoreWorkspace,
@@ -123,8 +132,8 @@ function isEditorState(
         !isValidatedProject(candidate.project as EditorState['project'], previousValidProject) ||
         !Array.isArray(candidate.past) || !Array.isArray(candidate.future) ||
         candidate.past.length + candidate.future.length > EDITOR_HISTORY_LIMIT ||
-        !candidate.past.every((entry) => isHistoricalProject(entry, workspace)) ||
-        !candidate.future.every((entry) => isHistoricalProject(entry, workspace)) ||
+        !candidate.past.every((entry) => isHistoricalDelta(entry, workspace)) ||
+        !candidate.future.every((entry) => isHistoricalDelta(entry, workspace)) ||
         (candidate.selectedNodeId !== null && typeof candidate.selectedNodeId !== 'string') ||
         !Array.isArray(candidate.selectedNodeIds) ||
         !candidate.selectedNodeIds.every((id) => typeof id === 'string' && id.length > 0) ||
@@ -191,8 +200,8 @@ class WorkspaceCanonicalEditorStore implements CanonicalEditorStore {
     storeIdentities.set(this, this.identity);
     const frozenInitial = freezeGraph(initialState);
     validatedFrozenProjects.add(frozenInitial.project as object);
-    for (const historical of frozenInitial.past) validatedFrozenProjects.add(historical as object);
-    for (const historical of frozenInitial.future) validatedFrozenProjects.add(historical as object);
+    for (const historical of frozenInitial.past) validatedFrozenDeltas.add(historical as object);
+    for (const historical of frozenInitial.future) validatedFrozenDeltas.add(historical as object);
     this.snapshot = Object.freeze({ editorState: frozenInitial, projectRevision: 0 });
     snapshotOwners.set(this.snapshot as object, this.identity);
     snapshotWorkspaces.set(this.snapshot as object, workspace);
@@ -305,8 +314,8 @@ class WorkspaceCanonicalEditorStore implements CanonicalEditorStore {
     try {
       acceptedState = freezeGraph(input.candidateState);
       validatedFrozenProjects.add(acceptedState.project as object);
-      for (const historical of acceptedState.past) validatedFrozenProjects.add(historical as object);
-      for (const historical of acceptedState.future) validatedFrozenProjects.add(historical as object);
+      for (const historical of acceptedState.past) validatedFrozenDeltas.add(historical as object);
+      for (const historical of acceptedState.future) validatedFrozenDeltas.add(historical as object);
     }
     catch { return { status: 'failed', snapshot: beforeSnapshot, errorCode: 'COMMIT_FAILED' }; }
 

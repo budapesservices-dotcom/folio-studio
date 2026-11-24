@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { lazy, Suspense } from 'preact/compat';
 import type { JSX } from 'preact';
 import { createInitialProject } from '../core/document/factory';
@@ -21,13 +21,13 @@ import { createEditorState } from './editorReducer';
 import { createCanonicalEditorStore } from './editorStore';
 import { createComponentCanvasCommandClient, createMainCanvasCommandClient } from './mainCanvasCommandClient';
 import { createToolOperationExecutor } from './toolOperationExecutor';
-import { activateModalDialog, trapModalDialogKeydown } from './modalFocus';
 import { getActiveEditorContext, type EditorTarget } from './editorContext';
 import { getWindowZIndex } from './windowManager';
 import { createToolbarHintStore, DEFAULT_TOOLBAR_HINT } from './ToolbarHintBar';
 import type { KeyboardShortcutsModalProps } from './KeyboardShortcutsModal';
 import { StudioIcon } from './workspace/StudioIcon';
 import { useWorkspaceWindows } from './workspace/useWorkspaceWindows';
+import { useWorkspaceChromeEffects } from './workspace/useWorkspaceChromeEffects';
 import { usePanelResizeController } from './workspace/usePanelResizeController';
 import { useComponentMasterLifecycle } from './workspace/useComponentMasterLifecycle';
 import { useWorkspaceShortcuts } from './workspace/useWorkspaceShortcuts';
@@ -37,6 +37,7 @@ import { useProjectFileLifecycle } from './workspace/useProjectFileLifecycle';
 import { usePageAndTemplateActions } from './workspace/usePageAndTemplateActions';
 import { useDesignSystemActions } from './workspace/useDesignSystemActions';
 import { useMotionPlayback } from './workspace/useMotionPlayback';
+import { useMediaAndFontsLifecycle } from './workspace/useMediaAndFontsLifecycle';
 import { GlobalToolbar, WorkspacePreferencesRecoveryBanner, type TopMenuId } from './workspace/GlobalToolbar';
 import { buildGlobalToolbarMenuActions } from './workspace/globalMenuActions';
 import { createInteractiveStarterProject } from './workspace/nodeLogicGraphHelpers';
@@ -54,6 +55,7 @@ import { ComponentDeletionDialog, ProjectHydrationOverlay } from './workspace/Co
 const LazyCodeWorkspace = lazy(() => import('./workspace/LazyCodeWorkspace'));
 const LazyTokensPanel = lazy(() => import('./workspace/TokensPanel').then((m) => ({ default: m.TokensPanel })));
 const LazyMotionTimelinePanel = lazy(() => import('./workspace/MotionTimelinePanel').then((m) => ({ default: m.MotionTimelinePanel })));
+const LazyDiagnosticsModal = lazy(() => import('./workspace/DiagnosticsModal'));
 const LazyKeyboardShortcutsModal = lazy(async () => {
   const module = await import('./KeyboardShortcutsModal');
   return {
@@ -163,6 +165,7 @@ export function App() {
   const clipboardRef = useRef<StudioClipboardPayload | null>(null);
 
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
+  const [diagnosticsModalOpen, setDiagnosticsModalOpen] = useState(false);
   const [shortcutsMountTick, setShortcutsMountTick] = useState(0);
   const shortcutsModalHostRef = useRef<HTMLDivElement | null>(null);
   const shortcutsDialogRef = useRef<HTMLElement | null>(null);
@@ -175,6 +178,7 @@ export function App() {
   // Stable canonical store callbacks for project hydration & autosave
   const editingComponentIdRef = useRef<string | null>(null);
   const resetEditingComponentRef = useRef<() => void>(() => {});
+  const activeBreakpointRef = useRef<'desktop' | 'tablet' | 'mobile'>('desktop');
   const getCanonicalRevision = useCallback(() => canonicalStore.getSnapshot().projectRevision, [canonicalStore]);
   const getCanonicalProject = useCallback(() => canonicalStore.getSnapshot().editorState.project, [canonicalStore]);
   const subscribeCanonicalStore = useCallback(
@@ -183,6 +187,7 @@ export function App() {
   );
   const getEditingComponentId = useCallback(() => editingComponentIdRef.current, []);
   const resetEditingComponent = useCallback(() => resetEditingComponentRef.current(), []);
+  const getActiveBreakpoint = useCallback(() => activeBreakpointRef.current, []);
 
   // Project hydration, revision-fenced autosave & .flop / SVG / PNG export
   const fileLifecycle = useProjectFileLifecycle({
@@ -190,6 +195,7 @@ export function App() {
     componentProject: componentState.project,
     componentDocument,
     activeEditorId,
+    getActiveBreakpoint,
     getEditingComponentId,
     onResetEditingComponent: resetEditingComponent,
     mainCommandClient,
@@ -269,13 +275,6 @@ export function App() {
     setNotice,
   });
 
-  // Auto-dismiss transient status toast
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 4200);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-
   const openShortcutsModal = useCallback(() => {
     shortcutsFocusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setOpenMenu(null);
@@ -292,92 +291,26 @@ export function App() {
     setShortcutsMountTick((tick) => tick + 1);
   }, []);
 
-  // Dismiss menus on outside pointerdown or Escape
-  useLayoutEffect(() => {
-    if (!openMenu) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && menuBarRef.current?.contains(event.target)) return;
-      setOpenMenu(null);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setOpenMenu(null);
-      }
-    };
-    const controller = new AbortController();
-    document.addEventListener('pointerdown', handlePointerDown, { capture: true, signal: controller.signal });
-    window.addEventListener('keydown', handleKeyDown, { capture: true, signal: controller.signal });
-    return () => controller.abort();
-  }, [openMenu]);
-
-  // Dismiss tool rack flyouts on outside pointerdown or Escape
-  useLayoutEffect(() => {
-    if (!toolRackOpen) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && toolRailRef.current?.contains(event.target)) return;
-      setToolRackOpen(null);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        if (
-          event.target instanceof HTMLInputElement
-          && event.target.classList.contains('template-library-search')
-          && event.target.value.trim().length > 0
-        ) {
-          return;
-        }
-        event.preventDefault();
-        setToolRackOpen(null);
-      }
-    };
-    const controller = new AbortController();
-    document.addEventListener('pointerdown', handlePointerDown, { capture: true, signal: controller.signal });
-    window.addEventListener('keydown', handleKeyDown, { capture: true, signal: controller.signal });
-    return () => controller.abort();
-  }, [toolRackOpen]);
-
-  // Window viewport recovery on mount & resize
-  useEffect(() => {
-    const onResize = () => {
-      windows.recoverWindow('main-canvas');
-      windows.recoverWindow('component-canvas');
-      windows.recoverWindow('node-logic');
-      panelResize.clampCurrentPanelWidths();
-    };
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [windows.recoverWindow, panelResize.clampCurrentPanelWidths]);
-
-  useEffect(() => {
-    windows.recoverWindow('main-canvas');
-    windows.recoverWindow('component-canvas');
-    windows.recoverWindow('node-logic');
-  }, []);
-
-  // Keyboard Shortcuts modal focus trap
-  useEffect(() => {
-    if (!shortcutsModalOpen || componentMaster.componentDeletionDialogOpen) return;
-    const shell = appShellRef.current;
-    const host = shortcutsModalHostRef.current;
-    const dialog = shortcutsDialogRef.current;
-    if (!shell || !host || !dialog) return;
-    const restoreFocus = activateModalDialog(shell, host, dialog, shortcutsFocusReturnRef.current);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key === '/') {
-        event.preventDefault();
-        event.stopPropagation();
-        closeShortcutsModal();
-        return;
-      }
-      trapModalDialogKeydown(dialog, event, closeShortcutsModal);
-    };
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown, true);
-      restoreFocus();
-    };
-  }, [shortcutsModalOpen, shortcutsMountTick, componentMaster.componentDeletionDialogOpen, closeShortcutsModal]);
+  useWorkspaceChromeEffects({
+    notice,
+    setNotice,
+    openMenu,
+    setOpenMenu,
+    menuBarRef,
+    toolRackOpen,
+    setToolRackOpen,
+    toolRailRef,
+    recoverWindow: windows.recoverWindow,
+    clampCurrentPanelWidths: panelResize.clampCurrentPanelWidths,
+    shortcutsModalOpen,
+    shortcutsMountTick,
+    componentDeletionDialogOpen: componentMaster.componentDeletionDialogOpen,
+    appShellRef,
+    shortcutsModalHostRef,
+    shortcutsDialogRef,
+    shortcutsFocusReturnRef,
+    closeShortcutsModal,
+  });
 
   const updateToolbarHint = useCallback((panel: string, description: string, shortcuts: string[] = []) => {
     if (panelResize.resizingPanelRef.current !== null) return;
@@ -433,6 +366,7 @@ export function App() {
   const pageActions = usePageAndTemplateActions({
     project: state.project,
     activeEditorId,
+    editingComponentId: componentMaster.editingComponentId,
     activeDocument,
     focusedDocument,
     isHydrating,
@@ -444,6 +378,20 @@ export function App() {
     setInspectorVisible: windows.setInspectorVisible,
     openMainCanvas: windows.openMainCanvas,
     closePagesRack,
+    setNotice,
+  });
+
+  // Studio Google Fonts / @font-face loader & deduplicated image ingestion
+  const { handleInsertImageFiles } = useMediaAndFontsLifecycle({
+    project: state.project,
+    activeEditorId,
+    isHydrating,
+    canonicalStore,
+    componentStore,
+    mainCommandClient,
+    componentCommandClient,
+    selectionSourceRef,
+    setInspectorVisible: windows.setInspectorVisible,
     setNotice,
   });
 
@@ -544,6 +492,7 @@ export function App() {
     setNotice,
     onMasterMetadataUpdated: componentMaster.acknowledgeMasterMetadataUpdate,
   });
+  activeBreakpointRef.current = designSystem.activeBreakpoint;
 
   const mainCanvasVisible = !windows.canvasClosed
     && !windows.canvasMinimized
@@ -664,11 +613,12 @@ export function App() {
         onCloseMenus={() => setOpenMenu(null)}
         onOpenProjectPicker={() => { if (isHydrating) return; setOpenMenu(null); projectFileInputRef.current?.click(); }}
         onProjectFileSelected={fileLifecycle.handleProjectFileSelected}
-        onExportCurrentProject={() => fileLifecycle.exportCurrentProject(isHydrating)}
+        onExportCurrentProject={() => { void fileLifecycle.exportCurrentProject(isHydrating); }}
         onExportActiveCanvasSvg={() => { void fileLifecycle.exportActiveCanvasSvg(isHydrating); }}
         onExportActiveCanvasPng={() => { void fileLifecycle.exportActiveCanvasPng(isHydrating); }}
         onResetWindowLayout={resetWindowLayout}
         onOpenShortcutsModal={openShortcutsModal}
+        onOpenDiagnosticsModal={() => setDiagnosticsModalOpen(true)}
         onStartProjectRename={() => {
           setProjectNameDraft(state.project.metadata.name);
           projectNameCancelRef.current = false;
@@ -800,6 +750,7 @@ export function App() {
         document={motion.animatedMainDocument}
         components={state.project.components}
         designTokens={designSystem.designTokens}
+        assets={state.project.assets}
         activeBreakpoint={designSystem.activeBreakpoint}
         onChangeBreakpoint={designSystem.setActiveBreakpoint}
         selectedNodeIds={state.selectedNodeIds}
@@ -836,6 +787,7 @@ export function App() {
         onToolOperation={(operation) => mainToolOperationExecutor.execute(operation)}
         onToolOperationBatch={(operations) => mainToolOperationExecutor.executeBatch(operations)}
         onLayerDrop={(nodeIds) => layers.dropLayersOnCanvas(nodeIds, 'main')}
+        onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'main', point); }}
       />
 
       <ComponentCanvasWindow
@@ -849,6 +801,7 @@ export function App() {
         document={componentDocument}
         components={state.project.components}
         designTokens={designSystem.designTokens}
+        assets={state.project.assets}
         editingComponent={componentMaster.editingComponent}
         selectedNodeIds={componentState.selectedNodeIds}
         selectedComponentNodes={componentMaster.selectedComponentNodes}
@@ -898,6 +851,7 @@ export function App() {
         onToolOperation={(operation) => componentToolOperationExecutor.execute(operation)}
         onToolOperationBatch={(operations) => componentToolOperationExecutor.executeBatch(operations)}
         onLayerDrop={(nodeIds) => layers.dropLayersOnCanvas(nodeIds, 'component')}
+        onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'component', point); }}
       />
 
       <NodeLogicWindow
@@ -946,6 +900,7 @@ export function App() {
         instanceOverrideTargets={instanceOverrideTargets}
         activeBreakpoint={designSystem.activeBreakpoint}
         designTokens={designSystem.designTokens}
+        assets={state.project.assets}
         defaultFillColor={toolOptions.fillColor}
         renderIcon={(name) => <StudioIcon name={name} />}
         onStartResize={panelResize.startPanelResize}
@@ -956,7 +911,7 @@ export function App() {
           componentCommandClient.commitEdit();
         }}
         onHoverHint={() =>
-          updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, semantics, Auto-Layout, tokens and contract.')
+          updateToolbarHint('INSPECTOR', 'Edit the selected layer’s position, dimensions, fills, gradients, effects, typography, layout, and contract.')
         }
         onRemoveFromCanvas={(nodeId) => {
           focusedCommandClient.setNodesCanvasState([nodeId], false, 'Remove from canvas');
@@ -975,6 +930,7 @@ export function App() {
         onSimplifyPath={selectionActions.handleSimplifyPath}
         onChooseTool={chooseCanvasTool}
         onQuickAdd={pageActions.addNode}
+        onInsertImageFiles={(files) => { void handleInsertImageFiles(files, activeEditorId); }}
         onDuplicateSelection={() => selectionActions.duplicateSelection(activeEditorId)}
         onCopySelection={() => selectionActions.copySelection(activeEditorId)}
       />
@@ -997,6 +953,7 @@ export function App() {
         open={windows.componentRackOpen}
         components={ownedComponents}
         designTokens={designSystem.designTokens}
+        assets={state.project.assets}
         searchQuery={componentRackSearch}
         canSaveSelection={selectedNodes.length > 0}
         renamingComponentId={componentMaster.renamingComponentId}
@@ -1172,6 +1129,23 @@ export function App() {
             hostRef={shortcutsModalHostRef}
             dialogRef={shortcutsDialogRef}
             onReady={handleShortcutsModalReady}
+          />
+        </Suspense>
+      )}
+
+      {diagnosticsModalOpen && !componentMaster.componentDeletionDialogOpen && (
+        <Suspense fallback={null}>
+          <LazyDiagnosticsModal
+            open
+            project={state.project}
+            activePageId={activePage.id}
+            historyUndoCount={state.past.length}
+            historyRedoCount={state.future.length}
+            onOpenCodeStudio={() => {
+              setActiveEditorId('main');
+              setCodeWorkspaceOpen(true);
+            }}
+            onClose={() => setDiagnosticsModalOpen(false)}
           />
         </Suspense>
       )}

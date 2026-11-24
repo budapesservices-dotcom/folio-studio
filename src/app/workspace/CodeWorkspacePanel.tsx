@@ -9,6 +9,8 @@ import type {
 } from '../../core/document/types';
 import { SEMANTIC_HTML_TAGS } from '../../core/document/validation';
 import type {
+  A11yAuditReport,
+  A11yQuickFix,
   CodeOutputTarget,
   CompiledCodeFile,
   CompiledProjectOutput,
@@ -37,6 +39,7 @@ export interface CodeWorkspacePanelProps {
   mappedTargetNode: DesignNode | null;
   previewPageNodes: readonly DesignNode[];
   mappedFeedback: MappedSyncFeedback | null;
+  a11yReport?: A11yAuditReport;
   onClose: () => void;
   onChangeViewMode: (mode: CodeWorkspaceViewMode) => void;
   onChangeOutputTarget: (target: CodeOutputTarget) => void;
@@ -56,6 +59,9 @@ export interface CodeWorkspacePanelProps {
   onFocusNodeInCanvas: (nodeId: string) => void;
   onCopySelectedFile: () => void;
   onDownloadPreviewHtml: () => void;
+  onDownloadProjectZip?: () => void;
+  onApplyA11yFix?: (fix: A11yQuickFix) => void;
+  onApplyAllA11yFixes?: () => void;
 }
 
 const CATEGORY_LABEL: Record<CodeMappingCategory, string> = {
@@ -91,6 +97,7 @@ export function CodeWorkspacePanel({
   mappedTargetNode,
   previewPageNodes,
   mappedFeedback,
+  a11yReport,
   onClose,
   onChangeViewMode,
   onChangeOutputTarget,
@@ -110,11 +117,15 @@ export function CodeWorkspacePanel({
   onFocusNodeInCanvas,
   onCopySelectedFile,
   onDownloadPreviewHtml,
+  onDownloadProjectZip,
+  onApplyA11yFix,
+  onApplyAllA11yFixes,
 }: CodeWorkspacePanelProps) {
   const [textDraft, setTextDraft] = useState('');
   const [tagDraft, setTagDraft] = useState<SemanticHtmlTag | ''>('');
   const [ariaDraft, setAriaDraft] = useState('');
   const [hrefDraft, setHrefDraft] = useState('');
+  const [auditOpen, setAuditOpen] = useState(false);
 
   // Sync mapped form fields whenever targeted AST node updates
   useEffect(() => {
@@ -215,6 +226,32 @@ export function CodeWorkspacePanel({
         </div>
 
         <div class="code-studio-actions">
+          {a11yReport && (
+            <button
+              type="button"
+              class={`code-text-action code-a11y-toggle${auditOpen ? ' is-active' : ''}${a11yReport.errorCount > 0 ? ' has-errors' : a11yReport.warningCount > 0 ? ' has-warnings' : ' is-clean'}`}
+              aria-pressed={auditOpen}
+              aria-label="Toggle Accessibility Audit"
+              title={`WCAG 2.1 AA & semantic audit score: ${a11yReport.score}/100`}
+              onClick={() => setAuditOpen((openState) => !openState)}
+            >
+              {a11yReport.issues.length > 0 ? `A11y · ${a11yReport.issues.length}` : 'A11y · Pass'}
+            </button>
+          )}
+          {onDownloadProjectZip && (
+            <button
+              type="button"
+              class="code-text-action"
+              onClick={onDownloadProjectZip}
+              title={
+                outputTarget === 'react'
+                  ? 'Export runnable React + TypeScript + Vite project ZIP'
+                  : 'Export static HTML5 + CSS multi-page project ZIP'
+              }
+            >
+              Export ZIP
+            </button>
+          )}
           <button
             type="button"
             class="code-text-action"
@@ -233,6 +270,81 @@ export function CodeWorkspacePanel({
           </button>
         </div>
       </header>
+
+      {auditOpen && a11yReport && (
+        <section class="code-a11y-drawer" aria-label="Accessibility Audit">
+          <div class="code-a11y-header">
+            <div class="code-a11y-title-group">
+              <strong>Accessibility Audit · {a11yReport.pageName}</strong>
+              <span class={`code-a11y-score${a11yReport.score >= 90 ? ' is-good' : a11yReport.score >= 70 ? ' is-warn' : ' is-bad'}`}>
+                Score {a11yReport.score}/100
+              </span>
+              <span class="code-a11y-counts">
+                {a11yReport.errorCount} errors · {a11yReport.warningCount} warnings · {a11yReport.passedChecks} passed
+              </span>
+            </div>
+            <div class="code-a11y-header-actions">
+              {onApplyAllA11yFixes && a11yReport.issues.filter((issue) => Boolean(issue.fix)).length > 0 && (
+                <button
+                  type="button"
+                  class="code-text-action code-text-action-primary"
+                  onClick={onApplyAllA11yFixes}
+                >
+                  Fix All ({a11yReport.issues.filter((issue) => Boolean(issue.fix)).length})
+                </button>
+              )}
+              <button
+                type="button"
+                class="code-text-action"
+                onClick={() => setAuditOpen(false)}
+                aria-label="Close Accessibility Audit"
+              >
+                Hide
+              </button>
+            </div>
+          </div>
+          {a11yReport.issues.length === 0 ? (
+            <p class="code-a11y-empty">
+              All WCAG 2.1 AA contrast, heading hierarchy, and interactive control checks passed on this page.
+            </p>
+          ) : (
+            <ul class="code-a11y-list">
+              {a11yReport.issues.map((issue) => (
+                <li key={issue.id} class={`code-a11y-item is-${issue.severity}`}>
+                  <span class={`code-a11y-badge is-${issue.severity}`}>
+                    {issue.severity === 'error' ? 'ERROR' : issue.severity === 'warning' ? 'WARN' : 'INFO'}
+                  </span>
+                  <div class="code-a11y-item-copy">
+                    <div class="code-a11y-item-title">{issue.title}</div>
+                    <div class="code-a11y-item-msg">{issue.message}</div>
+                    {issue.detail && <div class="code-a11y-item-detail">{issue.detail}</div>}
+                  </div>
+                  <div class="code-a11y-item-actions">
+                    {issue.fix && onApplyA11yFix && (
+                      <button
+                        type="button"
+                        class="code-text-action code-text-action-primary"
+                        onClick={() => onApplyA11yFix(issue.fix!)}
+                      >
+                        {issue.fix.label}
+                      </button>
+                    )}
+                    {issue.nodeId && (
+                      <button
+                        type="button"
+                        class="code-text-action"
+                        onClick={() => onFocusNodeInCanvas(issue.nodeId!)}
+                      >
+                        Focus
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       <div class={`code-studio-body is-mode-${viewMode}`}>
         {viewMode !== 'preview' && (
@@ -574,6 +686,7 @@ export function CodeWorkspaceView({
       mappedTargetNode={workspace.mappedTargetNode}
       previewPageNodes={workspace.previewPageNodes}
       mappedFeedback={workspace.mappedFeedback}
+      a11yReport={workspace.a11yReport}
       onClose={workspace.close}
       onChangeViewMode={workspace.setViewMode}
       onChangeOutputTarget={workspace.setOutputTarget}
@@ -593,6 +706,9 @@ export function CodeWorkspaceView({
       onFocusNodeInCanvas={workspace.focusNodeInCanvas}
       onCopySelectedFile={workspace.copySelectedFile}
       onDownloadPreviewHtml={workspace.downloadPreviewHtml}
+      onDownloadProjectZip={workspace.downloadProjectZip}
+      onApplyA11yFix={workspace.applyA11yFix}
+      onApplyAllA11yFixes={workspace.applyAllA11yFixes}
     />
   );
 }

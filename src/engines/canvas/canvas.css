@@ -534,3 +534,102 @@
   stroke-dasharray: 4 3;
   vector-effect: non-scaling-stroke;
 }
+
+/* Image file drag-and-drop highlight on canvas viewport */
+.canvas-scroll-area.is-file-drop-active {
+  outline: 2px dashed #8b7cf6;
+  outline-offset: -6px;
+  background-color: rgba(139, 124, 246, 0.08);
+}
+
+/* Hybrid GPU Viewport (WebGL2/WebGPU SDF Instancing + 512x512 LRU Tile Cache) */
+.artboard-stack {
+  position: relative;
+  width: 100%;
+}
+
+.gpu-viewport-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+  background-color: #1a202c;
+  background-image:
+    linear-gradient(45deg, #212836 25%, transparent 25%),
+    linear-gradient(-45deg, #212836 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #212836 75%),
+    linear-gradient(-45deg, transparent 75%, #212836 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.gpu-viewport-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.gpu-instanced-layer {
+  z-index: 0;
+}
+
+.gpu-tile-layer {
+  z-index: 1;
+}
+
+.artboard.is-gpu-hybrid {
+  position: relative;
+  z-index: 2;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+.renderer-mode-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  margin-left: 6px;
+  border: 1px solid #2f3646;
+  border-radius: 6px;
+  background: #131822;
+}
+
+.renderer-mode-btn {
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #8f9ab0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.renderer-mode-btn:hover {
+  color: #e4e8f3;
+  background: rgba(139, 124, 246, 0.14);
+}
+
+.renderer-mode-btn.is-active {
+  color: #eef0ff;
+  background: #302b4d;
+  border-color: #6c5ce7;
+}
+
+.renderer-mode-telemetry {
+  margin-left: 4px;
+  padding-right: 4px;
+  color: #6ee7b7;
+  font-size: 9.5px;
+  font-weight: 600;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

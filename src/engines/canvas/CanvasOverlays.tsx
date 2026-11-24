@@ -1,4 +1,5 @@
 import type {
+  AssetReference,
   ComponentDefinition,
   DesignNode,
   DesignTokenCollection,
@@ -270,12 +271,15 @@ export interface CanvasInteractiveOverlaysProps {
   readonly vectorAnchorsInteractive: boolean;
   readonly activeAnchor: { nodeId: string; pointIndex: number } | null;
   readonly previewCreateNodes: DesignNode[] | null;
+  readonly isolatedPreviewNodes?: readonly DesignNode[] | null;
   readonly canvasNodes: DesignNode[];
   readonly components: ComponentDefinition[];
+  readonly assets?: readonly AssetReference[];
   readonly maskPrefix: string;
   readonly clipMaskMap: Map<string, string[]>;
   readonly frameClipMap: Map<string, string[]>;
   readonly componentById: Map<string, ComponentDefinition>;
+  readonly assetById?: ReadonlyMap<string, AssetReference>;
   readonly designTokens?: DesignTokenCollection;
   readonly shapeBuilderHoverArrangement: PlanarArrangement | null;
   readonly shapeBuilderHoveredFace: PlanarFace | null;
@@ -306,12 +310,15 @@ export function CanvasInteractiveOverlays({
   vectorAnchorsInteractive,
   activeAnchor,
   previewCreateNodes,
+  isolatedPreviewNodes,
   canvasNodes,
   components,
+  assets,
   maskPrefix,
   clipMaskMap,
   frameClipMap,
   componentById,
+  assetById,
   designTokens,
   shapeBuilderHoverArrangement,
   shapeBuilderHoveredFace,
@@ -326,6 +333,67 @@ export function CanvasInteractiveOverlays({
 }: CanvasInteractiveOverlaysProps) {
   return (
     <>
+      {/* Shape Builder hatch patterns live in the interactive overlay so zoom ticks never invalidate static scene memoization. */}
+      {toolId === 'shape-builder' && (
+        <defs>
+          <pattern
+            id={`${maskPrefix}-sb-merge`}
+            width={10 * invZoom}
+            height={10 * invZoom}
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <rect width={10 * invZoom} height={10 * invZoom} fill="rgba(56, 189, 248, 0.28)" />
+            <line
+              x1="0"
+              y1="0"
+              x2="0"
+              y2={10 * invZoom}
+              stroke="rgba(255, 255, 255, 0.55)"
+              stroke-width={2 * invZoom}
+            />
+          </pattern>
+          <pattern
+            id={`${maskPrefix}-sb-punch`}
+            width={10 * invZoom}
+            height={10 * invZoom}
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(-45)"
+          >
+            <rect width={10 * invZoom} height={10 * invZoom} fill="rgba(244, 63, 94, 0.34)" />
+            <line
+              x1="0"
+              y1="0"
+              x2="0"
+              y2={10 * invZoom}
+              stroke="rgba(255, 255, 255, 0.55)"
+              stroke-width={2 * invZoom}
+            />
+          </pattern>
+        </defs>
+      )}
+
+      {/* Isolated Active Drag/Transform Layer — updates at 60–120fps without reconciling static scene nodes. */}
+      {isolatedPreviewNodes && isolatedPreviewNodes.length > 0 && (
+        <g class="canvas-active-drag-layer" pointer-events="none">
+          {isolatedPreviewNodes.map((node) => (
+            <MaskedNodeArtwork
+              key={`drag-${node.id}`}
+              node={node}
+              nodes={canvasNodes}
+              components={components}
+              assets={assets}
+              maskPrefix={maskPrefix}
+              clipMaskMap={clipMaskMap}
+              frameClipMap={frameClipMap}
+              componentById={componentById}
+              assetById={assetById}
+              tokens={designTokens}
+            />
+          ))}
+        </g>
+      )}
+
       {/* Auto-Layout Inner Padding Guide on Selected Container */}
       {selectedNodes.length === 1 &&
         selectedNodes[0].layout &&
@@ -363,10 +431,12 @@ export function CanvasInteractiveOverlays({
               node={node}
               nodes={[...canvasNodes, ...previewCreateNodes]}
               components={components}
+              assets={assets}
               maskPrefix={maskPrefix}
               clipMaskMap={clipMaskMap}
               frameClipMap={frameClipMap}
               componentById={componentById}
+              assetById={assetById}
               tokens={designTokens}
             />
           ))}

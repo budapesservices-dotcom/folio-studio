@@ -276,7 +276,7 @@ export function getDefaultNodePropertyValue(node: DesignNode, property: Animatab
     case 'scale':
       return 1;
     case 'fill':
-      return 'style' in node && typeof node.style.fill === 'string' && node.style.fill.trim()
+      return 'style' in node && 'fill' in node.style && typeof node.style.fill === 'string' && node.style.fill.trim()
         ? node.style.fill
         : '#4f8cff';
   }

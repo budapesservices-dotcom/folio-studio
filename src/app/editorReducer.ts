@@ -1,5 +1,6 @@
 import type {
   AnimationClip,
+  AssetReference,
   CodeModuleRecord,
   ComponentDefinition,
   ComponentSlotDefinition,
@@ -23,13 +24,20 @@ import {
 } from '../core/document/components';
 import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, collapseLegacyCanvasInstances, type LayerDropPosition } from '../core/document/layers';
 import { cleanupDeletedNodeReferences } from '../core/document/nodeReferenceCleanup';
+import {
+  applyProjectDelta,
+  computeProjectDelta,
+  DEFAULT_DELTA_HISTORY_LIMIT,
+  isProjectDeltaEmpty,
+  type ProjectDelta,
+} from '../engines/history/deltaHistory';
 
-const HISTORY_LIMIT = 60;
+export const EDITOR_HISTORY_LIMIT = DEFAULT_DELTA_HISTORY_LIMIT;
 
 export interface EditorState {
   project: FolioProject;
-  past: FolioProject[];
-  future: FolioProject[];
+  past: ProjectDelta[];
+  future: ProjectDelta[];
   selectedNodeId: string | null;
   selectedNodeIds: string[];
   historyGroup: string | null;
@@ -73,12 +81,29 @@ export type EditorAction =
   | { type: 'create-animation-clip'; clip: AnimationClip }
   | { type: 'update-animation-clip'; clip: AnimationClip }
   | { type: 'delete-animation-clip'; clipId: string }
+  | { type: 'upsert-asset'; asset: AssetReference }
   | { type: 'replace-project'; project: FolioProject }
   | { type: 'undo' }
   | { type: 'redo' };
 
 export function createEditorState(project: FolioProject): EditorState {
   return { project: normalizeProjectLayerDocuments(project), past: [], future: [], selectedNodeId: null, selectedNodeIds: [], historyGroup: null };
+}
+
+function pushDeltaToPast(
+  state: EditorState,
+  nextProject: FolioProject,
+  coalesceKey: string | null = null,
+): ProjectDelta[] {
+  if (coalesceKey && state.historyGroup === coalesceKey && state.past.length > 0) {
+    const previousDelta = state.past[state.past.length - 1];
+    const baselineProject = applyProjectDelta(state.project, previousDelta, 'backward');
+    const mergedDelta = computeProjectDelta(baselineProject, nextProject, { coalesceKey });
+    return [...state.past.slice(0, -1), mergedDelta];
+  }
+  const delta = computeProjectDelta(state.project, nextProject, { coalesceKey });
+  if (isProjectDeltaEmpty(delta)) return state.past;
+  return [...state.past, delta].slice(-EDITOR_HISTORY_LIMIT);
 }
 
 function withSnapshot(
@@ -89,7 +114,7 @@ function withSnapshot(
 ): EditorState {
   return {
     project: nextProject,
-    past: [...state.past, state.project].slice(-HISTORY_LIMIT),
+    past: pushDeltaToPast(state, nextProject, null),
     future: [],
     selectedNodeId,
     selectedNodeIds,
@@ -248,9 +273,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         nodes: document.nodes.map((node) => (node.id === action.node.id ? action.node : node)),
       };
       const nextProject = touch(updateActiveDocument(state.project, nextDocument));
-      const past = state.historyGroup === action.coalesceKey
-        ? state.past
-        : [...state.past, state.project].slice(-HISTORY_LIMIT);
+      const past = pushDeltaToPast(state, nextProject, action.coalesceKey);
       return {
         ...state,
         project: nextProject,
@@ -474,8 +497,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         document: action.document,
         updatedAt: action.updatedAt,
       };
-      const components = state.project.components.map((component) =>
-        component.id === action.componentId ? prunedComponent : component);
+      const components = state.project.components.map((component) => {
+        if (component.id === action.componentId) return prunedComponent;
+        const nextDoc = pruneComponentInstanceContractsInDocument(component.document, prunedComponent);
+        return nextDoc === component.document ? component : { ...component, document: nextDoc };
+      });
       const pages = state.project.pages.map((page) => {
         const document = pruneComponentInstanceContractsInDocument(page.document, prunedComponent);
         return document === page.document ? page : { ...page, document };
@@ -498,11 +524,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const target = state.project.components.find((component) => component.id === action.componentId);
       if (!target || target.document !== action.expectedMasterDocument ||
           target.updatedAt !== action.expectedUpdatedAt) return state;
-      // Detach all page instances so deleting a master never leaves broken references.
+      // Detach all page AND nested component instances so deleting a master never leaves broken references.
       const pages = state.project.pages.map((page) => ({
         ...page, document: replaceComponentInstancesInDocument(page.document, target, state.project.designTokens),
       }));
-      const components = state.project.components.filter((component) => component.id !== action.componentId);
+      const components = state.project.components
+        .filter((component) => component.id !== action.componentId)
+        .map((component) => {
+          const nextDoc = replaceComponentInstancesInDocument(component.document, target, state.project.designTokens);
+          return nextDoc === component.document ? component : { ...component, document: nextDoc };
+        });
       const logicGraphs = pruneLogicGraphsForDeletedComponent(state.project.logicGraphs, action.componentId);
       const next = touch({ ...state.project, pages, components, logicGraphs });
       const selected = existingSelection(next, state.selectedNodeIds);
@@ -528,8 +559,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (nextSlots && nextSlots.length > 0) updatedComponent.slots = nextSlots;
       else delete updatedComponent.slots;
 
-      const components = state.project.components.map((component) =>
-        component.id === action.componentId ? updatedComponent : component);
+      const components = state.project.components.map((component) => {
+        if (component.id === action.componentId) return updatedComponent;
+        const nextDoc = pruneComponentInstanceContractsInDocument(component.document, updatedComponent);
+        return nextDoc === component.document ? component : { ...component, document: nextDoc };
+      });
       const pages = state.project.pages.map((page) => {
         const document = pruneComponentInstanceContractsInDocument(page.document, updatedComponent);
         return document === page.document ? page : { ...page, document };
@@ -584,9 +618,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       }
       const touched = touch(nextProject);
       if (action.coalesceKey) {
-        const past = state.historyGroup === action.coalesceKey
-          ? state.past
-          : [...state.past, state.project].slice(-HISTORY_LIMIT);
+        const past = pushDeltaToPast(state, touched, action.coalesceKey);
         return {
           ...state,
           project: touched,
@@ -686,17 +718,39 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return withSnapshot(state, touch(nextProject));
     }
 
+    case 'upsert-asset': {
+      const existingIndex = state.project.assets.findIndex(
+        (item) => item.id === action.asset.id || (action.asset.sha256 && item.sha256 === action.asset.sha256),
+      );
+      if (existingIndex >= 0) {
+        const current = state.project.assets[existingIndex];
+        if (JSON.stringify(current) === JSON.stringify(action.asset)) {
+          return state;
+        }
+        const nextAssets = state.project.assets.map((item, idx) => (idx === existingIndex ? action.asset : item));
+        return withSnapshot(state, touch({ ...state.project, assets: nextAssets }));
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          assets: [...state.project.assets, action.asset],
+        }),
+      );
+    }
+
     case 'replace-project':
       return createEditorState(action.project);
 
     case 'undo': {
       if (state.past.length === 0) return state;
-      const previous = state.past[state.past.length - 1];
+      const lastDelta = state.past[state.past.length - 1];
+      const previous = applyProjectDelta(state.project, lastDelta, 'backward');
       const selected = existingSelection(previous, state.selectedNodeIds);
       return {
         project: touch(previous),
         past: state.past.slice(0, -1),
-        future: [state.project, ...state.future].slice(0, HISTORY_LIMIT),
+        future: [lastDelta, ...state.future].slice(0, EDITOR_HISTORY_LIMIT),
         selectedNodeId: selected.length === 1 ? selected[0] : null,
         selectedNodeIds: selected,
         historyGroup: null,
@@ -705,11 +759,12 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'redo': {
       if (state.future.length === 0) return state;
-      const next = state.future[0];
+      const nextDelta = state.future[0];
+      const next = applyProjectDelta(state.project, nextDelta, 'forward');
       const selected = existingSelection(next, state.selectedNodeIds);
       return {
         project: touch(next),
-        past: [...state.past, state.project].slice(-HISTORY_LIMIT),
+        past: [...state.past, nextDelta].slice(-EDITOR_HISTORY_LIMIT),
         future: state.future.slice(1),
         selectedNodeId: selected.length === 1 ? selected[0] : null,
         selectedNodeIds: selected,

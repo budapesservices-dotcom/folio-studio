@@ -35,9 +35,16 @@ import { createMainCanvasCommandClient } from '../src/app/mainCanvasCommandClien
 import { createToolOperationExecutor } from '../src/app/toolOperationExecutor';
 import { serializeDocumentToSvgString } from '../src/app/visualExport';
 import { buildSpatialIndexForNodes, cullVisibleRenderNodes } from '../src/engines/canvas/canvasHelpers';
+import {
+  computeTileSignature,
+  computeVisibleTileGrid,
+  packSceneToGpuBatches,
+} from '../src/engines/canvas/gpu/scenePacker';
+import { createWasmSpatialIndexKernel } from '../src/core/kernels/wasmSpatialKernel';
+import { handleComputeWorkerMessage } from '../src/core/kernels/compute.worker';
 import { computeProjectDelta, applyProjectDelta } from '../src/engines/history';
 
-export type BenchmarkScale = 'small' | 'medium' | 'large' | 'xlarge';
+export type BenchmarkScale = 'small' | 'medium' | 'large' | 'xlarge' | 'monster';
 
 export interface BenchmarkConfig {
   scale: BenchmarkScale;
@@ -112,6 +119,14 @@ export const BENCHMARK_PRESETS: Record<BenchmarkScale, BenchmarkConfig> = {
     componentCount: 16,
     warmupRuns: 1,
     iterations: 8,
+  },
+  monster: {
+    scale: 'monster',
+    pageCount: 2,
+    nodesPerPage: 10000,
+    componentCount: 16,
+    warmupRuns: 1,
+    iterations: 5,
   },
 };
 
@@ -993,6 +1008,109 @@ export function runStudioBenchmark(overrides: Partial<BenchmarkConfig> = {}): St
         if (!delta) throw new Error('Expected non-null delta for benchmark edit.');
         const undone = applyProjectDelta(sampleAfterProject, delta, 'backward');
         applyProjectDelta(undone, delta, 'forward');
+      },
+    ),
+  );
+
+  // 8. Hybrid GPU Viewport: Pack + Cull + Dirty-Tile Signature (60 frames @ active node count)
+  const gpuFrames = 60;
+  const gpuScratch = new Float32Array(Math.max(256, activeDoc.nodes.length) * 16);
+  results.push(
+    measureCase(
+      {
+        id: 'gpu:pack-and-cull-60',
+        category: 'render',
+        label: `Hybrid GPU pack + cull + tiles (${gpuFrames} frames @ ${activeDoc.nodes.length} nodes)`,
+        unitsPerIteration: gpuFrames,
+        frameBudgetMs: 4.0,
+        details: 'Float32Array SDF instancing + 512px visible tile grid',
+      },
+      config.warmupRuns,
+      config.iterations,
+      () => {
+        for (let frame = 0; frame < gpuFrames; frame += 1) {
+          const vp = {
+            x: (frame * 37) % 1000,
+            y: (frame * 29) % 1200,
+            width: 960,
+            height: 640,
+          };
+          const packed = packSceneToGpuBatches(activeDoc.nodes, {
+            viewportRect: vp,
+            scratchBuffer: gpuScratch,
+          });
+          const tiles = computeVisibleTileGrid(vp, activeDoc.width, activeDoc.height, 512);
+          if (tiles.length > 0 && packed.richNodes.length > 0) {
+            computeTileSignature(packed.richNodes.slice(0, 24), tiles[0], 1);
+          }
+        }
+      },
+    ),
+  );
+
+  // 9. WebAssembly Linear-Memory Spatial Kernel: 60 Viewport Queries
+  const wasmKernel = createWasmSpatialIndexKernel();
+  const wasmEntries = activeDoc.nodes.map((node, zIndex) => ({
+    id: node.id,
+    minX: node.x,
+    minY: node.y,
+    maxX: node.x + node.width,
+    maxY: node.y + node.height,
+    zIndex,
+  }));
+  const wasmSpatialIndex = wasmKernel.buildIndex(wasmEntries);
+  results.push(
+    measureCase(
+      {
+        id: 'wasm:spatial-query-60',
+        category: 'render',
+        label: `WASM spatial AABB sweep (${spatialQueries} queries @ ${activeDoc.nodes.length} nodes, ${wasmKernel.backend})`,
+        unitsPerIteration: spatialQueries,
+        frameBudgetMs: 4.0,
+        details: `WebAssembly linear-memory query_rect (${wasmKernel.backend})`,
+      },
+      config.warmupRuns,
+      config.iterations,
+      () => {
+        for (let frame = 0; frame < spatialQueries; frame += 1) {
+          wasmSpatialIndex.queryRect({
+            minX: (frame * 37) % 1000,
+            minY: (frame * 29) % 1200,
+            maxX: ((frame * 37) % 1000) + 960,
+            maxY: ((frame * 29) % 1200) + 640,
+          });
+        }
+      },
+    ),
+  );
+
+  // 10. Compute Worker Kernel Dispatch (Auto-Layout + Spatial Sync + Query)
+  results.push(
+    measureCase(
+      {
+        id: 'worker:kernel-dispatch',
+        category: 'render',
+        label: `Compute Worker dispatch (spatial sync + query @ ${activeDoc.nodes.length} nodes)`,
+        unitsPerIteration: 1,
+        frameBudgetMs: 16.67,
+        details: 'handleComputeWorkerMessage off-thread protocol',
+      },
+      config.warmupRuns,
+      config.iterations,
+      () => {
+        handleComputeWorkerMessage({
+          id: 1,
+          kind: 'spatial.sync',
+          entries: wasmEntries,
+        });
+        const resp = handleComputeWorkerMessage({
+          id: 2,
+          kind: 'spatial.queryRect',
+          rect: { minX: 0, minY: 0, maxX: 960, maxY: 640 },
+        });
+        if (!resp.ok) {
+          throw new Error(`Worker spatial query failed: ${resp.error}`);
+        }
       },
     ),
   );

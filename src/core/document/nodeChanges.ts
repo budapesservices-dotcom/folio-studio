@@ -47,7 +47,9 @@ function shapeStyleChanged(before: ShapeStyle, after: ShapeStyle): boolean {
     before.fill !== after.fill ||
     before.stroke !== after.stroke ||
     before.strokeWidth !== after.strokeWidth ||
-    before.radius !== after.radius
+    before.radius !== after.radius ||
+    (before.fills !== after.fills &&
+      JSON.stringify(before.fills ?? []) !== JSON.stringify(after.fills ?? []))
   );
 }
 
@@ -61,7 +63,9 @@ function pathStyleChanged(before: PathStyle, after: PathStyle): boolean {
     before.strokeDasharray !== after.strokeDasharray ||
     before.fillRule !== after.fillRule ||
     before.arrowStart !== after.arrowStart ||
-    before.arrowEnd !== after.arrowEnd
+    before.arrowEnd !== after.arrowEnd ||
+    (before.fills !== after.fills &&
+      JSON.stringify(before.fills ?? []) !== JSON.stringify(after.fills ?? []))
   );
 }
 
@@ -181,7 +185,25 @@ function hasTypeSpecificExtendedChange(before: DesignNode, after: DesignNode): b
         before.style.fontFamily !== after.style.fontFamily ||
         before.style.fontWeight !== after.style.fontWeight ||
         before.style.letterSpacing !== after.style.letterSpacing ||
-        before.style.lineHeight !== after.style.lineHeight
+        before.style.lineHeight !== after.style.lineHeight ||
+        before.style.textAlign !== after.style.textAlign ||
+        before.style.textWrap !== after.style.textWrap ||
+        before.style.textTransform !== after.style.textTransform ||
+        before.style.textDecoration !== after.style.textDecoration
+      );
+    }
+
+    case 'image': {
+      if (before.type !== 'image') return true;
+      return (
+        before.assetId !== after.assetId ||
+        before.alt !== after.alt ||
+        before.naturalWidth !== after.naturalWidth ||
+        before.naturalHeight !== after.naturalHeight ||
+        before.style.fit !== after.style.fit ||
+        before.style.radius !== after.style.radius ||
+        before.style.stroke !== after.style.stroke ||
+        before.style.strokeWidth !== after.style.strokeWidth
       );
     }
 
@@ -260,6 +282,9 @@ export function classifyNodeChange(
     before.type !== after.type ||
     before.name !== after.name ||
     before.opacity !== after.opacity ||
+    (before.blendMode ?? undefined) !== (after.blendMode ?? undefined) ||
+    (before.effects !== after.effects &&
+      JSON.stringify(before.effects ?? []) !== JSON.stringify(after.effects ?? [])) ||
     before.visible !== after.visible ||
     before.locked !== after.locked ||
     (before.layerColor ?? undefined) !== (after.layerColor ?? undefined) ||

@@ -52,7 +52,7 @@ export function buildSpatialIndexForNodes(nodes: readonly DesignNode[]): Spatial
       : 0;
     const cx = node.x + node.width * 0.5;
     const cy = node.y + node.height * 0.5;
-    const strokePad = (node.type === 'rect' || node.type === 'ellipse' || node.type === 'path' || node.type === 'frame')
+    const strokePad = (node.type === 'rect' || node.type === 'ellipse' || node.type === 'path' || node.type === 'frame' || node.type === 'image')
       ? Math.max(4, (node.style.strokeWidth ?? 0) * 1.5)
       : 4;
     entries[i] = {

@@ -1,10 +1,16 @@
 import { useEffect, useState } from 'preact/hooks';
-import type { FolioDocument, FolioProject } from '../../core/document/types';
+import type { BreakpointId, FolioDocument, FolioProject } from '../../core/document/types';
 import {
+  isStorageQuotaExceededError,
   loadMostRecentProject,
   saveProjectAndActivate,
   saveProjectIfRevisionCurrent,
+  subscribeExternalPersistenceSync,
 } from '../../core/persistence/indexedDb';
+import {
+  hydrateProjectAssetsToStore,
+  materializeProjectAssetsForExport,
+} from '../../core/persistence/assetStore';
 import { downloadProject } from '../../core/persistence/projectFile';
 import { setRevisionFencedAutosaveStatus } from '../debouncedAutosave';
 import type { EditorTarget } from '../editorContext';
@@ -18,6 +24,7 @@ export interface UseProjectFileLifecycleOptions {
   componentProject: FolioProject;
   componentDocument: FolioDocument;
   activeEditorId: EditorTarget;
+  getActiveBreakpoint?: () => BreakpointId;
   getEditingComponentId: () => string | null;
   onResetEditingComponent: () => void;
   mainCommandClient: MainCanvasCommandClient;
@@ -36,6 +43,7 @@ export function useProjectFileLifecycle({
   componentProject,
   componentDocument,
   activeEditorId,
+  getActiveBreakpoint,
   getEditingComponentId,
   onResetEditingComponent,
   mainCommandClient,
@@ -64,6 +72,7 @@ export function useProjectFileLifecycle({
           { ...loadedProject, activePageId: activePage.id },
           'Restore project from IndexedDB',
         );
+        void hydrateProjectAssetsToStore(loadedProject);
       })
       .catch((error: unknown) => {
         console.error('Folio could not restore the project from IndexedDB:', error);
@@ -74,6 +83,22 @@ export function useProjectFileLifecycle({
       });
     return () => { active = false; };
   }, [mainCommandClient]);
+
+  // Multi-tab persistence awareness: warn immediately if another tab commits newer changes
+  useEffect(() => {
+    return subscribeExternalPersistenceSync((event) => {
+      const currentProject = getCanonicalProject();
+      if (event.projectId === currentProject.metadata.id) {
+        setNotice(
+          'Another Folio tab saved newer changes to this project. Reload or export a .flop backup to avoid overwriting newer work.',
+        );
+      } else if (event.activated) {
+        setNotice(
+          'Another Folio tab opened a different project. Export a .flop backup before closing if you want to keep this tab.',
+        );
+      }
+    });
+  }, [getCanonicalProject, setNotice]);
 
   // Revision-fenced debounced autosave for primary project with pagehide/visibility flush
   useEffect(() => {
@@ -101,6 +126,11 @@ export function useProjectFileLifecycle({
         .catch((error: unknown) => {
           console.error('Folio autosave failed:', error);
           setRevisionFencedAutosaveStatus(projectRevision, getCanonicalRevision, 'error', setSaveStatus);
+          if (isStorageQuotaExceededError(error)) {
+            setNotice(
+              'Browser storage quota is full. Export a .flop backup now (File -> Export .flop) to avoid losing your changes.',
+            );
+          }
         });
     };
 
@@ -115,13 +145,14 @@ export function useProjectFileLifecycle({
       window.removeEventListener('pagehide', persistNow);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [project, isProjectLoaded, getCanonicalRevision, getCanonicalProject, subscribeCanonicalStore]);
+  }, [project, isProjectLoaded, getCanonicalRevision, getCanonicalProject, subscribeCanonicalStore, setNotice]);
 
   const handleProjectFileSelected = async (file: File) => {
     try {
       const loaded = await openProjectFile(file, async (loadedProject) => {
         await saveProjectAndActivate(loadedProject);
         mainCommandClient.replaceProject(loadedProject, 'Open .flop project');
+        void hydrateProjectAssetsToStore(loadedProject);
       });
       if (!loaded) return;
       setActiveEditorId('main');
@@ -136,7 +167,7 @@ export function useProjectFileLifecycle({
     }
   };
 
-  const exportCurrentProject = (isHydrating: boolean) => {
+  const exportCurrentProject = async (isHydrating: boolean) => {
     setFileMenuOpen(false);
     if (isHydrating) return;
     try {
@@ -145,7 +176,8 @@ export function useProjectFileLifecycle({
         getEditingComponentId(),
         componentProject,
       );
-      downloadProject(exportSnapshot);
+      const portableSnapshot = await materializeProjectAssetsForExport(exportSnapshot);
+      downloadProject(portableSnapshot);
       setNotice('Project exported successfully as a .flop file.');
     } catch (error) {
       console.error('Folio could not export the current project:', error);
@@ -166,7 +198,12 @@ export function useProjectFileLifecycle({
         componentDocument,
         getEditingComponentId(),
       );
-      downloadSvgDocument(target.document, project.components, target.name);
+      const exportBreakpoint = activeEditorId === 'main' ? (getActiveBreakpoint?.() ?? 'desktop') : 'desktop';
+      downloadSvgDocument(target.document, project.components, target.name, {
+        designTokens: project.designTokens,
+        breakpoint: exportBreakpoint,
+        assets: project.assets,
+      });
       setNotice(`Exported "${target.name}" as standalone SVG.`);
     } catch (error) {
       console.error('Folio could not export SVG:', error);
@@ -186,7 +223,12 @@ export function useProjectFileLifecycle({
         componentDocument,
         getEditingComponentId(),
       );
-      const result = await downloadPngDocument(target.document, project.components, target.name, 2);
+      const exportBreakpoint = activeEditorId === 'main' ? (getActiveBreakpoint?.() ?? 'desktop') : 'desktop';
+      const result = await downloadPngDocument(target.document, project.components, target.name, 2, {
+        designTokens: project.designTokens,
+        breakpoint: exportBreakpoint,
+        assets: project.assets,
+      });
       setNotice(`Exported "${target.name}" as PNG (${result.width}×${result.height}px @2×).`);
     } catch (error) {
       console.error('Folio could not export PNG:', error);

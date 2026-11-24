@@ -10,6 +10,7 @@ import type {
   FolioPage,
   FolioProject,
 } from '../document/types';
+import { isBlendMode, isFillPaint, isVisualEffect } from '../document/styling';
 import {
   SEMANTIC_HTML_TAGS,
   isAnimationClip,
@@ -28,6 +29,7 @@ import type {
   AnimationCreateClipPayload,
   AnimationDeleteClipPayload,
   AnimationUpdateClipPayload,
+  AssetUpsertPayload,
   CodeUpdateModulesPayload,
   ComponentCreatePayload,
   ComponentDeletePayload,
@@ -356,9 +358,24 @@ function isLayerDropPosition(value: unknown): value is LayerDropPosition {
 
 const COMMON_NODE_KEYS = [
   'id', 'name', 'type', 'x', 'y', 'width', 'height', 'rotation',
-  'opacity', 'visible', 'locked', 'layerColor', 'parentId', 'onCanvas', 'clipMaskBaseId',
+  'opacity', 'blendMode', 'effects', 'visible', 'locked', 'layerColor', 'parentId', 'onCanvas', 'clipMaskBaseId',
   'semanticTag', 'ariaLabel', 'href', 'layout', 'layoutChild', 'responsive', 'tokenBindings',
 ] as const;
+
+const TEXT_ALIGN_VALUES = new Set(['left', 'center', 'right']);
+const TEXT_WRAP_VALUES = new Set(['wrap', 'nowrap']);
+const TEXT_TRANSFORM_VALUES = new Set(['none', 'uppercase', 'lowercase', 'capitalize']);
+const TEXT_DECORATION_VALUES = new Set(['none', 'underline', 'line-through']);
+const IMAGE_FIT_VALUES = new Set(['cover', 'contain', 'fill']);
+const ASSET_SHA256_PATTERN = /^[a-f0-9]{64}$/i;
+
+function isValidFillsList(value: unknown): boolean {
+  return Array.isArray(value) && value.length <= 16 && value.every(isFillPaint);
+}
+
+function isValidEffectsList(value: unknown): boolean {
+  return Array.isArray(value) && value.length <= 16 && value.every(isVisualEffect);
+}
 
 function isDesignNodeData(value: unknown): value is DesignNode {
   if (!isRecord(value)) return false;
@@ -371,6 +388,8 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     !isFiniteNumber(value.height) || value.height < 0 ||
     !isFiniteNumber(value.rotation) ||
     !isFiniteNumber(value.opacity) || value.opacity < 0 || value.opacity > 1 ||
+    (value.blendMode !== undefined && !isBlendMode(value.blendMode)) ||
+    (value.effects !== undefined && !isValidEffectsList(value.effects)) ||
     typeof value.visible !== 'boolean' ||
     typeof value.locked !== 'boolean' ||
     (value.layerColor !== undefined && (typeof value.layerColor !== 'string' || value.layerColor.length > 128)) ||
@@ -397,9 +416,10 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       return false;
     }
     const style = value.style;
-    if (!hasOnlyKeys(style, ['fill', 'stroke', 'strokeWidth', 'radius'])) return false;
+    if (!hasOnlyKeys(style, ['fill', 'fills', 'stroke', 'strokeWidth', 'radius'])) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
+      (style.fills === undefined || isValidFillsList(style.fills)) &&
       typeof style.stroke === 'string' && style.stroke.length <= 128 &&
       isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0 &&
       (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
@@ -411,9 +431,10 @@ function isDesignNodeData(value: unknown): value is DesignNode {
   if (value.type === 'rect' || value.type === 'ellipse') {
     if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'style']) || !isRecord(value.style)) return false;
     const style = value.style;
-    if (!hasOnlyKeys(style, ['fill', 'stroke', 'strokeWidth', 'radius'])) return false;
+    if (!hasOnlyKeys(style, ['fill', 'fills', 'stroke', 'strokeWidth', 'radius'])) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
+      (style.fills === undefined || isValidFillsList(style.fills)) &&
       typeof style.stroke === 'string' && style.stroke.length <= 128 &&
       isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0 &&
       (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0))
@@ -485,11 +506,12 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     }
     const style = value.style;
     if (!hasOnlyKeys(style, [
-      'fill', 'stroke', 'strokeWidth', 'strokeLinecap', 'strokeLinejoin',
+      'fill', 'fills', 'stroke', 'strokeWidth', 'strokeLinecap', 'strokeLinejoin',
       'strokeDasharray', 'fillRule', 'arrowStart', 'arrowEnd',
     ])) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
+      (style.fills === undefined || isValidFillsList(style.fills)) &&
       typeof style.stroke === 'string' && style.stroke.length <= 128 &&
       isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0 &&
       (style.strokeLinecap === undefined || ['butt', 'round', 'square'].includes(String(style.strokeLinecap))) &&
@@ -505,14 +527,39 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'text', 'style']) || !isRecord(value.style)) return false;
     if (typeof value.text !== 'string' || value.text.length > 10000) return false;
     const style = value.style;
-    if (!hasOnlyKeys(style, ['fill', 'fontSize', 'fontFamily', 'fontWeight', 'letterSpacing', 'lineHeight'])) return false;
+    if (!hasOnlyKeys(style, [
+      'fill', 'fontSize', 'fontFamily', 'fontWeight', 'letterSpacing', 'lineHeight',
+      'textAlign', 'textWrap', 'textTransform', 'textDecoration',
+    ])) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
       isFiniteNumber(style.fontSize) && style.fontSize > 0 &&
       typeof style.fontFamily === 'string' && style.fontFamily.length <= 256 &&
       isFiniteNumber(style.fontWeight) &&
       isFiniteNumber(style.letterSpacing) &&
-      isFiniteNumber(style.lineHeight) && style.lineHeight > 0
+      isFiniteNumber(style.lineHeight) && style.lineHeight > 0 &&
+      (style.textAlign === undefined || TEXT_ALIGN_VALUES.has(String(style.textAlign))) &&
+      (style.textWrap === undefined || TEXT_WRAP_VALUES.has(String(style.textWrap))) &&
+      (style.textTransform === undefined || TEXT_TRANSFORM_VALUES.has(String(style.textTransform))) &&
+      (style.textDecoration === undefined || TEXT_DECORATION_VALUES.has(String(style.textDecoration)))
+    );
+  }
+
+  if (value.type === 'image') {
+    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'assetId', 'alt', 'naturalWidth', 'naturalHeight', 'style']) || !isRecord(value.style)) {
+      return false;
+    }
+    if (!isNonEmptyString(value.assetId, 256)) return false;
+    if (value.alt !== undefined && (typeof value.alt !== 'string' || value.alt.length > 512)) return false;
+    if (value.naturalWidth !== undefined && (!isFiniteNumber(value.naturalWidth) || value.naturalWidth <= 0)) return false;
+    if (value.naturalHeight !== undefined && (!isFiniteNumber(value.naturalHeight) || value.naturalHeight <= 0)) return false;
+    const style = value.style;
+    if (!hasOnlyKeys(style, ['fit', 'radius', 'stroke', 'strokeWidth'])) return false;
+    return (
+      IMAGE_FIT_VALUES.has(String(style.fit)) &&
+      (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
+      (style.stroke === undefined || (typeof style.stroke === 'string' && style.stroke.length <= 128)) &&
+      (style.strokeWidth === undefined || (isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0))
     );
   }
 
@@ -1352,3 +1399,49 @@ export function validateAnimationDeleteClipPayload(
     },
   };
 }
+
+export function validateAssetUpsertPayload(
+  value: unknown,
+): ValidationOutcome<AssetUpsertPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['asset']) || !isRecord(data.asset)) {
+    return invalid('INVALID_PAYLOAD', 'Upserting an asset requires a valid Folio AssetReference object.');
+  }
+  const asset = data.asset;
+  if (
+    !hasOnlyKeys(asset, ['id', 'name', 'kind', 'mimeType', 'source', 'createdAt', 'sha256', 'byteLength', 'width', 'height']) ||
+    !isNonEmptyString(asset.id, 256) ||
+    !isNonEmptyString(asset.name, 512) ||
+    !['image', 'font', 'svg', 'file'].includes(String(asset.kind)) ||
+    !isNonEmptyString(asset.mimeType, 128) ||
+    !isIsoTimestamp(asset.createdAt) ||
+    typeof asset.source !== 'string' ||
+    asset.source.trim().length === 0 ||
+    asset.source.length > 15 * 1024 * 1024 ||
+    !(
+      asset.source.startsWith('data:image/') ||
+      asset.source.startsWith('data:font/') ||
+      asset.source.startsWith('data:application/font') ||
+      asset.source.startsWith('data:application/octet-stream') ||
+      asset.source.startsWith('idb://') ||
+      asset.source.startsWith('assets/') ||
+      asset.source.startsWith('/assets/') ||
+      asset.source.startsWith('https://')
+    ) ||
+    (asset.sha256 !== undefined && (typeof asset.sha256 !== 'string' || !ASSET_SHA256_PATTERN.test(asset.sha256))) ||
+    (asset.byteLength !== undefined && (!isFiniteNumber(asset.byteLength) || asset.byteLength < 0)) ||
+    (asset.width !== undefined && (!isFiniteNumber(asset.width) || asset.width <= 0)) ||
+    (asset.height !== undefined && (!isFiniteNumber(asset.height) || asset.height <= 0))
+  ) {
+    return invalid('INVALID_PAYLOAD', 'The supplied asset reference is malformed or uses an unsupported source scheme.');
+  }
+  return {
+    ok: true,
+    value: {
+      asset: asset as unknown as AssetUpsertPayload['asset'],
+    },
+  };
+}
+

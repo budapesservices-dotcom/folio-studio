@@ -1,5 +1,5 @@
 import type { RefObject } from 'preact';
-import type { ComponentDefinition, DesignTokenCollection } from '../../core/document/types';
+import type { AssetReference, ComponentDefinition, DesignTokenCollection } from '../../core/document/types';
 import { ComponentThumbnail } from '../ComponentThumbnail';
 import { StudioIcon } from './StudioIcon';
 
@@ -8,6 +8,7 @@ export interface ComponentRackPanelProps {
   open: boolean;
   components: ComponentDefinition[];
   designTokens?: DesignTokenCollection;
+  assets?: readonly AssetReference[];
   searchQuery: string;
   canSaveSelection: boolean;
   renamingComponentId: string | null;
@@ -31,6 +32,7 @@ export function ComponentRackPanel({
   open,
   components,
   designTokens,
+  assets,
   searchQuery,
   canSaveSelection,
   renamingComponentId,
@@ -126,7 +128,7 @@ export function ComponentRackPanel({
               title={`Insert linked ${component.name} into Main Canvas`}
               onClick={() => onInsertComponent(component)}
             >
-              <ComponentThumbnail component={component} components={components} designTokens={designTokens} />
+              <ComponentThumbnail component={component} components={components} designTokens={designTokens} assets={assets} />
               <span class="component-rack-card-name">{component.name}</span>
               <span class="component-rack-card-meta">
                 {component.document.nodes.length} layer{component.document.nodes.length === 1 ? '' : 's'}
