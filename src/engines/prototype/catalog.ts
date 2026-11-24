@@ -354,7 +354,7 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     type: 'state.toggle',
     category: 'state',
     label: 'Toggle State',
-    description: 'Flips a Boolean state variable between true and false.',
+    description: 'Flips a Boolean toggle using private target-bound memory (no manual variable required) or an optional shared Boolean variable, and publishes { value, previous } into the pipeline.',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'in', dataType: 'exec' },
       { id: 'next', label: 'Next', direction: 'out', dataType: 'exec' },
@@ -362,6 +362,7 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     ],
     defaultData: {
       variableId: '',
+      initialValue: false,
     },
   }),
   'state.update': defineNode({
@@ -409,6 +410,7 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
       elseIfCondition: false,
       caseA: '',
       caseB: '',
+      pipelineRef: '',
     },
   }),
   'logic.condition': defineNode({
@@ -502,6 +504,8 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
       { id: 'next', label: 'Next', direction: 'out', dataType: 'exec' },
     ],
     defaultData: {
+      targetMode: 'override',
+      pipelineChildId: '',
       targetNodeId: '',
       property: 'text',
       visibleMode: 'toggle',
@@ -513,6 +517,7 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
       disabled: false,
       transitionMs: 0,
       transitionEasing: 'ease-out',
+      pipelineRef: '',
     },
   }),
   'action.set-variant': defineNode({

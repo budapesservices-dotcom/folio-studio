@@ -23,6 +23,15 @@ import {
   getLogicNodePort,
   isBuiltInLogicNodeType,
 } from './catalog';
+import {
+  PIPELINE_REF_DATA_KEYS,
+  getNodeTargetMode,
+  getUpstreamNodes,
+  getUpstreamPipelineOrigins,
+  parsePipelineRef,
+  resolveAstNodeById,
+  type PipelineOriginRef,
+} from './pipeline';
 
 export type LogicDiagnosticSeverity = 'error' | 'warning';
 
@@ -279,6 +288,123 @@ export function validateLogicGraphSemantics(
     const targetNodeId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId.trim() : '';
     const variableId = typeof node.data.variableId === 'string' ? node.data.variableId.trim() : '';
 
+    // Lazily compute upstream graph context for pipeline target & scoped ref checks.
+    let cachedUpstreamNodes: readonly (typeof graph.nodes)[number][] | null = null;
+    let cachedUpstreamOrigins: readonly PipelineOriginRef[] | null = null;
+    const ensureUpstreamNodes = () => {
+      if (!cachedUpstreamNodes) {
+        cachedUpstreamNodes = getUpstreamNodes(graph.nodes, graph.connections, node.id);
+      }
+      return cachedUpstreamNodes;
+    };
+    const ensureUpstreamOrigins = () => {
+      if (!cachedUpstreamOrigins) {
+        cachedUpstreamOrigins = getUpstreamPipelineOrigins(
+          graph.nodes,
+          graph.connections,
+          node.id,
+          astNodesById,
+          componentsById,
+          project.animations,
+        );
+      }
+      return cachedUpstreamOrigins;
+    };
+
+    // Validate any Scoped Data Picker references (pipelineRef, conditionRef, leftRef, rightRef, valueRef).
+    const hasScopedRef = new Set<string>();
+    for (const refKey of PIPELINE_REF_DATA_KEYS) {
+      const rawRef = typeof node.data[refKey] === 'string' ? node.data[refKey].trim() : '';
+      if (!rawRef) continue;
+      hasScopedRef.add(refKey);
+      const parsed = parsePipelineRef(rawRef);
+      if (!parsed) {
+        push(
+          'error',
+          'INVALID_PIPELINE_REF',
+          `${def.label} node "${node.id}" has an invalid pipeline data reference "${rawRef}".`,
+          { nodeId: node.id },
+        );
+        continue;
+      }
+      if (parsed.kind === 'origin') {
+        if (ensureUpstreamOrigins().length === 0) {
+          push(
+            'error',
+            'DISCONNECTED_PIPELINE_ORIGIN',
+            `${def.label} references "origin.${parsed.field}", but no upstream Event or Source with a bound layer is connected.`,
+            { nodeId: node.id },
+          );
+        }
+      } else {
+        const upstreamIds = new Set(ensureUpstreamNodes().map((item) => item.id));
+        if (!upstreamIds.has(parsed.sourceNodeId)) {
+          const referencedNode = logicNodesById.get(parsed.sourceNodeId);
+          const srcLabel = referencedNode
+            ? (getLogicNodeDefinition(referencedNode.type)?.label ?? referencedNode.type)
+            : parsed.sourceNodeId;
+          push(
+            'error',
+            'DISCONNECTED_PIPELINE_REF',
+            `${def.label} references "${parsed.field}" from disconnected node "${srcLabel}". Reconnect the wire or choose an active upstream output.`,
+            { nodeId: node.id },
+          );
+        }
+      }
+    }
+
+    const resolveActionTarget = (
+      nodeLabel: string,
+    ): { readonly targetNode: DesignNode | undefined; readonly failed: boolean } => {
+      if (getNodeTargetMode(node) === 'pipeline') {
+        const origins = ensureUpstreamOrigins();
+        if (origins.length === 0) {
+          push(
+            'error',
+            'DISCONNECTED_PIPELINE_ORIGIN',
+            `${nodeLabel} uses "Inherit from Pipeline", but no upstream Event or Element Source with a bound layer is connected.`,
+            { nodeId: node.id },
+          );
+          return { targetNode: undefined, failed: true };
+        }
+        const pipelineChildId =
+          typeof node.data.pipelineChildId === 'string' ? node.data.pipelineChildId.trim() : '';
+        if (pipelineChildId) {
+          const matchingOrigin = origins.find(
+            (orig) =>
+              orig.layerId === pipelineChildId
+              || (orig.children?.some((child) => child.id === pipelineChildId) ?? false),
+          );
+          if (!matchingOrigin) {
+            push(
+              'error',
+              'MISSING_PIPELINE_CHILD',
+              `${nodeLabel} targets pipeline child "${pipelineChildId}", which is not inside the connected upstream origin.`,
+              { nodeId: node.id },
+            );
+            return { targetNode: undefined, failed: true };
+          }
+          const resolvedChild = resolveAstNodeById(pipelineChildId, astNodesById, componentsById);
+          return { targetNode: resolvedChild, failed: !resolvedChild };
+        }
+        const primaryOrigin = origins[0];
+        const resolvedOrigin = resolveAstNodeById(primaryOrigin.layerId, astNodesById, componentsById);
+        return { targetNode: resolvedOrigin, failed: !resolvedOrigin };
+      }
+
+      const resolved = targetNodeId ? resolveAstNodeById(targetNodeId, astNodesById, componentsById) : undefined;
+      if (!resolved) {
+        push(
+          'error',
+          'MISSING_TARGET_NODE',
+          `${nodeLabel} node "${node.id}" references missing AST node "${targetNodeId}".`,
+          { nodeId: node.id },
+        );
+        return { targetNode: undefined, failed: true };
+      }
+      return { targetNode: resolved, failed: false };
+    };
+
     switch (node.type) {
       case 'source.page': {
         const pageId = typeof node.data.pageId === 'string' ? node.data.pageId.trim() : '';
@@ -461,6 +587,18 @@ export function validateLogicGraphSemantics(
       case 'state.toggle':
       case 'state.increment':
       case 'state.update': {
+        // Toggle State uses target-bound private boolean memory by default when variableId is empty.
+        if (node.type === 'state.toggle' && !variableId) {
+          if (node.data.initialValue !== undefined && typeof node.data.initialValue !== 'boolean') {
+            push(
+              'error',
+              'VARIABLE_TYPE_MISMATCH',
+              `Toggle State node "${node.id}" only supports boolean values.`,
+              { nodeId: node.id },
+            );
+          }
+          break;
+        }
         const variable = variableId ? variablesById.get(variableId) : undefined;
         if (!variable) {
           push(
@@ -546,18 +684,21 @@ export function validateLogicGraphSemantics(
       }
 
       case 'action.set-layer': {
-        const targetNode = targetNodeId ? astNodesById.get(targetNodeId) : undefined;
-        if (!targetNode) {
-          push(
-            'error',
-            'MISSING_TARGET_NODE',
-            `Set Layer node "${node.id}" references missing AST node "${targetNodeId}".`,
-            { nodeId: node.id },
-          );
+        const { targetNode, failed } = resolveActionTarget('Set Layer');
+        if (failed || !targetNode) {
           break;
         }
         const property = String(node.data.property ?? 'text');
-        if (property === 'fill' && !incomingDataPorts.has(`${node.id}:value`)) {
+        const hasDynamicValue = incomingDataPorts.has(`${node.id}:value`) || hasScopedRef.has('pipelineRef');
+        if (property === 'fill' && (targetNode.type === 'group' || targetNode.type === 'component-instance')) {
+          push(
+            'warning',
+            'INCOMPATIBLE_TARGET_NODE',
+            `Set Layer "${node.id}" sets fill on ${targetNode.type} "${targetNode.name}". Select a child shape from the pipeline target instead.`,
+            { nodeId: node.id },
+          );
+        }
+        if (property === 'fill' && !hasDynamicValue) {
           const fill = typeof node.data.fill === 'string' ? node.data.fill : '';
           if (!isSafeCssColorValue(fill)) {
             push('error', 'UNSAFE_CSS_VALUE', `Set Layer node "${node.id}" contains an invalid or unsafe CSS color value.`, { nodeId: node.id });
@@ -573,14 +714,7 @@ export function validateLogicGraphSemantics(
       }
 
       case 'action.set-visible': {
-        if (!targetNodeId || !astNodesById.has(targetNodeId)) {
-          push(
-            'error',
-            'MISSING_TARGET_NODE',
-            `Set Visible node "${node.id}" references missing AST node "${targetNodeId}".`,
-            { nodeId: node.id },
-          );
-        }
+        resolveActionTarget('Set Visible');
         const mode = node.data.mode;
         if (mode !== undefined && mode !== 'show' && mode !== 'hide' && mode !== 'toggle') {
           push(
@@ -594,15 +728,8 @@ export function validateLogicGraphSemantics(
       }
 
       case 'action.set-text': {
-        const targetNode = targetNodeId ? astNodesById.get(targetNodeId) : undefined;
-        if (!targetNode) {
-          push(
-            'error',
-            'MISSING_TARGET_NODE',
-            `Set Text node "${node.id}" references missing AST node "${targetNodeId}".`,
-            { nodeId: node.id },
-          );
-        } else if (targetNode.type !== 'text') {
+        const { targetNode, failed } = resolveActionTarget('Set Text');
+        if (!failed && targetNode && targetNode.type !== 'text') {
           push(
             'error',
             'INCOMPATIBLE_TARGET_NODE',
@@ -614,15 +741,8 @@ export function validateLogicGraphSemantics(
       }
 
       case 'action.set-fill': {
-        const targetNode = targetNodeId ? astNodesById.get(targetNodeId) : undefined;
-        if (!targetNode) {
-          push(
-            'error',
-            'MISSING_TARGET_NODE',
-            `Set Fill node "${node.id}" references missing AST node "${targetNodeId}".`,
-            { nodeId: node.id },
-          );
-        } else if (targetNode.type === 'group' || targetNode.type === 'component-instance') {
+        const { targetNode, failed } = resolveActionTarget('Set Fill');
+        if (!failed && targetNode && (targetNode.type === 'group' || targetNode.type === 'component-instance')) {
           push(
             'error',
             'INCOMPATIBLE_TARGET_NODE',
@@ -630,7 +750,7 @@ export function validateLogicGraphSemantics(
             { nodeId: node.id },
           );
         }
-        if (!incomingDataPorts.has(`${node.id}:fill`)) {
+        if (!incomingDataPorts.has(`${node.id}:fill`) && !hasScopedRef.has('pipelineRef')) {
           const fill = typeof node.data.fill === 'string' ? node.data.fill : '';
           if (!isSafeCssColorValue(fill)) {
             push(
@@ -645,14 +765,8 @@ export function validateLogicGraphSemantics(
       }
 
       case 'action.set-variant': {
-        const targetNode = targetNodeId ? astNodesById.get(targetNodeId) : undefined;
-        if (!targetNode) {
-          push(
-            'error',
-            'MISSING_TARGET_NODE',
-            `Set Variant node "${node.id}" references missing AST node "${targetNodeId}".`,
-            { nodeId: node.id },
-          );
+        const { targetNode, failed } = resolveActionTarget('Set Variant');
+        if (failed || !targetNode) {
           break;
         }
         if (targetNode.type !== 'component-instance') {
@@ -753,7 +867,12 @@ export function validateLogicGraphSemantics(
         const targetKind = String(node.data.targetKind ?? 'animation');
         if (targetKind === 'animation') {
           const clipId = typeof node.data.clipId === 'string' ? node.data.clipId.trim() : '';
-          if (!clipId || !animationClipIds.has(clipId)) {
+          const inheritedClipId =
+            !clipId && getNodeTargetMode(node) === 'pipeline'
+              ? (ensureUpstreamOrigins()[0]?.animationIds[0] ?? '')
+              : '';
+          const effectiveClipId = clipId || inheritedClipId;
+          if (!effectiveClipId || !animationClipIds.has(effectiveClipId)) {
             push(
               'error',
               'MISSING_ANIMATION_CLIP',
@@ -761,13 +880,20 @@ export function validateLogicGraphSemantics(
               { nodeId: node.id },
             );
           }
+        } else if (getNodeTargetMode(node) === 'pipeline') {
+          resolveActionTarget('Media & Animation');
         }
         break;
       }
 
       case 'action.play-animation': {
         const clipId = typeof node.data.clipId === 'string' ? node.data.clipId.trim() : '';
-        if (!clipId || !animationClipIds.has(clipId)) {
+        const inheritedClipId =
+          !clipId && getNodeTargetMode(node) === 'pipeline'
+            ? (ensureUpstreamOrigins()[0]?.animationIds[0] ?? '')
+            : '';
+        const effectiveClipId = clipId || inheritedClipId;
+        if (!effectiveClipId || !animationClipIds.has(effectiveClipId)) {
           push(
             'error',
             'MISSING_ANIMATION_CLIP',

@@ -10,7 +10,17 @@ import type {
   LogicValueType,
   LogicVariableDefinition,
 } from '../../core/document/types';
-import { LOGIC_COMPARE_OPERATORS } from '../../engines/prototype';
+import {
+  getNodeTargetMode,
+  getScopedUpstreamOutputs,
+  getUpstreamPipelineOrigins,
+  LOGIC_COMPARE_OPERATORS,
+  parsePipelineRef,
+  resolveAstNodeById,
+  type LogicPortDataType,
+  type PipelineOriginChildRef,
+  type PipelineTargetMode,
+} from '../../engines/prototype';
 import { getUsedSourceReferenceIds } from './nodeLogicGraphHelpers';
 import type { NodeLogicInspectorTab } from './NodeLogicInspector';
 
@@ -80,6 +90,32 @@ export function NodeLogicNodeFields({
 }: NodeLogicNodeFieldsProps) {
   const targetNodeId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
   const variableId = typeof node.data.variableId === 'string' ? node.data.variableId : '';
+  const targetMode: PipelineTargetMode = getNodeTargetMode(node);
+  const pipelineChildId = typeof node.data.pipelineChildId === 'string' ? node.data.pipelineChildId : '';
+
+  const astNodesById = new Map<string, DesignNode>(scopedAstNodes.map((item) => [item.id, item]));
+  const componentsById = new Map<string, ComponentDefinition>(components.map((item) => [item.id, item]));
+
+  const upstreamOrigins = graph
+    ? getUpstreamPipelineOrigins(
+        graph.nodes,
+        graph.connections,
+        node.id,
+        astNodesById,
+        componentsById,
+        animations,
+      )
+    : [];
+  const upstreamOutputs = graph
+    ? getScopedUpstreamOutputs(
+        graph.nodes,
+        graph.connections,
+        node.id,
+        astNodesById,
+        componentsById,
+        animations,
+      )
+    : [];
 
   const textNodes = scopedAstNodes.filter((item) => item.type === 'text');
   const fillableNodes = scopedAstNodes.filter(
@@ -104,6 +140,164 @@ export function NodeLogicNodeFields({
       </select>
     </label>
   );
+
+  /**
+   * Scoped Pipeline target selector: defaults to `Inherit from Pipeline`
+   * (allowing Origin or any direct/nested Child of an upstream Group/Component)
+   * with an explicit `Override Target` toggle for manual layer selection.
+   */
+  const renderPipelineTargetField = (label: string, overrideCandidates: readonly DesignNode[]) => {
+    const primaryOrigin = upstreamOrigins[0] ?? null;
+    const allChildren: PipelineOriginChildRef[] = [];
+    const seenChildIds = new Set<string>();
+    for (const origin of upstreamOrigins) {
+      for (const child of origin.children ?? []) {
+        if (seenChildIds.has(child.id)) continue;
+        seenChildIds.add(child.id);
+        allChildren.push(child);
+      }
+    }
+    const missingSavedChild =
+      pipelineChildId !== '' && !seenChildIds.has(pipelineChildId);
+
+    return (
+      <div class="nl-pipeline-target-box" data-testid="nl-pipeline-target-box">
+        <div class="nl-field">
+          <span>Target resolution</span>
+          <div class="nl-target-mode-toggle" role="group" aria-label="Target resolution mode">
+            <button
+              type="button"
+              class={`nl-target-mode-btn ${targetMode === 'pipeline' ? 'is-active' : ''}`}
+              aria-pressed={targetMode === 'pipeline'}
+              title="Inherit from Pipeline"
+              onClick={() => onUpdateNodeData(node.id, { targetMode: 'pipeline' })}
+            >
+              Inherit Pipeline
+            </button>
+            <button
+              type="button"
+              class={`nl-target-mode-btn ${targetMode === 'override' ? 'is-active' : ''}`}
+              aria-pressed={targetMode === 'override'}
+              title="Override Target"
+              onClick={() => onUpdateNodeData(node.id, { targetMode: 'override' })}
+            >
+              Override Target
+            </button>
+          </div>
+        </div>
+
+        {targetMode === 'pipeline' ? (
+          primaryOrigin ? (
+            <>
+              <div class="nl-pipeline-origin-chip">
+                <strong>Origin: {primaryOrigin.name}</strong>
+                <span>
+                  {primaryOrigin.type}
+                  {allChildren.length > 0 ? ` · ${allChildren.length} children` : ''}
+                  {upstreamOrigins.length > 1 ? ` · +${upstreamOrigins.length - 1} more` : ''}
+                </span>
+              </div>
+              <label class="nl-field">
+                <span>Pipeline layer (Origin or Child)</span>
+                <select
+                  class={`select-field ${missingSavedChild ? 'is-disconnected' : ''}`}
+                  aria-label="Pipeline target layer"
+                  value={pipelineChildId}
+                  onChange={(event) =>
+                    onUpdateNodeData(node.id, { pipelineChildId: event.currentTarget.value })
+                  }
+                >
+                  <option value="">
+                    Origin · {primaryOrigin.name} ({primaryOrigin.type})
+                  </option>
+                  {allChildren.map((child) => (
+                    <option key={child.id} value={child.id}>
+                      Child · {child.name} ({child.type})
+                    </option>
+                  ))}
+                  {missingSavedChild && (
+                    <option value={pipelineChildId}>
+                      ⚠ Missing child ({pipelineChildId})
+                    </option>
+                  )}
+                </select>
+              </label>
+            </>
+          ) : (
+            <div class="nl-pipeline-origin-chip is-disconnected">
+              <strong>No upstream pipeline origin</strong>
+              <span>
+                Connect an upstream Event (e.g. On Click) or switch to Override Target.
+              </span>
+            </div>
+          )
+        ) : (
+          renderAstTargetPicker(label, overrideCandidates)
+        )}
+      </div>
+    );
+  };
+
+  /**
+   * Dynamic Scoped Data Picker: shows only outputs from actively connected
+   * upstream nodes (cycle-safe), plus a clear diagnostic state if a saved ref
+   * became disconnected after unplugging a wire.
+   */
+  const renderScopedDataPicker = (
+    label: string,
+    refField: 'pipelineRef' | 'leftRef' | 'rightRef',
+    allowedTypes?: readonly LogicPortDataType[],
+  ) => {
+    const currentRef = typeof node.data[refField] === 'string' ? node.data[refField] : '';
+    const filteredOutputs = allowedTypes
+      ? upstreamOutputs.filter(
+          (opt) =>
+            opt.valueType === 'any'
+            || allowedTypes.includes(opt.valueType)
+            || opt.refKey === currentRef,
+        )
+      : upstreamOutputs;
+    const isDisconnected =
+      currentRef !== '' && !upstreamOutputs.some((opt) => opt.refKey === currentRef);
+    const parsedSaved = parsePipelineRef(currentRef);
+
+    return (
+      <div class="nl-scoped-picker" data-testid={`nl-scoped-picker-${refField}`}>
+        <label class="nl-field">
+          <span>{label}</span>
+          <select
+            class={`select-field ${isDisconnected ? 'is-disconnected' : ''}`}
+            aria-label={label}
+            value={currentRef}
+            onChange={(event) =>
+              onUpdateNodeData(node.id, { [refField]: event.currentTarget.value })
+            }
+          >
+            <option value="">Manual / Literal (or wired port)</option>
+            {filteredOutputs.map((opt) => (
+              <option key={opt.refKey} value={opt.refKey}>
+                {opt.label} ({opt.valueType})
+              </option>
+            ))}
+            {isDisconnected && (
+              <option value={currentRef}>
+                ⚠ Disconnected ({parsedSaved ? parsedSaved.field : currentRef})
+              </option>
+            )}
+          </select>
+        </label>
+        {isDisconnected ? (
+          <span class="nl-scoped-disconnected">
+            Referenced upstream node is disconnected. Reconnect wire or clear selection — see Node Diagnostics.
+          </span>
+        ) : filteredOutputs.length === 0 ? (
+          <span class="nl-scoped-empty-hint">
+            Connect upstream nodes (e.g. Toggle State, Condition) to pick their outputs here.
+          </span>
+        ) : null}
+      </div>
+    );
+  };
 
   const renderVariablePicker = (filterType?: LogicValueType) => {
     const candidates = filterType
@@ -650,8 +844,59 @@ export function NodeLogicNodeFields({
     case 'state.get':
       return renderVariablePicker();
 
-    case 'state.toggle':
-      return renderVariablePicker('boolean');
+    case 'state.toggle': {
+      const booleanVariables = availableVariables.filter((item) => item.valueType === 'boolean');
+      const usingPrivateMemory = variableId.trim() === '';
+      return (
+        <div class="nl-field-group" data-testid="nl-toggle-state-fields">
+          <div class="nl-private-mem-badge">
+            <strong>{usingPrivateMemory ? 'Private Node Memory (Boolean)' : 'Shared Global Variable (Boolean)'}</strong>
+            <span>
+              {usingPrivateMemory
+                ? 'Target-bound per origin layer — persists across clicks without declaring a global variable.'
+                : 'Synced to a shared boolean variable so separate flows can read the same state.'}
+            </span>
+          </div>
+
+          {usingPrivateMemory && (
+            <label class="nl-field">
+              <span>Initial boolean value</span>
+              <select
+                class="select-field"
+                aria-label="Initial boolean value"
+                value={String(Boolean(node.data.initialValue))}
+                onChange={(event) =>
+                  onUpdateNodeData(node.id, { initialValue: event.currentTarget.value === 'true' })
+                }
+              >
+                <option value="false">false (off)</option>
+                <option value="true">true (on)</option>
+              </select>
+            </label>
+          )}
+
+          <label class="nl-field">
+            <span>Shared boolean variable (optional)</span>
+            <select
+              class="select-field"
+              aria-label="Shared boolean variable (optional)"
+              value={variableId}
+              onChange={(event) => onUpdateNodeData(node.id, { variableId: event.currentTarget.value })}
+            >
+              <option value="">None — Private Memory (Default)</option>
+              {booleanVariables.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} (boolean)
+                </option>
+              ))}
+            </select>
+          </label>
+          <p class="nl-inspector-hint">
+            Toggle State strictly stores boolean values and publishes <code>value</code> &amp; <code>previous</code> directly to downstream pipeline nodes.
+          </p>
+        </div>
+      );
+    }
 
     case 'state.update': {
       const selectedVar = availableVariables.find((item) => item.id === variableId);
@@ -843,6 +1088,13 @@ export function NodeLogicNodeFields({
               <option value="switch-case">Switch / Case</option>
             </select>
           </label>
+          {renderScopedDataPicker(
+            mode === 'switch-case'
+              ? 'Switch value from Pipeline (Scoped)'
+              : 'Condition from Pipeline (Scoped)',
+            'pipelineRef',
+            mode === 'switch-case' ? undefined : ['boolean'],
+          )}
           {mode === 'switch-case' ? (
             <div class="nl-field-grid nl-field-grid-2">
               <label class="nl-field">
@@ -868,7 +1120,7 @@ export function NodeLogicNodeFields({
             </div>
           ) : (
             <label class="nl-field">
-              <span>Fallback condition (when Condition port is unwired)</span>
+              <span>Fallback condition (when Pipeline &amp; Condition port are unset)</span>
               <select
                 class="select-field"
                 value={String(Boolean(node.data.condition))}
@@ -915,6 +1167,10 @@ export function NodeLogicNodeFields({
                 ))}
               </select>
             </label>
+          )}
+          {renderScopedDataPicker('Left / A from Pipeline (Scoped)', 'leftRef')}
+          {mode !== 'not' && mode !== 'is-empty' && mode !== 'regex' && (
+            renderScopedDataPicker('Right / B from Pipeline (Scoped)', 'rightRef')
           )}
           {mode === 'regex' ? (
             <label class="nl-field">
@@ -1083,6 +1339,7 @@ export function NodeLogicNodeFields({
               <option value="format-currency">Format Currency</option>
             </select>
           </label>
+          {renderScopedDataPicker('Input value from Pipeline (Scoped)', 'pipelineRef')}
           {mode === 'template' ? (
             <label class="nl-field">
               <span>Template string</span>
@@ -1204,7 +1461,7 @@ export function NodeLogicNodeFields({
         property === 'text' ? textNodes : property === 'fill' ? fillableNodes : scopedAstNodes;
       return (
         <>
-          {renderAstTargetPicker('Target layer', targetPool.length > 0 ? targetPool : scopedAstNodes)}
+          {renderPipelineTargetField('Target layer', targetPool.length > 0 ? targetPool : scopedAstNodes)}
           <label class="nl-field">
             <span>Property to update</span>
             <select
@@ -1221,6 +1478,7 @@ export function NodeLogicNodeFields({
               <option value="disabled">Disabled State</option>
             </select>
           </label>
+          {renderScopedDataPicker('Value from Pipeline (optional)', 'pipelineRef')}
 
           {property === 'visible' && (
             <label class="nl-field">
@@ -1362,7 +1620,15 @@ export function NodeLogicNodeFields({
     }
 
     case 'action.set-variant': {
-      const targetInstance = instanceNodes.find((item) => item.id === targetNodeId);
+      const effectiveTargetId =
+        targetMode === 'pipeline'
+          ? (pipelineChildId || upstreamOrigins[0]?.layerId || '')
+          : targetNodeId;
+      const resolvedTarget = resolveAstNodeById(effectiveTargetId, astNodesById, componentsById);
+      const targetInstance =
+        resolvedTarget && resolvedTarget.type === 'component-instance'
+          ? resolvedTarget
+          : instanceNodes.find((item) => item.id === effectiveTargetId);
       const master =
         targetInstance && targetInstance.type === 'component-instance'
           ? components.find((comp) => comp.id === targetInstance.componentId)
@@ -1374,7 +1640,7 @@ export function NodeLogicNodeFields({
 
       return (
         <>
-          {renderAstTargetPicker('Component instance', instanceNodes)}
+          {renderPipelineTargetField('Component instance', instanceNodes)}
           <label class="nl-field">
             <span>Variant axis</span>
             <select
@@ -1414,6 +1680,8 @@ export function NodeLogicNodeFields({
 
     case 'action.media-animation': {
       const targetKind = node.data.targetKind === 'media' ? 'media' : 'animation';
+      const originClipIds = new Set(upstreamOrigins.flatMap((o) => o.animationIds));
+      const attachedClips = animations.filter((clip) => originClipIds.has(clip.id));
       return (
         <>
           <label class="nl-field">
@@ -1428,23 +1696,55 @@ export function NodeLogicNodeFields({
             </select>
           </label>
           {targetKind === 'animation' ? (
-            <label class="nl-field">
-              <span>Animation clip</span>
-              <select
-                class="select-field"
-                value={typeof node.data.clipId === 'string' ? node.data.clipId : ''}
-                onChange={(event) => onUpdateNodeData(node.id, { clipId: event.currentTarget.value })}
-              >
-                <option value="">Select animation clip…</option>
-                {animations.map((clip) => (
-                  <option key={clip.id} value={clip.id}>
-                    {clip.name} ({(clip.durationMs / 1000).toFixed(2)}s)
+            <>
+              <div class="nl-field">
+                <span>Clip source</span>
+                <div class="nl-target-mode-toggle" role="group" aria-label="Clip resolution mode">
+                  <button
+                    type="button"
+                    class={`nl-target-mode-btn ${targetMode === 'pipeline' ? 'is-active' : ''}`}
+                    aria-pressed={targetMode === 'pipeline'}
+                    title="Inherit from Pipeline"
+                    onClick={() => onUpdateNodeData(node.id, { targetMode: 'pipeline' })}
+                  >
+                    Inherit Pipeline
+                  </button>
+                  <button
+                    type="button"
+                    class={`nl-target-mode-btn ${targetMode === 'override' ? 'is-active' : ''}`}
+                    aria-pressed={targetMode === 'override'}
+                    title="Override Clip"
+                    onClick={() => onUpdateNodeData(node.id, { targetMode: 'override' })}
+                  >
+                    Override Clip
+                  </button>
+                </div>
+              </div>
+              <label class="nl-field">
+                <span>Animation clip</span>
+                <select
+                  class="select-field"
+                  value={typeof node.data.clipId === 'string' ? node.data.clipId : ''}
+                  onChange={(event) => onUpdateNodeData(node.id, { clipId: event.currentTarget.value })}
+                >
+                  <option value="">
+                    {targetMode === 'pipeline'
+                      ? attachedClips.length > 0
+                        ? `Auto · Origin clip (${attachedClips[0].name})`
+                        : 'Auto · Origin attached clip'
+                      : 'Select animation clip…'}
                   </option>
-                ))}
-              </select>
-            </label>
+                  {animations.map((clip) => (
+                    <option key={clip.id} value={clip.id}>
+                      {clip.name} ({(clip.durationMs / 1000).toFixed(2)}s)
+                      {originClipIds.has(clip.id) ? ' ★ Origin' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
           ) : (
-            renderAstTargetPicker('Media layer', scopedAstNodes)
+            renderPipelineTargetField('Media layer', scopedAstNodes)
           )}
           <label class="nl-field">
             <span>Playback command</span>
@@ -1515,7 +1815,7 @@ export function NodeLogicNodeFields({
               />
             </label>
           )}
-          {mode === 'scroll-to' && renderAstTargetPicker('Scroll target layer', scopedAstNodes)}
+          {mode === 'scroll-to' && renderPipelineTargetField('Scroll target layer', scopedAstNodes)}
           {mode === 'url-params' && (
             <label class="nl-field">
               <span>Query params</span>
@@ -1552,8 +1852,9 @@ export function NodeLogicNodeFields({
           </label>
           {mode === 'show-toast' ? (
             <>
+              {renderScopedDataPicker('Message from Pipeline (optional)', 'pipelineRef')}
               <label class="nl-field">
-                <span>Toast message (fallback if Message unwired)</span>
+                <span>Toast message (fallback if Pipeline &amp; Message port unset)</span>
                 <input
                   class="nl-input"
                   type="text"
@@ -1576,7 +1877,7 @@ export function NodeLogicNodeFields({
               </label>
             </>
           ) : (
-            renderAstTargetPicker('Target modal / drawer layer', scopedAstNodes)
+            renderPipelineTargetField('Target modal / drawer layer', scopedAstNodes)
           )}
         </>
       );
@@ -1618,17 +1919,20 @@ export function NodeLogicNodeFields({
             </label>
           )}
           {(action === 'focus' || action === 'blur' || action === 'reset-form') &&
-            renderAstTargetPicker('Target form / input layer', scopedAstNodes)}
+            renderPipelineTargetField('Target form / input layer', scopedAstNodes)}
           {(action === 'clipboard' || action === 'download' || action === 'storage') && (
-            <label class="nl-field">
-              <span>Payload fallback (if Value unwired)</span>
-              <input
-                class="nl-input"
-                type="text"
-                value={typeof node.data.value === 'string' ? node.data.value : ''}
-                onInput={(event) => onUpdateNodeData(node.id, { value: event.currentTarget.value })}
-              />
-            </label>
+            <>
+              {renderScopedDataPicker('Payload from Pipeline (optional)', 'pipelineRef')}
+              <label class="nl-field">
+                <span>Payload fallback (if Pipeline &amp; Value port unset)</span>
+                <input
+                  class="nl-input"
+                  type="text"
+                  value={typeof node.data.value === 'string' ? node.data.value : ''}
+                  onInput={(event) => onUpdateNodeData(node.id, { value: event.currentTarget.value })}
+                />
+              </label>
+            </>
           )}
           {action === 'download' && (
             <label class="nl-field">
@@ -2052,37 +2356,45 @@ export function NodeLogicNodeFields({
 
     case 'logic.compare':
       return (
-        <label class="nl-field">
-          <span>Operator</span>
-          <select
-            class="select-field"
-            value={String(node.data.operator ?? '==')}
-            onChange={(event) => onUpdateNodeData(node.id, { operator: event.currentTarget.value })}
-          >
-            {LOGIC_COMPARE_OPERATORS.map((op) => (
-              <option key={op} value={op}>{op}</option>
-            ))}
-          </select>
-        </label>
+        <>
+          <label class="nl-field">
+            <span>Operator</span>
+            <select
+              class="select-field"
+              value={String(node.data.operator ?? '==')}
+              onChange={(event) => onUpdateNodeData(node.id, { operator: event.currentTarget.value })}
+            >
+              {LOGIC_COMPARE_OPERATORS.map((op) => (
+                <option key={op} value={op}>{op}</option>
+              ))}
+            </select>
+          </label>
+          {renderScopedDataPicker('Left / A from Pipeline (Scoped)', 'leftRef')}
+          {renderScopedDataPicker('Right / B from Pipeline (Scoped)', 'rightRef')}
+        </>
       );
 
     case 'logic.template':
       return (
-        <label class="nl-field">
-          <span>Template</span>
-          <input
-            class="nl-input"
-            type="text"
-            value={typeof node.data.template === 'string' ? node.data.template : '{{value}}'}
-            onInput={(event) => onUpdateNodeData(node.id, { template: event.currentTarget.value })}
-          />
-        </label>
+        <>
+          {renderScopedDataPicker('Value from Pipeline (Scoped)', 'pipelineRef')}
+          <label class="nl-field">
+            <span>Template</span>
+            <input
+              class="nl-input"
+              type="text"
+              value={typeof node.data.template === 'string' ? node.data.template : '{{value}}'}
+              onInput={(event) => onUpdateNodeData(node.id, { template: event.currentTarget.value })}
+            />
+          </label>
+        </>
       );
 
     case 'action.set-visible':
       return (
         <>
-          {renderAstTargetPicker('Target layer', scopedAstNodes)}
+          {renderPipelineTargetField('Target layer', scopedAstNodes)}
+          {renderScopedDataPicker('Visibility from Pipeline (optional)', 'pipelineRef', ['boolean'])}
           <label class="nl-field">
             <span>Mode</span>
             <select
@@ -2101,7 +2413,8 @@ export function NodeLogicNodeFields({
     case 'action.set-text':
       return (
         <>
-          {renderAstTargetPicker('Target text layer', textNodes)}
+          {renderPipelineTargetField('Target text layer', textNodes)}
+          {renderScopedDataPicker('Text from Pipeline (optional)', 'pipelineRef')}
           <label class="nl-field">
             <span>Fallback text</span>
             <input
@@ -2117,7 +2430,8 @@ export function NodeLogicNodeFields({
     case 'action.set-fill':
       return (
         <>
-          {renderAstTargetPicker('Target fillable layer', fillableNodes)}
+          {renderPipelineTargetField('Target fillable layer', fillableNodes)}
+          {renderScopedDataPicker('Fill color from Pipeline (optional)', 'pipelineRef', ['string'])}
           <label class="nl-field">
             <span>Fill color</span>
             <input
@@ -2149,19 +2463,46 @@ export function NodeLogicNodeFields({
 
     case 'action.play-animation':
       return (
-        <label class="nl-field">
-          <span>Animation clip</span>
-          <select
-            class="select-field"
-            value={typeof node.data.clipId === 'string' ? node.data.clipId : ''}
-            onChange={(event) => onUpdateNodeData(node.id, { clipId: event.currentTarget.value })}
-          >
-            <option value="">Select clip…</option>
-            {animations.map((clip) => (
-              <option key={clip.id} value={clip.id}>{clip.name}</option>
-            ))}
-          </select>
-        </label>
+        <>
+          <div class="nl-field">
+            <span>Clip source</span>
+            <div class="nl-target-mode-toggle" role="group" aria-label="Clip resolution mode">
+              <button
+                type="button"
+                class={`nl-target-mode-btn ${targetMode === 'pipeline' ? 'is-active' : ''}`}
+                aria-pressed={targetMode === 'pipeline'}
+                title="Inherit from Pipeline"
+                onClick={() => onUpdateNodeData(node.id, { targetMode: 'pipeline' })}
+              >
+                Inherit Pipeline
+              </button>
+              <button
+                type="button"
+                class={`nl-target-mode-btn ${targetMode === 'override' ? 'is-active' : ''}`}
+                aria-pressed={targetMode === 'override'}
+                title="Override Clip"
+                onClick={() => onUpdateNodeData(node.id, { targetMode: 'override' })}
+              >
+                Override Clip
+              </button>
+            </div>
+          </div>
+          <label class="nl-field">
+            <span>Animation clip</span>
+            <select
+              class="select-field"
+              value={typeof node.data.clipId === 'string' ? node.data.clipId : ''}
+              onChange={(event) => onUpdateNodeData(node.id, { clipId: event.currentTarget.value })}
+            >
+              <option value="">
+                {targetMode === 'pipeline' ? 'Auto · Origin attached clip' : 'Select clip…'}
+              </option>
+              {animations.map((clip) => (
+                <option key={clip.id} value={clip.id}>{clip.name}</option>
+              ))}
+            </select>
+          </label>
+        </>
       );
 
     default:

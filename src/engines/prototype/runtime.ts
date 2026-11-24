@@ -21,6 +21,18 @@ import type {
 } from '../../core/document/types';
 import { sanitizeHref } from '../codegen/sanitize';
 import { isBuiltInLogicNodeType, type LogicCompareOperator } from './catalog';
+import {
+  buildPipelineOriginRef,
+  clonePipelineContextWithStep,
+  createPipelineContext,
+  getNodeTargetMode,
+  getPrivateToggleMemoryKey,
+  resolveAstNodeById,
+  resolvePipelineRefValue,
+  resolvePipelineTargetLayerId,
+  type PipelineContext,
+  type PipelineStepOutput,
+} from './pipeline';
 
 export const MAX_LOGIC_EXECUTION_STEPS = 256;
 const HARD_MAX_EXECUTION_STEPS = 1024;
@@ -51,6 +63,8 @@ export interface LogicExecutionTraceEntry {
   readonly nodeId: string;
   readonly nodeType: string;
   readonly detail: string;
+  readonly originLayerId?: string | null;
+  readonly payload?: PipelineStepOutput;
 }
 
 export interface PrototypeToastNotice {
@@ -65,6 +79,7 @@ export interface PrototypeRuntimeSnapshot {
   readonly mounted: boolean;
   readonly stepCount: number;
   readonly variables: Readonly<Record<string, LogicVariableValue>>;
+  readonly privateMemory: Readonly<Record<string, boolean>>;
   readonly nodeOverrides: Readonly<Record<string, PrototypeNodeOverride>>;
   readonly playedAnimations: readonly string[];
   readonly toasts?: readonly PrototypeToastNotice[];
@@ -311,13 +326,19 @@ export function createPrototypeRuntime(
   let variableInitialValues = new Map<string, LogicVariableValue>();
   let variableNameToId = new Map<string, string>();
   let variables: Record<string, LogicVariableValue> = {};
+  let privateMemory: Record<string, boolean> = {};
   let nodeOverrides: Record<string, PrototypeNodeOverride> = {};
   let playedAnimations: string[] = [];
   let toasts: PrototypeToastNotice[] = [];
   let trace: LogicExecutionTraceEntry[] = [];
   let warnings: string[] = [];
   let firedOnceEvents = new Set<string>();
-  let ephemeralNodeOutputs = new Map<string, unknown>();
+  let executionCounter = 0;
+
+  const nextExecutionId = (prefix: string): string => {
+    executionCounter += 1;
+    return `${prefix}-${executionCounter}`;
+  };
 
   const loadPageContext = (page: FolioPage, preserveVariables: boolean) => {
     activePageId = page.id;
@@ -355,13 +376,14 @@ export function createPrototypeRuntime(
     activeThemeId = tokens.activeThemeId;
     mounted = false;
     totalSteps = 0;
+    privateMemory = {};
     nodeOverrides = {};
     playedAnimations = [];
     toasts = [];
     trace = [];
     warnings = [];
     firedOnceEvents = new Set();
-    ephemeralNodeOutputs = new Map();
+    executionCounter = 0;
     loadPageContext(initialPage, false);
   };
 
@@ -372,10 +394,21 @@ export function createPrototypeRuntime(
     nodeId: string,
     portId: string,
     visiting: Set<string>,
+    context: PipelineContext,
   ): unknown => {
     const key = `${indexed.graph.id}:${nodeId}:${portId}`;
-    if (ephemeralNodeOutputs.has(key)) {
-      return ephemeralNodeOutputs.get(key);
+    // First check scoped PipelineContext steps (isolated per execution branch).
+    const stepOut = context.steps[nodeId];
+    if (stepOut) {
+      if (Object.prototype.hasOwnProperty.call(stepOut, portId)) {
+        return stepOut[portId];
+      }
+      if (portId === 'result' && Object.prototype.hasOwnProperty.call(stepOut, 'value')) {
+        return stepOut.value;
+      }
+      if (portId === 'target' && Object.prototype.hasOwnProperty.call(stepOut, 'targetLayerId')) {
+        return stepOut.targetLayerId;
+      }
     }
     if (visiting.has(key)) {
       warnings.push(`Dataflow cycle encountered while evaluating "${nodeId}.${portId}".`);
@@ -387,9 +420,18 @@ export function createPrototypeRuntime(
     visiting.add(key);
     try {
       switch (node.type) {
+        case 'state.toggle': {
+          const variableId = typeof node.data.variableId === 'string' ? node.data.variableId.trim() : '';
+          if (!variableId) {
+            const memKey = getPrivateToggleMemoryKey(node.id, context.origin);
+            return Object.prototype.hasOwnProperty.call(privateMemory, memKey)
+              ? privateMemory[memKey]
+              : Boolean(node.data.initialValue);
+          }
+          return Object.prototype.hasOwnProperty.call(variables, variableId) ? Boolean(variables[variableId]) : false;
+        }
         case 'state.get':
         case 'state.set':
-        case 'state.toggle':
         case 'state.increment':
         case 'state.update':
         case 'event.on-state-change': {
@@ -449,8 +491,8 @@ export function createPrototypeRuntime(
         case 'logic.compare':
         case 'logic.condition': {
           const mode = node.type === 'logic.condition' ? String(node.data.mode ?? 'compare') : 'compare';
-          const left = resolveInputValue(indexed, node, 'left', node.data.left ?? null, visiting);
-          const right = resolveInputValue(indexed, node, 'right', node.data.right ?? null, visiting);
+          const left = resolveInputValue(indexed, node, 'left', node.data.left ?? null, visiting, context, 'leftRef');
+          const right = resolveInputValue(indexed, node, 'right', node.data.right ?? null, visiting, context, 'rightRef');
           if (mode === 'and') return Boolean(left) && Boolean(right);
           if (mode === 'or') return Boolean(left) || Boolean(right);
           if (mode === 'not') return !Boolean(left);
@@ -474,8 +516,8 @@ export function createPrototypeRuntime(
         }
 
         case 'logic.math': {
-          const a = Number(resolveInputValue(indexed, node, 'a', node.data.a ?? 0, visiting));
-          const b = Number(resolveInputValue(indexed, node, 'b', node.data.b ?? 0, visiting));
+          const a = Number(resolveInputValue(indexed, node, 'a', node.data.a ?? 0, visiting, context, 'leftRef'));
+          const b = Number(resolveInputValue(indexed, node, 'b', node.data.b ?? 0, visiting, context, 'rightRef'));
           const safeA = Number.isFinite(a) ? a : 0;
           const safeB = Number.isFinite(b) ? b : 0;
           const op = String(node.data.operation ?? '+');
@@ -503,7 +545,7 @@ export function createPrototypeRuntime(
         case 'logic.template':
         case 'logic.text': {
           const mode = node.type === 'logic.text' ? String(node.data.mode ?? 'template') : 'template';
-          const connected = resolveInputValue(indexed, node, 'value', undefined, visiting);
+          const connected = resolveInputValue(indexed, node, 'value', undefined, visiting, context, 'pipelineRef');
           if (mode === 'format-number' || mode === 'format-currency') {
             const num = Number(connected ?? 0);
             const safeNum = Number.isFinite(num) ? num : 0;
@@ -528,11 +570,11 @@ export function createPrototypeRuntime(
         }
 
         case 'logic.list': {
-          const rawList = resolveInputValue(indexed, node, 'list', [], visiting);
+          const rawList = resolveInputValue(indexed, node, 'list', [], visiting, context, 'pipelineRef');
           const list = parseListValue(rawList);
           const op = String(node.data.operation ?? 'filter');
           const field = typeof node.data.field === 'string' ? node.data.field.trim() : '';
-          const rawQuery = resolveInputValue(indexed, node, 'query', node.data.matchValue ?? '', visiting);
+          const rawQuery = resolveInputValue(indexed, node, 'query', node.data.matchValue ?? '', visiting, context);
           const query = String(rawQuery ?? '').trim().toLowerCase();
 
           let outList = [...list];
@@ -557,7 +599,7 @@ export function createPrototypeRuntime(
         }
 
         case 'network.json': {
-          const raw = resolveInputValue(indexed, node, 'input', null, visiting);
+          const raw = resolveInputValue(indexed, node, 'input', null, visiting, context, 'pipelineRef');
           const mode = String(node.data.mode ?? 'get-field');
           if (mode === 'stringify') {
             if (portId === 'valid') return true;
@@ -599,11 +641,39 @@ export function createPrototypeRuntime(
     portId: string,
     fallback: unknown,
     visiting: Set<string>,
+    context: PipelineContext,
+    refField?: string,
   ): unknown => {
     const incoming = indexed.incomingByTarget.get(`${node.id}:${portId}`);
-    if (!incoming || incoming.length === 0) return fallback;
-    const first = incoming[0];
-    return evaluateDataPort(indexed, first.sourceNodeId, first.sourcePortId, visiting);
+    if (incoming && incoming.length > 0) {
+      const first = incoming[0];
+      return evaluateDataPort(indexed, first.sourceNodeId, first.sourcePortId, visiting, context);
+    }
+    if (refField) {
+      const refVal = node.data[refField];
+      if (typeof refVal === 'string' && refVal.trim().length > 0) {
+        const resolved = resolvePipelineRefValue(context, refVal);
+        if (resolved.found) return resolved.value;
+      }
+    }
+    return fallback;
+  };
+
+  const hasDynamicInput = (
+    indexed: IndexedGraph,
+    node: LogicNode,
+    portId: string,
+    context: PipelineContext,
+    refField?: string,
+  ): boolean => {
+    if ((indexed.incomingByTarget.get(`${node.id}:${portId}`)?.length ?? 0) > 0) return true;
+    if (refField) {
+      const refVal = node.data[refField];
+      if (typeof refVal === 'string' && refVal.trim().length > 0) {
+        return resolvePipelineRefValue(context, refVal).found;
+      }
+    }
+    return false;
   };
 
   const ensureNodeOverride = (nodeId: string): PrototypeNodeOverride => {
@@ -613,16 +683,27 @@ export function createPrototypeRuntime(
     return nodeOverrides[nodeId];
   };
 
-  const runExecutionQueue = (
-    initialQueue: Array<{ indexed: IndexedGraph; nodeId: string; outPortId?: string }>,
-  ) => {
-    const queue = [...initialQueue];
+  interface ExecutionQueueItem {
+    readonly indexed: IndexedGraph;
+    readonly nodeId: string;
+    readonly outPortId?: string;
+    readonly context: PipelineContext;
+    readonly initialStepPayload?: PipelineStepOutput;
+  }
+
+  const runExecutionQueue = (initialQueue: ExecutionQueueItem[]) => {
+    const queue: ExecutionQueueItem[] = [...initialQueue];
     let dispatchSteps = 0;
 
-    const enqueueOutgoing = (indexed: IndexedGraph, nodeId: string, portId: string) => {
+    const enqueueOutgoing = (
+      indexed: IndexedGraph,
+      nodeId: string,
+      portId: string,
+      nextContext: PipelineContext,
+    ) => {
       const connections = indexed.outgoingBySource.get(`${nodeId}:${portId}`) ?? [];
       for (const conn of connections) {
-        queue.push({ indexed, nodeId: conn.targetNodeId });
+        queue.push({ indexed, nodeId: conn.targetNodeId, context: nextContext });
       }
     };
 
@@ -633,8 +714,17 @@ export function createPrototypeRuntime(
             candidateNode.type === 'event.on-state-change' &&
             candidateNode.data.variableId === variableId
           ) {
-            ephemeralNodeOutputs.set(`${candidateGraph.graph.id}:${candidateNode.id}:value`, nextValue);
-            queue.push({ indexed: candidateGraph, nodeId: candidateNode.id });
+            const freshCtx = createPipelineContext(
+              nextExecutionId('state'),
+              'state-change',
+              null,
+            );
+            queue.push({
+              indexed: candidateGraph,
+              nodeId: candidateNode.id,
+              context: freshCtx,
+              initialStepPayload: { variableId, value: nextValue },
+            });
           }
         }
       }
@@ -648,6 +738,7 @@ export function createPrototypeRuntime(
       const next = queue.shift()!;
       const node = next.indexed.nodesById.get(next.nodeId);
       if (!node || !isBuiltInLogicNodeType(node.type)) continue;
+      const ctx = next.context;
 
       // Respect Once flag on event nodes
       if (node.type.startsWith('event.') && node.data.once === true) {
@@ -673,14 +764,29 @@ export function createPrototypeRuntime(
                 ? 'onReady'
                 : 'onClick';
           const outPort = next.outPortId ?? defaultPort;
+          const stepPayload: PipelineStepOutput = {
+            ...(next.initialStepPayload ?? {}),
+            ...(ctx.origin
+              ? {
+                  targetLayerId: ctx.origin.layerId,
+                  originName: ctx.origin.name,
+                  originType: ctx.origin.type,
+                  ...(ctx.origin.children ? { childCount: ctx.origin.children.length } : {}),
+                }
+              : {}),
+            port: outPort,
+          };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Triggered ${node.type}.${outPort}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
-          enqueueOutgoing(next.indexed, node.id, outPort);
+          enqueueOutgoing(next.indexed, node.id, outPort, nextCtx);
           break;
         }
 
@@ -696,14 +802,28 @@ export function createPrototypeRuntime(
         case 'event.on-lifecycle':
         case 'event.on-page-load':
         case 'event.on-state-change': {
+          const stepPayload: PipelineStepOutput = {
+            ...(next.initialStepPayload ?? {}),
+            ...(ctx.origin
+              ? {
+                  targetLayerId: ctx.origin.layerId,
+                  originName: ctx.origin.name,
+                  originType: ctx.origin.type,
+                  ...(ctx.origin.children ? { childCount: ctx.origin.children.length } : {}),
+                }
+              : {}),
+          };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
-            detail: `Triggered ${node.type}`,
+            detail: `Triggered ${node.type}${ctx.origin ? ` (${ctx.origin.name})` : ''}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
-          enqueueOutgoing(next.indexed, node.id, 'exec');
+          enqueueOutgoing(next.indexed, node.id, 'exec', nextCtx);
           break;
         }
 
@@ -714,41 +834,76 @@ export function createPrototypeRuntime(
             warnings.push(`Set State "${node.id}" references undeclared variable "${variableId}".`);
             break;
           }
-          const rawVal = resolveInputValue(next.indexed, node, 'value', node.data.value ?? null, visiting);
+          const rawVal = resolveInputValue(next.indexed, node, 'value', node.data.value ?? null, visiting, ctx, 'pipelineRef');
           const prevVal = variables[variableId];
           const coerced = coerceVariableValue(rawVal, expectedType, prevVal);
           variables[variableId] = coerced;
-          ephemeralNodeOutputs.set(`${next.indexed.graph.id}:${node.id}:result`, coerced);
+          const stepPayload: PipelineStepOutput = { variableId, value: coerced, previous: prevVal };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Set ${variableId} = ${JSON.stringify(coerced)}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
           if (coerced !== prevVal) enqueueStateChangeListeners(variableId, coerced);
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'state.toggle': {
-          const variableId = typeof node.data.variableId === 'string' ? node.data.variableId : '';
+          const variableId = typeof node.data.variableId === 'string' ? node.data.variableId.trim() : '';
+          if (!variableId) {
+            // Node-owned, target-bound private boolean memory (Anti-Amnesia)
+            const memoryKey = getPrivateToggleMemoryKey(node.id, ctx.origin);
+            const initialBool = Boolean(node.data.initialValue);
+            const prevVal = Object.prototype.hasOwnProperty.call(privateMemory, memoryKey)
+              ? privateMemory[memoryKey]
+              : initialBool;
+            const nextVal = !prevVal;
+            privateMemory[memoryKey] = nextVal;
+            const stepPayload: PipelineStepOutput = {
+              value: nextVal,
+              previous: prevVal,
+              memoryKey,
+            };
+            const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
+            trace.push({
+              step: totalSteps,
+              graphId: next.indexed.graph.id,
+              nodeId: node.id,
+              nodeType: node.type,
+              detail: `Toggled private (${ctx.origin?.name ?? 'default'}) -> ${String(nextVal)}`,
+              originLayerId: ctx.origin?.layerId ?? null,
+              payload: { value: nextVal, previous: prevVal },
+            });
+            enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
+            break;
+          }
+
           if (variableTypes.get(variableId) !== 'boolean') {
             warnings.push(`Toggle State "${node.id}" requires a boolean variable ("${variableId}").`);
             break;
           }
-          const nextVal = !Boolean(variables[variableId]);
+          const prevVal = Boolean(variables[variableId]);
+          const nextVal = !prevVal;
           variables[variableId] = nextVal;
-          ephemeralNodeOutputs.set(`${next.indexed.graph.id}:${node.id}:result`, nextVal);
+          const stepPayload: PipelineStepOutput = { value: nextVal, previous: prevVal, variableId };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Toggled ${variableId} -> ${String(nextVal)}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: { value: nextVal, previous: prevVal },
           });
           enqueueStateChangeListeners(variableId, nextVal);
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
@@ -758,23 +913,26 @@ export function createPrototypeRuntime(
             warnings.push(`Increment State "${node.id}" requires a number variable ("${variableId}").`);
             break;
           }
-          const rawStep = resolveInputValue(next.indexed, node, 'step', node.data.step ?? 1, visiting);
+          const rawStep = resolveInputValue(next.indexed, node, 'step', node.data.step ?? 1, visiting, ctx);
           const step = typeof rawStep === 'number' && Number.isFinite(rawStep) ? rawStep : 1;
           const prevVal = typeof variables[variableId] === 'number' ? (variables[variableId] as number) : 0;
           let nextVal = prevVal + step;
           if (typeof node.data.min === 'number' && Number.isFinite(node.data.min)) nextVal = Math.max(node.data.min, nextVal);
           if (typeof node.data.max === 'number' && Number.isFinite(node.data.max)) nextVal = Math.min(node.data.max, nextVal);
           variables[variableId] = nextVal;
-          ephemeralNodeOutputs.set(`${next.indexed.graph.id}:${node.id}:result`, nextVal);
+          const stepPayload: PipelineStepOutput = { variableId, value: nextVal, previous: prevVal };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Incremented ${variableId} -> ${String(nextVal)}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: { value: nextVal, previous: prevVal },
           });
           if (nextVal !== prevVal) enqueueStateChangeListeners(variableId, nextVal);
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
@@ -787,7 +945,7 @@ export function createPrototypeRuntime(
           }
           const op = String(node.data.operation ?? 'set');
           const prevVal = variables[variableId];
-          const incomingVal = resolveInputValue(next.indexed, node, 'value', node.data.value ?? null, visiting);
+          const incomingVal = resolveInputValue(next.indexed, node, 'value', node.data.value ?? null, visiting, ctx, 'pipelineRef');
           let nextVal: LogicVariableValue = prevVal;
 
           if (op === 'reset') {
@@ -826,30 +984,42 @@ export function createPrototypeRuntime(
           }
 
           variables[variableId] = nextVal;
-          ephemeralNodeOutputs.set(`${next.indexed.graph.id}:${node.id}:result`, nextVal);
+          const stepPayload: PipelineStepOutput = { variableId, operation: op, value: nextVal, previous: prevVal };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Update(${op}) ${variableId} -> ${JSON.stringify(nextVal)}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: { value: nextVal, operation: op },
           });
           if (nextVal !== prevVal) enqueueStateChangeListeners(variableId, nextVal);
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'logic.branch': {
           const mode = String(node.data.mode ?? 'if-else');
           let outPort = 'false';
+          let condBool = false;
           if (mode === 'switch-case') {
-            const matchVal = String(resolveInputValue(next.indexed, node, 'value', '', visiting) ?? '');
-            if (matchVal === String(node.data.caseA ?? '')) outPort = 'true';
-            else if (matchVal === String(node.data.caseB ?? '')) outPort = 'elseIf';
-            else outPort = 'false';
+            const matchVal = String(resolveInputValue(next.indexed, node, 'value', '', visiting, ctx, 'pipelineRef') ?? '');
+            if (matchVal === String(node.data.caseA ?? '')) {
+              outPort = 'true';
+              condBool = true;
+            } else if (matchVal === String(node.data.caseB ?? '')) {
+              outPort = 'elseIf';
+              condBool = true;
+            } else {
+              outPort = 'false';
+              condBool = false;
+            }
           } else {
-            const condRaw = resolveInputValue(next.indexed, node, 'condition', Boolean(node.data.condition), visiting);
-            if (Boolean(condRaw)) {
+            const condRaw = resolveInputValue(next.indexed, node, 'condition', Boolean(node.data.condition), visiting, ctx, 'pipelineRef');
+            condBool = Boolean(condRaw);
+            if (condBool) {
               outPort = 'true';
             } else if (mode === 'else-if' && Boolean(node.data.elseIfCondition)) {
               outPort = 'elseIf';
@@ -857,159 +1027,192 @@ export function createPrototypeRuntime(
               outPort = 'false';
             }
           }
+          const stepPayload: PipelineStepOutput = { matchedBranch: outPort, condition: condBool, mode };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Branch (${mode}) -> ${outPort}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: { matchedBranch: outPort, condition: condBool },
           });
-          enqueueOutgoing(next.indexed, node.id, outPort);
+          enqueueOutgoing(next.indexed, node.id, outPort, nextCtx);
           break;
         }
 
         case 'action.set-layer': {
-          const targetNodeId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
-          const astNode = astNodesById.get(targetNodeId);
+          const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
+          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById);
           if (!astNode) {
             warnings.push(`Set Layer "${node.id}" target node "${targetNodeId}" not found.`);
             break;
           }
           const property = String(node.data.property ?? 'text');
-          const hasConnectedValue = (next.indexed.incomingByTarget.get(`${node.id}:value`)?.length ?? 0) > 0;
-          const connectedVal = hasConnectedValue
-            ? resolveInputValue(next.indexed, node, 'value', null, visiting)
+          const hasDynVal = hasDynamicInput(next.indexed, node, 'value', ctx, 'pipelineRef');
+          const connectedVal = hasDynVal
+            ? resolveInputValue(next.indexed, node, 'value', null, visiting, ctx, 'pipelineRef')
             : undefined;
           const ov = ensureNodeOverride(targetNodeId);
+          let appliedValue: unknown = null;
 
           if (property === 'visible') {
-            if (hasConnectedValue) {
+            if (hasDynVal) {
               ov.visible = Boolean(connectedVal);
             } else {
               const mode = String(node.data.visibleMode ?? 'toggle');
               const curVis = ov.visible ?? astNode.visible;
               ov.visible = mode === 'show' ? true : mode === 'hide' ? false : !curVis;
             }
+            appliedValue = ov.visible;
           } else if (property === 'fill') {
-            const fill = String(hasConnectedValue ? connectedVal ?? '' : node.data.fill ?? '').trim();
+            const fill = String(hasDynVal ? connectedVal ?? '' : node.data.fill ?? '').trim();
             if (!isSafeCssColorValue(fill)) {
               warnings.push(`Set Layer "${node.id}" blocked unsafe CSS fill color.`);
               break;
             }
             ov.fill = fill;
+            appliedValue = fill;
           } else if (property === 'opacity') {
-            const rawOp = Number(hasConnectedValue ? connectedVal : node.data.opacity ?? 1);
+            const rawOp = Number(hasDynVal ? connectedVal : node.data.opacity ?? 1);
             ov.opacity = Number.isFinite(rawOp) ? Math.max(0, Math.min(1, rawOp)) : 1;
+            appliedValue = ov.opacity;
           } else if (property === 'transform') {
-            ov.transform = String(hasConnectedValue ? connectedVal ?? '' : node.data.transform ?? '');
+            ov.transform = String(hasDynVal ? connectedVal ?? '' : node.data.transform ?? '');
+            appliedValue = ov.transform;
           } else if (property === 'text') {
-            ov.text = String(hasConnectedValue ? connectedVal ?? '' : node.data.text ?? '');
+            ov.text = String(hasDynVal ? connectedVal ?? '' : node.data.text ?? '');
+            appliedValue = ov.text;
           } else if (property === 'image') {
-            const url = String(hasConnectedValue ? connectedVal ?? '' : node.data.imageUrl ?? '').trim();
+            const url = String(hasDynVal ? connectedVal ?? '' : node.data.imageUrl ?? '').trim();
             if (url && !sanitizeHref(url)) {
               warnings.push(`Set Layer "${node.id}" blocked unsafe image URL.`);
               break;
             }
             ov.imageUrl = url;
+            appliedValue = url;
           } else if (property === 'disabled') {
-            ov.disabled = hasConnectedValue ? Boolean(connectedVal) : Boolean(node.data.disabled);
+            ov.disabled = hasDynVal ? Boolean(connectedVal) : Boolean(node.data.disabled);
+            appliedValue = ov.disabled;
           }
 
+          const stepPayload: PipelineStepOutput = {
+            targetNodeId,
+            targetName: astNode.name,
+            property,
+            value: appliedValue,
+          };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
-            detail: `Set Layer(${targetNodeId}).${property}`,
+            detail: `Set Layer(${astNode.name}).${property} = ${JSON.stringify(appliedValue)}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: { target: astNode.name, [property]: appliedValue },
           });
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'action.set-visible': {
-          const targetNodeId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
-          const astNode = astNodesById.get(targetNodeId);
+          const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
+          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById);
           if (!astNode) {
             warnings.push(`Set Visible "${node.id}" target node "${targetNodeId}" not found.`);
             break;
           }
-          const incomingConnected = (next.indexed.incomingByTarget.get(`${node.id}:visible`)?.length ?? 0) > 0;
+          const incomingConnected = hasDynamicInput(next.indexed, node, 'visible', ctx, 'pipelineRef');
           let nextVisible: boolean;
           if (incomingConnected) {
-            nextVisible = Boolean(resolveInputValue(next.indexed, node, 'visible', true, visiting));
+            nextVisible = Boolean(resolveInputValue(next.indexed, node, 'visible', true, visiting, ctx, 'pipelineRef'));
           } else {
             const mode = String(node.data.mode ?? 'toggle');
             const currentVisible = nodeOverrides[targetNodeId]?.visible ?? astNode.visible;
             nextVisible = mode === 'show' ? true : mode === 'hide' ? false : !currentVisible;
           }
           ensureNodeOverride(targetNodeId).visible = nextVisible;
+          const stepPayload: PipelineStepOutput = { targetNodeId, targetName: astNode.name, visible: nextVisible };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Set visible(${targetNodeId}) = ${String(nextVisible)}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: { target: astNode.name, visible: nextVisible },
           });
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'action.set-text': {
-          const targetNodeId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
-          const astNode = astNodesById.get(targetNodeId);
+          const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
+          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById);
           if (!astNode || astNode.type !== 'text') {
             warnings.push(`Set Text "${node.id}" target text node "${targetNodeId}" not found.`);
             break;
           }
-          const rawText = resolveInputValue(next.indexed, node, 'text', node.data.text ?? '', visiting);
+          const rawText = resolveInputValue(next.indexed, node, 'text', node.data.text ?? '', visiting, ctx, 'pipelineRef');
           const nextText = rawText === null || rawText === undefined ? '' : String(rawText);
           ensureNodeOverride(targetNodeId).text = nextText;
+          const stepPayload: PipelineStepOutput = { targetNodeId, targetName: astNode.name, text: nextText };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Set text(${targetNodeId}) = ${JSON.stringify(nextText)}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: { target: astNode.name, text: nextText },
           });
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'action.set-fill': {
-          const targetNodeId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
-          const astNode = astNodesById.get(targetNodeId);
+          const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
+          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById);
           if (!astNode || astNode.type === 'group' || astNode.type === 'component-instance') {
             warnings.push(`Set Fill "${node.id}" target node "${targetNodeId}" does not support fill.`);
             break;
           }
-          const rawFill = resolveInputValue(next.indexed, node, 'fill', node.data.fill ?? '', visiting);
+          const rawFill = resolveInputValue(next.indexed, node, 'fill', node.data.fill ?? '', visiting, ctx, 'pipelineRef');
           const nextFill = typeof rawFill === 'string' ? rawFill.trim() : '';
           if (!isSafeCssColorValue(nextFill)) {
             warnings.push(`Set Fill "${node.id}" blocked unsafe CSS color value.`);
             break;
           }
           ensureNodeOverride(targetNodeId).fill = nextFill;
+          const stepPayload: PipelineStepOutput = { targetNodeId, targetName: astNode.name, fill: nextFill };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Set fill(${targetNodeId}) = ${nextFill}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: { target: astNode.name, fill: nextFill },
           });
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'action.set-variant': {
-          const targetNodeId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
-          const astNode = astNodesById.get(targetNodeId);
+          const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
+          const astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById);
           if (!astNode || astNode.type !== 'component-instance') {
             warnings.push(`Set Variant "${node.id}" target "${targetNodeId}" is not a component instance.`);
             break;
           }
           const master = componentsById.get(astNode.componentId);
           const axisId = typeof node.data.axisId === 'string' ? node.data.axisId : '';
-          const rawOpt = resolveInputValue(next.indexed, node, 'optionId', node.data.optionId ?? '', visiting);
+          const rawOpt = resolveInputValue(next.indexed, node, 'optionId', node.data.optionId ?? '', visiting, ctx, 'pipelineRef');
           const optionId = typeof rawOpt === 'string' ? rawOpt : '';
           const axis = master?.variants?.find((item) => item.id === axisId);
           if (!axis || !axis.options.some((opt) => opt.id === optionId)) {
@@ -1021,31 +1224,40 @@ export function createPrototypeRuntime(
             ...(targetOverride.variantSelection ?? {}),
             [axisId]: optionId,
           };
+          const stepPayload: PipelineStepOutput = { targetNodeId, axisId, optionId };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Set variant(${targetNodeId}, ${axisId}) = ${optionId}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'action.navigate': {
           const mode = String(node.data.mode ?? 'internal');
           if (mode === 'back' || mode === 'forward' || mode === 'reload' || mode === 'scroll-to' || mode === 'url-params') {
+            const scrollTargetId = mode === 'scroll-to' ? resolvePipelineTargetLayerId(node, ctx) : '';
+            const stepPayload: PipelineStepOutput = { mode, ...(scrollTargetId ? { targetNodeId: scrollTargetId } : {}) };
+            const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
             trace.push({
               step: totalSteps,
               graphId: next.indexed.graph.id,
               nodeId: node.id,
               nodeType: node.type,
               detail: `Navigate (${mode})`,
+              originLayerId: ctx.origin?.layerId ?? null,
+              payload: stepPayload,
             });
-            enqueueOutgoing(next.indexed, node.id, 'next');
+            enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
             break;
           }
-          const resolvedRoute = resolveInputValue(next.indexed, node, 'route', node.data.route ?? '', visiting);
+          const resolvedRoute = resolveInputValue(next.indexed, node, 'route', node.data.route ?? '', visiting, ctx, 'pipelineRef');
           const rawRoute = typeof resolvedRoute === 'string' ? resolvedRoute.trim() : '';
           const safeHref = sanitizeHref(rawRoute);
           if (!safeHref) {
@@ -1057,91 +1269,115 @@ export function createPrototypeRuntime(
           if (matchingPage && matchingPage.id !== activePageId) {
             loadPageContext(matchingPage, true);
           }
+          const stepPayload: PipelineStepOutput = { mode, route: safeHref };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Navigate -> ${safeHref}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'action.overlay-toast': {
           const mode = String(node.data.mode ?? 'show-toast');
-          const targetNodeId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
+          const targetNodeId = resolvePipelineTargetLayerId(node, ctx);
+          let stepPayload: PipelineStepOutput = { mode };
           if (mode === 'show-toast') {
-            const msg = String(resolveInputValue(next.indexed, node, 'message', node.data.message ?? '', visiting) ?? '');
+            const msg = String(resolveInputValue(next.indexed, node, 'message', node.data.message ?? '', visiting, ctx, 'pipelineRef') ?? '');
             const tone = String(node.data.tone ?? 'info');
             toasts.push({ message: msg, tone });
+            stepPayload = { mode, tone, message: msg };
             trace.push({
               step: totalSteps,
               graphId: next.indexed.graph.id,
               nodeId: node.id,
               nodeType: node.type,
               detail: `Toast(${tone}): ${msg}`,
+              originLayerId: ctx.origin?.layerId ?? null,
+              payload: { tone, message: msg },
             });
-          } else if (targetNodeId && astNodesById.has(targetNodeId)) {
+          } else if (targetNodeId && resolveAstNodeById(targetNodeId, astNodesById, componentsById)) {
             const open = mode === 'open-modal' || mode === 'open-drawer';
             ensureNodeOverride(targetNodeId).visible = open;
+            stepPayload = { mode, targetNodeId, visible: open };
             trace.push({
               step: totalSteps,
               graphId: next.indexed.graph.id,
               nodeId: node.id,
               nodeType: node.type,
               detail: `${mode}(${targetNodeId})`,
+              originLayerId: ctx.origin?.layerId ?? null,
+              payload: stepPayload,
             });
           }
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'action.system-form': {
           const sysAction = String(node.data.action ?? 'set-theme');
+          let stepPayload: PipelineStepOutput = { action: sysAction };
           if (sysAction === 'set-theme') {
-            const rawTheme = resolveInputValue(next.indexed, node, 'value', node.data.themeId ?? '', visiting);
+            const rawTheme = resolveInputValue(next.indexed, node, 'value', node.data.themeId ?? '', visiting, ctx, 'pipelineRef');
             const themeId = typeof rawTheme === 'string' ? rawTheme.trim() : '';
             if (!themeId || !themeIds.has(themeId)) {
               warnings.push(`System & Form "${node.id}" references unknown theme "${themeId}".`);
               break;
             }
             activeThemeId = themeId;
+            stepPayload = { action: sysAction, themeId };
           }
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `System & Form (${sysAction})`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'action.set-theme': {
-          const rawTheme = resolveInputValue(next.indexed, node, 'themeId', node.data.themeId ?? '', visiting);
+          const rawTheme = resolveInputValue(next.indexed, node, 'themeId', node.data.themeId ?? '', visiting, ctx, 'pipelineRef');
           const themeId = typeof rawTheme === 'string' ? rawTheme.trim() : '';
           if (!themeId || !themeIds.has(themeId)) {
             warnings.push(`Set Theme "${node.id}" references unknown theme "${themeId}".`);
             break;
           }
           activeThemeId = themeId;
+          const stepPayload: PipelineStepOutput = { themeId };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Set theme -> ${themeId}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'action.media-animation':
         case 'action.play-animation': {
           const command = node.type === 'action.media-animation' ? String(node.data.command ?? 'play') : 'play';
-          const clipId = typeof node.data.clipId === 'string' ? node.data.clipId.trim() : '';
+          const explicitClipId = typeof node.data.clipId === 'string' ? node.data.clipId.trim() : '';
+          const clipId =
+            explicitClipId
+            || (getNodeTargetMode(node) === 'pipeline' ? (ctx.origin?.animationIds[0] ?? '') : '');
           const clip = clipId ? animationsById.get(clipId) : undefined;
           if (clip && (command === 'play' || command === 'reverse')) {
             playedAnimations.push(clip.id);
@@ -1149,75 +1385,98 @@ export function createPrototypeRuntime(
             warnings.push(`Play Animation "${node.id}" references unknown clip "${clipId}".`);
             break;
           }
+          const targetId = resolvePipelineTargetLayerId(node, ctx);
+          const stepPayload: PipelineStepOutput = {
+            command,
+            ...(clip ? { clipId: clip.id, clipName: clip.name } : { targetNodeId: targetId }),
+          };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
-            detail: `${command} ${clip ? clip.name : String(node.data.targetNodeId ?? 'media')}`,
+            detail: `${command} ${clip ? clip.name : String(targetId || 'media')}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'flow.delay': {
           const dur = Number(node.data.duration ?? 300);
           const unit = node.data.unit === 's' ? 's' : 'ms';
+          const stepPayload: PipelineStepOutput = { duration: dur, unit };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Delay ${dur}${unit} (simulated)`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
-          enqueueOutgoing(next.indexed, node.id, 'next');
+          enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
           break;
         }
 
         case 'flow.loop-timer': {
           const mode = String(node.data.mode ?? 'for-each');
           if (mode === 'for-each') {
-            const list = parseListValue(resolveInputValue(next.indexed, node, 'list', [], visiting));
+            const list = parseListValue(resolveInputValue(next.indexed, node, 'list', [], visiting, ctx, 'pipelineRef'));
             const cap = Math.min(list.length, Math.max(1, Number(node.data.maxIterations ?? 50)));
             for (let idx = 0; idx < cap; idx += 1) {
-              ephemeralNodeOutputs.set(`${next.indexed.graph.id}:${node.id}:item`, list[idx]);
-              ephemeralNodeOutputs.set(`${next.indexed.graph.id}:${node.id}:index`, idx);
-              enqueueOutgoing(next.indexed, node.id, 'tick');
+              const iterCtx = clonePipelineContextWithStep(ctx, node.id, { item: list[idx], index: idx });
+              enqueueOutgoing(next.indexed, node.id, 'tick', iterCtx);
             }
+            const donePayload: PipelineStepOutput = { mode, count: cap };
+            const doneCtx = clonePipelineContextWithStep(ctx, node.id, donePayload);
             trace.push({
               step: totalSteps,
               graphId: next.indexed.graph.id,
               nodeId: node.id,
               nodeType: node.type,
               detail: `For Each (${cap} items)`,
+              originLayerId: ctx.origin?.layerId ?? null,
+              payload: donePayload,
             });
-            enqueueOutgoing(next.indexed, node.id, 'done');
+            enqueueOutgoing(next.indexed, node.id, 'done', doneCtx);
           } else {
+            const stepPayload: PipelineStepOutput = { mode, timerId: String(node.data.timerId ?? 'timer') };
+            const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
             trace.push({
               step: totalSteps,
               graphId: next.indexed.graph.id,
               nodeId: node.id,
               nodeType: node.type,
               detail: `Timer ${mode} (${String(node.data.timerId ?? 'timer')})`,
+              originLayerId: ctx.origin?.layerId ?? null,
+              payload: stepPayload,
             });
-            if (mode === 'interval-start') enqueueOutgoing(next.indexed, node.id, 'tick');
-            else enqueueOutgoing(next.indexed, node.id, 'done');
+            if (mode === 'interval-start') enqueueOutgoing(next.indexed, node.id, 'tick', nextCtx);
+            else enqueueOutgoing(next.indexed, node.id, 'done', nextCtx);
           }
           break;
         }
 
         case 'flow.control': {
           const mode = String(node.data.mode ?? 'sequence');
+          const stepPayload: PipelineStepOutput = { mode };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Flow Control (${mode})`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
-          enqueueOutgoing(next.indexed, node.id, 'step1');
-          enqueueOutgoing(next.indexed, node.id, 'step2');
-          enqueueOutgoing(next.indexed, node.id, 'done');
+          enqueueOutgoing(next.indexed, node.id, 'step1', nextCtx);
+          enqueueOutgoing(next.indexed, node.id, 'step2', nextCtx);
+          enqueueOutgoing(next.indexed, node.id, 'done', nextCtx);
           break;
         }
 
@@ -1225,33 +1484,38 @@ export function createPrototypeRuntime(
           const method = String(node.data.method ?? 'GET');
           const url = String(node.data.url ?? '/api/items');
           const simulatedPayload = { ok: true, method, url, data: { items: [] } };
-          ephemeralNodeOutputs.set(`${next.indexed.graph.id}:${node.id}:data`, simulatedPayload);
-          ephemeralNodeOutputs.set(`${next.indexed.graph.id}:${node.id}:status`, 200);
+          const stepPayload: PipelineStepOutput = { data: simulatedPayload, status: 200 };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `HTTP ${method} ${url} -> 200 (simulated)`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: { method, url, status: 200 },
           });
-          enqueueOutgoing(next.indexed, node.id, 'loading');
-          enqueueOutgoing(next.indexed, node.id, 'success');
+          enqueueOutgoing(next.indexed, node.id, 'loading', nextCtx);
+          enqueueOutgoing(next.indexed, node.id, 'success', nextCtx);
           break;
         }
 
         case 'network.socket': {
           const action = String(node.data.action ?? 'listen');
           const channel = String(node.data.channel ?? 'updates');
-          ephemeralNodeOutputs.set(`${next.indexed.graph.id}:${node.id}:connected`, true);
+          const stepPayload: PipelineStepOutput = { action, channel, connected: true };
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
             detail: `Socket ${action} #${channel}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
           });
           if (action === 'listen' || action === 'connect') {
-            enqueueOutgoing(next.indexed, node.id, 'onMessage');
+            enqueueOutgoing(next.indexed, node.id, 'onMessage', nextCtx);
           }
           break;
         }
@@ -1284,10 +1548,14 @@ export function createPrototypeRuntime(
       mounted,
       stepCount: totalSteps,
       variables: { ...variables },
+      privateMemory: { ...privateMemory },
       nodeOverrides: clonedOverrides,
       playedAnimations: [...playedAnimations],
       ...(toasts.length > 0 ? { toasts: [...toasts] } : {}),
-      trace: trace.map((entry) => ({ ...entry })),
+      trace: trace.map((entry) => ({
+        ...entry,
+        ...(entry.payload ? { payload: { ...entry.payload } } : {}),
+      })),
       warnings: [...warnings],
     };
   };
@@ -1296,22 +1564,39 @@ export function createPrototypeRuntime(
     mount() {
       if (mounted) return getSnapshot();
       mounted = true;
-      ephemeralNodeOutputs = new Map();
-      const starters: Array<{ indexed: IndexedGraph; nodeId: string; outPortId?: string }> = [];
+      const starters: ExecutionQueueItem[] = [];
       for (const indexed of indexedGraphs) {
         for (const node of indexed.graph.nodes) {
           if (node.type === 'event.on-page-load') {
-            starters.push({ indexed, nodeId: node.id });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              context: createPipelineContext(nextExecutionId('mount'), 'page-load', null),
+            });
           } else if (node.type === 'event.on-lifecycle' && (node.data.trigger === 'page-load' || !node.data.trigger)) {
-            starters.push({ indexed, nodeId: node.id });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              context: createPipelineContext(nextExecutionId('lifecycle'), 'page-load', null),
+            });
           } else if (node.type === 'source.page' && node.data.pageId === activePageId) {
-            starters.push({ indexed, nodeId: node.id, outPortId: 'onLoad' });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              outPortId: 'onLoad',
+              context: createPipelineContext(nextExecutionId('page'), 'page-load', null),
+            });
           } else if (
             node.type === 'source.context' &&
             (node.data.contextKind === 'page' || !node.data.contextKind) &&
             (!node.data.pageId || node.data.pageId === activePageId)
           ) {
-            starters.push({ indexed, nodeId: node.id, outPortId: 'onLoad' });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              outPortId: 'onLoad',
+              context: createPipelineContext(nextExecutionId('context'), 'page-load', null),
+            });
           }
         }
       }
@@ -1322,61 +1607,121 @@ export function createPrototypeRuntime(
     },
 
     dispatchNodeEvent(nodeId: string, event: LogicNodeEventKind, payload?: unknown) {
-      ephemeralNodeOutputs = new Map();
       const targetAstNode = astNodesById.get(nodeId);
       const targetComponentId =
         targetAstNode && targetAstNode.type === 'component-instance'
           ? targetAstNode.componentId
           : null;
-      const starters: Array<{ indexed: IndexedGraph; nodeId: string; outPortId?: string }> = [];
+      const originRef = buildPipelineOriginRef(
+        nodeId,
+        astNodesById,
+        componentsById,
+        project.animations,
+      );
+      const starters: ExecutionQueueItem[] = [];
       for (const indexed of indexedGraphs) {
         for (const node of indexed.graph.nodes) {
           if (event === 'click' && node.type === 'event.on-click' && node.data.targetNodeId === nodeId) {
-            ephemeralNodeOutputs.set(`${indexed.graph.id}:${node.id}:target`, nodeId);
-            starters.push({ indexed, nodeId: node.id });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              context: createPipelineContext(nextExecutionId('click'), 'click', originRef),
+              initialStepPayload: { targetLayerId: nodeId, mode: String(node.data.mode ?? 'click') },
+            });
           } else if (
             event === 'hover-enter' &&
             node.type === 'event.on-hover' &&
             node.data.targetNodeId === nodeId &&
             (node.data.phase === undefined || node.data.phase === 'enter')
           ) {
-            ephemeralNodeOutputs.set(`${indexed.graph.id}:${node.id}:isHovered`, true);
-            starters.push({ indexed, nodeId: node.id });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              context: createPipelineContext(nextExecutionId('hover'), 'hover-enter', originRef),
+              initialStepPayload: { targetLayerId: nodeId, isHovered: true },
+            });
           } else if (
             event === 'hover-leave' &&
             node.type === 'event.on-hover' &&
             node.data.targetNodeId === nodeId &&
             node.data.phase === 'leave'
           ) {
-            ephemeralNodeOutputs.set(`${indexed.graph.id}:${node.id}:isHovered`, false);
-            starters.push({ indexed, nodeId: node.id });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              context: createPipelineContext(nextExecutionId('hover'), 'hover-leave', originRef),
+              initialStepPayload: { targetLayerId: nodeId, isHovered: false },
+            });
           } else if (event === 'input' && node.type === 'event.on-input' && node.data.targetNodeId === nodeId) {
-            ephemeralNodeOutputs.set(`${indexed.graph.id}:${node.id}:value`, payload ?? '');
-            starters.push({ indexed, nodeId: node.id });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              context: createPipelineContext(nextExecutionId('input'), 'input', originRef),
+              initialStepPayload: { targetLayerId: nodeId, value: payload ?? '' },
+            });
           } else if (event === 'key-press' && node.type === 'event.on-key-press') {
-            ephemeralNodeOutputs.set(`${indexed.graph.id}:${node.id}:key`, payload ?? node.data.keyCombo ?? 'Enter');
-            starters.push({ indexed, nodeId: node.id });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              context: createPipelineContext(nextExecutionId('key'), 'key-press', originRef),
+              initialStepPayload: { key: payload ?? node.data.keyCombo ?? 'Enter' },
+            });
           } else if (event === 'drag' && node.type === 'event.on-drag' && node.data.targetNodeId === nodeId) {
-            starters.push({ indexed, nodeId: node.id });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              context: createPipelineContext(nextExecutionId('drag'), 'drag', originRef),
+              initialStepPayload: { targetLayerId: nodeId, phase: String(node.data.phase ?? 'start') },
+            });
           } else if (
             event === 'scroll-view' &&
             node.type === 'event.on-scroll-view' &&
             (node.data.mode === 'page-scroll' || node.data.targetNodeId === nodeId)
           ) {
-            ephemeralNodeOutputs.set(`${indexed.graph.id}:${node.id}:progress`, typeof payload === 'number' ? payload : 1);
-            starters.push({ indexed, nodeId: node.id });
+            starters.push({
+              indexed,
+              nodeId: node.id,
+              context: createPipelineContext(nextExecutionId('scroll'), 'scroll-view', originRef),
+              initialStepPayload: { progress: typeof payload === 'number' ? payload : 1 },
+            });
           } else if (
             node.type === 'source.element' &&
             (node.data.targetNodeId === nodeId || (targetComponentId && node.data.componentId === targetComponentId))
           ) {
-            if (event === 'click') starters.push({ indexed, nodeId: node.id, outPortId: 'onClick' });
-            else if (event === 'hover-enter') starters.push({ indexed, nodeId: node.id, outPortId: 'onHover' });
+            if (event === 'click') {
+              starters.push({
+                indexed,
+                nodeId: node.id,
+                outPortId: 'onClick',
+                context: createPipelineContext(nextExecutionId('src-click'), 'click', originRef),
+              });
+            } else if (event === 'hover-enter') {
+              starters.push({
+                indexed,
+                nodeId: node.id,
+                outPortId: 'onHover',
+                context: createPipelineContext(nextExecutionId('src-hover'), 'hover-enter', originRef),
+              });
+            }
           } else if (
             node.type === 'source.component' &&
             ((targetComponentId && node.data.componentId === targetComponentId) || node.data.componentId === nodeId)
           ) {
-            if (event === 'click') starters.push({ indexed, nodeId: node.id, outPortId: 'onClick' });
-            else if (event === 'hover-enter') starters.push({ indexed, nodeId: node.id, outPortId: 'onHover' });
+            if (event === 'click') {
+              starters.push({
+                indexed,
+                nodeId: node.id,
+                outPortId: 'onClick',
+                context: createPipelineContext(nextExecutionId('comp-click'), 'click', originRef),
+              });
+            } else if (event === 'hover-enter') {
+              starters.push({
+                indexed,
+                nodeId: node.id,
+                outPortId: 'onHover',
+                context: createPipelineContext(nextExecutionId('comp-hover'), 'hover-enter', originRef),
+              });
+            }
           }
         }
       }
@@ -1396,13 +1741,16 @@ export function createPrototypeRuntime(
       const coerced = coerceVariableValue(value, expectedType, prev);
       variables[variableId] = coerced;
       if (coerced !== prev) {
-        ephemeralNodeOutputs = new Map();
-        const starters: Array<{ indexed: IndexedGraph; nodeId: string }> = [];
+        const starters: ExecutionQueueItem[] = [];
         for (const indexed of indexedGraphs) {
           for (const node of indexed.graph.nodes) {
             if (node.type === 'event.on-state-change' && node.data.variableId === variableId) {
-              ephemeralNodeOutputs.set(`${indexed.graph.id}:${node.id}:value`, coerced);
-              starters.push({ indexed, nodeId: node.id });
+              starters.push({
+                indexed,
+                nodeId: node.id,
+                context: createPipelineContext(nextExecutionId('state'), 'state-change', null),
+                initialStepPayload: { variableId, value: coerced },
+              });
             }
           }
         }

@@ -434,6 +434,15 @@ export default function NodeLogicWorkspace({
       defaultExtras.themeId = designTokens.themes[0].id;
     } else if (type === 'action.navigate') {
       defaultExtras.route = activePage.route;
+    } else if (
+      type === 'action.set-layer'
+      || type === 'action.set-visible'
+      || type === 'action.set-fill'
+      || type === 'action.set-text'
+      || type === 'action.set-variant'
+      || type === 'action.media-animation'
+    ) {
+      defaultExtras.targetMode = 'pipeline';
     }
 
     const { graph: nextGraph, node } = addNodeToGraph(targetGraph, type, pos, defaultExtras);

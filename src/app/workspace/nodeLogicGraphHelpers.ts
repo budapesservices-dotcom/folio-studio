@@ -745,7 +745,20 @@ export function getLogicNodeSummary(
 ): string {
   const findNodeName = (id: unknown) => {
     if (typeof id !== 'string' || !id) return 'Unbound layer';
-    return astNodes.find((item) => item.id === id)?.name ?? 'Missing layer';
+    const direct = astNodes.find((item) => item.id === id);
+    if (direct) return direct.name;
+    const sepIdx = id.indexOf('__');
+    if (sepIdx > 0) {
+      return id.slice(sepIdx + 2);
+    }
+    return 'Missing layer';
+  };
+  const findTargetLabel = () => {
+    if (node.data.targetMode === 'pipeline') {
+      const childId = typeof node.data.pipelineChildId === 'string' ? node.data.pipelineChildId.trim() : '';
+      return childId ? `Pipeline · ${findNodeName(childId)}` : 'Pipeline · Origin';
+    }
+    return findNodeName(node.data.targetNodeId);
   };
   const findVarName = (id: unknown) => {
     if (typeof id !== 'string' || !id) return 'Unbound variable';
@@ -801,8 +814,11 @@ export function getLogicNodeSummary(
       return 'Page mount';
     case 'event.on-state-change':
     case 'state.get':
-    case 'state.toggle':
       return findVarName(node.data.variableId);
+    case 'state.toggle':
+      return typeof node.data.variableId === 'string' && node.data.variableId.trim() !== ''
+        ? findVarName(node.data.variableId)
+        : 'Private (bool)';
     case 'state.update': {
       const op = String(node.data.operation ?? 'set');
       if (op === 'increment') {
@@ -815,8 +831,10 @@ export function getLogicNodeSummary(
       return `${findVarName(node.data.variableId)} = ${node.data.value === null || node.data.value === undefined ? 'input' : String(node.data.value)}`;
     case 'state.increment':
       return `${findVarName(node.data.variableId)} ${Number(node.data.step ?? 1) >= 0 ? '+' : ''}${String(node.data.step ?? 1)}`;
-    case 'logic.branch':
-      return `Branch · ${String(node.data.mode ?? 'if-else')}`;
+    case 'logic.branch': {
+      const hasPipeRef = typeof node.data.pipelineRef === 'string' && node.data.pipelineRef.trim() !== '';
+      return `Branch · ${String(node.data.mode ?? 'if-else')}${hasPipeRef ? ' · Pipeline' : ''}`;
+    }
     case 'logic.condition':
       return node.data.mode === 'compare' || !node.data.mode
         ? `Left ${String(node.data.operator ?? '==')} Right`
@@ -836,19 +854,19 @@ export function getLogicNodeSummary(
     case 'action.set-layer': {
       const prop = String(node.data.property ?? 'text');
       const extra = prop === 'fill' ? ` ${String(node.data.fill ?? '')}` : prop === 'visible' ? ` ${String(node.data.visibleMode ?? 'toggle')}` : '';
-      return `${findNodeName(node.data.targetNodeId)} · ${prop}${extra}`;
+      return `${findTargetLabel()} · ${prop}${extra}`;
     }
     case 'action.set-visible':
-      return `${findNodeName(node.data.targetNodeId)} · ${String(node.data.mode ?? 'toggle')}`;
+      return `${findTargetLabel()} · ${String(node.data.mode ?? 'toggle')}`;
     case 'action.set-text':
-      return findNodeName(node.data.targetNodeId);
+      return findTargetLabel();
     case 'action.set-fill':
-      return `${findNodeName(node.data.targetNodeId)} · ${String(node.data.fill ?? '')}`;
+      return `${findTargetLabel()} · ${String(node.data.fill ?? '')}`;
     case 'action.set-variant':
-      return findNodeName(node.data.targetNodeId);
+      return findTargetLabel();
     case 'action.media-animation': {
       const clipId = typeof node.data.clipId === 'string' ? node.data.clipId : '';
-      const name = animations.find((clip) => clip.id === clipId)?.name ?? (clipId || findNodeName(node.data.targetNodeId));
+      const name = animations.find((clip) => clip.id === clipId)?.name ?? (clipId || findTargetLabel());
       return `${String(node.data.command ?? 'play')} · ${name}`;
     }
     case 'action.navigate':

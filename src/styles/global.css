@@ -6013,6 +6013,151 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   word-break: break-word;
 }
 
+.nl-trace-payload {
+  grid-column: 2;
+  padding: 3px 6px;
+  border-left: 2px solid #2dd4bf;
+  border-radius: 0 3px 3px 0;
+  background: rgba(45, 212, 191, 0.08);
+  color: #99f6e4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9.5px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+/* Scoped Data Pipeline Inspector Controls */
+.nl-pipeline-target-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #263145;
+  border-radius: 6px;
+  background: #131824;
+}
+
+.nl-target-mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  padding: 2px;
+  border: 1px solid #2a3448;
+  border-radius: 5px;
+  background: #0f131d;
+}
+
+.nl-target-mode-btn {
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #8c9ab2;
+  font-size: 9.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.nl-target-mode-btn:hover {
+  color: #dce4f4;
+  background: #1a2232;
+}
+
+.nl-target-mode-btn.is-active {
+  background: rgba(45, 212, 191, 0.16);
+  border-color: rgba(45, 212, 191, 0.44);
+  color: #99f6e4;
+}
+
+.nl-pipeline-origin-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  border-radius: 5px;
+  background: rgba(45, 212, 191, 0.08);
+  font-size: 10.5px;
+}
+
+.nl-pipeline-origin-chip strong {
+  color: #99f6e4;
+  font-weight: 650;
+}
+
+.nl-pipeline-origin-chip span {
+  color: #96abc2;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.nl-pipeline-origin-chip.is-disconnected {
+  border-color: rgba(245, 158, 11, 0.42);
+  background: rgba(245, 158, 11, 0.09);
+}
+
+.nl-pipeline-origin-chip.is-disconnected strong {
+  color: #fcd34d;
+}
+
+.nl-scoped-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.select-field.is-disconnected {
+  border-color: #d9536f;
+  background: rgba(217, 83, 111, 0.1);
+}
+
+.nl-scoped-disconnected {
+  color: #ff9ab0;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.nl-scoped-empty-hint {
+  color: #7d8ca6;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.nl-private-mem-badge {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 1px solid rgba(167, 139, 250, 0.36);
+  border-radius: 5px;
+  background: rgba(167, 139, 250, 0.1);
+}
+
+.nl-private-mem-badge strong {
+  color: #ddd6fe;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.nl-private-mem-badge span {
+  color: #a4b0c7;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.nl-sim-private-mem {
+  padding-top: 8px;
+  border-top: 1px solid #242c3c;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
 /* ── Stage 8: Motion Timeline Studio (Dockable Bottom Drawer) ─────────────── */
 .app-shell.has-motion-timeline {
   grid-template-rows: 56px minmax(0, 1fr) 236px 27px;

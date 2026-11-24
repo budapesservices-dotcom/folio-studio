@@ -16,7 +16,9 @@ import type {
   LogicVariableValue,
 } from '../../core/document/types';
 import {
+  formatPipelinePayloadSummary,
   getLogicNodeDefinition,
+  resolveAstNodeById,
   type LogicDiagnostic,
   type LogicNodeEventKind,
   type PrototypeRuntimeSnapshot,
@@ -304,7 +306,7 @@ export function NodeLogicInspector({
           class={`nl-tab-btn ${activeTab === 'variables' ? 'is-active' : ''}`}
           onClick={() => onChangeTab('variables')}
         >
-          Vars ({graphVariables.length})
+          Shared ({graphVariables.length})
         </button>
         <button
           type="button"
@@ -452,9 +454,12 @@ export function NodeLogicInspector({
 
         {activeTab === 'variables' && (
           <div class="nl-inspector-section">
-            <div class="nl-section-label">State Variables</div>
+            <div class="nl-section-label">Shared / Global Variables (Optional)</div>
+            <p class="nl-inspector-hint">
+              Stateful nodes like <strong>Toggle State</strong> keep private per-target memory automatically. Declare Shared Variables only when unconnected flows need to share state.
+            </p>
             {!graph ? (
-              <p class="nl-inspector-hint">Create a logic graph before declaring variables.</p>
+              <p class="nl-inspector-hint">Create a logic graph before declaring shared variables.</p>
             ) : (
               <>
                 <form class="nl-var-form" onSubmit={handleCreateVariable}>
@@ -722,6 +727,46 @@ export function NodeLogicInspector({
                   </div>
                 </div>
 
+                {(() => {
+                  const privateEntries = Object.entries(runtimeSnapshot.privateMemory ?? {});
+                  const astMap = new Map(scopedAstNodes.map((n) => [n.id, n]));
+                  const compMap = new Map(components.map((c) => [c.id, c]));
+                  return (
+                    <div class="nl-sim-private-mem" data-testid="nl-sim-private-memory">
+                      <div class="nl-section-label">
+                        Private Node Memory ({privateEntries.length})
+                      </div>
+                      {privateEntries.length === 0 ? (
+                        <div class="nl-inspector-hint">
+                          No private node memory recorded yet. Trigger a Toggle State flow to inspect target-bound memory.
+                        </div>
+                      ) : (
+                        <div class="nl-sim-kv-list nl-tabular">
+                          {privateEntries.map(([memKey, memVal]) => {
+                            const sepIdx = memKey.indexOf(':');
+                            const memNodeId = sepIdx > 0 ? memKey.slice(0, sepIdx) : memKey;
+                            const memOriginId = sepIdx > 0 ? memKey.slice(sepIdx + 1) : 'default';
+                            const logicNode = graph?.nodes.find((n) => n.id === memNodeId);
+                            const logicLabel = logicNode
+                              ? (getLogicNodeDefinition(logicNode.type)?.label ?? logicNode.type)
+                              : memNodeId;
+                            const originName =
+                              memOriginId === 'default'
+                                ? 'default'
+                                : (resolveAstNodeById(memOriginId, astMap, compMap)?.name ?? memOriginId);
+                            return (
+                              <div key={memKey} class="nl-sim-kv">
+                                <span>{logicLabel} · {originName}</span>
+                                <strong>{String(memVal)}</strong>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {runtimeSnapshot.toasts && runtimeSnapshot.toasts.length > 0 && (
                   <div class="nl-sim-toasts">
                     <div class="nl-section-label">Toasts ({runtimeSnapshot.toasts.length})</div>
@@ -738,7 +783,9 @@ export function NodeLogicInspector({
                   <div class="nl-sim-overrides">
                     <div class="nl-section-label">Visual Overrides</div>
                     {Object.entries(runtimeSnapshot.nodeOverrides).map(([astId, override]) => {
-                      const layerName = scopedAstNodes.find((n) => n.id === astId)?.name ?? astId;
+                      const astMap = new Map(scopedAstNodes.map((n) => [n.id, n]));
+                      const compMap = new Map(components.map((c) => [c.id, c]));
+                      const layerName = resolveAstNodeById(astId, astMap, compMap)?.name ?? astId;
                       return (
                         <div key={astId} class="nl-sim-override-row">
                           <strong>{layerName}</strong>
@@ -772,12 +819,18 @@ export function NodeLogicInspector({
                     <div class="nl-inspector-hint">Click Mount Page or a trigger button above to inspect execution steps.</div>
                   ) : (
                     <div class="nl-trace-list nl-tabular">
-                      {runtimeSnapshot.trace.slice(-16).map((entry) => (
-                        <div key={`${entry.step}-${entry.nodeId}`} class="nl-trace-row">
-                          <span class="nl-trace-step">#{entry.step}</span>
-                          <span class="nl-trace-detail">{entry.detail}</span>
-                        </div>
-                      ))}
+                      {runtimeSnapshot.trace.slice(-16).map((entry) => {
+                        const payloadSummary = formatPipelinePayloadSummary(entry.payload);
+                        return (
+                          <div key={`${entry.step}-${entry.nodeId}`} class="nl-trace-row">
+                            <span class="nl-trace-step">#{entry.step}</span>
+                            <span class="nl-trace-detail">{entry.detail}</span>
+                            {payloadSummary && (
+                              <span class="nl-trace-payload">{payloadSummary}</span>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
