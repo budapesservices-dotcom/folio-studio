@@ -1,9 +1,11 @@
 import type { JSX, RefObject } from 'preact';
+import { useState } from 'preact/hooks';
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { CanvasToolId } from '../../core/tools/operationContract';
 import { ToolbarHintBar, type ToolbarHintStore } from '../ToolbarHintBar';
 import type { WorkspacePreferencesLoadResult } from '../workspacePreferences';
 import { StudioIcon } from './StudioIcon';
+import type { ProjectImportOutcome } from './useProjectFileLifecycle';
 
 export type TopMenuId = 'file' | 'edit' | 'view' | 'tools' | 'option' | 'help';
 
@@ -75,7 +77,7 @@ export interface GlobalToolbarProps {
   onToggleMenu: (menu: TopMenuId) => void;
   onCloseMenus: () => void;
   onOpenProjectPicker: () => void;
-  onProjectFileSelected: (file: File) => void | Promise<unknown>;
+  onProjectFileSelected: (file: File) => void | Promise<ProjectImportOutcome | void>;
   onExportCurrentProject: () => void;
   onExportActiveCanvasSvg: () => void;
   onExportActiveCanvasPng: () => void;
@@ -169,13 +171,33 @@ export function GlobalToolbar({
   onEnterFullscreen,
   onUpdateToolbarHint,
 }: GlobalToolbarProps) {
-  const handleFileInputChange = (event: JSX.TargetedEvent<HTMLInputElement, Event>) => {
+  const [importError, setImportError] = useState<string | null>(null);
+
+  const handleOpenProjectPickerClick = () => {
+    setImportError(null);
+    onOpenProjectPicker();
+  };
+
+  const handleFileInputChange = async (event: JSX.TargetedEvent<HTMLInputElement, Event>) => {
     const input = event.currentTarget;
     const file = input.files?.[0];
     // Clear the native input so the same file can be selected again after failure.
     input.value = '';
     if (!file) return;
-    void onProjectFileSelected(file);
+    setImportError(null);
+    try {
+      const outcome = await onProjectFileSelected(file);
+      if (outcome && outcome.ok === false) {
+        setImportError(outcome.error.trim().length > 0
+          ? outcome.error
+          : 'Unable to open the selected .flop project file.');
+      }
+    } catch (error: unknown) {
+      const detail = error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : 'Unable to open the selected .flop project file.';
+      setImportError(detail);
+    }
   };
 
   const runMenuAction = (action: () => void) => {
@@ -204,7 +226,7 @@ export function GlobalToolbar({
               </button>
               {openMenu === 'file' && (
                 <div class="global-menu-dropdown" role="menu" aria-label="File menu">
-                  <button type="button" role="menuitem" onClick={onOpenProjectPicker} disabled={isHydrating}>
+                  <button type="button" role="menuitem" onClick={handleOpenProjectPickerClick} disabled={isHydrating}>
                     Open Project…
                   </button>
                   <button type="button" role="menuitem" onClick={() => runMenuAction(onExportCurrentProject)} disabled={isHydrating}>
@@ -685,6 +707,22 @@ export function GlobalToolbar({
         </div>
       </nav>
       <ToolbarHintBar store={toolbarHintStore} />
+      {importError && (
+        <div class="project-import-error" role="alert" aria-live="assertive">
+          <div class="project-import-error-copy">
+            <strong>Project import blocked</strong>
+            <span>{importError}</span>
+          </div>
+          <button
+            type="button"
+            class="project-import-error-dismiss"
+            aria-label="Dismiss project import error"
+            onClick={() => setImportError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
     </header>
   );
 }
