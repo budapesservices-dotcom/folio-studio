@@ -63,6 +63,7 @@ export function useMediaAndFontsLifecycle({
     let insertedCount = 0;
     let reusedCount = 0;
     let sanitizedSvgCount = 0;
+    let latestPortabilityWarning: string | null = null;
     const errors: string[] = [];
 
     for (let i = 0; i < files.length; i += 1) {
@@ -72,6 +73,7 @@ export function useMediaAndFontsLifecycle({
         const ingested = await ingestImageFile(file, existingAssets);
         if (ingested.deduplicated) reusedCount += 1;
         if (ingested.asset.mimeType === 'image/svg+xml') sanitizedSvgCount += 1;
+        if (ingested.portabilityWarning) latestPortabilityWarning = ingested.portabilityWarning;
 
         const offset = i * 28;
         const assetW = ingested.asset.width ?? 360;
@@ -107,7 +109,8 @@ export function useMediaAndFontsLifecycle({
       if (reusedCount > 0) details.push(`${reusedCount} deduplicated`);
       if (sanitizedSvgCount > 0) details.push(`${sanitizedSvgCount} SVG sanitized`);
       const suffix = details.length > 0 ? ` (${details.join(', ')})` : '';
-      setNotice(`Inserted ${insertedCount} image${insertedCount === 1 ? '' : 's'}${suffix}.`);
+      const baseNotice = `Inserted ${insertedCount} image${insertedCount === 1 ? '' : 's'}${suffix}.`;
+      setNotice(latestPortabilityWarning ? `${baseNotice} Warning: ${latestPortabilityWarning}` : baseNotice);
     } else if (errors.length > 0) {
       setNotice(errors[0]);
     }

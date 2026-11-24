@@ -12,6 +12,16 @@
  */
 
 import type { AssetReference, FolioProject, ImageNode } from '../document/types';
+import {
+  INTERNAL_ASSET_URI_PREFIX,
+  MissingExportAssetsError,
+  evaluateProjectAssetPortabilityBudget,
+  type MissingExportAssetInfo,
+  type ProjectAssetBudgetReport,
+} from './projectPortability';
+
+export { MissingExportAssetsError, evaluateProjectAssetPortabilityBudget };
+export type { MissingExportAssetInfo, ProjectAssetBudgetReport };
 
 export const ASSET_DB_NAME = 'folio-studio-assets';
 export const ASSET_DB_VERSION = 1;
@@ -74,6 +84,18 @@ function evictAssetMemoryCacheIfNeeded(): void {
       memoryUrlByHash.delete(oldestKey);
     }
   }
+}
+
+/** Clears the in-memory LRU blob/URL cache and revokes any object URLs. */
+export function clearAssetMemoryCache(): void {
+  for (const url of memoryUrlByHash.values()) {
+    if (url.startsWith('blob:') && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      URL.revokeObjectURL(url);
+    }
+  }
+  memoryUrlByHash.clear();
+  memoryBytesByHash.clear();
+  memoryCachedByteTotal = 0;
 }
 
 function setMemoryAssetCache(sha256: string, bytes: Uint8Array, mimeType: string): string {
@@ -535,11 +557,14 @@ export interface IngestedImageResult {
   readonly asset: AssetReference;
   readonly deduplicated: boolean;
   readonly existingAssetId?: string;
+  readonly budgetReport: ProjectAssetBudgetReport;
+  readonly portabilityWarning?: string;
 }
 
 /**
  * Validates, sanitizes (for SVG), SHA-256 hashes, deduplicates, and stores raw
- * image bytes into IndexedDB + memory cache, returning a valid `AssetReference`.
+ * image bytes into IndexedDB + memory cache, returning a valid `AssetReference`
+ * along with cumulative `.flop` export portability budget feedback.
  */
 export async function ingestImageBytes(
   input: {
@@ -593,7 +618,14 @@ export async function ingestImageBytes(
   // Deduplicate against project.assets by SHA-256 content hash
   const existing = existingAssets.find((item) => item.kind === 'image' && item.sha256 === sha256);
   if (existing) {
-    return { asset: existing, deduplicated: true, existingAssetId: existing.id };
+    const budgetReport = evaluateProjectAssetPortabilityBudget(existingAssets);
+    return {
+      asset: existing,
+      deduplicated: true,
+      existingAssetId: existing.id,
+      budgetReport,
+      ...(budgetReport.warningMessage ? { portabilityWarning: budgetReport.warningMessage } : {}),
+    };
   }
 
   // When persisted in IndexedDB blob store and above the small-inline threshold,
@@ -601,7 +633,7 @@ export async function ingestImageBytes(
   // Export pipelines materialize `folio-asset://` into portable data URLs automatically.
   const persistedSource =
     stored.persistedInIdb && finalBytes.byteLength > INLINE_ASSET_BYTE_THRESHOLD
-      ? `folio-asset://${sha256}`
+      ? `${INTERNAL_ASSET_URI_PREFIX}${sha256}`
       : dataUrl;
 
   const asset: AssetReference = {
@@ -616,7 +648,13 @@ export async function ingestImageBytes(
     createdAt: new Date().toISOString(),
   };
 
-  return { asset, deduplicated: false };
+  const budgetReport = evaluateProjectAssetPortabilityBudget([...existingAssets, asset]);
+  return {
+    asset,
+    deduplicated: false,
+    budgetReport,
+    ...(budgetReport.warningMessage ? { portabilityWarning: budgetReport.warningMessage } : {}),
+  };
 }
 
 export async function ingestImageFile(
@@ -729,18 +767,33 @@ export async function hydrateProjectAssetsToStore(project: FolioProject): Promis
 }
 
 /**
- * Ensures every `AssetReference` in a `.flop` export snapshot carries a portable
- * self-contained `data:` URL (hydrating any `folio-asset://<sha256>` reference
- * from IndexedDB / memory cache) and deduplicates redundant entries by `sha256`.
+ * Ensures every internal `AssetReference` in a `.flop` export snapshot carries a
+ * portable self-contained `data:` URL (hydrating any `folio-asset://<sha256>` or
+ * ephemeral `blob:` reference from IndexedDB / memory cache).
+ *
+ * Fail-closed by default: if any internal asset blob cannot be resolved, throws
+ * a structured `MissingExportAssetsError` listing every missing asset so broken
+ * `folio-asset://` references never leak silently into exported `.flop` files.
  */
 export async function materializeProjectAssetsForExport(project: FolioProject): Promise<FolioProject> {
   if (project.assets.length === 0) return project;
   let changed = false;
   const nextAssets: AssetReference[] = [];
+  const missingAssets: MissingExportAssetInfo[] = [];
+
   for (const asset of project.assets) {
-    if (asset.source.startsWith('folio-asset://') || (!asset.source.startsWith('data:') && asset.sha256)) {
-      const hash = asset.sha256 ?? asset.source.slice('folio-asset://'.length);
-      const entry = await getAssetBytesByHash(hash);
+    const trimmedSource = asset.source.trim();
+    const isInternalUri = trimmedSource.startsWith(INTERNAL_ASSET_URI_PREFIX);
+    const isEphemeralBlobUri = trimmedSource.startsWith('blob:');
+    const needsMaterialization =
+      isInternalUri || isEphemeralBlobUri || (!trimmedSource.startsWith('data:') && Boolean(asset.sha256));
+
+    if (needsMaterialization) {
+      const hash = (
+        asset.sha256 ??
+        (isInternalUri ? trimmedSource.slice(INTERNAL_ASSET_URI_PREFIX.length) : '')
+      ).trim();
+      const entry = hash ? await getAssetBytesByHash(hash) : null;
       if (entry) {
         changed = true;
         nextAssets.push({
@@ -751,8 +804,25 @@ export async function materializeProjectAssetsForExport(project: FolioProject): 
         });
         continue;
       }
+
+      if (isInternalUri || isEphemeralBlobUri) {
+        missingAssets.push({
+          id: asset.id,
+          name: asset.name,
+          sha256: hash || null,
+          source: asset.source,
+          kind: asset.kind,
+        });
+        continue;
+      }
     }
+
     nextAssets.push(asset);
   }
+
+  if (missingAssets.length > 0) {
+    throw new MissingExportAssetsError(missingAssets);
+  }
+
   return changed ? { ...project, assets: nextAssets } : project;
 }

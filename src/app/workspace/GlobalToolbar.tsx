@@ -75,7 +75,7 @@ export interface GlobalToolbarProps {
   onToggleMenu: (menu: TopMenuId) => void;
   onCloseMenus: () => void;
   onOpenProjectPicker: () => void;
-  onProjectFileSelected: (file: File) => void | Promise<void>;
+  onProjectFileSelected: (file: File) => void | Promise<unknown>;
   onExportCurrentProject: () => void;
   onExportActiveCanvasSvg: () => void;
   onExportActiveCanvasPng: () => void;
