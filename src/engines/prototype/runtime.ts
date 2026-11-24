@@ -41,6 +41,8 @@ const HARD_MAX_EXECUTION_STEPS = 1024;
 
 export type LogicNodeEventKind =
   | 'click'
+  | 'double-click'
+  | 'click-outside'
   | 'hover-enter'
   | 'hover-leave'
   | 'input'
@@ -236,6 +238,7 @@ function getNestedField(target: unknown, path: string): unknown {
   const parts = path.split('.').map((p) => p.trim()).filter(Boolean);
   let cur: unknown = target;
   for (const part of parts) {
+    if (part === '__proto__' || part === 'constructor' || part === 'prototype') return null;
     if (cur === null || cur === undefined) return null;
     if (Array.isArray(cur)) {
       const idx = Number(part);
@@ -256,6 +259,7 @@ function setNestedField(target: Record<string, unknown>, path: string, value: un
   let cur: Record<string, unknown> = clone;
   for (let i = 0; i < parts.length - 1; i += 1) {
     const key = parts[i];
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') return clone;
     const nextVal = cur[key];
     const nextObj =
       nextVal && typeof nextVal === 'object' && !Array.isArray(nextVal)
@@ -264,7 +268,10 @@ function setNestedField(target: Record<string, unknown>, path: string, value: un
     cur[key] = nextObj;
     cur = nextObj;
   }
-  cur[parts[parts.length - 1]] = value;
+  const lastKey = parts[parts.length - 1];
+  if (lastKey !== '__proto__' && lastKey !== 'constructor' && lastKey !== 'prototype') {
+    cur[lastKey] = value;
+  }
   return clone;
 }
 
@@ -1747,12 +1754,17 @@ export function createPrototypeRuntime(
       const starters: ExecutionQueueItem[] = [];
       for (const indexed of indexedGraphs) {
         for (const node of indexed.graph.nodes) {
-          if (event === 'click' && node.type === 'event.on-click' && node.data.targetNodeId === nodeId) {
+          if (
+            (event === 'click' || event === 'double-click' || event === 'click-outside') &&
+            node.type === 'event.on-click' &&
+            node.data.targetNodeId === nodeId &&
+            String(node.data.mode ?? 'click') === event
+          ) {
             starters.push({
               indexed,
               nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('click'), 'click', originRef),
-              initialStepPayload: { targetLayerId: nodeId, mode: String(node.data.mode ?? 'click') },
+              context: createPipelineContext(nextExecutionId(event), event, originRef),
+              initialStepPayload: { targetLayerId: nodeId, mode: event },
             });
           } else if (
             event === 'hover-enter' &&

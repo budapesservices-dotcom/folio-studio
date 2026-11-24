@@ -2,26 +2,26 @@
  * Folio Node Logic — Live Preview & React Codegen Bridges.
  *
  * Compiles valid Folio Logic Graphs (31 primary nodes + 13 backward-compatible
- * legacy v1 nodes, Scoped Data Pipeline, Private per-target state, and Baked
- * Logic Frames) into:
+ * legacy v1 nodes, Scoped Data Pipeline, Private per-target+frame state, and
+ * Baked Logic Frames) into:
  * 1. A tiny, zero-`eval`, zero-`innerHTML` sandbox-safe micro-runtime script
  *    for Folio's Live Preview (`<iframe sandbox="allow-scripts">`).
- * 2. Clean, typed React hooks (`useState`, `useEffect`, event handlers, and
- *    dynamic text/visibility/fill/variant bindings) for `reactCompiler.ts`.
+ * 2. Clean, strict-TypeScript React hooks (`useState`, `useEffect`, scoped
+ *    pipeline execution, event handlers, and dynamic layer/variant/toast
+ *    bindings) for `reactCompiler.ts`.
+ *
+ * Both targets consume the canonical payload from `parity.ts` so Headless
+ * Prototype Simulation, Live Preview, and Exported React TSX stay unified.
  */
 
-import { getProjectDesignTokens, toDesignTokenThemeSlug } from '../../core/document/tokens';
-import type {
-  FolioPage,
-  FolioProject,
-  LogicGraph,
-  LogicVariableValue,
-} from '../../core/document/types';
-import { sanitizeJsText, toKebabCase } from '../codegen/sanitize';
-import { buildLivePreviewAnimationPayload } from '../animation/codegen';
+import type { FolioPage, FolioProject, LogicGraph } from '../../core/document/types';
+import { sanitizeJsText } from '../codegen/sanitize';
 import { isBuiltInLogicNodeType } from './catalog';
-import { buildPipelineOriginRef } from './pipeline';
-import { getApplicableGraphsForPage, MAX_LOGIC_EXECUTION_STEPS } from './runtime';
+import {
+  compilePageLogicRuntimeConfig,
+  discoverDynamicReactTargets,
+} from './parity';
+import { getApplicableGraphsForPage } from './runtime';
 
 export function getActiveBuiltInPageLogicGraphs(
   project: FolioProject,
@@ -32,39 +32,12 @@ export function getActiveBuiltInPageLogicGraphs(
   );
 }
 
-interface CompiledPreviewOriginChildMeta {
-  id: string;
-  name: string;
-  type: string;
-}
-
-interface CompiledPreviewNodeMeta {
-  name: string;
-  type: string;
-  visible: boolean;
-  display: 'flex' | 'grid' | 'block';
-  componentId?: string;
-  animationIds?: readonly string[];
-  children?: readonly CompiledPreviewOriginChildMeta[];
-}
-
-interface CompiledPreviewVariantPatch {
-  fill?: string;
-  text?: string;
-  visible?: boolean;
-}
-
-interface CompiledPreviewVariantMap {
-  dataAttr: string;
-  options: Record<string, { label: string; overrides: Record<string, CompiledPreviewVariantPatch> }>;
-}
-
 /**
  * Compiles active logic graphs for a page into a self-contained, zero-`eval`,
- * zero-`innerHTML` script for Folio's sandboxed Live Preview using the exact
- * same Scoped Data Pipeline (`PipelineContext`, target-bound `privateMemory`,
- * `Inherit from Pipeline` Origin/Child resolution, and scoped upstream refs)
- * as the Headless Prototype Simulator (`runtime.ts`).
+ * zero-`innerHTML` script for Folio's sandboxed Live Preview with full parity
+ * across the 31 primary nodes, Scoped Data Pipeline (`PipelineContext`),
+ * target+frame-bound `privateMemory`, Baked Logic Frames (`compiledPlan`), and
+ * zero embedded credentials.
  */
 export function buildLivePreviewLogicScript(
   project: FolioProject,
@@ -73,141 +46,22 @@ export function buildLivePreviewLogicScript(
   const graphs = getActiveBuiltInPageLogicGraphs(project, page.id);
   if (graphs.length === 0) return null;
 
-  const tokens = getProjectDesignTokens(project);
-  const initialVariables: Record<string, LogicVariableValue> = {};
-  const variableTypes: Record<string, string> = {};
-  const variableNameToId: Record<string, string> = {};
-
-  for (const graph of graphs) {
-    for (const variable of graph.variables ?? []) {
-      variableTypes[variable.id] = variable.valueType;
-      variableNameToId[variable.name] = variable.id;
-      variableNameToId[variable.name.toLowerCase()] = variable.id;
-      if (!Object.prototype.hasOwnProperty.call(initialVariables, variable.id)) {
-        initialVariables[variable.id] = variable.initialValue;
-      }
-    }
-  }
-
-  const astNodesById = new Map(page.document.nodes.map((node) => [node.id, node]));
-  const componentsById = new Map(project.components.map((comp) => [comp.id, comp]));
-
-  const nodeMeta: Record<string, CompiledPreviewNodeMeta> = {};
-  for (const node of page.document.nodes) {
-    const originRef = buildPipelineOriginRef(
-      node.id,
-      astNodesById,
-      componentsById,
-      project.animations,
-    );
-    nodeMeta[node.id] = {
-      name: node.name,
-      type: node.type,
-      visible: node.visible,
-      display: node.layout?.mode === 'flex' ? 'flex' : node.layout?.mode === 'grid' ? 'grid' : 'block',
-      ...(node.type === 'component-instance' ? { componentId: node.componentId } : {}),
-      ...(originRef && originRef.animationIds.length > 0 ? { animationIds: originRef.animationIds } : {}),
-      ...(originRef?.children && originRef.children.length > 0
-        ? {
-            children: originRef.children.map((child) => ({
-              id: child.id,
-              name: child.name,
-              type: child.type,
-            })),
-          }
-        : {}),
-    };
-    // Also expose component-instance children metadata for pipeline child targeting in Live Preview.
-    if (node.type === 'component-instance') {
-      const master = componentsById.get(node.componentId);
-      if (master) {
-        for (const child of master.document.nodes) {
-          const scopedId = `${node.id}__${child.id}`;
-          nodeMeta[scopedId] = {
-            name: child.name,
-            type: child.type,
-            visible: child.visible,
-            display: child.layout?.mode === 'flex' ? 'flex' : child.layout?.mode === 'grid' ? 'grid' : 'block',
-          };
-        }
-      }
-    }
-  }
-
-  const themeSlugById: Record<string, string> = {};
-  const defaultThemeId = tokens.themes[0]?.id ?? '';
-  for (const theme of tokens.themes) {
-    themeSlugById[theme.id] = theme.id === defaultThemeId ? '' : toDesignTokenThemeSlug(theme.name);
-  }
-
-  const componentVariants: Record<string, Record<string, CompiledPreviewVariantMap>> = {};
-  for (const comp of project.components) {
-    if (!comp.variants || comp.variants.length === 0) continue;
-    const axisMap: Record<string, CompiledPreviewVariantMap> = {};
-    for (const axis of comp.variants) {
-      const options: CompiledPreviewVariantMap['options'] = {};
-      for (const opt of axis.options) {
-        const cleanedOverrides: Record<string, CompiledPreviewVariantPatch> = {};
-        for (const [childId, patch] of Object.entries(opt.overrides)) {
-          cleanedOverrides[childId] = {
-            ...(patch.fill !== undefined ? { fill: patch.fill } : {}),
-            ...(patch.text !== undefined ? { text: patch.text } : {}),
-            ...(patch.visible !== undefined ? { visible: patch.visible } : {}),
-          };
-        }
-        options[opt.id] = { label: opt.label, overrides: cleanedOverrides };
-      }
-      axisMap[axis.id] = {
-        dataAttr: `data-variant-${toKebabCase(axis.name, 'variant')}`,
-        options,
-      };
-    }
-    componentVariants[comp.id] = axisMap;
-  }
-
-  const compiledGraphs = graphs.map((graph) => ({
-    id: graph.id,
-    nodes: graph.nodes
-      .filter((node) => isBuiltInLogicNodeType(node.type))
-      .map((node) => ({ id: node.id, type: node.type, data: node.data })),
-    connections: graph.connections.map((conn) => ({
-      sourceNodeId: conn.sourceNodeId,
-      sourcePortId: conn.sourcePortId,
-      targetNodeId: conn.targetNodeId,
-      targetPortId: conn.targetPortId,
-    })),
-    bakedFrames: (graph.frames ?? [])
-      .filter((frame) => frame.isBaked && frame.bakedData?.compiledPlan)
-      .map((frame) => ({
-        id: frame.id,
-        title: frame.title,
-        childNodeIds: frame.childNodeIds,
-        compiledPlan: frame.bakedData!.compiledPlan,
-      })),
-  }));
-
-  const animationClassById: Record<string, string> = {};
-  for (const desc of buildLivePreviewAnimationPayload(project, page)) {
-    animationClassById[desc.id] = desc.className;
-  }
-
-  const pageRouteById: Record<string, string> = {};
-  for (const p of project.pages) {
-    pageRouteById[p.id] = p.route;
-  }
+  const config = compilePageLogicRuntimeConfig(project, page, graphs);
 
   const payload = {
-    activePageId: page.id,
-    maxSteps: MAX_LOGIC_EXECUTION_STEPS,
-    variables: initialVariables,
-    variableTypes,
-    variableNameToId,
-    nodeMeta,
-    pageRouteById,
-    themeSlugById,
-    componentVariants,
-    animationClassById,
-    graphs: compiledGraphs,
+    activePageId: config.activePageId,
+    activeRoute: config.activeRoute,
+    maxSteps: config.maxSteps,
+    variables: config.variables,
+    variableInitialValues: config.variableInitialValues,
+    variableTypes: config.variableTypes,
+    variableNameToId: config.variableNameToId,
+    nodeMeta: config.nodeMeta,
+    pageRouteById: config.pageRouteById,
+    themeSlugById: config.themeSlugById,
+    componentVariants: config.componentVariants,
+    animationClassById: config.animationClassById,
+    graphs: config.graphs,
   };
 
   const safePayloadJson = sanitizeJsText(JSON.stringify(payload));
@@ -218,7 +72,10 @@ export function buildLivePreviewLogicScript(
     `  var CONFIG = ${safePayloadJson};`,
     '  var state = Object.assign({}, CONFIG.variables);',
     '  var privateMemory = Object.create(null);',
+    '  var firedOnce = Object.create(null);',
+    '  var activeTimers = Object.create(null);',
     '  var visibleState = {};',
+    '  var activeRoute = CONFIG.activeRoute || "/";',
     '  var execCounter = 0;',
     '  var SAFE_COLOR = /^(?:#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})|transparent|currentcolor|inherit|(?:rgba?|hsla?)\\(\\s*[0-9.%,\\s/+-]+\\s*\\)|[a-z]{3,24})$/i;',
     '  var SAFE_HREF = /^(?:https?:\\/\\/|mailto:|\\/|#)/i;',
@@ -235,6 +92,51 @@ export function buildLivePreviewLogicScript(
     '      if (list[i].getAttribute("data-folio-id") === id) return list[i];',
     '    }',
     '    return null;',
+    '  }',
+    '  function parseList(raw) {',
+    '    if (Array.isArray(raw)) return raw.slice();',
+    '    if (typeof raw === "string") {',
+    '      var trimmed = raw.trim();',
+    '      if (!trimmed) return [];',
+    '      try { var p = JSON.parse(trimmed); if (Array.isArray(p)) return p; } catch (e) {}',
+    '      return trimmed.split(",").map(function (s) { return s.trim(); }).filter(Boolean);',
+    '    }',
+    '    return [];',
+    '  }',
+    '  function parseObj(raw) {',
+    '    if (raw && typeof raw === "object" && !Array.isArray(raw)) return Object.assign({}, raw);',
+    '    if (typeof raw === "string") {',
+    '      try { var p = JSON.parse(raw); if (p && typeof p === "object" && !Array.isArray(p)) return p; } catch (e) {}',
+    '    }',
+    '    return {};',
+    '  }',
+    '  function getNested(source, path) {',
+    '    if (!path || source === null || source === undefined) return source;',
+    '    var segs = String(path).split(".").filter(Boolean);',
+    '    var cur = source;',
+    '    for (var i = 0; i < segs.length; i++) {',
+    '      if (cur === null || cur === undefined || typeof cur !== "object") return null;',
+    '      var seg = segs[i];',
+    '      if (seg === "__proto__" || seg === "constructor" || seg === "prototype") return null;',
+    '      cur = Array.isArray(cur) ? cur[Number(seg)] : cur[seg];',
+    '    }',
+    '    return cur === undefined ? null : cur;',
+    '  }',
+    '  function setNested(obj, path, val) {',
+    '    var clone = Object.assign({}, obj);',
+    '    var segs = String(path || "").split(".").filter(Boolean);',
+    '    if (!segs.length) return clone;',
+    '    var cur = clone;',
+    '    for (var i = 0; i < segs.length - 1; i++) {',
+    '      var seg = segs[i];',
+    '      if (seg === "__proto__" || seg === "constructor" || seg === "prototype") return clone;',
+    '      var ex = cur[seg];',
+    '      cur[seg] = ex && typeof ex === "object" && !Array.isArray(ex) ? Object.assign({}, ex) : {};',
+    '      cur = cur[seg];',
+    '    }',
+    '    var last = segs[segs.length - 1];',
+    '    if (last !== "__proto__" && last !== "constructor" && last !== "prototype") cur[last] = val;',
+    '    return clone;',
     '  }',
     '  function buildOrigin(layerId) {',
     '    if (!layerId || !CONFIG.nodeMeta || !CONFIG.nodeMeta[layerId]) return null;',
@@ -307,6 +209,8 @@ export function buildLivePreviewLogicScript(
     '      var n = typeof raw === "number" ? raw : Number(raw);',
     '      return Number.isFinite(n) ? n : (typeof fallback === "number" ? fallback : 0);',
     '    }',
+    '    if (expected === "list") return parseList(raw);',
+    '    if (expected === "object") return parseObj(raw);',
     '    if (typeof raw === "boolean") return raw;',
     '    if (typeof raw === "string") { var l = raw.trim().toLowerCase(); return l !== "" && l !== "false" && l !== "0"; }',
     '    return Boolean(raw);',
@@ -319,6 +223,49 @@ export function buildLivePreviewLogicScript(
     '    if (op === "<") return typeof l === "number" && typeof r === "number" && l < r;',
     '    if (op === "<=") return typeof l === "number" && typeof r === "number" && l <= r;',
     '    return false;',
+    '  }',
+    '  function showDomToast(message, tone) {',
+    '    if (!document || !document.body || typeof document.createElement !== "function") return;',
+    '    var toast = document.createElement("div");',
+    '    if (typeof toast.setAttribute === "function") {',
+    '      toast.setAttribute("data-folio-toast", tone || "info");',
+    '      toast.setAttribute("role", "status");',
+    '    }',
+    '    toast.textContent = String(message || "");',
+    '    var bg = tone === "success" ? "#059669" : tone === "warning" ? "#D97706" : tone === "error" ? "#DC2626" : "#1E293B";',
+    '    if (toast.style) {',
+    '      toast.style.position = "fixed";',
+    '      toast.style.right = "16px";',
+    '      toast.style.bottom = "16px";',
+    '      toast.style.zIndex = "9999";',
+    '      toast.style.padding = "10px 14px";',
+    '      toast.style.borderRadius = "8px";',
+    '      toast.style.background = bg;',
+    '      toast.style.color = "#FFFFFF";',
+    '      toast.style.fontFamily = "system-ui, -apple-system, sans-serif";',
+    '      toast.style.fontSize = "13px";',
+    '      toast.style.boxShadow = "0 8px 24px rgba(0,0,0,0.28)";',
+    '    }',
+    '    document.body.appendChild(toast);',
+    '    if (typeof setTimeout === "function") {',
+    '      setTimeout(function () { if (typeof toast.remove === "function") toast.remove(); }, 3200);',
+    '    }',
+    '  }',
+    '  function matchKeyCombo(ev, combo) {',
+    '    if (!combo) return true;',
+    '    var parts = String(combo).toLowerCase().split("+").map(function (s) { return s.trim(); }).filter(Boolean);',
+    '    var key = String(ev && ev.key ? ev.key : "").toLowerCase();',
+    '    for (var i = 0; i < parts.length; i++) {',
+    '      var p = parts[i];',
+    '      if (p === "ctrl" || p === "control") { if (!ev.ctrlKey) return false; }',
+    '      else if (p === "meta" || p === "cmd") { if (!ev.metaKey) return false; }',
+    '      else if (p === "shift") { if (!ev.shiftKey) return false; }',
+    '      else if (p === "alt") { if (!ev.altKey) return false; }',
+    '      else if (p === "esc") { if (key !== "escape" && key !== "esc") return false; }',
+    '      else if (p === "space") { if (key !== " " && key !== "space") return false; }',
+    '      else if (key !== p) return false;',
+    '    }',
+    '    return true;',
     '  }',
     '  var indexed = CONFIG.graphs.map(function (g) {',
     '    var byId = {}; var out = {}; var inc = {}; var bakedByNode = {}; var stepByNode = {};',
@@ -365,11 +312,32 @@ export function buildLivePreviewLogicScript(
     '      } else if (n.type === "source.page") {',
     '        res = (CONFIG.pageRouteById && CONFIG.pageRouteById[n.data.pageId]) || "";',
     '      } else if (n.type === "source.context") {',
-    '        res = portId === "themeId" ? (n.data.themeId || "") : ((CONFIG.pageRouteById && CONFIG.pageRouteById[n.data.pageId]) || "/");',
+    '        var ctxKind = String(n.data.contextType || "page");',
+    '        if (portId === "themeId" || ctxKind === "theme") res = n.data.themeId || "";',
+    '        else if (ctxKind === "viewport") res = { width: window.innerWidth || 1440, height: window.innerHeight || 900 };',
+    '        else if (ctxKind === "url-params") {',
+    '          var params = {};',
+    '          try { new URLSearchParams(window.location ? window.location.search : "").forEach(function (pv, pk) { params[pk] = pv; }); } catch (e) {}',
+    '          res = params;',
+    '        } else if (ctxKind === "user-auth") res = { authenticated: false, role: "guest" };',
+    '        else res = (CONFIG.pageRouteById && CONFIG.pageRouteById[n.data.pageId]) || activeRoute;',
+    '      } else if (n.type === "source.external") {',
+    '        res = portId === "count" ? 0 : [];',
     '      } else if (n.type === "source.component") {',
     '        res = n.data.componentId || "";',
     '      } else if (n.type === "source.element") {',
-    '        res = n.data.targetNodeId || "";',
+    '        var elId = n.data.targetNodeId || "";',
+    '        if (portId === "target") res = elId;',
+    '        else {',
+    '          var prop = String(n.data.property || "text");',
+    '          var meta = CONFIG.nodeMeta && CONFIG.nodeMeta[elId];',
+    '          var domEl = findEl(elId);',
+    '          if (prop === "visible") res = Object.prototype.hasOwnProperty.call(visibleState, elId) ? visibleState[elId] : (meta ? meta.visible : true);',
+    '          else if (prop === "fill") res = (domEl && domEl.style && (domEl.style.background || domEl.style.color)) || (meta && meta.fill) || "";',
+    '          else if (prop === "opacity") res = domEl && domEl.style && domEl.style.opacity !== "" && domEl.style.opacity !== undefined ? Number(domEl.style.opacity) : (meta && meta.opacity != null ? meta.opacity : 1);',
+    '          else if (prop === "componentId") res = (meta && meta.componentId) || "";',
+    '          else res = domEl ? (typeof domEl.value === "string" ? domEl.value : (domEl.textContent || "")) : ((meta && meta.text) || "");',
+    '        }',
     '      } else if (n.type === "source.theme") {',
     '        res = n.data.themeId || "";',
     '      } else if (n.type === "logic.compare" || n.type === "logic.condition") {',
@@ -379,16 +347,81 @@ export function buildLivePreviewLogicScript(
     '        if (cmode === "and") res = Boolean(l) && Boolean(r);',
     '        else if (cmode === "or") res = Boolean(l) || Boolean(r);',
     '        else if (cmode === "not") res = !Boolean(l);',
-    '        else if (cmode === "is-empty") res = l === null || l === undefined || l === "" || (Array.isArray(l) && l.length === 0);',
-    '        else res = compare(String(n.data.operator || "=="), l, r);',
+    '        else if (cmode === "is-empty") res = l === null || l === undefined || l === "" || (Array.isArray(l) && l.length === 0) || (typeof l === "object" && !Array.isArray(l) && Object.keys(l).length === 0);',
+    '        else if (cmode === "regex") {',
+    '          try { res = new RegExp(String(n.data.pattern || "")).test(String(l == null ? "" : l)); } catch (e) { res = false; }',
+    '        } else res = compare(String(n.data.operator || "=="), l, r);',
     '      } else if (n.type === "logic.math") {',
-    '        var ma = Number(resolveIn(g, n, "a", n.data.a || 0, visiting, ctx, "leftRef")) || 0;',
-    '        var mb = Number(resolveIn(g, n, "b", n.data.b || 0, visiting, ctx, "rightRef")) || 0;',
+    '        var ma = Number(resolveIn(g, n, "a", n.data.a != null ? n.data.a : 0, visiting, ctx, "leftRef"));',
+    '        var mb = Number(resolveIn(g, n, "b", n.data.b != null ? n.data.b : 0, visiting, ctx, "rightRef"));',
+    '        var safeA = Number.isFinite(ma) ? ma : 0;',
+    '        var safeB = Number.isFinite(mb) ? mb : 0;',
     '        var mop = String(n.data.operation || "+");',
-    '        if (mop === "-") res = ma - mb; else if (mop === "*") res = ma * mb; else if (mop === "/") res = mb === 0 ? 0 : ma / mb; else if (mop === "%") res = mb === 0 ? 0 : ma % mb; else if (mop === "clamp") res = Math.max(Number(n.data.min || 0), Math.min(Number(n.data.max || 100), ma)); else res = ma + mb;',
+    '        if (mop === "-") res = safeA - safeB;',
+    '        else if (mop === "*") res = safeA * safeB;',
+    '        else if (mop === "/") res = safeB === 0 ? 0 : safeA / safeB;',
+    '        else if (mop === "%") res = safeB === 0 ? 0 : safeA % safeB;',
+    '        else if (mop === "clamp") res = Math.max(Number(n.data.min != null ? n.data.min : 0), Math.min(Number(n.data.max != null ? n.data.max : 100), safeA));',
+    '        else if (mop === "map-range") {',
+    '          var inMin = Number(n.data.inMin != null ? n.data.inMin : 0);',
+    '          var inMax = Number(n.data.inMax != null ? n.data.inMax : 100);',
+    '          var outMin = Number(n.data.outMin != null ? n.data.outMin : 0);',
+    '          var outMax = Number(n.data.outMax != null ? n.data.outMax : 1);',
+    '          res = inMax === inMin ? outMin : outMin + ((safeA - inMin) / (inMax - inMin)) * (outMax - outMin);',
+    '        } else res = safeA + safeB;',
     '      } else if (n.type === "logic.template" || n.type === "logic.text") {',
+    '        var tmode = n.type === "logic.text" ? String(n.data.mode || "template") : "template";',
     '        var cv = resolveIn(g, n, "value", undefined, visiting, ctx, "pipelineRef");',
-    '        res = interpolate(n.data.template, cv);',
+    '        if (tmode === "format-number" || tmode === "format-currency") {',
+    '          var fnum = Number(cv != null ? cv : 0);',
+    '          var safeFnum = Number.isFinite(fnum) ? fnum : 0;',
+    '          var loc = typeof n.data.locale === "string" && n.data.locale ? n.data.locale : "en-US";',
+    '          var dec = typeof n.data.decimals === "number" ? Math.max(0, Math.min(6, n.data.decimals)) : 2;',
+    '          try {',
+    '            res = tmode === "format-currency" ? new Intl.NumberFormat(loc, { style: "currency", currency: n.data.currency || "USD", maximumFractionDigits: dec }).format(safeFnum) : new Intl.NumberFormat(loc, { maximumFractionDigits: dec }).format(safeFnum);',
+    '          } catch (e) { res = safeFnum.toFixed(dec); }',
+    '        } else {',
+    '          res = interpolate(n.data.template, cv);',
+    '        }',
+    '      } else if (n.type === "logic.list") {',
+    '        var rawList = resolveIn(g, n, "list", [], visiting, ctx, "pipelineRef");',
+    '        var listArr = parseList(rawList);',
+    '        var lop = String(n.data.operation || "filter");',
+    '        var lfield = typeof n.data.field === "string" ? n.data.field.trim() : "";',
+    '        var lquery = String(resolveIn(g, n, "query", n.data.matchValue || "", visiting, ctx) || "").trim().toLowerCase();',
+    '        var outList = listArr.slice();',
+    '        if (lop === "filter" && lquery) {',
+    '          outList = listArr.filter(function (it) {',
+    '            var tgt = lfield ? getNested(it, lfield) : it;',
+    '            return String(tgt == null ? "" : tgt).toLowerCase().indexOf(lquery) !== -1;',
+    '          });',
+    '        } else if (lop === "sort") {',
+    '          var desc = n.data.sortOrder === "desc";',
+    '          outList.sort(function (a, b) {',
+    '            var va = lfield ? getNested(a, lfield) : a;',
+    '            var vb = lfield ? getNested(b, lfield) : b;',
+    '            var cmp = String(va == null ? "" : va).localeCompare(String(vb == null ? "" : vb), undefined, { numeric: true });',
+    '            return desc ? -cmp : cmp;',
+    '          });',
+    '        } else if (lop === "map" && lfield) {',
+    '          outList = listArr.map(function (it) { return getNested(it, lfield); });',
+    '        }',
+    '        res = portId === "count" ? outList.length : outList;',
+    '      } else if (n.type === "network.json") {',
+    '        var jraw = resolveIn(g, n, "input", null, visiting, ctx, "pipelineRef");',
+    '        var jmode = String(n.data.mode || "get-field");',
+    '        if (jmode === "stringify") {',
+    '          if (portId === "valid") res = true;',
+    '          else { try { res = JSON.stringify(jraw); } catch (e) { res = ""; } }',
+    '        } else if (jmode === "parse") {',
+    '          if (typeof jraw === "string") {',
+    '            try { var jp = JSON.parse(jraw); res = portId === "valid" ? true : jp; } catch (e) { res = portId === "valid" ? false : null; }',
+    '          } else res = portId === "valid" ? jraw !== null : jraw;',
+    '        } else {',
+    '          var jbase = typeof jraw === "string" ? parseObj(jraw) : jraw;',
+    '          var jext = getNested(jbase, String(n.data.path || ""));',
+    '          res = portId === "valid" ? jext !== null : jext;',
+    '        }',
     '      }',
     '      delete visiting[k];',
     '      return res;',
@@ -416,19 +449,25 @@ export function buildLivePreviewLogicScript(
     '      }',
     '      return false;',
     '    }',
-    '    function pushOut(g, nodeId, portId, nextCtx) {',
+    '    function collectOutItems(g, nodeId, portId, nextCtx) {',
+    '      var items = [];',
     '      var bs = g.stepByNode[nodeId];',
     '      if (bs && bs.step) {',
     '        var internalNext = (bs.step.nextByPort && bs.step.nextByPort[portId]) || [];',
-    '        for (var ii = 0; ii < internalNext.length; ii++) queue.push({ g: g, nodeId: internalNext[ii].targetNodeId, ctx: nextCtx });',
+    '        for (var ii = 0; ii < internalNext.length; ii++) items.push({ g: g, nodeId: internalNext[ii].targetNodeId, ctx: nextCtx });',
     '        var extList = g.out[nodeId + ":" + portId] || [];',
     '        for (var ei = 0; ei < extList.length; ei++) {',
-    '          if (!bs.childMap[extList[ei].targetNodeId]) queue.push({ g: g, nodeId: extList[ei].targetNodeId, ctx: nextCtx });',
+    '          if (!bs.childMap[extList[ei].targetNodeId]) items.push({ g: g, nodeId: extList[ei].targetNodeId, ctx: nextCtx });',
     '        }',
-    '        return;',
+    '        return items;',
     '      }',
     '      var list = g.out[nodeId + ":" + portId] || [];',
-    '      for (var i = 0; i < list.length; i++) queue.push({ g: g, nodeId: list[i].targetNodeId, ctx: nextCtx });',
+    '      for (var i = 0; i < list.length; i++) items.push({ g: g, nodeId: list[i].targetNodeId, ctx: nextCtx });',
+    '      return items;',
+    '    }',
+    '    function pushOut(g, nodeId, portId, nextCtx) {',
+    '      var nextItems = collectOutItems(g, nodeId, portId, nextCtx);',
+    '      for (var i = 0; i < nextItems.length; i++) queue.push(nextItems[i]);',
     '    }',
     '    function notifyState(varId, val) {',
     '      for (var i = 0; i < indexed.length; i++) {',
@@ -446,10 +485,16 @@ export function buildLivePreviewLogicScript(
     '      var item = queue.shift();',
     '      var g = item.g; var n = g.byId[item.nodeId]; if (!n) continue;',
     '      var ctx = item.ctx || createCtx("exec", null);',
+    '      if (n.type.indexOf("event.") === 0 && n.data && n.data.once === true) {',
+    '        var onceKey = g.id + ":" + n.id;',
+    '        if (firedOnce[onceKey]) continue;',
+    '        firedOnce[onceKey] = true;',
+    '      }',
     '      var v = {};',
-    '      if (n.type === "source.page" || n.type === "source.context" || n.type === "source.component" || n.type === "source.element") {',
+    '      if (n.type === "source.page" || n.type === "source.context" || n.type === "source.component" || n.type === "source.element" || n.type === "source.external") {',
     '        var sp = Object.assign({}, item.initPayload || {}, ctx.origin ? { targetLayerId: ctx.origin.layerId, originName: ctx.origin.name } : {});',
-    '        pushOut(g, n.id, item.outPortId || (n.type === "source.page" || n.type === "source.context" ? "onLoad" : "onClick"), cloneCtx(ctx, n.id, sp));',
+    '        var defPort = (n.type === "source.page" || n.type === "source.context") ? "onLoad" : (n.type === "source.external" ? "onReady" : "onClick");',
+    '        pushOut(g, n.id, item.outPortId || defPort, cloneCtx(ctx, n.id, sp));',
     '      } else if (n.type.indexOf("event.") === 0) {',
     '        var ep = Object.assign({}, item.initPayload || {}, ctx.origin ? { targetLayerId: ctx.origin.layerId, originName: ctx.origin.name } : {});',
     '        pushOut(g, n.id, "exec", cloneCtx(ctx, n.id, ep));',
@@ -481,17 +526,34 @@ export function buildLivePreviewLogicScript(
     '        if (ut) {',
     '          var uop = n.type === "state.increment" ? "increment" : String(n.data.operation || "set");',
     '          var oldUv = state[uvid]; var nextUv = oldUv;',
-    '          if (uop === "increment" && ut === "number") {',
+    '          var inUv = resolveIn(g, n, "value", n.data.value, v, ctx, "pipelineRef");',
+    '          if (uop === "reset") {',
+    '            nextUv = Object.prototype.hasOwnProperty.call(CONFIG.variableInitialValues || {}, uvid) ? CONFIG.variableInitialValues[uvid] : oldUv;',
+    '          } else if (uop === "increment" && ut === "number") {',
     '            var ustep = resolveIn(g, n, "step", n.data.step, v, ctx);',
     '            nextUv = (typeof oldUv === "number" ? oldUv : 0) + (typeof ustep === "number" && Number.isFinite(ustep) ? ustep : 1);',
     '            if (typeof n.data.min === "number") nextUv = Math.max(n.data.min, nextUv);',
     '            if (typeof n.data.max === "number") nextUv = Math.min(n.data.max, nextUv);',
+    '          } else if (uop === "push" && ut === "list") {',
+    '            nextUv = parseList(oldUv).concat([inUv]);',
+    '          } else if (uop === "remove" && ut === "list") {',
+    '            var remList = parseList(oldUv);',
+    '            if (typeof inUv === "number" && Math.floor(inUv) === inUv) nextUv = remList.filter(function (_, idx) { return idx !== inUv; });',
+    '            else nextUv = remList.filter(function (elItem) { return elItem !== inUv; });',
+    '          } else if (uop === "set-property" && ut === "object") {',
+    '            nextUv = setNested(parseObj(oldUv), String(n.data.propertyPath || ""), inUv);',
+    '          } else if (uop === "cycle") {',
+    '            var cyc = String(n.data.cycleValues || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean);',
+    '            if (cyc.length > 0) {',
+    '              var cidx = cyc.indexOf(String(oldUv));',
+    '              nextUv = coerce(cyc[(cidx + 1) % cyc.length], ut, oldUv);',
+    '            }',
     '          } else {',
-    '            nextUv = coerce(resolveIn(g, n, "value", n.data.value, v, ctx, "pipelineRef"), ut, oldUv);',
+    '            nextUv = coerce(inUv, ut, oldUv);',
     '          }',
     '          state[uvid] = nextUv;',
     '          if (nextUv !== oldUv) notifyState(uvid, nextUv);',
-    '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { variableId: uvid, value: nextUv, previous: oldUv }));',
+    '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { variableId: uvid, operation: uop, value: nextUv, previous: oldUv }));',
     '        }',
     '      } else if (n.type === "logic.branch") {',
     '        var bMode = String(n.data.mode || "if-else");',
@@ -505,7 +567,7 @@ export function buildLivePreviewLogicScript(
     '          if (bCond) bPort = "true";',
     '          else if (bMode === "else-if" && Boolean(n.data.elseIfCondition)) bPort = "elseIf";',
     '        }',
-    '        pushOut(g, n.id, bPort, cloneCtx(ctx, n.id, { matchedBranch: bPort, condition: bCond }));',
+    '        pushOut(g, n.id, bPort, cloneCtx(ctx, n.id, { matchedBranch: bPort, condition: bCond, mode: bMode }));',
     '      } else if (n.type === "action.set-layer") {',
     '        var slTarget = resolveTargetId(n, ctx); var slEl = findEl(slTarget); var slMeta = CONFIG.nodeMeta[slTarget];',
     '        if (slEl && slMeta) {',
@@ -513,6 +575,9 @@ export function buildLivePreviewLogicScript(
     '          var hasSlVal = hasDynIn(g, n, "value", ctx, "pipelineRef");',
     '          var slVal = hasSlVal ? resolveIn(g, n, "value", null, v, ctx, "pipelineRef") : undefined;',
     '          var appliedVal = null;',
+    '          if (typeof n.data.transitionMs === "number" && n.data.transitionMs > 0) {',
+    '            slEl.style.transition = "all " + Math.min(5000, Math.max(0, n.data.transitionMs)) + "ms ease";',
+    '          }',
     '          if (slProp === "visible") {',
     '            var slCurVis = Object.prototype.hasOwnProperty.call(visibleState, slTarget) ? visibleState[slTarget] : slMeta.visible;',
     '            var slNextVis = hasSlVal ? Boolean(slVal) : (n.data.visibleMode === "show" ? true : n.data.visibleMode === "hide" ? false : !slCurVis);',
@@ -524,16 +589,31 @@ export function buildLivePreviewLogicScript(
     '            var slFill = String(hasSlVal ? (slVal || "") : (n.data.fill || "")).trim();',
     '            if (isSafeColor(slFill)) {',
     '              if (slMeta.type === "text") slEl.style.color = slFill;',
-    '              else if (slMeta.type === "path") { var slp = slEl.querySelector("path"); if (slp) slp.setAttribute("fill", slFill); }',
+    '              else if (slMeta.type === "path") { var slp = slEl.querySelector ? slEl.querySelector("path") : null; if (slp) slp.setAttribute("fill", slFill); }',
     '              else slEl.style.background = slFill;',
     '              appliedVal = slFill;',
     '            }',
     '          } else if (slProp === "opacity") {',
-    '            appliedVal = String(hasSlVal ? slVal : (n.data.opacity != null ? n.data.opacity : 1));',
-    '            slEl.style.opacity = appliedVal;',
+    '            var rawOp = Number(hasSlVal ? slVal : (n.data.opacity != null ? n.data.opacity : 1));',
+    '            appliedVal = Number.isFinite(rawOp) ? Math.max(0, Math.min(1, rawOp)) : 1;',
+    '            slEl.style.opacity = String(appliedVal);',
     '          } else if (slProp === "transform") {',
-    '            appliedVal = String(hasSlVal ? slVal : (n.data.transform || ""));',
+    '            appliedVal = String(hasSlVal ? (slVal == null ? "" : slVal) : (n.data.transform || ""));',
     '            slEl.style.transform = appliedVal;',
+    '          } else if (slProp === "image") {',
+    '            var imgUrl = String(hasSlVal ? (slVal || "") : (n.data.imageUrl || "")).trim();',
+    '            if (!imgUrl || SAFE_HREF.test(imgUrl)) {',
+    '              if (slEl.tagName === "IMG") slEl.src = imgUrl;',
+    '              else slEl.style.backgroundImage = imgUrl ? "url(" + JSON.stringify(imgUrl) + ")" : "";',
+    '              appliedVal = imgUrl;',
+    '            }',
+    '          } else if (slProp === "disabled") {',
+    '            var isDis = hasSlVal ? Boolean(slVal) : Boolean(n.data.disabled);',
+    '            appliedVal = isDis;',
+    '            slEl.disabled = isDis;',
+    '            if (typeof slEl.setAttribute === "function") slEl.setAttribute("aria-disabled", String(isDis));',
+    '            slEl.style.pointerEvents = isDis ? "none" : "";',
+    '            slEl.style.opacity = isDis ? "0.5" : "";',
     '          }',
     '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: slTarget, property: slProp, value: appliedVal }));',
     '        }',
@@ -559,7 +639,7 @@ export function buildLivePreviewLogicScript(
     '        var fillVal = resolveIn(g, n, "fill", n.data.fill, v, ctx, "pipelineRef");',
     '        if (fillEl && fMeta && isSafeColor(fillVal)) {',
     '          if (fMeta.type === "text") fillEl.style.color = fillVal.trim();',
-    '          else if (fMeta.type === "path") { var p = fillEl.querySelector("path"); if (p) p.setAttribute("fill", fillVal.trim()); }',
+    '          else if (fMeta.type === "path") { var p = fillEl.querySelector ? fillEl.querySelector("path") : null; if (p) p.setAttribute("fill", fillVal.trim()); }',
     '          else fillEl.style.background = fillVal.trim();',
     '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: fillTarget, fill: fillVal.trim() }));',
     '        }',
@@ -584,41 +664,151 @@ export function buildLivePreviewLogicScript(
     '          });',
     '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: varTarget, optionId: String(optId || "") }));',
     '        }',
-    '      } else if (n.type === "action.set-theme" || (n.type === "action.system-form" && n.data.action === "set-theme")) {',
-    '        var tid = String(resolveIn(g, n, n.type === "action.set-theme" ? "themeId" : "value", n.data.themeId, v, ctx, "pipelineRef") || "");',
-    '        if (Object.prototype.hasOwnProperty.call(CONFIG.themeSlugById, tid)) {',
-    '          var slug = CONFIG.themeSlugById[tid];',
-    '          if (slug) document.documentElement.setAttribute("data-theme", slug);',
-    '          else document.documentElement.removeAttribute("data-theme");',
-    '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { themeId: tid }));',
+    '      } else if (n.type === "action.overlay-toast") {',
+    '        var otMode = String(n.data.mode || "show-toast");',
+    '        var otPayload = { mode: otMode };',
+    '        if (otMode === "show-toast") {',
+    '          var tmsg = String(resolveIn(g, n, "message", n.data.message || "", v, ctx, "pipelineRef") || "");',
+    '          var ttone = String(n.data.tone || "info");',
+    '          showDomToast(tmsg, ttone);',
+    '          otPayload = { mode: otMode, tone: ttone, message: tmsg };',
+    '        } else {',
+    '          var otTarget = resolveTargetId(n, ctx); var otEl = findEl(otTarget); var otMeta = CONFIG.nodeMeta[otTarget];',
+    '          if (otEl && otMeta) {',
+    '            var otOpen = otMode === "open-modal" || otMode === "open-drawer";',
+    '            visibleState[otTarget] = otOpen;',
+    '            otEl.style.display = otOpen ? otMeta.display : "none";',
+    '            otPayload = { mode: otMode, targetNodeId: otTarget, visible: otOpen };',
+    '          }',
+    '        }',
+    '        pushOut(g, n.id, "next", cloneCtx(ctx, n.id, otPayload));',
+    '      } else if (n.type === "action.set-theme" || n.type === "action.system-form") {',
+    '        var sysAct = n.type === "action.set-theme" ? "set-theme" : String(n.data.action || "set-theme");',
+    '        if (sysAct === "set-theme") {',
+    '          var tid = String(resolveIn(g, n, n.type === "action.set-theme" ? "themeId" : "value", n.data.themeId, v, ctx, "pipelineRef") || "");',
+    '          if (Object.prototype.hasOwnProperty.call(CONFIG.themeSlugById, tid)) {',
+    '            var slug = CONFIG.themeSlugById[tid];',
+    '            if (document.documentElement && typeof document.documentElement.setAttribute === "function") {',
+    '              if (slug) document.documentElement.setAttribute("data-theme", slug);',
+    '              else if (typeof document.documentElement.removeAttribute === "function") document.documentElement.removeAttribute("data-theme");',
+    '            }',
+    '            pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { action: sysAct, themeId: tid }));',
+    '          }',
+    '        } else {',
+    '          var sysTarget = resolveTargetId(n, ctx); var sysEl = findEl(sysTarget);',
+    '          if (sysAct === "focus-input" && sysEl && typeof sysEl.focus === "function") sysEl.focus();',
+    '          else if (sysAct === "blur-input" && sysEl && typeof sysEl.blur === "function") sysEl.blur();',
+    '          else if (sysAct === "reset-form" && sysEl && typeof sysEl.reset === "function") sysEl.reset();',
+    '          else if (sysAct === "copy-clipboard" && typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {',
+    '            var clipTxt = String(resolveIn(g, n, "value", n.data.value || "", v, ctx, "pipelineRef") || "");',
+    '            try { navigator.clipboard.writeText(clipTxt); } catch (e) {}',
+    '          }',
+    '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { action: sysAct }));',
     '        }',
     '      } else if (n.type === "action.navigate") {',
-    '        var route = String(resolveIn(g, n, "route", n.data.route || "", v, ctx, "pipelineRef") || "").trim();',
-    '        if (SAFE_HREF.test(route)) {',
-    '          document.documentElement.setAttribute("data-folio-route", route);',
-    '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { route: route }));',
+    '        var navMode = String(n.data.mode || "internal");',
+    '        if (navMode === "scroll-to") {',
+    '          var stId = resolveTargetId(n, ctx); var stEl = findEl(stId);',
+    '          if (stEl && typeof stEl.scrollIntoView === "function") stEl.scrollIntoView({ behavior: "smooth" });',
+    '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { mode: navMode, targetNodeId: stId }));',
+    '        } else if (navMode === "back" || navMode === "forward" || navMode === "reload" || navMode === "url-params") {',
+    '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { mode: navMode }));',
+    '        } else {',
+    '          var route = String(resolveIn(g, n, "route", n.data.route || "", v, ctx, "pipelineRef") || "").trim();',
+    '          if (SAFE_HREF.test(route)) {',
+    '            activeRoute = route;',
+    '            if (document.documentElement && typeof document.documentElement.setAttribute === "function") {',
+    '              document.documentElement.setAttribute("data-folio-route", route);',
+    '            }',
+    '            pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { mode: navMode, route: route }));',
+    '          }',
     '        }',
     '      } else if (n.type === "action.play-animation" || n.type === "action.media-animation") {',
+    '        var animCmd = n.type === "action.media-animation" ? String(n.data.command || "play") : "play";',
     '        var clipId = String(n.data.clipId || "").trim();',
     '        if (!clipId && n.data.targetMode === "pipeline" && ctx.origin && ctx.origin.animationIds && ctx.origin.animationIds.length) {',
     '          clipId = ctx.origin.animationIds[0];',
     '        }',
     '        var animClass = CONFIG.animationClassById && CONFIG.animationClassById[clipId];',
-    '        if (animClass) {',
-    '          document.documentElement.classList.remove(animClass);',
-    '          void document.documentElement.offsetWidth;',
-    '          document.documentElement.classList.add(animClass);',
-    '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { clipId: clipId }));',
+    '        if (animClass && document.documentElement && document.documentElement.classList) {',
+    '          if (animCmd === "stop") {',
+    '            document.documentElement.classList.remove(animClass);',
+    '          } else if (animCmd === "pause") {',
+    '            document.documentElement.style.animationPlayState = "paused";',
+    '          } else {',
+    '            document.documentElement.style.animationPlayState = "running";',
+    '            document.documentElement.style.animationDirection = animCmd === "reverse" ? "reverse" : "normal";',
+    '            document.documentElement.classList.remove(animClass);',
+    '            void document.documentElement.offsetWidth;',
+    '            document.documentElement.classList.add(animClass);',
+    '          }',
+    '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { command: animCmd, clipId: clipId }));',
+    '        } else if (n.type === "action.media-animation") {',
+    '          pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { command: animCmd, targetNodeId: resolveTargetId(n, ctx) }));',
     '        }',
     '      } else if (n.type === "flow.delay") {',
-    '        pushOut(g, n.id, "next", cloneCtx(ctx, n.id, { delayed: true }));',
+    '        var rawDur = Number(n.data.duration != null ? n.data.duration : 0);',
+    '        var durMs = (n.data.unit === "s" ? rawDur * 1000 : rawDur);',
+    '        var safeDelay = Number.isFinite(durMs) ? Math.max(0, Math.min(30000, durMs)) : 0;',
+    '        var delayCtx = cloneCtx(ctx, n.id, { duration: rawDur, unit: n.data.unit === "s" ? "s" : "ms", delayed: true });',
+    '        if (safeDelay > 0 && typeof setTimeout === "function") {',
+    '          (function (dg, dnid, dctx, dms) {',
+    '            setTimeout(function () {',
+    '              var delayedNext = collectOutItems(dg, dnid, "next", dctx);',
+    '              if (delayedNext.length) runQueue(delayedNext);',
+    '            }, dms);',
+    '          })(g, n.id, delayCtx, safeDelay);',
+    '        } else {',
+    '          pushOut(g, n.id, "next", delayCtx);',
+    '        }',
+    '      } else if (n.type === "flow.loop-timer") {',
+    '        var ltMode = String(n.data.mode || "for-each");',
+    '        if (ltMode === "for-each") {',
+    '          var feList = parseList(resolveIn(g, n, "list", [], v, ctx, "pipelineRef"));',
+    '          var feCap = Math.min(feList.length, Math.max(1, Number(n.data.maxIterations || 50)));',
+    '          for (var fi = 0; fi < feCap; fi++) {',
+    '            pushOut(g, n.id, "tick", cloneCtx(ctx, n.id, { item: feList[fi], index: fi }));',
+    '          }',
+    '          pushOut(g, n.id, "done", cloneCtx(ctx, n.id, { mode: ltMode, count: feCap }));',
+    '        } else {',
+    '          var timerKey = g.id + ":" + String(n.data.timerId || n.id);',
+    '          var ltCtx = cloneCtx(ctx, n.id, { mode: ltMode, timerId: String(n.data.timerId || "timer") });',
+    '          if (ltMode === "interval-stop") {',
+    '            if (activeTimers[timerKey] && typeof clearInterval === "function") { clearInterval(activeTimers[timerKey]); delete activeTimers[timerKey]; }',
+    '            pushOut(g, n.id, "done", ltCtx);',
+    '          } else {',
+    '            pushOut(g, n.id, "tick", ltCtx);',
+    '            if (typeof setInterval === "function") {',
+    '              if (activeTimers[timerKey] && typeof clearInterval === "function") clearInterval(activeTimers[timerKey]);',
+    '              var intMs = Math.max(50, Math.min(60000, Number(n.data.intervalMs || 1000)));',
+    '              (function (tg, tnid, tctx, tkey, tms) {',
+    '                activeTimers[tkey] = setInterval(function () {',
+    '                  var tickItems = collectOutItems(tg, tnid, "tick", tctx);',
+    '                  if (tickItems.length) runQueue(tickItems);',
+    '                }, tms);',
+    '              })(g, n.id, ltCtx, timerKey, intMs);',
+    '            }',
+    '          }',
+    '        }',
     '      } else if (n.type === "flow.control") {',
     '        var fcCtx = cloneCtx(ctx, n.id, { mode: n.data.mode || "sequence" });',
     '        pushOut(g, n.id, "step1", fcCtx); pushOut(g, n.id, "step2", fcCtx); pushOut(g, n.id, "done", fcCtx);',
+    '      } else if (n.type === "network.http") {',
+    '        var hMethod = String(n.data.method || "GET");',
+    '        var hUrl = String(n.data.url || "/api/items");',
+    '        var simRes = { ok: true, method: hMethod, url: hUrl, data: { items: [] } };',
+    '        var httpCtx = cloneCtx(ctx, n.id, { data: simRes, status: 200 });',
+    '        pushOut(g, n.id, "loading", httpCtx);',
+    '        pushOut(g, n.id, "success", httpCtx);',
+    '      } else if (n.type === "network.socket") {',
+    '        var sAct = String(n.data.action || "listen");',
+    '        var sChan = String(n.data.channel || "updates");',
+    '        var sockCtx = cloneCtx(ctx, n.id, { action: sAct, channel: sChan, connected: true });',
+    '        if (sAct === "listen" || sAct === "connect") pushOut(g, n.id, "onMessage", sockCtx);',
     '      }',
     '    }',
     '  }',
-    '  function triggerNode(nodeId, kind) {',
+    '  function triggerNode(nodeId, kind, extraPayload) {',
     '    var starters = [];',
     '    var targetMeta = CONFIG.nodeMeta && CONFIG.nodeMeta[nodeId];',
     '    var targetCompId = targetMeta && targetMeta.componentId ? targetMeta.componentId : null;',
@@ -626,9 +816,14 @@ export function buildLivePreviewLogicScript(
     '      var g = indexed[i];',
     '      for (var j = 0; j < g.nodes.length; j++) {',
     '        var n = g.nodes[j];',
-    '        if (kind === "click" && n.type === "event.on-click" && n.data.targetNodeId === nodeId) starters.push({ g: g, nodeId: n.id, ctx: createCtx("click", nodeId), initPayload: { targetLayerId: nodeId } });',
+    '        if (kind === "click" && n.type === "event.on-click" && n.data.targetNodeId === nodeId && (!n.data.mode || n.data.mode === "click")) starters.push({ g: g, nodeId: n.id, ctx: createCtx("click", nodeId), initPayload: { targetLayerId: nodeId } });',
+    '        else if (kind === "double-click" && n.type === "event.on-click" && n.data.targetNodeId === nodeId && n.data.mode === "double-click") starters.push({ g: g, nodeId: n.id, ctx: createCtx("double-click", nodeId), initPayload: { targetLayerId: nodeId } });',
+    '        else if (kind === "click-outside" && n.type === "event.on-click" && n.data.targetNodeId === nodeId && n.data.mode === "click-outside") starters.push({ g: g, nodeId: n.id, ctx: createCtx("click-outside", nodeId), initPayload: { targetLayerId: nodeId } });',
     '        else if (kind === "hover-enter" && n.type === "event.on-hover" && n.data.targetNodeId === nodeId && (!n.data.phase || n.data.phase === "enter")) starters.push({ g: g, nodeId: n.id, ctx: createCtx("hover-enter", nodeId), initPayload: { targetLayerId: nodeId, isHovered: true } });',
     '        else if (kind === "hover-leave" && n.type === "event.on-hover" && n.data.targetNodeId === nodeId && n.data.phase === "leave") starters.push({ g: g, nodeId: n.id, ctx: createCtx("hover-leave", nodeId), initPayload: { targetLayerId: nodeId, isHovered: false } });',
+    '        else if (kind.indexOf("input-") === 0 && n.type === "event.on-input" && n.data.targetNodeId === nodeId && (n.data.trigger || "change") === kind.slice(6)) starters.push({ g: g, nodeId: n.id, ctx: createCtx(kind, nodeId), initPayload: Object.assign({ targetLayerId: nodeId }, extraPayload || {}) });',
+    '        else if (kind.indexOf("drag-") === 0 && n.type === "event.on-drag" && n.data.targetNodeId === nodeId && (n.data.phase || "start") === kind.slice(5)) starters.push({ g: g, nodeId: n.id, ctx: createCtx(kind, nodeId), initPayload: Object.assign({ targetLayerId: nodeId }, extraPayload || {}) });',
+    '        else if ((kind === "enter-view" || kind === "leave-view") && n.type === "event.on-scroll-view" && n.data.targetNodeId === nodeId && (n.data.trigger || "enter-view") === kind) starters.push({ g: g, nodeId: n.id, ctx: createCtx(kind, nodeId), initPayload: { targetLayerId: nodeId } });',
     '        else if (n.type === "source.element" && n.data.targetNodeId === nodeId) {',
     '          if (kind === "click") starters.push({ g: g, nodeId: n.id, outPortId: "onClick", ctx: createCtx("click", nodeId) });',
     '          else if (kind === "hover-enter") starters.push({ g: g, nodeId: n.id, outPortId: "onHover", ctx: createCtx("hover-enter", nodeId) });',
@@ -642,15 +837,21 @@ export function buildLivePreviewLogicScript(
     '  }',
     '  function bindEvents() {',
     '    var bound = {};',
-    '    function bindClickTarget(tid) {',
-    '      if (!tid || bound["click:" + tid]) return;',
-    '      bound["click:" + tid] = true;',
+    '    function bindClickTarget(tid, mode) {',
+    '      var m = mode || "click";',
+    '      if (!tid || bound[m + ":" + tid]) return;',
+    '      bound[m + ":" + tid] = true;',
     '      var el = findEl(tid);',
-    '      if (el) {',
-    '        el.setAttribute("data-folio-interactive", "true");',
-    '        el.style.cursor = "pointer";',
-    '        el.addEventListener("click", function () { triggerNode(tid, "click"); });',
-    '      }',
+    '      if (!el) return;',
+    '      el.setAttribute("data-folio-interactive", "true");',
+    '      el.style.cursor = "pointer";',
+    '      if (m === "double-click") el.addEventListener("dblclick", function () { triggerNode(tid, "double-click"); });',
+    '      else if (m === "click-outside") {',
+    '        document.addEventListener("click", function (ev) {',
+    '          var tgt = ev && ev.target;',
+    '          if (tgt !== el && (!el.contains || !el.contains(tgt))) triggerNode(tid, "click-outside");',
+    '        });',
+    '      } else el.addEventListener("click", function () { triggerNode(tid, "click"); });',
     '    }',
     '    function bindHoverTarget(tid, phase) {',
     '      if (!tid || bound[phase + ":" + tid]) return;',
@@ -658,26 +859,93 @@ export function buildLivePreviewLogicScript(
     '      var hel = findEl(tid);',
     '      if (hel) hel.addEventListener(phase === "hover-leave" ? "mouseleave" : "mouseenter", function () { triggerNode(tid, phase); });',
     '    }',
+    '    function bindInputTarget(tid, trig) {',
+    '      var t = trig || "change";',
+    '      if (!tid || bound["input-" + t + ":" + tid]) return;',
+    '      bound["input-" + t + ":" + tid] = true;',
+    '      var iel = findEl(tid);',
+    '      if (!iel) return;',
+    '      var domEv = t === "change" ? "input" : t;',
+    '      iel.addEventListener(domEv, function (ev) {',
+    '        if (t === "submit" && ev && typeof ev.preventDefault === "function") ev.preventDefault();',
+    '        triggerNode(tid, "input-" + t, { value: typeof iel.value === "string" ? iel.value : (iel.textContent || "") });',
+    '      });',
+    '    }',
+    '    var keyListeners = [];',
+    '    var hasResizeListener = false;',
     '    indexed.forEach(function (g) {',
     '      g.nodes.forEach(function (n) {',
     '        var tid = n.data && n.data.targetNodeId;',
     '        if (n.type === "event.on-click") {',
-    '          bindClickTarget(tid);',
+    '          bindClickTarget(tid, n.data.mode);',
     '        } else if (n.type === "event.on-hover") {',
     '          bindHoverTarget(tid, n.data.phase === "leave" ? "hover-leave" : "hover-enter");',
+    '        } else if (n.type === "event.on-input") {',
+    '          bindInputTarget(tid, n.data.trigger);',
+    '        } else if (n.type === "event.on-key-press") {',
+    '          keyListeners.push({ g: g, n: n });',
+    '        } else if (n.type === "event.on-drag" && tid) {',
+    '          var dp = String(n.data.phase || "start");',
+    '          if (!bound["drag-" + dp + ":" + tid]) {',
+    '            bound["drag-" + dp + ":" + tid] = true;',
+    '            var del = findEl(tid);',
+    '            if (del) del.addEventListener(dp === "drop" ? "pointerup" : dp === "move" ? "pointermove" : "pointerdown", function (ev) { triggerNode(tid, "drag-" + dp, { x: ev && ev.clientX || 0, y: ev && ev.clientY || 0 }); });',
+    '          }',
+    '        } else if (n.type === "event.on-scroll-view") {',
+    '          var st = String(n.data.trigger || "enter-view");',
+    '          if (st === "page-scroll" && !bound["page-scroll"]) {',
+    '            bound["page-scroll"] = true;',
+    '            window.addEventListener("scroll", function () {',
+    '              var ss = [];',
+    '              indexed.forEach(function (sg) { sg.nodes.forEach(function (sn) { if (sn.type === "event.on-scroll-view" && sn.data.trigger === "page-scroll") ss.push({ g: sg, nodeId: sn.id, ctx: createCtx("page-scroll", null), initPayload: { scrollY: window.scrollY || 0 } }); }); });',
+    '              if (ss.length) runQueue(ss);',
+    '            });',
+    '          } else if (tid && typeof IntersectionObserver === "function" && !bound["io:" + tid]) {',
+    '            bound["io:" + tid] = true;',
+    '            var ioEl = findEl(tid);',
+    '            if (ioEl) {',
+    '              var obs = new IntersectionObserver(function (entries) {',
+    '                entries.forEach(function (ent) { triggerNode(tid, ent.isIntersecting ? "enter-view" : "leave-view"); });',
+    '              });',
+    '              obs.observe(ioEl);',
+    '            }',
+    '          }',
+    '        } else if (n.type === "event.on-lifecycle" && n.data.trigger === "resize") {',
+    '          hasResizeListener = true;',
     '        } else if (n.type === "source.element") {',
-    '          bindClickTarget(tid);',
+    '          bindClickTarget(tid, "click");',
     '          bindHoverTarget(tid, "hover-enter");',
     '        } else if (n.type === "source.component" && n.data && n.data.componentId) {',
     '          Object.keys(CONFIG.nodeMeta).forEach(function (nid) {',
     '            if (CONFIG.nodeMeta[nid] && CONFIG.nodeMeta[nid].componentId === n.data.componentId) {',
-    '              bindClickTarget(nid);',
+    '              bindClickTarget(nid, "click");',
     '              bindHoverTarget(nid, "hover-enter");',
     '            }',
     '          });',
     '        }',
     '      });',
     '    });',
+    '    if (keyListeners.length > 0) {',
+    '      ["keydown", "keyup"].forEach(function (kdType) {',
+    '        var dir = kdType === "keyup" ? "up" : "down";',
+    '        document.addEventListener(kdType, function (ev) {',
+    '          var ks = [];',
+    '          keyListeners.forEach(function (kl) {',
+    '            if ((kl.n.data.direction || "down") === dir && matchKeyCombo(ev, kl.n.data.keyCombo)) {',
+    '              ks.push({ g: kl.g, nodeId: kl.n.id, ctx: createCtx("key-" + dir, null), initPayload: { key: ev && ev.key ? ev.key : "" } });',
+    '            }',
+    '          });',
+    '          if (ks.length) runQueue(ks);',
+    '        });',
+    '      });',
+    '    }',
+    '    if (hasResizeListener) {',
+    '      window.addEventListener("resize", function () {',
+    '        var rs = [];',
+    '        indexed.forEach(function (rg) { rg.nodes.forEach(function (rn) { if (rn.type === "event.on-lifecycle" && rn.data.trigger === "resize") rs.push({ g: rg, nodeId: rn.id, ctx: createCtx("resize", null), initPayload: { width: window.innerWidth || 0, height: window.innerHeight || 0 } }); }); });',
+    '        if (rs.length) runQueue(rs);',
+    '      });',
+    '    }',
     '    var loadStarters = [];',
     '    indexed.forEach(function (g) {',
     '      g.nodes.forEach(function (n) {',
@@ -699,21 +967,28 @@ export interface ReactPageLogicPlan {
   readonly hasLogic: boolean;
   readonly needsUseEffect: boolean;
   readonly hasNavigation: boolean;
+  readonly hasToastAction: boolean;
   readonly hookLines: readonly string[];
   getNodeEventAttrs(nodeId: string): string[];
   hasDynamicOverride(nodeId: string): boolean;
   hasDynamicVisible(nodeId: string): boolean;
   hasDynamicText(nodeId: string): boolean;
   hasDynamicFill(nodeId: string): boolean;
+  hasDynamicOpacity(nodeId: string): boolean;
+  hasDynamicTransform(nodeId: string): boolean;
+  hasDynamicDisabled(nodeId: string): boolean;
+  hasDynamicTransition(nodeId: string): boolean;
   hasDynamicVariant(nodeId: string, axisId?: string): boolean;
 }
 
 /**
- * Generates clean React `useState`/`useEffect` state bindings and typed event
- * handlers for pages containing active Node Logic graphs, emitting bindings for
- * supported DOM events, shared/private state, and visual/navigation/animation
- * actions. Returns `hasLogic: false` for static pages so generated TSX stays
- * unchanged.
+ * Generates clean, strict-TypeScript React `useState`/`useEffect` state
+ * bindings and scoped-pipeline event handlers for pages containing active
+ * Node Logic graphs. Shares full parity with `PrototypeRuntime` and Live
+ * Preview (Scoped Data Pipeline, Private target+frame memory, Baked Logic
+ * Frames, 31 primary nodes + legacy v1 nodes, zero secrets).
+ *
+ * Returns `hasLogic: false` for static pages so generated TSX stays unchanged.
  */
 export function buildReactPageLogicPlan(
   project: FolioProject,
@@ -725,224 +1000,269 @@ export function buildReactPageLogicPlan(
       hasLogic: false,
       needsUseEffect: false,
       hasNavigation: false,
+      hasToastAction: false,
       hookLines: [],
       getNodeEventAttrs: () => [],
       hasDynamicOverride: () => false,
       hasDynamicVisible: () => false,
       hasDynamicText: () => false,
       hasDynamicFill: () => false,
+      hasDynamicOpacity: () => false,
+      hasDynamicTransform: () => false,
+      hasDynamicDisabled: () => false,
+      hasDynamicTransition: () => false,
       hasDynamicVariant: () => false,
     };
   }
 
-  const clickNodes = new Set<string>();
-  const hoverEnterNodes = new Set<string>();
-  const hoverLeaveNodes = new Set<string>();
-  const visibleTargets = new Set<string>();
-  const textTargets = new Set<string>();
-  const fillTargets = new Set<string>();
-  const variantTargets = new Map<string, Set<string>>();
-  let hasPageLoad = false;
-  let hasNavigation = false;
-  let hasThemeAction = false;
-  let hasAnimationAction = false;
-
-  const initialVariables: Record<string, LogicVariableValue> = {};
-  const variableTypes: Record<string, string> = {};
-  const variableNameToId: Record<string, string> = {};
-
-  for (const graph of graphs) {
-    for (const variable of graph.variables ?? []) {
-      variableTypes[variable.id] = variable.valueType;
-      variableNameToId[variable.name] = variable.id;
-      variableNameToId[variable.name.toLowerCase()] = variable.id;
-      if (!Object.prototype.hasOwnProperty.call(initialVariables, variable.id)) {
-        initialVariables[variable.id] = variable.initialValue;
-      }
-    }
-    for (const node of graph.nodes) {
-      const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
-      if (node.type === 'event.on-click' && targetId) clickNodes.add(targetId);
-      if (node.type === 'event.on-hover' && targetId) {
-        if (node.data.phase === 'leave') hoverLeaveNodes.add(targetId);
-        else hoverEnterNodes.add(targetId);
-      }
-      if (node.type === 'source.element' && targetId) {
-        clickNodes.add(targetId);
-        hoverEnterNodes.add(targetId);
-      }
-      if (node.type === 'source.component') {
-        const compId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
-        if (compId) {
-          for (const pageNode of page.document.nodes) {
-            if (pageNode.type === 'component-instance' && pageNode.componentId === compId) {
-              clickNodes.add(pageNode.id);
-              hoverEnterNodes.add(pageNode.id);
-            }
-          }
-        }
-      }
-      if (node.type === 'event.on-page-load' || (node.type === 'event.on-lifecycle' && (!node.data.trigger || node.data.trigger === 'page-load'))) hasPageLoad = true;
-      if ((node.type === 'source.page' || node.type === 'source.context') && (!node.data.pageId || node.data.pageId === page.id)) hasPageLoad = true;
-      if (node.type === 'action.set-visible' && targetId) visibleTargets.add(targetId);
-      if (node.type === 'action.set-text' && targetId) textTargets.add(targetId);
-      if (node.type === 'action.set-fill' && targetId) fillTargets.add(targetId);
-      if (node.type === 'action.set-layer' && targetId) {
-        const prop = String(node.data.property ?? 'text');
-        if (prop === 'visible') visibleTargets.add(targetId);
-        else if (prop === 'fill') fillTargets.add(targetId);
-        else if (prop === 'text') textTargets.add(targetId);
-      }
-      if (node.type === 'action.set-variant' && targetId) {
-        const axisId = typeof node.data.axisId === 'string' ? node.data.axisId : '';
-        const set = variantTargets.get(targetId) ?? new Set<string>();
-        if (axisId) set.add(axisId);
-        variantTargets.set(targetId, set);
-      }
-      if (node.type === 'action.navigate') hasNavigation = true;
-      if (node.type === 'action.set-theme' || (node.type === 'action.system-form' && node.data.action === 'set-theme')) hasThemeAction = true;
-      if (node.type === 'action.play-animation' || node.type === 'action.media-animation') hasAnimationAction = true;
-    }
-  }
+  const config = compilePageLogicRuntimeConfig(project, page, graphs);
+  const targets = discoverDynamicReactTargets(project, page, graphs);
 
   const nodeInitialVisible: Record<string, boolean> = {};
   const instanceComponentById: Record<string, string> = {};
-  for (const node of page.document.nodes) {
-    nodeInitialVisible[node.id] = node.visible;
-    if (node.type === 'component-instance') {
-      instanceComponentById[node.id] = node.componentId;
-    }
-  }
-  const pageRouteById: Record<string, string> = {};
-  for (const p of project.pages) {
-    pageRouteById[p.id] = p.route;
-  }
-
-  const tokens = getProjectDesignTokens(project);
-  const themeSlugById: Record<string, string> = {};
-  if (hasThemeAction) {
-    const defaultThemeId = tokens.themes[0]?.id ?? '';
-    for (const theme of tokens.themes) {
-      themeSlugById[theme.id] = theme.id === defaultThemeId ? '' : toDesignTokenThemeSlug(theme.name);
+  for (const [id, meta] of Object.entries(config.nodeMeta)) {
+    nodeInitialVisible[id] = meta.visible;
+    if (meta.componentId) {
+      instanceComponentById[id] = meta.componentId;
     }
   }
 
-  const variantLabels: Record<string, Record<string, Record<string, string>>> = {};
-  if (variantTargets.size > 0) {
-    for (const comp of project.components) {
-      if (!comp.variants || comp.variants.length === 0) continue;
-      const axisMap: Record<string, Record<string, string>> = {};
-      for (const axis of comp.variants) {
-        const optMap: Record<string, string> = {};
-        for (const opt of axis.options) {
-          optMap[opt.id] = opt.label;
-        }
-        axisMap[axis.id] = optMap;
-      }
-      variantLabels[comp.id] = axisMap;
-    }
-  }
-
-  const animationClassById: Record<string, string> = {};
-  if (hasAnimationAction) {
-    for (const desc of buildLivePreviewAnimationPayload(project, page)) {
-      animationClassById[desc.id] = desc.className;
-    }
-  }
-
-  const compiledGraphs = graphs.map((graph) => ({
-    id: graph.id,
-    nodes: graph.nodes
-      .filter((node) => isBuiltInLogicNodeType(node.type))
-      .map((node) => ({ id: node.id, type: node.type, data: node.data })),
-    connections: graph.connections.map((conn) => ({
-      sourceNodeId: conn.sourceNodeId,
-      sourcePortId: conn.sourcePortId,
-      targetNodeId: conn.targetNodeId,
-      targetPortId: conn.targetPortId,
-    })),
-  }));
-
-  const overrideType = '{ visible?: boolean; text?: string; fill?: string; variants?: Record<string, string> }';
+  const overrideType =
+    '{ visible?: boolean; text?: string; fill?: string; opacity?: number; transform?: string; disabled?: boolean; transitionMs?: number; variants?: Record<string, string> }';
+  const varValType = 'string | number | boolean | unknown[] | Record<string, unknown>';
+  const graphArrayType =
+    'Array<{ id: string; nodes: Array<{ id: string; type: string; data: Record<string, unknown> }>; connections: Array<{ sourceNodeId: string; sourcePortId: string; targetNodeId: string; targetPortId: string }>; bakedFrames: Array<{ id: string; title: string; childNodeIds: string[]; compiledPlan: { entryNodeIds: string[]; steps: Array<{ nodeId: string; nextByPort: Record<string, Array<{ targetNodeId: string; targetPort: string }>>; dataInputs: Record<string, { sourceNodeId: string; sourcePort: string }> }> } }> }>';
+  const nodeMetaType =
+    'Record<string, { name: string; type: string; visible: boolean; display: string; text?: string; fill?: string; opacity?: number; componentId?: string; animationIds?: string[]; children?: Array<{ id: string; name: string; type: string }> }>';
 
   const hookLines: string[] = [
-    `  const [logicState, setLogicState] = useState<Record<string, string | number | boolean>>(${JSON.stringify(initialVariables)});`,
+    `  const [logicState, setLogicState] = useState<Record<string, ${varValType}>>(${JSON.stringify(config.variables)});`,
     `  const [logicOverrides, setLogicOverrides] = useState<Record<string, ${overrideType}>>({});`,
-    `  const logicGraphs = ${JSON.stringify(compiledGraphs)};`,
-    `  const logicVarTypes: Record<string, string> = ${JSON.stringify(variableTypes)};`,
-    `  const logicVarNameToId: Record<string, string> = ${JSON.stringify(variableNameToId)};`,
+    ...(targets.hasToastAction
+      ? ['  const [logicToasts, setLogicToasts] = useState<Array<{ id: string; message: string; tone: string }>>([]);']
+      : []),
+    '  const logicPrivateMemoryRef = React.useRef<Record<string, boolean>>({});',
+    '  const logicFiredOnceRef = React.useRef<Record<string, boolean>>({});',
+    '  const logicExecCounterRef = React.useRef<number>(0);',
+    `  const logicGraphs: ${graphArrayType} = ${JSON.stringify(config.graphs)};`,
+    `  const logicInitialVars: Record<string, ${varValType}> = ${JSON.stringify(config.variableInitialValues)};`,
+    `  const logicVarTypes: Record<string, string> = ${JSON.stringify(config.variableTypes)};`,
+    `  const logicVarNameToId: Record<string, string> = ${JSON.stringify(config.variableNameToId)};`,
+    `  const logicNodeMeta: ${nodeMetaType} = ${JSON.stringify(config.nodeMeta)};`,
     `  const logicInitialVisible: Record<string, boolean> = ${JSON.stringify(nodeInitialVisible)};`,
     `  const logicInstanceComponentById: Record<string, string> = ${JSON.stringify(instanceComponentById)};`,
-    `  const logicPageRouteById: Record<string, string> = ${JSON.stringify(pageRouteById)};`,
-    `  const logicActivePageId = ${JSON.stringify(page.id)};`,
-    ...(variantTargets.size > 0
+    `  const logicPageRouteById: Record<string, string> = ${JSON.stringify(config.pageRouteById)};`,
+    `  const logicActivePageId = ${JSON.stringify(config.activePageId)};`,
+    ...(targets.variantTargets.size > 0
       ? [
-          `  const logicVariantLabels: Record<string, Record<string, Record<string, string>>> = ${JSON.stringify(variantLabels)};`,
+          `  const logicVariantLabels: Record<string, Record<string, Record<string, string>>> = ${JSON.stringify(config.variantLabels)};`,
         ]
       : []),
-    ...(hasThemeAction
-      ? [`  const logicThemeSlugById: Record<string, string> = ${JSON.stringify(themeSlugById)};`]
+    ...(targets.hasThemeAction
+      ? [`  const logicThemeSlugById: Record<string, string> = ${JSON.stringify(config.themeSlugById)};`]
       : []),
-    ...(hasAnimationAction
-      ? [`  const logicAnimationClassById: Record<string, string> = ${JSON.stringify(animationClassById)};`]
+    ...(targets.hasAnimationAction
+      ? [`  const logicAnimationClassById: Record<string, string> = ${JSON.stringify(config.animationClassById)};`]
       : []),
     '',
-    '  const runLogicTrigger = (triggerKind: "click" | "hover-enter" | "hover-leave" | "page-load", targetNodeId?: string) => {',
-    '    const nextVars: Record<string, string | number | boolean> = { ...logicState };',
+    '  const runLogicTrigger = (triggerKind: "click" | "double-click" | "hover-enter" | "hover-leave" | "page-load" | "key-down", targetNodeId?: string, extraPayload?: Record<string, unknown>) => {',
+    `    const nextVars: Record<string, ${varValType}> = { ...logicState };`,
     `    const nextOverrides: Record<string, ${overrideType}> = { ...logicOverrides };`,
-    '    const ephemeral: Record<string, unknown> = {};',
-    `    const maxSteps = ${MAX_LOGIC_EXECUTION_STEPS};`,
-    '    const queue: Array<{ graph: (typeof logicGraphs)[number]; nodeId: string; outPortId?: string }> = [];',
+    '    const privateMemory = logicPrivateMemoryRef.current;',
+    '    const firedOnce = logicFiredOnceRef.current;',
+    ...(targets.hasToastAction
+      ? ['    const emittedToasts: Array<{ id: string; message: string; tone: string }> = [];']
+      : []),
+    `    const maxSteps = ${config.maxSteps};`,
+    '    type PipelineOrigin = { layerId: string; name: string; type: string; animationIds: string[]; children: Array<{ id: string; name: string; type: string }> };',
+    '    type PipelineCtx = { executionId: string; eventKind: string; origin: PipelineOrigin | null; steps: Record<string, Record<string, unknown>> };',
+    '    const buildOrigin = (layerId?: string): PipelineOrigin | null => {',
+    '      if (!layerId || !logicNodeMeta[layerId]) return null;',
+    '      const m = logicNodeMeta[layerId];',
+    '      return { layerId, name: m.name, type: m.type, animationIds: m.animationIds ?? [], children: m.children ?? [] };',
+    '    };',
+    '    const createCtx = (eventKind: string, originLayerId?: string): PipelineCtx => {',
+    '      logicExecCounterRef.current += 1;',
+    '      return { executionId: `${eventKind}-${logicExecCounterRef.current}`, eventKind, origin: buildOrigin(originLayerId), steps: {} };',
+    '    };',
+    '    const cloneCtx = (ctx: PipelineCtx, nodeId: string, stepOut: Record<string, unknown>): PipelineCtx => ({',
+    '      executionId: ctx.executionId,',
+    '      eventKind: ctx.eventKind,',
+    '      origin: ctx.origin,',
+    '      steps: { ...ctx.steps, [nodeId]: { ...stepOut } },',
+    '    });',
+    '    const parseListVal = (raw: unknown): unknown[] => {',
+    '      if (Array.isArray(raw)) return [...raw];',
+    '      if (typeof raw === "string") {',
+    '        const trimmed = raw.trim();',
+    '        if (!trimmed) return [];',
+    '        try { const parsed = JSON.parse(trimmed); if (Array.isArray(parsed)) return parsed; } catch { /* fallback */ }',
+    '        return trimmed.split(",").map((s) => s.trim()).filter(Boolean);',
+    '      }',
+    '      return [];',
+    '    };',
+    '    const parseObjVal = (raw: unknown): Record<string, unknown> => {',
+    '      if (raw && typeof raw === "object" && !Array.isArray(raw)) return { ...(raw as Record<string, unknown>) };',
+    '      if (typeof raw === "string") {',
+    '        try { const parsed = JSON.parse(raw); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>; } catch { /* fallback */ }',
+    '      }',
+    '      return {};',
+    '    };',
+    '    const getNestedVal = (source: unknown, path: string): unknown => {',
+    '      if (!path || source === null || source === undefined) return source;',
+    '      const segs = path.split(".").filter(Boolean);',
+    '      let cur: unknown = source;',
+    '      for (const seg of segs) {',
+    '        if (cur === null || cur === undefined || typeof cur !== "object") return null;',
+    '        if (seg === "__proto__" || seg === "constructor" || seg === "prototype") return null;',
+    '        cur = Array.isArray(cur) ? cur[Number(seg)] : (cur as Record<string, unknown>)[seg];',
+    '      }',
+    '      return cur === undefined ? null : cur;',
+    '    };',
+    '    const setNestedVal = (obj: Record<string, unknown>, path: string, val: unknown): Record<string, unknown> => {',
+    '      const clone: Record<string, unknown> = { ...obj };',
+    '      const segs = path.split(".").filter(Boolean);',
+    '      if (segs.length === 0) return clone;',
+    '      let cur = clone;',
+    '      for (let i = 0; i < segs.length - 1; i += 1) {',
+    '        const seg = segs[i];',
+    '        if (seg === "__proto__" || seg === "constructor" || seg === "prototype") return clone;',
+    '        const ex = cur[seg];',
+    '        const nextObj: Record<string, unknown> = ex && typeof ex === "object" && !Array.isArray(ex) ? { ...(ex as Record<string, unknown>) } : {};',
+    '        cur[seg] = nextObj;',
+    '        cur = nextObj;',
+    '      }',
+    '      const last = segs[segs.length - 1];',
+    '      if (last !== "__proto__" && last !== "constructor" && last !== "prototype") cur[last] = val;',
+    '      return clone;',
+    '    };',
+    `    const coerceVar = (raw: unknown, expected: string, fallback: ${varValType}): ${varValType} => {`,
+    '      if (expected === "string") return raw == null ? "" : String(raw);',
+    '      if (expected === "number") { const n = typeof raw === "number" ? raw : Number(raw); return Number.isFinite(n) ? n : (typeof fallback === "number" ? fallback : 0); }',
+    '      if (expected === "list") return parseListVal(raw);',
+    '      if (expected === "object") return parseObjVal(raw);',
+    '      if (typeof raw === "boolean") return raw;',
+    '      if (typeof raw === "string") { const l = raw.trim().toLowerCase(); return l !== "" && l !== "false" && l !== "0"; }',
+    '      return Boolean(raw);',
+    '    };',
+    '    const resolvePipelineRef = (ctx: PipelineCtx, ref: unknown): { found: boolean; value: unknown } => {',
+    '      if (typeof ref !== "string") return { found: false, value: undefined };',
+    '      const t = ref.trim();',
+    '      if (!t) return { found: false, value: undefined };',
+    '      if (t.startsWith("origin:")) {',
+    '        if (!ctx.origin) return { found: false, value: undefined };',
+    '        const field = t.slice(7).trim();',
+    '        const originRec = ctx.origin as unknown as Record<string, unknown>;',
+    '        return Object.prototype.hasOwnProperty.call(originRec, field) ? { found: true, value: originRec[field] } : { found: false, value: undefined };',
+    '      }',
+    '      if (t.startsWith("step:")) {',
+    '        const rest = t.slice(5);',
+    '        const idx = rest.indexOf(":");',
+    '        if (idx <= 0) return { found: false, value: undefined };',
+    '        const sid = rest.slice(0, idx).trim();',
+    '        const fld = rest.slice(idx + 1).trim();',
+    '        const stepObj = ctx.steps[sid];',
+    '        if (stepObj && Object.prototype.hasOwnProperty.call(stepObj, fld)) return { found: true, value: stepObj[fld] };',
+    '      }',
+    '      return { found: false, value: undefined };',
+    '    };',
+    '    const resolveTargetId = (n: { data: Record<string, unknown> }, ctx: PipelineCtx): string => {',
+    '      if (n.data.targetMode === "pipeline") {',
+    '        if (!ctx.origin) return "";',
+    '        const cid = typeof n.data.pipelineChildId === "string" ? n.data.pipelineChildId.trim() : "";',
+    '        if (!cid || cid === ctx.origin.layerId) return ctx.origin.layerId;',
+    '        return ctx.origin.children.some((c) => c.id === cid) ? cid : "";',
+    '      }',
+    '      return String(n.data.targetNodeId ?? "");',
+    '    };',
+    '    const indexedGraphs = logicGraphs.map((g) => {',
+    '      const bakedByNode: Record<string, string> = {};',
+    '      const stepByNode: Record<string, { frameId: string; step: (typeof g.bakedFrames)[number]["compiledPlan"]["steps"][number]; childSet: Set<string> }> = {};',
+    '      for (const bf of g.bakedFrames) {',
+    '        const childSet = new Set(bf.childNodeIds);',
+    '        for (const cid of bf.childNodeIds) bakedByNode[cid] = bf.id;',
+    '        for (const st of bf.compiledPlan.steps) stepByNode[st.nodeId] = { frameId: bf.id, step: st, childSet };',
+    '      }',
+    '      return { graph: g, bakedByNode, stepByNode };',
+    '    });',
+    '    const queue: Array<{ ig: (typeof indexedGraphs)[number]; nodeId: string; outPortId?: string; ctx: PipelineCtx; initPayload?: Record<string, unknown> }> = [];',
     '    const targetCompId = targetNodeId ? logicInstanceComponentById[targetNodeId] : undefined;',
-    '    for (const graph of logicGraphs) {',
-    '      for (const n of graph.nodes) {',
-    '        if (triggerKind === "page-load" && n.type === "event.on-page-load") queue.push({ graph, nodeId: n.id });',
-    '        else if (triggerKind === "page-load" && n.type === "source.page" && n.data.pageId === logicActivePageId) queue.push({ graph, nodeId: n.id, outPortId: "onLoad" });',
-    '        else if (triggerKind === "click" && n.type === "event.on-click" && n.data.targetNodeId === targetNodeId) queue.push({ graph, nodeId: n.id });',
-    '        else if (triggerKind === "hover-enter" && n.type === "event.on-hover" && n.data.targetNodeId === targetNodeId && (!n.data.phase || n.data.phase === "enter")) queue.push({ graph, nodeId: n.id });',
-    '        else if (triggerKind === "hover-leave" && n.type === "event.on-hover" && n.data.targetNodeId === targetNodeId && n.data.phase === "leave") queue.push({ graph, nodeId: n.id });',
+    '    for (const ig of indexedGraphs) {',
+    '      for (const n of ig.graph.nodes) {',
+    '        if (triggerKind === "page-load" && (n.type === "event.on-page-load" || (n.type === "event.on-lifecycle" && (!n.data.trigger || n.data.trigger === "page-load")))) queue.push({ ig, nodeId: n.id, ctx: createCtx("page-load") });',
+    '        else if (triggerKind === "page-load" && (n.type === "source.page" || n.type === "source.context") && (!n.data.pageId || n.data.pageId === logicActivePageId)) queue.push({ ig, nodeId: n.id, outPortId: "onLoad", ctx: createCtx("page-load") });',
+    '        else if (triggerKind === "click" && n.type === "event.on-click" && n.data.targetNodeId === targetNodeId && (!n.data.mode || n.data.mode === "click")) queue.push({ ig, nodeId: n.id, ctx: createCtx("click", targetNodeId), initPayload: { targetLayerId: targetNodeId } });',
+    '        else if (triggerKind === "double-click" && n.type === "event.on-click" && n.data.targetNodeId === targetNodeId && n.data.mode === "double-click") queue.push({ ig, nodeId: n.id, ctx: createCtx("double-click", targetNodeId), initPayload: { targetLayerId: targetNodeId } });',
+    '        else if (triggerKind === "hover-enter" && n.type === "event.on-hover" && n.data.targetNodeId === targetNodeId && (!n.data.phase || n.data.phase === "enter")) queue.push({ ig, nodeId: n.id, ctx: createCtx("hover-enter", targetNodeId), initPayload: { targetLayerId: targetNodeId, isHovered: true } });',
+    '        else if (triggerKind === "hover-leave" && n.type === "event.on-hover" && n.data.targetNodeId === targetNodeId && n.data.phase === "leave") queue.push({ ig, nodeId: n.id, ctx: createCtx("hover-leave", targetNodeId), initPayload: { targetLayerId: targetNodeId, isHovered: false } });',
+    '        else if (triggerKind === "key-down" && n.type === "event.on-key-press" && (!n.data.keyCombo || String(n.data.keyCombo).toLowerCase() === String(extraPayload?.key ?? "").toLowerCase())) queue.push({ ig, nodeId: n.id, ctx: createCtx("key-down"), initPayload: extraPayload });',
     '        else if (n.type === "source.element" && n.data.targetNodeId === targetNodeId) {',
-    '          if (triggerKind === "click") queue.push({ graph, nodeId: n.id, outPortId: "onClick" });',
-    '          else if (triggerKind === "hover-enter") queue.push({ graph, nodeId: n.id, outPortId: "onHover" });',
+    '          if (triggerKind === "click") queue.push({ ig, nodeId: n.id, outPortId: "onClick", ctx: createCtx("click", targetNodeId) });',
+    '          else if (triggerKind === "hover-enter") queue.push({ ig, nodeId: n.id, outPortId: "onHover", ctx: createCtx("hover-enter", targetNodeId) });',
     '        } else if (n.type === "source.component" && targetCompId && n.data.componentId === targetCompId) {',
-    '          if (triggerKind === "click") queue.push({ graph, nodeId: n.id, outPortId: "onClick" });',
-    '          else if (triggerKind === "hover-enter") queue.push({ graph, nodeId: n.id, outPortId: "onHover" });',
+    '          if (triggerKind === "click") queue.push({ ig, nodeId: n.id, outPortId: "onClick", ctx: createCtx("click", targetNodeId) });',
+    '          else if (triggerKind === "hover-enter") queue.push({ ig, nodeId: n.id, outPortId: "onHover", ctx: createCtx("hover-enter", targetNodeId) });',
     '        }',
     '      }',
     '    }',
     '    let steps = 0;',
-    '    const notifyStateChange = (varId: string, val: string | number | boolean) => {',
-    '      for (const g of logicGraphs) {',
-    '        for (const cn of g.nodes) {',
+    `    const notifyStateChange = (varId: string, val: ${varValType}) => {`,
+    '      for (const ig of indexedGraphs) {',
+    '        for (const cn of ig.graph.nodes) {',
     '          if (cn.type === "event.on-state-change" && cn.data.variableId === varId) {',
-    '            ephemeral[`${g.id}:${cn.id}:value`] = val;',
-    '            queue.push({ graph: g, nodeId: cn.id });',
+    '            queue.push({ ig, nodeId: cn.id, ctx: createCtx("state-change"), initPayload: { variableId: varId, value: val } });',
     '          }',
     '        }',
     '      }',
     '    };',
-    '    const evalData = (graph: (typeof logicGraphs)[number], nodeId: string, portId: string, seen: Set<string>): unknown => {',
-    '      const epKey = `${graph.id}:${nodeId}:${portId}`;',
-    '      if (Object.prototype.hasOwnProperty.call(ephemeral, epKey)) return ephemeral[epKey];',
-    '      const key = `${graph.id}:${nodeId}`;',
+    '    const evalData = (ig: (typeof indexedGraphs)[number], nodeId: string, portId: string, seen: Set<string>, ctx: PipelineCtx): unknown => {',
+    '      const stepOut = ctx.steps[nodeId];',
+    '      if (stepOut) {',
+    '        if (Object.prototype.hasOwnProperty.call(stepOut, portId)) return stepOut[portId];',
+    '        if (portId === "result" && Object.prototype.hasOwnProperty.call(stepOut, "value")) return stepOut.value;',
+    '        if (portId === "target" && Object.prototype.hasOwnProperty.call(stepOut, "targetLayerId")) return stepOut.targetLayerId;',
+    '      }',
+    '      const key = `${ig.graph.id}:${nodeId}:${portId}`;',
     '      if (seen.has(key)) return null;',
-    '      const n = graph.nodes.find((item) => item.id === nodeId);',
+    '      const n = ig.graph.nodes.find((item) => item.id === nodeId);',
     '      if (!n) return null;',
     '      seen.add(key);',
     '      try {',
-    '        if (n.type === "state.get" || n.type === "state.set" || n.type === "state.toggle" || n.type === "state.increment" || n.type === "state.update" || n.type === "event.on-state-change") {',
+    '        if (n.type === "state.toggle") {',
+    '          const tvid = typeof n.data.variableId === "string" ? n.data.variableId.trim() : "";',
+    '          if (!tvid) {',
+    '            const frameId = ig.bakedByNode[n.id];',
+    '            const mk = `${frameId ? `${frameId}:` : ""}${n.id}:${ctx.origin?.layerId ?? "default"}`;',
+    '            return Object.prototype.hasOwnProperty.call(privateMemory, mk) ? privateMemory[mk] : Boolean(n.data.initialValue);',
+    '          }',
+    '          return Boolean(nextVars[tvid]);',
+    '        }',
+    '        if (n.type === "state.get" || n.type === "state.set" || n.type === "state.increment" || n.type === "state.update" || n.type === "event.on-state-change") {',
     '          return nextVars[String(n.data.variableId ?? "")] ?? null;',
     '        }',
     '        if (n.type === "source.page") return logicPageRouteById[String(n.data.pageId ?? "")] ?? "";',
-    '        if (n.type === "source.context") return portId === "themeId" ? String(n.data.themeId ?? "") : (logicPageRouteById[String(n.data.pageId ?? "")] ?? "/");',
+    '        if (n.type === "source.context") return portId === "themeId" || n.data.contextType === "theme" ? String(n.data.themeId ?? "") : (logicPageRouteById[String(n.data.pageId ?? "")] ?? "/");',
     '        if (n.type === "source.component") return String(n.data.componentId ?? "");',
-    '        if (n.type === "source.element") return String(n.data.targetNodeId ?? "");',
+    '        if (n.type === "source.element") {',
+    '          const elId = String(n.data.targetNodeId ?? "");',
+    '          if (portId === "target") return elId;',
+    '          const prop = String(n.data.property ?? "text");',
+    '          const ov = nextOverrides[elId]; const meta = logicNodeMeta[elId];',
+    '          if (prop === "visible") return ov?.visible ?? meta?.visible ?? true;',
+    '          if (prop === "fill") return ov?.fill ?? meta?.fill ?? "";',
+    '          if (prop === "opacity") return ov?.opacity ?? meta?.opacity ?? 1;',
+    '          return ov?.text ?? meta?.text ?? "";',
+    '        }',
     '        if (n.type === "source.theme") return String(n.data.themeId ?? "");',
     '        if (n.type === "logic.compare" || n.type === "logic.condition") {',
-    '          const leftConn = graph.connections.find((c) => c.targetNodeId === n.id && c.targetPortId === "left");',
-    '          const rightConn = graph.connections.find((c) => c.targetNodeId === n.id && c.targetPortId === "right");',
-    '          const l = leftConn ? evalData(graph, leftConn.sourceNodeId, leftConn.sourcePortId, seen) : n.data.left;',
-    '          const r = rightConn ? evalData(graph, rightConn.sourceNodeId, rightConn.sourcePortId, seen) : n.data.right;',
+    '          const l = resolveIn(ig, n, "left", n.data.left, seen, ctx, "leftRef");',
+    '          const r = resolveIn(ig, n, "right", n.data.right, seen, ctx, "rightRef");',
+    '          const cmode = n.type === "logic.condition" ? String(n.data.mode ?? "compare") : "compare";',
+    '          if (cmode === "and") return Boolean(l) && Boolean(r);',
+    '          if (cmode === "or") return Boolean(l) || Boolean(r);',
+    '          if (cmode === "not") return !Boolean(l);',
+    '          if (cmode === "is-empty") return l === null || l === undefined || l === "" || (Array.isArray(l) && l.length === 0) || (typeof l === "object" && !Array.isArray(l) && Object.keys(l as Record<string, unknown>).length === 0);',
+    '          if (cmode === "regex") { try { return new RegExp(String(n.data.pattern ?? "")).test(String(l ?? "")); } catch { return false; } }',
     '          const op = String(n.data.operator ?? "==");',
     '          if (op === "==") return l === r;',
     '          if (op === "!=") return l !== r;',
@@ -952,9 +1272,28 @@ export function buildReactPageLogicPlan(
     '          if (op === "<=") return typeof l === "number" && typeof r === "number" && l <= r;',
     '          return false;',
     '        }',
+    '        if (n.type === "logic.math") {',
+    '          const rawA = Number(resolveIn(ig, n, "a", n.data.a ?? 0, seen, ctx, "leftRef"));',
+    '          const rawB = Number(resolveIn(ig, n, "b", n.data.b ?? 0, seen, ctx, "rightRef"));',
+    '          const a = Number.isFinite(rawA) ? rawA : 0; const b = Number.isFinite(rawB) ? rawB : 0;',
+    '          const mop = String(n.data.operation ?? "+");',
+    '          if (mop === "-") return a - b;',
+    '          if (mop === "*") return a * b;',
+    '          if (mop === "/") return b === 0 ? 0 : a / b;',
+    '          if (mop === "%") return b === 0 ? 0 : a % b;',
+    '          if (mop === "clamp") return Math.max(Number(n.data.min ?? 0), Math.min(Number(n.data.max ?? 100), a));',
+    '          if (mop === "map-range") { const i0 = Number(n.data.inMin ?? 0); const i1 = Number(n.data.inMax ?? 100); const o0 = Number(n.data.outMin ?? 0); const o1 = Number(n.data.outMax ?? 1); return i1 === i0 ? o0 : o0 + ((a - i0) / (i1 - i0)) * (o1 - o0); }',
+    '          return a + b;',
+    '        }',
     '        if (n.type === "logic.template" || n.type === "logic.text") {',
-    '          const valConn = graph.connections.find((c) => c.targetNodeId === n.id && c.targetPortId === "value");',
-    '          const connected = valConn ? evalData(graph, valConn.sourceNodeId, valConn.sourcePortId, seen) : undefined;',
+    '          const tmode = n.type === "logic.text" ? String(n.data.mode ?? "template") : "template";',
+    '          const connected = resolveIn(ig, n, "value", undefined, seen, ctx, "pipelineRef");',
+    '          if (tmode === "format-number" || tmode === "format-currency") {',
+    '            const num = Number(connected ?? 0); const safeNum = Number.isFinite(num) ? num : 0;',
+    '            const loc = typeof n.data.locale === "string" && n.data.locale ? n.data.locale : "en-US";',
+    '            const dec = typeof n.data.decimals === "number" ? Math.max(0, Math.min(6, n.data.decimals)) : 2;',
+    '            try { return tmode === "format-currency" ? new Intl.NumberFormat(loc, { style: "currency", currency: String(n.data.currency ?? "USD"), maximumFractionDigits: dec }).format(safeNum) : new Intl.NumberFormat(loc, { maximumFractionDigits: dec }).format(safeNum); } catch { return safeNum.toFixed(dec); }',
+    '          }',
     '          return String(n.data.template ?? "").replace(/\\{\\{\\s*([a-zA-Z0-9_.-]+)\\s*\\}\\}/g, (_, k: string) => {',
     '            if (k === "value" && connected !== undefined && connected !== null) return String(connected);',
     '            if (Object.prototype.hasOwnProperty.call(nextVars, k)) return String(nextVars[k]);',
@@ -962,48 +1301,103 @@ export function buildReactPageLogicPlan(
     '            return mapped && Object.prototype.hasOwnProperty.call(nextVars, mapped) ? String(nextVars[mapped]) : "";',
     '          });',
     '        }',
+    '        if (n.type === "logic.list") {',
+    '          const listArr = parseListVal(resolveIn(ig, n, "list", [], seen, ctx, "pipelineRef"));',
+    '          const lop = String(n.data.operation ?? "filter");',
+    '          const lfield = typeof n.data.field === "string" ? n.data.field.trim() : "";',
+    '          const lquery = String(resolveIn(ig, n, "query", n.data.matchValue ?? "", seen, ctx) ?? "").trim().toLowerCase();',
+    '          let outList = [...listArr];',
+    '          if (lop === "filter" && lquery) outList = listArr.filter((it) => String((lfield ? getNestedVal(it, lfield) : it) ?? "").toLowerCase().includes(lquery));',
+    '          else if (lop === "sort") { const desc = n.data.sortOrder === "desc"; outList.sort((a, b) => { const cmp = String((lfield ? getNestedVal(a, lfield) : a) ?? "").localeCompare(String((lfield ? getNestedVal(b, lfield) : b) ?? ""), undefined, { numeric: true }); return desc ? -cmp : cmp; }); }',
+    '          else if (lop === "map" && lfield) outList = listArr.map((it) => getNestedVal(it, lfield));',
+    '          return portId === "count" ? outList.length : outList;',
+    '        }',
+    '        if (n.type === "network.json") {',
+    '          const jraw = resolveIn(ig, n, "input", null, seen, ctx, "pipelineRef");',
+    '          const jmode = String(n.data.mode ?? "get-field");',
+    '          if (jmode === "stringify") { if (portId === "valid") return true; try { return JSON.stringify(jraw); } catch { return ""; } }',
+    '          if (jmode === "parse") { if (typeof jraw === "string") { try { const jp = JSON.parse(jraw); return portId === "valid" ? true : jp; } catch { return portId === "valid" ? false : null; } } return portId === "valid" ? jraw !== null : jraw; }',
+    '          const jbase = typeof jraw === "string" ? parseObjVal(jraw) : jraw;',
+    '          const jext = getNestedVal(jbase, String(n.data.path ?? ""));',
+    '          return portId === "valid" ? jext !== null : jext;',
+    '        }',
     '        return null;',
     '      } finally { seen.delete(key); }',
     '    };',
-    '    const resolveIn = (graph: (typeof logicGraphs)[number], nodeId: string, portId: string, fallback: unknown): unknown => {',
-    '      const conn = graph.connections.find((c) => c.targetNodeId === nodeId && c.targetPortId === portId);',
-    '      return conn ? evalData(graph, conn.sourceNodeId, conn.sourcePortId, new Set<string>()) : fallback;',
+    '    const resolveIn = (ig: (typeof indexedGraphs)[number], n: { id: string; data: Record<string, unknown> }, portId: string, fallback: unknown, seen: Set<string>, ctx: PipelineCtx, refField?: string): unknown => {',
+    '      const bs = ig.stepByNode[n.id];',
+    '      const di = bs?.step.dataInputs[portId];',
+    '      if (di) return evalData(ig, di.sourceNodeId, di.sourcePort, seen, ctx);',
+    '      const conn = ig.graph.connections.find((c) => c.targetNodeId === n.id && c.targetPortId === portId);',
+    '      if (conn) return evalData(ig, conn.sourceNodeId, conn.sourcePortId, seen, ctx);',
+    '      if (refField) { const rr = resolvePipelineRef(ctx, n.data[refField]); if (rr.found) return rr.value; }',
+    '      return fallback;',
     '    };',
-    '    const enqueueOut = (graph: (typeof logicGraphs)[number], nodeId: string, portId: string) => {',
-    '      for (const c of graph.connections) {',
-    '        if (c.sourceNodeId === nodeId && c.sourcePortId === portId) queue.push({ graph, nodeId: c.targetNodeId });',
+    '    const hasDynIn = (ig: (typeof indexedGraphs)[number], n: { id: string; data: Record<string, unknown> }, portId: string, ctx: PipelineCtx, refField?: string): boolean => {',
+    '      if (ig.stepByNode[n.id]?.step.dataInputs[portId]) return true;',
+    '      if (ig.graph.connections.some((c) => c.targetNodeId === n.id && c.targetPortId === portId)) return true;',
+    '      if (refField && resolvePipelineRef(ctx, n.data[refField]).found) return true;',
+    '      return false;',
+    '    };',
+    '    const enqueueOut = (ig: (typeof indexedGraphs)[number], nodeId: string, portId: string, nextCtx: PipelineCtx) => {',
+    '      const bs = ig.stepByNode[nodeId];',
+    '      if (bs) {',
+    '        for (const edge of bs.step.nextByPort[portId] ?? []) queue.push({ ig, nodeId: edge.targetNodeId, ctx: nextCtx });',
+    '        for (const c of ig.graph.connections) {',
+    '          if (c.sourceNodeId === nodeId && c.sourcePortId === portId && !bs.childSet.has(c.targetNodeId)) queue.push({ ig, nodeId: c.targetNodeId, ctx: nextCtx });',
+    '        }',
+    '        return;',
+    '      }',
+    '      for (const c of ig.graph.connections) {',
+    '        if (c.sourceNodeId === nodeId && c.sourcePortId === portId) queue.push({ ig, nodeId: c.targetNodeId, ctx: nextCtx });',
     '      }',
     '    };',
     '    while (queue.length > 0 && steps < maxSteps) {',
     '      steps += 1;',
     '      const step = queue.shift()!;',
-    '      const n = step.graph.nodes.find((item) => item.id === step.nodeId);',
+    '      const n = step.ig.graph.nodes.find((item) => item.id === step.nodeId);',
     '      if (!n) continue;',
-    '      if (n.type === "source.page" || n.type === "source.component" || n.type === "source.element") {',
-    '        enqueueOut(step.graph, n.id, step.outPortId ?? (n.type === "source.page" ? "onLoad" : "onClick"));',
-    '      } else if (n.type === "event.on-click" || n.type === "event.on-hover" || n.type === "event.on-page-load" || n.type === "event.on-state-change") {',
-    '        enqueueOut(step.graph, n.id, "exec");',
+    '      if (n.type.startsWith("event.") && n.data.once === true) {',
+    '        const onceKey = `${step.ig.graph.id}:${n.id}`;',
+    '        if (firedOnce[onceKey]) continue;',
+    '        firedOnce[onceKey] = true;',
+    '      }',
+    '      const ctx = step.ctx;',
+    '      const seen = new Set<string>();',
+    '      if (n.type === "source.page" || n.type === "source.context" || n.type === "source.component" || n.type === "source.element" || n.type === "source.external") {',
+    '        const sp: Record<string, unknown> = { ...(step.initPayload ?? {}), ...(ctx.origin ? { targetLayerId: ctx.origin.layerId, originName: ctx.origin.name } : {}) };',
+    '        const defPort = n.type === "source.page" || n.type === "source.context" ? "onLoad" : n.type === "source.external" ? "onReady" : "onClick";',
+    '        enqueueOut(step.ig, n.id, step.outPortId ?? defPort, cloneCtx(ctx, n.id, sp));',
+    '      } else if (n.type.startsWith("event.")) {',
+    '        const ep: Record<string, unknown> = { ...(step.initPayload ?? {}), ...(ctx.origin ? { targetLayerId: ctx.origin.layerId, originName: ctx.origin.name } : {}) };',
+    '        enqueueOut(step.ig, n.id, "exec", cloneCtx(ctx, n.id, ep));',
     '      } else if (n.type === "state.toggle") {',
-    '        const vid = String(n.data.variableId ?? "");',
-    '        if (logicVarTypes[vid] === "boolean") {',
-    '          const nextBool = !Boolean(nextVars[vid]);',
+    '        const vid = typeof n.data.variableId === "string" ? n.data.variableId.trim() : "";',
+    '        if (!vid) {',
+    '          const frameId = step.ig.bakedByNode[n.id];',
+    '          const mk = `${frameId ? `${frameId}:` : ""}${n.id}:${ctx.origin?.layerId ?? "default"}`;',
+    '          const prevPriv = Object.prototype.hasOwnProperty.call(privateMemory, mk) ? privateMemory[mk] : Boolean(n.data.initialValue);',
+    '          const nextPriv = !prevPriv;',
+    '          privateMemory[mk] = nextPriv;',
+    '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { value: nextPriv, previous: prevPriv, memoryKey: mk }));',
+    '        } else if (logicVarTypes[vid] === "boolean") {',
+    '          const prevBool = Boolean(nextVars[vid]);',
+    '          const nextBool = !prevBool;',
     '          nextVars[vid] = nextBool;',
-    '          ephemeral[`${step.graph.id}:${n.id}:result`] = nextBool;',
     '          notifyStateChange(vid, nextBool);',
-    '          enqueueOut(step.graph, n.id, "next");',
+    '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { value: nextBool, previous: prevBool, variableId: vid }));',
     '        }',
     '      } else if (n.type === "state.increment") {',
     '        const vid = String(n.data.variableId ?? "");',
     '        if (logicVarTypes[vid] === "number") {',
     '          const prevVal = nextVars[vid];',
-    '          const inc = resolveIn(step.graph, n.id, "step", n.data.step ?? 1);',
-    '          let val = (typeof prevVal === "number" ? Number(prevVal) : 0) + (typeof inc === "number" && Number.isFinite(inc) ? inc : 1);',
+    '          const inc = resolveIn(step.ig, n, "step", n.data.step ?? 1, seen, ctx);',
+    '          let val = (typeof prevVal === "number" ? prevVal : 0) + (typeof inc === "number" && Number.isFinite(inc) ? inc : 1);',
     '          if (typeof n.data.min === "number") val = Math.max(n.data.min, val);',
     '          if (typeof n.data.max === "number") val = Math.min(n.data.max, val);',
     '          nextVars[vid] = val;',
-    '          ephemeral[`${step.graph.id}:${n.id}:result`] = val;',
     '          if (val !== prevVal) notifyStateChange(vid, val);',
-    '          enqueueOut(step.graph, n.id, "next");',
+    '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { variableId: vid, value: val, previous: prevVal }));',
     '        }',
     '      } else if (n.type === "state.set" || n.type === "state.update") {',
     '        const vid = String(n.data.variableId ?? "");',
@@ -1011,68 +1405,104 @@ export function buildReactPageLogicPlan(
     '        if (t) {',
     '          const prevVal = nextVars[vid];',
     '          const op = n.type === "state.update" ? String(n.data.operation ?? "set") : "set";',
-    '          let coercedVal: string | number | boolean = prevVal;',
-    '          if (op === "increment" && t === "number") {',
+    '          const raw = resolveIn(step.ig, n, "value", n.data.value, seen, ctx, "pipelineRef");',
+    `          let coercedVal: ${varValType} = prevVal;`,
+    '          if (op === "reset") coercedVal = Object.prototype.hasOwnProperty.call(logicInitialVars, vid) ? logicInitialVars[vid] : prevVal;',
+    '          else if (op === "increment" && t === "number") {',
     '            const stepVal = Number(n.data.step ?? 1);',
     '            let numVal = (typeof prevVal === "number" ? prevVal : 0) + (Number.isFinite(stepVal) ? stepVal : 1);',
     '            if (typeof n.data.min === "number") numVal = Math.max(n.data.min, numVal);',
     '            if (typeof n.data.max === "number") numVal = Math.min(n.data.max, numVal);',
     '            coercedVal = numVal;',
-    '          } else {',
-    '            const raw = resolveIn(step.graph, n.id, "value", n.data.value);',
-    '            coercedVal = t === "number" ? Number(raw ?? 0) : t === "boolean" ? Boolean(raw) : String(raw ?? "");',
-    '          }',
+    '          } else if (op === "push" && t === "list") coercedVal = [...parseListVal(prevVal), raw];',
+    '          else if (op === "remove" && t === "list") {',
+    '            const curL = parseListVal(prevVal);',
+    '            coercedVal = typeof raw === "number" && Number.isInteger(raw) ? curL.filter((_, idx) => idx !== raw) : curL.filter((it) => it !== raw);',
+    '          } else if (op === "set-property" && t === "object") coercedVal = setNestedVal(parseObjVal(prevVal), String(n.data.propertyPath ?? ""), raw);',
+    '          else if (op === "cycle") {',
+    '            const items = String(n.data.cycleValues ?? "").split(",").map((s) => s.trim()).filter(Boolean);',
+    '            if (items.length > 0) { const ci = items.indexOf(String(prevVal)); coercedVal = coerceVar(items[(ci + 1) % items.length], t, prevVal); }',
+    '          } else coercedVal = coerceVar(raw, t, prevVal);',
     '          nextVars[vid] = coercedVal;',
-    '          ephemeral[`${step.graph.id}:${n.id}:result`] = coercedVal;',
     '          if (coercedVal !== prevVal) notifyStateChange(vid, coercedVal);',
-    '          enqueueOut(step.graph, n.id, "next");',
+    '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { variableId: vid, operation: op, value: coercedVal, previous: prevVal }));',
     '        }',
     '      } else if (n.type === "logic.branch") {',
-    '        const cond = Boolean(resolveIn(step.graph, n.id, "condition", Boolean(n.data.condition)));',
-    '        enqueueOut(step.graph, n.id, cond ? "true" : "false");',
+    '        const bMode = String(n.data.mode ?? "if-else");',
+    '        let bPort = "false"; let bCond = false;',
+    '        if (bMode === "switch-case") {',
+    '          const mv = String(resolveIn(step.ig, n, "value", "", seen, ctx, "pipelineRef") ?? "");',
+    '          if (mv === String(n.data.caseA ?? "")) { bPort = "true"; bCond = true; }',
+    '          else if (mv === String(n.data.caseB ?? "")) { bPort = "elseIf"; bCond = true; }',
+    '        } else {',
+    '          bCond = Boolean(resolveIn(step.ig, n, "condition", Boolean(n.data.condition), seen, ctx, "pipelineRef"));',
+    '          if (bCond) bPort = "true";',
+    '          else if (bMode === "else-if" && Boolean(n.data.elseIfCondition)) bPort = "elseIf";',
+    '        }',
+    '        enqueueOut(step.ig, n.id, bPort, cloneCtx(ctx, n.id, { matchedBranch: bPort, condition: bCond, mode: bMode }));',
     '      } else if (n.type === "action.set-layer") {',
-    '        const tid = String(n.data.targetNodeId ?? "");',
+    '        const tid = resolveTargetId(n, ctx);',
     '        const prop = String(n.data.property ?? "text");',
-    '        const hasVal = step.graph.connections.some((c) => c.targetNodeId === n.id && c.targetPortId === "value");',
-    '        const val = hasVal ? resolveIn(step.graph, n.id, "value", null) : undefined;',
-    '        if (prop === "visible") {',
-    '          const cur = nextOverrides[tid]?.visible ?? logicInitialVisible[tid] ?? true;',
-    '          const nextVis = hasVal ? Boolean(val) : n.data.visibleMode === "show" ? true : n.data.visibleMode === "hide" ? false : !cur;',
-    '          nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), visible: nextVis };',
-    '        } else if (prop === "text") {',
-    '          nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), text: String(hasVal ? (val ?? "") : (n.data.text ?? "")) };',
-    '        } else if (prop === "fill") {',
-    '          const fill = String(hasVal ? (val ?? "") : (n.data.fill ?? "")).trim();',
-    '          if (/^(?:#[0-9a-f]{3,8}|transparent|currentcolor|(?:rgba?|hsla?)\\([0-9.%,\\s/+-]+\\)|[a-z]{3,24})$/i.test(fill)) {',
-    '            nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), fill };',
+    '        const hasVal = hasDynIn(step.ig, n, "value", ctx, "pipelineRef");',
+    '        const val = hasVal ? resolveIn(step.ig, n, "value", null, seen, ctx, "pipelineRef") : undefined;',
+    '        const transMs = typeof n.data.transitionMs === "number" && n.data.transitionMs > 0 ? Math.min(5000, n.data.transitionMs) : undefined;',
+    '        let applied: unknown = null;',
+    '        if (tid) {',
+    '          const baseOv = { ...(nextOverrides[tid] ?? {}), ...(transMs !== undefined ? { transitionMs: transMs } : {}) };',
+    '          if (prop === "visible") {',
+    '            const cur = nextOverrides[tid]?.visible ?? logicInitialVisible[tid] ?? true;',
+    '            const nextVis = hasVal ? Boolean(val) : n.data.visibleMode === "show" ? true : n.data.visibleMode === "hide" ? false : !cur;',
+    '            nextOverrides[tid] = { ...baseOv, visible: nextVis }; applied = nextVis;',
+    '          } else if (prop === "text") {',
+    '            applied = String(hasVal ? (val ?? "") : (n.data.text ?? ""));',
+    '            nextOverrides[tid] = { ...baseOv, text: applied as string };',
+    '          } else if (prop === "fill") {',
+    '            const fill = String(hasVal ? (val ?? "") : (n.data.fill ?? "")).trim();',
+    '            if (/^(?:#[0-9a-f]{3,8}|transparent|currentcolor|(?:rgba?|hsla?)\\([0-9.%,\\s/+-]+\\)|[a-z]{3,24})$/i.test(fill)) {',
+    '              nextOverrides[tid] = { ...baseOv, fill }; applied = fill;',
+    '            }',
+    '          } else if (prop === "opacity") {',
+    '            const opNum = Number(hasVal ? val : (n.data.opacity ?? 1));',
+    '            const clamped = Number.isFinite(opNum) ? Math.max(0, Math.min(1, opNum)) : 1;',
+    '            nextOverrides[tid] = { ...baseOv, opacity: clamped }; applied = clamped;',
+    '          } else if (prop === "transform") {',
+    '            const tr = String(hasVal ? (val ?? "") : (n.data.transform ?? ""));',
+    '            nextOverrides[tid] = { ...baseOv, transform: tr }; applied = tr;',
+    '          } else if (prop === "disabled") {',
+    '            const dis = hasVal ? Boolean(val) : Boolean(n.data.disabled);',
+    '            nextOverrides[tid] = { ...baseOv, disabled: dis }; applied = dis;',
     '          }',
     '        }',
-    '        enqueueOut(step.graph, n.id, "next");',
+    '        enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: tid, property: prop, value: applied }));',
     '      } else if (n.type === "action.set-visible") {',
-    '        const tid = String(n.data.targetNodeId ?? "");',
-    '        const cur = nextOverrides[tid]?.visible ?? logicInitialVisible[tid] ?? true;',
-    '        const hasIn = step.graph.connections.some((c) => c.targetNodeId === n.id && c.targetPortId === "visible");',
-    '        const nextVis = hasIn ? Boolean(resolveIn(step.graph, n.id, "visible", true)) : n.data.mode === "show" ? true : n.data.mode === "hide" ? false : !cur;',
-    '        nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), visible: nextVis };',
-    '        enqueueOut(step.graph, n.id, "next");',
-    '      } else if (n.type === "action.set-text") {',
-    '        const tid = String(n.data.targetNodeId ?? "");',
-    '        const txt = String(resolveIn(step.graph, n.id, "text", n.data.text ?? "") ?? "");',
-    '        nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), text: txt };',
-    '        enqueueOut(step.graph, n.id, "next");',
-    '      } else if (n.type === "action.set-fill") {',
-    '        const tid = String(n.data.targetNodeId ?? "");',
-    '        const fill = String(resolveIn(step.graph, n.id, "fill", n.data.fill ?? "") ?? "").trim();',
-    '        if (/^(?:#[0-9a-f]{3,8}|transparent|currentcolor|(?:rgba?|hsla?)\\([0-9.%,\\s/+-]+\\)|[a-z]{3,24})$/i.test(fill)) {',
-    '          nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), fill };',
-    '          enqueueOut(step.graph, n.id, "next");',
+    '        const tid = resolveTargetId(n, ctx);',
+    '        if (tid) {',
+    '          const cur = nextOverrides[tid]?.visible ?? logicInitialVisible[tid] ?? true;',
+    '          const hasIn = hasDynIn(step.ig, n, "visible", ctx, "pipelineRef");',
+    '          const nextVis = hasIn ? Boolean(resolveIn(step.ig, n, "visible", true, seen, ctx, "pipelineRef")) : n.data.mode === "show" ? true : n.data.mode === "hide" ? false : !cur;',
+    '          nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), visible: nextVis };',
+    '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: tid, visible: nextVis }));',
     '        }',
-    ...(variantTargets.size > 0
+    '      } else if (n.type === "action.set-text") {',
+    '        const tid = resolveTargetId(n, ctx);',
+    '        if (tid) {',
+    '          const txt = String(resolveIn(step.ig, n, "text", n.data.text ?? "", seen, ctx, "pipelineRef") ?? "");',
+    '          nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), text: txt };',
+    '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: tid, text: txt }));',
+    '        }',
+    '      } else if (n.type === "action.set-fill") {',
+    '        const tid = resolveTargetId(n, ctx);',
+    '        const fill = String(resolveIn(step.ig, n, "fill", n.data.fill ?? "", seen, ctx, "pipelineRef") ?? "").trim();',
+    '        if (tid && /^(?:#[0-9a-f]{3,8}|transparent|currentcolor|(?:rgba?|hsla?)\\([0-9.%,\\s/+-]+\\)|[a-z]{3,24})$/i.test(fill)) {',
+    '          nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), fill };',
+    '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: tid, fill }));',
+    '        }',
+    ...(targets.variantTargets.size > 0
       ? [
           '      } else if (n.type === "action.set-variant") {',
-          '        const tid = String(n.data.targetNodeId ?? "");',
+          '        const tid = resolveTargetId(n, ctx);',
           '        const axisId = String(n.data.axisId ?? "");',
-          '        const optId = String(resolveIn(step.graph, n.id, "optionId", n.data.optionId ?? "") ?? "");',
+          '        const optId = String(resolveIn(step.ig, n, "optionId", n.data.optionId ?? "", seen, ctx, "pipelineRef") ?? "");',
           '        const compId = logicInstanceComponentById[tid];',
           '        const label = compId ? logicVariantLabels[compId]?.[axisId]?.[optId] : undefined;',
           '        if (label) {',
@@ -1080,88 +1510,162 @@ export function buildReactPageLogicPlan(
           '            ...(nextOverrides[tid] ?? {}),',
           '            variants: { ...(nextOverrides[tid]?.variants ?? {}), [axisId]: label },',
           '          };',
-          '          enqueueOut(step.graph, n.id, "next");',
+          '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { targetNodeId: tid, axisId, optionId: optId }));',
           '        }',
         ]
       : []),
-    ...(hasThemeAction
+    '      } else if (n.type === "action.overlay-toast") {',
+    '        const otMode = String(n.data.mode ?? "show-toast");',
+    '        if (otMode === "show-toast") {',
+    '          const msg = String(resolveIn(step.ig, n, "message", n.data.message ?? "", seen, ctx, "pipelineRef") ?? "");',
+    '          const tone = String(n.data.tone ?? "info");',
+    ...(targets.hasToastAction
+      ? ['          emittedToasts.push({ id: `${ctx.executionId}-${steps}`, message: msg, tone });']
+      : []),
+    '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { mode: otMode, tone, message: msg }));',
+    '        } else {',
+    '          const tid = resolveTargetId(n, ctx);',
+    '          const open = otMode === "open-modal" || otMode === "open-drawer";',
+    '          if (tid) nextOverrides[tid] = { ...(nextOverrides[tid] ?? {}), visible: open };',
+    '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { mode: otMode, targetNodeId: tid, visible: open }));',
+    '        }',
+    ...(targets.hasThemeAction
       ? [
-          '      } else if (n.type === "action.set-theme") {',
-          '        const themeId = String(resolveIn(step.graph, n.id, "themeId", n.data.themeId ?? "") ?? "");',
+          '      } else if (n.type === "action.set-theme" || (n.type === "action.system-form" && n.data.action === "set-theme")) {',
+          '        const themeId = String(resolveIn(step.ig, n, n.type === "action.set-theme" ? "themeId" : "value", n.data.themeId ?? "", seen, ctx, "pipelineRef") ?? "");',
           '        if (Object.prototype.hasOwnProperty.call(logicThemeSlugById, themeId)) {',
           '          if (typeof document !== "undefined") {',
           '            const slug = logicThemeSlugById[themeId];',
           '            if (slug) document.documentElement.setAttribute("data-theme", slug);',
           '            else document.documentElement.removeAttribute("data-theme");',
           '          }',
-          '          enqueueOut(step.graph, n.id, "next");',
+          '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { themeId }));',
           '        }',
         ]
       : []),
-    ...(hasNavigation
+    '      } else if (n.type === "action.system-form") {',
+    '        enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { action: String(n.data.action ?? "set-theme") }));',
+    ...(targets.hasNavigation
       ? [
           '      } else if (n.type === "action.navigate") {',
-          '        const nextRoute = String(resolveIn(step.graph, n.id, "route", n.data.route ?? "") ?? "").trim();',
-          '        if (/^(?:https?:\\/\\/|mailto:|\\/|#)/i.test(nextRoute)) {',
-          '          if (typeof document !== "undefined") document.documentElement.setAttribute("data-folio-route", nextRoute);',
-          '          onNavigate?.(nextRoute);',
-          '          enqueueOut(step.graph, n.id, "next");',
+          '        const navMode = String(n.data.mode ?? "internal");',
+          '        if (navMode === "scroll-to" || navMode === "back" || navMode === "forward" || navMode === "reload" || navMode === "url-params") {',
+          '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { mode: navMode }));',
+          '        } else {',
+          '          const nextRoute = String(resolveIn(step.ig, n, "route", n.data.route ?? "", seen, ctx, "pipelineRef") ?? "").trim();',
+          '          if (/^(?:https?:\\/\\/|mailto:|\\/|#)/i.test(nextRoute)) {',
+          '            if (typeof document !== "undefined") document.documentElement.setAttribute("data-folio-route", nextRoute);',
+          '            onNavigate?.(nextRoute);',
+          '            enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { mode: navMode, route: nextRoute }));',
+          '          }',
           '        }',
         ]
       : []),
-    ...(hasAnimationAction
+    ...(targets.hasAnimationAction
       ? [
-          '      } else if (n.type === "action.play-animation") {',
-          '        const clipId = String(n.data.clipId ?? "").trim();',
+          '      } else if (n.type === "action.play-animation" || n.type === "action.media-animation") {',
+          '        const animCmd = n.type === "action.media-animation" ? String(n.data.command ?? "play") : "play";',
+          '        const explicitClip = String(n.data.clipId ?? "").trim();',
+          '        const clipId = explicitClip || (n.data.targetMode === "pipeline" ? (ctx.origin?.animationIds[0] ?? "") : "");',
           '        const animClass = logicAnimationClassById[clipId];',
           '        if (animClass && typeof document !== "undefined") {',
-          '          document.documentElement.classList.remove(animClass);',
-          '          void document.documentElement.offsetWidth;',
-          '          document.documentElement.classList.add(animClass);',
-          '          enqueueOut(step.graph, n.id, "next");',
+          '          if (animCmd === "stop") document.documentElement.classList.remove(animClass);',
+          '          else if (animCmd === "pause") document.documentElement.style.animationPlayState = "paused";',
+          '          else {',
+          '            document.documentElement.style.animationPlayState = "running";',
+          '            document.documentElement.style.animationDirection = animCmd === "reverse" ? "reverse" : "normal";',
+          '            document.documentElement.classList.remove(animClass);',
+          '            void document.documentElement.offsetWidth;',
+          '            document.documentElement.classList.add(animClass);',
+          '          }',
+          '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { command: animCmd, clipId }));',
+          '        } else if (n.type === "action.media-animation") {',
+          '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { command: animCmd }));',
           '        }',
         ]
       : []),
+    '      } else if (n.type === "flow.delay") {',
+    '        enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { delayed: true }));',
+    '      } else if (n.type === "flow.loop-timer") {',
+    '        const ltMode = String(n.data.mode ?? "for-each");',
+    '        if (ltMode === "for-each") {',
+    '          const feList = parseListVal(resolveIn(step.ig, n, "list", [], seen, ctx, "pipelineRef"));',
+    '          const feCap = Math.min(feList.length, Math.max(1, Number(n.data.maxIterations ?? 50)));',
+    '          for (let fi = 0; fi < feCap; fi += 1) enqueueOut(step.ig, n.id, "tick", cloneCtx(ctx, n.id, { item: feList[fi], index: fi }));',
+    '          enqueueOut(step.ig, n.id, "done", cloneCtx(ctx, n.id, { mode: ltMode, count: feCap }));',
+    '        } else {',
+    '          enqueueOut(step.ig, n.id, ltMode === "interval-start" ? "tick" : "done", cloneCtx(ctx, n.id, { mode: ltMode }));',
+    '        }',
+    '      } else if (n.type === "flow.control") {',
+    '        const fcCtx = cloneCtx(ctx, n.id, { mode: String(n.data.mode ?? "sequence") });',
+    '        enqueueOut(step.ig, n.id, "step1", fcCtx); enqueueOut(step.ig, n.id, "step2", fcCtx); enqueueOut(step.ig, n.id, "done", fcCtx);',
+    '      } else if (n.type === "network.http") {',
+    '        const simPayload = { ok: true, method: String(n.data.method ?? "GET"), url: String(n.data.url ?? "/api/items"), data: { items: [] } };',
+    '        const httpCtx = cloneCtx(ctx, n.id, { data: simPayload, status: 200 });',
+    '        enqueueOut(step.ig, n.id, "loading", httpCtx); enqueueOut(step.ig, n.id, "success", httpCtx);',
+    '      } else if (n.type === "network.socket") {',
+    '        const sockAct = String(n.data.action ?? "listen");',
+    '        if (sockAct === "listen" || sockAct === "connect") enqueueOut(step.ig, n.id, "onMessage", cloneCtx(ctx, n.id, { action: sockAct, channel: String(n.data.channel ?? "updates"), connected: true }));',
     '      }',
     '    }',
     '    setLogicState(nextVars);',
     '    setLogicOverrides(nextOverrides);',
+    ...(targets.hasToastAction
+      ? ['    if (emittedToasts.length > 0) setLogicToasts((prev) => [...prev, ...emittedToasts].slice(-5));']
+      : []),
     '  };',
   ];
 
-  if (hasPageLoad) {
+  if (targets.hasPageLoad) {
     hookLines.push('  useEffect(() => { runLogicTrigger("page-load"); }, []);');
+  }
+  if (targets.hasKeyPress) {
+    hookLines.push(
+      '  useEffect(() => { const onKey = (ev: KeyboardEvent) => runLogicTrigger("key-down", undefined, { key: ev.key }); window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, []);',
+    );
   }
   hookLines.push('');
 
   return {
     hasLogic: true,
-    needsUseEffect: hasPageLoad,
-    hasNavigation,
+    needsUseEffect: targets.hasPageLoad || targets.hasKeyPress,
+    hasNavigation: targets.hasNavigation,
+    hasToastAction: targets.hasToastAction,
     hookLines,
     getNodeEventAttrs(nodeId: string): string[] {
       const attrs: string[] = [];
-      if (clickNodes.has(nodeId)) {
+      if (targets.clickNodes.has(nodeId)) {
         attrs.push(`onClick={() => runLogicTrigger("click", ${JSON.stringify(nodeId)})}`);
       }
-      if (hoverEnterNodes.has(nodeId)) {
+      if (targets.doubleClickNodes.has(nodeId)) {
+        attrs.push(`onDoubleClick={() => runLogicTrigger("double-click", ${JSON.stringify(nodeId)})}`);
+      }
+      if (targets.hoverEnterNodes.has(nodeId)) {
         attrs.push(`onMouseEnter={() => runLogicTrigger("hover-enter", ${JSON.stringify(nodeId)})}`);
       }
-      if (hoverLeaveNodes.has(nodeId)) {
+      if (targets.hoverLeaveNodes.has(nodeId)) {
         attrs.push(`onMouseLeave={() => runLogicTrigger("hover-leave", ${JSON.stringify(nodeId)})}`);
       }
       return attrs;
     },
     hasDynamicOverride: (nodeId: string) =>
-      visibleTargets.has(nodeId)
-      || textTargets.has(nodeId)
-      || fillTargets.has(nodeId)
-      || variantTargets.has(nodeId),
-    hasDynamicVisible: (nodeId: string) => visibleTargets.has(nodeId),
-    hasDynamicText: (nodeId: string) => textTargets.has(nodeId),
-    hasDynamicFill: (nodeId: string) => fillTargets.has(nodeId),
+      targets.visibleTargets.has(nodeId)
+      || targets.textTargets.has(nodeId)
+      || targets.fillTargets.has(nodeId)
+      || targets.opacityTargets.has(nodeId)
+      || targets.transformTargets.has(nodeId)
+      || targets.disabledTargets.has(nodeId)
+      || targets.transitionTargets.has(nodeId)
+      || targets.variantTargets.has(nodeId),
+    hasDynamicVisible: (nodeId: string) => targets.visibleTargets.has(nodeId),
+    hasDynamicText: (nodeId: string) => targets.textTargets.has(nodeId),
+    hasDynamicFill: (nodeId: string) => targets.fillTargets.has(nodeId),
+    hasDynamicOpacity: (nodeId: string) => targets.opacityTargets.has(nodeId),
+    hasDynamicTransform: (nodeId: string) => targets.transformTargets.has(nodeId),
+    hasDynamicDisabled: (nodeId: string) => targets.disabledTargets.has(nodeId),
+    hasDynamicTransition: (nodeId: string) => targets.transitionTargets.has(nodeId),
     hasDynamicVariant: (nodeId: string, axisId?: string) => {
-      const axes = variantTargets.get(nodeId);
+      const axes = targets.variantTargets.get(nodeId);
       if (!axes) return false;
       return axisId ? axes.has(axisId) : axes.size > 0;
     },

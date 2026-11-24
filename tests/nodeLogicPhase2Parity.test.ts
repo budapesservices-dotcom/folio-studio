@@ -1,0 +1,703 @@
+import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
+import {
+  createEllipseNode,
+  createInitialProject,
+  createRectNode,
+  createTextNode,
+} from '../src/core/document/factory';
+import { getActivePage } from '../src/core/document/project';
+import type { DesignNode, FolioProject, GroupNode } from '../src/core/document/types';
+import { buildLivePreviewHtml } from '../src/engines/codegen';
+import { compileReactProjectFiles } from '../src/engines/codegen/reactCompiler';
+import { createFrameInGraph } from '../src/app/workspace/nodeLogicGraphHelpers';
+import {
+  bakeLogicFrame,
+  buildLivePreviewLogicScript,
+  compilePageLogicRuntimeConfig,
+  createLogicConnection,
+  createLogicFramePresetFromFrame,
+  createLogicGraph,
+  createLogicNode,
+  createLogicVariable,
+  createPrototypeRuntime,
+  discoverDynamicReactTargets,
+  instantiateLogicFramePreset,
+  LOGIC_NODE_CATALOG,
+  NODE_RUNTIME_PARITY_MATRIX,
+} from '../src/engines/prototype';
+
+interface MockDomElement {
+  id: string;
+  tagName: string;
+  textContent: string;
+  value: string;
+  disabled: boolean;
+  style: Record<string, string>;
+  listeners: Record<string, Array<(ev: unknown) => void>>;
+  attributes: Record<string, string>;
+  addEventListener: (type: string, cb: (ev: unknown) => void) => void;
+  getAttribute: (name: string) => string | null;
+  setAttribute: (name: string, value: string) => void;
+  removeAttribute: (name: string) => void;
+  contains: (other: unknown) => boolean;
+  dispatch: (type: string, ev?: Record<string, unknown>) => void;
+}
+
+interface MockToastElement {
+  textContent: string;
+  attributes: Record<string, string>;
+  style: Record<string, string>;
+  removed: boolean;
+  setAttribute: (k: string, v: string) => void;
+  remove: () => void;
+}
+
+function createParityPreviewHarness(script: string, ids: readonly string[]) {
+  const elements = new Map<string, MockDomElement>();
+  for (const id of ids) {
+    const el: MockDomElement = {
+      id,
+      tagName: 'DIV',
+      textContent: '',
+      value: '',
+      disabled: false,
+      style: {},
+      listeners: {},
+      attributes: { 'data-folio-id': id },
+      addEventListener(type, cb) {
+        if (!this.listeners[type]) this.listeners[type] = [];
+        this.listeners[type].push(cb);
+      },
+      getAttribute(name) {
+        return Object.prototype.hasOwnProperty.call(this.attributes, name)
+          ? this.attributes[name]
+          : null;
+      },
+      setAttribute(name, value) {
+        this.attributes[name] = value;
+      },
+      removeAttribute(name) {
+        delete this.attributes[name];
+      },
+      contains(other) {
+        return other === this;
+      },
+      dispatch(type, ev = {}) {
+        for (const cb of this.listeners[type] ?? []) {
+          cb({ target: this, currentTarget: this, ...ev });
+        }
+      },
+    };
+    elements.set(id, el);
+  }
+
+  const docListeners: Record<string, Array<(ev: unknown) => void>> = {};
+  const toasts: MockToastElement[] = [];
+  const docElementAttrs: Record<string, string> = {};
+  const docClassList = new Set<string>();
+
+  const mockDocument = {
+    readyState: 'complete',
+    documentElement: {
+      dataset: {} as Record<string, string>,
+      style: {} as Record<string, string>,
+      offsetWidth: 1440,
+      classList: {
+        add: (cls: string) => docClassList.add(cls),
+        remove: (cls: string) => docClassList.delete(cls),
+        has: (cls: string) => docClassList.has(cls),
+      },
+      setAttribute: (k: string, v: string) => {
+        docElementAttrs[k] = v;
+      },
+      removeAttribute: (k: string) => {
+        delete docElementAttrs[k];
+      },
+      getAttribute: (k: string) => docElementAttrs[k] ?? null,
+    },
+    body: {
+      appendChild: (node: MockToastElement) => {
+        toasts.push(node);
+      },
+    },
+    querySelector(selector: string) {
+      const match = /\[data-folio-id="([^"]+)"\]/.exec(selector);
+      if (match) return elements.get(match[1]) ?? null;
+      return null;
+    },
+    querySelectorAll(selector: string) {
+      if (selector === '[data-folio-id]') {
+        return Array.from(elements.values());
+      }
+      return [];
+    },
+    createElement() {
+      const toastEl: MockToastElement = {
+        textContent: '',
+        attributes: {},
+        style: {},
+        removed: false,
+        setAttribute(k, v) {
+          this.attributes[k] = v;
+        },
+        remove() {
+          this.removed = true;
+        },
+      };
+      return toastEl;
+    },
+    addEventListener(type: string, cb: (ev: unknown) => void) {
+      if (!docListeners[type]) docListeners[type] = [];
+      docListeners[type].push(cb);
+    },
+  };
+
+  const mockWindow = {
+    innerWidth: 1440,
+    innerHeight: 900,
+    scrollY: 0,
+    location: { href: 'http://localhost/?tab=pricing', search: '?tab=pricing', pathname: '/' },
+    history: { back: () => {}, forward: () => {}, replaceState: () => {} },
+    addEventListener: () => {},
+    dispatchEvent: () => {},
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+  };
+
+  const runner = new Function(
+    'document',
+    'window',
+    'CSS',
+    'URLSearchParams',
+    'console',
+    'setTimeout',
+    'clearTimeout',
+    'setInterval',
+    'clearInterval',
+    script,
+  );
+  runner(
+    mockDocument,
+    mockWindow,
+    { escape: (s: string) => s },
+    URLSearchParams,
+    console,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+  );
+
+  return {
+    elements,
+    toasts,
+    docElementAttrs,
+    docClassList,
+    click(id: string) {
+      elements.get(id)?.dispatch('click');
+    },
+    dblclick(id: string) {
+      elements.get(id)?.dispatch('dblclick');
+    },
+    keydown(key: string) {
+      for (const cb of docListeners.keydown ?? []) {
+        cb({ key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false });
+      }
+    },
+  };
+}
+
+function createParityFixture() {
+  const base = createInitialProject('Phase 2 Parity Project');
+  const page = getActivePage(base);
+
+  const groupA: GroupNode = {
+    id: 'grp-card-a',
+    type: 'group',
+    name: 'Card Group A',
+    x: 40,
+    y: 40,
+    width: 240,
+    height: 120,
+    rotation: 0,
+    opacity: 1,
+    visible: true,
+    locked: false,
+  };
+  const rectA: DesignNode = {
+    ...createRectNode(2),
+    id: 'rect-a',
+    name: 'Card Rect A',
+    parentId: groupA.id,
+    x: 50,
+    y: 50,
+    width: 140,
+    height: 80,
+  };
+  const dotA: DesignNode = {
+    ...createEllipseNode(3),
+    id: 'dot-a',
+    name: 'Status Dot A',
+    parentId: groupA.id,
+    x: 200,
+    y: 60,
+    width: 24,
+    height: 24,
+  };
+  const cardB: DesignNode = {
+    ...createRectNode(4),
+    id: 'rect-b',
+    name: 'Card B',
+    x: 320,
+    y: 40,
+    width: 160,
+    height: 80,
+  };
+  const modalBox: DesignNode = {
+    ...createRectNode(5),
+    id: 'modal-box',
+    name: 'Promo Modal',
+    x: 100,
+    y: 200,
+    width: 300,
+    height: 180,
+    visible: false,
+  };
+  const statusText: DesignNode = {
+    ...createTextNode(6),
+    id: 'txt-status',
+    name: 'Status Text',
+    x: 40,
+    y: 420,
+    width: 300,
+    height: 32,
+    text: 'Ready',
+  };
+  const triggerBtn: DesignNode = {
+    ...createRectNode(7),
+    id: 'btn-run',
+    name: 'Run Button',
+    semanticTag: 'button',
+    x: 40,
+    y: 480,
+    width: 140,
+    height: 44,
+  };
+
+  const project: FolioProject = {
+    ...base,
+    pages: base.pages.map((p) =>
+      p.id === page.id
+        ? {
+            ...p,
+            document: {
+              ...p.document,
+              nodes: [groupA, rectA, dotA, cardB, modalBox, statusText, triggerBtn],
+            },
+          }
+        : p,
+    ),
+  };
+
+  return {
+    project,
+    pageId: page.id,
+    groupAId: groupA.id,
+    rectAId: rectA.id,
+    dotAId: dotA.id,
+    cardBId: cardB.id,
+    modalBoxId: modalBox.id,
+    statusTextId: statusText.id,
+    triggerBtnId: triggerBtn.id,
+  };
+}
+
+function assertStrictTsxTranspiles(project: FolioProject) {
+  const reactFiles = compileReactProjectFiles(project);
+  const tsxFiles = reactFiles.filter((f) => f.language === 'tsx');
+  expect(tsxFiles.length).toBeGreaterThanOrEqual(2);
+  for (const file of tsxFiles) {
+    const transpiled = ts.transpileModule(file.content, {
+      fileName: file.path,
+      reportDiagnostics: true,
+      compilerOptions: {
+        jsx: ts.JsxEmit.React,
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+        strict: true,
+      },
+    });
+    expect(transpiled.diagnostics ?? [], `TSX diagnostics in ${file.path}`).toEqual([]);
+    expect(transpiled.outputText.length).toBeGreaterThan(20);
+  }
+  return reactFiles;
+}
+
+describe('Phase 2 — Node Logic Parity Unification (Headless ↔ Live Preview ↔ React TSX)', () => {
+  it('registers all 31 primary nodes in NODE_RUNTIME_PARITY_MATRIX with full 3-way coverage', () => {
+    const primaryCatalog = Object.values(LOGIC_NODE_CATALOG).filter((def) => !def.deprecated);
+    const matrixTypes = new Set(NODE_RUNTIME_PARITY_MATRIX.map((e) => e.type));
+    expect(NODE_RUNTIME_PARITY_MATRIX.length).toBe(primaryCatalog.length);
+    for (const def of primaryCatalog) {
+      expect(matrixTypes.has(def.type), `Missing ${def.type} in parity matrix`).toBe(true);
+    }
+    for (const entry of NODE_RUNTIME_PARITY_MATRIX) {
+      expect(['full', 'simulated']).toContain(entry.headless);
+      expect(['full', 'simulated']).toContain(entry.livePreview);
+      expect(['full', 'simulated']).toContain(entry.reactCodegen);
+    }
+  });
+
+  it('achieves 3-way parity for Scoped Pipeline Target Inheritance, Group children, opacity/transform/transition/disabled, and private toggle memory', () => {
+    const fx = createParityFixture();
+    const click = createLogicNode({ id: 'ev-click', type: 'event.on-click', data: { targetNodeId: fx.groupAId, mode: 'click' } });
+    const toggle = createLogicNode({ id: 'st-toggle', type: 'state.toggle', data: { variableId: '', initialValue: false } });
+    const branch = createLogicNode({ id: 'lg-branch', type: 'logic.branch', data: { mode: 'if-else', pipelineRef: 'step:st-toggle:value' } });
+    const setFill = createLogicNode({
+      id: 'act-fill',
+      type: 'action.set-layer',
+      data: { targetMode: 'pipeline', pipelineChildId: fx.rectAId, property: 'fill', fill: '#10B981', transitionMs: 250 },
+    });
+    const setOpacity = createLogicNode({
+      id: 'act-opacity',
+      type: 'action.set-layer',
+      data: { targetMode: 'pipeline', pipelineChildId: fx.dotAId, property: 'opacity', opacity: 0.35 },
+    });
+    const setTransform = createLogicNode({
+      id: 'act-transform',
+      type: 'action.set-layer',
+      data: { targetMode: 'pipeline', pipelineChildId: fx.dotAId, property: 'transform', transform: 'scale(1.2)' },
+    });
+    const setDisabled = createLogicNode({
+      id: 'act-disabled',
+      type: 'action.set-layer',
+      data: { targetMode: 'override', targetNodeId: fx.triggerBtnId, property: 'disabled', disabled: true },
+    });
+
+    const graph = createLogicGraph({
+      id: 'graph-pipeline-parity',
+      name: 'Pipeline Parity',
+      scope: 'page',
+      targetId: fx.pageId,
+      nodes: [click, toggle, branch, setFill, setOpacity, setTransform, setDisabled],
+      connections: [
+        createLogicConnection({ id: 'c1', sourceNodeId: click.id, sourcePortId: 'exec', targetNodeId: toggle.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c2', sourceNodeId: toggle.id, sourcePortId: 'next', targetNodeId: branch.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c3', sourceNodeId: branch.id, sourcePortId: 'true', targetNodeId: setFill.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c4', sourceNodeId: setFill.id, sourcePortId: 'next', targetNodeId: setOpacity.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c5', sourceNodeId: setOpacity.id, sourcePortId: 'next', targetNodeId: setTransform.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c6', sourceNodeId: setTransform.id, sourcePortId: 'next', targetNodeId: setDisabled.id, targetPortId: 'exec' }),
+      ],
+    });
+
+    const project: FolioProject = { ...fx.project, logicGraphs: [graph] };
+    const page = getActivePage(project);
+
+    // 1. Headless Simulator
+    const runtime = createPrototypeRuntime(project);
+    const snap = runtime.dispatchNodeEvent(fx.groupAId, 'click');
+    expect(snap.privateMemory[`${toggle.id}:${fx.groupAId}`]).toBe(true);
+    expect(snap.nodeOverrides[fx.rectAId]?.fill).toBe('#10B981');
+    expect(snap.nodeOverrides[fx.dotAId]?.opacity).toBe(0.35);
+    expect(snap.nodeOverrides[fx.dotAId]?.transform).toBe('scale(1.2)');
+    expect(snap.nodeOverrides[fx.triggerBtnId]?.disabled).toBe(true);
+
+    // 2. Live Preview Micro-Runtime
+    const script = buildLivePreviewLogicScript(project, page);
+    expect(script).not.toBeNull();
+    const harness = createParityPreviewHarness(script!, [fx.groupAId, fx.rectAId, fx.dotAId, fx.triggerBtnId]);
+    harness.click(fx.groupAId);
+    expect(harness.elements.get(fx.rectAId)?.style.background).toBe('#10B981');
+    expect(harness.elements.get(fx.rectAId)?.style.transition).toBe('all 250ms ease');
+    expect(harness.elements.get(fx.dotAId)?.style.opacity).toBe('0.35');
+    expect(harness.elements.get(fx.dotAId)?.style.transform).toBe('scale(1.2)');
+    expect(harness.elements.get(fx.triggerBtnId)?.disabled).toBe(true);
+    expect(harness.elements.get(fx.triggerBtnId)?.getAttribute('aria-disabled')).toBe('true');
+
+    // 3. React TSX Codegen (discovers pipeline-inherited children + emits bindings + transpiles cleanly)
+    const discovered = discoverDynamicReactTargets(project, page, [graph]);
+    expect(discovered.fillTargets.has(fx.rectAId)).toBe(true);
+    expect(discovered.transitionTargets.has(fx.rectAId)).toBe(true);
+    expect(discovered.opacityTargets.has(fx.dotAId)).toBe(true);
+    expect(discovered.transformTargets.has(fx.dotAId)).toBe(true);
+    expect(discovered.disabledTargets.has(fx.triggerBtnId)).toBe(true);
+
+    const reactFiles = assertStrictTsxTranspiles(project);
+    const pageTsx = reactFiles.find((f) => f.pageId === fx.pageId)!.content;
+    expect(pageTsx).toContain('logicPrivateMemoryRef');
+    expect(pageTsx).toContain('resolveTargetId');
+    expect(pageTsx).toContain(`logicOverrides["${fx.rectAId}"]?.fill`);
+    expect(pageTsx).toContain(`logicOverrides["${fx.rectAId}"]?.transitionMs`);
+    expect(pageTsx).toContain(`logicOverrides["${fx.dotAId}"]?.opacity`);
+    expect(pageTsx).toContain(`logicOverrides["${fx.dotAId}"]?.transform`);
+    expect(pageTsx).toContain(`disabled={Boolean(logicOverrides["${fx.triggerBtnId}"]?.disabled)}`);
+  });
+
+  it('achieves 3-way parity for Baked Logic Frames (compiledPlan + isolated per-frame private memory) across Headless, Live Preview, and React TSX', () => {
+    const fx = createParityFixture();
+    const evA = createLogicNode({ id: 'ev-a', type: 'event.on-click', x: 0, y: 0, data: { targetNodeId: fx.rectAId } });
+    const evB = createLogicNode({ id: 'ev-b', type: 'event.on-click', x: 0, y: 260, data: { targetNodeId: fx.cardBId } });
+    const tog = createLogicNode({ id: 'tog-frame', type: 'state.toggle', x: 240, y: 0, data: { variableId: '', initialValue: false } });
+    const br = createLogicNode({ id: 'br-frame', type: 'logic.branch', x: 460, y: 0, data: { mode: 'if-else', pipelineRef: 'step:tog-frame:value' } });
+    const setOn = createLogicNode({ id: 'on-frame', type: 'action.set-layer', x: 700, y: -40, data: { targetMode: 'pipeline', property: 'fill', fill: '#22C55E' } });
+    const setOff = createLogicNode({ id: 'off-frame', type: 'action.set-layer', x: 700, y: 60, data: { targetMode: 'pipeline', property: 'fill', fill: '#64748B' } });
+
+    const baseGraph = createLogicGraph({
+      id: 'graph-baked-parity',
+      name: 'Baked Parity',
+      scope: 'page',
+      targetId: fx.pageId,
+      nodes: [evA, evB, tog, br, setOn, setOff],
+      connections: [
+        createLogicConnection({ id: 'c1', sourceNodeId: evA.id, sourcePortId: 'exec', targetNodeId: tog.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c2', sourceNodeId: tog.id, sourcePortId: 'next', targetNodeId: br.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c3', sourceNodeId: br.id, sourcePortId: 'true', targetNodeId: setOn.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'c4', sourceNodeId: br.id, sourcePortId: 'false', targetNodeId: setOff.id, targetPortId: 'exec' }),
+      ],
+    });
+
+    const { graph: framed, frame } = createFrameInGraph(baseGraph, {
+      title: 'Toggle Color',
+      color: 'violet',
+      childNodeIds: [tog.id, br.id, setOn.id, setOff.id],
+    });
+    const bakedRes = bakeLogicFrame(framed, frame.id, fx.project);
+    expect(bakedRes.ok).toBe(true);
+    const bakedFrame = bakedRes.graph.frames!.find((f) => f.id === frame.id)!;
+    const preset = createLogicFramePresetFromFrame(bakedRes.graph, bakedFrame);
+    expect(preset).not.toBeNull();
+    const instRes = instantiateLogicFramePreset(bakedRes.graph, preset!, { x: 240, y: 260 });
+    const frame2 = instRes.frame;
+    const entry2 = frame2.bakedData!.exposedInputs[0];
+    const finalGraph = {
+      ...instRes.graph,
+      connections: [
+        ...instRes.graph.connections,
+        createLogicConnection({
+          id: 'c-ev-b-to-frame2',
+          sourceNodeId: evB.id,
+          sourcePortId: 'exec',
+          targetNodeId: entry2.targetNodeId,
+          targetPortId: entry2.targetPort,
+        }),
+      ],
+    };
+
+    const project: FolioProject = { ...fx.project, logicGraphs: [finalGraph] };
+    const page = getActivePage(project);
+
+    // 1. Headless Simulator
+    const rt = createPrototypeRuntime(project);
+    const s1 = rt.dispatchNodeEvent(fx.rectAId, 'click');
+    expect(s1.nodeOverrides[fx.rectAId]?.fill).toBe('#22C55E');
+    expect(s1.nodeOverrides[fx.cardBId]).toBeUndefined();
+    const s2 = rt.dispatchNodeEvent(fx.cardBId, 'click');
+    expect(s2.nodeOverrides[fx.cardBId]?.fill).toBe('#22C55E');
+
+    // 2. Live Preview
+    const script = buildLivePreviewLogicScript(project, page)!;
+    const harness = createParityPreviewHarness(script, [fx.rectAId, fx.cardBId]);
+    harness.click(fx.rectAId);
+    expect(harness.elements.get(fx.rectAId)?.style.background).toBe('#22C55E');
+    expect(harness.elements.get(fx.cardBId)?.style.background).toBeUndefined();
+    harness.click(fx.cardBId);
+    expect(harness.elements.get(fx.cardBId)?.style.background).toBe('#22C55E');
+
+    // 3. React TSX includes bakedFrames + compiledPlan + dynamic fill targets for both cards
+    const reactFiles = assertStrictTsxTranspiles(project);
+    const pageTsx = reactFiles.find((f) => f.pageId === fx.pageId)!.content;
+    expect(pageTsx).toContain('bakedFrames');
+    expect(pageTsx).toContain('compiledPlan');
+    expect(pageTsx).toContain(`logicOverrides["${fx.rectAId}"]?.fill`);
+    expect(pageTsx).toContain(`logicOverrides["${fx.cardBId}"]?.fill`);
+  });
+
+  it('achieves 3-way parity for modern v2 nodes (state.update ops, math map-range, text currency, list filter/count, condition regex, json get-field, overlay-toast, once, double-click, key-press)', () => {
+    const fx = createParityFixture();
+    const listVar = createLogicVariable({ id: 'var-items', name: 'items', valueType: 'list', initialValue: ['Apple', 'Banana'] });
+    const objVar = createLogicVariable({ id: 'var-user', name: 'user', valueType: 'object', initialValue: { profile: { plan: 'free' } } });
+    const modeVar = createLogicVariable({ id: 'var-mode', name: 'mode', valueType: 'string', initialValue: 'draft' });
+
+    const onDblClick = createLogicNode({ id: 'ev-dbl', type: 'event.on-click', data: { targetNodeId: fx.triggerBtnId, mode: 'double-click', once: true } });
+    const onKey = createLogicNode({ id: 'ev-key', type: 'event.on-key-press', data: { keyCombo: 'Enter', direction: 'down' } });
+    const pushItem = createLogicNode({ id: 'st-push', type: 'state.update', data: { variableId: listVar.id, operation: 'push', value: 'Apricot' } });
+    const setObjProp = createLogicNode({ id: 'st-obj', type: 'state.update', data: { variableId: objVar.id, operation: 'set-property', propertyPath: 'profile.plan', value: 'pro' } });
+    const cycleMode = createLogicNode({ id: 'st-cycle', type: 'state.update', data: { variableId: modeVar.id, operation: 'cycle', cycleValues: 'draft,review,live' } });
+    const getList = createLogicNode({ id: 'st-get-list', type: 'state.get', data: { variableId: listVar.id } });
+    const filterList = createLogicNode({ id: 'lg-list', type: 'logic.list', data: { operation: 'filter', matchValue: 'ap' } });
+    const mapRange = createLogicNode({ id: 'lg-math', type: 'logic.math', data: { operation: 'map-range', inMin: 0, inMax: 10, outMin: 0, outMax: 100 } });
+    const formatCurr = createLogicNode({ id: 'lg-curr', type: 'logic.text', data: { mode: 'format-currency', locale: 'en-US', currency: 'USD', decimals: 0 } });
+    const getObj = createLogicNode({ id: 'st-get-obj', type: 'state.get', data: { variableId: objVar.id } });
+    const jsonGet = createLogicNode({ id: 'net-json', type: 'network.json', data: { mode: 'get-field', path: 'profile.plan' } });
+    const condRegex = createLogicNode({ id: 'lg-cond', type: 'logic.condition', data: { mode: 'regex', pattern: '^pro$' } });
+    const branch = createLogicNode({ id: 'lg-br', type: 'logic.branch', data: { mode: 'if-else' } });
+    const setStatus = createLogicNode({ id: 'act-status', type: 'action.set-layer', data: { targetMode: 'override', targetNodeId: fx.statusTextId, property: 'text' } });
+    const openModal = createLogicNode({ id: 'act-modal', type: 'action.overlay-toast', data: { mode: 'open-modal', targetNodeId: fx.modalBoxId } });
+    const showToast = createLogicNode({ id: 'act-toast', type: 'action.overlay-toast', data: { mode: 'show-toast', tone: 'success', message: 'Upgraded to Pro!' } });
+    const keyToast = createLogicNode({ id: 'act-key-toast', type: 'action.overlay-toast', data: { mode: 'show-toast', tone: 'info', message: 'Enter pressed' } });
+
+    const graph = createLogicGraph({
+      id: 'graph-v2-parity',
+      name: 'Full v2 Node Parity',
+      scope: 'page',
+      targetId: fx.pageId,
+      variables: [listVar, objVar, modeVar],
+      nodes: [
+        onDblClick, onKey, pushItem, setObjProp, cycleMode,
+        getList, filterList, mapRange, formatCurr,
+        getObj, jsonGet, condRegex, branch,
+        setStatus, openModal, showToast, keyToast,
+      ],
+      connections: [
+        createLogicConnection({ id: 'e1', sourceNodeId: onDblClick.id, sourcePortId: 'exec', targetNodeId: pushItem.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'e2', sourceNodeId: pushItem.id, sourcePortId: 'next', targetNodeId: setObjProp.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'e3', sourceNodeId: setObjProp.id, sourcePortId: 'next', targetNodeId: cycleMode.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'e4', sourceNodeId: cycleMode.id, sourcePortId: 'next', targetNodeId: branch.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'e5', sourceNodeId: branch.id, sourcePortId: 'true', targetNodeId: setStatus.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'e6', sourceNodeId: setStatus.id, sourcePortId: 'next', targetNodeId: openModal.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'e7', sourceNodeId: openModal.id, sourcePortId: 'next', targetNodeId: showToast.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 'ek', sourceNodeId: onKey.id, sourcePortId: 'exec', targetNodeId: keyToast.id, targetPortId: 'exec' }),
+        // Data wires: items -> filter('ap') -> count (2) -> map-range(0..10 -> 0..100 => 20) -> format-currency ($20) -> setStatus
+        createLogicConnection({ id: 'd1', sourceNodeId: getList.id, sourcePortId: 'value', targetNodeId: filterList.id, targetPortId: 'list' }),
+        createLogicConnection({ id: 'd2', sourceNodeId: filterList.id, sourcePortId: 'count', targetNodeId: mapRange.id, targetPortId: 'a' }),
+        createLogicConnection({ id: 'd3', sourceNodeId: mapRange.id, sourcePortId: 'result', targetNodeId: formatCurr.id, targetPortId: 'value' }),
+        createLogicConnection({ id: 'd4', sourceNodeId: formatCurr.id, sourcePortId: 'text', targetNodeId: setStatus.id, targetPortId: 'value' }),
+        // Data wires: user -> json.get-field('profile.plan') -> regex('^pro$') -> branch.condition
+        createLogicConnection({ id: 'd5', sourceNodeId: getObj.id, sourcePortId: 'value', targetNodeId: jsonGet.id, targetPortId: 'input' }),
+        createLogicConnection({ id: 'd6', sourceNodeId: jsonGet.id, sourcePortId: 'output', targetNodeId: condRegex.id, targetPortId: 'left' }),
+        createLogicConnection({ id: 'd7', sourceNodeId: condRegex.id, sourcePortId: 'result', targetNodeId: branch.id, targetPortId: 'condition' }),
+      ],
+    });
+
+    const project: FolioProject = { ...fx.project, logicGraphs: [graph] };
+    const page = getActivePage(project);
+
+    // 1. Headless Simulator
+    const rt = createPrototypeRuntime(project);
+    const snap1 = rt.dispatchNodeEvent(fx.triggerBtnId, 'double-click');
+    expect(snap1.variables[listVar.id]).toEqual(['Apple', 'Banana', 'Apricot']);
+    expect(snap1.variables[objVar.id]).toEqual({ profile: { plan: 'pro' } });
+    expect(snap1.variables[modeVar.id]).toBe('review');
+    expect(snap1.nodeOverrides[fx.statusTextId]?.text).toBe('$20');
+    expect(snap1.nodeOverrides[fx.modalBoxId]?.visible).toBe(true);
+    expect(snap1.toasts).toEqual([{ message: 'Upgraded to Pro!', tone: 'success' }]);
+
+    // Once flag prevents second firing
+    const snap2 = rt.dispatchNodeEvent(fx.triggerBtnId, 'double-click');
+    expect(snap2.variables[listVar.id]).toEqual(['Apple', 'Banana', 'Apricot']);
+    expect(snap2.toasts).toHaveLength(1);
+
+    // 2. Live Preview Micro-Runtime produces identical results!
+    const script = buildLivePreviewLogicScript(project, page)!;
+    const harness = createParityPreviewHarness(script, [fx.triggerBtnId, fx.statusTextId, fx.modalBoxId]);
+    harness.dblclick(fx.triggerBtnId);
+    expect(harness.elements.get(fx.statusTextId)?.textContent).toBe('$20');
+    expect(harness.elements.get(fx.modalBoxId)?.style.display).toBe('block');
+    expect(harness.toasts).toHaveLength(1);
+    expect(harness.toasts[0].textContent).toBe('Upgraded to Pro!');
+    expect(harness.toasts[0].attributes['data-folio-toast']).toBe('success');
+
+    // Second dblclick is ignored due to once: true
+    harness.dblclick(fx.triggerBtnId);
+    expect(harness.toasts).toHaveLength(1);
+
+    // Keyboard shortcut fires Enter toast
+    harness.keydown('Enter');
+    expect(harness.toasts).toHaveLength(2);
+    expect(harness.toasts[1].textContent).toBe('Enter pressed');
+
+    // 3. React TSX Codegen compiles cleanly with all v2 features & toast stack
+    const reactFiles = assertStrictTsxTranspiles(project);
+    const pageTsx = reactFiles.find((f) => f.pageId === fx.pageId)!.content;
+    expect(pageTsx).toContain('onDoubleClick={() => runLogicTrigger("double-click", "btn-run")}');
+    expect(pageTsx).toContain('window.addEventListener("keydown"');
+    expect(pageTsx).toContain('logicToasts');
+    expect(pageTsx).toContain('data-folio-toast');
+    expect(pageTsx).toContain(`logicOverrides["${fx.modalBoxId}"]?.visible === false`);
+    expect(pageTsx).not.toContain('dangerouslySetInnerHTML');
+  });
+
+  it('enforces zero credential leakage, zero innerHTML/eval, safe href guards, and prototype-pollution protection across all 3 runtimes', () => {
+    const fx = createParityFixture();
+    const objVar = createLogicVariable({ id: 'var-sec', name: 'sec', valueType: 'object', initialValue: { ok: true } });
+
+    const onClick = createLogicNode({ id: 'ev-sec', type: 'event.on-click', data: { targetNodeId: fx.triggerBtnId } });
+    // Legacy node with raw authToken field injected to verify defense-in-depth stripping
+    const httpNode = createLogicNode({
+      id: 'net-http',
+      type: 'network.http',
+      data: { method: 'GET', url: '/api/secret', authSecretRef: 'API_TOKEN', authToken: 'sk-live-SUPER-SECRET-999' },
+    });
+    const badProp = createLogicNode({
+      id: 'st-proto',
+      type: 'state.update',
+      data: { variableId: objVar.id, operation: 'set-property', propertyPath: '__proto__.polluted', value: 'hacked' },
+    });
+    const badNav = createLogicNode({
+      id: 'act-bad-nav',
+      type: 'action.navigate',
+      data: { mode: 'external', route: 'javascript:alert(1)' },
+    });
+    const xssToast = createLogicNode({
+      id: 'act-xss-toast',
+      type: 'action.overlay-toast',
+      data: { mode: 'show-toast', tone: 'warning', message: '</script><img src=x onerror=alert(1)>' },
+    });
+
+    const graph = createLogicGraph({
+      id: 'graph-sec',
+      name: 'Security Parity',
+      scope: 'page',
+      targetId: fx.pageId,
+      variables: [objVar],
+      nodes: [onClick, httpNode, badProp, badNav, xssToast],
+      connections: [
+        createLogicConnection({ id: 's1', sourceNodeId: onClick.id, sourcePortId: 'exec', targetNodeId: httpNode.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 's2', sourceNodeId: httpNode.id, sourcePortId: 'success', targetNodeId: badProp.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 's3', sourceNodeId: badProp.id, sourcePortId: 'next', targetNodeId: xssToast.id, targetPortId: 'exec' }),
+        createLogicConnection({ id: 's4', sourceNodeId: xssToast.id, sourcePortId: 'next', targetNodeId: badNav.id, targetPortId: 'exec' }),
+      ],
+    });
+
+    const project: FolioProject = { ...fx.project, logicGraphs: [graph] };
+    const page = getActivePage(project);
+
+    // 1. Canonical config strips authToken
+    const compiledConfig = compilePageLogicRuntimeConfig(project, page, [graph]);
+    expect(JSON.stringify(compiledConfig)).not.toContain('sk-live-SUPER-SECRET-999');
+    expect(JSON.stringify(compiledConfig)).not.toContain('authToken');
+
+    // 2. Live Preview HTML & Script are completely safe
+    const html = buildLivePreviewHtml(project);
+    expect(html).not.toContain('sk-live-SUPER-SECRET-999');
+    expect(html).not.toContain('authToken');
+    expect(html).not.toContain('.innerHTML');
+    expect(html).not.toContain('eval(');
+    expect(html).not.toContain('new Function');
+    expect(html).not.toContain('</script><img');
+
+    const script = buildLivePreviewLogicScript(project, page)!;
+    const harness = createParityPreviewHarness(script, [fx.triggerBtnId]);
+    harness.click(fx.triggerBtnId);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(harness.docElementAttrs['data-folio-route']).toBeUndefined();
+    expect(harness.toasts[0]?.textContent).toBe('</script><img src=x onerror=alert(1)>');
+
+    // 3. Headless Simulator blocks javascript: href and prevents prototype pollution
+    const rt = createPrototypeRuntime(project);
+    const snap = rt.dispatchNodeEvent(fx.triggerBtnId, 'click');
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(snap.activeRoute).toBe('/');
+    expect(snap.warnings.some((w) => w.includes('unsafe URL'))).toBe(true);
+
+    // 4. React TSX omits authToken & transpiles cleanly
+    const reactFiles = assertStrictTsxTranspiles(project);
+    const pageTsx = reactFiles.find((f) => f.pageId === fx.pageId)!.content;
+    expect(pageTsx).not.toContain('sk-live-SUPER-SECRET-999');
+    expect(pageTsx).not.toContain('authToken');
+    expect(pageTsx).not.toContain('dangerouslySetInnerHTML');
+  });
+});

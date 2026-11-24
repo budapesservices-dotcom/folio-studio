@@ -820,7 +820,18 @@ function buildPageReactFile(
 
         const instanceEventAttrs = logicPlan.getNodeEventAttrs(node.id);
         const instanceDynamicVisible = logicPlan.hasDynamicVisible(node.id);
-        const needsInteractiveWrapper = needsScale || instanceEventAttrs.length > 0 || instanceDynamicVisible;
+        const instanceDynamicOpacity = logicPlan.hasDynamicOpacity(node.id);
+        const instanceDynamicTransform = logicPlan.hasDynamicTransform(node.id);
+        const instanceDynamicDisabled = logicPlan.hasDynamicDisabled(node.id);
+        const instanceDynamicTransition = logicPlan.hasDynamicTransition(node.id);
+        const needsInteractiveWrapper =
+          needsScale
+          || instanceEventAttrs.length > 0
+          || instanceDynamicVisible
+          || instanceDynamicOpacity
+          || instanceDynamicTransform
+          || instanceDynamicDisabled
+          || instanceDynamicTransition;
 
         if (needsInteractiveWrapper) {
           const wrapperAttrs: string[] = [
@@ -829,10 +840,35 @@ function buildPageReactFile(
             `data-folio-component=${escapeTsString(node.componentId)}`,
             ...instanceEventAttrs,
           ];
+          const wrapperStyles: string[] = [];
           if (instanceDynamicVisible) {
-            wrapperAttrs.push(
-              `style={{ ...(logicOverrides[${escapeTsString(node.id)}]?.visible === false ? { display: "none" } : logicOverrides[${escapeTsString(node.id)}]?.visible === true ? { display: "block" } : {}) }}`,
+            wrapperStyles.push(
+              `...(logicOverrides[${escapeTsString(node.id)}]?.visible === false ? { display: "none" } : logicOverrides[${escapeTsString(node.id)}]?.visible === true ? { display: "block" } : {})`,
             );
+          }
+          if (instanceDynamicOpacity) {
+            wrapperStyles.push(
+              `...(logicOverrides[${escapeTsString(node.id)}]?.opacity !== undefined ? { opacity: logicOverrides[${escapeTsString(node.id)}]?.opacity } : {})`,
+            );
+          }
+          if (instanceDynamicTransform) {
+            wrapperStyles.push(
+              `...(logicOverrides[${escapeTsString(node.id)}]?.transform ? { transform: logicOverrides[${escapeTsString(node.id)}]?.transform } : {})`,
+            );
+          }
+          if (instanceDynamicTransition) {
+            wrapperStyles.push(
+              `...(logicOverrides[${escapeTsString(node.id)}]?.transitionMs ? { transition: \`all \${logicOverrides[${escapeTsString(node.id)}]?.transitionMs}ms ease\` } : {})`,
+            );
+          }
+          if (instanceDynamicDisabled) {
+            wrapperAttrs.push(`aria-disabled={logicOverrides[${escapeTsString(node.id)}]?.disabled ? "true" : undefined}`);
+            wrapperStyles.push(
+              `...(logicOverrides[${escapeTsString(node.id)}]?.disabled ? { pointerEvents: "none" as const, opacity: 0.5 } : {})`,
+            );
+          }
+          if (wrapperStyles.length > 0) {
+            wrapperAttrs.push(`style={{ ${wrapperStyles.join(', ')} }}`);
           }
           const innerProps = needsScale
             ? instanceProps
@@ -871,6 +907,12 @@ function buildPageReactFile(
       attrs.push('type="button"');
     }
     attrs.push(...logicPlan.getNodeEventAttrs(node.id));
+    if (logicPlan.hasDynamicDisabled(node.id)) {
+      if (tag === 'button') {
+        attrs.push(`disabled={Boolean(logicOverrides[${escapeTsString(node.id)}]?.disabled)}`);
+      }
+      attrs.push(`aria-disabled={logicOverrides[${escapeTsString(node.id)}]?.disabled ? "true" : undefined}`);
+    }
 
     const logicStyleParts: string[] = [];
     if (logicPlan.hasDynamicVisible(node.id)) {
@@ -886,6 +928,26 @@ function buildPageReactFile(
       } else if (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') {
         logicStyleParts.push(`...(logicOverrides[${escapeTsString(node.id)}]?.fill ? { background: logicOverrides[${escapeTsString(node.id)}]?.fill } : {})`);
       }
+    }
+    if (logicPlan.hasDynamicOpacity(node.id)) {
+      logicStyleParts.push(
+        `...(logicOverrides[${escapeTsString(node.id)}]?.opacity !== undefined ? { opacity: logicOverrides[${escapeTsString(node.id)}]?.opacity } : {})`,
+      );
+    }
+    if (logicPlan.hasDynamicTransform(node.id)) {
+      logicStyleParts.push(
+        `...(logicOverrides[${escapeTsString(node.id)}]?.transform ? { transform: logicOverrides[${escapeTsString(node.id)}]?.transform } : {})`,
+      );
+    }
+    if (logicPlan.hasDynamicTransition(node.id)) {
+      logicStyleParts.push(
+        `...(logicOverrides[${escapeTsString(node.id)}]?.transitionMs ? { transition: \`all \${logicOverrides[${escapeTsString(node.id)}]?.transitionMs}ms ease\` } : {})`,
+      );
+    }
+    if (logicPlan.hasDynamicDisabled(node.id)) {
+      logicStyleParts.push(
+        `...(logicOverrides[${escapeTsString(node.id)}]?.disabled ? { pointerEvents: "none" as const, opacity: 0.5 } : {})`,
+      );
     }
     if (logicStyleParts.length > 0) {
       attrs.push(`style={{ ${logicStyleParts.join(', ')} }}`);
@@ -934,6 +996,18 @@ function buildPageReactFile(
 
   for (const root of roots) {
     emitJsx(root, 3);
+  }
+
+  if (logicPlan.hasToastAction) {
+    lines.push('      {logicToasts.length > 0 && (');
+    lines.push('        <div role="status" aria-live="polite" style={{ position: "fixed", right: 16, bottom: 16, zIndex: 9999, display: "flex", flexDirection: "column", gap: 8 }}>');
+    lines.push('          {logicToasts.map((toast) => (');
+    lines.push('            <div key={toast.id} data-folio-toast={toast.tone} style={{ padding: "10px 14px", borderRadius: 8, background: toast.tone === "success" ? "#059669" : toast.tone === "warning" ? "#D97706" : toast.tone === "error" ? "#DC2626" : "#1E293B", color: "#FFFFFF", fontSize: 13 }}>');
+    lines.push('              {toast.message}');
+    lines.push('            </div>');
+    lines.push('          ))}');
+    lines.push('        </div>');
+    lines.push('      )}');
   }
 
   lines.push('    </main>');
