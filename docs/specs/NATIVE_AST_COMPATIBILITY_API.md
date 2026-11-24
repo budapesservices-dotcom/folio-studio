@@ -2,7 +2,7 @@
 
 **Document ID:** FOLIO-AST-API-001  
 **Version:** 0.1 — Draft  
-**Status:** Implemented and CI verified in this branch  
+**Status:** Implemented in source; current verification evidence is recorded in docs/ACCEPTANCE_TESTS.md  
 **Related specifications:**
 - [Native AST v1](NATIVE_AST_V1.md)
 - [Native AST Compatibility & Migration Plan](NATIVE_AST_COMPATIBILITY_MIGRATION.md)
@@ -101,7 +101,7 @@ function createDocumentAstView(
 ): NativeAstDocumentView;
 \`\`\`
 
-This is an API proposal, not an existing exported TypeScript interface.
+This API is implemented and exported in src/core/document/ast.ts as NativeAstDocumentView and createDocumentAstView(). The method table below documents the current implementation contract, not a proposed interface.
 
 ### Method semantics
 
@@ -166,19 +166,11 @@ Strict project import validation remains owned by src/core/document/validation.t
 
 The read view is intentionally separated from mutations.
 
-A later Native Command API will cover:
-- Create and delete nodes.
-- Update typed properties.
-- Transform geometry.
-- Rename.
-- Reorder and reparent.
-- Group and ungroup.
-- Create and remove clipping relationships.
-- Component definition updates, instance overrides, and detach.
+The read view remains read-only. Mutations are handled outside this facade through the Native Command Engine (see docs/ARCHITECTURE.md and src/core/commands/types.ts / src/app/nativeCommandExecutor.ts).
 
-For the first command milestone, commands should delegate to existing pure document helpers and editorReducer actions. They must preserve existing snapshot Undo/Redo behavior. Do not introduce a second project mutation path that bypasses the reducer.
+Current command families cover project/page operations, node create/update/transform/delete/rename, layer move/group/ungroup/clipping, component create/sync/rename/delete/contract updates, design-token/code-module/asset updates, logic graph create/update/delete, animation clip create/update/delete, selection, and history. Commands must continue to validate scope and payloads and must remain the authoritative mutation boundary.
 
-Only after command outputs match legacy helper/reducer outputs should the application begin routing workspace mutations through the new command layer.
+The NativeAstDocumentView must not acquire write methods or duplicate the Native Command Engine. Read queries and mutation commands are deliberately separate.
 
 ## 9. Acceptance tests
 
