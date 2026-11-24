@@ -135,12 +135,19 @@ export function buildLivePreviewLogicScript(
     animationClassById[desc.id] = desc.className;
   }
 
+  const pageRouteById: Record<string, string> = {};
+  for (const p of project.pages) {
+    pageRouteById[p.id] = p.route;
+  }
+
   const payload = {
+    activePageId: page.id,
     maxSteps: MAX_LOGIC_EXECUTION_STEPS,
     variables: initialVariables,
     variableTypes,
     variableNameToId,
     nodeMeta,
+    pageRouteById,
     themeSlugById,
     componentVariants,
     animationClassById,
@@ -222,6 +229,14 @@ export function buildLivePreviewLogicScript(
     '      var res = null;',
     '      if (n.type === "state.get" || n.type === "state.set" || n.type === "state.toggle" || n.type === "state.increment" || n.type === "event.on-state-change") {',
     '        res = Object.prototype.hasOwnProperty.call(state, n.data.variableId) ? state[n.data.variableId] : null;',
+    '      } else if (n.type === "source.page") {',
+    '        res = (CONFIG.pageRouteById && CONFIG.pageRouteById[n.data.pageId]) || "";',
+    '      } else if (n.type === "source.component") {',
+    '        res = n.data.componentId || "";',
+    '      } else if (n.type === "source.element") {',
+    '        res = n.data.targetNodeId || "";',
+    '      } else if (n.type === "source.theme") {',
+    '        res = n.data.themeId || "";',
     '      } else if (n.type === "logic.compare") {',
     '        var l = resolveIn(g, n, "left", n.data.left, visiting);',
     '        var r = resolveIn(g, n, "right", n.data.right, visiting);',
@@ -259,7 +274,9 @@ export function buildLivePreviewLogicScript(
     '      var item = queue.shift();',
     '      var g = item.g; var n = g.byId[item.nodeId]; if (!n) continue;',
     '      var v = {};',
-    '      if (n.type === "event.on-click" || n.type === "event.on-hover" || n.type === "event.on-page-load" || n.type === "event.on-state-change") {',
+    '      if (n.type === "source.page" || n.type === "source.component" || n.type === "source.element") {',
+    '        pushOut(g, n.id, item.outPortId || (n.type === "source.page" ? "onLoad" : "onClick"));',
+    '      } else if (n.type === "event.on-click" || n.type === "event.on-hover" || n.type === "event.on-page-load" || n.type === "event.on-state-change") {',
     '        pushOut(g, n.id, "exec");',
     '      } else if (n.type === "state.set") {',
     '        var vid = n.data.variableId; var t = CONFIG.variableTypes[vid];',
@@ -348,7 +365,7 @@ export function buildLivePreviewLogicScript(
     '          pushOut(g, n.id, "next");',
     '        }',
     '      } else if (n.type === "action.navigate") {',
-    '        var route = String(n.data.route || "").trim();',
+    '        var route = String(resolveIn(g, n, "route", n.data.route || "", v) || "").trim();',
     '        if (SAFE_HREF.test(route)) {',
     '          document.documentElement.setAttribute("data-folio-route", route);',
     '          pushOut(g, n.id, "next");',
@@ -367,6 +384,8 @@ export function buildLivePreviewLogicScript(
     '  }',
     '  function triggerNode(nodeId, kind) {',
     '    var starters = [];',
+    '    var targetMeta = CONFIG.nodeMeta && CONFIG.nodeMeta[nodeId];',
+    '    var targetCompId = targetMeta && targetMeta.componentId ? targetMeta.componentId : null;',
     '    for (var i = 0; i < indexed.length; i++) {',
     '      var g = indexed[i];',
     '      for (var j = 0; j < g.nodes.length; j++) {',
@@ -374,37 +393,63 @@ export function buildLivePreviewLogicScript(
     '        if (kind === "click" && n.type === "event.on-click" && n.data.targetNodeId === nodeId) starters.push({ g: g, nodeId: n.id });',
     '        else if (kind === "hover-enter" && n.type === "event.on-hover" && n.data.targetNodeId === nodeId && (!n.data.phase || n.data.phase === "enter")) starters.push({ g: g, nodeId: n.id });',
     '        else if (kind === "hover-leave" && n.type === "event.on-hover" && n.data.targetNodeId === nodeId && n.data.phase === "leave") starters.push({ g: g, nodeId: n.id });',
+    '        else if (n.type === "source.element" && n.data.targetNodeId === nodeId) {',
+    '          if (kind === "click") starters.push({ g: g, nodeId: n.id, outPortId: "onClick" });',
+    '          else if (kind === "hover-enter") starters.push({ g: g, nodeId: n.id, outPortId: "onHover" });',
+    '        } else if (n.type === "source.component" && targetCompId && n.data.componentId === targetCompId) {',
+    '          if (kind === "click") starters.push({ g: g, nodeId: n.id, outPortId: "onClick" });',
+    '          else if (kind === "hover-enter") starters.push({ g: g, nodeId: n.id, outPortId: "onHover" });',
+    '        }',
     '      }',
     '    }',
     '    if (starters.length) runQueue(starters);',
     '  }',
     '  function bindEvents() {',
     '    var bound = {};',
+    '    function bindClickTarget(tid) {',
+    '      if (!tid || bound["click:" + tid]) return;',
+    '      bound["click:" + tid] = true;',
+    '      var el = findEl(tid);',
+    '      if (el) {',
+    '        el.setAttribute("data-folio-interactive", "true");',
+    '        el.style.cursor = "pointer";',
+    '        el.addEventListener("click", function () { triggerNode(tid, "click"); });',
+    '      }',
+    '    }',
+    '    function bindHoverTarget(tid, phase) {',
+    '      if (!tid || bound[phase + ":" + tid]) return;',
+    '      bound[phase + ":" + tid] = true;',
+    '      var hel = findEl(tid);',
+    '      if (hel) hel.addEventListener(phase === "hover-leave" ? "mouseleave" : "mouseenter", function () { triggerNode(tid, phase); });',
+    '    }',
     '    indexed.forEach(function (g) {',
     '      g.nodes.forEach(function (n) {',
     '        var tid = n.data && n.data.targetNodeId;',
-    '        if (!tid) return;',
-    '        if (n.type === "event.on-click" && !bound["click:" + tid]) {',
-    '          bound["click:" + tid] = true;',
-    '          var el = findEl(tid);',
-    '          if (el) {',
-    '            el.setAttribute("data-folio-interactive", "true");',
-    '            el.style.cursor = "pointer";',
-    '            el.addEventListener("click", function () { triggerNode(tid, "click"); });',
-    '          }',
+    '        if (n.type === "event.on-click") {',
+    '          bindClickTarget(tid);',
     '        } else if (n.type === "event.on-hover") {',
-    '          var phase = n.data.phase === "leave" ? "hover-leave" : "hover-enter";',
-    '          if (!bound[phase + ":" + tid]) {',
-    '            bound[phase + ":" + tid] = true;',
-    '            var hel = findEl(tid);',
-    '            if (hel) hel.addEventListener(phase === "hover-leave" ? "mouseleave" : "mouseenter", function () { triggerNode(tid, phase); });',
-    '          }',
+    '          bindHoverTarget(tid, n.data.phase === "leave" ? "hover-leave" : "hover-enter");',
+    '        } else if (n.type === "source.element") {',
+    '          bindClickTarget(tid);',
+    '          bindHoverTarget(tid, "hover-enter");',
+    '        } else if (n.type === "source.component" && n.data && n.data.componentId) {',
+    '          Object.keys(CONFIG.nodeMeta).forEach(function (nid) {',
+    '            if (CONFIG.nodeMeta[nid] && CONFIG.nodeMeta[nid].componentId === n.data.componentId) {',
+    '              bindClickTarget(nid);',
+    '              bindHoverTarget(nid, "hover-enter");',
+    '            }',
+    '          });',
     '        }',
     '      });',
     '    });',
     '    var loadStarters = [];',
     '    indexed.forEach(function (g) {',
-    '      g.nodes.forEach(function (n) { if (n.type === "event.on-page-load") loadStarters.push({ g: g, nodeId: n.id }); });',
+    '      g.nodes.forEach(function (n) {',
+    '        if (n.type === "event.on-page-load") loadStarters.push({ g: g, nodeId: n.id });',
+    '        else if (n.type === "source.page" && n.data && n.data.pageId === CONFIG.activePageId) {',
+    '          loadStarters.push({ g: g, nodeId: n.id, outPortId: "onLoad" });',
+    '        }',
+    '      });',
     '    });',
     '    if (loadStarters.length) runQueue(loadStarters);',
     '  }',
@@ -485,7 +530,23 @@ export function buildReactPageLogicPlan(
         if (node.data.phase === 'leave') hoverLeaveNodes.add(targetId);
         else hoverEnterNodes.add(targetId);
       }
+      if (node.type === 'source.element' && targetId) {
+        clickNodes.add(targetId);
+        hoverEnterNodes.add(targetId);
+      }
+      if (node.type === 'source.component') {
+        const compId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
+        if (compId) {
+          for (const pageNode of page.document.nodes) {
+            if (pageNode.type === 'component-instance' && pageNode.componentId === compId) {
+              clickNodes.add(pageNode.id);
+              hoverEnterNodes.add(pageNode.id);
+            }
+          }
+        }
+      }
       if (node.type === 'event.on-page-load') hasPageLoad = true;
+      if (node.type === 'source.page' && node.data.pageId === page.id) hasPageLoad = true;
       if (node.type === 'action.set-visible' && targetId) visibleTargets.add(targetId);
       if (node.type === 'action.set-text' && targetId) textTargets.add(targetId);
       if (node.type === 'action.set-fill' && targetId) fillTargets.add(targetId);
@@ -508,6 +569,10 @@ export function buildReactPageLogicPlan(
     if (node.type === 'component-instance') {
       instanceComponentById[node.id] = node.componentId;
     }
+  }
+  const pageRouteById: Record<string, string> = {};
+  for (const p of project.pages) {
+    pageRouteById[p.id] = p.route;
   }
 
   const tokens = getProjectDesignTokens(project);
@@ -564,9 +629,11 @@ export function buildReactPageLogicPlan(
     `  const logicVarTypes: Record<string, string> = ${JSON.stringify(variableTypes)};`,
     `  const logicVarNameToId: Record<string, string> = ${JSON.stringify(variableNameToId)};`,
     `  const logicInitialVisible: Record<string, boolean> = ${JSON.stringify(nodeInitialVisible)};`,
+    `  const logicInstanceComponentById: Record<string, string> = ${JSON.stringify(instanceComponentById)};`,
+    `  const logicPageRouteById: Record<string, string> = ${JSON.stringify(pageRouteById)};`,
+    `  const logicActivePageId = ${JSON.stringify(page.id)};`,
     ...(variantTargets.size > 0
       ? [
-          `  const logicInstanceComponentById: Record<string, string> = ${JSON.stringify(instanceComponentById)};`,
           `  const logicVariantLabels: Record<string, Record<string, Record<string, string>>> = ${JSON.stringify(variantLabels)};`,
         ]
       : []),
@@ -582,13 +649,22 @@ export function buildReactPageLogicPlan(
     `    const nextOverrides: Record<string, ${overrideType}> = { ...logicOverrides };`,
     '    const ephemeral: Record<string, unknown> = {};',
     `    const maxSteps = ${MAX_LOGIC_EXECUTION_STEPS};`,
-    '    const queue: Array<{ graph: (typeof logicGraphs)[number]; nodeId: string }> = [];',
+    '    const queue: Array<{ graph: (typeof logicGraphs)[number]; nodeId: string; outPortId?: string }> = [];',
+    '    const targetCompId = targetNodeId ? logicInstanceComponentById[targetNodeId] : undefined;',
     '    for (const graph of logicGraphs) {',
     '      for (const n of graph.nodes) {',
     '        if (triggerKind === "page-load" && n.type === "event.on-page-load") queue.push({ graph, nodeId: n.id });',
+    '        else if (triggerKind === "page-load" && n.type === "source.page" && n.data.pageId === logicActivePageId) queue.push({ graph, nodeId: n.id, outPortId: "onLoad" });',
     '        else if (triggerKind === "click" && n.type === "event.on-click" && n.data.targetNodeId === targetNodeId) queue.push({ graph, nodeId: n.id });',
     '        else if (triggerKind === "hover-enter" && n.type === "event.on-hover" && n.data.targetNodeId === targetNodeId && (!n.data.phase || n.data.phase === "enter")) queue.push({ graph, nodeId: n.id });',
     '        else if (triggerKind === "hover-leave" && n.type === "event.on-hover" && n.data.targetNodeId === targetNodeId && n.data.phase === "leave") queue.push({ graph, nodeId: n.id });',
+    '        else if (n.type === "source.element" && n.data.targetNodeId === targetNodeId) {',
+    '          if (triggerKind === "click") queue.push({ graph, nodeId: n.id, outPortId: "onClick" });',
+    '          else if (triggerKind === "hover-enter") queue.push({ graph, nodeId: n.id, outPortId: "onHover" });',
+    '        } else if (n.type === "source.component" && targetCompId && n.data.componentId === targetCompId) {',
+    '          if (triggerKind === "click") queue.push({ graph, nodeId: n.id, outPortId: "onClick" });',
+    '          else if (triggerKind === "hover-enter") queue.push({ graph, nodeId: n.id, outPortId: "onHover" });',
+    '        }',
     '      }',
     '    }',
     '    let steps = 0;',
@@ -614,6 +690,10 @@ export function buildReactPageLogicPlan(
     '        if (n.type === "state.get" || n.type === "state.set" || n.type === "state.toggle" || n.type === "state.increment" || n.type === "event.on-state-change") {',
     '          return nextVars[String(n.data.variableId ?? "")] ?? null;',
     '        }',
+    '        if (n.type === "source.page") return logicPageRouteById[String(n.data.pageId ?? "")] ?? "";',
+    '        if (n.type === "source.component") return String(n.data.componentId ?? "");',
+    '        if (n.type === "source.element") return String(n.data.targetNodeId ?? "");',
+    '        if (n.type === "source.theme") return String(n.data.themeId ?? "");',
     '        if (n.type === "logic.compare") {',
     '          const leftConn = graph.connections.find((c) => c.targetNodeId === n.id && c.targetPortId === "left");',
     '          const rightConn = graph.connections.find((c) => c.targetNodeId === n.id && c.targetPortId === "right");',
@@ -655,7 +735,9 @@ export function buildReactPageLogicPlan(
     '      const step = queue.shift()!;',
     '      const n = step.graph.nodes.find((item) => item.id === step.nodeId);',
     '      if (!n) continue;',
-    '      if (n.type === "event.on-click" || n.type === "event.on-hover" || n.type === "event.on-page-load" || n.type === "event.on-state-change") {',
+    '      if (n.type === "source.page" || n.type === "source.component" || n.type === "source.element") {',
+    '        enqueueOut(step.graph, n.id, step.outPortId ?? (n.type === "source.page" ? "onLoad" : "onClick"));',
+    '      } else if (n.type === "event.on-click" || n.type === "event.on-hover" || n.type === "event.on-page-load" || n.type === "event.on-state-change") {',
     '        enqueueOut(step.graph, n.id, "exec");',
     '      } else if (n.type === "state.toggle") {',
     '        const vid = String(n.data.variableId ?? "");',
@@ -747,7 +829,7 @@ export function buildReactPageLogicPlan(
     ...(hasNavigation
       ? [
           '      } else if (n.type === "action.navigate") {',
-          '        const nextRoute = String(n.data.route ?? "").trim();',
+          '        const nextRoute = String(resolveIn(step.graph, n.id, "route", n.data.route ?? "") ?? "").trim();',
           '        if (/^(?:https?:\\/\\/|mailto:|\\/|#)/i.test(nextRoute)) {',
           '          if (typeof document !== "undefined") document.documentElement.setAttribute("data-folio-route", nextRoute);',
           '          onNavigate?.(nextRoute);',

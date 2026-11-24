@@ -123,7 +123,7 @@ export function useDesignSystemActions({
   const updateMasterContract = useCallback(
     (
       component: ComponentDefinition,
-      patch: { variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[] },
+      patch: { variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[]; nodeLogicEnabled?: boolean },
     ) => {
       const live = project.components.find((c) => c.id === component.id);
       if (!live) return;
@@ -132,17 +132,38 @@ export function useDesignSystemActions({
           componentId: live.id,
           ...(patch.variants !== undefined ? { variants: patch.variants } : {}),
           ...(patch.slots !== undefined ? { slots: patch.slots } : {}),
+          ...(patch.nodeLogicEnabled !== undefined ? { nodeLogicEnabled: patch.nodeLogicEnabled } : {}),
           expectedUpdatedAt: live.updatedAt,
           expectedMasterDocument: live.document,
         },
-        `Update ${live.name} contract`,
+        patch.nodeLogicEnabled !== undefined
+          ? (patch.nodeLogicEnabled ? `Send ${live.name} to Node Logic` : `Disable ${live.name} in Node Logic`)
+          : `Update ${live.name} contract`,
       );
       if (res.status === 'applied') {
         onMasterMetadataUpdated?.(live.id, live.updatedAt);
-        setNotice(`Updated contract for “${live.name}”.`);
+        if (patch.nodeLogicEnabled !== undefined && patch.variants === undefined && patch.slots === undefined) {
+          setNotice(
+            patch.nodeLogicEnabled
+              ? `“${live.name}” enabled in Node Logic. Select it from any Component node dropdown.`
+              : `“${live.name}” removed from Node Logic component list.`,
+          );
+        } else {
+          setNotice(`Updated contract for “${live.name}”.`);
+        }
       }
     },
     [project.components, mainCommandClient, onMasterMetadataUpdated, setNotice],
+  );
+
+  const toggleComponentNodeLogic = useCallback(
+    (component: ComponentDefinition, enabled?: boolean) => {
+      const live = project.components.find((c) => c.id === component.id);
+      if (!live) return;
+      const nextEnabled = enabled ?? !Boolean(live.nodeLogicEnabled);
+      updateMasterContract(live, { nodeLogicEnabled: nextEnabled });
+    },
+    [project.components, updateMasterContract],
   );
 
   return {
@@ -159,5 +180,6 @@ export function useDesignSystemActions({
     updateInstanceVariant,
     updateInstanceSlot,
     updateMasterContract,
+    toggleComponentNodeLogic,
   };
 }

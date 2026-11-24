@@ -456,6 +456,8 @@ export interface ComponentDefinition {
   variants?: ComponentVariantAxis[];
   /** Optional named slots enabling structured content insertion on instances. */
   slots?: ComponentSlotDefinition[];
+  /** Optional opt-in flag exposing this component inside Node Logic Component nodes. */
+  nodeLogicEnabled?: boolean;
 }
 
 export type DesignTokenLayer = 'primitive' | 'semantic';

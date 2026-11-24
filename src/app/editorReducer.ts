@@ -72,7 +72,7 @@ export type EditorAction =
   | { type: 'sync-component-document'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; document: FolioDocument; updatedAt: string }
   | { type: 'rename-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; name: string }
   | { type: 'delete-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string }
-  | { type: 'update-component-contract'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[] }
+  | { type: 'update-component-contract'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[]; nodeLogicEnabled?: boolean }
   | { type: 'update-design-tokens'; designTokens: DesignTokenCollection; unbindTokenIds?: string[] }
   | { type: 'update-code-modules'; codeModules: CodeModuleRecord[]; coalesceKey?: string }
   | { type: 'create-logic-graph'; graph: LogicGraph }
@@ -546,9 +546,12 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           target.updatedAt !== action.expectedUpdatedAt) return state;
       const nextVariants = action.variants !== undefined ? action.variants : target.variants;
       const nextSlots = action.slots !== undefined ? action.slots : target.slots;
+      const nextNodeLogicEnabled =
+        action.nodeLogicEnabled !== undefined ? action.nodeLogicEnabled : Boolean(target.nodeLogicEnabled);
       if (
         JSON.stringify(target.variants ?? []) === JSON.stringify(nextVariants ?? []) &&
-        JSON.stringify(target.slots ?? []) === JSON.stringify(nextSlots ?? [])
+        JSON.stringify(target.slots ?? []) === JSON.stringify(nextSlots ?? []) &&
+        Boolean(target.nodeLogicEnabled) === nextNodeLogicEnabled
       ) {
         return state;
       }
@@ -558,6 +561,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       else delete updatedComponent.variants;
       if (nextSlots && nextSlots.length > 0) updatedComponent.slots = nextSlots;
       else delete updatedComponent.slots;
+      if (nextNodeLogicEnabled) updatedComponent.nodeLogicEnabled = true;
+      else delete updatedComponent.nodeLogicEnabled;
 
       const components = state.project.components.map((component) => {
         if (component.id === action.componentId) return updatedComponent;

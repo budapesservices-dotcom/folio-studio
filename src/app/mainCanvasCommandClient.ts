@@ -173,6 +173,7 @@ export interface MainCanvasCommandClient {
       componentId: string;
       variants?: ComponentVariantAxis[];
       slots?: ComponentSlotDefinition[];
+      nodeLogicEnabled?: boolean;
       expectedUpdatedAt: string;
       expectedMasterDocument: FolioDocument;
     },
@@ -473,6 +474,7 @@ export function createWorkspaceCommandClient(
           componentId: args.componentId,
           ...(args.variants !== undefined ? { variants: args.variants } : {}),
           ...(args.slots !== undefined ? { slots: args.slots } : {}),
+          ...(args.nodeLogicEnabled !== undefined ? { nodeLogicEnabled: args.nodeLogicEnabled } : {}),
           expectedUpdatedAt: args.expectedUpdatedAt,
           expectedMasterDocument: args.expectedMasterDocument,
         }),

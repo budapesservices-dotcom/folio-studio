@@ -18,13 +18,18 @@ import type {
 
 export type LogicPortDirection = 'in' | 'out';
 export type LogicPortDataType = 'exec' | 'string' | 'number' | 'boolean' | 'any';
-export type LogicNodeCategory = 'event' | 'state' | 'logic' | 'action';
+export type LogicNodeCategory = 'source' | 'event' | 'state' | 'logic' | 'action';
 
 export type LogicCompareOperator = '==' | '!=' | '>' | '>=' | '<' | '<=';
 export type LogicHoverPhase = 'enter' | 'leave';
 export type LogicVisibilityMode = 'show' | 'hide' | 'toggle';
 
 export const BUILT_IN_LOGIC_NODE_TYPES = [
+  // Source Anchor Nodes (identify Page, Component, Layer, or Theme in the graph)
+  'source.page',
+  'source.component',
+  'source.element',
+  'source.theme',
   // Event Triggers
   'event.on-click',
   'event.on-hover',
@@ -85,6 +90,59 @@ function defineNode(def: LogicNodeTypeDefinition): LogicNodeTypeDefinition {
 }
 
 export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNodeTypeDefinition>> = Object.freeze({
+  'source.page': defineNode({
+    type: 'source.page',
+    category: 'source',
+    label: 'Page',
+    description: 'Identifies a project page in this graph. Emits On Load when active and exposes its Route for Navigate.',
+    ports: [
+      { id: 'onLoad', label: 'On Load', direction: 'out', dataType: 'exec' },
+      { id: 'route', label: 'Route', direction: 'out', dataType: 'string' },
+    ],
+    defaultData: {
+      pageId: '',
+    },
+  }),
+  'source.component': defineNode({
+    type: 'source.component',
+    category: 'source',
+    label: 'Component',
+    description: 'Represents a component sent to Node Logic. Fires On Click or On Hover whenever an instance is interacted with.',
+    ports: [
+      { id: 'onClick', label: 'On Click', direction: 'out', dataType: 'exec' },
+      { id: 'onHover', label: 'On Hover', direction: 'out', dataType: 'exec' },
+      { id: 'componentId', label: 'Component ID', direction: 'out', dataType: 'string' },
+    ],
+    defaultData: {
+      componentId: '',
+    },
+  }),
+  'source.element': defineNode({
+    type: 'source.element',
+    category: 'source',
+    label: 'Canvas Layer',
+    description: 'Represents a specific canvas layer (button, card, text) in this graph with direct On Click and On Hover outputs.',
+    ports: [
+      { id: 'onClick', label: 'On Click', direction: 'out', dataType: 'exec' },
+      { id: 'onHover', label: 'On Hover', direction: 'out', dataType: 'exec' },
+      { id: 'target', label: 'Layer ID', direction: 'out', dataType: 'string' },
+    ],
+    defaultData: {
+      targetNodeId: '',
+    },
+  }),
+  'source.theme': defineNode({
+    type: 'source.theme',
+    category: 'source',
+    label: 'Theme',
+    description: 'Identifies a Design Token theme in this graph so you can patch its Theme ID directly into Set Theme.',
+    ports: [
+      { id: 'themeId', label: 'Theme ID', direction: 'out', dataType: 'string' },
+    ],
+    defaultData: {
+      themeId: '',
+    },
+  }),
   'event.on-click': defineNode({
     type: 'event.on-click',
     category: 'event',
@@ -305,6 +363,7 @@ export const LOGIC_NODE_CATALOG: Readonly<Record<BuiltInLogicNodeType, LogicNode
     description: 'Navigates to another Folio page route or an allowlisted safe URL.',
     ports: [
       { id: 'exec', label: 'Exec', direction: 'in', dataType: 'exec' },
+      { id: 'route', label: 'Route', direction: 'in', dataType: 'string' },
       { id: 'next', label: 'Next', direction: 'out', dataType: 'exec' },
     ],
     defaultData: {

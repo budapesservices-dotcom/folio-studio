@@ -146,6 +146,7 @@ export interface ComponentUpdateContractPayload {
   componentId: string;
   variants?: ComponentVariantAxis[];
   slots?: ComponentSlotDefinition[];
+  nodeLogicEnabled?: boolean;
   expectedUpdatedAt: string;
   expectedMasterDocument: FolioDocument;
 }

@@ -907,7 +907,7 @@ function isFolioPageData(value: unknown): value is FolioPage {
 }
 
 function isComponentDefinitionData(value: unknown): value is ComponentDefinition {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'document', 'createdAt', 'updatedAt', 'variants', 'slots'])) {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'document', 'createdAt', 'updatedAt', 'variants', 'slots', 'nodeLogicEnabled'])) {
     return false;
   }
   if (
@@ -922,6 +922,7 @@ function isComponentDefinitionData(value: unknown): value is ComponentDefinition
   const masterNodesById = new Map(value.document.nodes.map((node) => [node.id, node]));
   if (value.variants !== undefined && !isComponentVariantsList(value.variants, masterNodesById)) return false;
   if (value.slots !== undefined && !isComponentSlotsList(value.slots, masterNodesById)) return false;
+  if (value.nodeLogicEnabled !== undefined && typeof value.nodeLogicEnabled !== 'boolean') return false;
   return true;
 }
 
@@ -1250,11 +1251,11 @@ export function validateComponentUpdateContractPayload(
   const data = normalized.value;
   if (
     !isRecord(data) ||
-    !hasOnlyKeys(data, ['componentId', 'variants', 'slots', 'expectedUpdatedAt', 'expectedMasterDocument']) ||
+    !hasOnlyKeys(data, ['componentId', 'variants', 'slots', 'nodeLogicEnabled', 'expectedUpdatedAt', 'expectedMasterDocument']) ||
     !isNonEmptyString(data.componentId) ||
     !isIsoTimestamp(data.expectedUpdatedAt) ||
     !isFolioDocumentData(data.expectedMasterDocument) ||
-    (data.variants === undefined && data.slots === undefined)
+    (data.variants === undefined && data.slots === undefined && data.nodeLogicEnabled === undefined)
   ) {
     return invalid('INVALID_PAYLOAD', 'Component contract update requires a component ID, contract changes, and concurrency guard.');
   }
@@ -1265,12 +1266,16 @@ export function validateComponentUpdateContractPayload(
   if (data.slots !== undefined && !isComponentSlotsList(data.slots, masterNodesById)) {
     return invalid('INVALID_PAYLOAD', 'Component slots must be valid and compatible with existing master nodes.');
   }
+  if (data.nodeLogicEnabled !== undefined && typeof data.nodeLogicEnabled !== 'boolean') {
+    return invalid('INVALID_PAYLOAD', 'Component nodeLogicEnabled flag must be a boolean.');
+  }
   return {
     ok: true,
     value: {
       componentId: data.componentId,
       ...(data.variants !== undefined ? { variants: data.variants as ComponentUpdateContractPayload['variants'] } : {}),
       ...(data.slots !== undefined ? { slots: data.slots as ComponentUpdateContractPayload['slots'] } : {}),
+      ...(data.nodeLogicEnabled !== undefined ? { nodeLogicEnabled: data.nodeLogicEnabled } : {}),
       expectedUpdatedAt: data.expectedUpdatedAt,
       expectedMasterDocument: data.expectedMasterDocument,
     },

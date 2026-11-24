@@ -20,6 +20,7 @@ import {
   type LogicNodeEventKind,
   type PrototypeRuntimeSnapshot,
 } from '../../engines/prototype';
+import { getUsedSourceReferenceIds } from './nodeLogicGraphHelpers';
 import { StudioIcon } from './StudioIcon';
 
 export type NodeLogicInspectorTab = 'node' | 'variables' | 'simulate';
@@ -51,6 +52,7 @@ export interface NodeLogicInspectorProps {
   onRunMount: () => void;
   onTriggerNodeEvent: (nodeId: string, event: LogicNodeEventKind) => void;
   onResetRuntime: () => void;
+  onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
 }
 
 function parseLiteralForType(raw: string, valueType: LogicValueType): LogicVariableValue {
@@ -86,6 +88,7 @@ export function NodeLogicInspector({
   onRunMount,
   onTriggerNodeEvent,
   onResetRuntime,
+  onToggleComponentNodeLogic,
 }: NodeLogicInspectorProps) {
   const [newVarName, setNewVarName] = useState('');
   const [newVarType, setNewVarType] = useState<LogicValueType>('number');
@@ -99,31 +102,82 @@ export function NodeLogicInspector({
   const graphVariables = graph?.variables ?? [];
 
   const interactiveTriggers = graph
-    ? graph.nodes
-      .filter((node) => node.type === 'event.on-click' || node.type === 'event.on-hover')
-      .map((node) => {
-        const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
-        const targetAst = scopedAstNodes.find((item) => item.id === targetId);
-        const eventKind: LogicNodeEventKind =
-          node.type === 'event.on-click'
-            ? 'click'
-            : node.data.phase === 'leave'
-              ? 'hover-leave'
-              : 'hover-enter';
-        return {
-          logicNodeId: node.id,
-          targetNodeId: targetId,
-          targetName: targetAst?.name ?? 'Unbound layer',
-          eventKind,
-          label:
-            eventKind === 'click'
-              ? `Click “${targetAst?.name ?? 'Unbound'}”`
-              : eventKind === 'hover-leave'
-                ? `Hover Leave “${targetAst?.name ?? 'Unbound'}”`
-                : `Hover Enter “${targetAst?.name ?? 'Unbound'}”`,
-        };
+    ? graph.nodes.flatMap((node) => {
+        if (node.type === 'event.on-click' || node.type === 'event.on-hover') {
+          const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
+          if (!targetId) return [];
+          const targetAst = scopedAstNodes.find((item) => item.id === targetId);
+          const eventKind: LogicNodeEventKind =
+            node.type === 'event.on-click'
+              ? 'click'
+              : node.data.phase === 'leave'
+                ? 'hover-leave'
+                : 'hover-enter';
+          return [
+            {
+              logicNodeId: node.id,
+              targetNodeId: targetId,
+              targetName: targetAst?.name ?? 'Unbound layer',
+              eventKind,
+              label:
+                eventKind === 'click'
+                  ? `Click “${targetAst?.name ?? 'Unbound'}”`
+                  : eventKind === 'hover-leave'
+                    ? `Hover Leave “${targetAst?.name ?? 'Unbound'}”`
+                    : `Hover Enter “${targetAst?.name ?? 'Unbound'}”`,
+            },
+          ];
+        }
+        if (node.type === 'source.element') {
+          const targetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
+          if (!targetId) return [];
+          const targetAst = scopedAstNodes.find((item) => item.id === targetId);
+          const name = targetAst?.name ?? 'Layer';
+          return [
+            {
+              logicNodeId: node.id,
+              targetNodeId: targetId,
+              targetName: name,
+              eventKind: 'click' as LogicNodeEventKind,
+              label: `Click Layer “${name}”`,
+            },
+            {
+              logicNodeId: node.id,
+              targetNodeId: targetId,
+              targetName: name,
+              eventKind: 'hover-enter' as LogicNodeEventKind,
+              label: `Hover Layer “${name}”`,
+            },
+          ];
+        }
+        if (node.type === 'source.component') {
+          const compId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
+          if (!compId) return [];
+          const comp = components.find((item) => item.id === compId);
+          const instance = scopedAstNodes.find(
+            (item) => item.type === 'component-instance' && item.componentId === compId,
+          );
+          if (!instance) return [];
+          const name = comp?.name ?? instance.name;
+          return [
+            {
+              logicNodeId: node.id,
+              targetNodeId: instance.id,
+              targetName: name,
+              eventKind: 'click' as LogicNodeEventKind,
+              label: `Click Component “${name}”`,
+            },
+            {
+              logicNodeId: node.id,
+              targetNodeId: instance.id,
+              targetName: name,
+              eventKind: 'hover-enter' as LogicNodeEventKind,
+              label: `Hover Component “${name}”`,
+            },
+          ];
+        }
+        return [];
       })
-      .filter((item) => Boolean(item.targetNodeId))
     : [];
 
   const handleCreateVariable = (event: Event) => {
@@ -200,6 +254,166 @@ export function NodeLogicInspector({
     };
 
     switch (node.type) {
+      case 'source.page': {
+        const pageId = typeof node.data.pageId === 'string' ? node.data.pageId : '';
+        const usedPageIds = graph ? getUsedSourceReferenceIds(graph, 'source.page', node.id) : new Set<string>();
+        return (
+          <>
+            <label class="nl-field">
+              <span>Project page</span>
+              <select
+                class="select-field nl-source-select"
+                aria-label="Source page"
+                value={pageId}
+                onChange={(event) => onUpdateNodeData(node.id, { pageId: event.currentTarget.value })}
+              >
+                <option value="">Select available page…</option>
+                {pages.map((page) => {
+                  const isUsed = usedPageIds.has(page.id);
+                  return (
+                    <option key={page.id} value={page.id} disabled={isUsed}>
+                      {page.name} ({page.route}){isUsed ? ' — In graph' : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <p class="nl-inspector-hint">
+              Pages already placed in another Page node are greyed out. Wire On Load to run actions on mount, or drag Route into a Navigate node.
+            </p>
+          </>
+        );
+      }
+
+      case 'source.component': {
+        const componentId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
+        const usedComponentIds = graph
+          ? getUsedSourceReferenceIds(graph, 'source.component', node.id)
+          : new Set<string>();
+        const enabledComponents = components.filter((c) => c.nodeLogicEnabled || c.id === componentId);
+        const disabledComponents = components.filter((c) => !c.nodeLogicEnabled);
+        return (
+          <>
+            <label class="nl-field">
+              <span>Component (sent to Node Logic)</span>
+              <select
+                class="select-field nl-source-select"
+                aria-label="Source component"
+                value={componentId}
+                onChange={(event) => onUpdateNodeData(node.id, { componentId: event.currentTarget.value })}
+              >
+                <option value="">
+                  {enabledComponents.length === 0 ? 'No components sent to Node yet…' : 'Select component…'}
+                </option>
+                {enabledComponents.map((comp) => {
+                  const isUsed = usedComponentIds.has(comp.id);
+                  const suffix = !comp.nodeLogicEnabled
+                    ? ' — Disabled'
+                    : isUsed
+                      ? ' — In graph'
+                      : '';
+                  return (
+                    <option key={comp.id} value={comp.id} disabled={isUsed}>
+                      {comp.name}{suffix}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <p class="nl-inspector-hint">
+              Only components enabled with “Send to Node” appear here. Components already assigned to another node are greyed out.
+            </p>
+            {onToggleComponentNodeLogic && disabledComponents.length > 0 && (
+              <div class="nl-quick-enable-box">
+                <div class="nl-section-label">Send Component to Node Logic</div>
+                <div class="nl-quick-enable-list">
+                  {disabledComponents.map((comp) => (
+                    <div key={comp.id} class="nl-quick-enable-row">
+                      <span>{comp.name}</span>
+                      <button
+                        type="button"
+                        class="nl-quick-enable-btn"
+                        onClick={() => {
+                          onToggleComponentNodeLogic(comp, true);
+                          if (!componentId && !usedComponentIds.has(comp.id)) {
+                            onUpdateNodeData(node.id, { componentId: comp.id });
+                          }
+                        }}
+                      >
+                        Send to Node
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      }
+
+      case 'source.element': {
+        const usedElementIds = graph
+          ? getUsedSourceReferenceIds(graph, 'source.element', node.id)
+          : new Set<string>();
+        return (
+          <>
+            <label class="nl-field">
+              <span>Canvas layer</span>
+              <select
+                class="select-field nl-source-select"
+                aria-label="Source canvas layer"
+                value={targetNodeId}
+                onChange={(event) => onUpdateNodeData(node.id, { targetNodeId: event.currentTarget.value })}
+              >
+                <option value="">Select available layer…</option>
+                {scopedAstNodes.map((item) => {
+                  const isUsed = usedElementIds.has(item.id);
+                  return (
+                    <option key={item.id} value={item.id} disabled={isUsed}>
+                      {item.name} ({item.type}){isUsed ? ' — In graph' : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <p class="nl-inspector-hint">
+              Layers already bound to another Canvas Layer node are greyed out. Drag On Click or On Hover directly to any action.
+            </p>
+          </>
+        );
+      }
+
+      case 'source.theme': {
+        const themeId = typeof node.data.themeId === 'string' ? node.data.themeId : '';
+        const usedThemeIds = graph ? getUsedSourceReferenceIds(graph, 'source.theme', node.id) : new Set<string>();
+        return (
+          <>
+            <label class="nl-field">
+              <span>Design Token theme</span>
+              <select
+                class="select-field nl-source-select"
+                aria-label="Source theme"
+                value={themeId}
+                onChange={(event) => onUpdateNodeData(node.id, { themeId: event.currentTarget.value })}
+              >
+                <option value="">Select available theme…</option>
+                {themes.map((theme) => {
+                  const isUsed = usedThemeIds.has(theme.id);
+                  return (
+                    <option key={theme.id} value={theme.id} disabled={isUsed}>
+                      {theme.name}{isUsed ? ' — In graph' : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <p class="nl-inspector-hint">
+              Themes already assigned to another Theme node are greyed out.
+            </p>
+          </>
+        );
+      }
+
       case 'event.on-click':
         return renderAstTargetPicker('Target layer', scopedAstNodes);
 
@@ -547,7 +761,7 @@ export function NodeLogicInspector({
               </select>
             </label>
             <label class="nl-field">
-              <span>Route / safe URL</span>
+              <span>Route / safe URL (fallback when Route port is unwired)</span>
               <input
                 class="nl-input"
                 type="text"
@@ -702,6 +916,9 @@ export function NodeLogicInspector({
                 >
                   Disconnect Wire
                 </button>
+                <p class="nl-inspector-hint">
+                  Tip: Drag this wire or its connected input socket onto empty canvas to unplug, or onto another compatible port to re-patch.
+                </p>
               </div>
             ) : graph ? (
               <div class="nl-graph-overview">
@@ -710,7 +927,7 @@ export function NodeLogicInspector({
                   Scope: {graph.scope} · {graph.nodes.length} nodes · {graph.connections.length} wires
                 </div>
                 <p class="nl-inspector-hint">
-                  Select a node or wire on the canvas to configure bindings, or drag from any output port to a compatible input port.
+                  Drag from an output socket to a compatible input socket to patch a wire. Drag a connected input socket or wire onto empty canvas to disconnect.
                 </p>
 
                 <div class="nl-diag-block">
@@ -887,7 +1104,7 @@ export function NodeLogicInspector({
               </div>
             ) : (
               <p class="nl-inspector-hint">
-                Add an On Click or On Hover node bound to a layer to trigger interactive flows here.
+                Add a Page, Component, Canvas Layer, On Click, or On Hover node to trigger interactive flows here.
               </p>
             )}
 

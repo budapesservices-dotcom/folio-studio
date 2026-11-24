@@ -65,8 +65,13 @@ export interface InspectorPanelProps {
   onUpdateInstanceSlot: (slotId: string, patch: { text?: string; visible?: boolean }) => void;
   onUpdateMasterContract: (
     component: ComponentDefinition,
-    patch: { variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[] },
+    patch: {
+      variants?: ComponentVariantAxis[];
+      slots?: ComponentSlotDefinition[];
+      nodeLogicEnabled?: boolean;
+    },
   ) => void;
+  onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
   onResetInstanceOverrides: () => void;
   onDetachInstance: () => void;
   onConvertToPath: (target: EditorTarget) => void;
@@ -117,6 +122,7 @@ export function InspectorPanel({
   onUpdateInstanceVariant,
   onUpdateInstanceSlot,
   onUpdateMasterContract,
+  onToggleComponentNodeLogic,
   onResetInstanceOverrides,
   onDetachInstance,
   onConvertToPath,
@@ -826,6 +832,7 @@ export function InspectorPanel({
             onUpdateInstanceVariant={onUpdateInstanceVariant}
             onUpdateInstanceSlot={onUpdateInstanceSlot}
             onUpdateMasterContract={onUpdateMasterContract}
+            onToggleComponentNodeLogic={onToggleComponentNodeLogic}
           />
 
           <section class="property-section last-section">
@@ -907,6 +914,7 @@ export function InspectorPanel({
             onUpdateInstanceVariant={onUpdateInstanceVariant}
             onUpdateInstanceSlot={onUpdateInstanceSlot}
             onUpdateMasterContract={onUpdateMasterContract}
+            onToggleComponentNodeLogic={onToggleComponentNodeLogic}
           />
           <div class="inspector-empty">
             <div class="empty-icon">{renderIcon('cursor')}</div>

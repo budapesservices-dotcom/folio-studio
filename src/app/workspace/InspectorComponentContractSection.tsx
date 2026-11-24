@@ -21,8 +21,13 @@ export interface InspectorComponentContractSectionProps {
   onUpdateInstanceSlot: (slotId: string, patch: { text?: string; visible?: boolean }) => void;
   onUpdateMasterContract: (
     component: ComponentDefinition,
-    patch: { variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[] },
+    patch: {
+      variants?: ComponentVariantAxis[];
+      slots?: ComponentSlotDefinition[];
+      nodeLogicEnabled?: boolean;
+    },
   ) => void;
+  onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
 }
 
 export function InspectorComponentContractSection({
@@ -32,23 +37,61 @@ export function InspectorComponentContractSection({
   onUpdateInstanceVariant,
   onUpdateInstanceSlot,
   onUpdateMasterContract,
+  onToggleComponentNodeLogic,
 }: InspectorComponentContractSectionProps) {
   const [newAxisName, setNewAxisName] = useState('');
   const [newSlotName, setNewSlotName] = useState('');
   const [newSlotTargetId, setNewSlotTargetId] = useState('');
   const [optionDraftByAxis, setOptionDraftByAxis] = useState<Record<string, string>>({});
 
-  // Mode 1: Main Canvas Component Instance — Variant & Slot pickers
+  const renderNodeLogicToggle = (component: ComponentDefinition) => {
+    const enabled = Boolean(component.nodeLogicEnabled);
+    const handleToggle = () => {
+      if (onToggleComponentNodeLogic) {
+        onToggleComponentNodeLogic(component, !enabled);
+      } else {
+        onUpdateMasterContract(component, { nodeLogicEnabled: !enabled });
+      }
+    };
+    return (
+      <div class="contract-card contract-node-logic-card">
+        <div class="contract-node-logic-row">
+          <div>
+            <div class="contract-card-title">Node Logic</div>
+            <div class="contract-card-meta">
+              {enabled
+                ? 'Available in Component node dropdown'
+                : 'Enable to wire events in Node Logic'}
+            </div>
+          </div>
+          <button
+            type="button"
+            class={`contract-node-logic-btn ${enabled ? 'is-enabled' : ''}`}
+            aria-pressed={enabled}
+            onClick={handleToggle}
+          >
+            {enabled ? '✓ In Node' : 'Send to Node'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // Mode 1: Main Canvas Component Instance — Node Logic & Variant/Slot pickers
   if (instanceNode && instanceComponent) {
     const variants = instanceComponent.variants ?? [];
     const slots = instanceComponent.slots ?? [];
-    if (variants.length === 0 && slots.length === 0) return null;
-
     const effectiveSelection = getEffectiveVariantSelection(instanceNode, instanceComponent);
 
     return (
       <section class="property-section" aria-label="Component Contract">
-        <div class="section-title">Variants &amp; Slots</div>
+        <div class="section-title">
+          {variants.length > 0 || slots.length > 0 ? 'Component Contract' : 'Component Logic'}
+        </div>
+
+        <div class="contract-group">
+          {renderNodeLogicToggle(instanceComponent)}
+        </div>
 
         {variants.length > 0 && (
           <div class="contract-group">
@@ -205,6 +248,10 @@ export function InspectorComponentContractSection({
     return (
       <section class="property-section" aria-label="Component Master Contract">
         <div class="section-title">Component Contract</div>
+
+        <div class="contract-subgroup">
+          {renderNodeLogicToggle(editingMasterComponent)}
+        </div>
 
         <div class="contract-subgroup">
           <div class="contract-subhead">Variant Axes ({variants.length})</div>

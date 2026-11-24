@@ -378,6 +378,7 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
         componentId: command.payload.componentId,
         ...(command.payload.variants !== undefined ? { variants: command.payload.variants } : {}),
         ...(command.payload.slots !== undefined ? { slots: command.payload.slots } : {}),
+        ...(command.payload.nodeLogicEnabled !== undefined ? { nodeLogicEnabled: command.payload.nodeLogicEnabled } : {}),
         expectedUpdatedAt: command.payload.expectedUpdatedAt,
         expectedMasterDocument: context.liveComponentMasterDocument,
       }];

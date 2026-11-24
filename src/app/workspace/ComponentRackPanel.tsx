@@ -25,6 +25,7 @@ export interface ComponentRackPanelProps {
   onCancelRename: () => void;
   onDuplicateComponent: (component: ComponentDefinition) => void;
   onDeleteComponent: (component: ComponentDefinition) => void;
+  onToggleNodeLogic?: (component: ComponentDefinition) => void;
 }
 
 export function ComponentRackPanel({
@@ -49,6 +50,7 @@ export function ComponentRackPanel({
   onCancelRename,
   onDuplicateComponent,
   onDeleteComponent,
+  onToggleNodeLogic,
 }: ComponentRackPanelProps) {
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const filteredComponents = normalizedQuery
@@ -134,9 +136,25 @@ export function ComponentRackPanel({
                 {component.document.nodes.length} layer{component.document.nodes.length === 1 ? '' : 's'}
                 {(component.variants?.length ?? 0) > 0 ? ` · ${component.variants!.length} var` : ''}
                 {(component.slots?.length ?? 0) > 0 ? ` · ${component.slots!.length} slot` : ''}
+                {component.nodeLogicEnabled ? ' · In Node Logic' : ''}
               </span>
             </button>
             <div class="component-rack-card-actions">
+              {onToggleNodeLogic && (
+                <button
+                  type="button"
+                  class={`component-rack-node-toggle ${component.nodeLogicEnabled ? 'is-enabled' : ''}`}
+                  aria-pressed={Boolean(component.nodeLogicEnabled)}
+                  title={
+                    component.nodeLogicEnabled
+                      ? `Disable "${component.name}" in Node Logic`
+                      : `Send "${component.name}" to Node Logic`
+                  }
+                  onClick={() => onToggleNodeLogic(component)}
+                >
+                  {component.nodeLogicEnabled ? '✓ In Node' : 'Send to Node'}
+                </button>
+              )}
               <button type="button" title={`Edit ${component.name} master`} onClick={() => onEditMaster(component)}>
                 Edit Master
               </button>

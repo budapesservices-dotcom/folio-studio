@@ -254,8 +254,8 @@ describe('Node Logic v1 — .flop v2 Backward Compatibility & Schema Validation'
 });
 
 describe('Node Logic v1 — Typed Catalog & Semantic Graph Validator', () => {
-  it('registers all 18 v1 node types and enforces strict port type compatibility', () => {
-    expect(BUILT_IN_LOGIC_NODE_TYPES).toHaveLength(18);
+  it('registers all 22 v1 node types (including 4 Source nodes) and enforces strict port type compatibility', () => {
+    expect(BUILT_IN_LOGIC_NODE_TYPES).toHaveLength(22);
     for (const type of BUILT_IN_LOGIC_NODE_TYPES) {
       expect(LOGIC_NODE_CATALOG[type].type).toBe(type);
       expect(LOGIC_NODE_CATALOG[type].ports.length).toBeGreaterThan(0);
@@ -698,6 +698,126 @@ describe('Node Logic v1 — Live Preview & React Codegen Integration', () => {
       });
       expect(transpiled.diagnostics ?? [], `TSX diagnostics in ${file.path}`).toEqual([]);
       expect(transpiled.outputText.length).toBeGreaterThan(20);
+    }
+  });
+
+  it('supports Send-to-Node component toggle, all 4 Source nodes (Page, Component, Canvas Layer, Theme), duplicate binding checks, runtime, Live Preview, and React TSX', () => {
+    const fixture = createInteractiveFixtureProject();
+    const store = createCanonicalEditorStore(createEditorState(fixture.project));
+    const client = createMainCanvasCommandClient(store);
+
+    // 1. Toggle nodeLogicEnabled via Native Command Engine + Undo/Redo
+    const compBefore = store.getSnapshot().editorState.project.components[0];
+    expect(compBefore.nodeLogicEnabled).toBeUndefined();
+    const enableRes = client.updateComponentContract({
+      componentId: compBefore.id,
+      nodeLogicEnabled: true,
+      expectedUpdatedAt: compBefore.updatedAt,
+      expectedMasterDocument: compBefore.document,
+    });
+    expect(enableRes.status).toBe('applied');
+    expect(store.getSnapshot().editorState.project.components[0].nodeLogicEnabled).toBe(true);
+    expect(validateProject(store.getSnapshot().editorState.project).ok).toBe(true);
+
+    expect(client.undo().status).toBe('applied');
+    expect(store.getSnapshot().editorState.project.components[0].nodeLogicEnabled).toBeUndefined();
+    expect(client.redo().status).toBe('applied');
+    expect(store.getSnapshot().editorState.project.components[0].nodeLogicEnabled).toBe(true);
+
+    const enabledProject = store.getSnapshot().editorState.project;
+
+    // 2. Semantic validator catches disabled components & duplicate source bindings
+    const duplicateGraph = createLogicGraph({
+      id: 'graph-dup-sources',
+      name: 'Duplicate Sources',
+      scope: 'page',
+      targetId: fixture.pageId,
+      nodes: [
+        createLogicNode({ id: 'sp-1', type: 'source.page', data: { pageId: fixture.pageId } }),
+        createLogicNode({ id: 'sp-2', type: 'source.page', data: { pageId: fixture.pageId } }),
+        createLogicNode({ id: 'sc-disabled', type: 'source.component', data: { componentId: fixture.componentId } }),
+      ],
+    });
+    const dupReport = validateLogicGraphSemantics(duplicateGraph, {
+      ...fixture.project, // component NOT enabled in fixture.project
+      logicGraphs: [duplicateGraph],
+    });
+    expect(dupReport.warnings.some((w) => w.code === 'DUPLICATE_SOURCE_BINDING')).toBe(true);
+    expect(dupReport.warnings.some((w) => w.code === 'COMPONENT_NOT_ENABLED_FOR_LOGIC')).toBe(true);
+
+    // 3. Valid Source-driven flow:
+    //    - Page (Home) onLoad -> Set Text("Loaded Home")
+    //    - Component (Status Card) onClick -> Navigate (route wired from Page (About).route)
+    //    - Canvas Layer (CTA Button) onClick -> Set Fill(#10B981)
+    //    - Theme (Dark) -> valid source
+    const aboutPageId = enabledProject.pages[1].id;
+    const sourceFlowGraph = createLogicGraph({
+      id: 'graph-source-flow',
+      name: 'Source Driven Flow',
+      scope: 'page',
+      targetId: fixture.pageId,
+      nodes: [
+        createLogicNode({ id: 'src-home', type: 'source.page', data: { pageId: fixture.pageId } }),
+        createLogicNode({ id: 'src-about', type: 'source.page', data: { pageId: aboutPageId } }),
+        createLogicNode({ id: 'src-card', type: 'source.component', data: { componentId: fixture.componentId } }),
+        createLogicNode({ id: 'src-btn', type: 'source.element', data: { targetNodeId: fixture.buttonId } }),
+        createLogicNode({ id: 'src-theme', type: 'source.theme', data: { themeId: fixture.darkThemeId } }),
+        createLogicNode({ id: 'act-init', type: 'action.set-text', data: { targetNodeId: fixture.labelId, text: 'Loaded Home' } }),
+        createLogicNode({ id: 'act-nav', type: 'action.navigate', data: { route: '' } }),
+        createLogicNode({ id: 'act-fill', type: 'action.set-fill', data: { targetNodeId: fixture.buttonId, fill: '#10B981' } }),
+      ],
+      connections: [
+        createLogicConnection({ id: 'sc1', sourceNodeId: 'src-home', sourcePortId: 'onLoad', targetNodeId: 'act-init', targetPortId: 'exec' }),
+        createLogicConnection({ id: 'sc2', sourceNodeId: 'src-card', sourcePortId: 'onClick', targetNodeId: 'act-nav', targetPortId: 'exec' }),
+        createLogicConnection({ id: 'sc3', sourceNodeId: 'src-about', sourcePortId: 'route', targetNodeId: 'act-nav', targetPortId: 'route' }),
+        createLogicConnection({ id: 'sc4', sourceNodeId: 'src-btn', sourcePortId: 'onClick', targetNodeId: 'act-fill', targetPortId: 'exec' }),
+      ],
+    });
+
+    const projectWithSources: FolioProject = {
+      ...enabledProject,
+      logicGraphs: [sourceFlowGraph],
+    };
+    const report = validateProjectLogicGraphs(projectWithSources);
+    expect(report.ok).toBe(true);
+    expect(report.errors).toEqual([]);
+
+    // 4. Headless PrototypeRuntime execution
+    const runtime = createPrototypeRuntime(projectWithSources, { pageId: fixture.pageId });
+    const mounted = runtime.mount();
+    expect(mounted.nodeOverrides[fixture.labelId]?.text).toBe('Loaded Home');
+
+    const afterBtnClick = runtime.dispatchNodeEvent(fixture.buttonId, 'click');
+    expect(afterBtnClick.nodeOverrides[fixture.buttonId]?.fill).toBe('#10B981');
+
+    const afterCardClick = runtime.dispatchNodeEvent(fixture.cardInstanceId, 'click');
+    expect(afterCardClick.activeRoute).toBe('/about');
+    expect(afterCardClick.pageId).toBe(aboutPageId);
+
+    // 5. Live Preview HTML script & React TSX compilation both compile cleanly
+    const previewHtml = buildLivePreviewHtml(projectWithSources);
+    expect(previewHtml).toContain('source.page');
+    expect(previewHtml).toContain('source.component');
+    expect(previewHtml).toContain('pageRouteById');
+
+    const reactFiles = compileReactProjectFiles(projectWithSources);
+    const pageTsx = reactFiles.find((f) => f.pageId === fixture.pageId);
+    expect(pageTsx).toBeTruthy();
+    expect(pageTsx!.content).toContain('source.component');
+    expect(pageTsx!.content).toContain('logicPageRouteById');
+    expect(pageTsx!.content).toContain('onClick={() => runLogicTrigger("click", "node-card-inst")}');
+    for (const file of reactFiles.filter((f) => f.language === 'tsx')) {
+      const transpiled = ts.transpileModule(file.content, {
+        fileName: file.path,
+        reportDiagnostics: true,
+        compilerOptions: {
+          jsx: ts.JsxEmit.React,
+          target: ts.ScriptTarget.ES2022,
+          module: ts.ModuleKind.ESNext,
+          strict: true,
+        },
+      });
+      expect(transpiled.diagnostics ?? [], `TSX diagnostics in ${file.path}`).toEqual([]);
     }
   });
 });

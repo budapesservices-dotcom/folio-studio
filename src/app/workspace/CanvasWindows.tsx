@@ -655,6 +655,7 @@ export interface NodeLogicWindowProps {
   mainCommandClient: MainCanvasCommandClient;
   onNotice: (message: string) => void;
   onOpenLivePreview: (pageId?: string) => void;
+  onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
   onPositionChange: (position: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
   onFocus: () => void;
@@ -679,6 +680,7 @@ export function NodeLogicWindow({
   mainCommandClient,
   onNotice,
   onOpenLivePreview,
+  onToggleComponentNodeLogic,
   onPositionChange,
   onSizeChange,
   onFocus,
@@ -761,6 +763,7 @@ export function NodeLogicWindow({
                 mainCommandClient={mainCommandClient}
                 onNotice={onNotice}
                 onOpenLivePreview={onOpenLivePreview}
+                onToggleComponentNodeLogic={onToggleComponentNodeLogic}
                 autoArrangeRequestNonce={autoArrangeRequestNonce}
                 onActiveGraphNodeCountChange={setActiveGraphNodeCount}
               />

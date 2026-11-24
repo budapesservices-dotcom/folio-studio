@@ -867,6 +867,7 @@ export function App() {
         mainCommandClient={mainCommandClient}
         onNotice={setNotice}
         onOpenLivePreview={openLivePreviewForPage}
+        onToggleComponentNodeLogic={designSystem.toggleComponentNodeLogic}
         onPositionChange={windows.setNodeLogicPosition}
         onSizeChange={windows.setNodeLogicSize}
         onFocus={() => { windows.focusWindow('node-logic'); setActiveEditorId('main'); }}
@@ -923,6 +924,7 @@ export function App() {
         onUpdateInstanceVariant={designSystem.updateInstanceVariant}
         onUpdateInstanceSlot={designSystem.updateInstanceSlot}
         onUpdateMasterContract={designSystem.updateMasterContract}
+        onToggleComponentNodeLogic={designSystem.toggleComponentNodeLogic}
         onResetInstanceOverrides={selectionActions.resetInstanceOverrides}
         onDetachInstance={selectionActions.detachSelectedInstance}
         onConvertToPath={selectionActions.handleConvertToPath}
@@ -973,6 +975,7 @@ export function App() {
         onCancelRename={() => componentMaster.setRenamingComponentId(null)}
         onDuplicateComponent={componentMaster.duplicateComponent}
         onDeleteComponent={(component) => { void componentMaster.deleteComponent(component); }}
+        onToggleNodeLogic={(component) => designSystem.toggleComponentNodeLogic(component)}
       />
 
       {designSystem.tokensRackOpen && (

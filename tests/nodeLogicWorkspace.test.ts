@@ -19,12 +19,15 @@ import {
   computeFitViewTransform,
   createInteractiveStarterProject,
   createLogicPresetGraph,
+  findSnapLogicPort,
   getLogicNodeHeight,
   getLogicPortWorldPosition,
+  getUsedSourceReferenceIds,
   moveNodeInGraph,
   removeConnectionFromGraph,
   removeNodeFromGraph,
   removeVariableFromGraph,
+  repatchConnectionInGraph,
   updateNodeDataInGraph,
   updateVariableInGraph,
 } from '../src/app/workspace/nodeLogicGraphHelpers';
@@ -347,5 +350,83 @@ describe('Node Logic Workspace Helpers & Starter Experience', () => {
         expect(overlaps).toBe(false);
       }
     }
+  });
+
+  it('tracks used source reference IDs per source type and excludes the current node when editing', () => {
+    let graph = createLogicGraph({ id: 'g-src', name: 'Sources', scope: 'page', targetId: 'page-1' });
+    const p1 = addNodeToGraph(graph, 'source.page', { x: 40, y: 40 }, { pageId: 'page-home' });
+    const p2 = addNodeToGraph(p1.graph, 'source.page', { x: 40, y: 220 }, { pageId: 'page-about' });
+    const c1 = addNodeToGraph(p2.graph, 'source.component', { x: 40, y: 400 }, { componentId: 'comp-btn' });
+    graph = c1.graph;
+
+    expect(Array.from(getUsedSourceReferenceIds(graph, 'source.page'))).toEqual(['page-home', 'page-about']);
+    expect(Array.from(getUsedSourceReferenceIds(graph, 'source.page', p1.node.id))).toEqual(['page-about']);
+    expect(Array.from(getUsedSourceReferenceIds(graph, 'source.page', p2.node.id))).toEqual(['page-home']);
+    expect(Array.from(getUsedSourceReferenceIds(graph, 'source.component'))).toEqual(['comp-btn']);
+    expect(Array.from(getUsedSourceReferenceIds(graph, 'source.component', c1.node.id))).toEqual([]);
+  });
+
+  it('snaps drag-and-patch wires magnetically to nearest compatible socket and supports clean re-patching', () => {
+    let graph = createLogicGraph({ id: 'g-patch', name: 'Patch', scope: 'page', targetId: 'page-1' });
+    const srcComp = addNodeToGraph(graph, 'source.component', { x: 40, y: 40 }, { componentId: 'comp-1' });
+    const actA = addNodeToGraph(srcComp.graph, 'action.set-text', { x: 360, y: 40 });
+    const actB = addNodeToGraph(actA.graph, 'action.navigate', { x: 360, y: 240 });
+    graph = actB.graph;
+
+    // Source node uses 34px picker subheader, so port Y accounts for 38 + 34 + 8 + 13 = 93
+    const srcOutPos = getLogicPortWorldPosition(srcComp.node, 'onClick');
+    expect(srcOutPos).toEqual({ x: 40 + LOGIC_NODE_WIDTH, y: 40 + 38 + 34 + 8 + 13 });
+
+    const actAInPos = getLogicPortWorldPosition(actA.node, 'exec')!;
+    const actBInPos = getLogicPortWorldPosition(actB.node, 'exec')!;
+
+    // Drag pointer within 28px of actA.exec snaps onto actA.exec
+    const snapA = findSnapLogicPort(
+      graph,
+      graph.nodes,
+      srcComp.node.id,
+      'onClick',
+      { x: actAInPos.x + 10, y: actAInPos.y - 8 },
+      28,
+    );
+    expect(snapA?.nodeId).toBe(actA.node.id);
+    expect(snapA?.portId).toBe('exec');
+
+    // Drag pointer far away returns null
+    const snapNone = findSnapLogicPort(graph, graph.nodes, srcComp.node.id, 'onClick', { x: 900, y: 900 }, 28);
+    expect(snapNone).toBeNull();
+
+    // Connect srcComp.onClick -> actA.exec
+    const wired = addConnectionToGraph(graph, srcComp.node.id, 'onClick', actA.node.id, 'exec');
+    expect(wired.ok).toBe(true);
+    if (!wired.ok) return;
+    graph = wired.graph;
+
+    // While dragging the detached wire, snapping ignores the detached connection and snaps onto actB.exec
+    const snapB = findSnapLogicPort(
+      graph,
+      graph.nodes,
+      srcComp.node.id,
+      'onClick',
+      { x: actBInPos.x - 6, y: actBInPos.y + 4 },
+      28,
+      wired.connection.id,
+    );
+    expect(snapB?.nodeId).toBe(actB.node.id);
+    expect(snapB?.portId).toBe('exec');
+
+    // Re-patch wire cleanly from actA.exec to actB.exec
+    const repatched = repatchConnectionInGraph(graph, wired.connection.id, actB.node.id, 'exec');
+    expect(repatched.ok).toBe(true);
+    if (!repatched.ok) return;
+    expect(repatched.graph.connections).toHaveLength(1);
+    expect(repatched.graph.connections[0].targetNodeId).toBe(actB.node.id);
+    expect(repatched.graph.connections[0].targetPortId).toBe('exec');
+
+    // Auto-arrange places source node to the left of connected action node
+    const arranged = autoArrangeLogicGraph(repatched.graph);
+    const arrangedSrc = arranged.nodes.find((n) => n.id === srcComp.node.id)!;
+    const arrangedActB = arranged.nodes.find((n) => n.id === actB.node.id)!;
+    expect(arrangedSrc.x + LOGIC_NODE_WIDTH).toBeLessThan(arrangedActB.x);
   });
 });

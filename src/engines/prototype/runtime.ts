@@ -305,6 +305,19 @@ export function createPrototypeRuntime(
           const operator = String(node.data.operator ?? '==') as LogicCompareOperator;
           return evaluateComparison(operator, left, right);
         }
+        case 'source.page': {
+          const pageId = typeof node.data.pageId === 'string' ? node.data.pageId : '';
+          return pagesById.get(pageId)?.route ?? '';
+        }
+        case 'source.component': {
+          return typeof node.data.componentId === 'string' ? node.data.componentId : '';
+        }
+        case 'source.element': {
+          return typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
+        }
+        case 'source.theme': {
+          return typeof node.data.themeId === 'string' ? node.data.themeId : '';
+        }
         case 'logic.template': {
           const template = typeof node.data.template === 'string' ? node.data.template : '';
           const connected = resolveInputValue(indexed, node, 'value', undefined, visiting);
@@ -339,7 +352,7 @@ export function createPrototypeRuntime(
   };
 
   const runExecutionQueue = (
-    initialQueue: Array<{ indexed: IndexedGraph; nodeId: string }>,
+    initialQueue: Array<{ indexed: IndexedGraph; nodeId: string; outPortId?: string }>,
   ) => {
     const queue = [...initialQueue];
     let dispatchSteps = 0;
@@ -379,6 +392,23 @@ export function createPrototypeRuntime(
       const visiting = new Set<string>();
 
       switch (node.type) {
+        case 'source.page':
+        case 'source.component':
+        case 'source.element': {
+          const outPort = next.outPortId ?? (node.type === 'source.page' ? 'onLoad' : 'onClick');
+          trace.push({
+            step: totalSteps,
+            graphId: next.indexed.graph.id,
+            nodeId: node.id,
+            nodeType: node.type,
+            detail: `Triggered ${node.type}.${outPort}`,
+          });
+          enqueueOutgoing(next.indexed, node.id, outPort);
+          break;
+        }
+        case 'source.theme':
+          // Pure data anchor node evaluated lazily via evaluateDataPort.
+          break;
         case 'event.on-click':
         case 'event.on-hover':
         case 'event.on-page-load':
@@ -600,7 +630,8 @@ export function createPrototypeRuntime(
         }
 
         case 'action.navigate': {
-          const rawRoute = typeof node.data.route === 'string' ? node.data.route.trim() : '';
+          const resolvedRoute = resolveInputValue(next.indexed, node, 'route', node.data.route ?? '', visiting);
+          const rawRoute = typeof resolvedRoute === 'string' ? resolvedRoute.trim() : '';
           const safeHref = sanitizeHref(rawRoute);
           if (!safeHref) {
             warnings.push(`Navigate "${node.id}" blocked unsafe URL.`);
@@ -696,11 +727,13 @@ export function createPrototypeRuntime(
       if (mounted) return getSnapshot();
       mounted = true;
       ephemeralNodeOutputs = new Map();
-      const starters: Array<{ indexed: IndexedGraph; nodeId: string }> = [];
+      const starters: Array<{ indexed: IndexedGraph; nodeId: string; outPortId?: string }> = [];
       for (const indexed of indexedGraphs) {
         for (const node of indexed.graph.nodes) {
           if (node.type === 'event.on-page-load') {
             starters.push({ indexed, nodeId: node.id });
+          } else if (node.type === 'source.page' && node.data.pageId === activePageId) {
+            starters.push({ indexed, nodeId: node.id, outPortId: 'onLoad' });
           }
         }
       }
@@ -712,7 +745,12 @@ export function createPrototypeRuntime(
 
     dispatchNodeEvent(nodeId: string, event: LogicNodeEventKind) {
       ephemeralNodeOutputs = new Map();
-      const starters: Array<{ indexed: IndexedGraph; nodeId: string }> = [];
+      const targetAstNode = astNodesById.get(nodeId);
+      const targetComponentId =
+        targetAstNode && targetAstNode.type === 'component-instance'
+          ? targetAstNode.componentId
+          : null;
+      const starters: Array<{ indexed: IndexedGraph; nodeId: string; outPortId?: string }> = [];
       for (const indexed of indexedGraphs) {
         for (const node of indexed.graph.nodes) {
           if (event === 'click' && node.type === 'event.on-click' && node.data.targetNodeId === nodeId) {
@@ -731,6 +769,15 @@ export function createPrototypeRuntime(
             node.data.phase === 'leave'
           ) {
             starters.push({ indexed, nodeId: node.id });
+          } else if (node.type === 'source.element' && node.data.targetNodeId === nodeId) {
+            if (event === 'click') starters.push({ indexed, nodeId: node.id, outPortId: 'onClick' });
+            else if (event === 'hover-enter') starters.push({ indexed, nodeId: node.id, outPortId: 'onHover' });
+          } else if (
+            node.type === 'source.component' &&
+            ((targetComponentId && node.data.componentId === targetComponentId) || node.data.componentId === nodeId)
+          ) {
+            if (event === 'click') starters.push({ indexed, nodeId: node.id, outPortId: 'onClick' });
+            else if (event === 'hover-enter') starters.push({ indexed, nodeId: node.id, outPortId: 'onHover' });
           }
         }
       }

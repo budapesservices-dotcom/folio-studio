@@ -131,10 +131,15 @@ export function validateLogicGraphSemantics(
   }
 
   const variablesById = collectAvailableVariables(graph, project);
+  const pagesById = new Map(project.pages.map((page) => [page.id, page]));
   const pageRoutes = new Set(project.pages.map((page) => page.route));
   const themeIds = new Set((project.designTokens?.themes ?? []).map((theme) => theme.id));
   const animationClipIds = new Set((project.animations ?? []).map((clip) => clip.id));
   const logicNodesById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const seenSourcePageIds = new Set<string>();
+  const seenSourceComponentIds = new Set<string>();
+  const seenSourceElementIds = new Set<string>();
+  const seenSourceThemeIds = new Set<string>();
 
   // Track incoming connections per (nodeId, portId) so nodes with wired inputs
   // don't falsely fail literal-required checks.
@@ -275,6 +280,104 @@ export function validateLogicGraphSemantics(
     const variableId = typeof node.data.variableId === 'string' ? node.data.variableId.trim() : '';
 
     switch (node.type) {
+      case 'source.page': {
+        const pageId = typeof node.data.pageId === 'string' ? node.data.pageId.trim() : '';
+        if (!pageId || !pagesById.has(pageId)) {
+          push(
+            'error',
+            'MISSING_PAGE_REFERENCE',
+            `Page node "${node.id}" must reference an existing page in this project.`,
+            { nodeId: node.id },
+          );
+        } else if (seenSourcePageIds.has(pageId)) {
+          push(
+            'warning',
+            'DUPLICATE_SOURCE_BINDING',
+            `Page "${pagesById.get(pageId)?.name ?? pageId}" is already bound to another Page node in this graph.`,
+            { nodeId: node.id },
+          );
+        } else {
+          seenSourcePageIds.add(pageId);
+        }
+        break;
+      }
+
+      case 'source.component': {
+        const componentId = typeof node.data.componentId === 'string' ? node.data.componentId.trim() : '';
+        const component = componentId ? componentsById.get(componentId) : undefined;
+        if (!component) {
+          push(
+            'error',
+            'MISSING_COMPONENT_REFERENCE',
+            `Component node "${node.id}" must reference an existing component in this project.`,
+            { nodeId: node.id },
+          );
+        } else {
+          if (!component.nodeLogicEnabled) {
+            push(
+              'warning',
+              'COMPONENT_NOT_ENABLED_FOR_LOGIC',
+              `Component "${component.name}" is not enabled for Node Logic. Use "Send to Node" in Component Rack.`,
+              { nodeId: node.id },
+            );
+          }
+          if (seenSourceComponentIds.has(componentId)) {
+            push(
+              'warning',
+              'DUPLICATE_SOURCE_BINDING',
+              `Component "${component.name}" is already bound to another Component node in this graph.`,
+              { nodeId: node.id },
+            );
+          } else {
+            seenSourceComponentIds.add(componentId);
+          }
+        }
+        break;
+      }
+
+      case 'source.element': {
+        if (!targetNodeId || !astNodesById.has(targetNodeId)) {
+          push(
+            'error',
+            'MISSING_TARGET_NODE',
+            `Canvas Layer node "${node.id}" references missing AST node "${targetNodeId}".`,
+            { nodeId: node.id },
+          );
+        } else if (seenSourceElementIds.has(targetNodeId)) {
+          push(
+            'warning',
+            'DUPLICATE_SOURCE_BINDING',
+            `Layer "${astNodesById.get(targetNodeId)?.name ?? targetNodeId}" is already bound to another Canvas Layer node in this graph.`,
+            { nodeId: node.id },
+          );
+        } else {
+          seenSourceElementIds.add(targetNodeId);
+        }
+        break;
+      }
+
+      case 'source.theme': {
+        const themeId = typeof node.data.themeId === 'string' ? node.data.themeId.trim() : '';
+        if (!themeId || (themeIds.size > 0 && !themeIds.has(themeId))) {
+          push(
+            'error',
+            'MISSING_THEME',
+            `Theme node "${node.id}" references unknown theme "${themeId}".`,
+            { nodeId: node.id },
+          );
+        } else if (seenSourceThemeIds.has(themeId)) {
+          push(
+            'warning',
+            'DUPLICATE_SOURCE_BINDING',
+            `Theme "${themeId}" is already bound to another Theme node in this graph.`,
+            { nodeId: node.id },
+          );
+        } else {
+          seenSourceThemeIds.add(themeId);
+        }
+        break;
+      }
+
       case 'event.on-click':
       case 'event.on-hover': {
         if (!targetNodeId || !astNodesById.has(targetNodeId)) {
@@ -484,33 +587,35 @@ export function validateLogicGraphSemantics(
       }
 
       case 'action.navigate': {
-        const rawRoute = typeof node.data.route === 'string' ? node.data.route.trim() : '';
-        if (!rawRoute) {
-          push(
-            'error',
-            'INVALID_NAVIGATE_TARGET',
-            `Navigate node "${node.id}" requires a non-empty route or safe URL.`,
-            { nodeId: node.id },
-          );
-          break;
-        }
-        const safeHref = sanitizeHref(rawRoute);
-        if (!safeHref) {
-          push(
-            'error',
-            'UNSAFE_NAVIGATE_URL',
-            `Navigate node "${node.id}" uses a blocked or unsafe URL protocol.`,
-            { nodeId: node.id },
-          );
-          break;
-        }
-        if (rawRoute.startsWith('/') && !pageRoutes.has(rawRoute)) {
-          push(
-            'warning',
-            'UNKNOWN_PAGE_ROUTE',
-            `Navigate node "${node.id}" points to route "${rawRoute}" which does not match any page in this project.`,
-            { nodeId: node.id },
-          );
+        if (!incomingDataPorts.has(`${node.id}:route`)) {
+          const rawRoute = typeof node.data.route === 'string' ? node.data.route.trim() : '';
+          if (!rawRoute) {
+            push(
+              'error',
+              'INVALID_NAVIGATE_TARGET',
+              `Navigate node "${node.id}" requires a non-empty route or safe URL.`,
+              { nodeId: node.id },
+            );
+            break;
+          }
+          const safeHref = sanitizeHref(rawRoute);
+          if (!safeHref) {
+            push(
+              'error',
+              'UNSAFE_NAVIGATE_URL',
+              `Navigate node "${node.id}" uses a blocked or unsafe URL protocol.`,
+              { nodeId: node.id },
+            );
+            break;
+          }
+          if (rawRoute.startsWith('/') && !pageRoutes.has(rawRoute)) {
+            push(
+              'warning',
+              'UNKNOWN_PAGE_ROUTE',
+              `Navigate node "${node.id}" points to route "${rawRoute}" which does not match any page in this project.`,
+              { nodeId: node.id },
+            );
+          }
         }
         break;
       }
@@ -598,6 +703,8 @@ export function auditOrphanLogicReferences(project: FolioProject): readonly Logi
   const orphanCodes = new Set([
     'INVALID_GRAPH_SCOPE',
     'MISSING_TARGET_NODE',
+    'MISSING_PAGE_REFERENCE',
+    'MISSING_COMPONENT_REFERENCE',
     'MISSING_VARIABLE',
     'INVALID_VARIANT_REFERENCE',
     'MISSING_THEME',

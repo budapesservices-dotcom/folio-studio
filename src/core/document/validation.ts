@@ -1117,6 +1117,9 @@ export function validateProject(input: unknown): ValidationResult {
       if (component.slots !== undefined && !isComponentSlotsList(component.slots, masterNodesById)) {
         return { ok: false, error: `Component "${component.name}" contains invalid slot definitions.` };
       }
+      if (component.nodeLogicEnabled !== undefined && typeof component.nodeLogicEnabled !== 'boolean') {
+        return { ok: false, error: `Component "${component.name}" contains an invalid nodeLogicEnabled flag.` };
+      }
     }
     componentIds.add(component.id);
   }

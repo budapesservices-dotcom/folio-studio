@@ -36,8 +36,55 @@ import {
 export const LOGIC_NODE_WIDTH = 232;
 export const LOGIC_NODE_HEADER_HEIGHT = 38;
 export const LOGIC_NODE_SUBTITLE_HEIGHT = 22;
+export const LOGIC_SOURCE_PICKER_HEIGHT = 34;
 export const LOGIC_PORT_ROW_HEIGHT = 26;
 export const LOGIC_NODE_BODY_PAD_Y = 8;
+
+export type SourceLogicNodeType =
+  | 'source.page'
+  | 'source.component'
+  | 'source.element'
+  | 'source.theme';
+
+export function isSourceLogicNodeType(type: string): type is SourceLogicNodeType {
+  return (
+    type === 'source.page'
+    || type === 'source.component'
+    || type === 'source.element'
+    || type === 'source.theme'
+  );
+}
+
+/**
+ * Returns the set of entity IDs (pageId, componentId, targetNodeId, or themeId)
+ * already bound to other source nodes of the same type in the graph so UI
+ * dropdowns can grey out and disable already-used entries.
+ */
+export function getUsedSourceReferenceIds(
+  graph: LogicGraph | null | undefined,
+  nodeType: SourceLogicNodeType,
+  excludeNodeId?: string,
+): Set<string> {
+  const used = new Set<string>();
+  if (!graph) return used;
+  const key =
+    nodeType === 'source.page'
+      ? 'pageId'
+      : nodeType === 'source.component'
+        ? 'componentId'
+        : nodeType === 'source.element'
+          ? 'targetNodeId'
+          : 'themeId';
+  for (const node of graph.nodes) {
+    if (node.type !== nodeType) continue;
+    if (excludeNodeId && node.id === excludeNodeId) continue;
+    const raw = node.data[key];
+    if (typeof raw === 'string' && raw.trim().length > 0) {
+      used.add(raw.trim());
+    }
+  }
+  return used;
+}
 
 export interface LogicPoint {
   readonly x: number;
@@ -111,10 +158,14 @@ export function getLogicNodeCategory(type: string): LogicNodeCategory | 'custom'
   return getLogicNodeDefinition(type)?.category ?? 'custom';
 }
 
+export function getLogicNodeSubheaderHeight(type: string): number {
+  return isSourceLogicNodeType(type) ? LOGIC_SOURCE_PICKER_HEIGHT : LOGIC_NODE_SUBTITLE_HEIGHT;
+}
+
 export function getLogicNodeHeight(node: Pick<LogicNode, 'type'>): number {
   const { inputs, outputs } = getLogicNodePorts(node.type);
   const rows = Math.max(1, inputs.length, outputs.length);
-  return LOGIC_NODE_HEADER_HEIGHT + LOGIC_NODE_SUBTITLE_HEIGHT + LOGIC_NODE_BODY_PAD_Y * 2 + rows * LOGIC_PORT_ROW_HEIGHT;
+  return LOGIC_NODE_HEADER_HEIGHT + getLogicNodeSubheaderHeight(node.type) + LOGIC_NODE_BODY_PAD_Y * 2 + rows * LOGIC_PORT_ROW_HEIGHT;
 }
 
 export function getLogicPortLocalPosition(
@@ -122,13 +173,14 @@ export function getLogicPortLocalPosition(
   portId: string,
 ): LogicPoint | null {
   const { inputs, outputs } = getLogicNodePorts(node.type);
+  const subheaderH = getLogicNodeSubheaderHeight(node.type);
   const inIdx = inputs.findIndex((port) => port.id === portId);
   if (inIdx >= 0) {
     return {
       x: 0,
       y:
         LOGIC_NODE_HEADER_HEIGHT
-        + LOGIC_NODE_SUBTITLE_HEIGHT
+        + subheaderH
         + LOGIC_NODE_BODY_PAD_Y
         + inIdx * LOGIC_PORT_ROW_HEIGHT
         + LOGIC_PORT_ROW_HEIGHT / 2,
@@ -140,7 +192,7 @@ export function getLogicPortLocalPosition(
       x: LOGIC_NODE_WIDTH,
       y:
         LOGIC_NODE_HEADER_HEIGHT
-        + LOGIC_NODE_SUBTITLE_HEIGHT
+        + subheaderH
         + LOGIC_NODE_BODY_PAD_Y
         + outIdx * LOGIC_PORT_ROW_HEIGHT
         + LOGIC_PORT_ROW_HEIGHT / 2,
@@ -190,14 +242,11 @@ function wouldCreateDataflowCycle(
   graph: LogicGraph,
   sourceNodeId: string,
   targetNodeId: string,
+  ignoreConnectionId?: string,
 ): boolean {
-  // Adding data edge source -> target creates a cycle iff source is reachable
-  // by traversing existing data dependencies starting at sourceNodeId? Wait:
-  // A dataflow edge means target depends on source (target -> source in dep graph).
-  // Adding target -> source creates a cycle iff target is already reachable from source
-  // along existing dependency edges (i.e. source already depends on target).
   const depsByNode = new Map<string, string[]>();
   for (const conn of graph.connections) {
+    if (ignoreConnectionId && conn.id === ignoreConnectionId) continue;
     const srcNode = graph.nodes.find((n) => n.id === conn.sourceNodeId);
     const tgtNode = graph.nodes.find((n) => n.id === conn.targetNodeId);
     if (!srcNode || !tgtNode) continue;
@@ -232,6 +281,7 @@ export function canConnectLogicPorts(
   fromPortId: string,
   toNodeId: string,
   toPortId: string,
+  ignoreConnectionId?: string,
 ): LogicConnectionCheckResult {
   if (fromNodeId === toNodeId) {
     return { ok: false, reason: 'A node cannot connect to itself.' };
@@ -272,7 +322,8 @@ export function canConnectLogicPorts(
 
   const duplicate = graph.connections.some(
     (conn) =>
-      conn.sourceNodeId === sourceNode.id
+      conn.id !== ignoreConnectionId
+      && conn.sourceNodeId === sourceNode.id
       && conn.sourcePortId === sourcePort.id
       && conn.targetNodeId === targetNode.id
       && conn.targetPortId === targetPort.id,
@@ -281,7 +332,7 @@ export function canConnectLogicPorts(
     return { ok: false, reason: 'These two ports are already connected.' };
   }
 
-  if (targetPort.dataType !== 'exec' && wouldCreateDataflowCycle(graph, sourceNode.id, targetNode.id)) {
+  if (targetPort.dataType !== 'exec' && wouldCreateDataflowCycle(graph, sourceNode.id, targetNode.id, ignoreConnectionId)) {
     return { ok: false, reason: 'Pure data connections cannot form a circular dependency.' };
   }
 
@@ -294,6 +345,65 @@ export function canConnectLogicPorts(
       targetPortId: targetPort.id,
     },
   };
+}
+
+export interface SnapLogicPortMatch {
+  readonly nodeId: string;
+  readonly portId: string;
+  readonly direction: 'in' | 'out';
+  readonly position: LogicPoint;
+  readonly distance: number;
+}
+
+/**
+ * Finds the nearest compatible socket within `snapRadius` world units for
+ * magnetic drag-and-patch wiring.
+ */
+export function findSnapLogicPort(
+  graph: LogicGraph,
+  nodes: readonly LogicNode[],
+  anchorNodeId: string,
+  anchorPortId: string,
+  pointerWorld: LogicPoint,
+  snapRadius = 26,
+  ignoreConnectionId?: string,
+): SnapLogicPortMatch | null {
+  let best: SnapLogicPortMatch | null = null;
+  const maxDistSq = snapRadius * snapRadius;
+
+  for (const node of nodes) {
+    if (node.id === anchorNodeId) continue;
+    const { inputs, outputs } = getLogicNodePorts(node.type);
+    const allPorts = [...inputs, ...outputs];
+    for (const port of allPorts) {
+      const pos = getLogicPortWorldPosition(node, port.id);
+      if (!pos) continue;
+      const dx = pos.x - pointerWorld.x;
+      const dy = pos.y - pointerWorld.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq > maxDistSq) continue;
+      const check = canConnectLogicPorts(
+        graph,
+        anchorNodeId,
+        anchorPortId,
+        node.id,
+        port.id,
+        ignoreConnectionId,
+      );
+      if (!check.ok) continue;
+      const dist = Math.sqrt(distSq);
+      if (!best || dist < best.distance) {
+        best = {
+          nodeId: node.id,
+          portId: port.id,
+          direction: port.direction,
+          position: pos,
+          distance: dist,
+        };
+      }
+    }
+  }
+  return best;
 }
 
 export function touchLogicGraph(graph: LogicGraph, now = new Date().toISOString()): LogicGraph {
@@ -442,6 +552,37 @@ export function removeConnectionFromGraph(graph: LogicGraph, connectionId: strin
   });
 }
 
+/**
+ * Re-patches an existing connection from its original output anchor to a new
+ * target input socket in one atomic update. Dropping back onto the exact same
+ * target socket returns the original graph untouched.
+ */
+export function repatchConnectionInGraph(
+  graph: LogicGraph,
+  connectionId: string,
+  newTargetNodeId: string,
+  newTargetPortId: string,
+): { ok: true; graph: LogicGraph; connection: LogicConnection; unchanged?: boolean } | { ok: false; reason: string } {
+  const existing = graph.connections.find((conn) => conn.id === connectionId);
+  if (!existing) {
+    return { ok: false, reason: 'Connection no longer exists.' };
+  }
+  if (existing.targetNodeId === newTargetNodeId && existing.targetPortId === newTargetPortId) {
+    return { ok: true, graph, connection: existing, unchanged: true };
+  }
+  const withoutExisting = {
+    ...graph,
+    connections: graph.connections.filter((conn) => conn.id !== connectionId),
+  };
+  return addConnectionToGraph(
+    withoutExisting,
+    existing.sourceNodeId,
+    existing.sourcePortId,
+    newTargetNodeId,
+    newTargetPortId,
+  );
+}
+
 export function addVariableToGraph(
   graph: LogicGraph,
   args: { name: string; valueType: LogicValueType; initialValue: LogicVariableValue },
@@ -535,6 +676,8 @@ export function getLogicNodeSummary(
   variables: readonly LogicVariableDefinition[],
   themes: readonly { id: string; name: string }[],
   animations: readonly { id: string; name: string }[] = [],
+  pages: readonly { id: string; name: string; route: string }[] = [],
+  components: readonly { id: string; name: string }[] = [],
 ): string {
   const findNodeName = (id: unknown) => {
     if (typeof id !== 'string' || !id) return 'Unbound layer';
@@ -546,6 +689,22 @@ export function getLogicNodeSummary(
   };
 
   switch (node.type) {
+    case 'source.page': {
+      const pageId = typeof node.data.pageId === 'string' ? node.data.pageId : '';
+      const page = pages.find((p) => p.id === pageId);
+      return page ? `${page.name} (${page.route})` : 'Select a page';
+    }
+    case 'source.component': {
+      const compId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
+      const comp = components.find((c) => c.id === compId);
+      return comp ? comp.name : 'Select a sent component';
+    }
+    case 'source.element':
+      return findNodeName(node.data.targetNodeId);
+    case 'source.theme': {
+      const themeId = typeof node.data.themeId === 'string' ? node.data.themeId : '';
+      return themes.find((t) => t.id === themeId)?.name ?? (themeId || 'Select a theme');
+    }
     case 'event.on-click':
       return findNodeName(node.data.targetNodeId);
     case 'event.on-hover':
@@ -805,11 +964,12 @@ export function createLogicPresetGraph(
 }
 
 const AUTO_ARRANGE_CATEGORY_ORDER: Record<LogicNodeCategory | 'custom', number> = {
-  event: 0,
-  state: 1,
-  logic: 2,
-  action: 3,
-  custom: 4,
+  source: 0,
+  event: 1,
+  state: 2,
+  logic: 3,
+  action: 4,
+  custom: 5,
 };
 
 const AUTO_ARRANGE_START_X = 64;
@@ -900,10 +1060,16 @@ export function autoArrangeLogicGraph(graph: LogicGraph): LogicGraph {
     }
   }
 
-  // Sort connected components: event-driven flows first, then larger flows, then top-most
+  // Sort connected components: source/event-driven flows first, then larger flows, then top-most
   connectedComponents.sort((compA, compB) => {
-    const aHasEvent = compA.some((n) => getLogicNodeCategory(n.type) === 'event') ? 0 : 1;
-    const bHasEvent = compB.some((n) => getLogicNodeCategory(n.type) === 'event') ? 0 : 1;
+    const aHasEvent = compA.some((n) => {
+      const cat = getLogicNodeCategory(n.type);
+      return cat === 'source' || cat === 'event';
+    }) ? 0 : 1;
+    const bHasEvent = compB.some((n) => {
+      const cat = getLogicNodeCategory(n.type);
+      return cat === 'source' || cat === 'event';
+    }) ? 0 : 1;
     if (aHasEvent !== bHasEvent) return aHasEvent - bHasEvent;
     if (compB.length !== compA.length) return compB.length - compA.length;
     const aMinY = Math.min(...compA.map((n) => n.y));
@@ -1017,7 +1183,8 @@ export function autoArrangeLogicGraph(graph: LogicGraph): LogicGraph {
     const eventReachable = new Set<string>();
     const evQueue: string[] = [];
     for (const node of component) {
-      if (getLogicNodeCategory(node.type) === 'event') {
+      const cat = getLogicNodeCategory(node.type);
+      if (cat === 'source' || cat === 'event') {
         eventReachable.add(node.id);
         evQueue.push(node.id);
       }

@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { getActivePage } from '../../core/document/project';
 import { getProjectDesignTokens } from '../../core/document/tokens';
 import type {
+  ComponentDefinition,
   DesignNode,
   FolioProject,
+  LogicConnection,
   LogicGraph,
+  LogicNode,
   LogicValueType,
   LogicVariableDefinition,
   LogicVariableValue,
@@ -36,21 +39,26 @@ import {
   createLogicId,
   createLogicPresetGraph,
   createStarterMainPageLogicGraph,
+  findSnapLogicPort,
   getLogicNodeCategory,
   getLogicNodePorts,
   getLogicNodeSummary,
   getLogicPortDataType,
   getLogicPortWorldPosition,
+  getUsedSourceReferenceIds,
+  isSourceLogicNodeType,
   moveNodeInGraph,
   removeConnectionFromGraph,
   removeNodeFromGraph,
   removeVariableFromGraph,
+  repatchConnectionInGraph,
   touchLogicGraph,
   updateNodeDataInGraph,
   updateVariableInGraph,
   type LogicPoint,
   type LogicPresetId,
   type LogicViewportTransform,
+  type SnapLogicPortMatch,
 } from './nodeLogicGraphHelpers';
 import { NodeLogicInspector, type NodeLogicInspectorTab } from './NodeLogicInspector';
 import { StudioIcon } from './StudioIcon';
@@ -61,15 +69,30 @@ export interface NodeLogicWorkspaceProps {
   mainCommandClient: MainCanvasCommandClient;
   onNotice: (message: string) => void;
   onOpenLivePreview: (pageId?: string) => void;
+  onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
   autoArrangeRequestNonce?: number;
   onActiveGraphNodeCountChange?: (nodeCount: number) => void;
 }
 
-interface PendingWireState {
-  readonly fromNodeId: string;
-  readonly fromPortId: string;
-  readonly fromDirection: 'in' | 'out';
+interface WirePatchState {
+  readonly mode: 'drag' | 'click';
+  readonly pointerId: number | null;
+  readonly startClientX: number;
+  readonly startClientY: number;
+  readonly hasDragged: boolean;
+  readonly anchorNodeId: string;
+  readonly anchorPortId: string;
+  readonly anchorDirection: 'in' | 'out';
   readonly pointerWorld: LogicPoint;
+  readonly snapTarget: SnapLogicPortMatch | null;
+  readonly detachedConnection?: LogicConnection;
+}
+
+interface WireLiftCandidate {
+  readonly connection: LogicConnection;
+  readonly pointerId: number;
+  readonly startClientX: number;
+  readonly startClientY: number;
 }
 
 interface NodeDragState {
@@ -91,8 +114,12 @@ interface PanDragState {
   readonly originPanY: number;
 }
 
+const DRAG_ACTIVATION_THRESHOLD_PX = 5;
+const WIRE_SNAP_RADIUS_WORLD = 28;
+
 const CATEGORY_FILTER_OPTIONS: readonly { id: 'all' | LogicNodeCategory; label: string }[] = [
   { id: 'all', label: 'All' },
+  { id: 'source', label: 'Sources' },
   { id: 'event', label: 'Events' },
   { id: 'state', label: 'State' },
   { id: 'logic', label: 'Logic' },
@@ -100,6 +127,7 @@ const CATEGORY_FILTER_OPTIONS: readonly { id: 'all' | LogicNodeCategory; label: 
 ];
 
 const CATEGORY_MARKERS: Record<LogicNodeCategory | 'custom', { glyph: string; label: string }> = {
+  source: { glyph: '◈', label: 'Source' },
   event: { glyph: '◆', label: 'Event' },
   state: { glyph: '■', label: 'State' },
   logic: { glyph: '⬡', label: 'Logic' },
@@ -113,6 +141,7 @@ export default function NodeLogicWorkspace({
   mainCommandClient,
   onNotice,
   onOpenLivePreview,
+  onToggleComponentNodeLogic,
   autoArrangeRequestNonce = 0,
   onActiveGraphNodeCountChange,
 }: NodeLogicWorkspaceProps) {
@@ -132,7 +161,9 @@ export default function NodeLogicWorkspace({
   const [viewport, setViewport] = useState<LogicViewportTransform>({ panX: 32, panY: 32, zoom: 0.85 });
   const [nodeDrag, setNodeDrag] = useState<NodeDragState | null>(null);
   const [panDrag, setPanDrag] = useState<PanDragState | null>(null);
-  const [pendingWire, setPendingWire] = useState<PendingWireState | null>(null);
+  const [wirePatch, setWirePatch] = useState<WirePatchState | null>(null);
+  const [wireLiftCandidate, setWireLiftCandidate] = useState<WireLiftCandidate | null>(null);
+  const suppressNextPortClickRef = useRef(false);
 
   const activePage = useMemo(
     () => project.pages.find((page) => page.id === activePageId) ?? getActivePage(project),
@@ -357,9 +388,27 @@ export default function NodeLogicWorkspace({
       : { x: 260, y: 160 };
     const pos = computeNextNodePosition(targetGraph, centerWorld);
 
-    // Pre-fill helpful defaults for first theme or layer when sensible
+    // Pre-fill helpful defaults — auto-picking the first unused source reference for source.* nodes
     const defaultExtras: Record<string, string | number | boolean | null> = {};
-    if (type === 'action.set-theme' && designTokens.themes[0]) {
+    if (type === 'source.page') {
+      const usedPages = getUsedSourceReferenceIds(targetGraph, 'source.page');
+      const firstAvailable = project.pages.find((page) => !usedPages.has(page.id));
+      defaultExtras.pageId = firstAvailable?.id ?? '';
+    } else if (type === 'source.component') {
+      const usedComponents = getUsedSourceReferenceIds(targetGraph, 'source.component');
+      const firstAvailable = project.components.find(
+        (comp) => comp.nodeLogicEnabled && !usedComponents.has(comp.id),
+      );
+      defaultExtras.componentId = firstAvailable?.id ?? '';
+    } else if (type === 'source.element') {
+      const usedElements = getUsedSourceReferenceIds(targetGraph, 'source.element');
+      const firstAvailable = scopedAstNodes.find((item) => !usedElements.has(item.id));
+      defaultExtras.targetNodeId = firstAvailable?.id ?? '';
+    } else if (type === 'source.theme') {
+      const usedThemes = getUsedSourceReferenceIds(targetGraph, 'source.theme');
+      const firstAvailable = designTokens.themes.find((theme) => !usedThemes.has(theme.id));
+      defaultExtras.themeId = firstAvailable?.id ?? '';
+    } else if (type === 'action.set-theme' && designTokens.themes[0]) {
       defaultExtras.themeId = designTokens.themes[0].id;
     } else if (type === 'action.navigate') {
       defaultExtras.route = activePage.route;
@@ -432,9 +481,22 @@ export default function NodeLogicWorkspace({
     [displayNodes],
   );
 
-  // Global pointer tracking for smooth node dragging, panning, and wire dragging
+  const connectedPortKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (!activeGraph) return keys;
+    const liftedId =
+      wirePatch?.hasDragged && wirePatch.detachedConnection ? wirePatch.detachedConnection.id : null;
+    for (const conn of activeGraph.connections) {
+      if (conn.id === liftedId) continue;
+      keys.add(`${conn.sourceNodeId}:${conn.sourcePortId}`);
+      keys.add(`${conn.targetNodeId}:${conn.targetPortId}`);
+    }
+    return keys;
+  }, [activeGraph, wirePatch]);
+
+  // Global pointer tracking for smooth node dragging, panning, and drag-and-patch / drag-to-disconnect wires
   useEffect(() => {
-    if (!nodeDrag && !panDrag && !pendingWire) return;
+    if (!nodeDrag && !panDrag && !wirePatch && !wireLiftCandidate) return;
 
     const handlePointerMove = (event: PointerEvent) => {
       if (nodeDrag && event.pointerId === nodeDrag.pointerId) {
@@ -449,7 +511,10 @@ export default function NodeLogicWorkspace({
               }
             : null,
         );
-      } else if (panDrag && event.pointerId === panDrag.pointerId) {
+        return;
+      }
+
+      if (panDrag && event.pointerId === panDrag.pointerId) {
         const dx = event.clientX - panDrag.startClientX;
         const dy = event.clientY - panDrag.startClientY;
         setViewport((current) => ({
@@ -457,9 +522,71 @@ export default function NodeLogicWorkspace({
           panX: Math.round(panDrag.originPanX + dx),
           panY: Math.round(panDrag.originPanY + dy),
         }));
-      } else if (pendingWire) {
-        setPendingWire((current) =>
-          current ? { ...current, pointerWorld: screenToWorld(event.clientX, event.clientY) } : null,
+        return;
+      }
+
+      if (wireLiftCandidate && event.pointerId === wireLiftCandidate.pointerId && activeGraph) {
+        const dist = Math.hypot(
+          event.clientX - wireLiftCandidate.startClientX,
+          event.clientY - wireLiftCandidate.startClientY,
+        );
+        if (dist >= DRAG_ACTIVATION_THRESHOLD_PX) {
+          const pointerWorld = screenToWorld(event.clientX, event.clientY);
+          const conn = wireLiftCandidate.connection;
+          const snapTarget = findSnapLogicPort(
+            activeGraph,
+            displayNodes,
+            conn.sourceNodeId,
+            conn.sourcePortId,
+            pointerWorld,
+            WIRE_SNAP_RADIUS_WORLD,
+            conn.id,
+          );
+          setWireLiftCandidate(null);
+          setWirePatch({
+            mode: 'drag',
+            pointerId: event.pointerId,
+            startClientX: wireLiftCandidate.startClientX,
+            startClientY: wireLiftCandidate.startClientY,
+            hasDragged: true,
+            anchorNodeId: conn.sourceNodeId,
+            anchorPortId: conn.sourcePortId,
+            anchorDirection: 'out',
+            pointerWorld,
+            snapTarget,
+            detachedConnection: conn,
+          });
+        }
+        return;
+      }
+
+      if (wirePatch) {
+        if (wirePatch.mode === 'drag' && wirePatch.pointerId !== null && event.pointerId !== wirePatch.pointerId) {
+          return;
+        }
+        const pointerWorld = screenToWorld(event.clientX, event.clientY);
+        const dist = Math.hypot(event.clientX - wirePatch.startClientX, event.clientY - wirePatch.startClientY);
+        const hasDragged = wirePatch.hasDragged || (wirePatch.mode === 'drag' && dist >= DRAG_ACTIVATION_THRESHOLD_PX);
+        const snapTarget = activeGraph
+          ? findSnapLogicPort(
+              activeGraph,
+              displayNodes,
+              wirePatch.anchorNodeId,
+              wirePatch.anchorPortId,
+              pointerWorld,
+              WIRE_SNAP_RADIUS_WORLD,
+              wirePatch.detachedConnection?.id,
+            )
+          : null;
+        setWirePatch((current) =>
+          current
+            ? {
+                ...current,
+                hasDragged,
+                pointerWorld,
+                snapTarget,
+              }
+            : null,
         );
       }
     };
@@ -472,8 +599,104 @@ export default function NodeLogicWorkspace({
         }
         setNodeDrag(null);
       }
+
       if (panDrag && event.pointerId === panDrag.pointerId) {
         setPanDrag(null);
+      }
+
+      if (wireLiftCandidate && event.pointerId === wireLiftCandidate.pointerId) {
+        // Short click on wire without dragging selects it for inspection
+        setSelectedConnectionId(wireLiftCandidate.connection.id);
+        setSelectedNodeId(null);
+        setInspectorTab('node');
+        setWireLiftCandidate(null);
+      }
+
+      if (wirePatch && wirePatch.mode === 'drag' && event.pointerId === wirePatch.pointerId) {
+        if (!wirePatch.hasDragged) {
+          if (wirePatch.detachedConnection) {
+            // Short tap on a connected input selects its incoming wire without unplugging
+            setSelectedConnectionId(wirePatch.detachedConnection.id);
+            setSelectedNodeId(null);
+            setInspectorTab('node');
+            setWirePatch(null);
+            suppressNextPortClickRef.current = true;
+          } else {
+            // Quick click on an unwired socket falls back gracefully to click-to-connect mode
+            setWirePatch({
+              ...wirePatch,
+              mode: 'click',
+              pointerId: null,
+              hasDragged: false,
+            });
+            suppressNextPortClickRef.current = true;
+          }
+          return;
+        }
+
+        // Completed a real drag gesture
+        suppressNextPortClickRef.current = true;
+        if (activeGraph) {
+          const finalPointer = screenToWorld(event.clientX, event.clientY);
+          const finalSnap =
+            wirePatch.snapTarget
+            ?? findSnapLogicPort(
+              activeGraph,
+              displayNodes,
+              wirePatch.anchorNodeId,
+              wirePatch.anchorPortId,
+              finalPointer,
+              WIRE_SNAP_RADIUS_WORLD,
+              wirePatch.detachedConnection?.id,
+            );
+
+          if (wirePatch.detachedConnection) {
+            const detached = wirePatch.detachedConnection;
+            if (finalSnap) {
+              if (
+                finalSnap.nodeId === detached.targetNodeId
+                && finalSnap.portId === detached.targetPortId
+              ) {
+                // Dropped back on the exact same port — keep existing wire untouched
+              } else {
+                const res = repatchConnectionInGraph(
+                  activeGraph,
+                  detached.id,
+                  finalSnap.nodeId,
+                  finalSnap.portId,
+                );
+                if (res.ok) {
+                  commitGraphUpdate(res.graph, 'Re-patch logic wire');
+                  setSelectedConnectionId(res.connection.id);
+                  setSelectedNodeId(null);
+                } else {
+                  onNotice(res.reason);
+                }
+              }
+            } else {
+              // Dropped onto open canvas — disconnect the wire!
+              commitGraphUpdate(removeConnectionFromGraph(activeGraph, detached.id), 'Disconnect logic wire');
+              setSelectedConnectionId(null);
+              onNotice('Disconnected logic wire.');
+            }
+          } else if (finalSnap) {
+            const res = addConnectionToGraph(
+              activeGraph,
+              wirePatch.anchorNodeId,
+              wirePatch.anchorPortId,
+              finalSnap.nodeId,
+              finalSnap.portId,
+            );
+            if (res.ok) {
+              commitGraphUpdate(res.graph, 'Connect logic ports');
+              setSelectedConnectionId(res.connection.id);
+              setSelectedNodeId(null);
+            } else {
+              onNotice(res.reason);
+            }
+          }
+        }
+        setWirePatch(null);
       }
     };
 
@@ -485,9 +708,76 @@ export default function NodeLogicWorkspace({
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);
     };
-  }, [nodeDrag, panDrag, pendingWire, viewport.zoom, activeGraph, commitGraphUpdate, screenToWorld]);
+  }, [
+    nodeDrag,
+    panDrag,
+    wirePatch,
+    wireLiftCandidate,
+    viewport.zoom,
+    activeGraph,
+    displayNodes,
+    commitGraphUpdate,
+    screenToWorld,
+    onNotice,
+  ]);
 
-  // Complete or start a wire connection when interacting with any port socket
+  // Start drag-and-patch (or unplug an already-connected input socket) on pointerdown
+  const handlePortPointerDown = (
+    event: PointerEvent,
+    nodeId: string,
+    portId: string,
+    direction: 'in' | 'out',
+  ) => {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    if (!activeGraph) return;
+
+    // If user already started click-mode wiring, let handlePortClick complete it
+    if (wirePatch?.mode === 'click') return;
+
+    const node = displayNodesById.get(nodeId);
+    const startPos = node ? getLogicPortWorldPosition(node, portId) : null;
+    if (!startPos) return;
+
+    // If grabbing an already-connected input port, lift its latest incoming wire so dragging detaches or re-patches it
+    if (direction === 'in') {
+      const incoming = activeGraph.connections.filter(
+        (conn) => conn.targetNodeId === nodeId && conn.targetPortId === portId,
+      );
+      const latestIncoming = incoming[incoming.length - 1];
+      if (latestIncoming) {
+        setWirePatch({
+          mode: 'drag',
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          hasDragged: false,
+          anchorNodeId: latestIncoming.sourceNodeId,
+          anchorPortId: latestIncoming.sourcePortId,
+          anchorDirection: 'out',
+          pointerWorld: startPos,
+          snapTarget: null,
+          detachedConnection: latestIncoming,
+        });
+        return;
+      }
+    }
+
+    setWirePatch({
+      mode: 'drag',
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      hasDragged: false,
+      anchorNodeId: nodeId,
+      anchorPortId: portId,
+      anchorDirection: direction,
+      pointerWorld: startPos,
+      snapTarget: null,
+    });
+  };
+
+  // Preserve accessible click-to-connect / keyboard Enter wiring alongside drag-and-patch
   const handlePortClick = (
     event: MouseEvent,
     nodeId: string,
@@ -495,35 +785,45 @@ export default function NodeLogicWorkspace({
     direction: 'in' | 'out',
   ) => {
     event.stopPropagation();
+    if (suppressNextPortClickRef.current) {
+      suppressNextPortClickRef.current = false;
+      return;
+    }
     if (!activeGraph) return;
 
-    if (!pendingWire) {
+    if (!wirePatch) {
       const node = displayNodesById.get(nodeId);
       const startPos = node ? getLogicPortWorldPosition(node, portId) : null;
       if (!startPos) return;
-      setPendingWire({
-        fromNodeId: nodeId,
-        fromPortId: portId,
-        fromDirection: direction,
+      setWirePatch({
+        mode: 'click',
+        pointerId: null,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        hasDragged: false,
+        anchorNodeId: nodeId,
+        anchorPortId: portId,
+        anchorDirection: direction,
         pointerWorld: startPos,
+        snapTarget: null,
       });
       return;
     }
 
     // Clicking the same port cancels pending wire cleanly
-    if (pendingWire.fromNodeId === nodeId && pendingWire.fromPortId === portId) {
-      setPendingWire(null);
+    if (wirePatch.anchorNodeId === nodeId && wirePatch.anchorPortId === portId) {
+      setWirePatch(null);
       return;
     }
 
     const result = addConnectionToGraph(
       activeGraph,
-      pendingWire.fromNodeId,
-      pendingWire.fromPortId,
+      wirePatch.anchorNodeId,
+      wirePatch.anchorPortId,
       nodeId,
       portId,
     );
-    setPendingWire(null);
+    setWirePatch(null);
     if (!result.ok) {
       onNotice(result.reason);
       return;
@@ -538,9 +838,10 @@ export default function NodeLogicWorkspace({
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
       return;
     }
-    if (event.key === 'Escape' && pendingWire) {
+    if (event.key === 'Escape' && (wirePatch || wireLiftCandidate)) {
       event.preventDefault();
-      setPendingWire(null);
+      setWirePatch(null);
+      setWireLiftCandidate(null);
       return;
     }
     if ((event.key === 'Delete' || event.key === 'Backspace') && activeGraph) {
@@ -572,15 +873,166 @@ export default function NodeLogicWorkspace({
   const selectedNode = activeGraph?.nodes.find((n) => n.id === selectedNodeId) ?? null;
   const selectedConnection = activeGraph?.connections.find((c) => c.id === selectedConnectionId) ?? null;
 
+  const isWireActivelyShown = Boolean(wirePatch && (wirePatch.mode === 'click' || wirePatch.hasDragged));
+
   const pendingWirePath = useMemo(() => {
-    if (!pendingWire) return null;
-    const fromNode = displayNodesById.get(pendingWire.fromNodeId);
-    const fromPos = fromNode ? getLogicPortWorldPosition(fromNode, pendingWire.fromPortId) : null;
-    if (!fromPos) return null;
-    return pendingWire.fromDirection === 'out'
-      ? buildLogicWirePath(fromPos, pendingWire.pointerWorld)
-      : buildLogicWirePath(pendingWire.pointerWorld, fromPos);
-  }, [pendingWire, displayNodesById]);
+    if (!wirePatch || !isWireActivelyShown) return null;
+    const anchorNode = displayNodesById.get(wirePatch.anchorNodeId);
+    const anchorPos = anchorNode ? getLogicPortWorldPosition(anchorNode, wirePatch.anchorPortId) : null;
+    if (!anchorPos) return null;
+    const endPoint = wirePatch.snapTarget ? wirePatch.snapTarget.position : wirePatch.pointerWorld;
+    return wirePatch.anchorDirection === 'out'
+      ? buildLogicWirePath(anchorPos, endPoint)
+      : buildLogicWirePath(endPoint, anchorPos);
+  }, [wirePatch, isWireActivelyShown, displayNodesById]);
+
+  const isUnpluggingWire = Boolean(
+    isWireActivelyShown && wirePatch?.detachedConnection && !wirePatch.snapTarget,
+  );
+
+  const renderInlineSourcePicker = (node: LogicNode) => {
+    if (!activeGraph || !isSourceLogicNodeType(node.type)) return null;
+
+    if (node.type === 'source.page') {
+      const currentPageId = typeof node.data.pageId === 'string' ? node.data.pageId : '';
+      const usedIds = getUsedSourceReferenceIds(activeGraph, 'source.page', node.id);
+      return (
+        <div
+          class="nl-node-picker"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <select
+            class="nl-node-select"
+            aria-label="Select page for Page node"
+            value={currentPageId}
+            onChange={(event) => {
+              commitGraphUpdate(
+                updateNodeDataInGraph(activeGraph, node.id, { pageId: event.currentTarget.value }),
+                'Bind Page node',
+              );
+            }}
+          >
+            <option value="">Select page…</option>
+            {project.pages.map((page) => {
+              const isUsed = usedIds.has(page.id);
+              return (
+                <option key={page.id} value={page.id} disabled={isUsed}>
+                  {page.name} ({page.route}){isUsed ? ' — In graph' : ''}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+      );
+    }
+
+    if (node.type === 'source.component') {
+      const currentComponentId = typeof node.data.componentId === 'string' ? node.data.componentId : '';
+      const usedIds = getUsedSourceReferenceIds(activeGraph, 'source.component', node.id);
+      const enabledComponents = project.components.filter(
+        (comp) => comp.nodeLogicEnabled || comp.id === currentComponentId,
+      );
+      return (
+        <div
+          class="nl-node-picker"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <select
+            class="nl-node-select"
+            aria-label="Select component for Component node"
+            value={currentComponentId}
+            onChange={(event) => {
+              commitGraphUpdate(
+                updateNodeDataInGraph(activeGraph, node.id, { componentId: event.currentTarget.value }),
+                'Bind Component node',
+              );
+            }}
+          >
+            <option value="">
+              {enabledComponents.length === 0 ? 'Send component to Node…' : 'Select component…'}
+            </option>
+            {enabledComponents.map((comp) => {
+              const isUsed = usedIds.has(comp.id);
+              const suffix = !comp.nodeLogicEnabled
+                ? ' — Disabled'
+                : isUsed
+                  ? ' — In graph'
+                  : '';
+              return (
+                <option key={comp.id} value={comp.id} disabled={isUsed}>
+                  {comp.name}{suffix}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+      );
+    }
+
+    if (node.type === 'source.element') {
+      const currentTargetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
+      const usedIds = getUsedSourceReferenceIds(activeGraph, 'source.element', node.id);
+      return (
+        <div
+          class="nl-node-picker"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <select
+            class="nl-node-select"
+            aria-label="Select canvas layer for Canvas Layer node"
+            value={currentTargetId}
+            onChange={(event) => {
+              commitGraphUpdate(
+                updateNodeDataInGraph(activeGraph, node.id, { targetNodeId: event.currentTarget.value }),
+                'Bind Canvas Layer node',
+              );
+            }}
+          >
+            <option value="">Select layer…</option>
+            {scopedAstNodes.map((ast) => {
+              const isUsed = usedIds.has(ast.id);
+              return (
+                <option key={ast.id} value={ast.id} disabled={isUsed}>
+                  {ast.name} ({ast.type}){isUsed ? ' — In graph' : ''}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+      );
+    }
+
+    const currentThemeId = typeof node.data.themeId === 'string' ? node.data.themeId : '';
+    const usedIds = getUsedSourceReferenceIds(activeGraph, 'source.theme', node.id);
+    return (
+      <div
+        class="nl-node-picker"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <select
+          class="nl-node-select"
+          aria-label="Select theme for Theme node"
+          value={currentThemeId}
+          onChange={(event) => {
+            commitGraphUpdate(
+              updateNodeDataInGraph(activeGraph, node.id, { themeId: event.currentTarget.value }),
+              'Bind Theme node',
+            );
+          }}
+        >
+          <option value="">Select theme…</option>
+          {designTokens.themes.map((theme) => {
+            const isUsed = usedIds.has(theme.id);
+            return (
+              <option key={theme.id} value={theme.id} disabled={isUsed}>
+                {theme.name}{isUsed ? ' — In graph' : ''}
+              </option>
+            );
+          })}
+        </select>
+      </div>
+    );
+  };
 
   const errorCount = validationReport?.errors.length ?? 0;
   const warningCount = validationReport?.warnings.length ?? 0;
@@ -619,7 +1071,8 @@ export default function NodeLogicWorkspace({
                 setActiveGraphId(event.currentTarget.value);
                 setSelectedNodeId(null);
                 setSelectedConnectionId(null);
-                setPendingWire(null);
+                setWirePatch(null);
+                setWireLiftCandidate(null);
               }}
             >
               {project.logicGraphs.length === 0 ? (
@@ -744,7 +1197,7 @@ export default function NodeLogicWorkspace({
               class="nl-input"
               type="search"
               aria-label="Search logic nodes"
-              placeholder="Filter 18 nodes…"
+              placeholder={`Filter ${LOGIC_CATALOG_LIST.length} nodes…`}
               value={paletteSearch}
               onInput={(event) => setPaletteSearch(event.currentTarget.value)}
             />
@@ -791,13 +1244,13 @@ export default function NodeLogicWorkspace({
         {/* Center Pan/Zoom Node-Wire Graph Canvas */}
         <div
           ref={stageRef}
-          class={`nl-canvas-stage ${panDrag ? 'is-panning' : ''} ${pendingWire ? 'is-connecting' : ''}`}
+          class={`nl-canvas-stage ${panDrag ? 'is-panning' : ''} ${isWireActivelyShown ? 'is-connecting' : ''}`}
           data-testid="node-logic-canvas"
           onPointerDown={(event) => {
             if (event.button !== 0 && event.button !== 1) return;
             setPresetsOpen(false);
-            if (pendingWire) {
-              setPendingWire(null);
+            if (wirePatch) {
+              setWirePatch(null);
               return;
             }
             setSelectedNodeId(null);
@@ -850,17 +1303,27 @@ export default function NodeLogicWorkspace({
                   const pathD = buildLogicWirePath(start, end);
                   const dataType = getLogicPortDataType(srcNode.type, conn.sourcePortId);
                   const isSelected = selectedConnectionId === conn.id;
+                  const isDetachedDragging = Boolean(
+                    isWireActivelyShown && wirePatch?.detachedConnection?.id === conn.id,
+                  );
                   return (
-                    <g key={conn.id} class={`nl-wire-group nl-wire-${dataType} ${isSelected ? 'is-selected' : ''}`}>
+                    <g
+                      key={conn.id}
+                      data-connection-id={conn.id}
+                      class={`nl-wire-group nl-wire-${dataType} ${isSelected ? 'is-selected' : ''} ${isDetachedDragging ? 'is-dragging-detached' : ''}`}
+                    >
                       <path
                         d={pathD}
                         class="nl-wire-hit"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
+                        onPointerDown={(event) => {
+                          if (event.button !== 0) return;
                           event.stopPropagation();
-                          setSelectedConnectionId(conn.id);
-                          setSelectedNodeId(null);
-                          setInspectorTab('node');
+                          setWireLiftCandidate({
+                            connection: conn,
+                            pointerId: event.pointerId,
+                            startClientX: event.clientX,
+                            startClientY: event.clientY,
+                          });
                         }}
                       />
                       <path d={pathD} class="nl-wire-stroke" />
@@ -868,7 +1331,10 @@ export default function NodeLogicWorkspace({
                   );
                 })}
                 {pendingWirePath && (
-                  <path d={pendingWirePath} class="nl-wire-pending" />
+                  <path
+                    d={pendingWirePath}
+                    class={`nl-wire-pending ${isUnpluggingWire ? 'is-unplugging' : ''} ${wirePatch?.snapTarget ? 'is-snapped' : ''}`}
+                  />
                 )}
               </svg>
 
@@ -885,7 +1351,10 @@ export default function NodeLogicWorkspace({
                   availableVariables,
                   designTokens.themes,
                   project.animations ?? [],
+                  project.pages,
+                  project.components,
                 );
+                const isSourceNode = isSourceLogicNodeType(node.type);
                 const diagCounts = diagnosticsByNodeId.get(node.id);
                 const isSelected = selectedNodeId === node.id;
 
@@ -937,36 +1406,62 @@ export default function NodeLogicWorkspace({
                       ) : null}
                     </header>
 
-                    <div class="nl-node-subtitle" title={summary}>
-                      {summary}
-                    </div>
+                    {isSourceNode ? (
+                      renderInlineSourcePicker(node)
+                    ) : (
+                      <div class="nl-node-subtitle" title={summary}>
+                        {summary}
+                      </div>
+                    )}
 
                     <div class="nl-node-ports">
                       {Array.from({ length: rowCount }).map((_, rowIdx) => {
                         const inPort = inputs[rowIdx];
                         const outPort = outputs[rowIdx];
 
+                        const inConnected = Boolean(inPort && connectedPortKeys.has(`${node.id}:${inPort.id}`));
+                        const outConnected = Boolean(outPort && connectedPortKeys.has(`${node.id}:${outPort.id}`));
+
                         const inCompatible = Boolean(
-                          pendingWire
+                          isWireActivelyShown
+                          && wirePatch
                           && inPort
                           && canConnectLogicPorts(
                             activeGraph,
-                            pendingWire.fromNodeId,
-                            pendingWire.fromPortId,
+                            wirePatch.anchorNodeId,
+                            wirePatch.anchorPortId,
                             node.id,
                             inPort.id,
+                            wirePatch.detachedConnection?.id,
                           ).ok,
                         );
                         const outCompatible = Boolean(
-                          pendingWire
+                          isWireActivelyShown
+                          && wirePatch
                           && outPort
                           && canConnectLogicPorts(
                             activeGraph,
-                            pendingWire.fromNodeId,
-                            pendingWire.fromPortId,
+                            wirePatch.anchorNodeId,
+                            wirePatch.anchorPortId,
                             node.id,
                             outPort.id,
+                            wirePatch.detachedConnection?.id,
                           ).ok,
+                        );
+
+                        const inSnapped = Boolean(
+                          isWireActivelyShown
+                          && wirePatch?.snapTarget
+                          && inPort
+                          && wirePatch.snapTarget.nodeId === node.id
+                          && wirePatch.snapTarget.portId === inPort.id,
+                        );
+                        const outSnapped = Boolean(
+                          isWireActivelyShown
+                          && wirePatch?.snapTarget
+                          && outPort
+                          && wirePatch.snapTarget.nodeId === node.id
+                          && wirePatch.snapTarget.portId === outPort.id,
                         );
 
                         return (
@@ -977,11 +1472,16 @@ export default function NodeLogicWorkspace({
                                   type="button"
                                   data-port-dir="in"
                                   data-port-id={inPort.id}
-                                  class={`nl-port-btn nl-port-${inPort.dataType} ${inCompatible ? 'is-compatible' : ''} ${
-                                    pendingWire?.fromNodeId === node.id && pendingWire?.fromPortId === inPort.id ? 'is-source' : ''
+                                  class={`nl-port-btn nl-port-${inPort.dataType} ${inConnected ? 'is-connected' : ''} ${inCompatible ? 'is-compatible' : ''} ${inSnapped ? 'is-snap-target' : ''} ${
+                                    isWireActivelyShown && wirePatch?.anchorNodeId === node.id && wirePatch?.anchorPortId === inPort.id ? 'is-source' : ''
                                   }`}
+                                  title={
+                                    inConnected
+                                      ? `Drag to disconnect or re-patch ${inPort.label}`
+                                      : `Connect to ${inPort.label} (${inPort.dataType})`
+                                  }
                                   aria-label={`Input port ${inPort.label} (${inPort.dataType}) on ${def?.label ?? node.type}`}
-                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onPointerDown={(event) => handlePortPointerDown(event, node.id, inPort.id, 'in')}
                                   onClick={(event) => handlePortClick(event, node.id, inPort.id, 'in')}
                                 >
                                   <span class={`nl-port-socket ${inPort.dataType === 'exec' ? 'is-exec' : ''}`} />
@@ -996,11 +1496,12 @@ export default function NodeLogicWorkspace({
                                   type="button"
                                   data-port-dir="out"
                                   data-port-id={outPort.id}
-                                  class={`nl-port-btn nl-port-${outPort.dataType} ${outCompatible ? 'is-compatible' : ''} ${
-                                    pendingWire?.fromNodeId === node.id && pendingWire?.fromPortId === outPort.id ? 'is-source' : ''
+                                  class={`nl-port-btn nl-port-${outPort.dataType} ${outConnected ? 'is-connected' : ''} ${outCompatible ? 'is-compatible' : ''} ${outSnapped ? 'is-snap-target' : ''} ${
+                                    isWireActivelyShown && wirePatch?.anchorNodeId === node.id && wirePatch?.anchorPortId === outPort.id ? 'is-source' : ''
                                   }`}
+                                  title={`Drag from ${outPort.label} (${outPort.dataType}) to connect`}
                                   aria-label={`Output port ${outPort.label} (${outPort.dataType}) on ${def?.label ?? node.type}`}
-                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onPointerDown={(event) => handlePortPointerDown(event, node.id, outPort.id, 'out')}
                                   onClick={(event) => handlePortClick(event, node.id, outPort.id, 'out')}
                                 >
                                   <span class="nl-port-label">{outPort.label}</span>
@@ -1024,9 +1525,17 @@ export default function NodeLogicWorkspace({
             </div>
           )}
 
-          {pendingWire && (
-            <div class="nl-wire-banner" role="status">
-              Select a highlighted compatible port to connect · Press Escape to cancel
+          {isWireActivelyShown && wirePatch && (
+            <div class={`nl-wire-banner ${isUnpluggingWire ? 'is-unplugging' : ''}`} role="status">
+              {wirePatch.detachedConnection
+                ? wirePatch.snapTarget
+                  ? 'Release to re-patch wire onto highlighted port'
+                  : 'Release on empty canvas to disconnect wire · Drag onto a port to re-patch'
+                : wirePatch.snapTarget
+                  ? 'Release to connect wire'
+                  : wirePatch.mode === 'drag'
+                    ? 'Drag onto a highlighted compatible port to connect · Release on canvas to cancel'
+                    : 'Click a highlighted compatible port to connect · Press Escape to cancel'}
             </div>
           )}
         </div>
@@ -1100,6 +1609,7 @@ export default function NodeLogicWorkspace({
             if (!runtimeRef.current) return;
             setRuntimeSnapshot(runtimeRef.current.reset());
           }}
+          onToggleComponentNodeLogic={onToggleComponentNodeLogic}
         />
       </div>
     </div>
