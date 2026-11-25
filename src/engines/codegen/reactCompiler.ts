@@ -20,11 +20,13 @@ import {
   buildNodeCssDeclarations,
   buildNodePseudoStateCssRules,
   buildVectorMaskDefsLines,
+  getNodeBorderInset,
   isVoidHtmlTag,
   resolveSemanticTag,
   resolveTokenCssVar,
   roundCss,
 } from './htmlCssCompiler';
+import { applyAutoLayoutToNodes } from '../layout/autoLayout';
 import {
   sanitizeCommentLabel,
   sanitizeCssValue,
@@ -110,7 +112,7 @@ function buildInlineJsxSvgLines(
   }
 
   const svgLines: string[] = [
-    `${indent}<svg width={${w}} height={${h}} viewBox="0 0 ${w} ${h}" fill="none" overflow="visible" aria-hidden="true">`,
+    `${indent}<svg width={${w}} height={${h}} viewBox="0 0 ${w} ${h}" fill="none" overflow="visible" style={{ display: "block" }} aria-hidden="true">`,
     `${indent}  <path ${pathAttrs.join(' ')} />`,
   ];
 
@@ -190,7 +192,10 @@ function buildComponentStylesheet(
   lines.push('}');
   lines.push('');
 
-  const { roots, childrenByParent, nodeById } = buildChildrenMap(component.document.nodes);
+  const solvedMasterNodes = component.document.nodes.some((n) => n.layout && n.layout.mode !== 'none')
+    ? applyAutoLayoutToNodes(component.document.nodes, undefined, tokens)
+    : component.document.nodes;
+  const { roots, childrenByParent, nodeById } = buildChildrenMap(solvedMasterNodes);
   const classByNodeId = new Map<string, string>();
 
   const emitMasterCss = (
@@ -239,8 +244,9 @@ function buildComponentStylesheet(
 
     const children = childrenByParent.get(node.id) ?? [];
     const selfIsAutoLayout = Boolean(node.layout && node.layout.mode !== 'none');
+    const borderInset = getNodeBorderInset(node);
     for (const child of children) {
-      emitMasterCss(child, node, selfIsAutoLayout, { x: node.x, y: node.y });
+      emitMasterCss(child, node, selfIsAutoLayout, { x: node.x + borderInset.left, y: node.y + borderInset.top });
     }
   };
 

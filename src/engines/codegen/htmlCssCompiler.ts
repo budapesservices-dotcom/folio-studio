@@ -58,6 +58,7 @@ import {
 import type { CodeMappingEntry, CompiledCodeFile } from './types';
 import { buildLivePreviewLogicScript } from '../prototype/codegen';
 import { compilePageAnimationsCss } from '../animation/codegen';
+import { applyAutoLayoutToNodes } from '../layout/autoLayout';
 
 export function roundCss(value: number): number {
   return Math.round(value * 100) / 100;
@@ -74,6 +75,69 @@ function mapJustifyContent(value: NodeLayoutConfig['justifyContent']): string {
     default:
       return 'flex-start';
   }
+}
+
+function mapGridJustifyItems(value: NodeLayoutConfig['justifyContent']): string | null {
+  switch (value) {
+    case 'center': return 'center';
+    case 'end': return 'end';
+    case 'start': return 'start';
+    default:
+      return null;
+  }
+}
+
+export function getNodeBorderInset(node: DesignNode | null | undefined): { top: number; left: number } {
+  if (!node) return { top: 0, left: 0 };
+  if (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') {
+    if (node.style.borderSides) {
+      const topSide = node.style.borderSides.top;
+      const leftSide = node.style.borderSides.left;
+      const top = topSide && topSide.width > 0 && topSide.color && topSide.color !== 'none'
+        && (!topSide.widthUnit || topSide.widthUnit === 'px')
+        ? topSide.width
+        : 0;
+      const left = leftSide && leftSide.width > 0 && leftSide.color && leftSide.color !== 'none'
+        && (!leftSide.widthUnit || leftSide.widthUnit === 'px')
+        ? leftSide.width
+        : 0;
+      return { top, left };
+    }
+    const sw = node.style.strokeWidth;
+    if (
+      sw > 0
+      && node.style.stroke
+      && node.style.stroke !== 'none'
+      && node.style.strokeAlign !== 'outside'
+      && (!node.style.strokeWidthUnit || node.style.strokeWidthUnit === 'px')
+    ) {
+      return { top: sw, left: sw };
+    }
+  } else if (node.type === 'image') {
+    if (node.style.borderSides) {
+      const topSide = node.style.borderSides.top;
+      const leftSide = node.style.borderSides.left;
+      const top = topSide && topSide.width > 0 && topSide.color && topSide.color !== 'none'
+        && (!topSide.widthUnit || topSide.widthUnit === 'px')
+        ? topSide.width
+        : 0;
+      const left = leftSide && leftSide.width > 0 && leftSide.color && leftSide.color !== 'none'
+        && (!leftSide.widthUnit || leftSide.widthUnit === 'px')
+        ? leftSide.width
+        : 0;
+      return { top, left };
+    }
+    const sw = node.style.strokeWidth ?? 0;
+    if (
+      sw > 0
+      && node.style.stroke
+      && node.style.stroke !== 'none'
+      && (!node.style.strokeWidthUnit || node.style.strokeWidthUnit === 'px')
+    ) {
+      return { top: sw, left: sw };
+    }
+  }
+  return { top: 0, left: 0 };
 }
 
 function mapAlignItems(value: NodeLayoutConfig['alignItems']): string {
@@ -172,7 +236,7 @@ function buildInlineSvgMarkup(
     : '';
 
   const svgLines: string[] = [
-    `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" overflow="visible" aria-hidden="true">`,
+    `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" overflow="visible" style="display:block" aria-hidden="true">`,
     `${indent}  <path d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${fillRule}${linecap}${linejoin}${dash} />`,
   ];
 
@@ -538,7 +602,10 @@ export function buildNodeCssDeclarations(
   } else if (node.layout && node.layout.mode === 'flex') {
     declarations.push('display: flex;');
     declarations.push(`flex-direction: ${node.layout.direction};`);
-    if (node.layout.wrap === 'wrap') declarations.push('flex-wrap: wrap;');
+    if (node.layout.wrap === 'wrap') {
+      declarations.push('flex-wrap: wrap;');
+      declarations.push('align-content: flex-start;');
+    }
     declarations.push(`justify-content: ${mapJustifyContent(node.layout.justifyContent)};`);
     declarations.push(`align-items: ${mapAlignItems(node.layout.alignItems)};`);
     const gapVar = resolveTokenCssVar(tokens, node.tokenBindings?.gap);
@@ -581,10 +648,17 @@ export function buildNodeCssDeclarations(
       && isSafeCssGridTemplate(node.layout.gridTemplateRows)
     ) {
       declarations.push(`grid-template-rows: ${node.layout.gridTemplateRows.trim()};`);
+    } else {
+      declarations.push('align-content: start;');
     }
 
     if (node.layout.justifyContent && node.layout.justifyContent !== 'start') {
-      declarations.push(`justify-items: ${mapJustifyContent(node.layout.justifyContent)};`);
+      const gridJustifyItems = mapGridJustifyItems(node.layout.justifyContent);
+      if (gridJustifyItems) {
+        declarations.push(`justify-items: ${gridJustifyItems};`);
+      } else {
+        declarations.push(`justify-content: ${mapJustifyContent(node.layout.justifyContent)};`);
+      }
     }
     if (node.layout.alignItems && node.layout.alignItems !== 'stretch') {
       declarations.push(`align-items: ${mapAlignItems(node.layout.alignItems)};`);
@@ -656,6 +730,10 @@ export function buildNodeCssDeclarations(
     return hasInset;
   };
 
+  const transformParts: string[] = [];
+  const hasExplicitMinW = node.layoutChild?.minWidthValue !== undefined || node.layoutChild?.minWidth !== undefined;
+  const hasExplicitMinH = node.layoutChild?.minHeightValue !== undefined || node.layoutChild?.minHeight !== undefined;
+
   if (isChildOfAutoLayout && !isOutOfFlowInAutoLayout) {
     declarations.push(`position: ${explicitPosition === 'sticky' ? 'sticky' : 'relative'};`);
     if (explicitPosition === 'sticky') {
@@ -663,9 +741,9 @@ export function buildNodeCssDeclarations(
         declarations.push('top: 0px;');
       }
     }
-    const widthMode = node.layoutChild?.widthMode ?? 'fixed';
-    const heightMode = node.layoutChild?.heightMode ?? 'fixed';
     const parentMode = parent?.layout?.mode ?? 'flex';
+    const widthMode = node.layoutChild?.widthMode ?? (parentMode === 'grid' ? 'fill' : 'fixed');
+    const heightMode = node.layoutChild?.heightMode ?? 'fixed';
     const parentIsRow =
       parentMode === 'flex'
       && (parent?.layout?.direction === 'row' || parent?.layout?.direction === 'row-reverse' || !parent?.layout?.direction);
@@ -675,6 +753,7 @@ export function buildNodeCssDeclarations(
       declarations.push('width: 100%;');
       if (parentIsRow) {
         declarations.push(`flex: ${growWeight} 1 0%;`);
+        if (!hasExplicitMinW) declarations.push('min-width: 0;');
       } else if (parentMode === 'flex') {
         declarations.push('align-self: stretch;');
       }
@@ -683,27 +762,32 @@ export function buildNodeCssDeclarations(
       if (parentIsRow) declarations.push('flex-shrink: 0;');
     } else if (widthMode === 'hug') {
       declarations.push('width: fit-content;');
+      if (parentIsRow) declarations.push('flex-shrink: 0;');
     } else {
       declarations.push(`width: ${resolvedFixedWidth};`);
+      if (parentIsRow) declarations.push('flex-shrink: 0;');
     }
 
     if (heightMode === 'fill') {
       declarations.push('height: 100%;');
       if (!parentIsRow && parentMode === 'flex') {
         declarations.push(`flex: ${growWeight} 1 0%;`);
+        if (!hasExplicitMinH) declarations.push('min-height: 0;');
       } else {
         declarations.push('align-self: stretch;');
       }
     } else if (heightMode === 'relative') {
       declarations.push(`height: ${roundCss(node.layoutChild?.heightPercent ?? 100)}%;`);
+      if (!parentIsRow && parentMode === 'flex') declarations.push('flex-shrink: 0;');
     } else if (heightMode === 'hug') {
       declarations.push('height: fit-content;');
-    } else if (node.type !== 'text') {
-      if (node.layoutChild?.heightValue && node.layoutChild.heightValue.unit !== 'px') {
-        declarations.push(`height: ${resolvedFixedHeight};`);
-      } else {
-        declarations.push(`min-height: ${resolvedFixedHeight};`);
-      }
+      if (!parentIsRow && parentMode === 'flex') declarations.push('flex-shrink: 0;');
+    } else if (node.type === 'text') {
+      declarations.push(`min-height: ${resolvedFixedHeight};`);
+      if (!parentIsRow && parentMode === 'flex') declarations.push('flex-shrink: 0;');
+    } else {
+      declarations.push(`height: ${resolvedFixedHeight};`);
+      if (!parentIsRow && parentMode === 'flex') declarations.push('flex-shrink: 0;');
     }
 
     if (parentMode === 'grid') {
@@ -723,42 +807,58 @@ export function buildNodeCssDeclarations(
     if (node.layoutChild?.zIndex !== undefined) {
       declarations.push(`z-index: ${Math.round(node.layoutChild.zIndex)};`);
     }
-  } else if (hasRootAutoLayout && !parent && !isInstanceChild) {
-    const pos = explicitPosition ?? 'relative';
-    declarations.push(`position: ${pos};`);
-    if (pos === 'sticky' || pos === 'fixed' || pos === 'absolute') {
-      const emitted = emitExplicitInsets();
-      if (pos === 'sticky' && !emitted) declarations.push('top: 0px;');
-    }
-    const rootWMode = node.layoutChild?.widthMode ?? 'fill';
-    const rootHMode = node.layoutChild?.heightMode ?? 'fixed';
-    if (rootWMode === 'hug') declarations.push('width: fit-content;');
-    else if (rootWMode === 'relative') declarations.push(`width: ${roundCss(node.layoutChild?.widthPercent ?? 100)}%;`);
-    else if (rootWMode === 'fixed') declarations.push(`width: ${resolvedFixedWidth};`);
-    else declarations.push('width: 100%;');
-
-    if (rootHMode === 'hug') declarations.push('height: fit-content;');
-    else if (rootHMode === 'relative') declarations.push(`height: ${roundCss(node.layoutChild?.heightPercent ?? 100)}%;`);
-    else if (node.layoutChild?.heightValue && node.layoutChild.heightValue.unit !== 'px') {
-      declarations.push(`height: ${resolvedFixedHeight};`);
-    } else {
-      declarations.push(`min-height: ${resolvedFixedHeight};`);
-    }
-    emitBoundsAndPositionExtras();
-    if (node.layoutChild?.zIndex !== undefined) {
-      declarations.push(`z-index: ${Math.round(node.layoutChild.zIndex)};`);
-    }
   } else {
+    void hasRootAutoLayout;
     const relX = roundCss(node.x - originOffset.x);
     const relY = roundCss(node.y - originOffset.y);
-    const pos = explicitPosition === 'fixed' || explicitPosition === 'sticky' ? explicitPosition : 'absolute';
+    const isExplicitRelative = !parent && !isInstanceChild && explicitPosition === 'relative';
+    const pos = isExplicitRelative
+      ? 'relative'
+      : explicitPosition === 'fixed' || explicitPosition === 'sticky'
+        ? explicitPosition
+        : 'absolute';
     declarations.push(`position: ${pos};`);
     const hasExplicitInsets = emitExplicitInsets();
-    if (!hasExplicitInsets) {
-      declarations.push(`left: ${relX}px;`);
-      declarations.push(`top: ${relY}px;`);
+    const constraints = isOutOfFlowInAutoLayout ? node.layoutChild?.constraints : undefined;
+    const parentPad = parent?.layout?.padding ?? { top: 0, right: 0, bottom: 0, left: 0 };
+    const pinnedHStretch = Boolean(constraints?.horizontal === 'left-right' && !hasExplicitInsets);
+    const pinnedVStretch = Boolean(constraints?.vertical === 'top-bottom' && !hasExplicitInsets);
+
+    if (!hasExplicitInsets && pos !== 'relative') {
+      if (constraints?.horizontal === 'left') {
+        declarations.push(`left: ${roundCss(parentPad.left)}px;`);
+      } else if (constraints?.horizontal === 'right') {
+        declarations.push(`right: ${roundCss(parentPad.right)}px;`);
+      } else if (constraints?.horizontal === 'left-right') {
+        declarations.push(`left: ${roundCss(parentPad.left)}px;`);
+        declarations.push(`right: ${roundCss(parentPad.right)}px;`);
+      } else if (constraints?.horizontal === 'center') {
+        declarations.push('left: 50%;');
+        transformParts.push('translateX(-50%)');
+      } else {
+        declarations.push(`left: ${relX}px;`);
+      }
+
+      if (constraints?.vertical === 'top') {
+        declarations.push(`top: ${roundCss(parentPad.top)}px;`);
+      } else if (constraints?.vertical === 'bottom') {
+        declarations.push(`bottom: ${roundCss(parentPad.bottom)}px;`);
+      } else if (constraints?.vertical === 'top-bottom') {
+        declarations.push(`top: ${roundCss(parentPad.top)}px;`);
+        declarations.push(`bottom: ${roundCss(parentPad.bottom)}px;`);
+      } else if (constraints?.vertical === 'center') {
+        declarations.push('top: 50%;');
+        transformParts.push('translateY(-50%)');
+      } else {
+        declarations.push(`top: ${relY}px;`);
+      }
+    } else if (pos === 'sticky' && !hasExplicitInsets) {
+      declarations.push('top: 0px;');
     }
-    if (node.layoutChild?.widthMode === 'relative') {
+
+    if (pinnedHStretch) {
+      declarations.push('width: auto;');
+    } else if (node.layoutChild?.widthMode === 'relative') {
       declarations.push(`width: ${roundCss(node.layoutChild.widthPercent ?? 100)}%;`);
     } else if (node.layoutChild?.widthMode === 'hug') {
       declarations.push('width: fit-content;');
@@ -767,7 +867,10 @@ export function buildNodeCssDeclarations(
     } else {
       declarations.push(`width: ${resolvedFixedWidth};`);
     }
-    if (node.layoutChild?.heightMode === 'relative') {
+
+    if (pinnedVStretch) {
+      declarations.push('height: auto;');
+    } else if (node.layoutChild?.heightMode === 'relative') {
       declarations.push(`height: ${roundCss(node.layoutChild.heightPercent ?? 100)}%;`);
     } else if (node.layoutChild?.heightMode === 'hug') {
       declarations.push('height: fit-content;');
@@ -783,7 +886,10 @@ export function buildNodeCssDeclarations(
   }
 
   if (Math.abs(node.rotation) > 0.01) {
-    declarations.push(`transform: rotate(${roundCss(node.rotation)}deg);`);
+    transformParts.push(`rotate(${roundCss(node.rotation)}deg)`);
+  }
+  if (transformParts.length > 0) {
+    declarations.push(`transform: ${transformParts.join(' ')};`);
   }
   if (node.opacity < 0.999) {
     declarations.push(`opacity: ${roundCss(node.opacity)};`);
@@ -885,14 +991,22 @@ export function buildNodeCssDeclarations(
     if (Math.abs(node.style.letterSpacing) > 0.001) {
       declarations.push(`letter-spacing: ${roundCss(node.style.letterSpacing)}${lsUnit};`);
     }
+    const resolvedTag = resolveSemanticTag(node);
     if (node.style.textAlign && node.style.textAlign !== 'left') {
       declarations.push(`text-align: ${node.style.textAlign};`);
+    } else if (resolvedTag === 'button') {
+      declarations.push('text-align: left;');
     }
     if (node.style.verticalAlign === 'middle' || node.style.verticalAlign === 'bottom') {
       declarations.push('display: flex;');
       declarations.push('flex-direction: column;');
       declarations.push(`justify-content: ${node.style.verticalAlign === 'middle' ? 'center' : 'flex-end'};`);
-      declarations.push(`height: ${roundCss(node.height)}px;`);
+      const hMode = node.layoutChild?.heightMode;
+      if (!hMode || hMode === 'fixed') {
+        declarations.push(`height: ${roundCss(node.height)}px;`);
+      }
+    } else if (node.visible && (resolvedTag === 'span' || resolvedTag === 'a')) {
+      declarations.push('display: block;');
     }
     if (node.style.textTransform && node.style.textTransform !== 'none') {
       declarations.push(`text-transform: ${node.style.textTransform};`);
@@ -907,6 +1021,8 @@ export function buildNodeCssDeclarations(
       declarations.push('white-space: pre-wrap;');
       declarations.push('overflow-wrap: break-word;');
     }
+  } else if (node.type === 'group') {
+    declarations.push('overflow: visible;');
   } else if (node.type === 'component-instance') {
     declarations.push('overflow: visible;');
   }
@@ -1004,7 +1120,11 @@ export function compilePageHtmlCss(
     project.assets.map((asset) => [asset.id, asset]),
   );
 
-  const { roots, childrenByParent, nodeById } = buildChildrenMap(page.document.nodes);
+  const solvedNodes = page.document.nodes.some((n) => n.layout && n.layout.mode !== 'none')
+    ? applyAutoLayoutToNodes(page.document.nodes, undefined, tokens)
+    : page.document.nodes;
+
+  const { roots, childrenByParent, nodeById } = buildChildrenMap(solvedNodes);
   const htmlBodyLines: string[] = [];
   const htmlMappings: CodeMappingEntry[] = [];
   const cssLines: string[] = [
@@ -1017,18 +1137,40 @@ export function compilePageHtmlCss(
   const mobileRules: string[] = [];
 
   const pageClass = `folio-page-${slug}`;
-  const hasRootAutoLayout = roots.length > 0 && roots.every((node) => node.layout && node.layout.mode !== 'none');
+  const docWidth = Math.max(1, roundCss(page.document.width));
+  const docHeight = Math.max(1, roundCss(page.document.height));
+  const hasExplicitBreakpoints = solvedNodes.some((node) => Boolean(node.responsive?.tablet || node.responsive?.mobile));
+  const hasAllResponsiveRoots =
+    roots.length > 0
+    && roots.every(
+      (node) =>
+        Boolean(node.layout && node.layout.mode !== 'none')
+        || node.layoutChild?.widthMode === 'fill'
+        || node.layoutChild?.widthMode === 'relative',
+    );
+  const hasFullWidthFluidRoot = roots.some(
+    (node) =>
+      (Boolean(node.layout && node.layout.mode !== 'none') && node.width >= docWidth * 0.85)
+      || node.layoutChild?.widthMode === 'fill'
+      || node.layoutChild?.widthMode === 'relative',
+  );
+  const hasResponsiveDesign = hasExplicitBreakpoints || hasAllResponsiveRoots || hasFullWidthFluidRoot;
+  const hasRootAutoLayout = false;
+
+  pushCssRule(
+    cssLines,
+    `.${pageClass}, .${pageClass} *, .${pageClass} *::before, .${pageClass} *::after`,
+    ['box-sizing: border-box;'],
+  );
 
   pushCssRule(cssLines, `.${pageClass}`, [
     'position: relative;',
-    'width: 100%;',
-    `max-width: ${roundCss(page.document.width)}px;`,
-    `min-height: ${roundCss(page.document.height)}px;`,
+    hasResponsiveDesign ? 'width: 100%;' : `width: ${docWidth}px;`,
+    `max-width: ${docWidth}px;`,
+    `min-height: ${docHeight}px;`,
     'margin: 0 auto;',
     `background: ${sanitizeCssValue(page.document.background, '#ffffff')};`,
-    ...(hasRootAutoLayout
-      ? ['display: flex;', 'flex-direction: column;', 'gap: 24px;']
-      : ['overflow: hidden;']),
+    'overflow-x: clip;',
   ]);
 
   const emitNodeCss = (
@@ -1068,9 +1210,12 @@ export function compilePageHtmlCss(
     const restoreDisplay =
       node.layout?.mode === 'flex' ? 'flex' : node.layout?.mode === 'grid' ? 'grid' : 'block';
 
+    const isRootAutoLayoutContainer =
+      !parent && !isInstanceChild && Boolean(node.layout && node.layout.mode !== 'none');
+
+    const tDecls: string[] = [];
     if (node.responsive?.tablet) {
       const t = node.responsive.tablet;
-      const tDecls: string[] = [];
       if (t.visible === false) tDecls.push('display: none;');
       else if (t.visible === true && !node.visible) tDecls.push(`display: ${restoreDisplay};`);
       if (t.width !== undefined) tDecls.push(`width: ${roundCss(t.width)}px;`);
@@ -1079,14 +1224,26 @@ export function compilePageHtmlCss(
       if (t.gridColumns !== undefined) tDecls.push(`grid-template-columns: repeat(${Math.max(1, Math.round(t.gridColumns))}, minmax(0, 1fr));`);
       if (t.gap !== undefined) tDecls.push(`gap: ${roundCss(t.gap)}px;`);
       if (t.padding) tDecls.push(`padding: ${formatPadding(t.padding)};`);
-      if (tDecls.length > 0) {
-        tabletRules.push(`  ${selector} { ${tDecls.join(' ')} }`);
-      }
+    }
+    if (
+      isRootAutoLayoutContainer
+      && node.responsive?.tablet?.width === undefined
+      && node.layoutChild?.widthMode !== 'fill'
+      && node.layoutChild?.widthMode !== 'relative'
+      && node.layoutChild?.widthMode !== 'hug'
+      && (node.width > 768 - 32 || node.x + node.width > 768)
+    ) {
+      const clampedLeft = Math.min(Math.max(0, roundCss(node.x)), 16);
+      tDecls.push(`left: ${clampedLeft}px;`);
+      tDecls.push(`width: calc(100% - ${clampedLeft * 2}px);`);
+    }
+    if (tDecls.length > 0) {
+      tabletRules.push(`  ${selector} { ${tDecls.join(' ')} }`);
     }
 
+    const mDecls: string[] = [];
     if (node.responsive?.mobile) {
       const m = node.responsive.mobile;
-      const mDecls: string[] = [];
       if (m.visible === false) mDecls.push('display: none;');
       else if (m.visible === true && !node.visible) mDecls.push(`display: ${restoreDisplay};`);
       if (m.width !== undefined) mDecls.push(`width: ${roundCss(m.width)}px;`);
@@ -1095,9 +1252,21 @@ export function compilePageHtmlCss(
       if (m.gridColumns !== undefined) mDecls.push(`grid-template-columns: repeat(${Math.max(1, Math.round(m.gridColumns))}, minmax(0, 1fr));`);
       if (m.gap !== undefined) mDecls.push(`gap: ${roundCss(m.gap)}px;`);
       if (m.padding) mDecls.push(`padding: ${formatPadding(m.padding)};`);
-      if (mDecls.length > 0) {
-        mobileRules.push(`  ${selector} { ${mDecls.join(' ')} }`);
-      }
+    }
+    if (
+      isRootAutoLayoutContainer
+      && node.responsive?.mobile?.width === undefined
+      && node.layoutChild?.widthMode !== 'fill'
+      && node.layoutChild?.widthMode !== 'relative'
+      && node.layoutChild?.widthMode !== 'hug'
+      && (node.width > 390 - 32 || node.x + node.width > 390)
+    ) {
+      const clampedLeft = Math.min(Math.max(0, roundCss(node.x)), 16);
+      mDecls.push(`left: ${clampedLeft}px;`);
+      mDecls.push(`width: calc(100% - ${clampedLeft * 2}px);`);
+    }
+    if (mDecls.length > 0) {
+      mobileRules.push(`  ${selector} { ${mDecls.join(' ')} }`);
     }
   };
 
@@ -1187,7 +1356,10 @@ export function compilePageHtmlCss(
       if (master && !visitedComponentIds.has(master.id) && componentDepth < MAX_COMPONENT_RENDER_DEPTH) {
         const nextVisited = new Set(visitedComponentIds);
         nextVisited.add(master.id);
-        const resolvedChildren = resolveComponentInstanceNodes(node, master, tokens);
+        const resolvedRaw = resolveComponentInstanceNodes(node, master, tokens);
+        const resolvedChildren = resolvedRaw.some((child) => child.layout && child.layout.mode !== 'none')
+          ? applyAutoLayoutToNodes(resolvedRaw, undefined, tokens)
+          : resolvedRaw;
         const childMap = buildChildrenMap(resolvedChildren);
         const masterW = Math.max(1, master.document.width);
         const masterH = Math.max(1, master.document.height);
@@ -1259,7 +1431,8 @@ export function compilePageHtmlCss(
       } else {
         const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
         htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
-        const nextOrigin = { x: node.x, y: node.y };
+        const borderInset = getNodeBorderInset(node);
+        const nextOrigin = { x: node.x + borderInset.left, y: node.y + borderInset.top };
         for (const child of children) {
           emitNodeHtml(
             child,
@@ -1327,7 +1500,7 @@ export function compilePageHtmlCss(
   );
 
   const htmlLineOffset = htmlPreambleLines.length;
-  const pageMaskDefs = buildVectorMaskDefsLines(page.document.nodes, slug, false, '    ');
+  const pageMaskDefs = buildVectorMaskDefsLines(solvedNodes, slug, false, '    ');
   if (pageMaskDefs.length > 0) {
     htmlBodyLines.push(...pageMaskDefs);
   }
@@ -1346,6 +1519,18 @@ export function compilePageHtmlCss(
       emptyVisited,
       0,
     );
+  }
+
+  if (!hasResponsiveDesign && docWidth > 320) {
+    cssLines.push(`@media (max-width: ${Math.max(320, Math.floor(docWidth) - 1)}px) {`);
+    cssLines.push(`  .${pageClass} {`);
+    cssLines.push(`    width: ${docWidth}px;`);
+    cssLines.push('    max-width: none;');
+    cssLines.push('    margin: 0;');
+    cssLines.push(`    zoom: calc(100vw / ${docWidth}px);`);
+    cssLines.push('  }');
+    cssLines.push('}');
+    cssLines.push('');
   }
 
   if (tabletRules.length > 0) {
@@ -1482,9 +1667,9 @@ export function buildLivePreviewHtml(
 
   const baseResetCss = [
     '*, *::before, *::after { box-sizing: border-box; }',
-    'html, body { margin: 0; padding: 0; min-height: 100%; background: var(--surface-canvas, #f5f2ec); color: var(--text-primary, #1d1f28); font-family: system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }',
+    'html, body { margin: 0; padding: 0; min-height: 100%; overflow-x: clip; background: var(--surface-canvas, #f5f2ec); color: var(--text-primary, #1d1f28); font-family: system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }',
     'a { color: inherit; text-decoration: none; }',
-    'button { font: inherit; cursor: pointer; background: none; border: none; padding: 0; }',
+    'button { font: inherit; text-align: inherit; cursor: pointer; background: none; border: none; padding: 0; }',
   ].join('\n');
 
   const combinedStyles = [
