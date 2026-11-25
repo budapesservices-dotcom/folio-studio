@@ -53,9 +53,13 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
   tokens,
   hiddenNodeIds,
 }: CanvasSceneLayerProps) {
+  const artboardClipId = `${maskPrefix}--artboard-clip`;
   return (
     <>
       <defs>
+        <clipPath id={artboardClipId}>
+          <rect x="0" y="0" width={width} height={height} />
+        </clipPath>
         <DocumentMaskDefs
           nodes={canvasNodes as DesignNode[]}
           width={width}
@@ -71,23 +75,25 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
         />
       </defs>
       <rect x="0" y="0" width={width} height={height} fill={background} />
-      {renderNodes.map((node) => (
-        inlineEditNodeId === node.id || hiddenNodeIds?.has(node.id) ? null : (
-          <MaskedNodeArtwork
-            key={node.id}
-            node={node}
-            nodes={canvasNodes as DesignNode[]}
-            components={components as ComponentDefinition[]}
-            assets={assets}
-            maskPrefix={maskPrefix}
-            clipMaskMap={clipMaskMap as Map<string, string[]>}
-            frameClipMap={frameClipMap as Map<string, string[]>}
-            componentById={componentById as Map<string, ComponentDefinition>}
-            assetById={assetById}
-            tokens={tokens}
-          />
-        )
-      ))}
+      <g clip-path={`url(#${artboardClipId})`}>
+        {renderNodes.map((node) => (
+          inlineEditNodeId === node.id || hiddenNodeIds?.has(node.id) ? null : (
+            <MaskedNodeArtwork
+              key={node.id}
+              node={node}
+              nodes={canvasNodes as DesignNode[]}
+              components={components as ComponentDefinition[]}
+              assets={assets}
+              maskPrefix={maskPrefix}
+              clipMaskMap={clipMaskMap as Map<string, string[]>}
+              frameClipMap={frameClipMap as Map<string, string[]>}
+              componentById={componentById as Map<string, ComponentDefinition>}
+              assetById={assetById}
+              tokens={tokens}
+            />
+          )
+        ))}
+      </g>
     </>
   );
 });

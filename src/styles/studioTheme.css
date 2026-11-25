@@ -774,7 +774,7 @@ textarea:focus-visible {
   padding: 36px 32px 42px;
 }
 
-.canvas-stage,
+.artboard-stack,
 .canvas-artboard {
   box-shadow: var(--shadow-canvas);
 }

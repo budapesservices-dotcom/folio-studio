@@ -1476,7 +1476,7 @@ export function Canvas({
       <div
         class="canvas-stage"
         style={{
-          width: String(zoom * 100) + '%',
+          width: String(zoom * (effectiveDocWidth / Math.max(1, document.width)) * 100) + '%',
           transform: 'translate(' + pan.x + 'px, ' + pan.y + 'px)',
           transition: (isPanning || toolSession?.kind === 'hand' || toolSession?.kind === 'scrubby-zoom') ? 'none' : 'transform 110ms ease-out',
           willChange: 'transform',
