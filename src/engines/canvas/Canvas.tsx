@@ -1058,6 +1058,17 @@ export function Canvas({
     };
     window.addEventListener('pointerdown', handlePointerDownOutside, true);
     window.addEventListener('keydown', handleEscape);
+    // Clamp rendered menu cleanly within viewport bounds after mount
+    const el = contextMenuRef.current;
+    if (el && typeof window !== 'undefined') {
+      const rect = el.getBoundingClientRect();
+      const pad = 10;
+      const clampedX = Math.max(pad, Math.min(contextMenu.x, window.innerWidth - rect.width - pad));
+      const clampedY = Math.max(pad, Math.min(contextMenu.y, window.innerHeight - rect.height - pad));
+      if (Math.abs(clampedX - contextMenu.x) > 1 || Math.abs(clampedY - contextMenu.y) > 1) {
+        setContextMenu({ x: clampedX, y: clampedY });
+      }
+    }
     return () => {
       window.removeEventListener('pointerdown', handlePointerDownOutside, true);
       window.removeEventListener('keydown', handleEscape);
@@ -1112,8 +1123,8 @@ export function Canvas({
     const maxW = typeof window !== 'undefined' ? window.innerWidth : 1280;
     const maxH = typeof window !== 'undefined' ? window.innerHeight : 720;
     setContextMenu({
-      x: Math.max(8, Math.min(event.clientX, maxW - 236)),
-      y: Math.max(8, Math.min(event.clientY, maxH - 320)),
+      x: Math.max(10, Math.min(event.clientX, maxW - 260)),
+      y: Math.max(10, Math.min(event.clientY, maxH - 360)),
     });
   };
 
@@ -1663,8 +1674,16 @@ export function Canvas({
             role="menu"
             aria-label="Canvas selection and draw mode menu"
             style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+            onContextMenu={(event) => event.preventDefault()}
           >
-            <div class="canvas-context-menu-header">Selection</div>
+            <div class="canvas-context-menu-header">
+              <span>Selection</span>
+              {selectedNodeIds.length > 0 && (
+                <span class="canvas-context-menu-meta">
+                  {selectedNodeIds.length} {selectedNodeIds.length === 1 ? 'layer' : 'layers'}
+                </span>
+              )}
+            </div>
             <button
               type="button"
               role="menuitem"
@@ -1672,7 +1691,13 @@ export function Canvas({
               disabled={selectedNodeIds.length === 0}
               onClick={() => runMenuAction(contextMenuActions.onDeselect)}
             >
-              <span>Deselect</span>
+              <span class="canvas-context-menu-item-main">
+                <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke-dasharray="2.5 2.5" />
+                  <path d="M5.75 5.75l4.5 4.5M10.25 5.75l-4.5 4.5" />
+                </svg>
+                <span class="canvas-context-menu-label">Deselect</span>
+              </span>
               <kbd>Ctrl+D</kbd>
             </button>
             <button
@@ -1681,11 +1706,20 @@ export function Canvas({
               class="canvas-context-menu-item"
               onClick={() => runMenuAction(contextMenuActions.onInvertSelection)}
             >
-              <span>Invert Selection</span>
+              <span class="canvas-context-menu-item-main">
+                <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
+                  <path d="M8 2.5v11" />
+                  <path d="M8 2.5h3.5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H8V2.5z" fill="currentColor" fill-opacity="0.22" stroke="none" />
+                </svg>
+                <span class="canvas-context-menu-label">Invert Selection</span>
+              </span>
               <kbd>Ctrl+Shift+I</kbd>
             </button>
             <div class="canvas-context-menu-divider" role="separator" />
-            <div class="canvas-context-menu-header">Select Similar</div>
+            <div class="canvas-context-menu-header">
+              <span>Select Similar</span>
+            </div>
             <button
               type="button"
               role="menuitem"
@@ -1693,7 +1727,12 @@ export function Canvas({
               disabled={selectedNodeIds.length === 0}
               onClick={() => runMenuAction(() => contextMenuActions.onSelectSimilar('fill'))}
             >
-              <span>Same Fill</span>
+              <span class="canvas-context-menu-item-main">
+                <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="8" cy="8" r="5" fill="currentColor" fill-opacity="0.24" />
+                </svg>
+                <span class="canvas-context-menu-label">Same Fill</span>
+              </span>
             </button>
             <button
               type="button"
@@ -1702,7 +1741,12 @@ export function Canvas({
               disabled={selectedNodeIds.length === 0}
               onClick={() => runMenuAction(() => contextMenuActions.onSelectSimilar('stroke'))}
             >
-              <span>Same Stroke</span>
+              <span class="canvas-context-menu-item-main">
+                <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="8" cy="8" r="5" />
+                </svg>
+                <span class="canvas-context-menu-label">Same Stroke</span>
+              </span>
             </button>
             <button
               type="button"
@@ -1711,12 +1755,22 @@ export function Canvas({
               disabled={selectedNodeIds.length === 0}
               onClick={() => runMenuAction(() => contextMenuActions.onSelectSimilar('type'))}
             >
-              <span>Same Node Type</span>
+              <span class="canvas-context-menu-item-main">
+                <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="2.25" y="2.25" width="4.75" height="4.75" rx="1" />
+                  <rect x="9" y="2.25" width="4.75" height="4.75" rx="1" />
+                  <rect x="2.25" y="9" width="4.75" height="4.75" rx="1" />
+                  <rect x="9" y="9" width="4.75" height="4.75" rx="1" />
+                </svg>
+                <span class="canvas-context-menu-label">Same Node Type</span>
+              </span>
             </button>
             {selectedNodes.length > 0 && (
               <>
                 <div class="canvas-context-menu-divider" role="separator" />
-                <div class="canvas-context-menu-header">Draw Mode</div>
+                <div class="canvas-context-menu-header">
+                  <span>Draw Mode</span>
+                </div>
                 {([
                   { id: 'normal', label: 'Draw Normal' },
                   { id: 'inside', label: 'Draw Inside' },
@@ -1730,19 +1784,56 @@ export function Canvas({
                     class={`canvas-context-menu-item${activeDrawMode === item.id ? ' is-active' : ''}`}
                     onClick={() => runMenuAction(() => contextMenuActions.onSetDrawMode(item.id))}
                   >
-                    <span>{item.label}</span>
-                    {activeDrawMode === item.id && <span class="canvas-context-menu-check">●</span>}
+                    <span class="canvas-context-menu-item-main">
+                      <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        {item.id === 'normal' && (
+                          <>
+                            <rect x="2.25" y="4.75" width="7" height="7" rx="1.25" />
+                            <rect x="6.75" y="2.25" width="7" height="7" rx="1.25" fill="var(--panel-elevated, #171c27)" />
+                          </>
+                        )}
+                        {item.id === 'inside' && (
+                          <>
+                            <rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke-dasharray="2.5 2" />
+                            <circle cx="8" cy="8" r="2.75" fill="currentColor" fill-opacity="0.28" />
+                          </>
+                        )}
+                        {item.id === 'outside' && (
+                          <>
+                            <rect x="4.5" y="4.5" width="7" height="7" rx="1.5" fill="currentColor" fill-opacity="0.22" />
+                            <path d="M2.5 6V3.5A1 1 0 0 1 3.5 2.5H6M10 2.5h2.5a1 1 0 0 1 1 1V6M13.5 10v2.5a1 1 0 0 1-1 1H10M6 13.5H3.5a1 1 0 0 1-1-1V10" />
+                          </>
+                        )}
+                      </svg>
+                      <span class="canvas-context-menu-label">{item.label}</span>
+                    </span>
+                    {activeDrawMode === item.id && (
+                      <span class="canvas-context-menu-check" aria-hidden="true">
+                        <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M2.8 7.3l2.9 2.9 5.5-6" />
+                        </svg>
+                      </span>
+                    )}
                   </button>
                 ))}
                 {hasOutsideTargets && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="canvas-context-menu-item is-accent"
-                    onClick={() => runMenuAction(contextMenuActions.onPermanentSubtractOutside)}
-                  >
-                    <span>Permanent Subtract (Pathfinder)</span>
-                  </button>
+                  <>
+                    <div class="canvas-context-menu-divider" role="separator" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="canvas-context-menu-item is-accent"
+                      onClick={() => runMenuAction(contextMenuActions.onPermanentSubtractOutside)}
+                    >
+                      <span class="canvas-context-menu-item-main">
+                        <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <rect x="2.5" y="2.5" width="7.5" height="7.5" rx="1.25" />
+                          <rect x="6" y="6" width="7.5" height="7.5" rx="1.25" stroke-dasharray="2.5 2" />
+                        </svg>
+                        <span class="canvas-context-menu-label">Permanent Subtract (Pathfinder)</span>
+                      </span>
+                    </button>
+                  </>
                 )}
               </>
             )}
