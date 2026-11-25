@@ -55,6 +55,11 @@ export interface VectorGeometryKernel {
     operation: PathfinderOperation,
     resultId: string,
   ): PathNode | null;
+  booleanOp(
+    nodes: readonly DesignNode[],
+    operation: PathfinderOperation,
+    resultId?: string,
+  ): PathNode | null;
   decomposeForShapeBuilder(nodes: readonly DesignNode[]): PlanarArrangement;
   hitTestFace(arrangement: PlanarArrangement, x: number, y: number): PlanarFace | null;
 }

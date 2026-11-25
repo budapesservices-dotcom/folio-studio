@@ -259,7 +259,6 @@ interface InspectorSelectedNodeBodyProps {
   activeEditorId: EditorTarget;
   selectedNode: DesignNode;
   scopedNodes: readonly DesignNode[];
-  safeSelectedNodes: readonly DesignNode[];
   selectedInstanceComponent: ComponentDefinition | null;
   editingMasterComponent: ComponentDefinition | null;
   instanceOverrideTargets: InspectorOverrideTargets | null;
@@ -288,7 +287,6 @@ function InspectorSelectedNodeBody({
   activeEditorId,
   selectedNode,
   scopedNodes,
-  safeSelectedNodes,
   selectedInstanceComponent,
   editingMasterComponent,
   instanceOverrideTargets,
@@ -542,7 +540,7 @@ function InspectorSelectedNodeBody({
               <button type="button" class="inspector-icon-btn" title="Align Left" onClick={() => studioActions.onAlign('left')}>
                 <svg viewBox="0 0 16 16" fill="none"><path d="M2.5 2V14M5 4H12V6.5H5V4ZM5 9.5H9.5V12H5V9.5Z" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </button>
-              <button type="button" class="inspector-icon-btn" title="Align Center X" onClick={() => studioActions.onAlign('center-x')}>
+              <button type="button" class="inspector-icon-btn" title="Align Center X" onClick={() => studioActions.onAlign('horizontal-center')}>
                 <svg viewBox="0 0 16 16" fill="none"><path d="M8 2V14M4 4H12V6.5H4V4ZM5.5 9.5H10.5V12H5.5V9.5Z" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </button>
               <button type="button" class="inspector-icon-btn" title="Align Right" onClick={() => studioActions.onAlign('right')}>
@@ -551,7 +549,7 @@ function InspectorSelectedNodeBody({
               <button type="button" class="inspector-icon-btn" title="Align Top" onClick={() => studioActions.onAlign('top')}>
                 <svg viewBox="0 0 16 16" fill="none"><path d="M2 2.5H14M4 5H6.5V12H4V5ZM9.5 5H12V9.5H9.5V5Z" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </button>
-              <button type="button" class="inspector-icon-btn" title="Align Middle Y" onClick={() => studioActions.onAlign('center-y')}>
+              <button type="button" class="inspector-icon-btn" title="Align Middle Y" onClick={() => studioActions.onAlign('vertical-center')}>
                 <svg viewBox="0 0 16 16" fill="none"><path d="M2 8H14M4 4H6.5V12H4V4ZM9.5 5.5H12V10.5H9.5V5.5Z" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </button>
               <button type="button" class="inspector-icon-btn" title="Align Bottom" onClick={() => studioActions.onAlign('bottom')}>
@@ -688,10 +686,10 @@ function InspectorSelectedNodeBody({
           />
           {studioActions && (
             <div class="inspector-quick-row cols-2">
-              <button type="button" class="inspector-mini-btn" onClick={studioActions.onFlipHorizontal}>
+              <button type="button" class="inspector-mini-btn" onClick={() => studioActions.onFlip('horizontal')}>
                 Flip Horizontal
               </button>
-              <button type="button" class="inspector-mini-btn" onClick={studioActions.onFlipVertical}>
+              <button type="button" class="inspector-mini-btn" onClick={() => studioActions.onFlip('vertical')}>
                 Flip Vertical
               </button>
             </div>
@@ -1370,8 +1368,8 @@ function InspectorSelectedNodeBody({
                 })}
 
                 {(selectedInstanceComponent.slots ?? []).map((slot) => {
-                  const slotState = selectedNode.slotOverrides?.[slot.id];
-                  const isVisible = slotState?.visible ?? slot.defaultVisible;
+                  const slotState = selectedNode.slotAssignments?.[slot.id];
+                  const isVisible = slotState?.visible ?? true;
                   return (
                     <label key={slot.id} class="toggle-row">
                       <span>Slot: {slot.name}</span>
@@ -1566,7 +1564,6 @@ export function InspectorPanel({
           activeEditorId={activeEditorId}
           selectedNode={selectedNode}
           scopedNodes={scopedNodes}
-          safeSelectedNodes={safeSelectedNodes}
           selectedInstanceComponent={selectedInstanceComponent}
           editingMasterComponent={editingMasterComponent}
           instanceOverrideTargets={instanceOverrideTargets}

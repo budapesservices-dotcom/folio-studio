@@ -26,6 +26,9 @@ export const defaultVectorGeometryKernel: VectorGeometryKernel = {
   applyPathfinder(nodes, operation, resultId) {
     return applyPathfinderOperation(nodes, operation, resultId);
   },
+  booleanOp(nodes, operation, resultId = 'pathfinder-result') {
+    return applyPathfinderOperation(nodes, operation, resultId);
+  },
   decomposeForShapeBuilder(nodes) {
     return decomposeNodesForShapeBuilder(nodes).arrangement;
   },

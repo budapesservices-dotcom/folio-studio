@@ -828,6 +828,7 @@ export function useSelectionAndVectorActions({
 
   const createStudioActionsForTarget = (target: EditorTarget): StudioVectorActions => ({
     onPathfinder: (operation) => handlePathfinder(target, operation),
+    onBooleanOp: (operation) => handlePathfinder(target, operation),
     onDividePathfinder: () => handleDividePathfinder(target),
     onOffsetPath: (distancePx, keepOriginal) => handleOffsetPath(target, distancePx, keepOriginal),
     onReversePath: () => handleReversePath(target),

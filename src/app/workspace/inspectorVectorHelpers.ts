@@ -24,6 +24,7 @@ export interface StepAndRepeatConfig {
 
 export interface StudioVectorActions {
   readonly onPathfinder: (operation: PathfinderOperation) => void;
+  readonly onBooleanOp: (operation: PathfinderOperation) => void;
   readonly onDividePathfinder: () => void;
   readonly onOffsetPath: (distancePx: number, keepOriginal: boolean) => void;
   readonly onReversePath: () => void;

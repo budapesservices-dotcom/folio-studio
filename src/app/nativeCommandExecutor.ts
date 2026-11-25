@@ -301,6 +301,9 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'node.update-many':
     case 'node.edit':
     case 'selection.set':
+    case 'selection.deselect':
+    case 'selection.invert':
+    case 'selection.select-similar':
     case 'history.commit-edit':
     case 'history.undo':
     case 'history.redo':
@@ -324,6 +327,10 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'layer.create-clipping-mask':
     case 'layer.remove-clipping-mask':
       return [command.payload.node];
+    default: {
+      const exhaustive: never = command;
+      return exhaustive;
+    }
   }
 }
 
@@ -350,6 +357,9 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'node.create':
     case 'node.set-properties':
     case 'selection.set':
+    case 'selection.deselect':
+    case 'selection.invert':
+    case 'selection.select-similar':
     case 'history.commit-edit':
     case 'history.undo':
     case 'history.redo':
@@ -384,6 +394,10 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'layer.create-clipping-mask':
     case 'layer.remove-clipping-mask':
       return [command.payload.node.nodeId];
+    default: {
+      const exhaustive: never = command;
+      return exhaustive;
+    }
   }
 }
 

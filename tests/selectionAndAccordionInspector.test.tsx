@@ -4,10 +4,10 @@ import {
   createEllipseNode,
   createFrameNode,
   createInitialProject,
-  createPathNode,
   createRectNode,
   createTextNode,
 } from '../src/core/document/factory';
+import { getEffectiveLayerStates } from '../src/core/document/layers';
 import { getActivePage } from '../src/core/document/project';
 import {
   applyShadowPresetToEffects,
@@ -18,10 +18,12 @@ import {
 } from '../src/core/document/styling';
 import { createDefaultDesignTokens } from '../src/core/document/tokens';
 import { computeTextVerticalOffset } from '../src/core/document/typography';
-import type { DesignNode, PathNode, TextNode } from '../src/core/document/types';
+import type { DesignNode, FolioDocument, PathNode, TextNode } from '../src/core/document/types';
 import { validateProject } from '../src/core/document/validation';
-import { createStarPoints } from '../src/core/document/vector';
-import { createEditorStore } from '../src/app/editorStore';
+import { createStarPathPoints } from '../src/core/document/vector';
+import { createToolOperation } from '../src/core/tools/operationContract';
+import { createEditorState } from '../src/app/editorReducer';
+import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createMainCanvasCommandClient } from '../src/app/mainCanvasCommandClient';
 import { InspectorPanel, type InspectorPanelProps } from '../src/app/InspectorPanel';
 import { evaluateToolOperation } from '../src/engines/canvas/geometryEngine';
@@ -33,18 +35,26 @@ import inspectorAccordionSource from '../src/app/workspace/InspectorAccordion.ts
 import inspectorZeroTypingSource from '../src/app/workspace/InspectorZeroTypingControls.tsx?raw';
 
 function makeStarPathNode(id: string, x: number, y: number, w: number, h: number): PathNode {
-  const base = createPathNode(createStarPoints(w, h, 5, 0.42), {
+  return {
+    id,
+    type: 'path',
+    name: 'Star',
     x,
     y,
     width: w,
     height: h,
+    rotation: 0,
+    opacity: 1,
+    visible: true,
+    locked: false,
+    points: createStarPathPoints(w, h, 5, 0.42),
     closed: true,
-    name: 'Star',
-    fill: '#00E5FF',
-    stroke: '#12161A',
-    strokeWidth: 2,
-  });
-  return { ...base, id };
+    style: {
+      fill: '#00E5FF',
+      stroke: '#12161A',
+      strokeWidth: 2,
+    },
+  };
 }
 
 describe('Part A — Shape-Aware Hit-Testing', () => {
@@ -111,8 +121,13 @@ describe('Part A — Shape-Aware Hit-Testing', () => {
 
     const hidden = { ...createRectNode(1), id: 'hidden-top', x: 0, y: 0, width: 300, height: 300, visible: false };
     const locked = { ...createRectNode(2), id: 'locked-top', x: 0, y: 0, width: 300, height: 300, locked: true };
-    const hit = hitTestNodesAtPoint([rotated, hidden, locked], { x: 200, y: 40 });
-    expect(hit?.id).toBe('rot-1');
+    const orderedNodes = [rotated, hidden, locked];
+    const hit = hitTestNodesAtPoint(
+      orderedNodes,
+      { x: 200, y: 40 },
+      getEffectiveLayerStates(orderedNodes),
+    );
+    expect(hit).toBe('rot-1');
   });
 });
 
@@ -142,7 +157,7 @@ describe('Part A — Native Command Engine Selection Commands (Zero-Bypass)', ()
     const nHidden = { ...createRectNode(3), id: 'n-hidden', name: 'Hidden', visible: false };
     page.document.nodes = [n1, n2, n3, nLocked, nHidden];
 
-    const store = createEditorStore(baseProject);
+    const store = createCanonicalEditorStore(createEditorState(baseProject), { workspace: 'main' });
     const client = createMainCanvasCommandClient(store);
 
     // Select n1
@@ -189,42 +204,47 @@ describe('Part A — Draw Inside & Draw Outside Vector Masking + Codegen + .flop
 
     const newRect = { ...createRectNode(0), id: 'drawn-1' };
 
+    const makeDoc = (nodes: DesignNode[]): FolioDocument => ({
+      id: 'doc-draw-mode',
+      name: 'Draw Mode Test',
+      width: 1200,
+      height: 800,
+      background: '#FFFFFF',
+      nodes,
+    });
+
     const insideResult = evaluateToolOperation(
-      {
-        nodes: [insideFrame],
-        selectedNodeIds: ['frame-inside'],
-        canvasWidth: 1200,
-        canvasHeight: 800,
-      },
-      {
+      createToolOperation('draw-rect', 'main', {
         kind: 'create-nodes',
-        toolId: 'draw-rect',
         nodes: [newRect],
-        selectIds: ['drawn-1'],
-        historyMode: 'commit',
+      }),
+      {
+        document: makeDoc([insideFrame]),
+        selectedNodeIds: ['frame-inside'],
       },
     );
-    expect(insideResult.ok).toBe(true);
-    const createdInside = insideResult.nextNodes.find((n) => n.id === 'drawn-1');
+    expect(insideResult.status).toBe('ready');
+    if (insideResult.status !== 'ready' || insideResult.operation.payload.kind !== 'create-nodes') {
+      throw new Error('Expected ready create-nodes result for Draw Inside');
+    }
+    const createdInside = insideResult.operation.payload.nodes.find((n) => n.id === 'drawn-1');
     expect(createdInside?.parentId).toBe('frame-inside');
 
     const outsideResult = evaluateToolOperation(
-      {
-        nodes: [outsideEllipse],
-        selectedNodeIds: ['ellipse-outside'],
-        canvasWidth: 1200,
-        canvasHeight: 800,
-      },
-      {
+      createToolOperation('draw-rect', 'main', {
         kind: 'create-nodes',
-        toolId: 'draw-rect',
         nodes: [newRect],
-        selectIds: ['drawn-1'],
-        historyMode: 'commit',
+      }),
+      {
+        document: makeDoc([outsideEllipse]),
+        selectedNodeIds: ['ellipse-outside'],
       },
     );
-    expect(outsideResult.ok).toBe(true);
-    const createdOutside = outsideResult.nextNodes.find((n) => n.id === 'drawn-1');
+    expect(outsideResult.status).toBe('ready');
+    if (outsideResult.status !== 'ready' || outsideResult.operation.payload.kind !== 'create-nodes') {
+      throw new Error('Expected ready create-nodes result for Draw Outside');
+    }
+    const createdOutside = outsideResult.operation.payload.nodes.find((n) => n.id === 'drawn-1');
     expect(createdOutside?.clipMaskBaseId).toBe('ellipse-outside');
     expect(createdOutside?.clipMaskMode).toBe('outside');
   });
@@ -331,8 +351,10 @@ describe('Part B — Styling Helpers & Zero-Typing Accordion Inspector', () => {
     expect(detectShadowPreset(applyShadowPresetToEffects(neonEffects, 'none'))).toBe('none');
 
     expect(computeTextVerticalOffset(100, 1, 20, 1.5, 'top')).toBe(0);
-    expect(computeTextVerticalOffset(100, 1, 20, 1.5, 'middle')).toBe(35);
-    expect(computeTextVerticalOffset(100, 1, 20, 1.5, 'bottom')).toBe(70);
+    expect(computeTextVerticalOffset(100, 1, 20, 1.5, 'middle')).toBe(40);
+    expect(computeTextVerticalOffset(100, 1, 20, 1.5, 'bottom')).toBe(80);
+    expect(computeTextVerticalOffset(100, 2, 20, 1.5, 'middle')).toBe(25);
+    expect(computeTextVerticalOffset(100, 2, 20, 1.5, 'bottom')).toBe(50);
   });
 
   it('enforces Zero-Typing contract (zero number inputs, zero textarea, single Name text input) and hook-free InspectorPanel root', () => {

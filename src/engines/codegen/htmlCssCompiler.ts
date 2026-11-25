@@ -554,7 +554,11 @@ export function buildNodeCssDeclarations(
     const imgStrokeWidth = node.style.strokeWidth ?? 0;
     if (imgStrokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
       const strokeVal = strokeVar ?? sanitizeCssValue(node.style.stroke, 'transparent');
-      const borderStyle = resolveCssBorderStyle(node.style.strokeDasharray);
+      const dasharray =
+        'strokeDasharray' in node.style && typeof node.style.strokeDasharray === 'string'
+          ? node.style.strokeDasharray
+          : undefined;
+      const borderStyle = resolveCssBorderStyle(dasharray);
       declarations.push(`border: ${roundCss(imgStrokeWidth)}px ${borderStyle} ${strokeVal};`);
     }
     if (radiusVar) {

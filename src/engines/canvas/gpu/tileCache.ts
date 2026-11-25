@@ -16,6 +16,7 @@ import type {
   ImageNode,
   PathNode,
   RectNode,
+  TextAlign,
   TextNode,
   VectorAnchorPoint,
 } from '../../../core/document/types';
@@ -614,12 +615,25 @@ function renderPathNode(ctx: CanvasRenderingContext2D, node: PathNode): void {
   }
 }
 
+function mapTextAlignToCanvasTextAlign(align: TextAlign): CanvasTextAlign {
+  switch (align) {
+    case 'center':
+      return 'center';
+    case 'right':
+      return 'right';
+    case 'left':
+    case 'justify':
+      return 'left';
+  }
+}
+
 function renderTextNode(ctx: CanvasRenderingContext2D, node: TextNode): void {
   const fontSize = Math.max(1, node.style.fontSize || 16);
   const fontWeight = Math.round(node.style.fontWeight || 400);
   const fontFamily = node.style.fontFamily || 'Inter, system-ui, sans-serif';
   const lineHeightPx = fontSize * (node.style.lineHeight || 1.35);
-  const textAlign = node.style.textAlign ?? 'left';
+  const textAlign: TextAlign = node.style.textAlign ?? 'left';
+  const canvasTextAlign = mapTextAlignToCanvasTextAlign(textAlign);
 
   const lines = wrapTextLines(node.text, {
     maxWidth: node.width,
@@ -634,7 +648,7 @@ function renderTextNode(ctx: CanvasRenderingContext2D, node: TextNode): void {
   ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   ctx.fillStyle = sanitizeStyleColor(node.style.fill);
   ctx.textBaseline = 'alphabetic';
-  ctx.textAlign = textAlign;
+  ctx.textAlign = canvasTextAlign;
 
   const anchorX =
     textAlign === 'center'
@@ -674,7 +688,7 @@ function renderTextNode(ctx: CanvasRenderingContext2D, node: TextNode): void {
         ctx.fillText(ch, cursorX, baselineY);
         cursorX += ctx.measureText(ch).width + letterSpacing;
       }
-      ctx.textAlign = textAlign;
+      ctx.textAlign = canvasTextAlign;
     } else {
       ctx.fillText(line, anchorX, baselineY);
     }
