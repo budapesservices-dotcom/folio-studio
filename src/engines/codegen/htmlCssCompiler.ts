@@ -55,6 +55,7 @@ function mapJustifyContent(value: NodeLayoutConfig['justifyContent']): string {
     case 'end': return 'flex-end';
     case 'space-between': return 'space-between';
     case 'space-around': return 'space-around';
+    case 'space-evenly': return 'space-evenly';
     case 'start':
     default:
       return 'flex-start';
@@ -371,9 +372,22 @@ export function buildNodeCssDeclarations(
     declarations.push(`justify-content: ${mapJustifyContent(node.layout.justifyContent)};`);
     declarations.push(`align-items: ${mapAlignItems(node.layout.alignItems)};`);
     const gapVar = resolveTokenCssVar(tokens, node.tokenBindings?.gap);
-    declarations.push(`gap: ${gapVar ?? `${roundCss(node.layout.gap)}px`};`);
+    if (gapVar) {
+      declarations.push(`gap: ${gapVar};`);
+    } else {
+      const rowGap = roundCss(node.layout.rowGap ?? node.layout.gap);
+      const colGap = roundCss(node.layout.columnGap ?? node.layout.gap);
+      declarations.push(rowGap === colGap ? `gap: ${rowGap}px;` : `gap: ${rowGap}px ${colGap}px;`);
+    }
     const padVar = resolveTokenCssVar(tokens, node.tokenBindings?.padding);
     declarations.push(`padding: ${padVar ?? formatPadding(node.layout.padding)};`);
+    if (node.layout.overflow === 'scroll') {
+      declarations.push('overflow: auto;');
+    } else if (node.layout.overflow === 'hidden') {
+      declarations.push('overflow: hidden;');
+    } else if (node.layout.overflow === 'visible') {
+      declarations.push('overflow: visible;');
+    }
   } else if (node.layout && node.layout.mode === 'grid') {
     declarations.push('display: grid;');
     const cols = Math.max(1, Math.round(node.layout.gridColumns ?? 2));
@@ -388,15 +402,35 @@ export function buildNodeCssDeclarations(
     }
     const padVar = resolveTokenCssVar(tokens, node.tokenBindings?.padding);
     declarations.push(`padding: ${padVar ?? formatPadding(node.layout.padding)};`);
+    if (node.layout.overflow === 'scroll') {
+      declarations.push('overflow: auto;');
+    } else if (node.layout.overflow === 'hidden') {
+      declarations.push('overflow: hidden;');
+    } else if (node.layout.overflow === 'visible') {
+      declarations.push('overflow: visible;');
+    }
   }
 
-  if (isChildOfAutoLayout) {
+  const isAbsoluteInAutoLayout = isChildOfAutoLayout && node.layoutChild?.position === 'absolute';
+
+  if (isChildOfAutoLayout && !isAbsoluteInAutoLayout) {
     declarations.push('position: relative;');
     const widthMode = node.layoutChild?.widthMode ?? 'fixed';
     const heightMode = node.layoutChild?.heightMode ?? 'fixed';
+    const parentMode = parent?.layout?.mode ?? 'flex';
+    const parentIsRow = parentMode === 'flex' && (parent?.layout?.direction ?? 'row') === 'row';
+    const growWeight = Math.max(1, roundCss(node.layoutChild?.flexGrow ?? 1));
+
     if (widthMode === 'fill') {
       declarations.push('width: 100%;');
-      declarations.push('flex: 1 1 0%;');
+      if (parentIsRow) {
+        declarations.push(`flex: ${growWeight} 1 0%;`);
+      } else if (parentMode === 'flex') {
+        declarations.push('align-self: stretch;');
+      }
+    } else if (widthMode === 'relative') {
+      declarations.push(`width: ${roundCss(node.layoutChild?.widthPercent ?? 100)}%;`);
+      if (parentIsRow) declarations.push('flex-shrink: 0;');
     } else if (widthMode === 'hug') {
       declarations.push('width: fit-content;');
     } else {
@@ -405,13 +439,22 @@ export function buildNodeCssDeclarations(
 
     if (heightMode === 'fill') {
       declarations.push('height: 100%;');
-      declarations.push('align-self: stretch;');
+      if (!parentIsRow && parentMode === 'flex') {
+        declarations.push(`flex: ${growWeight} 1 0%;`);
+      } else {
+        declarations.push('align-self: stretch;');
+      }
+    } else if (heightMode === 'relative') {
+      declarations.push(`height: ${roundCss(node.layoutChild?.heightPercent ?? 100)}%;`);
     } else if (heightMode === 'hug') {
       declarations.push('height: fit-content;');
     } else if (node.type !== 'text') {
       declarations.push(`min-height: ${roundCss(node.height)}px;`);
     }
 
+    if (parentMode === 'grid' && node.layoutChild?.gridColumnSpan && node.layoutChild.gridColumnSpan > 1) {
+      declarations.push(`grid-column: span ${Math.round(node.layoutChild.gridColumnSpan)};`);
+    }
     if (node.layoutChild?.minWidth !== undefined) declarations.push(`min-width: ${roundCss(node.layoutChild.minWidth)}px;`);
     if (node.layoutChild?.maxWidth !== undefined) declarations.push(`max-width: ${roundCss(node.layoutChild.maxWidth)}px;`);
     if (node.layoutChild?.minHeight !== undefined) declarations.push(`min-height: ${roundCss(node.layoutChild.minHeight)}px;`);
@@ -419,19 +462,43 @@ export function buildNodeCssDeclarations(
     if (node.layoutChild?.alignSelf && node.layoutChild.alignSelf !== 'auto') {
       declarations.push(`align-self: ${mapAlignItems(node.layoutChild.alignSelf)};`);
     }
+    if (node.layoutChild?.zIndex !== undefined) {
+      declarations.push(`z-index: ${Math.round(node.layoutChild.zIndex)};`);
+    }
   } else if (hasRootAutoLayout && !parent && !isInstanceChild) {
     declarations.push('position: relative;');
-    declarations.push('width: 100%;');
-    declarations.push(`min-height: ${roundCss(node.height)}px;`);
+    const rootWMode = node.layoutChild?.widthMode ?? 'fill';
+    const rootHMode = node.layoutChild?.heightMode ?? 'fixed';
+    if (rootWMode === 'hug') declarations.push('width: fit-content;');
+    else if (rootWMode === 'relative') declarations.push(`width: ${roundCss(node.layoutChild?.widthPercent ?? 100)}%;`);
+    else if (rootWMode === 'fixed') declarations.push(`width: ${roundCss(node.width)}px;`);
+    else declarations.push('width: 100%;');
+
+    if (rootHMode === 'hug') declarations.push('height: fit-content;');
+    else if (rootHMode === 'relative') declarations.push(`height: ${roundCss(node.layoutChild?.heightPercent ?? 100)}%;`);
+    else declarations.push(`min-height: ${roundCss(node.height)}px;`);
   } else {
     const relX = roundCss(node.x - originOffset.x);
     const relY = roundCss(node.y - originOffset.y);
     declarations.push('position: absolute;');
     declarations.push(`left: ${relX}px;`);
     declarations.push(`top: ${relY}px;`);
-    declarations.push(`width: ${roundCss(node.width)}px;`);
-    if (node.type !== 'text') {
+    if (node.layoutChild?.widthMode === 'relative') {
+      declarations.push(`width: ${roundCss(node.layoutChild.widthPercent ?? 100)}%;`);
+    } else if (node.layoutChild?.widthMode === 'hug') {
+      declarations.push('width: fit-content;');
+    } else {
+      declarations.push(`width: ${roundCss(node.width)}px;`);
+    }
+    if (node.layoutChild?.heightMode === 'relative') {
+      declarations.push(`height: ${roundCss(node.layoutChild.heightPercent ?? 100)}%;`);
+    } else if (node.layoutChild?.heightMode === 'hug') {
+      declarations.push('height: fit-content;');
+    } else if (node.type !== 'text') {
       declarations.push(`height: ${roundCss(node.height)}px;`);
+    }
+    if (node.layoutChild?.zIndex !== undefined) {
+      declarations.push(`z-index: ${Math.round(node.layoutChild.zIndex)};`);
     }
   }
 

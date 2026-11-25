@@ -21,7 +21,6 @@ import type {
   FolioProject,
   FrameNode,
   ImageFitMode,
-  NodeLayoutConfig,
   PathNode,
   RectNode,
   StrokeAlign,
@@ -54,6 +53,7 @@ import {
   PresetStepperSlider,
   VisualColorAlphaControl,
 } from './workspace/InspectorZeroTypingControls';
+import { InspectorFrameLayoutSection } from './workspace/InspectorFrameLayoutSection';
 import type {
   QuickInteractionConfig,
   QuickInteractionEntry,
@@ -156,7 +156,6 @@ const POSITION_PRESETS = [0, 16, 32, 64, 120, 200, 320, 480, 640] as const;
 const RADIUS_PRESETS = [0, 4, 8, 12, 16, 24, 32, 48, 999] as const;
 const STROKE_WIDTH_PRESETS = [0, 1, 2, 3, 4, 6, 8, 12, 16] as const;
 const FONT_SIZE_PRESETS = [12, 14, 16, 18, 20, 24, 32, 40, 48, 64, 72] as const;
-const SPACING_PRESETS = [0, 4, 8, 12, 16, 24, 32, 48, 64] as const;
 const ROTATION_PRESETS = [0, 45, 90, 180] as const;
 
 const FONT_WEIGHT_OPTIONS = [
@@ -259,6 +258,7 @@ function renderVerticalAlignIcon(align: TextVerticalAlign): JSX.Element {
 interface InspectorSelectedNodeBodyProps {
   activeEditorId: EditorTarget;
   selectedNode: DesignNode;
+  scopedNodes: readonly DesignNode[];
   safeSelectedNodes: readonly DesignNode[];
   selectedInstanceComponent: ComponentDefinition | null;
   editingMasterComponent: ComponentDefinition | null;
@@ -287,6 +287,7 @@ interface InspectorSelectedNodeBodyProps {
 function InspectorSelectedNodeBody({
   activeEditorId,
   selectedNode,
+  scopedNodes,
   safeSelectedNodes,
   selectedInstanceComponent,
   editingMasterComponent,
@@ -381,25 +382,9 @@ function InspectorSelectedNodeBody({
     onUpdateSelected(computeResizePatchForOrigin(selectedNode, transformOrigin, nextW, nextH));
   };
 
-  const updateFrameLayout = (patch: Partial<NodeLayoutConfig>) => {
-    if (selectedNode.type !== 'frame') return;
-    const current: NodeLayoutConfig = selectedNode.layout ?? {
-      mode: 'none',
-      direction: 'column',
-      wrap: 'nowrap',
-      gap: 12,
-      padding: { top: 16, right: 16, bottom: 16, left: 16 },
-      justifyContent: 'start',
-      alignItems: 'stretch',
-      gridColumns: 2,
-    };
-    const nextLayout: NodeLayoutConfig = { ...current, ...patch };
-    onUpdateSelected({ layout: nextLayout });
-    if (nextLayout.mode !== 'none') {
-      onApplyAutoLayout(selectedNode.id);
-    }
-    onCommitEdit();
-  };
+  const parentNode = selectedNode.parentId
+    ? scopedNodes.find((node) => node.id === selectedNode.parentId) ?? null
+    : null;
 
   const hasShapeStroke =
     selectedNode.type === 'rect' ||
@@ -409,26 +394,26 @@ function InspectorSelectedNodeBody({
 
   const activeShadowPreset = detectShadowPreset(selectedNode.effects);
   const layerBlurEffect = (selectedNode.effects ?? []).find(
-    (item) => item.type === 'layer-blur' && item.enabled,
+    (item) => item.type === 'layer-blur' && item.visible !== false,
   );
   const bgBlurEffect = (selectedNode.effects ?? []).find(
-    (item) => item.type === 'background-blur' && item.enabled,
+    (item) => item.type === 'backdrop-blur' && item.visible !== false,
   );
-  const layerBlurPx = layerBlurEffect && layerBlurEffect.type === 'layer-blur' ? layerBlurEffect.blur : 0;
-  const bgBlurPx = bgBlurEffect && bgBlurEffect.type === 'background-blur' ? bgBlurEffect.blur : 0;
+  const layerBlurPx = layerBlurEffect && layerBlurEffect.type === 'layer-blur' ? layerBlurEffect.radius : 0;
+  const bgBlurPx = bgBlurEffect && bgBlurEffect.type === 'backdrop-blur' ? bgBlurEffect.radius : 0;
 
-  const updateBlurEffect = (kind: 'layer-blur' | 'background-blur', blur: number) => {
+  const updateBlurEffect = (kind: 'layer-blur' | 'backdrop-blur', radius: number) => {
     const rest = (selectedNode.effects ?? []).filter((item) => item.type !== kind);
     const nextEffects =
-      blur <= 0
+      radius <= 0
         ? rest
         : [
             ...rest,
             {
               id: `effect-${kind}`,
               type: kind,
-              enabled: true,
-              blur,
+              visible: true,
+              radius,
             } as const,
           ];
     onUpdateSelected({ effects: nextEffects });
@@ -693,8 +678,13 @@ function InspectorSelectedNodeBody({
             max={180}
             step={1}
             value={Math.round(selectedNode.rotation)}
+            style={{
+              '--slider-pct': `${Math.max(0, Math.min(100, ((Math.round(selectedNode.rotation) + 180) / 360) * 100))}%`,
+            } as Record<string, string>}
             onInput={(event) => onUpdateSelected({ rotation: Number(event.currentTarget.value) })}
-            onChange={onCommitEdit}
+            onPointerUp={onCommitEdit}
+            onKeyUp={onCommitEdit}
+            onBlur={onCommitEdit}
           />
           {studioActions && (
             <div class="inspector-quick-row cols-2">
@@ -708,129 +698,13 @@ function InspectorSelectedNodeBody({
           )}
         </div>
 
-        {selectedNode.type === 'frame' && (
-          <div class="inspector-acc-group inspector-autolayout-block">
-            <div class="inspector-sublabel-row">
-              <span class="inspector-sublabel">Frame Auto-Layout</span>
-              <span class="inspector-accordion-badge">
-                {(selectedNode.layout?.mode ?? 'none').toUpperCase()}
-              </span>
-            </div>
-            <div class="field-grid single-row">
-              <label class="field-label">
-                Mode
-                <select
-                  class="select-field"
-                  aria-label="Auto-Layout mode"
-                  value={selectedNode.layout?.mode ?? 'none'}
-                  onChange={(event) =>
-                    updateFrameLayout({
-                      mode: event.currentTarget.value as NodeLayoutConfig['mode'],
-                    })
-                  }
-                >
-                  <option value="none">None (Free)</option>
-                  <option value="flex">Flex</option>
-                  <option value="grid">Grid</option>
-                </select>
-              </label>
-              <label class="field-label">
-                Direction
-                <select
-                  class="select-field"
-                  aria-label="Flex direction"
-                  value={selectedNode.layout?.direction ?? 'column'}
-                  onChange={(event) =>
-                    updateFrameLayout({
-                      direction: event.currentTarget.value as NodeLayoutConfig['direction'],
-                    })
-                  }
-                >
-                  <option value="row">Row</option>
-                  <option value="column">Column</option>
-                </select>
-              </label>
-            </div>
-            {(selectedNode.layout?.mode ?? 'none') !== 'none' && (
-              <>
-                <div class="field-grid single-row">
-                  <label class="field-label">
-                    Justify
-                    <select
-                      class="select-field"
-                      aria-label="Justify content"
-                      value={selectedNode.layout?.justifyContent ?? 'start'}
-                      onChange={(event) =>
-                        updateFrameLayout({
-                          justifyContent: event.currentTarget.value as NodeLayoutConfig['justifyContent'],
-                        })
-                      }
-                    >
-                      <option value="start">Start</option>
-                      <option value="center">Center</option>
-                      <option value="end">End</option>
-                      <option value="space-between">Between</option>
-                      <option value="space-around">Around</option>
-                    </select>
-                  </label>
-                  <label class="field-label">
-                    Align
-                    <select
-                      class="select-field"
-                      aria-label="Align items"
-                      value={selectedNode.layout?.alignItems ?? 'stretch'}
-                      onChange={(event) =>
-                        updateFrameLayout({
-                          alignItems: event.currentTarget.value as NodeLayoutConfig['alignItems'],
-                        })
-                      }
-                    >
-                      <option value="start">Start</option>
-                      <option value="center">Center</option>
-                      <option value="end">End</option>
-                      <option value="stretch">Stretch</option>
-                    </select>
-                  </label>
-                </div>
-                <PresetStepperSlider
-                  label="Gap"
-                  ariaLabel="Auto-Layout Gap"
-                  value={Math.round(selectedNode.layout?.gap ?? 12)}
-                  min={0}
-                  max={96}
-                  step={4}
-                  presets={SPACING_PRESETS}
-                  onChange={(next) => updateFrameLayout({ gap: next })}
-                />
-                <PresetStepperSlider
-                  label="Padding"
-                  ariaLabel="Auto-Layout Padding"
-                  value={Math.round(selectedNode.layout?.padding.top ?? 16)}
-                  min={0}
-                  max={96}
-                  step={4}
-                  presets={SPACING_PRESETS}
-                  onChange={(next) =>
-                    updateFrameLayout({
-                      padding: { top: next, right: next, bottom: next, left: next },
-                    })
-                  }
-                />
-              </>
-            )}
-            <label class="toggle-row">
-              <span>Clip Content</span>
-              <input
-                type="checkbox"
-                checked={selectedNode.clipContent !== false}
-                onChange={(event) => {
-                  onUpdateSelected({ clipContent: event.currentTarget.checked } as Partial<DesignNode>);
-                  onCommitEdit();
-                }}
-              />
-            </label>
-          </div>
-        )}
+        <InspectorFrameLayoutSection
+          selectedNode={selectedNode}
+          parentNode={parentNode}
+          onUpdateSelected={onUpdateSelected}
+          onApplyAutoLayout={onApplyAutoLayout}
+          onCommitEdit={onCommitEdit}
+        />
       </InspectorAccordionSection>
 
       {/* c. Fill & Stroke (Default Open) */}
@@ -1327,12 +1201,17 @@ function InspectorSelectedNodeBody({
             max={100}
             step={1}
             value={Math.round(selectedNode.opacity * 100)}
+            style={{
+              '--slider-pct': `${Math.max(0, Math.min(100, Math.round(selectedNode.opacity * 100)))}%`,
+            } as Record<string, string>}
             onInput={(event) =>
               onUpdateSelected({
                 opacity: Math.min(1, Math.max(0, Number(event.currentTarget.value) / 100)),
               })
             }
-            onChange={onCommitEdit}
+            onPointerUp={onCommitEdit}
+            onKeyUp={onCommitEdit}
+            onBlur={onCommitEdit}
           />
 
           <div class="field-grid single-row">
@@ -1389,8 +1268,13 @@ function InspectorSelectedNodeBody({
             max={48}
             step={1}
             value={Math.round(layerBlurPx)}
+            style={{
+              '--slider-pct': `${Math.max(0, Math.min(100, (Math.round(layerBlurPx) / 48) * 100))}%`,
+            } as Record<string, string>}
             onInput={(event) => updateBlurEffect('layer-blur', Number(event.currentTarget.value))}
-            onChange={onCommitEdit}
+            onPointerUp={onCommitEdit}
+            onKeyUp={onCommitEdit}
+            onBlur={onCommitEdit}
           />
 
           <div class="inspector-sublabel-row">
@@ -1405,8 +1289,13 @@ function InspectorSelectedNodeBody({
             max={48}
             step={1}
             value={Math.round(bgBlurPx)}
-            onInput={(event) => updateBlurEffect('background-blur', Number(event.currentTarget.value))}
-            onChange={onCommitEdit}
+            style={{
+              '--slider-pct': `${Math.max(0, Math.min(100, (Math.round(bgBlurPx) / 48) * 100))}%`,
+            } as Record<string, string>}
+            onInput={(event) => updateBlurEffect('backdrop-blur', Number(event.currentTarget.value))}
+            onPointerUp={onCommitEdit}
+            onKeyUp={onCommitEdit}
+            onBlur={onCommitEdit}
           />
 
           <label class="field-label">
@@ -1587,6 +1476,7 @@ export function InspectorPanel({
   onInsertImageFiles,
   onDuplicateSelection,
   onCopySelection,
+  scopedNodes = [],
   studioActions,
 }: InspectorPanelProps) {
   const triggerImagePicker = () => {
@@ -1675,6 +1565,7 @@ export function InspectorPanel({
         <InspectorSelectedNodeBody
           activeEditorId={activeEditorId}
           selectedNode={selectedNode}
+          scopedNodes={scopedNodes}
           safeSelectedNodes={safeSelectedNodes}
           selectedInstanceComponent={selectedInstanceComponent}
           editingMasterComponent={editingMasterComponent}

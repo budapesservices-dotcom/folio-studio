@@ -118,20 +118,96 @@ function shiftSubtree(
   }
 }
 
+function resolveAbsolutePinnedChildren(
+  container: DesignNode,
+  absoluteChildren: readonly DesignNode[],
+  nodeById: Map<string, DesignNode>,
+  childrenByParent: Map<string, string[]>,
+): void {
+  if (absoluteChildren.length === 0) return;
+  const pad = container.layout?.padding ?? { top: 0, right: 0, bottom: 0, left: 0 };
+  const innerW = Math.max(1, container.width - pad.left - pad.right);
+  const innerH = Math.max(1, container.height - pad.top - pad.bottom);
+
+  for (const child of absoluteChildren) {
+    const prev = nodeById.get(child.id) ?? child;
+    const cfg = prev.layoutChild;
+    const widthMode = cfg?.widthMode ?? 'fixed';
+    const heightMode = cfg?.heightMode ?? 'fixed';
+    const hPin = cfg?.constraints?.horizontal;
+    const vPin = cfg?.constraints?.vertical;
+
+    let nextW = prev.width;
+    if (widthMode === 'fill' || hPin === 'left-right') {
+      nextW = clampSize(innerW, cfg?.minWidth, cfg?.maxWidth);
+    } else if (widthMode === 'relative') {
+      const pct = Math.max(1, cfg?.widthPercent ?? 100) / 100;
+      nextW = clampSize(innerW * pct, cfg?.minWidth, cfg?.maxWidth);
+    } else {
+      nextW = clampSize(prev.width, cfg?.minWidth, cfg?.maxWidth);
+    }
+
+    let nextH = prev.height;
+    if (heightMode === 'fill' || vPin === 'top-bottom') {
+      nextH = clampSize(innerH, cfg?.minHeight, cfg?.maxHeight);
+    } else if (heightMode === 'relative') {
+      const pct = Math.max(1, cfg?.heightPercent ?? 100) / 100;
+      nextH = clampSize(innerH * pct, cfg?.minHeight, cfg?.maxHeight);
+    } else {
+      nextH = clampSize(prev.height, cfg?.minHeight, cfg?.maxHeight);
+    }
+
+    let nextX = prev.x;
+    if (hPin === 'left' || hPin === 'left-right') {
+      nextX = roundPx(container.x + pad.left);
+    } else if (hPin === 'right') {
+      nextX = roundPx(container.x + container.width - pad.right - nextW);
+    } else if (hPin === 'center') {
+      nextX = roundPx(container.x + (container.width - nextW) / 2);
+    }
+
+    let nextY = prev.y;
+    if (vPin === 'top' || vPin === 'top-bottom') {
+      nextY = roundPx(container.y + pad.top);
+    } else if (vPin === 'bottom') {
+      nextY = roundPx(container.y + container.height - pad.bottom - nextH);
+    } else if (vPin === 'center') {
+      nextY = roundPx(container.y + (container.height - nextH) / 2);
+    }
+
+    const dx = nextX - prev.x;
+    const dy = nextY - prev.y;
+    if (dx !== 0 || dy !== 0 || nextW !== prev.width || nextH !== prev.height) {
+      nodeById.set(prev.id, {
+        ...prev,
+        x: nextX,
+        y: nextY,
+        width: Math.max(1, nextW),
+        height: Math.max(1, nextH),
+      });
+      shiftSubtree(nodeById, childrenByParent, prev.id, dx, dy);
+    }
+  }
+}
+
 function solveFlexContainer(
   container: DesignNode,
-  children: DesignNode[],
+  allVisibleChildren: DesignNode[],
   nodeById: Map<string, DesignNode>,
   childrenByParent: Map<string, string[]>,
 ): void {
   const layout = container.layout;
   if (!layout || layout.mode !== 'flex') return;
 
+  const flowChildren = allVisibleChildren.filter((c) => c.layoutChild?.position !== 'absolute');
+  const absoluteChildren = allVisibleChildren.filter((c) => c.layoutChild?.position === 'absolute');
+
   const isRow = layout.direction === 'row';
   const wrap = layout.wrap === 'wrap';
   const justify = layout.justifyContent ?? 'start';
   const align = layout.alignItems ?? 'start';
-  const gap = Math.max(0, layout.gap);
+  const mainGap = Math.max(0, isRow ? (layout.columnGap ?? layout.gap) : (layout.rowGap ?? layout.gap));
+  const crossGap = Math.max(0, isRow ? (layout.rowGap ?? layout.gap) : (layout.columnGap ?? layout.gap));
   const pad = layout.padding;
 
   const contentX = container.x + pad.left;
@@ -150,17 +226,35 @@ function solveFlexContainer(
     grow: number;
   }
 
-  const items: FlexItem[] = children.map((child) => {
-    const childCfg = child.layoutChild;
+  const items: FlexItem[] = flowChildren.map((child) => {
+    const latestChild = nodeById.get(child.id) ?? child;
+    const childCfg = latestChild.layoutChild;
     const widthMode = childCfg?.widthMode ?? 'fixed';
     const heightMode = childCfg?.heightMode ?? 'fixed';
     const isFillMain = isRow ? widthMode === 'fill' : heightMode === 'fill';
     const isFillCross = isRow ? heightMode === 'fill' : widthMode === 'fill';
     const grow = Math.max(0, childCfg?.flexGrow ?? (isFillMain ? 1 : 0));
+
+    let baseWidth = latestChild.width;
+    if (widthMode === 'relative') {
+      const pct = Math.max(1, childCfg?.widthPercent ?? 100) / 100;
+      baseWidth = clampSize(innerWidth * pct, childCfg?.minWidth, childCfg?.maxWidth);
+    } else if (widthMode === 'fixed') {
+      baseWidth = clampSize(latestChild.width, childCfg?.minWidth, childCfg?.maxWidth);
+    }
+
+    let baseHeight = latestChild.height;
+    if (heightMode === 'relative') {
+      const pct = Math.max(1, childCfg?.heightPercent ?? 100) / 100;
+      baseHeight = clampSize(innerHeight * pct, childCfg?.minHeight, childCfg?.maxHeight);
+    } else if (heightMode === 'fixed') {
+      baseHeight = clampSize(latestChild.height, childCfg?.minHeight, childCfg?.maxHeight);
+    }
+
     return {
-      node: child,
-      mainSize: isRow ? child.width : child.height,
-      crossSize: isRow ? child.height : child.width,
+      node: latestChild,
+      mainSize: isRow ? baseWidth : baseHeight,
+      crossSize: isRow ? baseHeight : baseWidth,
       isFillMain,
       isFillCross,
       grow,
@@ -170,12 +264,12 @@ function solveFlexContainer(
   // Partition into lines (single line when nowrap)
   const lines: FlexItem[][] = [];
   if (!wrap) {
-    lines.push(items);
+    if (items.length > 0) lines.push(items);
   } else {
     let currentLine: FlexItem[] = [];
     let lineMain = 0;
     for (const item of items) {
-      const nextMain = currentLine.length === 0 ? item.mainSize : lineMain + gap + item.mainSize;
+      const nextMain = currentLine.length === 0 ? item.mainSize : lineMain + mainGap + item.mainSize;
       if (currentLine.length > 0 && nextMain > mainAvailable + 0.5) {
         lines.push(currentLine);
         currentLine = [item];
@@ -192,7 +286,7 @@ function solveFlexContainer(
   let totalUsedMainMax = 0;
 
   for (const line of lines) {
-    const totalGaps = Math.max(0, line.length - 1) * gap;
+    const totalGaps = Math.max(0, line.length - 1) * mainGap;
     const fixedMain = line.reduce((sum, item) => sum + (item.isFillMain ? 0 : item.mainSize), 0);
     const totalGrow = line.reduce((sum, item) => sum + (item.isFillMain ? Math.max(1, item.grow) : 0), 0);
     const remainingForFill = Math.max(0, mainAvailable - fixedMain - totalGaps);
@@ -228,18 +322,22 @@ function solveFlexContainer(
     const freeSpace = Math.max(0, mainAvailable - lineMainSum);
 
     let mainCursor = 0;
-    let itemStepGap = gap;
+    let itemStepGap = mainGap;
 
     if (justify === 'center') {
       mainCursor = freeSpace / 2;
     } else if (justify === 'end') {
       mainCursor = freeSpace;
     } else if (justify === 'space-between' && line.length > 1) {
-      itemStepGap = gap + freeSpace / (line.length - 1);
+      itemStepGap = mainGap + freeSpace / (line.length - 1);
     } else if (justify === 'space-around' && line.length > 0) {
       const extra = freeSpace / line.length;
       mainCursor = extra / 2;
-      itemStepGap = gap + extra;
+      itemStepGap = mainGap + extra;
+    } else if (justify === 'space-evenly' && line.length > 0) {
+      const extra = freeSpace / (line.length + 1);
+      mainCursor = extra;
+      itemStepGap = mainGap + extra;
     }
 
     const lineActualCross = Math.max(...line.map((item) => item.crossSize), 0);
@@ -276,42 +374,48 @@ function solveFlexContainer(
       mainCursor += item.mainSize + itemStepGap;
     }
 
-    crossCursor += lineActualCross + gap;
+    crossCursor += lineActualCross + crossGap;
   }
 
-  // Hug-contents resizing on the container itself when requested
+  // Hug-contents (Fit Content) resizing on the container itself from in-flow children
   const containerWidthMode = container.layoutChild?.widthMode ?? 'fixed';
   const containerHeightMode = container.layoutChild?.heightMode ?? 'fixed';
-  const totalCrossUsed = Math.max(0, crossCursor - (lines.length > 0 ? gap : 0));
+  const totalCrossUsed = Math.max(0, crossCursor - (lines.length > 0 ? crossGap : 0));
 
   let nextContainerW = container.width;
   let nextContainerH = container.height;
-  if (containerWidthMode === 'hug') {
+  if (containerWidthMode === 'hug' && flowChildren.length > 0) {
     const contentW = isRow ? totalUsedMainMax : totalCrossUsed;
     nextContainerW = clampSize(contentW + pad.left + pad.right, container.layoutChild?.minWidth, container.layoutChild?.maxWidth);
   }
-  if (containerHeightMode === 'hug') {
+  if (containerHeightMode === 'hug' && flowChildren.length > 0) {
     const contentH = isRow ? totalCrossUsed : totalUsedMainMax;
     nextContainerH = clampSize(contentH + pad.top + pad.bottom, container.layoutChild?.minHeight, container.layoutChild?.maxHeight);
   }
-  if (nextContainerW !== container.width || nextContainerH !== container.height) {
-    const latest = nodeById.get(container.id) ?? container;
-    nodeById.set(container.id, {
-      ...latest,
-      width: nextContainerW,
-      height: nextContainerH,
-    });
+  const latestContainer = nodeById.get(container.id) ?? container;
+  const resolvedContainer =
+    nextContainerW !== container.width || nextContainerH !== container.height
+      ? { ...latestContainer, width: nextContainerW, height: nextContainerH }
+      : latestContainer;
+  if (resolvedContainer !== latestContainer) {
+    nodeById.set(container.id, resolvedContainer);
   }
+
+  // Pin absolute children against the resolved container bounds without affecting flow siblings
+  resolveAbsolutePinnedChildren(resolvedContainer, absoluteChildren, nodeById, childrenByParent);
 }
 
 function solveGridContainer(
   container: DesignNode,
-  children: DesignNode[],
+  allVisibleChildren: DesignNode[],
   nodeById: Map<string, DesignNode>,
   childrenByParent: Map<string, string[]>,
 ): void {
   const layout = container.layout;
   if (!layout || layout.mode !== 'grid') return;
+
+  const flowChildren = allVisibleChildren.filter((c) => c.layoutChild?.position !== 'absolute');
+  const absoluteChildren = allVisibleChildren.filter((c) => c.layoutChild?.position === 'absolute');
 
   const cols = Math.max(1, Math.round(layout.gridColumns ?? 2));
   const colGap = Math.max(0, layout.columnGap ?? layout.gap);
@@ -321,28 +425,78 @@ function solveGridContainer(
   const innerWidth = Math.max(1, container.width - pad.left - pad.right);
   const cellWidth = Math.max(1, (innerWidth - colGap * (cols - 1)) / cols);
   const align = layout.alignItems ?? 'stretch';
+  const justify = layout.justifyContent ?? 'start';
 
-  const rowCount = Math.ceil(children.length / cols);
+  // Pack children into rows respecting optional gridColumnSpan (1..cols)
+  interface GridPlacement {
+    child: DesignNode;
+    colStart: number;
+    span: number;
+  }
+  const rows: GridPlacement[][] = [];
+  let currentRow: GridPlacement[] = [];
+  let colCursor = 0;
+
+  for (const rawChild of flowChildren) {
+    const child = nodeById.get(rawChild.id) ?? rawChild;
+    const span = Math.max(1, Math.min(cols, Math.round(child.layoutChild?.gridColumnSpan ?? 1)));
+    if (colCursor > 0 && colCursor + span > cols) {
+      rows.push(currentRow);
+      currentRow = [];
+      colCursor = 0;
+    }
+    currentRow.push({ child, colStart: colCursor, span });
+    colCursor += span;
+    if (colCursor >= cols) {
+      rows.push(currentRow);
+      currentRow = [];
+      colCursor = 0;
+    }
+  }
+  if (currentRow.length > 0) rows.push(currentRow);
+
   let yCursor = container.y + pad.top;
 
-  for (let row = 0; row < rowCount; row += 1) {
-    const rowChildren = children.slice(row * cols, (row + 1) * cols);
-    const rowHeight = Math.max(...rowChildren.map((child) => child.height), 1);
+  for (const rowPlacements of rows) {
+    const rowHeight = Math.max(...rowPlacements.map((p) => p.child.height), 1);
 
-    for (let col = 0; col < rowChildren.length; col += 1) {
-      const child = rowChildren[col];
+    for (const { child, colStart, span } of rowPlacements) {
       const childCfg = child.layoutChild;
-      const nextW = childCfg?.widthMode === 'fixed'
-        ? clampSize(child.width, childCfg?.minWidth, childCfg?.maxWidth)
-        : clampSize(cellWidth, childCfg?.minWidth, childCfg?.maxWidth);
-      const nextH = (childCfg?.heightMode === 'fill' || align === 'stretch')
-        ? clampSize(rowHeight, childCfg?.minHeight, childCfg?.maxHeight)
-        : clampSize(child.height, childCfg?.minHeight, childCfg?.maxHeight);
+      const spanWidth = Math.max(1, cellWidth * span + colGap * (span - 1));
+      const widthMode = childCfg?.widthMode ?? 'fill';
+      const heightMode = childCfg?.heightMode ?? 'fixed';
 
-      const cellX = container.x + pad.left + col * (cellWidth + colGap);
+      let nextW: number;
+      if (widthMode === 'fixed') {
+        nextW = clampSize(child.width, childCfg?.minWidth, childCfg?.maxWidth);
+      } else if (widthMode === 'relative') {
+        const pct = Math.max(1, childCfg?.widthPercent ?? 100) / 100;
+        nextW = clampSize(spanWidth * pct, childCfg?.minWidth, childCfg?.maxWidth);
+      } else {
+        nextW = clampSize(spanWidth, childCfg?.minWidth, childCfg?.maxWidth);
+      }
+
+      const effectiveAlign =
+        childCfg?.alignSelf && childCfg.alignSelf !== 'auto' ? childCfg.alignSelf : align;
+      let nextH: number;
+      if (heightMode === 'fill' || effectiveAlign === 'stretch') {
+        nextH = clampSize(rowHeight, childCfg?.minHeight, childCfg?.maxHeight);
+      } else if (heightMode === 'relative') {
+        const pct = Math.max(1, childCfg?.heightPercent ?? 100) / 100;
+        nextH = clampSize(rowHeight * pct, childCfg?.minHeight, childCfg?.maxHeight);
+      } else {
+        nextH = clampSize(child.height, childCfg?.minHeight, childCfg?.maxHeight);
+      }
+
+      let cellX = container.x + pad.left + colStart * (cellWidth + colGap);
+      if (nextW < spanWidth) {
+        if (justify === 'center') cellX += (spanWidth - nextW) / 2;
+        else if (justify === 'end') cellX += spanWidth - nextW;
+      }
+
       let nextY = yCursor;
-      if (align === 'center') nextY = yCursor + (rowHeight - nextH) / 2;
-      else if (align === 'end') nextY = yCursor + (rowHeight - nextH);
+      if (effectiveAlign === 'center') nextY = yCursor + (rowHeight - nextH) / 2;
+      else if (effectiveAlign === 'end') nextY = yCursor + (rowHeight - nextH);
 
       const prev = nodeById.get(child.id) ?? child;
       const dx = roundPx(cellX) - prev.x;
@@ -360,19 +514,24 @@ function solveGridContainer(
     yCursor += rowHeight + rowGap;
   }
 
-  if (container.layoutChild?.heightMode === 'hug' && rowCount > 0) {
+  const latest = nodeById.get(container.id) ?? container;
+  let resolvedContainer = latest;
+  if (container.layoutChild?.heightMode === 'hug' && rows.length > 0) {
     const usedH = yCursor - rowGap - container.y + pad.bottom;
-    const latest = nodeById.get(container.id) ?? container;
-    nodeById.set(container.id, {
+    resolvedContainer = {
       ...latest,
       height: clampSize(usedH, container.layoutChild?.minHeight, container.layoutChild?.maxHeight),
-    });
+    };
+    nodeById.set(container.id, resolvedContainer);
   }
+
+  resolveAbsolutePinnedChildren(resolvedContainer, absoluteChildren, nodeById, childrenByParent);
 }
 
 /**
- * Pure, framework-independent deterministic Auto-Layout + Responsive + Token solver.
- * Produces resolved render/commit nodes while preserving original node ordering.
+ * Pure, framework-independent deterministic 2-Pass Framer Auto-Layout + Responsive + Token solver.
+ * Pass 1 (Bottom-Up): resolves nested `hug` (Fit Content) intrinsic bounds from leaf containers upward.
+ * Pass 2 (Top-Down): distributes `fill` (fr), `relative` (%), `space-evenly`, and `absolute` pins downward.
  */
 export function computeAutoLayoutNodes(
   nodes: readonly DesignNode[],
@@ -413,41 +572,66 @@ export function computeAutoLayoutNodes(
     }
   }
 
-  const solveRecursive = (containerId: string, visited: Set<string>) => {
-    if (visited.has(containerId)) return;
-    visited.add(containerId);
-
+  const solveContainerNode = (containerId: string) => {
     const container = nodeById.get(containerId);
-    if (!container) return;
-
+    if (!container || !container.layout || container.layout.mode === 'none') return;
     const childIds = childrenByParent.get(containerId) ?? [];
     const visibleChildren = childIds
       .map((id) => nodeById.get(id))
       .filter((child): child is DesignNode => child !== undefined && child.visible && child.onCanvas !== false);
+    if (visibleChildren.length === 0) return;
 
-    // Solve current container first (top-down sizing for fill children)
-    if (container.layout && container.layout.mode === 'flex' && visibleChildren.length > 0) {
+    if (container.layout.mode === 'flex') {
       solveFlexContainer(container, visibleChildren, nodeById, childrenByParent);
-    } else if (container.layout && container.layout.mode === 'grid' && visibleChildren.length > 0) {
+    } else if (container.layout.mode === 'grid') {
       solveGridContainer(container, visibleChildren, nodeById, childrenByParent);
-    }
-
-    // Recursively solve nested Auto-Layout children
-    for (const childId of childIds) {
-      solveRecursive(childId, visited);
     }
   };
 
-  const visited = new Set<string>();
-  if (options.onlyContainerId) {
-    solveRecursive(options.onlyContainerId, visited);
-  } else {
-    // Solve from top-level roots downward
-    for (const node of working) {
-      if (!node.parentId || !nodeById.has(node.parentId)) {
-        solveRecursive(node.id, visited);
-      }
+  // Pass 1 (Bottom-Up): measure nested Fit-Content (hug) containers first so parents see accurate intrinsic sizes
+  const solveIntrinsicBottomUp = (containerId: string, visited: Set<string>) => {
+    if (visited.has(containerId)) return;
+    visited.add(containerId);
+    const childIds = childrenByParent.get(containerId) ?? [];
+    for (const childId of childIds) {
+      solveIntrinsicBottomUp(childId, visited);
     }
+    const container = nodeById.get(containerId);
+    if (
+      container &&
+      container.layout &&
+      container.layout.mode !== 'none' &&
+      (container.layoutChild?.widthMode === 'hug' || container.layoutChild?.heightMode === 'hug')
+    ) {
+      solveContainerNode(containerId);
+    }
+  };
+
+  // Pass 2 (Top-Down): distribute Fill (fr), Relative (%), alignment, and Absolute pins downward
+  const solveTopDown = (containerId: string, visited: Set<string>) => {
+    if (visited.has(containerId)) return;
+    visited.add(containerId);
+    solveContainerNode(containerId);
+    const childIds = childrenByParent.get(containerId) ?? [];
+    for (const childId of childIds) {
+      solveTopDown(childId, visited);
+    }
+  };
+
+  const roots = options.onlyContainerId
+    ? [options.onlyContainerId]
+    : working
+        .filter((node) => !node.parentId || !nodeById.has(node.parentId))
+        .map((node) => node.id);
+
+  const visitedBottomUp = new Set<string>();
+  for (const rootId of roots) {
+    solveIntrinsicBottomUp(rootId, visitedBottomUp);
+  }
+
+  const visitedTopDown = new Set<string>();
+  for (const rootId of roots) {
+    solveTopDown(rootId, visitedTopDown);
   }
 
   return nodes.map((original) => nodeById.get(original.id) ?? original);

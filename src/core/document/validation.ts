@@ -103,9 +103,12 @@ const BREAKPOINT_IDS = new Set(['desktop', 'tablet', 'mobile']);
 const LAYOUT_MODES = new Set(['none', 'flex', 'grid']);
 const LAYOUT_DIRECTIONS = new Set(['row', 'column']);
 const LAYOUT_WRAPS = new Set(['nowrap', 'wrap']);
-const LAYOUT_JUSTIFY = new Set(['start', 'center', 'end', 'space-between', 'space-around']);
+const LAYOUT_JUSTIFY = new Set(['start', 'center', 'end', 'space-between', 'space-around', 'space-evenly']);
 const LAYOUT_ALIGN = new Set(['start', 'center', 'end', 'stretch']);
-const LAYOUT_SIZING_MODES = new Set(['fixed', 'hug', 'fill']);
+const LAYOUT_OVERFLOW_VALUES = new Set(['visible', 'hidden', 'scroll']);
+const LAYOUT_PADDING_MODES = new Set(['uniform', 'per-side']);
+const LAYOUT_SIZING_MODES = new Set(['fixed', 'hug', 'fill', 'relative']);
+const LAYOUT_CHILD_POSITIONS = new Set(['relative', 'absolute']);
 const ALIGN_SELF_VALUES = new Set(['auto', 'start', 'center', 'end', 'stretch']);
 const HORIZONTAL_CONSTRAINTS = new Set(['left', 'right', 'left-right', 'center', 'scale']);
 const VERTICAL_CONSTRAINTS = new Set(['top', 'bottom', 'top-bottom', 'center', 'scale']);
@@ -147,6 +150,8 @@ export function isNodeLayoutConfig(value: unknown): boolean {
     (value.columnGap === undefined || (isFiniteNumber(value.columnGap) && value.columnGap >= 0)) &&
     (value.rowGap === undefined || (isFiniteNumber(value.rowGap) && value.rowGap >= 0)) &&
     (value.gridColumns === undefined || (isFiniteNumber(value.gridColumns) && value.gridColumns >= 1 && value.gridColumns <= 24)) &&
+    (value.overflow === undefined || LAYOUT_OVERFLOW_VALUES.has(String(value.overflow))) &&
+    (value.paddingMode === undefined || LAYOUT_PADDING_MODES.has(String(value.paddingMode))) &&
     isNodePadding(value.padding)
   );
 }
@@ -154,10 +159,15 @@ export function isNodeLayoutConfig(value: unknown): boolean {
 export function isNodeLayoutChildConfig(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
+    (value.position === undefined || LAYOUT_CHILD_POSITIONS.has(String(value.position))) &&
     (value.widthMode === undefined || LAYOUT_SIZING_MODES.has(String(value.widthMode))) &&
     (value.heightMode === undefined || LAYOUT_SIZING_MODES.has(String(value.heightMode))) &&
+    (value.widthPercent === undefined || (isFiniteNumber(value.widthPercent) && value.widthPercent > 0 && value.widthPercent <= 1000)) &&
+    (value.heightPercent === undefined || (isFiniteNumber(value.heightPercent) && value.heightPercent > 0 && value.heightPercent <= 1000)) &&
     (value.alignSelf === undefined || ALIGN_SELF_VALUES.has(String(value.alignSelf))) &&
     (value.flexGrow === undefined || (isFiniteNumber(value.flexGrow) && value.flexGrow >= 0)) &&
+    (value.gridColumnSpan === undefined || (isFiniteNumber(value.gridColumnSpan) && value.gridColumnSpan >= 1 && value.gridColumnSpan <= 24)) &&
+    (value.zIndex === undefined || (isFiniteNumber(value.zIndex) && value.zIndex >= -9999 && value.zIndex <= 9999)) &&
     (value.minWidth === undefined || (isFiniteNumber(value.minWidth) && value.minWidth >= 0)) &&
     (value.maxWidth === undefined || (isFiniteNumber(value.maxWidth) && value.maxWidth >= 0)) &&
     (value.minHeight === undefined || (isFiniteNumber(value.minHeight) && value.minHeight >= 0)) &&

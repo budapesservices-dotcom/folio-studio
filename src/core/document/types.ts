@@ -41,8 +41,16 @@ export interface NodePadding {
 export type LayoutMode = 'none' | 'flex' | 'grid';
 export type LayoutDirection = 'row' | 'column';
 export type LayoutWrap = 'nowrap' | 'wrap';
-export type LayoutJustifyContent = 'start' | 'center' | 'end' | 'space-between' | 'space-around';
+export type LayoutJustifyContent =
+  | 'start'
+  | 'center'
+  | 'end'
+  | 'space-between'
+  | 'space-around'
+  | 'space-evenly';
 export type LayoutAlignItems = 'start' | 'center' | 'end' | 'stretch';
+export type LayoutOverflow = 'visible' | 'hidden' | 'scroll';
+export type LayoutPaddingMode = 'uniform' | 'per-side';
 
 export interface NodeLayoutConfig {
   mode: LayoutMode;
@@ -55,17 +63,33 @@ export interface NodeLayoutConfig {
   rowGap?: number;
   gridColumns?: number;
   padding: NodePadding;
+  /** Optional Framer-style overflow behavior (visible, hidden, scroll). */
+  overflow?: LayoutOverflow;
+  /** Optional inspector UI preference for uniform vs individual T/R/B/L padding. */
+  paddingMode?: LayoutPaddingMode;
 }
 
-export type LayoutSizingMode = 'fixed' | 'hug' | 'fill';
+export type LayoutSizingMode = 'fixed' | 'hug' | 'fill' | 'relative';
+export type LayoutChildPosition = 'relative' | 'absolute';
 export type HorizontalConstraint = 'left' | 'right' | 'left-right' | 'center' | 'scale';
 export type VerticalConstraint = 'top' | 'bottom' | 'top-bottom' | 'center' | 'scale';
 
 export interface NodeLayoutChildConfig {
+  /** Positioning mode inside an Auto-Layout parent: 'relative' participates in flow; 'absolute' floats via constraints. */
+  position?: LayoutChildPosition;
   widthMode?: LayoutSizingMode;
   heightMode?: LayoutSizingMode;
+  /** Percentage width (1–100+) when widthMode === 'relative'. */
+  widthPercent?: number;
+  /** Percentage height (1–100+) when heightMode === 'relative'. */
+  heightPercent?: number;
   alignSelf?: 'auto' | 'start' | 'center' | 'end' | 'stretch';
+  /** Proportional Fill weight (fr) when sizing mode is 'fill'. */
   flexGrow?: number;
+  /** Optional CSS Grid column span (1–12) when parent layout mode is 'grid'. */
+  gridColumnSpan?: number;
+  /** Optional stacking order when overlapping siblings or positioned absolutely. */
+  zIndex?: number;
   minWidth?: number;
   maxWidth?: number;
   minHeight?: number;

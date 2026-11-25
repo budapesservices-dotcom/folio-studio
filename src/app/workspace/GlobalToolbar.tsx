@@ -172,6 +172,29 @@ export function GlobalToolbar({
   onUpdateToolbarHint,
 }: GlobalToolbarProps) {
   const [importError, setImportError] = useState<string | null>(null);
+  const [studioTheme, setStudioTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof document !== 'undefined' && document.documentElement.dataset.studioTheme === 'light') {
+      return 'light';
+    }
+    return 'dark';
+  });
+
+  const handleToggleStudioTheme = () => {
+    const nextTheme: 'dark' | 'light' = studioTheme === 'dark' ? 'light' : 'dark';
+    setStudioTheme(nextTheme);
+    if (typeof document !== 'undefined') {
+      document.documentElement.dataset.studioTheme = nextTheme;
+      const themeMeta = document.querySelector('meta[name="theme-color"]');
+      if (themeMeta) {
+        themeMeta.setAttribute('content', nextTheme === 'light' ? '#f4f6fa' : '#0b0d12');
+      }
+    }
+    try {
+      window.localStorage.setItem('folio.studio-theme.v1', nextTheme);
+    } catch {
+      // Ignore storage quota / privacy mode errors
+    }
+  };
 
   const handleOpenProjectPickerClick = () => {
     setImportError(null);
@@ -212,6 +235,9 @@ export function GlobalToolbar({
     >
       <nav class="global-menu-bar" aria-label="Application menus">
         <div class="global-toolbar-left">
+          <div class="global-brand-mark" aria-hidden="true" title="Folio Studio">
+            <span class="global-brand-glyph">F</span>
+          </div>
           <div class="global-menu-items" ref={menuBarRef}>
             <div class="global-menu-entry">
               <button
@@ -680,6 +706,24 @@ export function GlobalToolbar({
           </div>
           <span class="global-panel-group-divider" aria-hidden="true" />
           <div class="global-panel-group" role="group" aria-label="Utilities">
+            <button
+              class={`global-panel-toggle studio-theme-toggle ${studioTheme === 'light' ? 'active' : ''}`}
+              type="button"
+              title={studioTheme === 'dark' ? 'Switch to Daylight Atelier (Light) theme' : 'Switch to Obsidian Studio (Dark) theme'}
+              aria-label={studioTheme === 'dark' ? 'Switch to Light theme' : 'Switch to Dark theme'}
+              aria-pressed={studioTheme === 'light'}
+              onClick={handleToggleStudioTheme}
+              onMouseEnter={() =>
+                onUpdateToolbarHint(
+                  'STUDIO THEME',
+                  studioTheme === 'dark'
+                    ? 'Switch workspace chrome to Daylight Atelier light mode.'
+                    : 'Switch workspace chrome to Obsidian Studio dark mode.',
+                )
+              }
+            >
+              <StudioIcon name={studioTheme === 'dark' ? 'sun' : 'moon'} />
+            </button>
             <button
               class={`global-panel-toggle shortcuts-header-toggle ${shortcutsModalOpen ? 'active' : ''}`}
               type="button"

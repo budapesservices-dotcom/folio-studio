@@ -73,6 +73,8 @@ export const STUDIO_ICON_PATHS: Record<string, string> = {
   loop: 'M17 2l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3',
   autoArrange: 'M3 9h5v6H3zM16 4h5v5h-5zM16 15h5v5h-5zM8 12h4m0-5.5h4M12 6.5v11h4',
   image: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm0 11 4.5-4.5L12 15l3.5-3.5L20 16M9 9.5a1.5 1.5 0 1 0 0 .01',
+  sun: 'M12 3v2m0 14v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M3 12h2m14 0h2M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
+  moon: 'M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z',
 };
 
 export function StudioIcon({ name }: { name: string }) {

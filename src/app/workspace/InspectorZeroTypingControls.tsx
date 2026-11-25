@@ -102,25 +102,30 @@ export function PresetStepperSlider({
         max={max}
         step={step}
         value={clampedSlider}
+        style={{
+          '--slider-pct': `${Math.max(0, Math.min(100, ((clampedSlider - min) / Math.max(1e-6, max - min)) * 100))}%`,
+        } as Record<string, string>}
         onInput={(event) => {
           const next = Number(event.currentTarget.value);
           if (Number.isFinite(next)) onChange(next);
         }}
-        onChange={() => onCommit?.()}
+        onPointerUp={() => onCommit?.()}
+        onKeyUp={() => onCommit?.()}
+        onBlur={() => onCommit?.()}
       />
     </div>
   );
 }
 
 export const QUICK_COLOR_SWATCHES = [
-  '#00E5FF',
-  '#8B7CF6',
-  '#F59E0B',
+  '#3B82F6',
   '#10B981',
-  '#EF4444',
+  '#F59E0B',
+  '#F43F5E',
+  '#06B6D4',
   '#FFFFFF',
   '#94A3B8',
-  '#12161A',
+  '#0F172A',
 ] as const;
 
 export interface VisualColorAlphaControlProps {
@@ -137,7 +142,7 @@ export interface VisualColorAlphaControlProps {
 export function VisualColorAlphaControl({
   label,
   value,
-  fallbackHex = '#00E5FF',
+  fallbackHex = '#3B82F6',
   boundTokenId,
   designTokens,
   onChangeColor,
@@ -147,7 +152,7 @@ export function VisualColorAlphaControl({
   const transparent = isTransparentColor(value);
   const parsed = parseColorWithAlpha(value, fallbackHex);
   const alphaPercent = Math.round(parsed.alpha * 100);
-  const colorTokens = designTokens.tokens.filter((token) => token.type === 'color');
+  const colorTokens = designTokens.tokens.filter((token) => token.category === 'color');
 
   const handleHexChange = (nextHex: string) => {
     const nextAlpha = transparent ? 1 : parsed.alpha;
@@ -180,7 +185,9 @@ export function VisualColorAlphaControl({
               aria-label={`${label} color picker`}
               value={parsed.hex}
               onInput={(event) => handleHexChange(event.currentTarget.value)}
-              onChange={() => onCommit?.()}
+              onPointerUp={() => onCommit?.()}
+              onKeyUp={() => onCommit?.()}
+              onBlur={() => onCommit?.()}
             />
           </label>
           <span class="zt-color-badge" title={value}>
@@ -217,8 +224,11 @@ export function VisualColorAlphaControl({
             max={100}
             step={1}
             value={alphaPercent}
+            style={{ '--slider-pct': `${alphaPercent}%` } as Record<string, string>}
             onInput={(event) => handleAlphaChange(Number(event.currentTarget.value))}
-            onChange={() => onCommit?.()}
+            onPointerUp={() => onCommit?.()}
+            onKeyUp={() => onCommit?.()}
+            onBlur={() => onCommit?.()}
           />
         </div>
         <span class="zt-value-readout">{alphaPercent}%</span>

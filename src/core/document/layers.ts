@@ -135,7 +135,13 @@ function resolveFrameClipAncestorIdsFromMap(
   const result: string[] = [];
   for (let i = chain.length - 1; i >= 0; i -= 1) {
     const ancestor = chain[i];
-    if (ancestor.type === 'frame' && ancestor.clipContent !== false && ancestor.onCanvas !== false) {
+    const clipsChildren =
+      ancestor.type === 'frame' &&
+      ancestor.onCanvas !== false &&
+      (ancestor.layout?.overflow
+        ? ancestor.layout.overflow !== 'visible'
+        : ancestor.clipContent !== false);
+    if (clipsChildren) {
       result.push(ancestor.id);
     }
   }
