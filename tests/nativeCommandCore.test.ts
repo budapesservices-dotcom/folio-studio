@@ -610,7 +610,7 @@ describe('Reducer parity, history and canonical revision', () => {
     expect('projectRevision' in fixture.store.getSnapshot().editorState.project).toBe(false);
   });
 
-  it('keeps projectRevision monotonic while page addition and page switching reset history as before', () => {
+  it('keeps projectRevision monotonic while preserving multi-page delta history across page addition and switching', () => {
     const fixture = createFixture();
     fixture.store.dispatchLegacyAction({ type: 'rename-project', name: 'Changed' });
     expect(fixture.store.getSnapshot().projectRevision).toBe(1);
@@ -624,10 +624,22 @@ describe('Reducer parity, history and canonical revision', () => {
     };
     fixture.store.dispatchLegacyAction({ type: 'add-page', page: secondPage });
     expect(fixture.store.getSnapshot().projectRevision).toBe(2);
-    expect(fixture.store.getSnapshot().editorState.past).toHaveLength(0);
+    expect(fixture.store.getSnapshot().editorState.past).toHaveLength(2);
+    expect(fixture.store.getSnapshot().editorState.project.activePageId).toBe('page-second');
+
     fixture.store.dispatchLegacyAction({ type: 'set-active-page', pageId: 'page-main' });
     expect(fixture.store.getSnapshot().projectRevision).toBe(3);
-    expect(fixture.store.getSnapshot().editorState.past).toHaveLength(0);
+    expect(fixture.store.getSnapshot().editorState.past).toHaveLength(3);
+    expect(fixture.store.getSnapshot().editorState.project.activePageId).toBe('page-main');
+
+    // Undo restores the active page back to page-second, then removes page-second, then reverts rename
+    fixture.store.dispatchLegacyAction({ type: 'undo' });
+    expect(fixture.store.getSnapshot().editorState.project.activePageId).toBe('page-second');
+    fixture.store.dispatchLegacyAction({ type: 'undo' });
+    expect(fixture.store.getSnapshot().editorState.project.pages.map((p) => p.id)).toEqual(['page-main']);
+    expect(fixture.store.getSnapshot().editorState.project.activePageId).toBe('page-main');
+    fixture.store.dispatchLegacyAction({ type: 'undo' });
+    expect(fixture.store.getSnapshot().editorState.project.metadata.name).toBe('Native command project');
   });
 
   it('keeps the 200-entry delta history limit', () => {

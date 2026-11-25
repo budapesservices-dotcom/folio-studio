@@ -24,7 +24,7 @@ import { serializeDocumentToSvgString } from '../src/app/visualExport';
 import { buildLivePreviewHtml } from '../src/engines/codegen/htmlCssCompiler';
 import { buildCompiledProjectBundle } from '../src/engines/codegen/projectBundle';
 import { parseZipArchive } from '../src/engines/codegen/zipArchive';
-import { createInitialEditorState, editorReducer } from '../src/app/editorReducer';
+import { createEditorState, editorReducer } from '../src/app/editorReducer';
 import { createClipboardPayload, prepareNodesForPaste } from '../src/app/nodeClipboard';
 
 function makeRect(id: string, extra: Partial<RectNode> = {}): RectNode {
@@ -180,7 +180,7 @@ describe('P0-1 & P0-2: Portable Asset Exports (SVG/PNG/HTML/ZIP) & Hydration Rea
       const parsed = parseZipArchive(bundle.zipBytes);
       const assetEntry = parsed.find((entry) => entry.path.startsWith('assets/') && entry.path.endsWith('.png'));
       expect(assetEntry).toBeDefined();
-      expect(assetEntry!.bytes.byteLength).toBe(largeBytes.byteLength);
+      expect(assetEntry!.data.byteLength).toBe(largeBytes.byteLength);
     } finally {
       globalWithWin.window = prevWindow;
       globalWithWin.URL.createObjectURL = prevCreateObjectUrl;
@@ -232,7 +232,7 @@ describe('P0-1 & P0-2: Portable Asset Exports (SVG/PNG/HTML/ZIP) & Hydration Rea
           name: 'b.svg',
           kind: 'image',
           mimeType: 'image/svg+xml',
-          source: `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>').toString('base64')}`,
+          source: `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>')}`,
           createdAt: new Date().toISOString(),
         },
       ];
@@ -320,12 +320,11 @@ describe('P0-3: delete-component cleans orphan clipMaskBaseId & cross-studio ref
         id: 'graph-page-1',
         name: 'Page Logic',
         scope: 'page',
-        pageId,
+        targetId: pageId,
         nodes: [
           {
             id: 'ln-click',
             type: 'event.on-click',
-            label: 'Click Badge',
             x: 10,
             y: 10,
             data: { targetNodeId: 'page-inst-1' },
@@ -372,7 +371,6 @@ describe('P0-3: delete-component cleans orphan clipMaskBaseId & cross-studio ref
         targetPageId: pageId,
         targetNodeId: 'page-inst-1',
         content: '.badge { color: red; }',
-        createdAt: now,
         updatedAt: now,
       },
     ];
@@ -380,12 +378,13 @@ describe('P0-3: delete-component cleans orphan clipMaskBaseId & cross-studio ref
     const preValidation = validateProject(project);
     expect(preValidation.ok, preValidation.ok ? '' : preValidation.error).toBe(true);
 
-    const state = createInitialEditorState(project);
+    const state = createEditorState(project);
+    const liveMaster = state.project.components.find((c) => c.id === 'comp-badge')!;
     const nextState = editorReducer(state, {
       type: 'delete-component',
       componentId: 'comp-badge',
-      expectedMasterDocument: masterComp.document,
-      expectedUpdatedAt: masterComp.updatedAt,
+      expectedMasterDocument: liveMaster.document,
+      expectedUpdatedAt: liveMaster.updatedAt,
     });
 
     // Must remain 100% valid for IndexedDB autosave & .flop export
@@ -488,6 +487,7 @@ describe('P0-4: prepareNodesForPaste strips orphan clipMaskBaseId on auto-detach
       clipboard!,
       {
         target: 'component',
+        pageId: null,
         componentId: 'comp-chip',
         components: [chipComp],
       },
@@ -500,7 +500,7 @@ describe('P0-4: prepareNodesForPaste strips orphan clipMaskBaseId on auto-detach
     expect(pastedOverlay?.clipMaskBaseId).toBeUndefined();
 
     // Inserting pasted nodes into the master component document must pass full project validation
-    const project = createEmptyProject('Circular Paste Validation');
+    const project = createInitialProject('Circular Paste Validation');
     project.components = [
       {
         ...chipComp,

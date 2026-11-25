@@ -654,6 +654,14 @@ export async function getAssetBytesByHash(sha256: string): Promise<{ bytes: Uint
   return entry;
 }
 
+function isSafeInlineAssetDataUrl(src: string, kind: AssetReference['kind']): boolean {
+  if (src.startsWith('data:image/')) return true;
+  if (kind === 'font') {
+    return /^data:(?:font\/(?:woff2|woff|ttf|otf|sfnt)|application\/(?:font-woff2|font-woff|x-font-ttf|x-font-opentype|font-sfnt|octet-stream));base64,/i.test(src);
+  }
+  return false;
+}
+
 /** Synchronously resolves an AssetReference into a safe displayable URL for in-tab Canvas/Preview rendering. */
 export function resolveAssetDisplayUrl(asset: AssetReference | undefined): string | null {
   if (!asset) return null;
@@ -662,12 +670,17 @@ export function resolveAssetDisplayUrl(asset: AssetReference | undefined): strin
     if (cached) return cached;
   }
   const src = asset.source.trim();
-  if (src.startsWith('data:image/') || src.startsWith('blob:') || src.startsWith('https://') || src.startsWith('http://')) {
+  if (
+    isSafeInlineAssetDataUrl(src, asset.kind) ||
+    src.startsWith('blob:') ||
+    src.startsWith('https://') ||
+    src.startsWith('http://')
+  ) {
     return src;
   }
-  if (src.startsWith('folio-asset://')) {
-    const hash = src.slice('folio-asset://'.length);
-    return memoryUrlByHash.get(hash) ?? null;
+  if (src.startsWith(INTERNAL_ASSET_URI_PREFIX)) {
+    const hash = src.slice(INTERNAL_ASSET_URI_PREFIX.length).trim();
+    return hash ? (memoryUrlByHash.get(hash) ?? null) : null;
   }
   return null;
 }
@@ -679,7 +692,7 @@ export function resolveAssetDisplayUrl(asset: AssetReference | undefined): strin
 export function resolvePortableAssetUrl(asset: AssetReference | undefined): string | null {
   if (!asset) return null;
   const src = asset.source.trim();
-  if (src.startsWith('data:image/') || src.startsWith('https://') || src.startsWith('http://')) {
+  if (isSafeInlineAssetDataUrl(src, asset.kind) || src.startsWith('https://') || src.startsWith('http://')) {
     return src;
   }
   const hash = (

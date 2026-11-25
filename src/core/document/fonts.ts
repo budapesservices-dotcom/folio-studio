@@ -7,6 +7,7 @@
  */
 
 import type { AssetReference, DesignNode, FolioProject } from './types';
+import { resolveAssetDisplayUrl, resolvePortableAssetUrl } from '../persistence/assetStore';
 
 export interface CuratedFontEntry {
   readonly label: string;
@@ -111,32 +112,57 @@ function detectFontFormat(mimeType: string, name: string): string {
   return 'truetype';
 }
 
-const SAFE_FONT_DATA_URL_PREFIX = /^data:(?:font\/(?:woff2|woff|ttf|otf)|application\/(?:font-woff2|font-woff|x-font-ttf|x-font-opentype|octet-stream));base64,[A-Za-z0-9+/=]+$/;
+const SAFE_FONT_DATA_URL_PREFIX = /^data:(?:font\/(?:woff2|woff|ttf|otf|sfnt)|application\/(?:font-woff2|font-woff|x-font-ttf|x-font-opentype|font-sfnt|octet-stream));base64,[A-Za-z0-9+/=]+$/;
+const SAFE_FONT_RELATIVE_PATH = /^\.\.\/assets\/[a-zA-Z0-9._-]+$|^\/assets\/[a-zA-Z0-9._-]+$/;
+const SAFE_FONT_BLOB_URL = /^blob:(?:https?:\/\/[a-zA-Z0-9.:-]+|null)\/[a-zA-Z0-9._-]+$/;
+
+export interface CustomFontFaceCssOptions {
+  /** Custom href resolver (e.g. bundled `../assets/...` or `/assets/...` paths for ZIP export). */
+  resolveHref?: (asset: AssetReference) => string | null;
+  /** 'display' allows in-tab hydrated blob: URLs for Studio/Live Preview; 'portable' emits only self-contained data: or relative asset URLs. */
+  mode?: 'display' | 'portable';
+}
 
 /**
  * Emits safe `@font-face` CSS rules for embedded project font assets (`kind === 'font'`).
- * Only allows validated `data:` font URLs or clean relative `assets/` paths.
+ * Resolves `folio-asset://<sha256>` assets (> 16 KB) via `assetStore` in addition to
+ * validated `data:` font URLs and clean relative `assets/` paths.
  */
 export function buildCustomFontFaceCss(
   assets: readonly AssetReference[],
-  options: { resolveHref?: (asset: AssetReference) => string | null } = {},
+  options: CustomFontFaceCssOptions = {},
 ): string {
+  const mode = options.mode ?? 'display';
   const rules: string[] = [];
   for (const asset of assets) {
     if (asset.kind !== 'font') continue;
     const rawName = asset.name.replace(/\.(woff2?|ttf|otf)$/i, '').trim();
     if (!isSafeFontFamilyName(rawName)) continue;
-    const href = options.resolveHref ? options.resolveHref(asset) : asset.source;
+    let href: string | null;
+    if (options.resolveHref) {
+      href = options.resolveHref(asset);
+    } else if (mode === 'portable') {
+      href = resolvePortableAssetUrl(asset) ?? (SAFE_FONT_RELATIVE_PATH.test(asset.source.trim()) ? asset.source.trim() : null);
+    } else {
+      const trimmed = asset.source.trim();
+      if (trimmed.startsWith('folio-asset://') || asset.sha256) {
+        href = resolveAssetDisplayUrl(asset) ?? resolvePortableAssetUrl(asset);
+      } else {
+        href = trimmed;
+      }
+    }
     if (!href) continue;
-    const isSafeData = SAFE_FONT_DATA_URL_PREFIX.test(href);
-    const isSafeRelative = /^\.\.\/assets\/[a-zA-Z0-9._-]+$|^\/assets\/[a-zA-Z0-9._-]+$/.test(href);
-    if (!isSafeData && !isSafeRelative) continue;
+    const trimmedHref = href.trim();
+    const isSafeData = SAFE_FONT_DATA_URL_PREFIX.test(trimmedHref);
+    const isSafeRelative = SAFE_FONT_RELATIVE_PATH.test(trimmedHref);
+    const isSafeBlob = mode === 'display' && SAFE_FONT_BLOB_URL.test(trimmedHref);
+    if (!isSafeData && !isSafeRelative && !isSafeBlob) continue;
     const format = detectFontFormat(asset.mimeType, asset.name);
     rules.push(
       [
         '@font-face {',
         `  font-family: "${rawName}";`,
-        `  src: url("${href}") format("${format}");`,
+        `  src: url("${trimmedHref}") format("${format}");`,
         '  font-display: swap;',
         '}',
       ].join('\n'),

@@ -1,7 +1,8 @@
-import { useMemo } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import type { AssetReference, ComponentDefinition, DesignTokenCollection } from '../core/document/types';
 import { resolveComponentDefaultNodes } from '../core/document/components';
 import { getEffectiveLayerStates } from '../core/document/layers';
+import { getAssetCacheRevision, subscribeAssetCacheUpdates } from '../core/persistence/assetStore';
 import { DocumentArtworkContent, sanitizeMaskIdSegment } from '../engines/canvas/artwork';
 import { computeAutoLayoutNodes } from '../engines/layout/autoLayout';
 
@@ -23,6 +24,11 @@ export function ComponentThumbnail({
   assets?: readonly AssetReference[];
 }) {
   const doc = component.document;
+  const [, setAssetCacheRevision] = useState(() => getAssetCacheRevision());
+
+  useEffect(() => subscribeAssetCacheUpdates(() => {
+    setAssetCacheRevision(getAssetCacheRevision());
+  }), []);
 
   const resolvedDoc = useMemo(() => {
     const resolvedNodes = resolveComponentDefaultNodes(component, designTokens);

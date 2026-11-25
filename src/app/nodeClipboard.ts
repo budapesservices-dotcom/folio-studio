@@ -1,7 +1,19 @@
 import type {
+  BorderSidesConfig,
   ComponentDefinition,
+  ComponentSlotAssignment,
+  CornerRadiiConfig,
+  CssLengthValue,
   DesignNode,
+  FillPaint,
+  NodeBase,
+  NodeInsetOffsets,
+  NodeLayoutChildConfig,
+  NodeLayoutConfig,
+  NodePadding,
   PathNode,
+  PseudoStateKey,
+  ResponsiveNodeOverride,
   VectorAnchorPoint,
   VectorSubpath,
 } from '../core/document/types';
@@ -74,48 +86,146 @@ function cloneSubpath(subpath: VectorSubpath): VectorSubpath {
   };
 }
 
-/** Deep-clones a DesignNode so mutations never alias shared style/points/override objects. */
+function cloneCssLength(value: CssLengthValue): CssLengthValue {
+  return typeof value === 'object' && value !== null ? { ...value } : value;
+}
+
+function clonePadding(padding: NodePadding): NodePadding {
+  return { ...padding };
+}
+
+function cloneLayout(layout: NodeLayoutConfig): NodeLayoutConfig {
+  return {
+    ...layout,
+    padding: clonePadding(layout.padding),
+    ...(layout.gridMinColumnWidth ? { gridMinColumnWidth: cloneCssLength(layout.gridMinColumnWidth) } : {}),
+  };
+}
+
+function cloneInset(inset: NodeInsetOffsets): NodeInsetOffsets {
+  return {
+    ...(inset.top ? { top: cloneCssLength(inset.top) } : {}),
+    ...(inset.right ? { right: cloneCssLength(inset.right) } : {}),
+    ...(inset.bottom ? { bottom: cloneCssLength(inset.bottom) } : {}),
+    ...(inset.left ? { left: cloneCssLength(inset.left) } : {}),
+  };
+}
+
+function cloneLayoutChild(layoutChild: NodeLayoutChildConfig): NodeLayoutChildConfig {
+  return {
+    ...layoutChild,
+    ...(layoutChild.widthValue ? { widthValue: cloneCssLength(layoutChild.widthValue) } : {}),
+    ...(layoutChild.heightValue ? { heightValue: cloneCssLength(layoutChild.heightValue) } : {}),
+    ...(layoutChild.minWidthValue ? { minWidthValue: cloneCssLength(layoutChild.minWidthValue) } : {}),
+    ...(layoutChild.maxWidthValue ? { maxWidthValue: cloneCssLength(layoutChild.maxWidthValue) } : {}),
+    ...(layoutChild.minHeightValue ? { minHeightValue: cloneCssLength(layoutChild.minHeightValue) } : {}),
+    ...(layoutChild.maxHeightValue ? { maxHeightValue: cloneCssLength(layoutChild.maxHeightValue) } : {}),
+    ...(layoutChild.inset ? { inset: cloneInset(layoutChild.inset) } : {}),
+    ...(layoutChild.constraints ? { constraints: { ...layoutChild.constraints } } : {}),
+  };
+}
+
+function cloneResponsive(
+  responsive: NonNullable<NodeBase['responsive']>,
+): NonNullable<NodeBase['responsive']> {
+  const cloned: NonNullable<NodeBase['responsive']> = {};
+  for (const [bp, entry] of Object.entries(responsive) as Array<[keyof NonNullable<NodeBase['responsive']>, ResponsiveNodeOverride | undefined]>) {
+    if (!entry) continue;
+    cloned[bp] = {
+      ...entry,
+      ...(entry.padding ? { padding: clonePadding(entry.padding) } : {}),
+    };
+  }
+  return cloned;
+}
+
+function cloneStateOverrides(
+  stateOverrides: NonNullable<NodeBase['stateOverrides']>,
+): NonNullable<NodeBase['stateOverrides']> {
+  const cloned: NonNullable<NodeBase['stateOverrides']> = {};
+  for (const [key, entry] of Object.entries(stateOverrides) as Array<[PseudoStateKey, NonNullable<NodeBase['stateOverrides']>[PseudoStateKey]]>) {
+    if (!entry) continue;
+    cloned[key] = { ...entry };
+  }
+  return cloned;
+}
+
+function cloneBorderSides(borderSides: BorderSidesConfig): BorderSidesConfig {
+  return {
+    ...(borderSides.top ? { top: { ...borderSides.top } } : {}),
+    ...(borderSides.right ? { right: { ...borderSides.right } } : {}),
+    ...(borderSides.bottom ? { bottom: { ...borderSides.bottom } } : {}),
+    ...(borderSides.left ? { left: { ...borderSides.left } } : {}),
+  };
+}
+
+function cloneCornerRadii(cornerRadii: CornerRadiiConfig): CornerRadiiConfig {
+  return { ...cornerRadii };
+}
+
+function cloneFills(fills: readonly FillPaint[] | undefined): FillPaint[] | undefined {
+  return fills
+    ? fills.map((fill) =>
+        fill.type === 'solid'
+          ? { ...fill }
+          : { ...fill, stops: fill.stops.map((stop) => ({ ...stop })) },
+      )
+    : undefined;
+}
+
+function cloneNodeBaseExtras(node: NodeBase): Partial<NodeBase> {
+  return {
+    ...(node.layout ? { layout: cloneLayout(node.layout) } : {}),
+    ...(node.layoutChild ? { layoutChild: cloneLayoutChild(node.layoutChild) } : {}),
+    ...(node.responsive ? { responsive: cloneResponsive(node.responsive) } : {}),
+    ...(node.tokenBindings ? { tokenBindings: { ...node.tokenBindings } } : {}),
+    ...(node.effects ? { effects: node.effects.map((effect) => ({ ...effect })) } : {}),
+    ...(node.cssFilters ? { cssFilters: { ...node.cssFilters } } : {}),
+    ...(node.transition ? { transition: { ...node.transition } } : {}),
+    ...(node.stateOverrides ? { stateOverrides: cloneStateOverrides(node.stateOverrides) } : {}),
+  };
+}
+
+/** Deep-clones a DesignNode so mutations never alias shared nested layout, responsive, style, points, or override objects. */
 export function deepCloneNode(node: DesignNode): DesignNode {
-  const clonedEffects = node.effects ? node.effects.map((effect) => ({ ...effect })) : undefined;
-  const cloneFills = (fills: readonly import('../core/document/types').FillPaint[] | undefined) =>
-    fills
-      ? fills.map((fill) =>
-          fill.type === 'solid'
-            ? { ...fill }
-            : { ...fill, stops: fill.stops.map((stop) => ({ ...stop })) },
-        )
-      : undefined;
+  const baseExtras = cloneNodeBaseExtras(node);
 
   switch (node.type) {
     case 'group':
-      return { ...node, ...(clonedEffects ? { effects: clonedEffects } : {}) };
+      return { ...node, ...baseExtras };
     case 'frame':
     case 'rect':
     case 'ellipse':
       return {
         ...node,
-        ...(clonedEffects ? { effects: clonedEffects } : {}),
+        ...baseExtras,
         style: {
           ...node.style,
+          ...(node.style.borderSides ? { borderSides: cloneBorderSides(node.style.borderSides) } : {}),
+          ...(node.style.cornerRadii ? { cornerRadii: cloneCornerRadii(node.style.cornerRadii) } : {}),
           ...(node.style.fills ? { fills: cloneFills(node.style.fills) } : {}),
         },
       };
     case 'text':
       return {
         ...node,
-        ...(clonedEffects ? { effects: clonedEffects } : {}),
+        ...baseExtras,
         style: { ...node.style },
       };
     case 'image':
       return {
         ...node,
-        ...(clonedEffects ? { effects: clonedEffects } : {}),
-        style: { ...node.style },
+        ...baseExtras,
+        style: {
+          ...node.style,
+          ...(node.style.borderSides ? { borderSides: cloneBorderSides(node.style.borderSides) } : {}),
+          ...(node.style.cornerRadii ? { cornerRadii: cloneCornerRadii(node.style.cornerRadii) } : {}),
+        },
       };
     case 'path': {
       const cloned: PathNode = {
         ...node,
-        ...(clonedEffects ? { effects: clonedEffects } : {}),
+        ...baseExtras,
         points: node.points.map(cloneAnchorPoint),
         style: {
           ...node.style,
@@ -131,10 +241,20 @@ export function deepCloneNode(node: DesignNode): DesignNode {
       for (const [key, value] of Object.entries(node.overrides)) {
         overrides[key] = { ...value };
       }
+      const variantSelection = node.variantSelection ? { ...node.variantSelection } : undefined;
+      let slotAssignments: Record<string, ComponentSlotAssignment> | undefined;
+      if (node.slotAssignments) {
+        slotAssignments = {};
+        for (const [slotId, assignment] of Object.entries(node.slotAssignments)) {
+          slotAssignments[slotId] = { ...assignment };
+        }
+      }
       return {
         ...node,
-        ...(clonedEffects ? { effects: clonedEffects } : {}),
+        ...baseExtras,
         overrides,
+        ...(variantSelection ? { variantSelection } : {}),
+        ...(slotAssignments ? { slotAssignments } : {}),
       };
     }
   }

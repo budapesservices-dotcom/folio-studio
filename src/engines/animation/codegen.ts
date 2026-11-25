@@ -148,6 +148,15 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       lines.push(
         `${selectors.join(', ')} { animation: ${kfName} ${clip.durationMs}ms ${dominantEasing} ${iteration} ${fillMode}; will-change: transform, opacity; }`,
       );
+      lines.push(
+        `.${playClass}--reverse ${attrSelector}, ${attrSelector}.${playClass}--reverse { animation-direction: reverse; }`,
+      );
+      lines.push(
+        `.${playClass}--paused ${attrSelector}, ${attrSelector}.${playClass}--paused { animation-play-state: paused; }`,
+      );
+      lines.push(
+        `.${playClass}--stopped ${attrSelector}, ${attrSelector}.${playClass}--stopped { animation: none; }`,
+      );
     }
   }
 

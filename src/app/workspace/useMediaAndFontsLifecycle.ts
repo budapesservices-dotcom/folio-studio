@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useMemo } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
 import { getActiveDocument } from '../../core/document/project';
 import {
   collectProjectGoogleFonts,
   ensureStudioCustomFontsLoaded,
   ensureStudioGoogleFontsLoaded,
 } from '../../core/document/fonts';
-import { createImageNodeFromAsset, ingestImageFile } from '../../core/persistence/assetStore';
+import {
+  createImageNodeFromAsset,
+  getAssetCacheRevision,
+  ingestImageFile,
+  subscribeAssetCacheUpdates,
+} from '../../core/persistence/assetStore';
 import type { FolioProject } from '../../core/document/types';
 import type { EditorTarget } from '../editorContext';
 import type { CanonicalEditorStore } from '../editorStore';
@@ -42,6 +47,11 @@ export function useMediaAndFontsLifecycle({
 }: UseMediaAndFontsLifecycleOptions) {
   const projectGoogleFonts = useMemo(() => collectProjectGoogleFonts(project), [project]);
   const projectGoogleFontsKey = projectGoogleFonts.join('|');
+  const [assetCacheRevision, setAssetCacheRevision] = useState(() => getAssetCacheRevision());
+
+  useEffect(() => subscribeAssetCacheUpdates(() => {
+    setAssetCacheRevision(getAssetCacheRevision());
+  }), []);
 
   useEffect(() => {
     ensureStudioGoogleFontsLoaded(projectGoogleFonts);
@@ -49,7 +59,7 @@ export function useMediaAndFontsLifecycle({
 
   useEffect(() => {
     ensureStudioCustomFontsLoaded(project.assets);
-  }, [project.assets]);
+  }, [project.assets, assetCacheRevision]);
 
   const handleInsertImageFiles = useCallback(async (
     files: readonly File[],

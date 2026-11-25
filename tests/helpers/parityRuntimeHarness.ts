@@ -111,6 +111,7 @@ export function createPreviewDomHarness(
       classList: {
         add: (cls: string) => docClassList.add(cls),
         remove: (cls: string) => docClassList.delete(cls),
+        contains: (cls: string) => docClassList.has(cls),
         has: (cls: string) => docClassList.has(cls),
       },
       setAttribute: (k: string, v: string) => {
@@ -454,6 +455,7 @@ export function createReactTsxHarness(
       classList: {
         add: (cls: string) => docClassList.add(cls),
         remove: (cls: string) => docClassList.delete(cls),
+        contains: (cls: string) => docClassList.has(cls),
         has: (cls: string) => docClassList.has(cls),
       },
       setAttribute: (k: string, v: string) => {

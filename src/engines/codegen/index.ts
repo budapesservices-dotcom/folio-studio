@@ -114,7 +114,7 @@ export function compileFolioProject(
       const compiled = compilePageHtmlCss(project, page);
       files.push(compiled.htmlFile, compiled.cssFile);
     }
-    files.push(compileTokensCssFile(project));
+    files.push(compileTokensCssFile(project, { assetMode: 'bundle', bundlePrefix: '../' }));
   } else {
     files.push(...compileReactProjectFiles(project, activePage.id));
     // Include every page stylesheet and tokens CSS under `src/styles/` so all React imports resolve cleanly
@@ -125,7 +125,7 @@ export function compileFolioProject(
         path: `src/${compiled.cssFile.path}`,
       });
     }
-    const tokensCssFile = compileTokensCssFile(project);
+    const tokensCssFile = compileTokensCssFile(project, { assetMode: 'bundle', bundlePrefix: '/' });
     files.push({
       ...tokensCssFile,
       path: `src/${tokensCssFile.path}`,
