@@ -22,7 +22,7 @@ import type {
   LogicValueType,
   LogicVariableValue,
 } from '../../core/document/types';
-import { sanitizeCssTransformValue, sanitizeHref, sanitizeImageUrl } from '../codegen/sanitize';
+import { safeRegexTest, sanitizeCssTransformValue, sanitizeHref, sanitizeImageUrl } from '../codegen/sanitize';
 import { isBuiltInLogicNodeType, type LogicCompareOperator } from './catalog';
 import {
   getInstanceIdFromExpandedGraphId,
@@ -566,11 +566,7 @@ export function createPrototypeRuntime(
           if (mode === 'regex') {
             const pattern = typeof node.data.pattern === 'string' ? node.data.pattern : '';
             if (!pattern) return false;
-            try {
-              return new RegExp(pattern).test(String(left ?? ''));
-            } catch {
-              return false;
-            }
+            return safeRegexTest(pattern, String(left ?? ''));
           }
           const operator = String(node.data.operator ?? '==') as LogicCompareOperator;
           return evaluateComparison(operator, left, right);

@@ -7,6 +7,7 @@ import type {
   DesignTokenCollection,
   FolioPage,
   FolioProject,
+  LogicFramePreset,
   LogicGraph,
 } from '../../core/document/types';
 
@@ -76,6 +77,9 @@ export interface ProjectDelta {
   readonly animationsChanged?: boolean;
   readonly animationsBefore?: readonly AnimationClip[];
   readonly animationsAfter?: readonly AnimationClip[];
+  readonly logicFramePresetsChanged?: boolean;
+  readonly logicFramePresetsBefore?: readonly LogicFramePreset[];
+  readonly logicFramePresetsAfter?: readonly LogicFramePreset[];
 }
 
 export interface DeltaHistoryTimeline {
@@ -91,6 +95,48 @@ let deltaSequence = 0;
 function nextDeltaId(): string {
   deltaSequence += 1;
   return `delta-${deltaSequence}`;
+}
+
+function areValuesDeepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (!areValuesDeepEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+  const aRec = a as Record<string, unknown>;
+  const bRec = b as Record<string, unknown>;
+  const aKeys = Object.keys(aRec);
+  const bKeys = Object.keys(bRec);
+  if (aKeys.length !== bKeys.length) return false;
+  for (let i = 0; i < aKeys.length; i += 1) {
+    const k = aKeys[i];
+    if (!Object.prototype.hasOwnProperty.call(bRec, k)) return false;
+    if (!areValuesDeepEqual(aRec[k], bRec[k])) return false;
+  }
+  return true;
+}
+
+function isDocumentNodesDeltaEmpty(delta: DocumentNodesDelta): boolean {
+  if (
+    delta.removedOrPreviousNodes.length > 0 ||
+    delta.addedOrNextNodes.length > 0 ||
+    delta.documentNameBefore !== delta.documentNameAfter ||
+    delta.widthBefore !== delta.widthAfter ||
+    delta.heightBefore !== delta.heightAfter ||
+    delta.backgroundBefore !== delta.backgroundAfter ||
+    delta.beforeOrder.length !== delta.afterOrder.length
+  ) {
+    return false;
+  }
+  for (let i = 0; i < delta.beforeOrder.length; i += 1) {
+    if (delta.beforeOrder[i] !== delta.afterOrder[i]) return false;
+  }
+  return true;
 }
 
 function computeDocumentNodesDelta(
@@ -118,14 +164,14 @@ function computeDocumentNodesDelta(
 
   for (const [id, beforeNode] of beforeById) {
     const afterNode = afterById.get(id);
-    if (!afterNode || afterNode !== beforeNode) {
+    if (!afterNode || !areValuesDeepEqual(beforeNode, afterNode)) {
       removedOrPreviousNodes.push([id, beforeNode]);
     }
   }
 
   for (const [id, afterNode] of afterById) {
     const beforeNode = beforeById.get(id);
-    if (!beforeNode || beforeNode !== afterNode) {
+    if (!beforeNode || !areValuesDeepEqual(beforeNode, afterNode)) {
       addedOrNextNodes.push([id, afterNode]);
     }
   }
@@ -197,7 +243,8 @@ export function isProjectDeltaEmpty(delta: ProjectDelta): boolean {
     !delta.codeModulesChanged &&
     !delta.logicGraphsChanged &&
     !delta.assetsChanged &&
-    !delta.animationsChanged
+    !delta.animationsChanged &&
+    !delta.logicFramePresetsChanged
   );
 }
 
@@ -219,7 +266,11 @@ export function computeProjectDelta(
     if (!beforePage) {
       pages.push({ kind: 'added', pageId: afterPage.id, afterPage });
     } else if (beforePage !== afterPage) {
-      const docChanged = beforePage.document !== afterPage.document;
+      const candidateDocDelta =
+        beforePage.document !== afterPage.document
+          ? computeDocumentNodesDelta(beforePage.document, afterPage.document)
+          : undefined;
+      const docChanged = candidateDocDelta !== undefined && !isDocumentNodesDeltaEmpty(candidateDocDelta);
       const metaChanged = beforePage.name !== afterPage.name || beforePage.route !== afterPage.route;
       if (docChanged || metaChanged) {
         pages.push({
@@ -227,9 +278,7 @@ export function computeProjectDelta(
           pageId: afterPage.id,
           beforePage: metaChanged ? { ...beforePage, document: beforePage.document } : undefined,
           afterPage: metaChanged ? { ...afterPage, document: afterPage.document } : undefined,
-          documentDelta: docChanged
-            ? computeDocumentNodesDelta(beforePage.document, afterPage.document)
-            : undefined,
+          documentDelta: docChanged ? candidateDocDelta : undefined,
         });
       }
     }
@@ -277,11 +326,40 @@ export function computeProjectDelta(
     componentOrderBefore.length !== componentOrderAfter.length ||
     componentOrderBefore.some((id, idx) => id !== componentOrderAfter[idx]);
 
+  const designTokensChanged = before.designTokens !== after.designTokens && !areValuesDeepEqual(before.designTokens, after.designTokens);
+  const codeModulesChanged = before.codeModules !== after.codeModules && !areValuesDeepEqual(before.codeModules, after.codeModules);
+  const logicGraphsChanged = before.logicGraphs !== after.logicGraphs && !areValuesDeepEqual(before.logicGraphs, after.logicGraphs);
+  const assetsChanged = before.assets !== after.assets && !areValuesDeepEqual(before.assets, after.assets);
+  const animationsChanged = before.animations !== after.animations && !areValuesDeepEqual(before.animations, after.animations);
+  const logicFramePresetsChanged =
+    before.logicFramePresets !== after.logicFramePresets &&
+    !areValuesDeepEqual(before.logicFramePresets, after.logicFramePresets);
+
+  const hasNonMetadataChanges =
+    before.activePageId !== after.activePageId ||
+    pageOrderChanged ||
+    pages.length > 0 ||
+    componentOrderChanged ||
+    components.length > 0 ||
+    designTokensChanged ||
+    codeModulesChanged ||
+    logicGraphsChanged ||
+    assetsChanged ||
+    animationsChanged ||
+    logicFramePresetsChanged;
+
+  const metadataCoreChanged =
+    before.metadata.id !== after.metadata.id ||
+    before.metadata.name !== after.metadata.name ||
+    before.metadata.createdAt !== after.metadata.createdAt;
+  const includeMetadataDelta =
+    before.metadata !== after.metadata && (metadataCoreChanged || hasNonMetadataChanges);
+
   return {
     id: nextDeltaId(),
     ...(options?.label ? { label: options.label } : {}),
     ...(options?.coalesceKey !== undefined ? { coalesceKey: options.coalesceKey } : {}),
-    ...(before.metadata !== after.metadata
+    ...(includeMetadataDelta
       ? { metadataBefore: before.metadata, metadataAfter: after.metadata }
       : {}),
     ...(before.activePageId !== after.activePageId
@@ -291,39 +369,46 @@ export function computeProjectDelta(
     pages,
     ...(componentOrderChanged ? { componentOrderBefore, componentOrderAfter } : {}),
     components,
-    ...(before.designTokens !== after.designTokens
+    ...(designTokensChanged
       ? {
           designTokensChanged: true,
           designTokensBefore: before.designTokens,
           designTokensAfter: after.designTokens,
         }
       : {}),
-    ...(before.codeModules !== after.codeModules
+    ...(codeModulesChanged
       ? {
           codeModulesChanged: true,
           codeModulesBefore: before.codeModules,
           codeModulesAfter: after.codeModules,
         }
       : {}),
-    ...(before.logicGraphs !== after.logicGraphs
+    ...(logicGraphsChanged
       ? {
           logicGraphsChanged: true,
           logicGraphsBefore: before.logicGraphs,
           logicGraphsAfter: after.logicGraphs,
         }
       : {}),
-    ...(before.assets !== after.assets
+    ...(assetsChanged
       ? {
           assetsChanged: true,
           assetsBefore: before.assets,
           assetsAfter: after.assets,
         }
       : {}),
-    ...(before.animations !== after.animations
+    ...(animationsChanged
       ? {
           animationsChanged: true,
           animationsBefore: before.animations,
           animationsAfter: after.animations,
+        }
+      : {}),
+    ...(logicFramePresetsChanged
+      ? {
+          logicFramePresetsChanged: true,
+          logicFramePresetsBefore: before.logicFramePresets,
+          logicFramePresetsAfter: after.logicFramePresets,
         }
       : {}),
   };
@@ -449,6 +534,13 @@ export function applyProjectDelta(
     else nextProject.animations = [...nextAnimations];
   }
 
+  if (delta.logicFramePresetsChanged) {
+    const nextPresets =
+      direction === 'forward' ? delta.logicFramePresetsAfter : delta.logicFramePresetsBefore;
+    if (nextPresets === undefined) delete nextProject.logicFramePresets;
+    else nextProject.logicFramePresets = [...nextPresets];
+  }
+
   return nextProject;
 }
 
@@ -486,6 +578,15 @@ export function pushProjectDelta(
       label: options?.label ?? previousDelta.label,
       coalesceKey,
     });
+    if (isProjectDeltaEmpty(mergedDelta)) {
+      return {
+        ...timeline,
+        current: nextProject,
+        past: timeline.past.slice(0, -1),
+        future: [],
+        activeCoalesceKey: null,
+      };
+    }
     return {
       ...timeline,
       current: nextProject,

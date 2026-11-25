@@ -175,11 +175,27 @@ export function parseZipArchive(bytes: Uint8Array): ParsedZipEntry[] {
   }
 
   const totalEntries = view.getUint16(eocdOffset + 10, true);
+  const centralSize = view.getUint32(eocdOffset + 12, true);
   const centralOffset = view.getUint32(eocdOffset + 16, true);
+  const centralEnd = centralOffset + centralSize;
+
+  if (
+    centralOffset > eocdOffset ||
+    centralSize > eocdOffset ||
+    centralEnd > eocdOffset ||
+    centralSize < totalEntries * 46
+  ) {
+    throw new Error('Invalid ZIP archive: central directory bounds exceed archive size.');
+  }
+
   const results: ParsedZipEntry[] = [];
+  const seenPaths = new Set<string>();
 
   let cursor = centralOffset;
   for (let i = 0; i < totalEntries; i += 1) {
+    if (cursor + 46 > centralEnd) {
+      throw new Error('Invalid ZIP archive: central directory entry out of bounds.');
+    }
     if (view.getUint32(cursor, true) !== 0x02014b50) {
       throw new Error('Invalid ZIP archive: malformed central directory entry.');
     }
@@ -188,22 +204,44 @@ export function parseZipArchive(bytes: Uint8Array): ParsedZipEntry[] {
       throw new Error(`Unsupported ZIP compression method: ${method}.`);
     }
     const expectedCrc = view.getUint32(cursor + 16, true);
+    const compressedSize = view.getUint32(cursor + 20, true);
     const uncompressedSize = view.getUint32(cursor + 24, true);
+    if (compressedSize !== uncompressedSize) {
+      throw new Error('Invalid ZIP archive: Store-mode entry size mismatch.');
+    }
     const nameLen = view.getUint16(cursor + 28, true);
     const extraLen = view.getUint16(cursor + 30, true);
     const commentLen = view.getUint16(cursor + 32, true);
     const localOffset = view.getUint32(cursor + 42, true);
 
-    const path = textDecoder.decode(bytes.subarray(cursor + 46, cursor + 46 + nameLen));
-    cursor += 46 + nameLen + extraLen + commentLen;
+    const entryRecordEnd = cursor + 46 + nameLen + extraLen + commentLen;
+    if (entryRecordEnd > centralEnd) {
+      throw new Error('Invalid ZIP archive: central directory entry fields out of bounds.');
+    }
 
+    const rawPath = textDecoder.decode(bytes.subarray(cursor + 46, cursor + 46 + nameLen));
+    const path = normalizeArchiveEntryPath(rawPath);
+    if (seenPaths.has(path)) {
+      throw new Error(`Invalid ZIP archive: duplicate entry path "${path}".`);
+    }
+    seenPaths.add(path);
+    cursor = entryRecordEnd;
+
+    if (localOffset + 30 > centralOffset) {
+      throw new Error(`Invalid ZIP archive: local header out of bounds for "${path}".`);
+    }
     if (view.getUint32(localOffset, true) !== 0x04034b50) {
       throw new Error(`Invalid ZIP archive: missing local header for "${path}".`);
     }
     const localNameLen = view.getUint16(localOffset + 26, true);
     const localExtraLen = view.getUint16(localOffset + 28, true);
     const dataStart = localOffset + 30 + localNameLen + localExtraLen;
-    const data = bytes.slice(dataStart, dataStart + uncompressedSize);
+    const dataEnd = dataStart + uncompressedSize;
+    if (dataStart > centralOffset || dataEnd > centralOffset || dataEnd < dataStart) {
+      throw new Error(`Invalid ZIP archive: payload out of bounds for "${path}".`);
+    }
+
+    const data = bytes.slice(dataStart, dataEnd);
     const actualCrc = computeCrc32(data);
     if (actualCrc !== expectedCrc) {
       throw new Error(`CRC-32 mismatch for archive entry "${path}".`);

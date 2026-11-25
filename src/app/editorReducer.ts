@@ -99,6 +99,9 @@ function pushDeltaToPast(
     const previousDelta = state.past[state.past.length - 1];
     const baselineProject = applyProjectDelta(state.project, previousDelta, 'backward');
     const mergedDelta = computeProjectDelta(baselineProject, nextProject, { coalesceKey });
+    if (isProjectDeltaEmpty(mergedDelta)) {
+      return state.past.slice(0, -1);
+    }
     return [...state.past.slice(0, -1), mergedDelta];
   }
   const delta = computeProjectDelta(state.project, nextProject, { coalesceKey });
@@ -325,12 +328,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       };
       const nextProject = touch(updateActiveDocument(state.project, nextDocument));
       const past = pushDeltaToPast(state, nextProject, action.coalesceKey);
+      const nextHistoryGroup =
+        action.coalesceKey && past.length > 0 && past[past.length - 1].coalesceKey === action.coalesceKey
+          ? action.coalesceKey
+          : null;
       return {
         ...state,
         project: nextProject,
         past,
         future: [],
-        historyGroup: action.coalesceKey,
+        historyGroup: nextHistoryGroup,
       };
     }
 
@@ -682,12 +689,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const touched = touch(nextProject);
       if (action.coalesceKey) {
         const past = pushDeltaToPast(state, touched, action.coalesceKey);
+        const nextHistoryGroup =
+          past.length > 0 && past[past.length - 1].coalesceKey === action.coalesceKey
+            ? action.coalesceKey
+            : null;
         return {
           ...state,
           project: touched,
           past,
           future: [],
-          historyGroup: action.coalesceKey,
+          historyGroup: nextHistoryGroup,
         };
       }
       return withSnapshot(state, touched);

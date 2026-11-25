@@ -77,6 +77,7 @@ export function buildLivePreviewLogicScript(
     '  var privateMemory = Object.create(null);',
     '  var firedOnce = Object.create(null);',
     '  var activeTimers = Object.create(null);',
+    '  var activeTimeouts = [];',
     '  var visibleState = {};',
     '  var activeRoute = CONFIG.activeRoute || "/";',
     '  var activeThemeId = CONFIG.activeThemeId || "";',
@@ -112,6 +113,34 @@ export function buildLivePreviewLogicScript(
     '      if (list[i].getAttribute("data-folio-id") === id) return list[i];',
     '    }',
     '    return null;',
+    '  }',
+    '  function safeRegexTest(pat, str) {',
+    '    if (typeof pat !== "string" || !pat || pat.length > 200 || str.length > 10000) return false;',
+    '    var stack = [{ q: false, a: false }], inCls = false, lastQ = false;',
+    '    for (var i = 0; i < pat.length; i++) {',
+    '      var ch = pat.charAt(i);',
+    '      if (ch === "\\\\") { if (i + 1 >= pat.length) return false; var nx = pat.charAt(i + 1); if (!inCls && nx >= "1" && nx <= "9") return false; i++; lastQ = false; continue; }',
+    '      if (inCls) { if (ch === "]") inCls = false; continue; }',
+    '      if (ch === "[") { inCls = true; lastQ = false; continue; }',
+    '      if (ch === "(") { if (stack.length > 6) return false; stack.push({ q: false, a: false }); lastQ = false; continue; }',
+    '      if (ch === ")") {',
+    '        if (stack.length <= 1) { lastQ = false; continue; }',
+    '        var pop = stack.pop(), par = stack[stack.length - 1], j = i + 1, rep = false;',
+    '        if (j < pat.length) {',
+    '          var c2 = pat.charAt(j);',
+    '          if (c2 === "+" || c2 === "*") { rep = true; j++; if (pat.charAt(j) === "?") j++; }',
+    '          else if (c2 === "{") { var bm = /^\\{(\\d+)(?:,(\\d*))?\\}/.exec(pat.slice(j)); if (bm) { var mn = Number(bm[1]), mx = bm[2] === undefined ? mn : (bm[2] === "" ? Infinity : Number(bm[2])); if (mn > 100 || (Number.isFinite(mx) && mx > 100)) return false; if (mx > 1) rep = true; j += bm[0].length; if (pat.charAt(j) === "?") j++; } }',
+    '        }',
+    '        if (rep) { if (pop.q || pop.a) return false; par.q = true; i = j - 1; lastQ = true; } else { if (pop.q) par.q = true; lastQ = false; }',
+    '        continue;',
+    '      }',
+    '      if (ch === "|") { stack[stack.length - 1].a = true; lastQ = false; continue; }',
+    '      if (ch === "+" || ch === "*") { if (lastQ) return false; stack[stack.length - 1].q = true; lastQ = true; if (pat.charAt(i + 1) === "?") i++; continue; }',
+    '      if (ch === "?") { if (lastQ) return false; lastQ = true; continue; }',
+    '      if (ch === "{") { var bm2 = /^\\{(\\d+)(?:,(\\d*))?\\}/.exec(pat.slice(i)); if (bm2) { if (lastQ) return false; var mn2 = Number(bm2[1]), mx2 = bm2[2] === undefined ? mn2 : (bm2[2] === "" ? Infinity : Number(bm2[2])); if (mn2 > 100 || (Number.isFinite(mx2) && mx2 > 100)) return false; if (mx2 > 1) stack[stack.length - 1].q = true; i += bm2[0].length - 1; if (pat.charAt(i + 1) === "?") i++; lastQ = true; continue; } }',
+    '      lastQ = false;',
+    '    }',
+    '    try { return new RegExp(pat).test(str); } catch (e) { return false; }',
     '  }',
     '  function parseList(raw) {',
     '    if (Array.isArray(raw)) return raw.slice();',
@@ -381,7 +410,7 @@ export function buildLivePreviewLogicScript(
     '        else if (cmode === "not") res = !Boolean(l);',
     '        else if (cmode === "is-empty") res = l === null || l === undefined || l === "" || (Array.isArray(l) && l.length === 0) || (typeof l === "object" && !Array.isArray(l) && Object.keys(l).length === 0);',
     '        else if (cmode === "regex") {',
-    '          try { res = new RegExp(String(n.data.pattern || "")).test(String(l == null ? "" : l)); } catch (e) { res = false; }',
+    '          res = safeRegexTest(String(n.data.pattern || ""), String(l == null ? "" : l));',
     '        } else res = compare(String(n.data.operator || "=="), l, r);',
     '      } else if (n.type === "logic.math") {',
     '        var ma = Number(resolveIn(g, n, "a", n.data.a != null ? n.data.a : 0, visiting, ctx, "leftRef"));',
@@ -813,10 +842,13 @@ export function buildLivePreviewLogicScript(
     '        var delayCtx = cloneCtx(ctx, n.id, { duration: rawDur, unit: n.data.unit === "s" ? "s" : "ms", delayed: true });',
     '        if (safeDelay > 0 && typeof setTimeout === "function") {',
     '          (function (dg, dnid, dctx, dms) {',
-    '            setTimeout(function () {',
+    '            var tid = setTimeout(function () {',
+    '              var idx = activeTimeouts.indexOf(tid);',
+    '              if (idx !== -1) activeTimeouts.splice(idx, 1);',
     '              var delayedNext = collectOutItems(dg, dnid, "next", dctx);',
     '              if (delayedNext.length) runQueue(delayedNext);',
     '            }, dms);',
+    '            activeTimeouts.push(tid);',
     '          })(g, n.id, delayCtx, safeDelay);',
     '        } else {',
     '          pushOut(g, n.id, "next", delayCtx);',
@@ -1022,6 +1054,18 @@ export function buildLivePreviewLogicScript(
     '    });',
     '    if (loadStarters.length) runQueue(loadStarters);',
     '  }',
+    '  function cleanupTimers() {',
+    '    if (typeof clearInterval === "function") {',
+    '      Object.keys(activeTimers).forEach(function (k) { clearInterval(activeTimers[k]); delete activeTimers[k]; });',
+    '    }',
+    '    if (typeof clearTimeout === "function") {',
+    '      while (activeTimeouts.length > 0) { clearTimeout(activeTimeouts.pop()); }',
+    '    }',
+    '  }',
+    '  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {',
+    '    window.addEventListener("pagehide", cleanupTimers);',
+    '    window.addEventListener("unload", cleanupTimers);',
+    '  }',
     '  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bindEvents);',
     '  else bindEvents();',
     '})();',
@@ -1106,7 +1150,15 @@ export function buildReactPageLogicPlan(
   const nodeMetaType =
     'Record<string, { name: string; type: string; visible: boolean; display: string; text?: string; fill?: string; opacity?: number; componentId?: string; instanceId?: string; animationIds?: string[]; children?: Array<{ id: string; name: string; type: string }> }>';
   const triggerKindUnion =
-    '"click" | "double-click" | "click-outside" | "hover-enter" | "hover-leave" | "input-change" | "input-focus" | "input-blur" | "input-submit" | "drag-start" | "drag-move" | "drag-drop" | "enter-view" | "leave-view" | "page-scroll" | "resize" | "page-load" | "key-down" | "key-up"';
+    '"click" | "double-click" | "click-outside" | "hover-enter" | "hover-leave" | "input-change" | "input-focus" | "input-blur" | "input-submit" | "drag-start" | "drag-move" | "drag-drop" | "enter-view" | "leave-view" | "page-scroll" | "resize" | "page-load" | "key-down" | "key-up" | "__resume__"';
+  const hasAsyncTimers = graphs.some((g) =>
+    g.nodes.some((n) => n.type === 'flow.delay' || n.type === 'flow.loop-timer'),
+  );
+  const needsFindFolioEl = targets.clickOutsideNodes.size > 0 || targets.scrollViewTargets.size > 0;
+  const pipelineOriginType =
+    '{ layerId: string; name: string; type: string; instanceId?: string; animationIds: string[]; children: Array<{ id: string; name: string; type: string }> }';
+  const pipelineCtxType =
+    `{ executionId: string; eventKind: string; origin: ${pipelineOriginType} | null; steps: Record<string, Record<string, unknown>> }`;
 
   const hookLines: string[] = [
     `  const [logicState, setLogicState] = useState<Record<string, ${varValType}>>(${JSON.stringify(config.variables)});`,
@@ -1121,6 +1173,9 @@ export function buildReactPageLogicPlan(
     '  const logicPrivateMemoryRef = React.useRef<Record<string, boolean>>({});',
     '  const logicFiredOnceRef = React.useRef<Record<string, boolean>>({});',
     '  const logicExecCounterRef = React.useRef<number>(0);',
+    '  const logicTimersRef = React.useRef<Record<string, ReturnType<typeof setInterval>>>({});',
+    '  const logicTimeoutsRef = React.useRef<Set<ReturnType<typeof setTimeout>>>(new Set());',
+    '  const logicMountedRef = React.useRef<boolean>(true);',
     `  const logicGraphs: ${graphArrayType} = ${JSON.stringify(config.graphs)};`,
     `  const logicInitialVars: Record<string, ${varValType}> = ${JSON.stringify(config.variableInitialValues)};`,
     `  const logicVarTypes: Record<string, string> = ${JSON.stringify(config.variableTypes)};`,
@@ -1141,8 +1196,18 @@ export function buildReactPageLogicPlan(
     ...(targets.hasAnimationAction
       ? [`  const logicAnimationClassById: Record<string, string> = ${JSON.stringify(config.animationClassById)};`]
       : []),
+    ...(needsFindFolioEl
+      ? [
+          '  const findFolioEl = (id: string): Element | null => {',
+          '    if (!id || typeof document === "undefined") return null;',
+          '    const list = document.querySelectorAll("[data-folio-id]");',
+          '    for (let i = 0; i < list.length; i += 1) { if (list[i].getAttribute("data-folio-id") === id) return list[i]; }',
+          '    return null;',
+          '  };',
+        ]
+      : []),
     '',
-    `  const runLogicTrigger = (triggerKind: ${triggerKindUnion}, targetNodeId?: string, extraPayload?: Record<string, unknown>) => {`,
+    `  const runLogicTrigger = (triggerKind: ${triggerKindUnion}, targetNodeId?: string, extraPayload?: Record<string, unknown>, resumeStep?: { graphId: string; nodeId: string; outPortId: string; ctx: ${pipelineCtxType} }) => {`,
     `    const nextVars: Record<string, ${varValType}> = { ...logicStateRef.current };`,
     `    const nextOverrides: Record<string, ${overrideType}> = { ...logicOverridesRef.current };`,
     '    const privateMemory = logicPrivateMemoryRef.current;',
@@ -1278,6 +1343,35 @@ export function buildReactPageLogicPlan(
     '      }',
     '      return true;',
     '    };',
+    '    const safeRegexTest = (pat: string, str: string): boolean => {',
+    '      if (!pat || pat.length > 200 || str.length > 10000) return false;',
+    '      const stack: Array<{ q: boolean; a: boolean }> = [{ q: false, a: false }];',
+    '      let inCls = false; let lastQ = false;',
+    '      for (let i = 0; i < pat.length; i += 1) {',
+    '        const ch = pat.charAt(i);',
+    '        if (ch === "\\\\") { if (i + 1 >= pat.length) return false; const nx = pat.charAt(i + 1); if (!inCls && nx >= "1" && nx <= "9") return false; i += 1; lastQ = false; continue; }',
+    '        if (inCls) { if (ch === "]") inCls = false; continue; }',
+    '        if (ch === "[") { inCls = true; lastQ = false; continue; }',
+    '        if (ch === "(") { if (stack.length > 6) return false; stack.push({ q: false, a: false }); lastQ = false; continue; }',
+    '        if (ch === ")") {',
+    '          if (stack.length <= 1) { lastQ = false; continue; }',
+    '          const pop = stack.pop()!; const par = stack[stack.length - 1]; let j = i + 1; let rep = false;',
+    '          if (j < pat.length) {',
+    '            const c2 = pat.charAt(j);',
+    '            if (c2 === "+" || c2 === "*") { rep = true; j += 1; if (pat.charAt(j) === "?") j += 1; }',
+    '            else if (c2 === "{") { const bm = /^\\{(\\d+)(?:,(\\d*))?\\}/.exec(pat.slice(j)); if (bm) { const mn = Number(bm[1]); const mx = bm[2] === undefined ? mn : (bm[2] === "" ? Infinity : Number(bm[2])); if (mn > 100 || (Number.isFinite(mx) && mx > 100)) return false; if (mx > 1) rep = true; j += bm[0].length; if (pat.charAt(j) === "?") j += 1; } }',
+    '          }',
+    '          if (rep) { if (pop.q || pop.a) return false; par.q = true; i = j - 1; lastQ = true; } else { if (pop.q) par.q = true; lastQ = false; }',
+    '          continue;',
+    '        }',
+    '        if (ch === "|") { stack[stack.length - 1].a = true; lastQ = false; continue; }',
+    '        if (ch === "+" || ch === "*") { if (lastQ) return false; stack[stack.length - 1].q = true; lastQ = true; if (pat.charAt(i + 1) === "?") i += 1; continue; }',
+    '        if (ch === "?") { if (lastQ) return false; lastQ = true; continue; }',
+    '        if (ch === "{") { const bm2 = /^\\{(\\d+)(?:,(\\d*))?\\}/.exec(pat.slice(i)); if (bm2) { if (lastQ) return false; const mn2 = Number(bm2[1]); const mx2 = bm2[2] === undefined ? mn2 : (bm2[2] === "" ? Infinity : Number(bm2[2])); if (mn2 > 100 || (Number.isFinite(mx2) && mx2 > 100)) return false; if (mx2 > 1) stack[stack.length - 1].q = true; i += bm2[0].length - 1; if (pat.charAt(i + 1) === "?") i += 1; lastQ = true; continue; } }',
+    '        lastQ = false;',
+    '      }',
+    '      try { return new RegExp(pat).test(str); } catch { return false; }',
+    '    };',
     '    const queue: Array<{ ig: (typeof indexedGraphs)[number]; nodeId: string; outPortId?: string; ctx: PipelineCtx; initPayload?: Record<string, unknown> }> = [];',
     '    const targetCompId = targetNodeId ? logicInstanceComponentById[targetNodeId] : undefined;',
     '    for (const ig of indexedGraphs) {',
@@ -1376,7 +1470,7 @@ export function buildReactPageLogicPlan(
     '          if (cmode === "or") return Boolean(l) || Boolean(r);',
     '          if (cmode === "not") return !Boolean(l);',
     '          if (cmode === "is-empty") return l === null || l === undefined || l === "" || (Array.isArray(l) && l.length === 0) || (typeof l === "object" && !Array.isArray(l) && Object.keys(l as Record<string, unknown>).length === 0);',
-    '          if (cmode === "regex") { try { return new RegExp(String(n.data.pattern ?? "")).test(String(l ?? "")); } catch { return false; } }',
+    '          if (cmode === "regex") return safeRegexTest(String(n.data.pattern ?? ""), String(l ?? ""));',
     '          const op = String(n.data.operator ?? "==");',
     '          if (op === "==") return l === r;',
     '          if (op === "!=") return l !== r;',
@@ -1466,6 +1560,10 @@ export function buildReactPageLogicPlan(
     '        if (c.sourceNodeId === nodeId && c.sourcePortId === portId) queue.push({ ig, nodeId: c.targetNodeId, ctx: nextCtx });',
     '      }',
     '    };',
+    '    if (triggerKind === "__resume__" && resumeStep) {',
+    '      const resumeIg = indexedGraphs.find((item) => item.graph.id === resumeStep.graphId);',
+    '      if (resumeIg) enqueueOut(resumeIg, resumeStep.nodeId, resumeStep.outPortId, resumeStep.ctx);',
+    '    }',
     '    while (queue.length > 0 && steps < maxSteps) {',
     '      steps += 1;',
     '      const step = queue.shift()!;',
@@ -1682,7 +1780,7 @@ export function buildReactPageLogicPlan(
           '          enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { mode: navMode }));',
           '        } else {',
           '          const nextRoute = String(resolveIn(step.ig, n, "route", n.data.route ?? "", seen, ctx, "pipelineRef") ?? "").trim();',
-          '          if (/^(?:https?:\\/\\/|mailto:|\\/|#)/i.test(nextRoute)) {',
+          '          if (/^(?:https?:\\/\\/|mailto:|\\/(?!\\/)|#)/i.test(nextRoute)) {',
           '            logicRouteRef.current = nextRoute;',
           '            if (typeof document !== "undefined") document.documentElement.setAttribute("data-folio-route", nextRoute);',
           '            onNavigate?.(nextRoute);',
@@ -1715,7 +1813,21 @@ export function buildReactPageLogicPlan(
         ]
       : []),
     '      } else if (n.type === "flow.delay") {',
-    '        enqueueOut(step.ig, n.id, "next", cloneCtx(ctx, n.id, { delayed: true }));',
+    '        const rawDur = Number(n.data.duration ?? 0);',
+    '        const durMs = n.data.unit === "s" ? rawDur * 1000 : rawDur;',
+    '        const safeDelay = Number.isFinite(durMs) ? Math.max(0, Math.min(30000, durMs)) : 0;',
+    '        const delayCtx = cloneCtx(ctx, n.id, { duration: rawDur, unit: n.data.unit === "s" ? "s" : "ms", delayed: true });',
+    '        if (safeDelay > 0 && typeof setTimeout === "function") {',
+    '          const delayGraphId = step.ig.graph.id;',
+    '          const delayNodeId = n.id;',
+    '          const tid = setTimeout(() => {',
+    '            logicTimeoutsRef.current.delete(tid);',
+    '            if (logicMountedRef.current) runLogicTrigger("__resume__", undefined, undefined, { graphId: delayGraphId, nodeId: delayNodeId, outPortId: "next", ctx: delayCtx });',
+    '          }, safeDelay);',
+    '          logicTimeoutsRef.current.add(tid);',
+    '        } else {',
+    '          enqueueOut(step.ig, n.id, "next", delayCtx);',
+    '        }',
     '      } else if (n.type === "flow.loop-timer") {',
     '        const ltMode = String(n.data.mode ?? "for-each");',
     '        if (ltMode === "for-each") {',
@@ -1724,7 +1836,25 @@ export function buildReactPageLogicPlan(
     '          for (let fi = 0; fi < feCap; fi += 1) enqueueOut(step.ig, n.id, "tick", cloneCtx(ctx, n.id, { item: feList[fi], index: fi }));',
     '          enqueueOut(step.ig, n.id, "done", cloneCtx(ctx, n.id, { mode: ltMode, count: feCap }));',
     '        } else {',
-    '          enqueueOut(step.ig, n.id, ltMode === "interval-start" ? "tick" : "done", cloneCtx(ctx, n.id, { mode: ltMode }));',
+    '          const timerKey = `${step.ig.graph.id}:${String(n.data.timerId || n.id)}`;',
+    '          const ltCtx = cloneCtx(ctx, n.id, { mode: ltMode, timerId: String(n.data.timerId || "timer") });',
+    '          if (ltMode === "interval-stop") {',
+    '            const existing = logicTimersRef.current[timerKey];',
+    '            if (existing !== undefined && typeof clearInterval === "function") { clearInterval(existing); delete logicTimersRef.current[timerKey]; }',
+    '            enqueueOut(step.ig, n.id, "done", ltCtx);',
+    '          } else {',
+    '            enqueueOut(step.ig, n.id, "tick", ltCtx);',
+    '            if (typeof setInterval === "function") {',
+    '              const existing = logicTimersRef.current[timerKey];',
+    '              if (existing !== undefined && typeof clearInterval === "function") clearInterval(existing);',
+    '              const intMs = Math.max(50, Math.min(60000, Number(n.data.intervalMs ?? 1000)));',
+    '              const timerGraphId = step.ig.graph.id;',
+    '              const timerNodeId = n.id;',
+    '              logicTimersRef.current[timerKey] = setInterval(() => {',
+    '                if (logicMountedRef.current) runLogicTrigger("__resume__", undefined, undefined, { graphId: timerGraphId, nodeId: timerNodeId, outPortId: "tick", ctx: ltCtx });',
+    '              }, intMs);',
+    '            }',
+    '          }',
     '        }',
     '      } else if (n.type === "flow.control") {',
     '        const fcCtx = cloneCtx(ctx, n.id, { mode: String(n.data.mode ?? "sequence") });',
@@ -1754,8 +1884,14 @@ export function buildReactPageLogicPlan(
     || targets.hasResize
     || targets.hasPageScroll
     || targets.clickOutsideNodes.size > 0
-    || targets.scrollViewTargets.size > 0;
+    || targets.scrollViewTargets.size > 0
+    || hasAsyncTimers;
 
+  if (hasAsyncTimers) {
+    hookLines.push(
+      '  useEffect(() => { logicMountedRef.current = true; return () => { logicMountedRef.current = false; Object.values(logicTimersRef.current).forEach((id) => clearInterval(id)); logicTimersRef.current = {}; logicTimeoutsRef.current.forEach((id) => clearTimeout(id)); logicTimeoutsRef.current.clear(); }; }, []);',
+    );
+  }
   if (targets.hasPageLoad) {
     hookLines.push('  useEffect(() => { runLogicTrigger("page-load"); }, []);');
   }
@@ -1766,7 +1902,7 @@ export function buildReactPageLogicPlan(
   }
   if (targets.clickOutsideNodes.size > 0) {
     hookLines.push(
-      `  useEffect(() => { const watchedIds = ${JSON.stringify(Array.from(targets.clickOutsideNodes))}; const onDocClick = (ev: MouseEvent) => { const tgt = ev.target as Node | null; for (const wid of watchedIds) { const el = document.querySelector(\`[data-folio-id="\${wid}"]\`); if (el && tgt !== el && !el.contains(tgt)) runLogicTrigger("click-outside", wid); } }; document.addEventListener("click", onDocClick); return () => document.removeEventListener("click", onDocClick); }, []);`,
+      `  useEffect(() => { const watchedIds = ${JSON.stringify(Array.from(targets.clickOutsideNodes))}; const onDocClick = (ev: MouseEvent) => { const tgt = ev.target as Node | null; for (const wid of watchedIds) { const el = findFolioEl(wid); if (el && tgt !== el && !el.contains(tgt)) runLogicTrigger("click-outside", wid); } }; document.addEventListener("click", onDocClick); return () => document.removeEventListener("click", onDocClick); }, []);`,
     );
   }
   if (targets.hasResize) {
@@ -1781,7 +1917,7 @@ export function buildReactPageLogicPlan(
   }
   if (targets.scrollViewTargets.size > 0) {
     hookLines.push(
-      `  useEffect(() => { if (typeof IntersectionObserver !== "function") return; const watchedIds = ${JSON.stringify(Array.from(targets.scrollViewTargets))}; const observers: IntersectionObserver[] = []; for (const wid of watchedIds) { const el = document.querySelector(\`[data-folio-id="\${wid}"]\`); if (!el) continue; const obs = new IntersectionObserver((entries) => { for (const ent of entries) runLogicTrigger(ent.isIntersecting ? "enter-view" : "leave-view", wid); }); obs.observe(el); observers.push(obs); } return () => observers.forEach((obs) => obs.disconnect()); }, []);`,
+      `  useEffect(() => { if (typeof IntersectionObserver !== "function") return; const watchedIds = ${JSON.stringify(Array.from(targets.scrollViewTargets))}; const observers: IntersectionObserver[] = []; for (const wid of watchedIds) { const el = findFolioEl(wid); if (!el) continue; const obs = new IntersectionObserver((entries) => { for (const ent of entries) runLogicTrigger(ent.isIntersecting ? "enter-view" : "leave-view", wid); }); obs.observe(el); observers.push(obs); } return () => observers.forEach((obs) => obs.disconnect()); }, []);`,
     );
   }
   hookLines.push('');

@@ -106,11 +106,14 @@ function shiftSubtree(
   rootId: string,
   dx: number,
   dy: number,
+  visited: Set<string> = new Set([rootId]),
 ): void {
   if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return;
   const childIds = childrenByParent.get(rootId);
   if (!childIds) return;
   for (const childId of childIds) {
+    if (visited.has(childId)) continue;
+    visited.add(childId);
     const child = nodeById.get(childId);
     if (!child) continue;
     nodeById.set(childId, {
@@ -118,7 +121,7 @@ function shiftSubtree(
       x: roundPx(child.x + dx),
       y: roundPx(child.y + dy),
     });
-    shiftSubtree(nodeById, childrenByParent, childId, dx, dy);
+    shiftSubtree(nodeById, childrenByParent, childId, dx, dy, visited);
   }
 }
 
@@ -563,6 +566,9 @@ function solveGridContainer(
     colStart: number;
     colSpan: number;
     rowSpan: number;
+    spanWidth: number;
+    nextW: number;
+    intrinsicH: number;
   }
   const occupied: boolean[][] = [];
   const placements: GridCellPlacement[] = [];
@@ -595,21 +601,48 @@ function solveGridContainer(
 
   let scanRow = 0;
   let scanCol = 0;
+  const maxPlacementRows = Math.max(256, flowChildren.length * 6 + 16);
 
   for (const rawChild of flowChildren) {
     const child = nodeById.get(rawChild.id) ?? rawChild;
-    const colSpan = child.layoutChild?.gridColumnSpanFull
+    const childCfg = child.layoutChild;
+    const colSpan = childCfg?.gridColumnSpanFull
       ? cols
-      : Math.max(1, Math.min(cols, Math.round(child.layoutChild?.gridColumnSpan ?? 1)));
-    const rowSpan = Math.max(1, Math.min(6, Math.round(child.layoutChild?.gridRowSpan ?? 1)));
+      : Math.max(1, Math.min(cols, Math.round(childCfg?.gridColumnSpan ?? 1)));
+    const rowSpan = Math.max(1, Math.min(6, Math.round(childCfg?.gridRowSpan ?? 1)));
 
     let placed = false;
     let r = scanRow;
     let c = scanCol;
-    while (!placed && r < 256) {
+    while (!placed && r < maxPlacementRows) {
       if (canPlace(r, c, colSpan, rowSpan)) {
         markOccupied(r, c, colSpan, rowSpan);
-        placements.push({ child, rowStart: r, colStart: c, colSpan, rowSpan });
+
+        let spanWidth = 0;
+        for (let dc = 0; dc < colSpan; dc += 1) {
+          spanWidth += trackWidths[c + dc] ?? 1;
+        }
+        spanWidth = Math.max(1, spanWidth + colGap * (colSpan - 1));
+
+        const widthMode = childCfg?.widthMode ?? 'fill';
+        const heightMode = childCfg?.heightMode ?? 'fixed';
+        let nextW: number;
+        if (widthMode === 'fixed') {
+          nextW = clampSize(child.width, childCfg?.minWidth, childCfg?.maxWidth);
+        } else if (widthMode === 'relative') {
+          const pct = Math.max(1, childCfg?.widthPercent ?? 100) / 100;
+          nextW = clampSize(spanWidth * pct, childCfg?.minWidth, childCfg?.maxWidth);
+        } else {
+          nextW = clampSize(spanWidth, childCfg?.minWidth, childCfg?.maxWidth);
+        }
+
+        const ratio = parseAspectRatioNumeric(childCfg?.aspectRatio);
+        const intrinsicH =
+          ratio && heightMode !== 'fill'
+            ? clampSize(nextW / ratio, childCfg?.minHeight, childCfg?.maxHeight)
+            : clampSize(child.height, childCfg?.minHeight, childCfg?.maxHeight);
+
+        placements.push({ child, rowStart: r, colStart: c, colSpan, rowSpan, spanWidth, nextW, intrinsicH });
         scanRow = r;
         scanCol = c + colSpan;
         if (scanCol >= cols) {
@@ -633,10 +666,10 @@ function solveGridContainer(
   );
   const rowHeights: number[] = Array.from({ length: totalRows }, () => 1);
 
-  // Pass A: single-row children establish natural row heights
+  // Pass A: single-row children establish natural row heights (including aspectRatio heights)
   for (const p of placements) {
     if (p.rowSpan === 1) {
-      rowHeights[p.rowStart] = Math.max(rowHeights[p.rowStart] ?? 1, p.child.height);
+      rowHeights[p.rowStart] = Math.max(rowHeights[p.rowStart] ?? 1, p.intrinsicH);
     }
   }
   // Pass B: multi-row children expand rows proportionally if taller than summed rows
@@ -647,8 +680,8 @@ function solveGridContainer(
         spanH += rowHeights[p.rowStart + dr] ?? 1;
       }
       spanH += Math.max(0, p.rowSpan - 1) * rowGap;
-      if (p.child.height > spanH) {
-        const deficit = (p.child.height - spanH) / p.rowSpan;
+      if (p.intrinsicH > spanH) {
+        const deficit = (p.intrinsicH - spanH) / p.rowSpan;
         for (let dr = 0; dr < p.rowSpan; dr += 1) {
           rowHeights[p.rowStart + dr] = (rowHeights[p.rowStart + dr] ?? 1) + deficit;
         }
@@ -663,13 +696,8 @@ function solveGridContainer(
     yAcc += rowHeights[r] + rowGap;
   }
 
-  for (const { child, rowStart, colStart, colSpan, rowSpan } of placements) {
+  for (const { child, rowStart, colStart, rowSpan, spanWidth, nextW } of placements) {
     const childCfg = child.layoutChild;
-    let spanWidth = 0;
-    for (let dc = 0; dc < colSpan; dc += 1) {
-      spanWidth += trackWidths[colStart + dc] ?? 1;
-    }
-    spanWidth = Math.max(1, spanWidth + colGap * (colSpan - 1));
 
     let spanHeight = 0;
     for (let dr = 0; dr < rowSpan; dr += 1) {
@@ -677,19 +705,7 @@ function solveGridContainer(
     }
     spanHeight = Math.max(1, spanHeight + rowGap * (rowSpan - 1));
 
-    const widthMode = childCfg?.widthMode ?? 'fill';
     const heightMode = childCfg?.heightMode ?? 'fixed';
-
-    let nextW: number;
-    if (widthMode === 'fixed') {
-      nextW = clampSize(child.width, childCfg?.minWidth, childCfg?.maxWidth);
-    } else if (widthMode === 'relative') {
-      const pct = Math.max(1, childCfg?.widthPercent ?? 100) / 100;
-      nextW = clampSize(spanWidth * pct, childCfg?.minWidth, childCfg?.maxWidth);
-    } else {
-      nextW = clampSize(spanWidth, childCfg?.minWidth, childCfg?.maxWidth);
-    }
-
     const effectiveAlign =
       childCfg?.alignSelf && childCfg.alignSelf !== 'auto' ? childCfg.alignSelf : align;
     const ratio = parseAspectRatioNumeric(childCfg?.aspectRatio);

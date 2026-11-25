@@ -444,7 +444,7 @@ export function createReactTsxHarness(
   const navigatedRoutes: string[] = [];
 
   let currentTree: RenderedVNode | null = null;
-  const mockDomCache = new Map<string, { id: string; contains: (other: unknown) => boolean }>();
+  const mockDomCache = new Map<string, { id: string; getAttribute: (attr: string) => string | null; contains: (other: unknown) => boolean }>();
 
   const mockDocument = {
     documentElement: {
@@ -483,6 +483,9 @@ export function createReactTsxHarness(
       if (!el) {
         el = {
           id: targetId,
+          getAttribute(attr: string) {
+            return attr === 'data-folio-id' ? targetId : null;
+          },
           contains(other: unknown) {
             return other === this;
           },
@@ -491,7 +494,35 @@ export function createReactTsxHarness(
       }
       return el;
     },
-    querySelectorAll: () => [],
+    querySelectorAll: (selector: string) => {
+      if (selector !== '[data-folio-id]') return [];
+      const collected: Array<{ id: string; getAttribute(attr: string): string | null; contains(other: unknown): boolean }> = [];
+      const walk = (node: RenderedVNode | null) => {
+        if (!node) return;
+        const fid = node.props['data-folio-id'];
+        if (typeof fid === 'string' && fid.length > 0) {
+          let el = mockDomCache.get(fid);
+          if (!el) {
+            el = {
+              id: fid,
+              getAttribute(attr: string) {
+                return attr === 'data-folio-id' ? fid : null;
+              },
+              contains(other: unknown) {
+                return other === this;
+              },
+            };
+            mockDomCache.set(fid, el);
+          }
+          collected.push(el);
+        }
+        for (const child of node.children) {
+          if (typeof child !== 'string') walk(child);
+        }
+      };
+      walk(currentTree);
+      return collected;
+    },
   };
 
   const mockWindow = {

@@ -679,7 +679,7 @@ describe('Node Logic v1 — Live Preview & React Codegen Integration', () => {
     expect(pageTsx!.content).toContain('action.play-animation');
     expect(pageTsx!.content).toContain('onNavigate?: (route: string) => void');
     expect(pageTsx!.content).toContain('onNavigate?.(nextRoute)');
-    expect(pageTsx!.content).toContain('/^(?:https?:\\/\\/|mailto:|\\/|#)/i.test(nextRoute)');
+    expect(pageTsx!.content).toContain('/^(?:https?:\\/\\/|mailto:|\\/(?!\\/)|#)/i.test(nextRoute)');
     expect(pageTsx!.content).toContain('logicOverrides["node-card-inst"]?.variants?.["axis-state"]');
 
     // 2. App.tsx manages currentRoute state when any page triggers navigation
