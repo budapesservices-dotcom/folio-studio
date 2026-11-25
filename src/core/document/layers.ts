@@ -656,10 +656,20 @@ export function ungroupLayers(nodes: DesignNode[], selectedIds: readonly string[
   const parentById = new Map(roots.map((id) => [id, nodeById.get(id)?.parentId ?? undefined]));
 
   return nodes.filter((node) => !removedGroups.has(node.id)).map((node) => {
-    if (!node.parentId || !unwrap.has(node.parentId)) return node;
-    const nextParentId = parentById.get(node.parentId);
-    if (nextParentId) return { ...node, parentId: nextParentId };
-    const { parentId: _parentId, ...promoted } = node;
-    return promoted;
+    let nextNode = node;
+    if (nextNode.parentId && unwrap.has(nextNode.parentId)) {
+      const nextParentId = parentById.get(nextNode.parentId);
+      if (nextParentId) {
+        nextNode = { ...nextNode, parentId: nextParentId };
+      } else {
+        const { parentId: _parentId, ...promoted } = nextNode;
+        nextNode = promoted as DesignNode;
+      }
+    }
+    if (nextNode.clipMaskBaseId && removedGroups.has(nextNode.clipMaskBaseId)) {
+      const { clipMaskBaseId: _clipMaskBaseId, ...unmasked } = nextNode;
+      nextNode = unmasked as DesignNode;
+    }
+    return nextNode;
   });
 }

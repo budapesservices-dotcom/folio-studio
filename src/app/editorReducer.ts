@@ -146,9 +146,11 @@ function normalizeProjectLayerDocuments(project: FolioProject): FolioProject {
 function removeNodesFromLayers(nodes: DesignNode[], requestedIds: Iterable<string>): DesignNode[] {
   const remaining = removeLayersAndPromoteChildren(nodes, requestedIds);
   const remainingIds = new Set(remaining.map((node) => node.id));
-  return remaining.map((node) => node.clipMaskBaseId && !remainingIds.has(node.clipMaskBaseId)
-    ? { ...node, clipMaskBaseId: undefined }
-    : node);
+  return remaining.map((node) => {
+    if (!node.clipMaskBaseId || remainingIds.has(node.clipMaskBaseId)) return node;
+    const { clipMaskBaseId: _clipMaskBaseId, ...unmasked } = node;
+    return unmasked as DesignNode;
+  });
 }
 
 function unbindTokenIdsFromNodes(nodes: DesignNode[], removeSet: ReadonlySet<string>): DesignNode[] {
@@ -229,10 +231,46 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'replace-node-with-nodes': {
-      if (!document.nodes.some((node) => node.id === action.nodeId)) return state;
-      const nodes = document.nodes.flatMap((node) => node.id === action.nodeId ? action.nodes : [node]);
-      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
-      const ids = action.nodes.map((node) => node.id);
+      const targetIndex = document.nodes.findIndex((node) => node.id === action.nodeId);
+      if (targetIndex === -1) return state;
+      const insertedIds = new Set(action.nodes.map((node) => node.id));
+      const targetRemoved = !insertedIds.has(action.nodeId);
+
+      let nodes: DesignNode[];
+      if (targetRemoved) {
+        const cleaned = removeNodesFromLayers(document.nodes, [action.nodeId]);
+        const targetParentId = document.nodes[targetIndex].parentId;
+        const sanitizedInserted = action.nodes.map((node) => {
+          let nextNode = node;
+          if (nextNode.parentId === action.nodeId) {
+            if (targetParentId) {
+              nextNode = { ...nextNode, parentId: targetParentId };
+            } else {
+              const { parentId: _parentId, ...promoted } = nextNode;
+              nextNode = promoted as DesignNode;
+            }
+          }
+          if (nextNode.clipMaskBaseId === action.nodeId) {
+            const { clipMaskBaseId: _clipMaskBaseId, ...unmasked } = nextNode;
+            nextNode = unmasked as DesignNode;
+          }
+          return nextNode;
+        });
+        nodes = [
+          ...cleaned.slice(0, targetIndex),
+          ...sanitizedInserted,
+          ...cleaned.slice(targetIndex),
+        ];
+      } else {
+        nodes = document.nodes.flatMap((node) => (node.id === action.nodeId ? action.nodes : [node]));
+      }
+
+      const updatedProject = updateActiveDocument(state.project, { ...document, nodes });
+      const cleanedProject = targetRemoved
+        ? cleanupDeletedNodeReferences(updatedProject, new Set([action.nodeId]), state.project.activePageId).project
+        : updatedProject;
+      const next = touch(cleanedProject);
+      const ids = existingSelection(next, action.nodes.map((node) => node.id));
       return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
     }
 
@@ -245,11 +283,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       });
       if (removeSet.size > 0 && insertIndex === -1 && action.insertNodes.length === 0) return state;
 
-      // Remove targeted nodes (preserving children & cleaning broken clip masks),
-      // then insert replacement nodes at the exact z-index slot in ONE atomic undo step!
+      // Remove targeted nodes (preserving children & cleaning broken clip masks for
+      // IDs that are not re-inserted), then insert replacement nodes at the exact
+      // z-index slot and clean up dangling cross-studio references in ONE atomic undo step.
+      const insertIdSet = new Set(action.insertNodes.map((node) => node.id));
+      const trulyRemovedIds = new Set([...removeSet].filter((id) => !insertIdSet.has(id)));
       const survivingBeforeSlot: DesignNode[] = [];
       const survivingAfterSlot: DesignNode[] = [];
-      const cleaned = removeNodesFromLayers(document.nodes, removeSet);
+      const cleaned = removeNodesFromLayers(document.nodes, trulyRemovedIds).filter(
+        (node) => !removeSet.has(node.id),
+      );
       const originalIndexById = new Map(document.nodes.map((n, idx) => [n.id, idx]));
       for (const node of cleaned) {
         const origIdx = originalIndexById.get(node.id) ?? 0;
@@ -257,7 +300,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         else survivingAfterSlot.push(node);
       }
       const nodes = [...survivingBeforeSlot, ...action.insertNodes, ...survivingAfterSlot];
-      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
+      const finalIds = new Set(nodes.map((node) => node.id));
+      const actuallyRemovedIds = new Set(
+        document.nodes.filter((node) => !finalIds.has(node.id)).map((node) => node.id),
+      );
+      const updatedProject = updateActiveDocument(state.project, { ...document, nodes });
+      const cleanedProject = actuallyRemovedIds.size > 0
+        ? cleanupDeletedNodeReferences(updatedProject, actuallyRemovedIds, state.project.activePageId).project
+        : updatedProject;
+      const next = touch(cleanedProject);
       const ids = existingSelection(
         next,
         action.selectIds ?? action.insertNodes.map((node) => node.id),
@@ -368,13 +419,20 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const nodes = ungroupLayers(document.nodes, action.nodeIds);
       if (nodes === document.nodes) return state;
       const nextById = new Map(nodes.map((node) => [node.id, node]));
+      const removedGroupIds = new Set(
+        document.nodes.filter((node) => !nextById.has(node.id)).map((node) => node.id),
+      );
       const promotedIds = document.nodes
         .filter((node) => {
           const nextNode = nextById.get(node.id);
           return nextNode && nextNode.parentId !== node.parentId;
         })
         .map((node) => node.id);
-      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
+      const updatedProject = updateActiveDocument(state.project, { ...document, nodes });
+      const cleanedProject = removedGroupIds.size > 0
+        ? cleanupDeletedNodeReferences(updatedProject, removedGroupIds, state.project.activePageId).project
+        : updatedProject;
+      const next = touch(cleanedProject);
       return withSnapshot(state, next, promotedIds.length === 1 ? promotedIds[0] : null, promotedIds);
     }
 

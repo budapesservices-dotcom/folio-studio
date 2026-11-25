@@ -23,6 +23,7 @@ import {
   ungroupLayers,
 } from '../src/core/document/layers';
 import { getActiveDocument } from '../src/core/document/project';
+import { validateProject } from '../src/core/document/validation';
 import { createEditorState, editorReducer } from '../src/app/editorReducer';
 
 function layer(id: string, parentId?: string, patch: Record<string, unknown> = {}) {
@@ -497,5 +498,335 @@ describe('layer hierarchy and panel operations', () => {
     expect(getActiveDocument(undone.project).nodes.find((node) => node.id === first.id)?.parentId).toBeUndefined();
     const redone = editorReducer(undone, { type: 'redo' });
     expect(getActiveDocument(redone.project).nodes.find((node) => node.id === first.id)?.parentId).toBe(second.id);
+  });
+
+  it('clears dangling clipMaskBaseId and cross-studio refs when ungrouping a Group so project validation & autosave never break', () => {
+    const base = layer('mask-base');
+    const companion = layer('mask-companion');
+    const clipped = layer('clipped-content', undefined, { clipMaskBaseId: 'mask-base' });
+
+    const grouped = groupLayers([base, companion, clipped], ['mask-base', 'mask-companion']);
+    const group = grouped.find((node) => node.type === 'group')!;
+    expect(grouped.find((node) => node.id === 'clipped-content')?.clipMaskBaseId).toBe(group.id);
+
+    const ungrouped = ungroupLayers(grouped, [group.id]);
+    expect(ungrouped.some((node) => node.id === group.id)).toBe(false);
+    expect(ungrouped.find((node) => node.id === 'clipped-content')?.clipMaskBaseId).toBeUndefined();
+
+    // End-to-end via editorReducer + validateProject + cross-studio cleanup + Undo
+    const initialProject = createInitialProject();
+    const activePageId = initialProject.activePageId;
+    const now = new Date().toISOString();
+    const projectWithGroupRefs = {
+      ...initialProject,
+      pages: initialProject.pages.map((page) =>
+        page.id === activePageId
+          ? { ...page, document: { ...page.document, nodes: grouped } }
+          : page,
+      ),
+      logicGraphs: [
+        {
+          id: 'graph-group-ref',
+          name: 'Group Click Logic',
+          scope: 'page' as const,
+          targetId: activePageId,
+          variables: [],
+          nodes: [
+            {
+              id: 'ln-group-click',
+              type: 'event.on-click',
+              x: 0,
+              y: 0,
+              data: { targetNodeId: group.id },
+            },
+          ],
+          connections: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      animations: [
+        {
+          id: 'clip-group-ref',
+          name: 'Group Motion',
+          pageId: activePageId,
+          durationMs: 1000,
+          loop: false,
+          autoplay: false,
+          tracks: [
+            {
+              id: 'track-group-x',
+              targetNodeId: group.id,
+              property: 'x' as const,
+              keyframes: [{ id: 'kf-1', timeMs: 0, value: 0, easing: 'linear' as const }],
+            },
+          ],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      codeModules: [
+        {
+          id: 'mod-group-ref',
+          path: 'custom/group.css',
+          language: 'css' as const,
+          mapping: 'extension' as const,
+          targetPageId: activePageId,
+          targetNodeId: group.id,
+          content: '.group-ext { opacity: 0.9; }',
+          updatedAt: now,
+        },
+      ],
+    };
+
+    expect(validateProject(projectWithGroupRefs).ok).toBe(true);
+    const state0 = createEditorState(projectWithGroupRefs);
+    const state1 = editorReducer(state0, { type: 'ungroup-layers', nodeIds: [group.id] });
+
+    expect(validateProject(state1.project)).toEqual({ ok: true, project: state1.project });
+    expect(getActiveDocument(state1.project).nodes.find((n) => n.id === 'clipped-content')?.clipMaskBaseId).toBeUndefined();
+    expect(state1.project.logicGraphs[0].nodes[0].data.targetNodeId).toBe('');
+    expect(state1.project.animations?.[0].tracks).toHaveLength(0);
+    expect(state1.project.codeModules?.[0].targetNodeId).toBeUndefined();
+
+    // Undo restores the Group, clipping mask, and all cross-studio references atomically
+    const undone = editorReducer(state1, { type: 'undo' });
+    expect(validateProject(undone.project).ok).toBe(true);
+    expect(getActiveDocument(undone.project).nodes.find((n) => n.id === 'clipped-content')?.clipMaskBaseId).toBe(group.id);
+    expect(undone.project.logicGraphs[0].nodes[0].data.targetNodeId).toBe(group.id);
+    expect(undone.project.animations?.[0].tracks).toHaveLength(1);
+    expect(undone.project.codeModules?.[0].targetNodeId).toBe(group.id);
+  });
+
+  it('replace-node-with-nodes promotes children, clears broken clip masks, cleans cross-studio refs, and stays valid', () => {
+    const initialProject = createInitialProject();
+    const activePageId = initialProject.activePageId;
+    const now = new Date().toISOString();
+    const grandparent = layer('grandparent');
+    const target = layer('split-target', 'grandparent');
+    const child = layer('target-child', 'split-target');
+    const clipped = layer('clipped-to-target', 'grandparent', { clipMaskBaseId: 'split-target' });
+    const siblingAfter = layer('sibling-after');
+
+    const project = {
+      ...initialProject,
+      pages: initialProject.pages.map((page) =>
+        page.id === activePageId
+          ? { ...page, document: { ...page.document, nodes: [grandparent, target, child, clipped, siblingAfter] } }
+          : page,
+      ),
+      logicGraphs: [
+        {
+          id: 'graph-split',
+          name: 'Split Logic',
+          scope: 'page' as const,
+          targetId: activePageId,
+          variables: [],
+          nodes: [
+            { id: 'ln-split', type: 'event.on-click', x: 0, y: 0, data: { targetNodeId: 'split-target' } },
+          ],
+          connections: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      animations: [
+        {
+          id: 'clip-split',
+          name: 'Split Motion',
+          pageId: activePageId,
+          durationMs: 1000,
+          loop: false,
+          autoplay: false,
+          tracks: [
+            {
+              id: 'track-split-op',
+              targetNodeId: 'split-target',
+              property: 'opacity' as const,
+              keyframes: [{ id: 'kf-s1', timeMs: 0, value: 1, easing: 'linear' as const }],
+            },
+          ],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      codeModules: [
+        {
+          id: 'mod-split',
+          path: 'custom/split.css',
+          language: 'css' as const,
+          mapping: 'extension' as const,
+          targetPageId: activePageId,
+          targetNodeId: 'split-target',
+          content: '.split-ext { color: red; }',
+          updatedAt: now,
+        },
+      ],
+    };
+
+    const pieceA = layer('piece-a', 'grandparent');
+    const pieceB = layer('piece-b', 'grandparent');
+    const state0 = createEditorState(project);
+    const state1 = editorReducer(state0, {
+      type: 'replace-node-with-nodes',
+      nodeId: 'split-target',
+      nodes: [pieceA, pieceB],
+    });
+
+    expect(validateProject(state1.project)).toEqual({ ok: true, project: state1.project });
+    const nextNodes = getActiveDocument(state1.project).nodes;
+    expect(nextNodes.map((n) => n.id)).toEqual([
+      'grandparent',
+      'piece-a',
+      'piece-b',
+      'target-child',
+      'clipped-to-target',
+      'sibling-after',
+    ]);
+    expect(nextNodes.find((n) => n.id === 'target-child')?.parentId).toBe('grandparent');
+    expect(nextNodes.find((n) => n.id === 'clipped-to-target')?.clipMaskBaseId).toBeUndefined();
+    expect(state1.project.logicGraphs[0].nodes[0].data.targetNodeId).toBe('');
+    expect(state1.project.animations?.[0].tracks).toHaveLength(0);
+    expect(state1.project.codeModules?.[0].targetNodeId).toBeUndefined();
+
+    // Undo restores everything atomically
+    const undone = editorReducer(state1, { type: 'undo' });
+    expect(validateProject(undone.project).ok).toBe(true);
+    const restoredNodes = getActiveDocument(undone.project).nodes;
+    expect(restoredNodes.find((n) => n.id === 'target-child')?.parentId).toBe('split-target');
+    expect(restoredNodes.find((n) => n.id === 'clipped-to-target')?.clipMaskBaseId).toBe('split-target');
+    expect(undone.project.logicGraphs[0].nodes[0].data.targetNodeId).toBe('split-target');
+    expect(undone.project.animations?.[0].tracks).toHaveLength(1);
+    expect(undone.project.codeModules?.[0].targetNodeId).toBe('split-target');
+  });
+
+  it('replace-node-with-nodes preserves children and refs when a replacement reuses the original nodeId', () => {
+    const initialProject = createInitialProject();
+    const activePageId = initialProject.activePageId;
+    const now = new Date().toISOString();
+    const target = layer('keep-id');
+    const child = layer('child-of-keep', 'keep-id');
+    const clipped = layer('clipped-to-keep', undefined, { clipMaskBaseId: 'keep-id' });
+
+    const project = {
+      ...initialProject,
+      pages: initialProject.pages.map((page) =>
+        page.id === activePageId
+          ? { ...page, document: { ...page.document, nodes: [target, child, clipped] } }
+          : page,
+      ),
+      logicGraphs: [
+        {
+          id: 'graph-keep',
+          name: 'Keep Logic',
+          scope: 'page' as const,
+          targetId: activePageId,
+          variables: [],
+          nodes: [
+            { id: 'ln-keep', type: 'event.on-click', x: 0, y: 0, data: { targetNodeId: 'keep-id' } },
+          ],
+          connections: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    };
+
+    const state0 = createEditorState(project);
+    const state1 = editorReducer(state0, {
+      type: 'replace-node-with-nodes',
+      nodeId: 'keep-id',
+      nodes: [layer('keep-id', undefined, { x: 42 }), layer('extra-piece')],
+    });
+
+    expect(validateProject(state1.project).ok).toBe(true);
+    const nextNodes = getActiveDocument(state1.project).nodes;
+    expect(nextNodes.find((n) => n.id === 'child-of-keep')?.parentId).toBe('keep-id');
+    expect(nextNodes.find((n) => n.id === 'clipped-to-keep')?.clipMaskBaseId).toBe('keep-id');
+    expect(state1.project.logicGraphs[0].nodes[0].data.targetNodeId).toBe('keep-id');
+  });
+
+  it('replace-nodes cleans up cross-studio references for removed nodes and restores them on undo', () => {
+    const initialProject = createInitialProject();
+    const activePageId = initialProject.activePageId;
+    const now = new Date().toISOString();
+    const shapeA = layer('bool-a');
+    const shapeB = layer('bool-b');
+    const merged = layer('bool-merged');
+
+    const project = {
+      ...initialProject,
+      pages: initialProject.pages.map((page) =>
+        page.id === activePageId
+          ? { ...page, document: { ...page.document, nodes: [shapeA, shapeB] } }
+          : page,
+      ),
+      logicGraphs: [
+        {
+          id: 'graph-bool',
+          name: 'Bool Logic',
+          scope: 'page' as const,
+          targetId: activePageId,
+          variables: [],
+          nodes: [
+            { id: 'ln-a', type: 'event.on-click', x: 0, y: 0, data: { targetNodeId: 'bool-a' } },
+            { id: 'ln-b', type: 'event.on-click', x: 100, y: 0, data: { targetNodeId: 'bool-b' } },
+          ],
+          connections: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      animations: [
+        {
+          id: 'clip-bool',
+          name: 'Bool Motion',
+          pageId: activePageId,
+          durationMs: 1000,
+          loop: false,
+          autoplay: false,
+          tracks: [
+            {
+              id: 'track-bool-a',
+              targetNodeId: 'bool-a',
+              property: 'x' as const,
+              keyframes: [{ id: 'kf-b1', timeMs: 0, value: 0, easing: 'linear' as const }],
+            },
+          ],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      codeModules: [
+        {
+          id: 'mod-bool',
+          path: 'custom/bool.css',
+          language: 'css' as const,
+          mapping: 'extension' as const,
+          targetPageId: activePageId,
+          targetNodeId: 'bool-b',
+          content: '.bool-ext { opacity: 0.8; }',
+          updatedAt: now,
+        },
+      ],
+    };
+
+    const state0 = createEditorState(project);
+    const state1 = editorReducer(state0, {
+      type: 'replace-nodes',
+      removeIds: ['bool-a', 'bool-b'],
+      insertNodes: [merged],
+    });
+
+    expect(validateProject(state1.project).ok).toBe(true);
+    expect(state1.project.logicGraphs[0].nodes.map((n) => n.data.targetNodeId)).toEqual(['', '']);
+    expect(state1.project.animations?.[0].tracks).toHaveLength(0);
+    expect(state1.project.codeModules?.[0].targetNodeId).toBeUndefined();
+
+    const undone = editorReducer(state1, { type: 'undo' });
+    expect(validateProject(undone.project).ok).toBe(true);
+    expect(undone.project.logicGraphs[0].nodes.map((n) => n.data.targetNodeId)).toEqual(['bool-a', 'bool-b']);
+    expect(undone.project.animations?.[0].tracks).toHaveLength(1);
+    expect(undone.project.codeModules?.[0].targetNodeId).toBe('bool-b');
   });
 });
