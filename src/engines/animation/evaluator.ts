@@ -236,17 +236,40 @@ export function applyAnimatedPosesToDocument(
   const poseKeys = Object.keys(poses);
   if (poseKeys.length === 0) return document;
 
+  const nodeById = new Map<string, DesignNode>(document.nodes.map((n) => [n.id, n]));
+  const getAncestorDelta = (node: DesignNode): { dx: number; dy: number } => {
+    let curParentId = node.parentId;
+    const visited = new Set<string>([node.id]);
+    while (curParentId && !visited.has(curParentId)) {
+      visited.add(curParentId);
+      const anc = nodeById.get(curParentId);
+      if (!anc) break;
+      const ancPose = poses[anc.id];
+      if (ancPose && (ancPose.x !== undefined || ancPose.y !== undefined)) {
+        return {
+          dx: ancPose.x !== undefined ? ancPose.x - anc.x : 0,
+          dy: ancPose.y !== undefined ? ancPose.y - anc.y : 0,
+        };
+      }
+      curParentId = anc.parentId;
+    }
+    return { dx: 0, dy: 0 };
+  };
+
   let changed = false;
   const nextNodes = document.nodes.map((node) => {
     const pose = poses[node.id];
-    if (!pose) return node;
+    const ancDelta = !pose || pose.x === undefined || pose.y === undefined
+      ? getAncestorDelta(node)
+      : { dx: 0, dy: 0 };
+    if (!pose && ancDelta.dx === 0 && ancDelta.dy === 0) return node;
     changed = true;
 
-    const baseX = pose.x ?? node.x;
-    const baseY = pose.y ?? node.y;
-    const baseWidth = pose.width !== undefined ? Math.max(1, roundTo2(pose.width)) : node.width;
-    const baseHeight = pose.height !== undefined ? Math.max(1, roundTo2(pose.height)) : node.height;
-    const scale = pose.scale ?? 1;
+    const baseX = pose?.x !== undefined ? pose.x : roundTo2(node.x + ancDelta.dx);
+    const baseY = pose?.y !== undefined ? pose.y : roundTo2(node.y + ancDelta.dy);
+    const baseWidth = pose?.width !== undefined ? Math.max(1, roundTo2(pose.width)) : node.width;
+    const baseHeight = pose?.height !== undefined ? Math.max(1, roundTo2(pose.height)) : node.height;
+    const scale = pose?.scale ?? 1;
     const scaledWidth = scale !== 1 ? Math.max(1, roundTo2(baseWidth * scale)) : baseWidth;
     const scaledHeight = scale !== 1 ? Math.max(1, roundTo2(baseHeight * scale)) : baseHeight;
     const centeredX = scale !== 1 ? roundTo2(baseX + (baseWidth - scaledWidth) / 2) : baseX;
@@ -257,8 +280,8 @@ export function applyAnimatedPosesToDocument(
       y: centeredY,
       width: scaledWidth,
       height: scaledHeight,
-      rotation: pose.rotation ?? node.rotation,
-      opacity: pose.opacity !== undefined ? clamp(pose.opacity, 0, 1) : node.opacity,
+      rotation: pose?.rotation ?? node.rotation,
+      opacity: pose?.opacity !== undefined ? clamp(pose.opacity, 0, 1) : node.opacity,
     };
 
     let nextNode: DesignNode =
@@ -270,13 +293,16 @@ export function applyAnimatedPosesToDocument(
           }
         : ({ ...node, ...basePatch } as DesignNode);
 
-    const hasStyleAnim =
-      pose.fill !== undefined ||
-      pose.stroke !== undefined ||
-      pose.strokeWidth !== undefined ||
-      pose.radius !== undefined;
+    const hasStyleAnim = Boolean(
+      pose && (
+        pose.fill !== undefined ||
+        pose.stroke !== undefined ||
+        pose.strokeWidth !== undefined ||
+        pose.radius !== undefined
+      ),
+    );
 
-    if (hasStyleAnim && 'style' in nextNode) {
+    if (hasStyleAnim && pose && 'style' in nextNode) {
       const nextStyle: Record<string, unknown> = { ...nextNode.style };
       if (pose.fill !== undefined && 'fill' in nextNode.style) {
         nextStyle.fill = pose.fill;

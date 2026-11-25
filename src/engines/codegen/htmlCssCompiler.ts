@@ -236,7 +236,7 @@ function buildInlineSvgMarkup(
     : '';
 
   const svgLines: string[] = [
-    `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" overflow="visible" style="display:block" aria-hidden="true">`,
+    `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style="display:block;width:100%;height:100%" aria-hidden="true">`,
     `${indent}  <path d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${fillRule}${linecap}${linejoin}${dash} />`,
   ];
 
@@ -809,8 +809,27 @@ export function buildNodeCssDeclarations(
     }
   } else {
     void hasRootAutoLayout;
-    const relX = roundCss(node.x - originOffset.x);
-    const relY = roundCss(node.y - originOffset.y);
+    const parentWorldRot = parent && parent.type !== 'group' && !isChildOfAutoLayout
+      ? (parent.rotation || 0)
+      : 0;
+    let relX = roundCss(node.x - originOffset.x);
+    let relY = roundCss(node.y - originOffset.y);
+    if (parent && Math.abs(parentWorldRot) > 0.01) {
+      const borderInset = getNodeBorderInset(parent);
+      const pcx = parent.x + parent.width / 2;
+      const pcy = parent.y + parent.height / 2;
+      const ccx = node.x + node.width / 2;
+      const ccy = node.y + node.height / 2;
+      const dx = ccx - pcx;
+      const dy = ccy - pcy;
+      const rad = (parentWorldRot * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const localDx = dx * cos + dy * sin;
+      const localDy = -dx * sin + dy * cos;
+      relX = roundCss((parent.width / 2 - borderInset.left) + localDx - node.width / 2);
+      relY = roundCss((parent.height / 2 - borderInset.top) + localDy - node.height / 2);
+    }
     const isExplicitRelative = !parent && !isInstanceChild && explicitPosition === 'relative';
     const pos = isExplicitRelative
       ? 'relative'
@@ -885,8 +904,12 @@ export function buildNodeCssDeclarations(
     }
   }
 
-  if (Math.abs(node.rotation) > 0.01) {
-    transformParts.push(`rotate(${roundCss(node.rotation)}deg)`);
+  const effectiveParentWorldRot =
+    parent && parent.type !== 'group' && !isChildOfAutoLayout ? (parent.rotation || 0) : 0;
+  const effectiveNodeWorldRot = node.type === 'group' ? 0 : (node.rotation || 0);
+  const localRotation = roundCss(effectiveNodeWorldRot - effectiveParentWorldRot);
+  if (Math.abs(localRotation) > 0.01) {
+    transformParts.push(`rotate(${localRotation}deg)`);
   }
   if (transformParts.length > 0) {
     declarations.push(`transform: ${transformParts.join(' ')};`);
@@ -940,7 +963,7 @@ export function buildNodeCssDeclarations(
       }
     }
     if (node.type === 'ellipse') {
-      declarations.push('border-radius: 9999px;');
+      declarations.push('border-radius: 50%;');
     } else if (radiusVar) {
       declarations.push(`border-radius: ${radiusVar};`);
     } else if (node.style.cornerRadii) {
@@ -948,7 +971,11 @@ export function buildNodeCssDeclarations(
     } else if (node.style.radius !== undefined && node.style.radius > 0) {
       declarations.push(`border-radius: ${roundCss(node.style.radius)}${node.style.radiusUnit ?? 'px'};`);
     }
-    if (node.type === 'frame' && node.clipContent && !node.layout?.overflow) {
+    const frameClipsChildren =
+      node.type === 'frame'
+      && !node.layout?.overflow
+      && (node.clipContent !== undefined ? node.clipContent : !node.isSection);
+    if (frameClipsChildren) {
       declarations.push('overflow: hidden;');
     }
   } else if (node.type === 'image') {
@@ -1527,7 +1554,13 @@ export function compilePageHtmlCss(
     cssLines.push(`    width: ${docWidth}px;`);
     cssLines.push('    max-width: none;');
     cssLines.push('    margin: 0;');
-    cssLines.push(`    zoom: calc(100vw / ${docWidth}px);`);
+    cssLines.push('    transform-origin: top left;');
+    cssLines.push(`    zoom: tan(atan2(100vw, ${docWidth}px));`);
+    cssLines.push('  }');
+    cssLines.push('  @supports not (zoom: 1) {');
+    cssLines.push(`    .${pageClass} {`);
+    cssLines.push(`      transform: scale(tan(atan2(100vw, ${docWidth}px)));`);
+    cssLines.push('    }');
     cssLines.push('  }');
     cssLines.push('}');
     cssLines.push('');
@@ -1665,9 +1698,14 @@ export function buildLivePreviewHtml(
     ...customJsBlocks,
   ];
 
+  const pageBg = sanitizeCssValue(page.document.background, '');
+  const bodyBg = pageBg && pageBg !== 'transparent' && pageBg !== '#00000000'
+    ? pageBg
+    : 'var(--surface-canvas, #f5f2ec)';
+
   const baseResetCss = [
     '*, *::before, *::after { box-sizing: border-box; }',
-    'html, body { margin: 0; padding: 0; min-height: 100%; overflow-x: clip; background: var(--surface-canvas, #f5f2ec); color: var(--text-primary, #1d1f28); font-family: system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }',
+    `html, body { margin: 0; padding: 0; min-height: 100%; overflow-x: hidden; background: ${bodyBg}; color: var(--text-primary, #1d1f28); font-family: system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }`,
     'a { color: inherit; text-decoration: none; }',
     'button { font: inherit; text-align: inherit; cursor: pointer; background: none; border: none; padding: 0; }',
   ].join('\n');

@@ -217,7 +217,7 @@ export function useMotionPlayback({
 
   const createNewClip = useCallback(() => {
     const name = `Clip ${pageClips.length + 1}`;
-    const clip = createAnimationClip({ pageId: activePage.id, name, durationMs: 1200 });
+    const clip = createAnimationClip({ pageId: activePage.id, name, durationMs: 1200, autoplay: true });
     const result = mainCommandClient.createAnimationClip(clip, `Create animation clip "${name}"`);
     if (result.status === 'applied') {
       setActiveClipId(clip.id);
@@ -229,7 +229,7 @@ export function useMotionPlayback({
   }, [activePage.id, pageClips.length, mainCommandClient, onNotice]);
 
   const applyPreset = useCallback((presetId: MotionPresetDefinition['id']) => {
-    const presetClip = buildPresetClipForPage(activePage, presetId, selectedNodeIds);
+    const presetClip = { ...buildPresetClipForPage(activePage, presetId, selectedNodeIds), autoplay: true };
     const existingCount = pageClips.filter((c) => c.name.startsWith(presetClip.name)).length;
     const namedClip: AnimationClip = existingCount > 0
       ? { ...presetClip, name: `${presetClip.name} ${existingCount + 1}` }
@@ -276,7 +276,7 @@ export function useMotionPlayback({
     let clip = activeClip;
     let isNewClip = false;
     if (!clip) {
-      clip = createAnimationClip({ pageId: activePage.id, name: `Clip ${pageClips.length + 1}`, durationMs: 1200 });
+      clip = createAnimationClip({ pageId: activePage.id, name: `Clip ${pageClips.length + 1}`, durationMs: 1200, autoplay: true });
       isNewClip = true;
     }
 
@@ -350,6 +350,7 @@ export function useMotionPlayback({
         pageId: activePage.id,
         name: `Clip ${pageClips.length + 1}`,
         durationMs: Math.max(1200, playheadMs),
+        autoplay: true,
       });
       isNewClip = true;
     }

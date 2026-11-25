@@ -112,7 +112,7 @@ function buildInlineJsxSvgLines(
   }
 
   const svgLines: string[] = [
-    `${indent}<svg width={${w}} height={${h}} viewBox="0 0 ${w} ${h}" fill="none" overflow="visible" style={{ display: "block" }} aria-hidden="true">`,
+    `${indent}<svg width={${w}} height={${h}} viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style={{ display: "block", width: "100%", height: "100%" }} aria-hidden="true">`,
     `${indent}  <path ${pathAttrs.join(' ')} />`,
   ];
 

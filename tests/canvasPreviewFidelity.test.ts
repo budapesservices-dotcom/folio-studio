@@ -273,15 +273,17 @@ describe('Canvas ↔ Live Preview & Codegen Layout Fidelity', () => {
     expect(css).toMatch(/\.f-inner-child-[^{]+\{[^}]*left:\s*20px;[^}]*top:\s*26px;/);
     // Pinned child uses CSS right/bottom/center pins and merges translateX + rotate into ONE transform
     expect(css).toMatch(/\.f-centered-badge-[^{]+\{[^}]*left:\s*50%;[^}]*bottom:\s*14px;[^}]*transform:\s*translateX\(-50%\)\s+rotate\(15deg\);/);
-    // Inline SVG uses display:block to avoid baseline descender shifts
-    expect(compiled.htmlFile.content).toContain('style="display:block"');
+    // Inline SVG uses display:block + fluid 100% sizing to avoid baseline descender shifts and scale smoothly during animations
+    expect(compiled.htmlFile.content).toContain('preserveAspectRatio="none"');
+    expect(compiled.htmlFile.content).toContain('style="display:block;width:100%;height:100%"');
 
     const reactFiles = compileReactProjectFiles(project);
     const reactPage = reactFiles.find((f) => f.path.startsWith('src/pages/') && f.path.endsWith('.tsx'))?.content ?? '';
-    expect(reactPage).toContain('style={{ display: "block" }}');
+    expect(reactPage).toContain('preserveAspectRatio="none"');
+    expect(reactPage).toContain('style={{ display: "block", width: "100%", height: "100%" }}');
   });
 
-  it('scales pure freeform artboards proportionally on narrower viewports so Tablet/Mobile preview never clips content', () => {
+  it('scales pure freeform artboards proportionally cross-browser via tan(atan2(...)) without script tags', () => {
     const project = createInitialProject('Freeform Poster');
     const page = getActivePage(project);
     // Default First canvas is 1440x900 pure freeform
@@ -290,11 +292,14 @@ describe('Canvas ↔ Live Preview & Codegen Layout Fidelity', () => {
 
     expect(css).toContain('width: 1440px;');
     expect(css).toContain('@media (max-width: 1439px)');
-    expect(css).toContain('zoom: calc(100vw / 1440px);');
+    expect(css).toContain('zoom: tan(atan2(100vw, 1440px));');
+    expect(css).toContain('@supports not (zoom: 1)');
+    expect(css).toContain('transform: scale(tan(atan2(100vw, 1440px)));');
 
     const previewHtml = buildLivePreviewHtml(project);
-    expect(previewHtml).toContain('zoom: calc(100vw / 1440px);');
+    expect(previewHtml).toContain('zoom: tan(atan2(100vw, 1440px));');
     expect(previewHtml).toContain('text-align: inherit;');
+    expect(previewHtml).not.toContain('<script>');
   });
 
   it('solves internal Auto-Layout inside Component Instances before compiling HTML/CSS', () => {
@@ -347,5 +352,236 @@ describe('Canvas ↔ Live Preview & Codegen Layout Fidelity', () => {
 
     const compiled = compilePageHtmlCss(project, page);
     expect(compiled.cssFile.content).toMatch(/\.f-comp-dot-[^{]+\{[^}]*position:\s*absolute;[^}]*right:\s*12px;[^}]*top:\s*12px;/);
+  });
+
+  it('animates freeform vector paths via SVG @keyframes without turning wrapper divs into colored boxes', () => {
+    const project = createInitialProject('Freeform Vector Motion');
+    const page = getActivePage(project);
+
+    const starPath: PathNode = {
+      id: 'star-1',
+      type: 'path',
+      name: 'Star Shape',
+      x: 200,
+      y: 160,
+      width: 120,
+      height: 120,
+      rotation: 15,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      onCanvas: true,
+      points: [
+        { id: 's1', x: 60, y: 0, pointType: 'corner' },
+        { id: 's2', x: 120, y: 120, pointType: 'corner' },
+        { id: 's3', x: 0, y: 120, pointType: 'corner' },
+      ],
+      closed: true,
+      style: { fill: '#f59e0b', stroke: '#ffffff', strokeWidth: 2 },
+    };
+
+    const ovalNode = {
+      ...createRectNode(1),
+      id: 'oval-1',
+      type: 'ellipse' as const,
+      name: 'Oval Halo',
+      x: 420,
+      y: 180,
+      width: 240,
+      height: 100,
+      style: { fill: '#6366f1', stroke: 'none', strokeWidth: 0 },
+    };
+
+    page.document.nodes = [starPath, ovalNode];
+    project.animations = [
+      {
+        id: 'clip-freeform',
+        name: 'Freeform Orbit',
+        pageId: page.id,
+        durationMs: 1000,
+        loop: true,
+        autoplay: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        tracks: [
+          {
+            id: 't-x',
+            targetNodeId: 'star-1',
+            property: 'x',
+            keyframes: [
+              { id: 'k1', timeMs: 0, value: 200, easing: 'ease-in' },
+              { id: 'k2', timeMs: 500, value: 320, easing: 'ease-out' },
+              { id: 'k3', timeMs: 1000, value: 200, easing: 'linear' },
+            ],
+          },
+          {
+            id: 't-fill',
+            targetNodeId: 'star-1',
+            property: 'fill',
+            keyframes: [
+              { id: 'k4', timeMs: 0, value: '#f59e0b', easing: 'linear' },
+              { id: 'k5', timeMs: 1000, value: '#ec4899', easing: 'linear' },
+            ],
+          },
+          {
+            id: 't-sw',
+            targetNodeId: 'oval-1',
+            property: 'strokeWidth',
+            keyframes: [
+              { id: 'k6', timeMs: 0, value: 0, easing: 'linear' },
+              { id: 'k7', timeMs: 1000, value: 6, easing: 'ease-out' },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const compiled = compilePageHtmlCss(project, page);
+    const css = compiled.cssFile.content;
+
+    // Oval must use true ellipse border-radius: 50%, not pill 9999px
+    expect(css).toMatch(/\.f-oval-halo-[^{]+\{[^}]*border-radius:\s*50%;/);
+    expect(css).not.toMatch(/\.f-oval-halo-[^{]+\{[^}]*border-radius:\s*9999px;/);
+
+    // Wrapper @keyframes for star-1 must preserve static rotate(15deg) and NEVER emit background-color/border on wrapper div
+    const wrapperKfMatch = css.match(/@keyframes folio-kf-clip-freeform-star-1 \{[\s\S]*?\n\}/);
+    expect(wrapperKfMatch).not.toBeNull();
+    expect(wrapperKfMatch![0]).toContain('rotate(15deg)');
+    expect(wrapperKfMatch![0]).not.toContain('background-color');
+    expect(wrapperKfMatch![0]).not.toContain('border-width');
+    // Mixed easings emit per-stop animation-timing-function
+    expect(wrapperKfMatch![0]).toContain('animation-timing-function:');
+
+    // Dedicated SVG path @keyframes animate fill directly on > svg path
+    expect(css).toContain('@keyframes folio-kf-clip-freeform-star-1--svg');
+    expect(css).toContain('[data-folio-id="star-1"] > svg path');
+    expect(css).toMatch(/@keyframes folio-kf-clip-freeform-star-1--svg \{[\s\S]*fill:\s*#ec4899;/);
+
+    // Oval animating strokeWidth from 0 -> 6 activates border-style: solid
+    expect(css).toMatch(/@keyframes folio-kf-clip-freeform-oval-1 \{[\s\S]*border-style:\s*solid;/);
+  });
+
+  it('prevents double-translation and double-rotation for nested animated groups/frames and static rotated frames', async () => {
+    const { applyAnimatedPosesToDocument, evaluateClipAtTime } = await import('../src/engines/animation/evaluator');
+
+    const project = createInitialProject('Nested Group & Rotated Frame');
+    const page = getActivePage(project);
+
+    const groupNode = {
+      id: 'grp-1',
+      type: 'group' as const,
+      name: 'Hero Group',
+      x: 100,
+      y: 100,
+      width: 200,
+      height: 200,
+      rotation: 30, // Groups in Canvas don't rotate children visually
+      opacity: 1,
+      visible: true,
+      locked: false,
+      onCanvas: true,
+      style: { fill: 'transparent', stroke: 'none', strokeWidth: 0 },
+    };
+    const childKeyed = {
+      ...createRectNode(0),
+      id: 'child-keyed',
+      name: 'Keyed Child',
+      parentId: 'grp-1',
+      x: 140,
+      y: 150,
+      width: 80,
+      height: 60,
+      rotation: 0,
+    };
+    const childUnkeyed = {
+      ...createRectNode(1),
+      id: 'child-unkeyed',
+      name: 'Unkeyed Child',
+      parentId: 'grp-1',
+      x: 160,
+      y: 180,
+      width: 50,
+      height: 50,
+      rotation: 0,
+    };
+
+    const rotatedFrame: FrameNode = {
+      ...createFrameNode(2),
+      id: 'rot-frame',
+      name: 'Rotated Frame',
+      x: 500,
+      y: 100,
+      width: 200,
+      height: 200,
+      rotation: 90,
+    };
+    const rotChild = {
+      ...createRectNode(3),
+      id: 'rot-child',
+      name: 'Rot Child',
+      parentId: 'rot-frame',
+      // Center of rot-frame is (600, 200). Put rotChild centered at (600, 200) with 40x40 -> x=580, y=180
+      x: 580,
+      y: 180,
+      width: 40,
+      height: 40,
+      rotation: 90,
+    };
+
+    page.document.nodes = [groupNode, childKeyed, childUnkeyed, rotatedFrame, rotChild];
+    const clip = {
+      id: 'clip-nested',
+      name: 'Group Slide',
+      pageId: page.id,
+      durationMs: 1000,
+      loop: false,
+      autoplay: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      tracks: [
+        {
+          id: 'g-x',
+          targetNodeId: 'grp-1',
+          property: 'x' as const,
+          keyframes: [
+            { id: 'gx0', timeMs: 0, value: 100, easing: 'linear' as const },
+            { id: 'gx1', timeMs: 1000, value: 200, easing: 'linear' as const },
+          ],
+        },
+        {
+          id: 'c-x',
+          targetNodeId: 'child-keyed',
+          property: 'x' as const,
+          keyframes: [
+            { id: 'cx0', timeMs: 0, value: 140, easing: 'linear' as const },
+            { id: 'cx1', timeMs: 1000, value: 240, easing: 'linear' as const },
+          ],
+        },
+      ],
+    };
+    project.animations = [clip];
+
+    const css = compilePageHtmlCss(project, page).cssFile.content;
+
+    // Group itself must NOT emit rotate(30deg) in CSS (Canvas groups don't rotate children)
+    expect(css).not.toMatch(/\.f-hero-group-[^{]+\{[^}]*rotate\(30deg\)/);
+
+    // Rotated frame child centered at parent's center stays at (79px, 79px) after 1px parent border inset, with localRotation = 90 - 90 = 0 (no double 90deg!)
+    expect(css).toMatch(/\.f-rot-child-[^{]+\{[^}]*left:\s*79px;[^}]*top:\s*79px;/);
+    expect(css).not.toMatch(/\.f-rot-child-[^{]+\{[^}]*rotate\(90deg\)/);
+
+    // Keyed child moving +100px alongside group moving +100px has 0px relative CSS translate -> transform: none (no double-translation!)
+    const childKfMatch = css.match(/@keyframes folio-kf-clip-nested-child-keyed \{[\s\S]*?\n\}/);
+    expect(childKfMatch).not.toBeNull();
+    expect(childKfMatch![0]).toContain('transform: none;');
+    expect(childKfMatch![0]).not.toContain('translate(100px');
+
+    // On Canvas, un-keyed child inherits group's +100px translation delta via applyAnimatedPosesToDocument
+    const posesAtEnd = evaluateClipAtTime(clip, 1000);
+    const evaluatedDoc = applyAnimatedPosesToDocument(page.document, posesAtEnd);
+    const evalUnkeyed = evaluatedDoc.nodes.find((n) => n.id === 'child-unkeyed');
+    expect(evalUnkeyed?.x).toBe(260); // 160 + 100
+    const evalKeyed = evaluatedDoc.nodes.find((n) => n.id === 'child-keyed');
+    expect(evalKeyed?.x).toBe(240); // Keeps its own explicit keyframe world coordinate, NOT 340!
   });
 });
