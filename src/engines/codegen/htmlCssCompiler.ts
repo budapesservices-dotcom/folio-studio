@@ -43,7 +43,7 @@ import type {
   SemanticHtmlTag,
 } from '../../core/document/types';
 import { serializePathPointsToSvgD } from '../../core/document/vector';
-import { getAssetBundlePath, resolveAssetDisplayUrl } from '../../core/persistence/assetStore';
+import { getAssetBundlePath, resolveAssetDisplayUrl, resolvePortableAssetUrl } from '../../core/persistence/assetStore';
 import {
   escapeAttr,
   escapeHtml,
@@ -963,7 +963,7 @@ function pushCssRule(
 const MAX_COMPONENT_RENDER_DEPTH = 16;
 
 export interface CompilePageHtmlCssOptions {
-  assetMode?: 'bundle' | 'inline';
+  assetMode?: 'bundle' | 'inline' | 'portable';
 }
 
 export function compilePageHtmlCss(
@@ -1134,9 +1134,11 @@ export function compilePageHtmlCss(
     } else if (node.type === 'image') {
       const asset = assetsById.get(node.assetId);
       const src = asset
-        ? assetMode === 'inline'
-          ? (resolveAssetDisplayUrl(asset) ?? '')
-          : `../${getAssetBundlePath(asset)}`
+        ? assetMode === 'portable'
+          ? (resolvePortableAssetUrl(asset) ?? '')
+          : assetMode === 'inline'
+            ? (resolveAssetDisplayUrl(asset) ?? '')
+            : `../${getAssetBundlePath(asset)}`
         : '';
       const alt = node.alt ?? node.name;
       htmlBodyLines.push(
@@ -1370,6 +1372,8 @@ export interface LivePreviewOptions {
   themeId?: string;
   includeCustomScripts?: boolean;
   includeLogicRuntime?: boolean;
+  /** 'inline' uses fast in-tab blob/data URLs for Live Preview iframe; 'portable' emits self-contained data URIs for standalone HTML export. */
+  assetMode?: 'inline' | 'portable';
 }
 
 export const LIVE_PREVIEW_CSP =
@@ -1404,7 +1408,7 @@ export function buildLivePreviewHtml(
       : '';
 
   const tokensCss = compileTokensCssFile(project).content;
-  const compiledPage = compilePageHtmlCss(project, page, { assetMode: 'inline' });
+  const compiledPage = compilePageHtmlCss(project, page, { assetMode: options.assetMode ?? 'inline' });
   const googleFontsUrl = buildGoogleFontsStylesheetUrl(collectProjectGoogleFonts(project));
 
   const modules: readonly CodeModuleRecord[] = project.codeModules ?? [];

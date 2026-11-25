@@ -15,6 +15,7 @@ import type {
   DesignNode,
   DesignTokenCollection,
 } from '../../../core/document/types';
+import { subscribeAssetCacheUpdates } from '../../../core/persistence/assetStore';
 import { HybridGpuViewportEngine } from './gpuRenderer';
 import type { GpuSceneMetrics, ViewportRect } from './types';
 
@@ -67,6 +68,15 @@ export const GpuViewportLayer = memo(function GpuViewportLayer({
   const tileCanvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<HybridGpuViewportEngine | null>(null);
   const [assetVersion, setAssetVersion] = useState(0);
+
+  // Invalidate cached tiles immediately when IndexedDB asset hydration finishes
+  useEffect(() => {
+    if (!active) return;
+    return subscribeAssetCacheUpdates(() => {
+      engineRef.current?.invalidateTiles();
+      setAssetVersion((v) => v + 1);
+    });
+  }, [active]);
 
   // Initialize / dispose GPU engine tied to `active` lifecycle, then opportunistically upgrade to WebGPU
   useEffect(() => {

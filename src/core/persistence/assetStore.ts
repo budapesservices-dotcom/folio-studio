@@ -63,6 +63,38 @@ const INLINE_ASSET_BYTE_THRESHOLD = 16 * 1024;
 const memoryUrlByHash = new Map<string, string>();
 const memoryBytesByHash = new Map<string, { bytes: Uint8Array; mimeType: string }>();
 let memoryCachedByteTotal = 0;
+let assetCacheRevision = 0;
+let assetCacheBatchDepth = 0;
+let assetCacheBatchDirty = false;
+const assetCacheListeners = new Set<() => void>();
+
+function notifyAssetCacheUpdated(): void {
+  if (assetCacheBatchDepth > 0) {
+    assetCacheBatchDirty = true;
+    return;
+  }
+  assetCacheRevision += 1;
+  for (const listener of assetCacheListeners) {
+    try {
+      listener();
+    } catch {
+      // Keep cache notifications resilient to individual listener errors.
+    }
+  }
+}
+
+/** Monotonic counter incremented whenever in-memory hydrated asset URLs/bytes change. */
+export function getAssetCacheRevision(): number {
+  return assetCacheRevision;
+}
+
+/** Subscribes UI renderers (Canvas SVG, GPU tile cache, Live Preview) to async asset hydration updates. */
+export function subscribeAssetCacheUpdates(listener: () => void): () => void {
+  assetCacheListeners.add(listener);
+  return () => {
+    assetCacheListeners.delete(listener);
+  };
+}
 
 function evictAssetMemoryCacheIfNeeded(): void {
   while (
@@ -88,6 +120,7 @@ function evictAssetMemoryCacheIfNeeded(): void {
 
 /** Clears the in-memory LRU blob/URL cache and revokes any object URLs. */
 export function clearAssetMemoryCache(): void {
+  const hadEntries = memoryUrlByHash.size > 0 || memoryBytesByHash.size > 0;
   for (const url of memoryUrlByHash.values()) {
     if (url.startsWith('blob:') && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
       URL.revokeObjectURL(url);
@@ -96,6 +129,9 @@ export function clearAssetMemoryCache(): void {
   memoryUrlByHash.clear();
   memoryBytesByHash.clear();
   memoryCachedByteTotal = 0;
+  if (hadEntries) {
+    notifyAssetCacheUpdated();
+  }
 }
 
 const DISALLOWED_ACTIVE_BLOB_MIMES = new Set([
@@ -152,6 +188,7 @@ function setMemoryAssetCache(sha256: string, bytes: Uint8Array, mimeType: string
   memoryCachedByteTotal += bytes.byteLength;
   memoryUrlByHash.set(sha256, displayUrl);
   evictAssetMemoryCacheIfNeeded();
+  notifyAssetCacheUpdated();
   return displayUrl;
 }
 
@@ -617,7 +654,7 @@ export async function getAssetBytesByHash(sha256: string): Promise<{ bytes: Uint
   return entry;
 }
 
-/** Synchronously resolves an AssetReference into a safe displayable URL for Canvas/Export. */
+/** Synchronously resolves an AssetReference into a safe displayable URL for in-tab Canvas/Preview rendering. */
 export function resolveAssetDisplayUrl(asset: AssetReference | undefined): string | null {
   if (!asset) return null;
   if (asset.sha256) {
@@ -631,6 +668,30 @@ export function resolveAssetDisplayUrl(asset: AssetReference | undefined): strin
   if (src.startsWith('folio-asset://')) {
     const hash = src.slice('folio-asset://'.length);
     return memoryUrlByHash.get(hash) ?? null;
+  }
+  return null;
+}
+
+/**
+ * Synchronously resolves an AssetReference into a self-contained portable URL (`data:` or `https:`)
+ * for standalone exports (SVG, PNG rasterization, standalone HTML). Never returns ephemeral `blob:` URLs.
+ */
+export function resolvePortableAssetUrl(asset: AssetReference | undefined): string | null {
+  if (!asset) return null;
+  const src = asset.source.trim();
+  if (src.startsWith('data:image/') || src.startsWith('https://') || src.startsWith('http://')) {
+    return src;
+  }
+  const hash = (
+    asset.sha256 ??
+    (src.startsWith(INTERNAL_ASSET_URI_PREFIX) ? src.slice(INTERNAL_ASSET_URI_PREFIX.length) : '')
+  ).trim();
+  if (hash) {
+    const cached = memoryBytesByHash.get(hash);
+    if (cached) {
+      const safeMime = normalizeSafeBlobMimeType(asset.mimeType || cached.mimeType);
+      return bytesToDataUrl(cached.bytes, safeMime);
+    }
   }
   return null;
 }
@@ -852,45 +913,68 @@ export function getAssetBundlePath(asset: AssetReference): string {
 
 /** Extracts raw binary bytes from an AssetReference (inline data URL or in-memory hash cache). */
 export function extractAssetBinaryBytesSync(asset: AssetReference): Uint8Array | null {
-  if (asset.sha256) {
-    const cached = memoryBytesByHash.get(asset.sha256);
+  const src = asset.source.trim();
+  const hash = (
+    asset.sha256 ??
+    (src.startsWith(INTERNAL_ASSET_URI_PREFIX) ? src.slice(INTERNAL_ASSET_URI_PREFIX.length) : '')
+  ).trim();
+  if (hash) {
+    const cached = memoryBytesByHash.get(hash);
     if (cached) return cached.bytes;
   }
-  const decoded = dataUrlToBytes(asset.source);
+  const decoded = dataUrlToBytes(src);
   return decoded ? decoded.bytes : null;
 }
 
 /**
- * Hydrates embedded `data:` assets from a loaded `.flop` project into the
- * deduplicated IndexedDB blob store & memory cache (best-effort async).
+ * Hydrates embedded `data:` assets and `folio-asset://<sha256>` references from a loaded
+ * project into the deduplicated IndexedDB blob store & memory cache, then emits one batched
+ * cache update notification so Canvas, GPU tiles, and Live Preview repaint immediately.
  */
 export async function hydrateProjectAssetsToStore(project: FolioProject): Promise<void> {
-  for (const asset of project.assets) {
-    if (asset.source.startsWith('data:')) {
-      const decoded = dataUrlToBytes(asset.source);
-      if (!decoded) continue;
-      const declaredMime = (asset.mimeType || '').trim().toLowerCase().split(';')[0].trim();
-      const decodedMime = (decoded.mimeType || '').trim().toLowerCase().split(';')[0].trim();
-      if (DISALLOWED_ACTIVE_BLOB_MIMES.has(declaredMime) || DISALLOWED_ACTIVE_BLOB_MIMES.has(decodedMime)) {
-        continue;
+  if (project.assets.length === 0) return;
+  assetCacheBatchDepth += 1;
+  try {
+    for (const asset of project.assets) {
+      const src = asset.source.trim();
+      if (src.startsWith('data:')) {
+        const decoded = dataUrlToBytes(src);
+        if (!decoded) continue;
+        const declaredMime = (asset.mimeType || '').trim().toLowerCase().split(';')[0].trim();
+        const decodedMime = (decoded.mimeType || '').trim().toLowerCase().split(';')[0].trim();
+        if (DISALLOWED_ACTIVE_BLOB_MIMES.has(declaredMime) || DISALLOWED_ACTIVE_BLOB_MIMES.has(decodedMime)) {
+          continue;
+        }
+        const effectiveMime = normalizeSafeBlobMimeType(declaredMime || decodedMime);
+        let safeBytes = decoded.bytes;
+        if (effectiveMime === 'image/svg+xml' || decodedMime === 'image/svg+xml') {
+          const sanitized = sanitizeSvgMarkup(new TextDecoder().decode(decoded.bytes));
+          if (!/<svg\b/i.test(sanitized)) continue;
+          safeBytes = new TextEncoder().encode(sanitized);
+        }
+        const sha256 = asset.sha256 ?? (await computeBytesSha256(safeBytes));
+        await putDeduplicatedAssetBlob({
+          sha256,
+          bytes: safeBytes,
+          mimeType: effectiveMime,
+          width: asset.width,
+          height: asset.height,
+        });
+      } else {
+        const hash = (
+          asset.sha256 ??
+          (src.startsWith(INTERNAL_ASSET_URI_PREFIX) ? src.slice(INTERNAL_ASSET_URI_PREFIX.length) : '')
+        ).trim();
+        if (hash) {
+          await getAssetBytesByHash(hash);
+        }
       }
-      const effectiveMime = normalizeSafeBlobMimeType(declaredMime || decodedMime);
-      let safeBytes = decoded.bytes;
-      if (effectiveMime === 'image/svg+xml' || decodedMime === 'image/svg+xml') {
-        const sanitized = sanitizeSvgMarkup(new TextDecoder().decode(decoded.bytes));
-        if (!/<svg\b/i.test(sanitized)) continue;
-        safeBytes = new TextEncoder().encode(sanitized);
-      }
-      const sha256 = asset.sha256 ?? (await computeBytesSha256(safeBytes));
-      await putDeduplicatedAssetBlob({
-        sha256,
-        bytes: safeBytes,
-        mimeType: effectiveMime,
-        width: asset.width,
-        height: asset.height,
-      });
-    } else if (asset.sha256) {
-      await getAssetBytesByHash(asset.sha256);
+    }
+  } finally {
+    assetCacheBatchDepth = Math.max(0, assetCacheBatchDepth - 1);
+    if (assetCacheBatchDepth === 0 && assetCacheBatchDirty) {
+      assetCacheBatchDirty = false;
+      notifyAssetCacheUpdated();
     }
   }
 }

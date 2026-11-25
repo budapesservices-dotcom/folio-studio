@@ -414,15 +414,50 @@ export function replaceComponentInstancesInDocument(
   component: ComponentDefinition,
   tokens?: DesignTokenCollection,
 ): FolioDocument {
-  let changed = false;
-  const nodes: DesignNode[] = [];
+  const replacedInstanceIds = new Set<string>();
+  const parentByReplacedId = new Map<string, string | null | undefined>();
   for (const node of document.nodes) {
     if (node.type === 'component-instance' && node.componentId === component.id) {
-      nodes.push(...detachComponentInstance(node, component, tokens));
-      changed = true;
-    } else nodes.push(node);
+      replacedInstanceIds.add(node.id);
+      parentByReplacedId.set(node.id, node.parentId);
+    }
   }
-  return changed ? { ...document, nodes } : document;
+  if (replacedInstanceIds.size === 0) return document;
+
+  const resolveSurvivingParentId = (startParentId: string): string | undefined => {
+    let cursor: string | null | undefined = startParentId;
+    const visited = new Set<string>();
+    while (cursor && replacedInstanceIds.has(cursor)) {
+      if (visited.has(cursor)) return undefined;
+      visited.add(cursor);
+      cursor = parentByReplacedId.get(cursor);
+    }
+    return cursor ?? undefined;
+  };
+
+  const nodes: DesignNode[] = [];
+  for (const node of document.nodes) {
+    if (replacedInstanceIds.has(node.id) && node.type === 'component-instance') {
+      nodes.push(...detachComponentInstance(node, component, tokens));
+    } else {
+      let nextNode = node;
+      if (nextNode.clipMaskBaseId && replacedInstanceIds.has(nextNode.clipMaskBaseId)) {
+        const { clipMaskBaseId: _removedClip, ...unmasked } = nextNode;
+        nextNode = unmasked as DesignNode;
+      }
+      if (nextNode.parentId && replacedInstanceIds.has(nextNode.parentId)) {
+        const promotedParentId = resolveSurvivingParentId(nextNode.parentId);
+        if (promotedParentId) {
+          nextNode = { ...nextNode, parentId: promotedParentId };
+        } else {
+          const { parentId: _removedParent, ...promoted } = nextNode;
+          nextNode = promoted as DesignNode;
+        }
+      }
+      nodes.push(nextNode);
+    }
+  }
+  return { ...document, nodes };
 }
 
 /** Prunes only override keys whose master nodes were removed; surviving keys remain. */

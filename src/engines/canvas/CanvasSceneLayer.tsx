@@ -25,6 +25,8 @@ export interface CanvasSceneLayerProps {
   readonly tokens?: DesignTokenCollection;
   /** Node IDs currently isolated onto the active drag overlay layer (skipped here without mutating scene arrays). */
   readonly hiddenNodeIds?: ReadonlySet<string> | null;
+  /** Monotonic revision from assetStore so async IndexedDB hydration invalidates React.memo cleanly. */
+  readonly assetCacheRevision?: number;
 }
 
 /**

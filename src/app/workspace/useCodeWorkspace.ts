@@ -9,6 +9,11 @@ import type {
   FolioProject,
 } from '../../core/document/types';
 import {
+  getAssetCacheRevision,
+  materializeProjectAssetsForExport,
+  subscribeAssetCacheUpdates,
+} from '../../core/persistence/assetStore';
+import {
   applyA11yQuickFixToNode,
   applyMappedNodeEdit,
   auditPageAccessibility,
@@ -120,8 +125,13 @@ export function useCodeWorkspace({
   const [previewBreakpoint, setPreviewBreakpoint] = useState<BreakpointId>(activeBreakpoint);
   const [includeCustomScripts, setIncludeCustomScripts] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [assetCacheRevision, setAssetCacheRevision] = useState(() => getAssetCacheRevision());
   const [mappedTargetNodeId, setMappedTargetNodeId] = useState<string | null>(selectedNodeId);
   const [mappedFeedback, setMappedFeedback] = useState<MappedSyncFeedback | null>(null);
+
+  useEffect(() => subscribeAssetCacheUpdates(() => {
+    setAssetCacheRevision(getAssetCacheRevision());
+  }), []);
 
   // Keep preview page synced when project active page changes or page list changes
   useEffect(() => {
@@ -233,6 +243,7 @@ export function useCodeWorkspace({
     themeId: previewThemeId,
     includeCustomScripts,
     shouldRenderPreview,
+    assetCacheRevision,
     project,
   });
 
@@ -245,7 +256,8 @@ export function useCodeWorkspace({
       prev.pageId !== previewPage.id ||
       prev.themeId !== previewThemeId ||
       prev.includeCustomScripts !== includeCustomScripts ||
-      prev.shouldRenderPreview !== shouldRenderPreview;
+      prev.shouldRenderPreview !== shouldRenderPreview ||
+      prev.assetCacheRevision !== assetCacheRevision;
     const projectChanged = prev.project !== project;
 
     prevCompileContextRef.current = {
@@ -255,6 +267,7 @@ export function useCodeWorkspace({
       themeId: previewThemeId,
       includeCustomScripts,
       shouldRenderPreview,
+      assetCacheRevision,
       project,
     };
 
@@ -292,6 +305,7 @@ export function useCodeWorkspace({
     previewThemeId,
     includeCustomScripts,
     shouldRenderPreview,
+    assetCacheRevision,
   ]);
 
   useEffect(() => () => {
@@ -505,38 +519,55 @@ export function useCodeWorkspace({
 
   const downloadPreviewHtml = () => {
     if (typeof document === 'undefined' || typeof URL === 'undefined') return;
-    const html = buildLivePreviewHtml(project, {
-      pageId: previewPage.id,
-      themeId: previewThemeId,
-      includeCustomScripts,
-    });
-    const slug = toPageFileSlug(previewPage.route, previewPage.name);
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${toPageFileSlug('', project.metadata.name)}-${slug}.html`;
-    anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    onNotice(`Exported standalone HTML (${anchor.download}).`);
+    void (async () => {
+      try {
+        const portableProject = await materializeProjectAssetsForExport(project);
+        const html = buildLivePreviewHtml(portableProject, {
+          pageId: previewPage.id,
+          themeId: previewThemeId,
+          includeCustomScripts,
+          assetMode: 'portable',
+        });
+        const slug = toPageFileSlug(previewPage.route, previewPage.name);
+        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `${toPageFileSlug('', portableProject.metadata.name)}-${slug}.html`;
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        onNotice(`Exported standalone HTML (${anchor.download}).`);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
+        onNotice(`Unable to export standalone HTML: ${detail}`);
+      }
+    })();
   };
 
   const downloadProjectZip = () => {
     if (typeof document === 'undefined' || typeof URL === 'undefined') return;
-    const bundle = buildCompiledProjectBundle(project, {
-      target: outputTarget,
-      pageId: previewPage.id,
-      themeId: previewThemeId,
-    });
-    const zipBuffer = new Uint8Array(bundle.zipBytes).buffer;
-    const blob = new Blob([zipBuffer], { type: 'application/zip' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = bundle.fileName;
-    anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    onNotice(`Exported ${bundle.fileName} (${bundle.entries.length} files).`);
+    void (async () => {
+      try {
+        const portableProject = await materializeProjectAssetsForExport(project);
+        const bundle = buildCompiledProjectBundle(portableProject, {
+          target: outputTarget,
+          pageId: previewPage.id,
+          themeId: previewThemeId,
+        });
+        const zipBuffer = new Uint8Array(bundle.zipBytes).buffer;
+        const blob = new Blob([zipBuffer], { type: 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = bundle.fileName;
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        onNotice(`Exported ${bundle.fileName} (${bundle.entries.length} files).`);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
+        onNotice(`Unable to export project ZIP: ${detail}`);
+      }
+    })();
   };
 
   const applyA11yFix = (fix: A11yQuickFix) => {

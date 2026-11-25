@@ -12,6 +12,7 @@ import type {
   TextNode,
 } from '../../core/document/types';
 import { buildFrameClipAncestorMap, buildLayerClipMaskMap, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
+import { getAssetCacheRevision, subscribeAssetCacheUpdates } from '../../core/persistence/assetStore';
 import { computeAutoLayoutNodes, getBreakpointCanvasWidth } from '../layout/autoLayout';
 import {
   decomposeNodesForShapeBuilder,
@@ -418,6 +419,12 @@ export function Canvas({
     () => (workspace === 'main' ? getBreakpointCanvasWidth(document.width, activeBreakpoint) : document.width),
     [workspace, document.width, activeBreakpoint],
   );
+
+  const [assetCacheRevision, setAssetCacheRevision] = useState(() => getAssetCacheRevision());
+
+  useEffect(() => subscribeAssetCacheUpdates(() => {
+    setAssetCacheRevision(getAssetCacheRevision());
+  }), []);
 
   const resolvedLayoutNodes = useMemo(
     () => computeAutoLayoutNodes(document.nodes, {
@@ -1547,6 +1554,7 @@ export function Canvas({
                 assetById={assetById}
                 tokens={designTokens}
                 hiddenNodeIds={isolatedPreviewIdSet}
+                assetCacheRevision={assetCacheRevision}
               />
             )}
 

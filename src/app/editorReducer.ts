@@ -589,6 +589,18 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const target = state.project.components.find((component) => component.id === action.componentId);
       if (!target || target.document !== action.expectedMasterDocument ||
           target.updatedAt !== action.expectedUpdatedAt) return state;
+      const removedInstanceIdsByPage = new Map<string, Set<string>>();
+      for (const page of state.project.pages) {
+        const pageRemovedIds = new Set<string>();
+        for (const node of page.document.nodes) {
+          if (node.type === 'component-instance' && node.componentId === action.componentId) {
+            pageRemovedIds.add(node.id);
+          }
+        }
+        if (pageRemovedIds.size > 0) {
+          removedInstanceIdsByPage.set(page.id, pageRemovedIds);
+        }
+      }
       // Detach all page AND nested component instances so deleting a master never leaves broken references.
       const pages = state.project.pages.map((page) => ({
         ...page, document: replaceComponentInstancesInDocument(page.document, target, state.project.designTokens),
@@ -600,7 +612,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           return nextDoc === component.document ? component : { ...component, document: nextDoc };
         });
       const logicGraphs = pruneLogicGraphsForDeletedComponent(state.project.logicGraphs, action.componentId);
-      const next = touch({ ...state.project, pages, components, logicGraphs });
+      let cleanedProject: FolioProject = { ...state.project, pages, components, logicGraphs };
+      for (const [pageId, removedIds] of removedInstanceIdsByPage) {
+        cleanedProject = cleanupDeletedNodeReferences(cleanedProject, removedIds, pageId).project;
+      }
+      const next = touch(cleanedProject);
       const selected = existingSelection(next, state.selectedNodeIds);
       return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
     }

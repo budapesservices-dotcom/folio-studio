@@ -315,6 +315,8 @@ export function prepareNodesForPaste(
 
   const componentById = new Map(destination.components.map((component) => [component.id, component]));
   let detachedCircularCount = 0;
+  const detachedInstanceIds = new Set<string>();
+  const parentByDetachedId = new Map<string, string | null | undefined>();
   const safeNodes: DesignNode[] = [];
   for (const node of clonedNodes) {
     if (
@@ -323,6 +325,8 @@ export function prepareNodesForPaste(
     ) {
       const master = componentById.get(node.componentId);
       if (master) {
+        detachedInstanceIds.add(node.id);
+        parentByDetachedId.set(node.id, node.parentId);
         const detached = detachComponentInstance(node, master).map((detachedNode) => ({
           ...detachedNode,
           parentId: detachedNode.parentId ?? node.parentId ?? null,
@@ -336,8 +340,40 @@ export function prepareNodesForPaste(
     safeNodes.push(node);
   }
 
+  let finalNodes = safeNodes;
+  if (detachedInstanceIds.size > 0) {
+    const resolveSurvivingParentId = (startParentId: string): string | undefined => {
+      let cursor: string | null | undefined = startParentId;
+      const visited = new Set<string>();
+      while (cursor && detachedInstanceIds.has(cursor)) {
+        if (visited.has(cursor)) return undefined;
+        visited.add(cursor);
+        cursor = parentByDetachedId.get(cursor);
+      }
+      return cursor ?? undefined;
+    };
+
+    finalNodes = safeNodes.map((node) => {
+      let nextNode = node;
+      if (nextNode.clipMaskBaseId && detachedInstanceIds.has(nextNode.clipMaskBaseId)) {
+        const { clipMaskBaseId: _removedClip, ...unmasked } = nextNode;
+        nextNode = unmasked as DesignNode;
+      }
+      if (nextNode.parentId && detachedInstanceIds.has(nextNode.parentId)) {
+        const promotedParentId = resolveSurvivingParentId(nextNode.parentId);
+        if (promotedParentId) {
+          nextNode = { ...nextNode, parentId: promotedParentId };
+        } else {
+          const { parentId: _removedParent, ...promoted } = nextNode;
+          nextNode = promoted as DesignNode;
+        }
+      }
+      return nextNode;
+    });
+  }
+
   return {
-    nodes: safeNodes,
+    nodes: finalNodes,
     detachedCircularCount,
     nextPasteCount: clipboard.pasteCount + 1,
   };

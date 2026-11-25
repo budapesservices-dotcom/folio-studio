@@ -24,7 +24,7 @@ import {
 } from '../core/document/styling';
 import { getSvgTextAnchorAndX, wrapTextLines } from '../core/document/typography';
 import { serializePathPointsToSvgD } from '../core/document/vector';
-import { resolveAssetDisplayUrl } from '../core/persistence/assetStore';
+import { resolvePortableAssetUrl } from '../core/persistence/assetStore';
 import {
   buildFrameClipAncestorMap,
   buildLayerClipMaskMap,
@@ -43,6 +43,8 @@ export interface VisualExportOptions {
   designTokens?: DesignTokenCollection;
   breakpoint?: BreakpointId;
   assets?: readonly AssetReference[];
+  /** When true (PNG canvas rasterization), skips <foreignObject> backdrop-blur elements that taint <canvas> in WebKit/Safari. */
+  rasterizeSafe?: boolean;
 }
 
 function escapeXml(value: string): string {
@@ -145,8 +147,9 @@ function serializeBackdropBlur(
   mask: boolean,
   radius: number,
   isEllipse = false,
+  rasterizeSafe = false,
 ): string {
-  if (mask) return '';
+  if (mask || rasterizeSafe) return '';
   const blurRadius = getBackdropBlurRadius(node);
   if (blurRadius <= 0 || node.width <= 0 || node.height <= 0) return '';
   const borderRadius = isEllipse ? '50%' : `${radius}px`;
@@ -158,6 +161,7 @@ function serializePrimitiveNode(
   mask: boolean,
   prefix: string,
   assetById: ReadonlyMap<string, AssetReference>,
+  rasterizeSafe = false,
 ): string {
   if (node.type === 'group') return '';
   const transformAttr = formatRotationTransform(node);
@@ -175,7 +179,7 @@ function serializePrimitiveNode(
     const rx = node.style.radius ?? 0;
     const rxAttr = rx ? ` rx="${rx}"` : '';
     const dashAttr = node.type === 'frame' && node.isSection && !mask ? ' stroke-dasharray="6 4"' : '';
-    const backdrop = serializeBackdropBlur(node, mask, rx);
+    const backdrop = serializeBackdropBlur(node, mask, rx, false, rasterizeSafe);
     if (mask || fills.length <= 1) {
       const fillAttr = mask
         ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff'}"`
@@ -197,7 +201,7 @@ function serializePrimitiveNode(
     const fills = getVisibleFillPaints(node);
     const cx = node.x + node.width / 2;
     const cy = node.y + node.height / 2;
-    const backdrop = serializeBackdropBlur(node, mask, 0, true);
+    const backdrop = serializeBackdropBlur(node, mask, 0, true, rasterizeSafe);
     if (mask || fills.length <= 1) {
       const fillAttr = mask
         ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff'}"`
@@ -270,7 +274,7 @@ function serializePrimitiveNode(
       inner = `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="#fff" />`;
     } else {
       const asset = assetById.get(imgNode.assetId);
-      const href = resolveAssetDisplayUrl(asset);
+      const href = resolvePortableAssetUrl(asset);
       const clipAttr = rx > 0 ? ` clip-path="url(#${imageClipId(prefix, imgNode.id)})"` : '';
       const imgMarkup = href
         ? `<image href="${escapeXml(href)}" x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}" preserveAspectRatio="${imageFitToPreserveAspectRatio(imgNode.style.fit)}"${clipAttr} />`
@@ -410,6 +414,7 @@ function serializeNodesBlock(
   tokens: DesignTokenCollection | undefined,
   visitedComponentIds: ReadonlySet<string>,
   depth: number,
+  rasterizeSafe = false,
 ): string {
   const nodeById = new Map(canvasNodes.map((node) => [node.id, node]));
   const clipMaskMap = buildLayerClipMaskMap(canvasNodes, nodeById);
@@ -473,6 +478,7 @@ function serializeNodesBlock(
             tokens,
             nextVisited,
             depth + 1,
+            rasterizeSafe,
           );
           const opacityAttr = node.opacity < 1 ? ` opacity="${node.opacity}"` : '';
           const filterAttr = !mask && hasSvgFilterEffects(node)
@@ -484,7 +490,7 @@ function serializeNodesBlock(
           markup = `<g${formatRotationTransform(node)}${opacityAttr}${filterAttr}${blendAttr}><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${inner}</g></g>`;
         }
       } else {
-        markup = serializePrimitiveNode(node, mask, prefix, assetById);
+        markup = serializePrimitiveNode(node, mask, prefix, assetById, rasterizeSafe);
       }
 
       if (!markup) return '';
@@ -553,6 +559,7 @@ export function serializeDocumentToSvgString(
     options.designTokens,
     new Set<string>(),
     0,
+    Boolean(options.rasterizeSafe),
   );
 
   return [
@@ -612,7 +619,11 @@ export async function downloadPngDocument(
   const effectiveDocWidth = getBreakpointCanvasWidth(doc.width, options.breakpoint ?? 'desktop');
   const width = Math.max(1, Math.round(effectiveDocWidth * safeScale));
   const height = Math.max(1, Math.round(doc.height * safeScale));
-  const svg = serializeDocumentToSvgString(doc, components, { ...options, title: options.title ?? filenameBase });
+  const svg = serializeDocumentToSvgString(doc, components, {
+    ...options,
+    title: options.title ?? filenameBase,
+    rasterizeSafe: true,
+  });
   const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
   const svgUrl = URL.createObjectURL(svgBlob);
 

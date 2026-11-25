@@ -739,18 +739,21 @@ export function useProjectFileLifecycle({
     setFileMenuOpen(false);
     if (isHydrating) return;
     try {
-      const { downloadSvgDocument } = await import('../visualExport');
+      const [{ downloadSvgDocument }, portableProject] = await Promise.all([
+        import('../visualExport'),
+        materializeProjectAssetsForExport(project),
+      ]);
       const target = resolveActiveExportTarget(
         activeEditorId,
-        project,
+        portableProject,
         componentDocument,
         getEditingComponentId(),
       );
       const exportBreakpoint = activeEditorId === 'main' ? (getActiveBreakpoint?.() ?? 'desktop') : 'desktop';
-      downloadSvgDocument(target.document, project.components, target.name, {
-        designTokens: project.designTokens,
+      downloadSvgDocument(target.document, portableProject.components, target.name, {
+        designTokens: portableProject.designTokens,
         breakpoint: exportBreakpoint,
-        assets: project.assets,
+        assets: portableProject.assets,
       });
       setNotice(`Exported "${target.name}" as standalone SVG.`);
     } catch (error) {
@@ -764,18 +767,21 @@ export function useProjectFileLifecycle({
     setFileMenuOpen(false);
     if (isHydrating) return;
     try {
-      const { downloadPngDocument } = await import('../visualExport');
+      const [{ downloadPngDocument }, portableProject] = await Promise.all([
+        import('../visualExport'),
+        materializeProjectAssetsForExport(project),
+      ]);
       const target = resolveActiveExportTarget(
         activeEditorId,
-        project,
+        portableProject,
         componentDocument,
         getEditingComponentId(),
       );
       const exportBreakpoint = activeEditorId === 'main' ? (getActiveBreakpoint?.() ?? 'desktop') : 'desktop';
-      const result = await downloadPngDocument(target.document, project.components, target.name, 2, {
-        designTokens: project.designTokens,
+      const result = await downloadPngDocument(target.document, portableProject.components, target.name, 2, {
+        designTokens: portableProject.designTokens,
         breakpoint: exportBreakpoint,
-        assets: project.assets,
+        assets: portableProject.assets,
       });
       setNotice(`Exported "${target.name}" as PNG (${result.width}×${result.height}px @2×).`);
     } catch (error) {
