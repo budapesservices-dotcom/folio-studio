@@ -47,6 +47,7 @@ import { getAssetBundlePath, resolveAssetDisplayUrl } from '../../core/persisten
 import {
   escapeAttr,
   escapeHtml,
+  sanitizeCommentLabel,
   sanitizeCssText,
   sanitizeCssValue,
   sanitizeHref,
@@ -985,7 +986,7 @@ export function compilePageHtmlCss(
   const htmlBodyLines: string[] = [];
   const htmlMappings: CodeMappingEntry[] = [];
   const cssLines: string[] = [
-    `/* Mapped by FOLIO Code Engine — Page "${page.name}" (${page.route}) */`,
+    `/* Mapped by FOLIO Code Engine — Page "${sanitizeCommentLabel(page.name)}" (${sanitizeCommentLabel(page.route)}) */`,
     '/* Structured AST layout, typography, semantic classes, and responsive rules. */',
     '',
   ];
@@ -1369,14 +1370,6 @@ export interface LivePreviewOptions {
   themeId?: string;
   includeCustomScripts?: boolean;
   includeLogicRuntime?: boolean;
-}
-
-function sanitizeCommentLabel(value: string): string {
-  return value
-    .replace(/\*\//g, '* /')
-    .replace(/<\/style/gi, '<\\/style')
-    .replace(/<\/script/gi, '<\\/script')
-    .replace(/[\r\n]+/g, ' ');
 }
 
 export const LIVE_PREVIEW_CSP =

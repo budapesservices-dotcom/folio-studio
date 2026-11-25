@@ -16,7 +16,7 @@ import {
 } from './htmlCssCompiler';
 import { applyMappedNodeEdit } from './mappedSync';
 import { compileReactProjectFiles } from './reactCompiler';
-import { toKebabCase } from './sanitize';
+import { sanitizeCommentLabel, toKebabCase } from './sanitize';
 import type {
   CodegenOptions,
   CodeMappingEntry,
@@ -255,9 +255,9 @@ export function createNodeExtensionModule(
     targetPageId: pageId,
     description: `Extension CSS anchored to AST node "${node.name}" (${node.id}).`,
     content: [
-      `/* FOLIO Extension Override for "${node.name}" */`,
+      `/* FOLIO Extension Override for "${sanitizeCommentLabel(node.name)}" */`,
       `/* Anchored via stable AST ID so visual moves/renames never discard this code. */`,
-      `[data-folio-id="${node.id}"] {`,
+      `[data-folio-id="${node.id.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]/g, ' ')}"] {`,
       '  outline: 2px solid #7c6cf6;',
       '  outline-offset: 4px;',
       '}',

@@ -98,7 +98,27 @@ export function clearAssetMemoryCache(): void {
   memoryCachedByteTotal = 0;
 }
 
+const DISALLOWED_ACTIVE_BLOB_MIMES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'text/javascript',
+  'application/javascript',
+  'text/ecmascript',
+  'application/ecmascript',
+  'text/xml',
+  'application/xml',
+]);
+
+function normalizeSafeBlobMimeType(rawMimeType: string | undefined, fallback = 'application/octet-stream'): string {
+  const base = (rawMimeType ?? '').trim().toLowerCase().split(';')[0].trim();
+  if (!base || DISALLOWED_ACTIVE_BLOB_MIMES.has(base) || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(base)) {
+    return fallback;
+  }
+  return base;
+}
+
 function setMemoryAssetCache(sha256: string, bytes: Uint8Array, mimeType: string): string {
+  const safeMimeType = normalizeSafeBlobMimeType(mimeType);
   const existingBytes = memoryBytesByHash.get(sha256);
   if (existingBytes) {
     memoryCachedByteTotal = Math.max(0, memoryCachedByteTotal - existingBytes.bytes.byteLength);
@@ -107,7 +127,7 @@ function setMemoryAssetCache(sha256: string, bytes: Uint8Array, mimeType: string
   const existingUrl = memoryUrlByHash.get(sha256);
   if (existingUrl) {
     memoryUrlByHash.delete(sha256);
-    memoryBytesByHash.set(sha256, { bytes, mimeType });
+    memoryBytesByHash.set(sha256, { bytes, mimeType: safeMimeType });
     memoryCachedByteTotal += bytes.byteLength;
     memoryUrlByHash.set(sha256, existingUrl);
     evictAssetMemoryCacheIfNeeded();
@@ -123,12 +143,12 @@ function setMemoryAssetCache(sha256: string, bytes: Uint8Array, mimeType: string
   ) {
     const copy = new Uint8Array(bytes.byteLength);
     copy.set(bytes);
-    displayUrl = URL.createObjectURL(new Blob([copy.buffer], { type: mimeType }));
+    displayUrl = URL.createObjectURL(new Blob([copy.buffer], { type: safeMimeType }));
   } else {
-    displayUrl = bytesToDataUrl(bytes, mimeType);
+    displayUrl = bytesToDataUrl(bytes, safeMimeType);
   }
 
-  memoryBytesByHash.set(sha256, { bytes, mimeType });
+  memoryBytesByHash.set(sha256, { bytes, mimeType: safeMimeType });
   memoryCachedByteTotal += bytes.byteLength;
   memoryUrlByHash.set(sha256, displayUrl);
   evictAssetMemoryCacheIfNeeded();
@@ -240,11 +260,11 @@ function decodeBasicHtmlEntities(value: string): string {
   return value
     .replace(/&#x([0-9a-f]+);?/gi, (_m, hex: string) => {
       const cp = parseInt(hex, 16);
-      return Number.isFinite(cp) ? String.fromCodePoint(cp) : '';
+      return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
     })
     .replace(/&#(\d+);?/g, (_m, dec: string) => {
       const cp = parseInt(dec, 10);
-      return Number.isFinite(cp) ? String.fromCodePoint(cp) : '';
+      return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
     })
     .replace(/&colon;/gi, ':')
     .replace(/&tab;/gi, '\t')
@@ -752,11 +772,23 @@ export async function hydrateProjectAssetsToStore(project: FolioProject): Promis
     if (asset.source.startsWith('data:')) {
       const decoded = dataUrlToBytes(asset.source);
       if (!decoded) continue;
-      const sha256 = asset.sha256 ?? (await computeBytesSha256(decoded.bytes));
+      const declaredMime = (asset.mimeType || '').trim().toLowerCase().split(';')[0].trim();
+      const decodedMime = (decoded.mimeType || '').trim().toLowerCase().split(';')[0].trim();
+      if (DISALLOWED_ACTIVE_BLOB_MIMES.has(declaredMime) || DISALLOWED_ACTIVE_BLOB_MIMES.has(decodedMime)) {
+        continue;
+      }
+      const effectiveMime = normalizeSafeBlobMimeType(declaredMime || decodedMime);
+      let safeBytes = decoded.bytes;
+      if (effectiveMime === 'image/svg+xml' || decodedMime === 'image/svg+xml') {
+        const sanitized = sanitizeSvgMarkup(new TextDecoder().decode(decoded.bytes));
+        if (!/<svg\b/i.test(sanitized)) continue;
+        safeBytes = new TextEncoder().encode(sanitized);
+      }
+      const sha256 = asset.sha256 ?? (await computeBytesSha256(safeBytes));
       await putDeduplicatedAssetBlob({
         sha256,
-        bytes: decoded.bytes,
-        mimeType: asset.mimeType || decoded.mimeType,
+        bytes: safeBytes,
+        mimeType: effectiveMime,
         width: asset.width,
         height: asset.height,
       });
@@ -795,12 +827,19 @@ export async function materializeProjectAssetsForExport(project: FolioProject): 
       ).trim();
       const entry = hash ? await getAssetBytesByHash(hash) : null;
       if (entry) {
+        const safeMime = normalizeSafeBlobMimeType(asset.mimeType || entry.mimeType);
+        let exportBytes = entry.bytes;
+        if (safeMime === 'image/svg+xml') {
+          const sanitized = sanitizeSvgMarkup(new TextDecoder().decode(entry.bytes));
+          exportBytes = new TextEncoder().encode(sanitized);
+        }
         changed = true;
         nextAssets.push({
           ...asset,
           sha256: hash,
-          byteLength: entry.bytes.byteLength,
-          source: bytesToDataUrl(entry.bytes, asset.mimeType || entry.mimeType),
+          mimeType: safeMime,
+          byteLength: exportBytes.byteLength,
+          source: bytesToDataUrl(exportBytes, safeMime),
         });
         continue;
       }

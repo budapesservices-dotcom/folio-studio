@@ -88,6 +88,20 @@ export function sanitizeJsText(js: string): string {
 }
 
 /**
+ * Sanitizes untrusted labels (page names, routes, component names, module paths)
+ * before interpolating into CSS block comments (`/* ... *\/`) or JS/TS line comments
+ * (`// ...`) so comment terminators or line breaks cannot inject code or CSS rules.
+ */
+export function sanitizeCommentLabel(raw: string): string {
+  return raw
+    .replace(/[\u0000-\u001F\u007F\u2028\u2029]+/g, ' ')
+    .replace(/\*\//g, '* /')
+    .replace(/\/\*/g, '/ *')
+    .replace(/<\/(style|script)/gi, '<\\/$1')
+    .trim();
+}
+
+/**
  * Sanitizes a single CSS property value (e.g. fill color or font family) so
  * AST string fields cannot inject arbitrary declarations or close blocks.
  */

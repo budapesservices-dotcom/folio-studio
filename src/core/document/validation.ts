@@ -1045,6 +1045,62 @@ export function isLogicFramePreset(value: unknown): value is import('./types').L
   return isLogicFrame(value.frame, nodeIds);
 }
 
+const SAFE_IMAGE_ASSET_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+  'image/svg+xml',
+]);
+
+const SAFE_FONT_ASSET_MIMES = new Set([
+  'font/woff2',
+  'font/woff',
+  'font/ttf',
+  'font/otf',
+  'application/font-woff',
+  'application/font-woff2',
+  'application/x-font-ttf',
+  'application/x-font-otf',
+  'application/octet-stream',
+]);
+
+const SAFE_FILE_ASSET_MIMES = new Set([
+  'application/octet-stream',
+  'application/pdf',
+  'application/json',
+  'text/plain',
+  'text/csv',
+]);
+
+const DISALLOWED_ACTIVE_ASSET_MIMES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'text/javascript',
+  'application/javascript',
+  'text/ecmascript',
+  'application/ecmascript',
+  'text/xml',
+  'application/xml',
+]);
+
+function decodeSvgEntitiesSafe(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);?/gi, (_m, hex: string) => {
+      const cp = parseInt(hex, 16);
+      return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+    })
+    .replace(/&#(\d+);?/g, (_m, dec: string) => {
+      const cp = parseInt(dec, 10);
+      return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+    })
+    .replace(/&colon;/gi, ':')
+    .replace(/&tab;/gi, '\t')
+    .replace(/&newline;/gi, '\n');
+}
+
 function isSafeSvgDataUri(trimmed: string): boolean {
   const commaIdx = trimmed.indexOf(',');
   if (commaIdx < 0) return false;
@@ -1061,35 +1117,89 @@ function isSafeSvgDataUri(trimmed: string): boolean {
   } catch {
     return false;
   }
-  return !/(?:<\s*script\b|<\s*foreignobject\b|\bon[a-z]+\s*=|(?:javascript|vbscript)\s*:)/i.test(decoded);
+
+  const entityDecoded = decodeSvgEntitiesSafe(decoded);
+  const disallowedTagPattern =
+    /<\s*(?:script|foreignobject|iframe|object|embed|applet|meta|link|style|animate|animatetransform|animatemotion|set|handler|listener)\b/i;
+  const eventHandlerPattern = /(?:[\s/]+)on[a-z0-9_-]+\s*=/i;
+
+  if (
+    disallowedTagPattern.test(decoded) ||
+    disallowedTagPattern.test(entityDecoded) ||
+    eventHandlerPattern.test(decoded) ||
+    eventHandlerPattern.test(entityDecoded)
+  ) {
+    return false;
+  }
+
+  const collapsed = entityDecoded.replace(/[\u0000-\u0020\u007f-\u009f]+/g, '');
+  if (
+    /(?:javascript|vbscript):/i.test(collapsed) ||
+    /data:(?:text\/html|application\/xhtml\+xml|text\/javascript|application\/javascript|image\/svg\+xml)/i.test(collapsed) ||
+    /(?:expression\s*\(|@import|behavior\s*:)/i.test(collapsed)
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
-function isSafeAssetSource(source: string): boolean {
+function isSafeAssetMimeType(kind: string, rawMimeType: string): boolean {
+  const trimmed = rawMimeType.trim();
+  if (!trimmed || trimmed.length > 128) return false;
+  if (/[\u0000-\u001F\u007F;,\s]/.test(trimmed)) return false;
+  const normalized = trimmed.toLowerCase();
+  if (DISALLOWED_ACTIVE_ASSET_MIMES.has(normalized)) return false;
+  if (kind === 'image') return SAFE_IMAGE_ASSET_MIMES.has(normalized);
+  if (kind === 'font') return SAFE_FONT_ASSET_MIMES.has(normalized);
+  if (kind === 'file') return SAFE_FILE_ASSET_MIMES.has(normalized);
+  return false;
+}
+
+function isSafeAssetSource(source: string, kind: string, declaredMimeType: string): boolean {
   const trimmed = source.replace(/[\u0000-\u001F\u007F]/g, '').trim();
   if (!trimmed) return true;
   if (trimmed.startsWith('//')) return false;
   if (/^(?:javascript|vbscript):/i.test(trimmed)) return false;
-  if (/^data:\s*(?:text\/html|application\/xhtml\+xml|text\/javascript|application\/javascript)/i.test(trimmed)) {
-    return false;
+
+  if (/^data:/i.test(trimmed)) {
+    const dataMatch = /^data:\s*([^;,]*)(?:;[^,]*)?,/i.exec(trimmed);
+    if (!dataMatch) return false;
+    const dataMime = (dataMatch[1].trim() || 'text/plain').toLowerCase();
+    const declaredMime = declaredMimeType.trim().toLowerCase();
+
+    if (DISALLOWED_ACTIVE_ASSET_MIMES.has(dataMime)) {
+      return false;
+    }
+    if (!isSafeAssetMimeType(kind, dataMime)) {
+      return false;
+    }
+    if (declaredMime === 'image/svg+xml' && dataMime !== 'image/svg+xml') {
+      return false;
+    }
+    if (dataMime === 'image/svg+xml' || declaredMime === 'image/svg+xml') {
+      return isSafeSvgDataUri(trimmed);
+    }
   }
-  if (/^data:\s*image\/svg\+xml/i.test(trimmed)) {
-    return isSafeSvgDataUri(trimmed);
-  }
+
   return true;
 }
 
 function isAssetReference(value: unknown): boolean {
-  return isRecord(value) &&
+  if (!isRecord(value)) return false;
+  const kind = String(value.kind);
+  return (
     isString(value.id) && value.id.trim().length > 0 &&
     isString(value.name) &&
-    ['image', 'font', 'file'].includes(String(value.kind)) &&
-    isString(value.mimeType) &&
-    isString(value.source) && isSafeAssetSource(value.source) &&
+    (kind === 'image' || kind === 'font' || kind === 'file') &&
+    isString(value.mimeType) && isSafeAssetMimeType(kind, value.mimeType) &&
+    isString(value.source) && isSafeAssetSource(value.source, kind, value.mimeType) &&
     isString(value.createdAt) &&
     (value.sha256 === undefined || (isString(value.sha256) && SHA256_HEX_PATTERN.test(value.sha256))) &&
     (value.byteLength === undefined || (isFiniteNumber(value.byteLength) && value.byteLength >= 0)) &&
     (value.width === undefined || (isFiniteNumber(value.width) && value.width > 0)) &&
-    (value.height === undefined || (isFiniteNumber(value.height) && value.height > 0));
+    (value.height === undefined || (isFiniteNumber(value.height) && value.height > 0))
+  );
 }
 
 const CODE_MODULE_LANGUAGES = new Set(['html', 'css', 'tsx', 'ts', 'js']);
@@ -1471,7 +1581,7 @@ export function validateProject(input: unknown): ValidationResult {
     const page = input.pages[i];
     if (!isRecord(page) || !isString(page.id) || !page.id ||
         !isString(page.name) || !page.name.trim() ||
-        !isString(page.route) || !page.route.startsWith('/') ||
+        !isString(page.route) || !page.route.startsWith('/') || /[\u0000-\u001F\u007F\u2028\u2029]/.test(page.route) ||
         !isDocument(page.document)) {
       return { ok: false, error: 'One or more pages contain invalid route or document data.' };
     }

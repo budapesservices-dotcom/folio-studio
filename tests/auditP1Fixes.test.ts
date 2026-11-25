@@ -14,7 +14,15 @@ import type { ComponentDefinition, DesignNode, GroupNode } from '../src/core/doc
 import { validateProject } from '../src/core/document/validation';
 import { filterLayerPanelRows } from '../src/app/workspace/layerOperations';
 import { compileReactProjectFiles } from '../src/engines/codegen/reactCompiler';
-import { sanitizeCssTransformValue, sanitizeImageUrl } from '../src/engines/codegen/sanitize';
+import { buildLivePreviewHtml, compilePageHtmlCss } from '../src/engines/codegen/htmlCssCompiler';
+import { createNodeExtensionModule } from '../src/engines/codegen';
+import { sanitizeCommentLabel, sanitizeCssTransformValue, sanitizeImageUrl } from '../src/engines/codegen/sanitize';
+import {
+  clearAssetMemoryCache,
+  getAssetBytesByHash,
+  hydrateProjectAssetsToStore,
+  sanitizeSvgMarkup,
+} from '../src/core/persistence/assetStore';
 import {
   buildLivePreviewLogicScript,
   createLogicConnection,
@@ -284,5 +292,163 @@ describe('Audit P1 Regression Suite', () => {
       },
     ];
     expect(validateProject(protoRelProject).ok).toBe(false);
+  });
+
+  it('P0-3: neutralizes comment breakout and newline injection in React TSX, CSS, Live Preview, and node extensions', () => {
+    expect(sanitizeCommentLabel('Home\nimport "evil";\r\n*/ body { color: red; } </style><script>')).not.toMatch(
+      /[\r\n\u2028\u2029]|\*\/|<\/style|<\/script/i,
+    );
+
+    const project = createInitialProject('Comment Injection Audit');
+    const page = project.pages[0];
+    page.name = 'Home\nconsole.log("pwn"); // */ body { display: none; } /* </style>';
+    page.route = '/home';
+
+    const now = '2026-11-25T00:00:00.000Z';
+    const master: ComponentDefinition = {
+      id: 'comp-inject',
+      name: 'Card */ body { background: red; } /*',
+      createdAt: now,
+      updatedAt: now,
+      document: {
+        id: 'doc-comp-inject',
+        name: 'Card',
+        width: 200,
+        height: 100,
+        background: '#ffffff',
+        nodes: [createRectNode(0)],
+      },
+    };
+    project.components.push(master);
+
+    const reactFiles = compileReactProjectFiles(project);
+    const pageTsx = reactFiles.find((f) => f.path.startsWith('src/pages/') && f.path.endsWith('.tsx'))?.content ?? '';
+    const firstTsxLine = pageTsx.split('\n')[0] ?? '';
+    expect(firstTsxLine.startsWith('// Mapped by FOLIO')).toBe(true);
+    expect(pageTsx).not.toContain('\nconsole.log("pwn")');
+
+    const compCss = reactFiles.find((f) => f.path.startsWith('src/components/') && f.path.endsWith('.css'))?.content ?? '';
+    expect(compCss).not.toMatch(/\*\/\s*body\s*\{/);
+
+    const compiledPage = compilePageHtmlCss(project, page);
+    expect(compiledPage.pageCssContent).not.toMatch(/\*\/\s*body\s*\{/);
+
+    const liveHtml = buildLivePreviewHtml(project, { pageId: page.id });
+    const styleBlockMatch = liveHtml.match(/<style>([\s\S]*?)<\/style>/i);
+    expect(styleBlockMatch).not.toBeNull();
+    const styleBlock = styleBlockMatch?.[1] ?? '';
+    expect(styleBlock).not.toMatch(/\*\/\s*body\s*\{/);
+    expect(styleBlock).toContain('.folio-page-home');
+
+    const extModule = createNodeExtensionModule(
+      {
+        ...createRectNode(1),
+        id: 'node-1"] { color: red; } [x="',
+        name: 'Hero */ body { display: none; } /*',
+      },
+      page.id,
+      [],
+    );
+    expect(extModule.content).not.toMatch(/\*\/\s*body\s*\{/);
+    expect(extModule.content).toContain('[data-folio-id="node-1\\"] { color: red; } [x=\\""]');
+
+    const badRouteProject = createInitialProject('Newline Route');
+    badRouteProject.pages[0].route = '/home\nimport "evil";';
+    expect(validateProject(badRouteProject).ok).toBe(false);
+  });
+
+  it('P0-4: blocks .flop asset MIME spoofing, entity/SMIL SVG payloads, out-of-range entity crashes, and unsanitized hydration', async () => {
+    const htmlSpoofProject = createInitialProject('HTML MIME Spoof');
+    htmlSpoofProject.assets = [
+      {
+        id: 'asset-html-spoof',
+        name: 'payload.html',
+        kind: 'file',
+        mimeType: 'text/html',
+        source: `data:application/octet-stream;base64,${btoa('<script>alert(1)</script>')}`,
+        createdAt: '2026-11-25T00:00:00.000Z',
+      },
+    ];
+    expect(validateProject(htmlSpoofProject).ok).toBe(false);
+
+    const svgSpoofProject = createInitialProject('SVG MIME Spoof');
+    svgSpoofProject.assets = [
+      {
+        id: 'asset-svg-spoof',
+        name: 'spoof.svg',
+        kind: 'image',
+        mimeType: 'image/svg+xml',
+        source: `data:application/octet-stream;base64,${btoa('<svg onload="alert(1)"></svg>')}`,
+        createdAt: '2026-11-25T00:00:00.000Z',
+      },
+    ];
+    expect(validateProject(svgSpoofProject).ok).toBe(false);
+
+    const entitySvgProject = createInitialProject('Entity Encoded SVG');
+    entitySvgProject.assets = [
+      {
+        id: 'asset-entity-svg',
+        name: 'entity.svg',
+        kind: 'image',
+        mimeType: 'image/svg+xml',
+        source: `data:image/svg+xml;base64,${btoa('<svg><a href="&#106;avascript:alert(1)"><rect width="10" height="10"/></a></svg>')}`,
+        createdAt: '2026-11-25T00:00:00.000Z',
+      },
+    ];
+    expect(validateProject(entitySvgProject).ok).toBe(false);
+
+    const smilSvgProject = createInitialProject('SMIL SVG');
+    smilSvgProject.assets = [
+      {
+        id: 'asset-smil-svg',
+        name: 'smil.svg',
+        kind: 'image',
+        mimeType: 'image/svg+xml',
+        source: `data:image/svg+xml;base64,${btoa('<svg><a><set attributeName="href" to="javascript:alert(1)"/></a></svg>')}`,
+        createdAt: '2026-11-25T00:00:00.000Z',
+      },
+    ];
+    expect(validateProject(smilSvgProject).ok).toBe(false);
+
+    // Out-of-range numeric entities must never throw RangeError in sanitizeSvgMarkup
+    expect(() =>
+      sanitizeSvgMarkup('<svg onload="alert(1)"><text>&#x110000;&#999999999;</text><rect width="10" height="10"/></svg>'),
+    ).not.toThrow();
+    const cleanedOutOfRange = sanitizeSvgMarkup(
+      '<svg onload="alert(1)"><a href="&#106;avascript:alert(1)"><text>&#x110000;</text></a></svg>',
+    );
+    expect(cleanedOutOfRange).not.toMatch(/onload|javascript:/i);
+
+    // Hydration must skip active HTML blobs and sanitize SVG payloads before caching
+    clearAssetMemoryCache();
+    const hydrateProject = createInitialProject('Hydration Defense');
+    hydrateProject.assets = [
+      {
+        id: 'asset-hydrate-html',
+        name: 'bad.html',
+        kind: 'file',
+        mimeType: 'text/html',
+        sha256: 'hash-bad-html-0001',
+        source: `data:application/octet-stream;base64,${btoa('<script>alert(1)</script>')}`,
+        createdAt: '2026-11-25T00:00:00.000Z',
+      },
+      {
+        id: 'asset-hydrate-svg',
+        name: 'dirty.svg',
+        kind: 'image',
+        mimeType: 'image/svg+xml',
+        sha256: 'hash-dirty-svg-0002',
+        source: `data:image/svg+xml;base64,${btoa('<svg onload="alert(1)"><script>alert(2)</script><rect width="20" height="20"/></svg>')}`,
+        createdAt: '2026-11-25T00:00:00.000Z',
+      },
+    ];
+    await hydrateProjectAssetsToStore(hydrateProject);
+
+    expect(await getAssetBytesByHash('hash-bad-html-0001')).toBeNull();
+    const cachedSvg = await getAssetBytesByHash('hash-dirty-svg-0002');
+    expect(cachedSvg).not.toBeNull();
+    const cachedSvgText = new TextDecoder().decode(cachedSvg!.bytes);
+    expect(cachedSvgText).toContain('<rect');
+    expect(cachedSvgText).not.toMatch(/<script|onload/i);
   });
 });
