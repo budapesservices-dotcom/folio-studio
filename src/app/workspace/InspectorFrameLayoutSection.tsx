@@ -1,26 +1,68 @@
 import { useState } from 'preact/hooks';
+import {
+  isSafeCssGridTemplate,
+  type CssLengthUnit,
+  type CssUnitOption,
+} from '../../core/document/cssUnits';
 import type {
   DesignNode,
+  GridColumnsMode,
+  GridRowsMode,
   LayoutAlignItems,
-  LayoutChildPosition,
+  LayoutDirection,
   LayoutJustifyContent,
+  LayoutMode,
   LayoutOverflow,
   LayoutPaddingMode,
-  LayoutSizingMode,
+  NodeCursor,
   NodeLayoutChildConfig,
   NodeLayoutConfig,
+  NodePointerEvents,
+  NodeUserSelect,
+  ScrollSnapAlign,
+  ScrollSnapType,
 } from '../../core/document/types';
-import { PresetStepperSlider } from './InspectorZeroTypingControls';
+import { NumericUnitInput, type NumericUnitPreset } from './NumericUnitInput';
 
-type LayoutChildConstraints = NonNullable<NodeLayoutChildConfig['constraints']>;
+const SPACING_UNITS: readonly CssUnitOption[] = ['px', 'rem', 'em', '%'];
+const SPACING_PRESETS: readonly NumericUnitPreset[] = [
+  { label: '0 px', value: 0, unit: 'px' },
+  { label: '4 px', value: 4, unit: 'px' },
+  { label: '8 px', value: 8, unit: 'px' },
+  { label: '12 px', value: 12, unit: 'px' },
+  { label: '16 px', value: 16, unit: 'px' },
+  { label: '24 px', value: 24, unit: 'px' },
+  { label: '32 px', value: 32, unit: 'px' },
+  { label: '48 px', value: 48, unit: 'px' },
+  { label: '64 px', value: 64, unit: 'px' },
+];
 
-const SPACING_PRESETS = [0, 4, 8, 12, 16, 24, 32, 48, 64] as const;
-const GRID_COL_PRESETS = [1, 2, 3, 4, 6, 12] as const;
-const FILL_WEIGHT_PRESETS = [1, 2, 3, 4, 6] as const;
-const RELATIVE_PCT_PRESETS = [25, 33, 50, 75, 100] as const;
-const Z_INDEX_PRESETS = [0, 1, 5, 10, 20, 50] as const;
-const BOUND_SIZE_PRESETS = [40, 80, 120, 160, 240, 320, 480, 640, 800, 1024, 1200] as const;
-const SIDE_PADDING_PRESETS = [0, 4, 8, 12, 16, 20, 24, 32, 48, 64] as const;
+const GRID_COUNT_UNITS: readonly CssUnitOption[] = [''];
+const GRID_COL_PRESETS: readonly NumericUnitPreset[] = [
+  { label: '1 col', value: 1 },
+  { label: '2 cols', value: 2 },
+  { label: '3 cols', value: 3 },
+  { label: '4 cols', value: 4 },
+  { label: '6 cols', value: 6 },
+  { label: '12 cols', value: 12 },
+];
+
+const GRID_MIN_WIDTH_UNITS: readonly CssUnitOption[] = ['px', 'rem', '%'];
+const GRID_MIN_WIDTH_PRESETS: readonly NumericUnitPreset[] = [
+  { label: '160 px (Compact)', value: 160, unit: 'px' },
+  { label: '220 px (Card)', value: 220, unit: 'px' },
+  { label: '280 px (Standard)', value: 280, unit: 'px' },
+  { label: '320 px (Wide)', value: 320, unit: 'px' },
+  { label: '360 px (Feature)', value: 360, unit: 'px' },
+];
+
+const FILL_WEIGHT_PRESETS: readonly NumericUnitPreset[] = [
+  { label: '1 fr', value: 1, unit: 'fr' },
+  { label: '2 fr', value: 2, unit: 'fr' },
+  { label: '3 fr', value: 3, unit: 'fr' },
+  { label: '4 fr', value: 4, unit: 'fr' },
+  { label: '6 fr', value: 6, unit: 'fr' },
+];
 
 const DEFAULT_LAYOUT: NodeLayoutConfig = {
   mode: 'none',
@@ -32,7 +74,13 @@ const DEFAULT_LAYOUT: NodeLayoutConfig = {
   justifyContent: 'start',
   alignItems: 'stretch',
   gridColumns: 2,
+  gridColumnsMode: 'fixed',
+  gridMinColumnWidth: 220,
+  gridMinColumnWidthUnit: 'px',
+  gridRowsMode: 'auto',
+  gridRows: 2,
   overflow: 'hidden',
+  scrollSnapType: 'none',
 };
 
 const DEFAULT_LAYOUT_CHILD: NodeLayoutChildConfig = {
@@ -45,21 +93,14 @@ const DEFAULT_LAYOUT_CHILD: NodeLayoutChildConfig = {
 
 const MATRIX_AXIS_VALUES: readonly ('start' | 'center' | 'end')[] = ['start', 'center', 'end'];
 
-type PinPresetId = 'tl' | 'tc' | 'tr' | 'center' | 'bl' | 'br' | 'stretch';
-
-const PIN_PRESETS: readonly {
-  id: PinPresetId;
-  label: string;
-  title: string;
-  constraints: LayoutChildConstraints;
-}[] = [
-  { id: 'tl', label: 'TL', title: 'Pin Top-Left', constraints: { horizontal: 'left', vertical: 'top' } },
-  { id: 'tc', label: 'TC', title: 'Pin Top-Center', constraints: { horizontal: 'center', vertical: 'top' } },
-  { id: 'tr', label: 'TR', title: 'Pin Top-Right', constraints: { horizontal: 'right', vertical: 'top' } },
-  { id: 'center', label: 'Ctr', title: 'Pin Center', constraints: { horizontal: 'center', vertical: 'center' } },
-  { id: 'bl', label: 'BL', title: 'Pin Bottom-Left', constraints: { horizontal: 'left', vertical: 'bottom' } },
-  { id: 'br', label: 'BR', title: 'Pin Bottom-Right', constraints: { horizontal: 'right', vertical: 'bottom' } },
-  { id: 'stretch', label: 'Fill', title: 'Pin All Sides', constraints: { horizontal: 'left-right', vertical: 'top-bottom' } },
+const CURSOR_OPTIONS: ReadonlyArray<{ value: NodeCursor; label: string }> = [
+  { value: 'default', label: 'Default' },
+  { value: 'pointer', label: 'Pointer (Hand)' },
+  { value: 'grab', label: 'Grab' },
+  { value: 'text', label: 'Text (I-Beam)' },
+  { value: 'not-allowed', label: 'Not Allowed' },
+  { value: 'move', label: 'Move' },
+  { value: 'crosshair', label: 'Crosshair' },
 ];
 
 export interface InspectorFrameLayoutSectionProps {
@@ -67,6 +108,7 @@ export interface InspectorFrameLayoutSectionProps {
   parentNode: DesignNode | null;
   onUpdateSelected: (patch: Partial<DesignNode>) => void;
   onApplyAutoLayout: (containerId: string) => void;
+  onConvertFrameLayoutMode?: (containerId: string, mode: LayoutMode) => void;
   onCommitEdit: () => void;
 }
 
@@ -85,11 +127,24 @@ function getEffectivePaddingMode(layout: NodeLayoutConfig): LayoutPaddingMode {
   return isUniform ? 'uniform' : 'per-side';
 }
 
-function detectActivePinPreset(constraints?: LayoutChildConstraints): PinPresetId | null {
-  const h = constraints?.horizontal ?? 'left';
-  const v = constraints?.vertical ?? 'top';
-  const match = PIN_PRESETS.find((preset) => preset.constraints.horizontal === h && preset.constraints.vertical === v);
-  return match?.id ?? null;
+function isHorizontalDirection(direction: LayoutDirection): boolean {
+  return direction === 'row' || direction === 'row-reverse';
+}
+
+function toLengthUnit(unit: CssUnitOption, fallback: CssLengthUnit = 'px'): CssLengthUnit {
+  if (
+    unit === 'px' ||
+    unit === '%' ||
+    unit === 'vw' ||
+    unit === 'vh' ||
+    unit === 'dvh' ||
+    unit === 'rem' ||
+    unit === 'em' ||
+    unit === 'fr'
+  ) {
+    return unit;
+  }
+  return fallback;
 }
 
 export function InspectorFrameLayoutSection({
@@ -97,18 +152,17 @@ export function InspectorFrameLayoutSection({
   parentNode,
   onUpdateSelected,
   onApplyAutoLayout,
+  onConvertFrameLayoutMode,
   onCommitEdit,
 }: InspectorFrameLayoutSectionProps) {
-  const [showMinMax, setShowMinMax] = useState(false);
+  const [customColsDraft, setCustomColsDraft] = useState<string | null>(null);
+  const [customColsInvalid, setCustomColsInvalid] = useState(false);
+  const [customRowsDraft, setCustomRowsDraft] = useState<string | null>(null);
+  const [customRowsInvalid, setCustomRowsInvalid] = useState(false);
 
   const isContainer = selectedNode.type === 'frame' || selectedNode.type === 'group';
   const parentLayout = parentNode?.layout;
   const isInsideAutoLayout = Boolean(parentLayout && parentLayout.mode !== 'none');
-  const showSizingCard = isContainer || Boolean(parentNode);
-
-  if (!isContainer && !showSizingCard) {
-    return null;
-  }
 
   const layout: NodeLayoutConfig = {
     ...DEFAULT_LAYOUT,
@@ -126,12 +180,20 @@ export function InspectorFrameLayoutSection({
 
   const mode = layout.mode;
   const direction = layout.direction;
+  const isRowAxis = isHorizontalDirection(direction);
   const isDistributed =
     layout.justifyContent === 'space-between' ||
     layout.justifyContent === 'space-around' ||
     layout.justifyContent === 'space-evenly';
   const paddingMode = getEffectivePaddingMode(layout);
   const overflow = getEffectiveOverflow(selectedNode);
+  const gridColsMode: GridColumnsMode = layout.gridColumnsMode ?? 'fixed';
+  const gridRowsMode: GridRowsMode = layout.gridRowsMode ?? 'auto';
+  const gapUnit: CssLengthUnit = layout.gapUnit ?? 'px';
+  const paddingUnit: CssLengthUnit = layout.paddingUnit ?? 'px';
+  const minColUnit: CssLengthUnit = layout.gridMinColumnWidthUnit ?? 'px';
+  const minColWidth = Math.max(40, Math.round(layout.gridMinColumnWidth ?? 220));
+  const scrollSnapType: ScrollSnapType = layout.scrollSnapType ?? 'none';
 
   const commitContainerLayout = (
     patch: Partial<NodeLayoutConfig>,
@@ -172,6 +234,18 @@ export function InspectorFrameLayoutSection({
     if (commit) onCommitEdit();
   };
 
+  const handleModeSwitch = (targetMode: LayoutMode) => {
+    if (targetMode === mode) return;
+    if (onConvertFrameLayoutMode) {
+      onConvertFrameLayoutMode(selectedNode.id, targetMode);
+      return;
+    }
+    commitContainerLayout({
+      mode: targetMode,
+      ...(targetMode === 'grid' && isDistributed ? { justifyContent: 'start' } : {}),
+    });
+  };
+
   const handleOverflowChange = (nextOverflow: LayoutOverflow) => {
     const clipPatch =
       selectedNode.type === 'frame'
@@ -183,7 +257,7 @@ export function InspectorFrameLayoutSection({
   const handleMatrixCellClick = (rowIdx: number, colIdx: number) => {
     const rowVal = MATRIX_AXIS_VALUES[rowIdx];
     const colVal = MATRIX_AXIS_VALUES[colIdx];
-    if (direction === 'row') {
+    if (isRowAxis) {
       commitContainerLayout({ justifyContent: colVal, alignItems: rowVal });
     } else {
       commitContainerLayout({ justifyContent: rowVal, alignItems: colVal });
@@ -195,134 +269,69 @@ export function InspectorFrameLayoutSection({
     const colVal = MATRIX_AXIS_VALUES[colIdx];
     const effectiveAlign = layout.alignItems === 'stretch' ? 'center' : layout.alignItems;
     if (isDistributed) {
-      return direction === 'row' ? rowVal === effectiveAlign : colVal === effectiveAlign;
+      return isRowAxis ? rowVal === effectiveAlign : colVal === effectiveAlign;
     }
-    if (direction === 'row') {
+    if (isRowAxis) {
       return layout.justifyContent === colVal && effectiveAlign === rowVal;
     }
     return layout.justifyContent === rowVal && effectiveAlign === colVal;
   };
 
-  const activeBoundsCount = [
-    layoutChild.minWidth,
-    layoutChild.maxWidth,
-    layoutChild.minHeight,
-    layoutChild.maxHeight,
-  ].filter((v) => typeof v === 'number' && v > 0).length;
-
+  const isChildOutOfFlow =
+    isInsideAutoLayout && (layoutChild.position === 'absolute' || layoutChild.position === 'fixed');
   const parentGridCols = Math.max(1, Math.round(parentLayout?.gridColumns ?? 2));
-  const isChildAbsolute = isInsideAutoLayout && layoutChild.position === 'absolute';
-  const activePinPreset = detectActivePinPreset(layoutChild.constraints);
-  const parentBadge = parentLayout?.mode === 'flex'
-    ? 'IN STACK'
-    : parentLayout?.mode === 'grid'
-      ? 'IN GRID'
-      : isContainer
-        ? 'FRAME'
-        : 'LAYER';
+  const isChildInGrid = parentLayout?.mode === 'grid' && !isChildOutOfFlow;
+  const isChildInStack = parentLayout?.mode === 'flex' && !isChildOutOfFlow;
+  const parentHasScrollSnap = Boolean(
+    parentLayout?.scrollSnapType && parentLayout.scrollSnapType !== 'none',
+  );
 
-  const renderPaddingSideControl = (side: 'top' | 'right' | 'bottom' | 'left', label: string) => {
-    const val = Math.round(layout.padding[side] ?? 0);
-    const matchingPreset = SIDE_PADDING_PRESETS.find((p) => p === val);
-    const updateSide = (next: number) => {
-      const clamped = Math.max(0, Math.min(256, Math.round(next)));
-      commitContainerLayout({
-        paddingMode: 'per-side',
-        padding: { ...layout.padding, [side]: clamped },
-      });
-    };
-
-    return (
-      <div class="framer-pad-cell" key={side}>
-        <span class="framer-pad-label">{label}</span>
-        <div class="framer-pad-stepper">
-          <button
-            type="button"
-            class="framer-pad-step-btn"
-            aria-label={`Decrease padding ${label}`}
-            onClick={() => updateSide(val - 4)}
-          >
-            −
-          </button>
-          <select
-            class="framer-pad-select"
-            aria-label={`Padding ${label}`}
-            value={matchingPreset !== undefined ? String(matchingPreset) : '__custom__'}
-            onChange={(event) => {
-              const raw = event.currentTarget.value;
-              if (raw === '__custom__') return;
-              updateSide(Number(raw));
-            }}
-          >
-            {matchingPreset === undefined && <option value="__custom__">{val}</option>}
-            {SIDE_PADDING_PRESETS.map((preset) => (
-              <option key={preset} value={String(preset)}>
-                {preset}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            class="framer-pad-step-btn"
-            aria-label={`Increase padding ${label}`}
-            onClick={() => updateSide(val + 4)}
-          >
-            +
-          </button>
-        </div>
-      </div>
-    );
+  const commitCustomGridColumns = () => {
+    const raw = (customColsDraft ?? layout.gridTemplateColumns ?? '').trim();
+    if (!raw) {
+      setCustomColsDraft(null);
+      setCustomColsInvalid(false);
+      commitContainerLayout({ gridTemplateColumns: undefined });
+      return;
+    }
+    if (!isSafeCssGridTemplate(raw)) {
+      setCustomColsInvalid(true);
+      setCustomColsDraft(null);
+      return;
+    }
+    setCustomColsInvalid(false);
+    setCustomColsDraft(null);
+    commitContainerLayout({ gridColumnsMode: 'custom', gridTemplateColumns: raw });
   };
 
-  const renderBoundSelect = (
-    key: 'minWidth' | 'maxWidth' | 'minHeight' | 'maxHeight',
-    label: string,
-  ) => {
-    const current = layoutChild[key];
-    const hasVal = typeof current === 'number' && current > 0;
-    const isPreset = hasVal && BOUND_SIZE_PRESETS.includes(current as (typeof BOUND_SIZE_PRESETS)[number]);
-    return (
-      <label class="framer-bound-field" key={key}>
-        <span>{label}</span>
-        <select
-          class="select-field framer-bound-select"
-          aria-label={label}
-          value={hasVal ? (isPreset ? String(current) : '__custom__') : ''}
-          onChange={(event) => {
-            const raw = event.currentTarget.value;
-            if (!raw) {
-              commitChildConfig({ [key]: undefined });
-              return;
-            }
-            if (raw === '__custom__') return;
-            const num = Number(raw);
-            if (Number.isFinite(num) && num > 0) {
-              commitChildConfig({ [key]: num });
-            }
-          }}
-        >
-          <option value="">None</option>
-          {hasVal && !isPreset && <option value="__custom__">{Math.round(current)}px</option>}
-          {BOUND_SIZE_PRESETS.map((preset) => (
-            <option key={preset} value={String(preset)}>
-              {preset}px
-            </option>
-          ))}
-        </select>
-      </label>
-    );
+  const commitCustomGridRows = () => {
+    const raw = (customRowsDraft ?? layout.gridTemplateRows ?? '').trim();
+    if (!raw) {
+      setCustomRowsDraft(null);
+      setCustomRowsInvalid(false);
+      commitContainerLayout({ gridTemplateRows: undefined });
+      return;
+    }
+    if (!isSafeCssGridTemplate(raw)) {
+      setCustomRowsInvalid(true);
+      setCustomRowsDraft(null);
+      return;
+    }
+    setCustomRowsInvalid(false);
+    setCustomRowsDraft(null);
+    commitContainerLayout({ gridRowsMode: 'custom', gridTemplateRows: raw });
   };
 
   return (
     <div class="framer-layout-stack">
-      {/* 1. FRAME AUTO-LAYOUT CONTAINER CARD */}
+      {/* 1. DUAL-MODE FRAME ENGINE (FREEFORM | STACK | GRID) */}
       {isContainer && (
         <div class="inspector-acc-group inspector-autolayout-block framer-layout-card">
           <div class="inspector-sublabel-row">
-            <span class="inspector-sublabel">Frame Auto-Layout</span>
+            <span class="inspector-sublabel">Frame Mode</span>
             <div class="framer-header-actions">
               <span class={`inspector-accordion-badge${mode !== 'none' ? ' is-live' : ''}`}>
-                {mode === 'flex' ? 'STACK' : mode === 'grid' ? 'GRID' : 'FREE'}
+                {mode === 'flex' ? 'STACK' : mode === 'grid' ? 'GRID' : 'FREEFORM'}
               </span>
               {mode !== 'none' && (
                 <button
@@ -340,11 +349,11 @@ export function InspectorFrameLayoutSection({
             </div>
           </div>
 
-          {/* Layout Type Segmented Control: Free | Stack | Grid */}
-          <div class="framer-seg-row cols-3" role="group" aria-label="Auto-Layout mode">
+          {/* 1-Click Dual-Mode Switch: Freeform | Stack | Grid */}
+          <div class="framer-seg-row cols-3" role="group" aria-label="Dual-mode frame switch">
             {(
               [
-                { value: 'none', label: 'Free' },
+                { value: 'none', label: 'Freeform' },
                 { value: 'flex', label: 'Stack' },
                 { value: 'grid', label: 'Grid' },
               ] as const
@@ -354,62 +363,61 @@ export function InspectorFrameLayoutSection({
                 type="button"
                 class={`framer-seg-btn${mode === opt.value ? ' is-active' : ''}`}
                 aria-pressed={mode === opt.value}
-                onClick={() =>
-                  commitContainerLayout({
-                    mode: opt.value,
-                    ...(opt.value === 'grid' && isDistributed ? { justifyContent: 'start' } : {}),
-                  })
-                }
+                onClick={() => handleModeSwitch(opt.value)}
               >
                 {opt.label}
               </button>
             ))}
           </div>
 
-          {/* STACK (FLEX) CONTROLS */}
+          {/* STACK (FLEXBOX) CONTROLS */}
           {mode === 'flex' && (
             <>
-              <div class="framer-row-split">
-                <div class="framer-seg-row cols-2" role="group" aria-label="Stack direction">
+              <div class="framer-subcontrol">
+                <div class="framer-sublabel-inline">
+                  <span class="framer-mini-kicker">Direction</span>
                   <button
                     type="button"
-                    class={`framer-seg-btn${direction === 'row' ? ' is-active' : ''}`}
-                    aria-pressed={direction === 'row'}
-                    title="Horizontal Stack (Row)"
-                    onClick={() => commitContainerLayout({ direction: 'row' })}
+                    class={`framer-seg-btn framer-wrap-chip${layout.wrap === 'wrap' ? ' is-active' : ''}`}
+                    aria-pressed={layout.wrap === 'wrap'}
+                    title="Allow children to wrap onto multiple lines"
+                    onClick={() =>
+                      commitContainerLayout({
+                        wrap: layout.wrap === 'wrap' ? 'nowrap' : 'wrap',
+                      })
+                    }
                   >
-                    → Row
-                  </button>
-                  <button
-                    type="button"
-                    class={`framer-seg-btn${direction === 'column' ? ' is-active' : ''}`}
-                    aria-pressed={direction === 'column'}
-                    title="Vertical Stack (Column)"
-                    onClick={() => commitContainerLayout({ direction: 'column' })}
-                  >
-                    ↓ Col
+                    {layout.wrap === 'wrap' ? '✓ Wrap' : 'Wrap'}
                   </button>
                 </div>
-                <button
-                  type="button"
-                  class={`framer-seg-btn framer-wrap-btn${layout.wrap === 'wrap' ? ' is-active' : ''}`}
-                  aria-pressed={layout.wrap === 'wrap'}
-                  title="Allow children to wrap onto multiple lines"
-                  onClick={() =>
-                    commitContainerLayout({
-                      wrap: layout.wrap === 'wrap' ? 'nowrap' : 'wrap',
-                    })
-                  }
-                >
-                  Wrap
-                </button>
+                <div class="framer-seg-row cols-4" role="group" aria-label="Stack direction">
+                  {(
+                    [
+                      { value: 'row', label: '→ Row', title: 'Horizontal Stack (Row)' },
+                      { value: 'column', label: '↓ Col', title: 'Vertical Stack (Column)' },
+                      { value: 'row-reverse', label: '← Rev', title: 'Reverse Row' },
+                      { value: 'column-reverse', label: '↑ Rev', title: 'Reverse Column' },
+                    ] as const
+                  ).map((dir) => (
+                    <button
+                      key={dir.value}
+                      type="button"
+                      class={`framer-seg-btn${direction === dir.value ? ' is-active' : ''}`}
+                      aria-pressed={direction === dir.value}
+                      title={dir.title}
+                      onClick={() => commitContainerLayout({ direction: dir.value })}
+                    >
+                      {dir.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {/* Framer 3x3 Interactive Alignment Matrix + Distribution Controls */}
+              {/* 3x3 Interactive Alignment Matrix + Distribute */}
               <div class="framer-matrix-block">
                 <div
                   class={`framer-align-matrix${isDistributed ? ' is-distributed' : ''}${
-                    direction === 'row' ? ' is-row' : ' is-col'
+                    isRowAxis ? ' is-row' : ' is-col'
                   }`}
                   role="group"
                   aria-label="Stack alignment matrix"
@@ -495,79 +503,318 @@ export function InspectorFrameLayoutSection({
                 </div>
               </div>
 
-              {/* Stack Gap & Wrapped Row Gap */}
-              <PresetStepperSlider
-                label={layout.wrap === 'wrap' ? 'Col Gap' : 'Gap'}
-                ariaLabel="Auto-Layout Gap"
-                value={Math.round(layout.gap ?? 12)}
-                min={0}
-                max={96}
-                step={4}
-                presets={SPACING_PRESETS}
-                onChange={(next) =>
-                  commitContainerLayout(
-                    layout.wrap === 'wrap' ? { gap: next, columnGap: next } : { gap: next },
-                    undefined,
-                    false,
-                  )
-                }
-                onCommit={onCommitEdit}
-              />
-              {layout.wrap === 'wrap' && (
-                <PresetStepperSlider
-                  label="Row Gap"
-                  ariaLabel="Wrapped Stack Row Gap"
-                  value={Math.round(layout.rowGap ?? layout.gap ?? 12)}
-                  min={0}
-                  max={96}
-                  step={4}
+              {/* Stack Gap via NumericUnitInput */}
+              <div class={layout.wrap === 'wrap' ? 'folio-dual-grid' : ''}>
+                <NumericUnitInput
+                  label={layout.wrap === 'wrap' ? 'Col' : 'Gap'}
+                  ariaLabel="Stack Gap"
+                  value={layout.gap ?? 12}
+                  unit={gapUnit}
+                  units={SPACING_UNITS}
                   presets={SPACING_PRESETS}
-                  onChange={(next) => commitContainerLayout({ rowGap: next }, undefined, false)}
-                  onCommit={onCommitEdit}
+                  min={0}
+                  max={256}
+                  step={2}
+                  onPreview={(p) =>
+                    commitContainerLayout(
+                      {
+                        gap: p.value,
+                        ...(layout.wrap === 'wrap' ? { columnGap: p.value } : {}),
+                        gapUnit: toLengthUnit(p.unit, gapUnit),
+                      },
+                      undefined,
+                      false,
+                    )
+                  }
+                  onChange={(p) =>
+                    commitContainerLayout({
+                      gap: p.value,
+                      ...(layout.wrap === 'wrap' ? { columnGap: p.value } : {}),
+                      gapUnit: toLengthUnit(p.unit, gapUnit),
+                    })
+                  }
                 />
-              )}
+                {layout.wrap === 'wrap' && (
+                  <NumericUnitInput
+                    label="Row"
+                    ariaLabel="Wrapped Stack Row Gap"
+                    value={layout.rowGap ?? layout.gap ?? 12}
+                    unit={gapUnit}
+                    units={SPACING_UNITS}
+                    presets={SPACING_PRESETS}
+                    min={0}
+                    max={256}
+                    step={2}
+                    onPreview={(p) =>
+                      commitContainerLayout(
+                        { rowGap: p.value, gapUnit: toLengthUnit(p.unit, gapUnit) },
+                        undefined,
+                        false,
+                      )
+                    }
+                    onChange={(p) =>
+                      commitContainerLayout({
+                        rowGap: p.value,
+                        gapUnit: toLengthUnit(p.unit, gapUnit),
+                      })
+                    }
+                  />
+                )}
+              </div>
             </>
           )}
 
-          {/* GRID CONTROLS */}
+          {/* FULL CSS GRID CONTROLS */}
           {mode === 'grid' && (
             <>
-              <PresetStepperSlider
-                label="Columns"
-                ariaLabel="Grid Columns"
-                value={Math.max(1, Math.round(layout.gridColumns ?? 2))}
-                min={1}
-                max={12}
-                step={1}
-                unit="col"
-                presets={GRID_COL_PRESETS}
-                onChange={(next) => commitContainerLayout({ gridColumns: next }, undefined, false)}
-                onCommit={onCommitEdit}
-              />
-              <PresetStepperSlider
-                label="Col Gap"
-                ariaLabel="Grid Column Gap"
-                value={Math.round(layout.columnGap ?? layout.gap ?? 12)}
-                min={0}
-                max={96}
-                step={4}
-                presets={SPACING_PRESETS}
-                onChange={(next) =>
-                  commitContainerLayout({ columnGap: next, gap: next }, undefined, false)
-                }
-                onCommit={onCommitEdit}
-              />
-              <PresetStepperSlider
-                label="Row Gap"
-                ariaLabel="Grid Row Gap"
-                value={Math.round(layout.rowGap ?? layout.gap ?? 12)}
-                min={0}
-                max={96}
-                step={4}
-                presets={SPACING_PRESETS}
-                onChange={(next) => commitContainerLayout({ rowGap: next }, undefined, false)}
-                onCommit={onCommitEdit}
-              />
+              <div class="framer-subcontrol">
+                <span class="framer-mini-kicker">Columns</span>
+                <div class="framer-seg-row cols-3" role="group" aria-label="Grid columns mode">
+                  {(
+                    [
+                      { value: 'fixed', label: 'Fixed' },
+                      { value: 'auto-fit', label: 'Auto-Fit' },
+                      { value: 'custom', label: 'Custom' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      class={`framer-seg-btn${gridColsMode === opt.value ? ' is-active' : ''}`}
+                      aria-pressed={gridColsMode === opt.value}
+                      onClick={() =>
+                        commitContainerLayout({
+                          gridColumnsMode: opt.value,
+                          ...(opt.value === 'auto-fit' && !layout.gridMinColumnWidth
+                            ? { gridMinColumnWidth: 220, gridMinColumnWidthUnit: 'px' }
+                            : {}),
+                          ...(opt.value === 'custom' && !layout.gridTemplateColumns
+                            ? { gridTemplateColumns: '240px 1fr' }
+                            : {}),
+                        })
+                      }
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {gridColsMode === 'fixed' && (
+                <NumericUnitInput
+                  label="Cols"
+                  ariaLabel="Grid Fixed Columns"
+                  value={Math.max(1, Math.round(layout.gridColumns ?? 2))}
+                  unit=""
+                  units={GRID_COUNT_UNITS}
+                  presets={GRID_COL_PRESETS}
+                  min={1}
+                  max={12}
+                  step={1}
+                  precision={0}
+                  onPreview={(p) =>
+                    commitContainerLayout({ gridColumns: Math.max(1, Math.round(p.value)) }, undefined, false)
+                  }
+                  onChange={(p) =>
+                    commitContainerLayout({ gridColumns: Math.max(1, Math.round(p.value)) })
+                  }
+                />
+              )}
+
+              {gridColsMode === 'auto-fit' && (
+                <>
+                  <NumericUnitInput
+                    label="Min"
+                    ariaLabel="Grid Auto-Fit Min Card Width"
+                    value={minColWidth}
+                    unit={minColUnit}
+                    units={GRID_MIN_WIDTH_UNITS}
+                    presets={GRID_MIN_WIDTH_PRESETS}
+                    min={40}
+                    max={1200}
+                    step={10}
+                    onPreview={(p) =>
+                      commitContainerLayout(
+                        {
+                          gridColumnsMode: 'auto-fit',
+                          gridMinColumnWidth: p.value,
+                          gridMinColumnWidthUnit: toLengthUnit(p.unit, minColUnit),
+                        },
+                        undefined,
+                        false,
+                      )
+                    }
+                    onChange={(p) =>
+                      commitContainerLayout({
+                        gridColumnsMode: 'auto-fit',
+                        gridMinColumnWidth: p.value,
+                        gridMinColumnWidthUnit: toLengthUnit(p.unit, minColUnit),
+                      })
+                    }
+                  />
+                  <div class="folio-css-readout" title="Compiled CSS grid-template-columns">
+                    repeat(auto-fit, minmax({minColWidth}{minColUnit}, 1fr))
+                  </div>
+                </>
+              )}
+
+              {gridColsMode === 'custom' && (
+                <div class="framer-subcontrol">
+                  <input
+                    type="text"
+                    class={`text-field folio-code-input${customColsInvalid ? ' is-invalid' : ''}`}
+                    aria-label="Custom Grid Columns Template"
+                    placeholder="e.g. 240px 1fr 300px"
+                    value={customColsDraft ?? layout.gridTemplateColumns ?? '240px 1fr'}
+                    onInput={(event) => {
+                      setCustomColsDraft(event.currentTarget.value);
+                      setCustomColsInvalid(false);
+                    }}
+                    onBlur={commitCustomGridColumns}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        commitCustomGridColumns();
+                      } else if (event.key === 'Escape') {
+                        setCustomColsDraft(null);
+                        setCustomColsInvalid(false);
+                      }
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Grid Rows Mode */}
+              <div class="framer-subcontrol">
+                <span class="framer-mini-kicker">Rows</span>
+                <div class="framer-seg-row cols-3" role="group" aria-label="Grid rows mode">
+                  {(
+                    [
+                      { value: 'auto', label: 'Auto' },
+                      { value: 'fixed', label: 'Fixed' },
+                      { value: 'custom', label: 'Custom' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      class={`framer-seg-btn${gridRowsMode === opt.value ? ' is-active' : ''}`}
+                      aria-pressed={gridRowsMode === opt.value}
+                      onClick={() =>
+                        commitContainerLayout({
+                          gridRowsMode: opt.value,
+                          ...(opt.value === 'fixed' && !layout.gridRows ? { gridRows: 2 } : {}),
+                          ...(opt.value === 'custom' && !layout.gridTemplateRows
+                            ? { gridTemplateRows: 'auto 1fr' }
+                            : {}),
+                        })
+                      }
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {gridRowsMode === 'fixed' && (
+                <NumericUnitInput
+                  label="Rows"
+                  ariaLabel="Grid Fixed Rows"
+                  value={Math.max(1, Math.round(layout.gridRows ?? 2))}
+                  unit=""
+                  units={GRID_COUNT_UNITS}
+                  min={1}
+                  max={12}
+                  step={1}
+                  precision={0}
+                  onPreview={(p) =>
+                    commitContainerLayout({ gridRows: Math.max(1, Math.round(p.value)) }, undefined, false)
+                  }
+                  onChange={(p) =>
+                    commitContainerLayout({ gridRows: Math.max(1, Math.round(p.value)) })
+                  }
+                />
+              )}
+
+              {gridRowsMode === 'custom' && (
+                <div class="framer-subcontrol">
+                  <input
+                    type="text"
+                    class={`text-field folio-code-input${customRowsInvalid ? ' is-invalid' : ''}`}
+                    aria-label="Custom Grid Rows Template"
+                    placeholder="e.g. auto 1fr 120px"
+                    value={customRowsDraft ?? layout.gridTemplateRows ?? 'auto 1fr'}
+                    onInput={(event) => {
+                      setCustomRowsDraft(event.currentTarget.value);
+                      setCustomRowsInvalid(false);
+                    }}
+                    onBlur={commitCustomGridRows}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        commitCustomGridRows();
+                      } else if (event.key === 'Escape') {
+                        setCustomRowsDraft(null);
+                        setCustomRowsInvalid(false);
+                      }
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Separate Col Gap & Row Gap */}
+              <div class="folio-dual-grid">
+                <NumericUnitInput
+                  label="Col"
+                  ariaLabel="Grid Column Gap"
+                  value={layout.columnGap ?? layout.gap ?? 12}
+                  unit={gapUnit}
+                  units={SPACING_UNITS}
+                  presets={SPACING_PRESETS}
+                  min={0}
+                  max={256}
+                  step={2}
+                  onPreview={(p) =>
+                    commitContainerLayout(
+                      { columnGap: p.value, gap: p.value, gapUnit: toLengthUnit(p.unit, gapUnit) },
+                      undefined,
+                      false,
+                    )
+                  }
+                  onChange={(p) =>
+                    commitContainerLayout({
+                      columnGap: p.value,
+                      gap: p.value,
+                      gapUnit: toLengthUnit(p.unit, gapUnit),
+                    })
+                  }
+                />
+                <NumericUnitInput
+                  label="Row"
+                  ariaLabel="Grid Row Gap"
+                  value={layout.rowGap ?? layout.gap ?? 12}
+                  unit={gapUnit}
+                  units={SPACING_UNITS}
+                  presets={SPACING_PRESETS}
+                  min={0}
+                  max={256}
+                  step={2}
+                  onPreview={(p) =>
+                    commitContainerLayout(
+                      { rowGap: p.value, gapUnit: toLengthUnit(p.unit, gapUnit) },
+                      undefined,
+                      false,
+                    )
+                  }
+                  onChange={(p) =>
+                    commitContainerLayout({
+                      rowGap: p.value,
+                      gapUnit: toLengthUnit(p.unit, gapUnit),
+                    })
+                  }
+                />
+              </div>
+
               <div class="framer-subcontrol">
                 <span class="framer-mini-kicker">Cell Align</span>
                 <div class="framer-seg-row cols-4" role="group" aria-label="Grid cell alignment">
@@ -584,6 +831,7 @@ export function InspectorFrameLayoutSection({
                   ))}
                 </div>
               </div>
+
               <div class="framer-subcontrol">
                 <span class="framer-mini-kicker">Cell Justify</span>
                 <div class="framer-seg-row cols-3" role="group" aria-label="Grid cell justify">
@@ -605,7 +853,7 @@ export function InspectorFrameLayoutSection({
             </>
           )}
 
-          {/* PADDING (UNIFORM <-> PER-SIDE T/R/B/L) */}
+          {/* PADDING (UNIFORM <-> PER-SIDE T/R/B/L) via NumericUnitInput */}
           {mode !== 'none' && (
             <div class="framer-padding-block">
               <div class="framer-sublabel-inline">
@@ -616,7 +864,7 @@ export function InspectorFrameLayoutSection({
                     class={`framer-seg-btn${paddingMode === 'uniform' ? ' is-active' : ''}`}
                     aria-pressed={paddingMode === 'uniform'}
                     onClick={() => {
-                      const val = Math.round(layout.padding.top ?? 16);
+                      const val = layout.padding.top ?? 16;
                       commitContainerLayout({
                         paddingMode: 'uniform',
                         padding: { top: val, right: val, bottom: val, left: val },
@@ -637,288 +885,228 @@ export function InspectorFrameLayoutSection({
               </div>
 
               {paddingMode === 'uniform' ? (
-                <PresetStepperSlider
-                  label="All Sides"
-                  ariaLabel="Auto-Layout Padding"
-                  value={Math.round(layout.padding.top ?? 16)}
-                  min={0}
-                  max={96}
-                  step={4}
+                <NumericUnitInput
+                  label="Pad"
+                  ariaLabel="Uniform Padding"
+                  value={layout.padding.top ?? 16}
+                  unit={paddingUnit}
+                  units={SPACING_UNITS}
                   presets={SPACING_PRESETS}
-                  onChange={(next) =>
+                  min={0}
+                  max={256}
+                  step={2}
+                  onPreview={(p) =>
                     commitContainerLayout(
                       {
                         paddingMode: 'uniform',
-                        padding: { top: next, right: next, bottom: next, left: next },
+                        padding: { top: p.value, right: p.value, bottom: p.value, left: p.value },
+                        paddingUnit: toLengthUnit(p.unit, paddingUnit),
                       },
                       undefined,
                       false,
                     )
                   }
-                  onCommit={onCommitEdit}
+                  onChange={(p) =>
+                    commitContainerLayout({
+                      paddingMode: 'uniform',
+                      padding: { top: p.value, right: p.value, bottom: p.value, left: p.value },
+                      paddingUnit: toLengthUnit(p.unit, paddingUnit),
+                    })
+                  }
                 />
               ) : (
-                <div class="framer-padding-quad">
-                  {renderPaddingSideControl('top', 'Top')}
-                  {renderPaddingSideControl('right', 'Right')}
-                  {renderPaddingSideControl('bottom', 'Bottom')}
-                  {renderPaddingSideControl('left', 'Left')}
+                <div class="folio-dual-grid">
+                  {(
+                    [
+                      { key: 'top', label: 'T', aria: 'Padding Top' },
+                      { key: 'right', label: 'R', aria: 'Padding Right' },
+                      { key: 'bottom', label: 'B', aria: 'Padding Bottom' },
+                      { key: 'left', label: 'L', aria: 'Padding Left' },
+                    ] as const
+                  ).map((side) => (
+                    <NumericUnitInput
+                      key={side.key}
+                      label={side.label}
+                      ariaLabel={side.aria}
+                      value={layout.padding[side.key] ?? 0}
+                      unit={paddingUnit}
+                      units={SPACING_UNITS}
+                      min={0}
+                      max={256}
+                      step={2}
+                      onPreview={(p) =>
+                        commitContainerLayout(
+                          {
+                            paddingMode: 'per-side',
+                            padding: { ...layout.padding, [side.key]: p.value },
+                            paddingUnit: toLengthUnit(p.unit, paddingUnit),
+                          },
+                          undefined,
+                          false,
+                        )
+                      }
+                      onChange={(p) =>
+                        commitContainerLayout({
+                          paddingMode: 'per-side',
+                          padding: { ...layout.padding, [side.key]: p.value },
+                          paddingUnit: toLengthUnit(p.unit, paddingUnit),
+                        })
+                      }
+                    />
+                  ))}
                 </div>
               )}
             </div>
           )}
 
-          {/* OVERFLOW: VISIBLE | HIDDEN | SCROLL */}
+          {/* OVERFLOW & CSS SCROLL SNAP */}
           {selectedNode.type === 'frame' && (
-            <div class="framer-subcontrol">
-              <span class="framer-mini-kicker">Overflow</span>
-              <div class="framer-seg-row cols-3" role="group" aria-label="Frame overflow">
-                {(
-                  [
-                    { value: 'visible', label: 'Visible' },
-                    { value: 'hidden', label: 'Hidden' },
-                    { value: 'scroll', label: 'Scroll' },
-                  ] as const
-                ).map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    class={`framer-seg-btn${overflow === opt.value ? ' is-active' : ''}`}
-                    aria-pressed={overflow === opt.value}
-                    onClick={() => handleOverflowChange(opt.value)}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 2. FRAMER SIZING & POSITION CARD */}
-      {showSizingCard && (
-        <div class="inspector-acc-group inspector-autolayout-block framer-layout-card">
-          <div class="inspector-sublabel-row">
-            <span class="inspector-sublabel">Sizing &amp; Position</span>
-            <span class="inspector-accordion-badge">{parentBadge}</span>
-          </div>
-
-          {/* POSITION: RELATIVE (FLOW) | ABSOLUTE (PIN) — inside Auto-Layout parent */}
-          {isInsideAutoLayout && (
-            <div class="framer-subcontrol">
-              <span class="framer-mini-kicker">Position</span>
-              <div class="framer-seg-row cols-2" role="group" aria-label="Child layout position">
-                {(
-                  [
-                    { value: 'relative', label: 'Relative (Flow)' },
-                    { value: 'absolute', label: 'Absolute (Pin)' },
-                  ] as const
-                ).map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    class={`framer-seg-btn${(layoutChild.position ?? 'relative') === opt.value ? ' is-active' : ''}`}
-                    aria-pressed={(layoutChild.position ?? 'relative') === opt.value}
-                    onClick={() =>
-                      commitChildConfig({
-                        position: opt.value as LayoutChildPosition,
-                        ...(opt.value === 'absolute' && !layoutChild.constraints
-                          ? { constraints: { horizontal: 'left', vertical: 'top' } }
-                          : {}),
-                      })
-                    }
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ABSOLUTE PIN CONSTRAINTS & Z-INDEX */}
-          {isChildAbsolute && (
             <>
               <div class="framer-subcontrol">
-                <span class="framer-mini-kicker">Pin Anchor</span>
-                <div class="framer-pin-grid" role="group" aria-label="Absolute pin anchor">
-                  {PIN_PRESETS.map((preset) => (
+                <span class="framer-mini-kicker">Overflow</span>
+                <div class="framer-seg-row cols-5" role="group" aria-label="Frame overflow">
+                  {(
+                    [
+                      { value: 'visible', label: 'Vis' },
+                      { value: 'hidden', label: 'Clip' },
+                      { value: 'scroll-y', label: 'Scr Y' },
+                      { value: 'scroll-x', label: 'Scr X' },
+                      { value: 'auto', label: 'Auto' },
+                    ] as const
+                  ).map((opt) => {
+                    const isActive =
+                      overflow === opt.value || (overflow === 'scroll' && opt.value === 'scroll-y');
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        class={`framer-seg-btn${isActive ? ' is-active' : ''}`}
+                        aria-pressed={isActive}
+                        title={`Overflow: ${opt.value}`}
+                        onClick={() => handleOverflowChange(opt.value)}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div class="framer-subcontrol">
+                <span class="framer-mini-kicker">CSS Scroll Snap</span>
+                <div class="framer-seg-row cols-3" role="group" aria-label="Container scroll snap">
+                  {(
+                    [
+                      { value: 'none', label: 'Off' },
+                      { value: 'x', label: 'Horizontal (X)' },
+                      { value: 'y', label: 'Vertical (Y)' },
+                    ] as const
+                  ).map((opt) => (
                     <button
-                      key={preset.id}
+                      key={opt.value}
                       type="button"
-                      class={`framer-seg-btn${activePinPreset === preset.id ? ' is-active' : ''}`}
-                      title={preset.title}
-                      aria-pressed={activePinPreset === preset.id}
-                      onClick={() => commitChildConfig({ constraints: preset.constraints })}
+                      class={`framer-seg-btn${scrollSnapType === opt.value ? ' is-active' : ''}`}
+                      aria-pressed={scrollSnapType === opt.value}
+                      onClick={() => commitContainerLayout({ scrollSnapType: opt.value })}
                     >
-                      {preset.label}
+                      {opt.label}
                     </button>
                   ))}
                 </div>
               </div>
-              <PresetStepperSlider
-                label="Z-Index"
-                ariaLabel="Layer Z-Index"
-                value={Math.round(layoutChild.zIndex ?? 0)}
-                min={-10}
-                max={50}
-                step={1}
-                unit="z"
-                presets={Z_INDEX_PRESETS}
-                onChange={(next) => commitChildConfig({ zIndex: next }, false)}
-                onCommit={onCommitEdit}
-              />
+            </>
+          )}
+        </div>
+      )}
+
+      {/* 2. CONTEXTUAL GRID CHILD & STACK ITEM CONTROLS */}
+      {(isChildInGrid || isChildInStack || parentHasScrollSnap) && (
+        <div class="inspector-acc-group inspector-autolayout-block framer-layout-card">
+          <div class="inspector-sublabel-row">
+            <span class="inspector-sublabel">
+              {isChildInGrid ? 'Grid Item Placement' : 'Layout Item'}
+            </span>
+            <span class="inspector-accordion-badge is-live">
+              {isChildInGrid ? 'GRID CHILD' : isChildInStack ? 'STACK ITEM' : 'SNAP'}
+            </span>
+          </div>
+
+          {isChildInGrid && (
+            <>
+              <div class="framer-sublabel-inline">
+                <span class="framer-mini-kicker">Column Span</span>
+                <button
+                  type="button"
+                  class={`framer-seg-btn framer-wrap-chip${layoutChild.gridColumnSpanFull ? ' is-active' : ''}`}
+                  aria-pressed={Boolean(layoutChild.gridColumnSpanFull)}
+                  title="Span all columns (grid-column: 1 / -1)"
+                  onClick={() =>
+                    commitChildConfig({
+                      gridColumnSpanFull: !layoutChild.gridColumnSpanFull,
+                    })
+                  }
+                >
+                  {layoutChild.gridColumnSpanFull ? '✓ Full (1/-1)' : 'Full Row'}
+                </button>
+              </div>
+              <div class="folio-dual-grid">
+                <NumericUnitInput
+                  label="Col"
+                  ariaLabel="Grid Column Span"
+                  value={Math.max(1, Math.min(12, Math.round(layoutChild.gridColumnSpan ?? 1)))}
+                  unit=""
+                  units={GRID_COUNT_UNITS}
+                  min={1}
+                  max={Math.max(parentGridCols, 12)}
+                  step={1}
+                  precision={0}
+                  disabled={Boolean(layoutChild.gridColumnSpanFull)}
+                  onChange={(p) =>
+                    commitChildConfig({
+                      gridColumnSpan: Math.max(1, Math.min(12, Math.round(p.value))),
+                      gridColumnSpanFull: false,
+                    })
+                  }
+                />
+                <NumericUnitInput
+                  label="Row"
+                  ariaLabel="Grid Row Span"
+                  value={Math.max(1, Math.min(6, Math.round(layoutChild.gridRowSpan ?? 1)))}
+                  unit=""
+                  units={GRID_COUNT_UNITS}
+                  min={1}
+                  max={6}
+                  step={1}
+                  precision={0}
+                  onChange={(p) =>
+                    commitChildConfig({
+                      gridRowSpan: Math.max(1, Math.min(6, Math.round(p.value))),
+                    })
+                  }
+                />
+              </div>
             </>
           )}
 
-          {/* WIDTH SIZING: FIXED | FILL | FIT (HUG) | REL % */}
-          <div class="framer-subcontrol">
-            <span class="framer-mini-kicker">Width Sizing</span>
-            <div class="framer-seg-row cols-4" role="group" aria-label="Width sizing mode">
-              {(
-                [
-                  { value: 'fixed', label: 'Fixed' },
-                  { value: 'fill', label: 'Fill' },
-                  { value: 'hug', label: 'Fit' },
-                  { value: 'relative', label: 'Rel %' },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  class={`framer-seg-btn${layoutChild.widthMode === opt.value ? ' is-active' : ''}`}
-                  aria-pressed={layoutChild.widthMode === opt.value}
-                  onClick={() =>
-                    commitChildConfig({
-                      widthMode: opt.value as LayoutSizingMode,
-                      ...(opt.value === 'relative' && !layoutChild.widthPercent
-                        ? { widthPercent: 50 }
-                        : {}),
-                    })
-                  }
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {layoutChild.widthMode === 'fill' &&
-            parentLayout?.mode === 'flex' &&
-            parentLayout.direction === 'row' &&
-            !isChildAbsolute && (
-              <PresetStepperSlider
-                label="Fill Weight"
-                ariaLabel="Horizontal Fill Weight"
+          {isChildInStack &&
+            ((layoutChild.widthMode === 'fill' && isHorizontalDirection(parentLayout.direction)) ||
+              (layoutChild.heightMode === 'fill' && !isHorizontalDirection(parentLayout.direction))) && (
+              <NumericUnitInput
+                label="Grow"
+                ariaLabel="Stack Fill Weight"
                 value={Math.max(1, Math.round(layoutChild.flexGrow ?? 1))}
-                min={1}
-                max={6}
-                step={1}
                 unit="fr"
+                units={['fr']}
                 presets={FILL_WEIGHT_PRESETS}
-                onChange={(next) => commitChildConfig({ flexGrow: next }, false)}
-                onCommit={onCommitEdit}
+                min={1}
+                max={12}
+                step={1}
+                precision={0}
+                onChange={(p) => commitChildConfig({ flexGrow: Math.max(1, Math.round(p.value)) })}
               />
             )}
 
-          {layoutChild.widthMode === 'relative' && (
-            <PresetStepperSlider
-              label="Width %"
-              ariaLabel="Relative Width Percent"
-              value={Math.round(layoutChild.widthPercent ?? 50)}
-              min={5}
-              max={100}
-              step={5}
-              unit="%"
-              presets={RELATIVE_PCT_PRESETS}
-              onChange={(next) => commitChildConfig({ widthPercent: next }, false)}
-              onCommit={onCommitEdit}
-            />
-          )}
-
-          {/* HEIGHT SIZING: FIXED | FILL | FIT (HUG) | REL % */}
-          <div class="framer-subcontrol">
-            <span class="framer-mini-kicker">Height Sizing</span>
-            <div class="framer-seg-row cols-4" role="group" aria-label="Height sizing mode">
-              {(
-                [
-                  { value: 'fixed', label: 'Fixed' },
-                  { value: 'fill', label: 'Fill' },
-                  { value: 'hug', label: 'Fit' },
-                  { value: 'relative', label: 'Rel %' },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  class={`framer-seg-btn${layoutChild.heightMode === opt.value ? ' is-active' : ''}`}
-                  aria-pressed={layoutChild.heightMode === opt.value}
-                  onClick={() =>
-                    commitChildConfig({
-                      heightMode: opt.value as LayoutSizingMode,
-                      ...(opt.value === 'relative' && !layoutChild.heightPercent
-                        ? { heightPercent: 50 }
-                        : {}),
-                    })
-                  }
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {layoutChild.heightMode === 'fill' &&
-            parentLayout?.mode === 'flex' &&
-            parentLayout.direction === 'column' &&
-            !isChildAbsolute && (
-              <PresetStepperSlider
-                label="Fill Weight"
-                ariaLabel="Vertical Fill Weight"
-                value={Math.max(1, Math.round(layoutChild.flexGrow ?? 1))}
-                min={1}
-                max={6}
-                step={1}
-                unit="fr"
-                presets={FILL_WEIGHT_PRESETS}
-                onChange={(next) => commitChildConfig({ flexGrow: next }, false)}
-                onCommit={onCommitEdit}
-              />
-            )}
-
-          {layoutChild.heightMode === 'relative' && (
-            <PresetStepperSlider
-              label="Height %"
-              ariaLabel="Relative Height Percent"
-              value={Math.round(layoutChild.heightPercent ?? 50)}
-              min={5}
-              max={100}
-              step={5}
-              unit="%"
-              presets={RELATIVE_PCT_PRESETS}
-              onChange={(next) => commitChildConfig({ heightPercent: next }, false)}
-              onCommit={onCommitEdit}
-            />
-          )}
-
-          {/* GRID COLUMN SPAN */}
-          {parentLayout?.mode === 'grid' && !isChildAbsolute && (
-            <PresetStepperSlider
-              label="Col Span"
-              ariaLabel="Grid Column Span"
-              value={Math.max(1, Math.min(parentGridCols, Math.round(layoutChild.gridColumnSpan ?? 1)))}
-              min={1}
-              max={parentGridCols}
-              step={1}
-              unit="col"
-              presets={[1, 2, 3, 4, 6].filter((p) => p <= parentGridCols)}
-              onChange={(next) => commitChildConfig({ gridColumnSpan: next }, false)}
-              onCommit={onCommitEdit}
-            />
-          )}
-
-          {/* ALIGN SELF */}
-          {isInsideAutoLayout && !isChildAbsolute && (
+          {(isChildInStack || isChildInGrid) && (
             <div class="framer-subcontrol">
               <span class="framer-mini-kicker">Align Self</span>
               <div class="framer-seg-row cols-5" role="group" aria-label="Child align self">
@@ -945,48 +1133,116 @@ export function InspectorFrameLayoutSection({
             </div>
           )}
 
-          {/* MIN / MAX CONSTRAINTS (COLLAPSIBLE ZERO-TYPING) */}
-          <div class="framer-minmax-wrap">
-            <button
-              type="button"
-              class={`framer-minmax-toggle${showMinMax || activeBoundsCount > 0 ? ' is-active' : ''}`}
-              aria-expanded={showMinMax}
-              onClick={() => setShowMinMax((prev) => !prev)}
-            >
-              <span>Min / Max Bounds</span>
-              <span class="framer-minmax-meta">
-                {activeBoundsCount > 0 ? `${activeBoundsCount} active` : showMinMax ? 'Hide' : 'Set'}
-              </span>
-            </button>
-            {showMinMax && (
-              <div class="framer-minmax-panel">
-                <div class="framer-minmax-grid">
-                  {renderBoundSelect('minWidth', 'Min W')}
-                  {renderBoundSelect('maxWidth', 'Max W')}
-                  {renderBoundSelect('minHeight', 'Min H')}
-                  {renderBoundSelect('maxHeight', 'Max H')}
-                </div>
-                {activeBoundsCount > 0 && (
+          {parentHasScrollSnap && (
+            <div class="framer-subcontrol">
+              <span class="framer-mini-kicker">Scroll Snap Align</span>
+              <div class="framer-seg-row cols-4" role="group" aria-label="Child scroll snap align">
+                {(
+                  [
+                    { value: 'none', label: 'None' },
+                    { value: 'start', label: 'Start' },
+                    { value: 'center', label: 'Center' },
+                    { value: 'end', label: 'End' },
+                  ] as const
+                ).map((opt) => (
                   <button
+                    key={opt.value}
                     type="button"
-                    class="inspector-mini-btn"
-                    onClick={() =>
-                      commitChildConfig({
-                        minWidth: undefined,
-                        maxWidth: undefined,
-                        minHeight: undefined,
-                        maxHeight: undefined,
-                      })
-                    }
+                    class={`framer-seg-btn${(layoutChild.scrollSnapAlign ?? 'none') === opt.value ? ' is-active' : ''}`}
+                    aria-pressed={(layoutChild.scrollSnapAlign ?? 'none') === opt.value}
+                    onClick={() => commitChildConfig({ scrollSnapAlign: opt.value as ScrollSnapAlign })}
                   >
-                    Clear Min/Max Bounds
+                    {opt.label}
                   </button>
-                )}
+                ))}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
+
+      {/* 3. WEB INTERACTION (CURSOR, POINTER EVENTS, USER SELECT) */}
+      <div class="inspector-acc-group framer-layout-card">
+        <div class="inspector-sublabel-row">
+          <span class="inspector-sublabel">Web Interaction</span>
+        </div>
+
+        <label class="field-label">
+          Cursor
+          <select
+            class="select-field"
+            aria-label="CSS Cursor"
+            value={selectedNode.cursor ?? 'default'}
+            onChange={(event) => {
+              const next = event.currentTarget.value as NodeCursor;
+              onUpdateSelected({ cursor: next === 'default' ? undefined : next });
+              onCommitEdit();
+            }}
+          >
+            {CURSOR_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div class="folio-dual-grid">
+          <div class="framer-subcontrol">
+            <span class="framer-mini-kicker">Pointer Events</span>
+            <div class="framer-seg-row cols-2" role="group" aria-label="Pointer events">
+              {(
+                [
+                  { value: 'auto', label: 'Auto' },
+                  { value: 'none', label: 'None' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  class={`framer-seg-btn${(selectedNode.pointerEvents ?? 'auto') === opt.value ? ' is-active' : ''}`}
+                  aria-pressed={(selectedNode.pointerEvents ?? 'auto') === opt.value}
+                  onClick={() => {
+                    onUpdateSelected({
+                      pointerEvents: opt.value === 'auto' ? undefined : (opt.value as NodePointerEvents),
+                    });
+                    onCommitEdit();
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div class="framer-subcontrol">
+            <span class="framer-mini-kicker">User Select</span>
+            <div class="framer-seg-row cols-2" role="group" aria-label="User select">
+              {(
+                [
+                  { value: 'auto', label: 'Auto' },
+                  { value: 'none', label: 'None' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  class={`framer-seg-btn${(selectedNode.userSelect ?? 'auto') === opt.value ? ' is-active' : ''}`}
+                  aria-pressed={(selectedNode.userSelect ?? 'auto') === opt.value}
+                  onClick={() => {
+                    onUpdateSelected({
+                      userSelect: opt.value === 'auto' ? undefined : (opt.value as NodeUserSelect),
+                    });
+                    onCommitEdit();
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

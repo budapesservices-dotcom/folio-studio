@@ -47,9 +47,16 @@ function shapeStyleChanged(before: ShapeStyle, after: ShapeStyle): boolean {
     before.fill !== after.fill ||
     before.stroke !== after.stroke ||
     before.strokeWidth !== after.strokeWidth ||
+    before.strokeWidthUnit !== after.strokeWidthUnit ||
+    before.strokeStyle !== after.strokeStyle ||
     before.strokeDasharray !== after.strokeDasharray ||
     before.strokeAlign !== after.strokeAlign ||
     before.radius !== after.radius ||
+    before.radiusUnit !== after.radiusUnit ||
+    (before.borderSides !== after.borderSides &&
+      JSON.stringify(before.borderSides ?? null) !== JSON.stringify(after.borderSides ?? null)) ||
+    (before.cornerRadii !== after.cornerRadii &&
+      JSON.stringify(before.cornerRadii ?? null) !== JSON.stringify(after.cornerRadii ?? null)) ||
     (before.fills !== after.fills &&
       JSON.stringify(before.fills ?? []) !== JSON.stringify(after.fills ?? []))
   );
@@ -185,10 +192,13 @@ function hasTypeSpecificExtendedChange(before: DesignNode, after: DesignNode): b
         before.text !== after.text ||
         before.style.fill !== after.style.fill ||
         before.style.fontSize !== after.style.fontSize ||
+        before.style.fontSizeUnit !== after.style.fontSizeUnit ||
         before.style.fontFamily !== after.style.fontFamily ||
         before.style.fontWeight !== after.style.fontWeight ||
         before.style.letterSpacing !== after.style.letterSpacing ||
+        before.style.letterSpacingUnit !== after.style.letterSpacingUnit ||
         before.style.lineHeight !== after.style.lineHeight ||
+        before.style.lineHeightUnit !== after.style.lineHeightUnit ||
         before.style.textAlign !== after.style.textAlign ||
         before.style.verticalAlign !== after.style.verticalAlign ||
         before.style.textWrap !== after.style.textWrap ||
@@ -206,8 +216,15 @@ function hasTypeSpecificExtendedChange(before: DesignNode, after: DesignNode): b
         before.naturalHeight !== after.naturalHeight ||
         before.style.fit !== after.style.fit ||
         before.style.radius !== after.style.radius ||
+        before.style.radiusUnit !== after.style.radiusUnit ||
         before.style.stroke !== after.style.stroke ||
-        before.style.strokeWidth !== after.style.strokeWidth
+        before.style.strokeWidth !== after.style.strokeWidth ||
+        before.style.strokeWidthUnit !== after.style.strokeWidthUnit ||
+        before.style.strokeStyle !== after.style.strokeStyle ||
+        (before.style.borderSides !== after.style.borderSides &&
+          JSON.stringify(before.style.borderSides ?? null) !== JSON.stringify(after.style.borderSides ?? null)) ||
+        (before.style.cornerRadii !== after.style.cornerRadii &&
+          JSON.stringify(before.style.cornerRadii ?? null) !== JSON.stringify(after.style.cornerRadii ?? null))
       );
     }
 
@@ -289,6 +306,8 @@ export function classifyNodeChange(
     (before.blendMode ?? undefined) !== (after.blendMode ?? undefined) ||
     (before.effects !== after.effects &&
       JSON.stringify(before.effects ?? []) !== JSON.stringify(after.effects ?? [])) ||
+    (before.cssFilters !== after.cssFilters &&
+      JSON.stringify(before.cssFilters ?? null) !== JSON.stringify(after.cssFilters ?? null)) ||
     before.visible !== after.visible ||
     before.locked !== after.locked ||
     Boolean(before.aspectRatioLocked) !== Boolean(after.aspectRatioLocked) ||
@@ -300,6 +319,16 @@ export function classifyNodeChange(
     (before.semanticTag ?? undefined) !== (after.semanticTag ?? undefined) ||
     (before.ariaLabel ?? undefined) !== (after.ariaLabel ?? undefined) ||
     (before.href ?? undefined) !== (after.href ?? undefined) ||
+    (before.linkTarget ?? undefined) !== (after.linkTarget ?? undefined) ||
+    (before.htmlId ?? undefined) !== (after.htmlId ?? undefined) ||
+    (before.className ?? undefined) !== (after.className ?? undefined) ||
+    (before.cursor ?? undefined) !== (after.cursor ?? undefined) ||
+    (before.pointerEvents ?? undefined) !== (after.pointerEvents ?? undefined) ||
+    (before.userSelect ?? undefined) !== (after.userSelect ?? undefined) ||
+    (before.transition !== after.transition &&
+      JSON.stringify(before.transition ?? null) !== JSON.stringify(after.transition ?? null)) ||
+    (before.stateOverrides !== after.stateOverrides &&
+      JSON.stringify(before.stateOverrides ?? null) !== JSON.stringify(after.stateOverrides ?? null)) ||
     JSON.stringify(before.layout ?? null) !== JSON.stringify(after.layout ?? null) ||
     JSON.stringify(before.layoutChild ?? null) !== JSON.stringify(after.layoutChild ?? null) ||
     JSON.stringify(before.responsive ?? null) !== JSON.stringify(after.responsive ?? null) ||

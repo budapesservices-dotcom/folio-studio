@@ -11,12 +11,14 @@ import type {
   FolioProject,
   PathNode,
 } from '../../core/document/types';
+import { isSafeHtmlClassName, isSafeHtmlId } from '../../core/document/cssUnits';
 import { serializePathPointsToSvgD } from '../../core/document/vector';
 import { getAssetBundlePath } from '../../core/persistence/assetStore';
 import {
   buildArrowheadPoints,
   buildChildrenMap,
   buildNodeCssDeclarations,
+  buildNodePseudoStateCssRules,
   buildVectorMaskDefsLines,
   resolveSemanticTag,
   resolveTokenCssVar,
@@ -223,6 +225,14 @@ function buildComponentStylesheet(
         endLine,
         selector,
       });
+    }
+
+    const pseudoRules = buildNodePseudoStateCssRules(node, selector);
+    for (const rule of pseudoRules) {
+      lines.push(`${rule.selector} {`);
+      for (const decl of rule.declarations) lines.push(`  ${decl}`);
+      lines.push('}');
+      lines.push('');
     }
 
     const children = childrenByParent.get(node.id) ?? [];
@@ -1036,15 +1046,27 @@ function buildPageReactFile(
     }
 
     const tag = resolveSemanticTag(node);
-    const attrs: string[] = [
-      `className=${escapeTsString(cls)}`,
+    const extraClass =
+      node.className?.trim() && isSafeHtmlClassName(node.className.trim())
+        ? ` ${node.className.trim()}`
+        : '';
+    const attrs: string[] = [];
+    if (node.htmlId?.trim() && isSafeHtmlId(node.htmlId.trim())) {
+      attrs.push(`id=${escapeTsString(node.htmlId.trim())}`);
+    }
+    attrs.push(
+      `className=${escapeTsString(`${cls}${extraClass}`)}`,
       `data-folio-id=${escapeTsString(node.id)}`,
-    ];
+    );
     if (node.ariaLabel?.trim()) {
       attrs.push(`aria-label=${escapeTsString(node.ariaLabel.trim())}`);
     }
     if (tag === 'a') {
       attrs.push(`href=${escapeTsString(sanitizeHref(node.href) ?? '#')}`);
+      if (node.linkTarget === '_blank') {
+        attrs.push('target="_blank"');
+        attrs.push('rel="noopener noreferrer"');
+      }
     }
     if (tag === 'button') {
       attrs.push('type="button"');

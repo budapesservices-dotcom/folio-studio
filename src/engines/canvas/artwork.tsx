@@ -1,6 +1,7 @@
 import type { JSX } from 'preact';
 import type {
   AssetReference,
+  BorderSidesConfig,
   ComponentDefinition,
   ComponentInstanceNode,
   DesignNode,
@@ -14,6 +15,7 @@ import type {
 } from '../../core/document/types';
 import { resolveComponentInstanceNodes } from '../../core/document/components';
 import {
+  buildCssFilterString,
   buildSvgFilterId,
   buildSvgPaintId,
   computeSvgLinearGradientCoords,
@@ -333,6 +335,35 @@ function renderBackdropBlurOverlay(
   );
 }
 
+function renderPerSideBorders(
+  node: { id: string; x: number; y: number; width: number; height: number },
+  borderSides: BorderSidesConfig | undefined,
+  mask: boolean,
+): JSX.Element | null {
+  if (mask || !borderSides) return null;
+  const lines: JSX.Element[] = [];
+  const dashFor = (style?: 'solid' | 'dashed' | 'dotted'): string | undefined =>
+    style === 'dashed' ? '6 4' : style === 'dotted' ? '2 3' : undefined;
+  const { x, y, width: w, height: h } = node;
+  if (borderSides.top && borderSides.top.width > 0 && borderSides.top.color !== 'none') {
+    const bw = borderSides.top.width;
+    lines.push(<line key={`${node.id}-bt`} x1={x} y1={y + bw / 2} x2={x + w} y2={y + bw / 2} stroke={borderSides.top.color} stroke-width={bw} stroke-dasharray={dashFor(borderSides.top.style)} />);
+  }
+  if (borderSides.right && borderSides.right.width > 0 && borderSides.right.color !== 'none') {
+    const bw = borderSides.right.width;
+    lines.push(<line key={`${node.id}-br`} x1={x + w - bw / 2} y1={y} x2={x + w - bw / 2} y2={y + h} stroke={borderSides.right.color} stroke-width={bw} stroke-dasharray={dashFor(borderSides.right.style)} />);
+  }
+  if (borderSides.bottom && borderSides.bottom.width > 0 && borderSides.bottom.color !== 'none') {
+    const bw = borderSides.bottom.width;
+    lines.push(<line key={`${node.id}-bb`} x1={x} y1={y + h - bw / 2} x2={x + w} y2={y + h - bw / 2} stroke={borderSides.bottom.color} stroke-width={bw} stroke-dasharray={dashFor(borderSides.bottom.style)} />);
+  }
+  if (borderSides.left && borderSides.left.width > 0 && borderSides.left.color !== 'none') {
+    const bw = borderSides.left.width;
+    lines.push(<line key={`${node.id}-bl`} x1={x + bw / 2} y1={y} x2={x + bw / 2} y2={y + h} stroke={borderSides.left.color} stroke-width={bw} stroke-dasharray={dashFor(borderSides.left.style)} />);
+  }
+  return lines.length > 0 ? <g pointer-events="none">{lines}</g> : null;
+}
+
 export function NodeShape({
   node,
   mask = false,
@@ -352,16 +383,22 @@ export function NodeShape({
   const filterAttr = !mask && hasSvgFilterEffects(node)
     ? `url(#${buildSvgFilterId(maskPrefix, node.id)})`
     : undefined;
-  const blendStyle = !mask && node.blendMode && node.blendMode !== 'normal'
-    ? { mixBlendMode: node.blendMode }
-    : undefined;
+  const cssFilterStr = !mask ? buildCssFilterString(node.cssFilters) : '';
+  const hasBlend = !mask && node.blendMode && node.blendMode !== 'normal';
+  const groupStyle: JSX.CSSProperties | undefined =
+    hasBlend || cssFilterStr
+      ? {
+          ...(hasBlend ? { mixBlendMode: node.blendMode } : {}),
+          ...(cssFilterStr ? { filter: cssFilterStr } : {}),
+        }
+      : undefined;
 
   return (
     <g
       transform={transform}
       opacity={node.opacity}
       filter={filterAttr}
-      style={blendStyle}
+      style={groupStyle}
       class="canvas-node"
     >
       {node.type === 'group' && (
@@ -400,7 +437,11 @@ export function NodeShape({
                 {node.name}
                 {node.semanticTag ? ` · <${node.semanticTag}>` : ''}
                 {node.layout && node.layout.mode !== 'none'
-                  ? ` · ${node.layout.mode === 'grid' ? `grid(${node.layout.gridColumns ?? 2})` : `flex-${node.layout.direction === 'column' ? 'col' : 'row'}`}`
+                  ? ` · ${
+                      node.layout.mode === 'grid'
+                        ? `grid(${node.layout.gridColumnsMode === 'auto-fit' ? 'auto-fit' : node.layout.gridColumnsMode === 'custom' ? 'custom' : (node.layout.gridColumns ?? 2)})`
+                        : `flex-${node.layout.direction === 'column' || node.layout.direction === 'column-reverse' ? 'col' : 'row'}`
+                    }`
                   : ''}
               </text>
             )}
@@ -420,8 +461,8 @@ export function NodeShape({
                       : 'none'
                 }
                 fill-opacity={!mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined}
-                stroke={mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke}
-                stroke-width={sw}
+                stroke={node.style.borderSides && !mask ? 'none' : (mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke)}
+                stroke-width={node.style.borderSides && !mask ? 0 : sw}
                 stroke-dasharray={dash}
               />
             ) : (
@@ -442,7 +483,7 @@ export function NodeShape({
                     />
                   );
                 })}
-                {hasStroke && (
+                {hasStroke && !node.style.borderSides && (
                   <rect
                     x={node.x + strokeDelta}
                     y={node.y + strokeDelta}
@@ -457,6 +498,7 @@ export function NodeShape({
                 )}
               </>
             )}
+            {renderPerSideBorders(node, node.style.borderSides, mask)}
           </g>
         );
       })()}
@@ -487,8 +529,8 @@ export function NodeShape({
                       : 'none'
                 }
                 fill-opacity={!mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined}
-                stroke={mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke}
-                stroke-width={sw}
+                stroke={node.style.borderSides && !mask ? 'none' : (mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke)}
+                stroke-width={node.style.borderSides && !mask ? 0 : sw}
                 stroke-dasharray={dash}
               />
             ) : (
@@ -509,7 +551,7 @@ export function NodeShape({
                     />
                   );
                 })}
-                {hasStroke && (
+                {hasStroke && !node.style.borderSides && (
                   <rect
                     x={node.x + strokeDelta}
                     y={node.y + strokeDelta}
@@ -524,6 +566,7 @@ export function NodeShape({
                 )}
               </>
             )}
+            {renderPerSideBorders(node, node.style.borderSides, mask)}
           </>
         );
       })()}

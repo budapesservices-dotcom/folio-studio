@@ -10,18 +10,28 @@ import type {
   FolioPage,
   FolioProject,
 } from '../document/types';
+import {
+  isCssLengthUnit,
+  isSafeHtmlClassName,
+  isSafeHtmlId,
+} from '../document/cssUnits';
 import { isBlendMode, isFillPaint, isVisualEffect } from '../document/styling';
 import {
   SEMANTIC_HTML_TAGS,
   isAnimationClip,
+  isBorderSidesConfig,
   isCodeModuleList,
   isComponentSlotsList,
   isComponentVariantsList,
+  isCornerRadiiConfig,
   isDesignTokenCollection,
   isLogicGraph,
+  isNodeCssFilters,
   isNodeLayoutChildConfig,
   isNodeLayoutConfig,
+  isNodeStateOverrides,
   isNodeTokenBindings,
+  isNodeTransitionConfig,
   isResponsiveOverrides,
   validateProject,
 } from '../document/validation';
@@ -361,20 +371,33 @@ function isLayerDropPosition(value: unknown): value is LayerDropPosition {
 
 const COMMON_NODE_KEYS = [
   'id', 'name', 'type', 'x', 'y', 'width', 'height', 'rotation',
-  'opacity', 'blendMode', 'effects', 'visible', 'locked', 'aspectRatioLocked', 'layerColor', 'parentId', 'onCanvas', 'clipMaskBaseId',
+  'opacity', 'blendMode', 'effects', 'cssFilters', 'visible', 'locked', 'aspectRatioLocked', 'layerColor', 'parentId', 'onCanvas', 'clipMaskBaseId',
   'clipMaskMode', 'drawMode',
-  'semanticTag', 'ariaLabel', 'href', 'layout', 'layoutChild', 'responsive', 'tokenBindings',
+  'semanticTag', 'ariaLabel', 'href', 'linkTarget', 'htmlId', 'className',
+  'cursor', 'pointerEvents', 'userSelect', 'transition', 'stateOverrides',
+  'layout', 'layoutChild', 'responsive', 'tokenBindings',
 ] as const;
 
 const TEXT_ALIGN_VALUES = new Set(['left', 'center', 'right', 'justify']);
 const TEXT_VERTICAL_ALIGN_VALUES = new Set(['top', 'middle', 'bottom']);
 const STROKE_ALIGN_VALUES = new Set(['inside', 'center', 'outside']);
+const BORDER_LINE_STYLES = new Set(['solid', 'dashed', 'dotted']);
 const CLIP_MASK_MODE_VALUES = new Set(['inside', 'outside']);
 const DRAW_MODE_VALUES = new Set(['normal', 'inside', 'outside']);
 const TEXT_WRAP_VALUES = new Set(['wrap', 'nowrap']);
 const TEXT_TRANSFORM_VALUES = new Set(['none', 'uppercase', 'lowercase', 'capitalize']);
 const TEXT_DECORATION_VALUES = new Set(['none', 'underline', 'line-through']);
 const IMAGE_FIT_VALUES = new Set(['cover', 'contain', 'fill']);
+const CURSOR_TYPES = new Set(['default', 'pointer', 'grab', 'text', 'not-allowed']);
+const AUTO_NONE_VALUES = new Set(['auto', 'none']);
+const LINK_TARGET_VALUES = new Set(['_self', '_blank']);
+const FONT_SIZE_UNITS = new Set(['px', 'rem', 'em']);
+const LETTER_SPACING_UNITS = new Set(['px', 'em']);
+const LINE_HEIGHT_UNITS = new Set(['', 'px', '%']);
+const SHAPE_STYLE_KEYS = [
+  'fill', 'fills', 'stroke', 'strokeWidth', 'strokeWidthUnit', 'strokeStyle',
+  'strokeDasharray', 'strokeAlign', 'borderSides', 'radius', 'radiusUnit', 'cornerRadii',
+] as const;
 const ASSET_SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 
 function isValidFillsList(value: unknown): boolean {
@@ -398,6 +421,7 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     !isFiniteNumber(value.opacity) || value.opacity < 0 || value.opacity > 1 ||
     (value.blendMode !== undefined && !isBlendMode(value.blendMode)) ||
     (value.effects !== undefined && !isValidEffectsList(value.effects)) ||
+    (value.cssFilters !== undefined && !isNodeCssFilters(value.cssFilters)) ||
     typeof value.visible !== 'boolean' ||
     typeof value.locked !== 'boolean' ||
     (value.aspectRatioLocked !== undefined && typeof value.aspectRatioLocked !== 'boolean') ||
@@ -410,6 +434,14 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     (value.semanticTag !== undefined && !SEMANTIC_HTML_TAGS.has(String(value.semanticTag))) ||
     (value.ariaLabel !== undefined && (typeof value.ariaLabel !== 'string' || value.ariaLabel.length > 512)) ||
     (value.href !== undefined && (typeof value.href !== 'string' || value.href.length > 2048)) ||
+    (value.linkTarget !== undefined && !LINK_TARGET_VALUES.has(String(value.linkTarget))) ||
+    (value.htmlId !== undefined && (typeof value.htmlId !== 'string' || !isSafeHtmlId(value.htmlId))) ||
+    (value.className !== undefined && (typeof value.className !== 'string' || !isSafeHtmlClassName(value.className))) ||
+    (value.cursor !== undefined && !CURSOR_TYPES.has(String(value.cursor))) ||
+    (value.pointerEvents !== undefined && !AUTO_NONE_VALUES.has(String(value.pointerEvents))) ||
+    (value.userSelect !== undefined && !AUTO_NONE_VALUES.has(String(value.userSelect))) ||
+    (value.transition !== undefined && !isNodeTransitionConfig(value.transition)) ||
+    (value.stateOverrides !== undefined && !isNodeStateOverrides(value.stateOverrides)) ||
     (value.layout !== undefined && !isNodeLayoutConfig(value.layout)) ||
     (value.layoutChild !== undefined && !isNodeLayoutChildConfig(value.layoutChild)) ||
     (value.responsive !== undefined && !isResponsiveOverrides(value.responsive)) ||
@@ -427,15 +459,20 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       return false;
     }
     const style = value.style;
-    if (!hasOnlyKeys(style, ['fill', 'fills', 'stroke', 'strokeWidth', 'strokeDasharray', 'strokeAlign', 'radius'])) return false;
+    if (!hasOnlyKeys(style, SHAPE_STYLE_KEYS)) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
       (style.fills === undefined || isValidFillsList(style.fills)) &&
       typeof style.stroke === 'string' && style.stroke.length <= 128 &&
       isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0 &&
+      (style.strokeWidthUnit === undefined || isCssLengthUnit(style.strokeWidthUnit)) &&
+      (style.strokeStyle === undefined || BORDER_LINE_STYLES.has(String(style.strokeStyle))) &&
       (style.strokeDasharray === undefined || (typeof style.strokeDasharray === 'string' && style.strokeDasharray.length <= 128)) &&
       (style.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(style.strokeAlign))) &&
+      (style.borderSides === undefined || isBorderSidesConfig(style.borderSides)) &&
       (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
+      (style.radiusUnit === undefined || isCssLengthUnit(style.radiusUnit)) &&
+      (style.cornerRadii === undefined || isCornerRadiiConfig(style.cornerRadii)) &&
       (value.clipContent === undefined || typeof value.clipContent === 'boolean') &&
       (value.isSection === undefined || typeof value.isSection === 'boolean')
     );
@@ -444,15 +481,20 @@ function isDesignNodeData(value: unknown): value is DesignNode {
   if (value.type === 'rect' || value.type === 'ellipse') {
     if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'style']) || !isRecord(value.style)) return false;
     const style = value.style;
-    if (!hasOnlyKeys(style, ['fill', 'fills', 'stroke', 'strokeWidth', 'strokeDasharray', 'strokeAlign', 'radius'])) return false;
+    if (!hasOnlyKeys(style, SHAPE_STYLE_KEYS)) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
       (style.fills === undefined || isValidFillsList(style.fills)) &&
       typeof style.stroke === 'string' && style.stroke.length <= 128 &&
       isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0 &&
+      (style.strokeWidthUnit === undefined || isCssLengthUnit(style.strokeWidthUnit)) &&
+      (style.strokeStyle === undefined || BORDER_LINE_STYLES.has(String(style.strokeStyle))) &&
       (style.strokeDasharray === undefined || (typeof style.strokeDasharray === 'string' && style.strokeDasharray.length <= 128)) &&
       (style.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(style.strokeAlign))) &&
-      (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0))
+      (style.borderSides === undefined || isBorderSidesConfig(style.borderSides)) &&
+      (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
+      (style.radiusUnit === undefined || isCssLengthUnit(style.radiusUnit)) &&
+      (style.cornerRadii === undefined || isCornerRadiiConfig(style.cornerRadii))
     );
   }
 
@@ -544,16 +586,19 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     if (typeof value.text !== 'string' || value.text.length > 10000) return false;
     const style = value.style;
     if (!hasOnlyKeys(style, [
-      'fill', 'fontSize', 'fontFamily', 'fontWeight', 'letterSpacing', 'lineHeight',
+      'fill', 'fontSize', 'fontSizeUnit', 'fontFamily', 'fontWeight', 'letterSpacing', 'letterSpacingUnit', 'lineHeight', 'lineHeightUnit',
       'textAlign', 'verticalAlign', 'textWrap', 'textTransform', 'textDecoration',
     ])) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
       isFiniteNumber(style.fontSize) && style.fontSize > 0 &&
+      (style.fontSizeUnit === undefined || FONT_SIZE_UNITS.has(String(style.fontSizeUnit))) &&
       typeof style.fontFamily === 'string' && style.fontFamily.length <= 256 &&
       isFiniteNumber(style.fontWeight) &&
       isFiniteNumber(style.letterSpacing) &&
+      (style.letterSpacingUnit === undefined || LETTER_SPACING_UNITS.has(String(style.letterSpacingUnit))) &&
       isFiniteNumber(style.lineHeight) && style.lineHeight > 0 &&
+      (style.lineHeightUnit === undefined || LINE_HEIGHT_UNITS.has(String(style.lineHeightUnit))) &&
       (style.textAlign === undefined || TEXT_ALIGN_VALUES.has(String(style.textAlign))) &&
       (style.verticalAlign === undefined || TEXT_VERTICAL_ALIGN_VALUES.has(String(style.verticalAlign))) &&
       (style.textWrap === undefined || TEXT_WRAP_VALUES.has(String(style.textWrap))) &&
@@ -571,12 +616,17 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     if (value.naturalWidth !== undefined && (!isFiniteNumber(value.naturalWidth) || value.naturalWidth <= 0)) return false;
     if (value.naturalHeight !== undefined && (!isFiniteNumber(value.naturalHeight) || value.naturalHeight <= 0)) return false;
     const style = value.style;
-    if (!hasOnlyKeys(style, ['fit', 'radius', 'stroke', 'strokeWidth'])) return false;
+    if (!hasOnlyKeys(style, ['fit', 'radius', 'radiusUnit', 'cornerRadii', 'stroke', 'strokeWidth', 'strokeWidthUnit', 'strokeStyle', 'borderSides'])) return false;
     return (
       IMAGE_FIT_VALUES.has(String(style.fit)) &&
       (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
+      (style.radiusUnit === undefined || isCssLengthUnit(style.radiusUnit)) &&
+      (style.cornerRadii === undefined || isCornerRadiiConfig(style.cornerRadii)) &&
       (style.stroke === undefined || (typeof style.stroke === 'string' && style.stroke.length <= 128)) &&
-      (style.strokeWidth === undefined || (isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0))
+      (style.strokeWidth === undefined || (isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0)) &&
+      (style.strokeWidthUnit === undefined || isCssLengthUnit(style.strokeWidthUnit)) &&
+      (style.strokeStyle === undefined || BORDER_LINE_STYLES.has(String(style.strokeStyle))) &&
+      (style.borderSides === undefined || isBorderSidesConfig(style.borderSides))
     );
   }
 

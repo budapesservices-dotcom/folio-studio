@@ -3,6 +3,9 @@
  * Keep this layer independent from Preact and browser rendering APIs.
  */
 
+import type { CssLengthUnit, CssLengthValue } from './cssUnits';
+export type { CssLengthUnit, CssLengthValue };
+
 export const FOLIO_FORMAT = 'folio-project' as const;
 export const FOLIO_LEGACY_FORMAT_VERSION = 1 as const;
 export const FOLIO_FORMAT_VERSION = 2 as const;
@@ -21,6 +24,9 @@ export type SemanticHtmlTag =
   | 'h1'
   | 'h2'
   | 'h3'
+  | 'h4'
+  | 'h5'
+  | 'h6'
   | 'p'
   | 'span'
   | 'ul'
@@ -39,7 +45,7 @@ export interface NodePadding {
 }
 
 export type LayoutMode = 'none' | 'flex' | 'grid';
-export type LayoutDirection = 'row' | 'column';
+export type LayoutDirection = 'row' | 'column' | 'row-reverse' | 'column-reverse';
 export type LayoutWrap = 'nowrap' | 'wrap';
 export type LayoutJustifyContent =
   | 'start'
@@ -49,8 +55,12 @@ export type LayoutJustifyContent =
   | 'space-around'
   | 'space-evenly';
 export type LayoutAlignItems = 'start' | 'center' | 'end' | 'stretch';
-export type LayoutOverflow = 'visible' | 'hidden' | 'scroll';
+export type LayoutOverflow = 'visible' | 'hidden' | 'scroll' | 'scroll-y' | 'scroll-x' | 'auto';
 export type LayoutPaddingMode = 'uniform' | 'per-side';
+export type GridColumnsMode = 'fixed' | 'auto-fit' | 'custom';
+export type GridRowsMode = 'auto' | 'fixed' | 'custom';
+export type ScrollSnapType = 'none' | 'x' | 'y';
+export type ScrollSnapAlign = 'none' | 'start' | 'center' | 'end';
 
 export interface NodeLayoutConfig {
   mode: LayoutMode;
@@ -62,23 +72,53 @@ export interface NodeLayoutConfig {
   columnGap?: number;
   rowGap?: number;
   gridColumns?: number;
+  /** CSS Grid column mode: fixed track count, responsive auto-fit, or custom CSS template. */
+  gridColumnsMode?: GridColumnsMode;
+  /** Minimum card width for gridColumnsMode === 'auto-fit' (compiled to minmax(X, 1fr)). */
+  gridMinColumnWidth?: CssLengthValue;
+  /** Custom CSS grid-template-columns expression when gridColumnsMode === 'custom'. */
+  gridTemplateColumns?: string;
+  /** CSS Grid row track mode: auto, fixed count, or custom template. */
+  gridRowsMode?: GridRowsMode;
+  /** Fixed row count (1-12) when gridRowsMode === 'fixed'. */
+  gridRows?: number;
+  /** Custom CSS grid-template-rows expression when gridRowsMode === 'custom'. */
+  gridTemplateRows?: string;
   padding: NodePadding;
-  /** Optional Framer-style overflow behavior (visible, hidden, scroll). */
+  /** Optional Framer-style overflow behavior (visible, hidden, scroll, scroll-y, scroll-x, auto). */
   overflow?: LayoutOverflow;
+  /** Optional CSS Scroll Snap container axis. */
+  scrollSnapType?: ScrollSnapType;
   /** Optional inspector UI preference for uniform vs individual T/R/B/L padding. */
   paddingMode?: LayoutPaddingMode;
+  /** Optional unit metadata for gap/padding codegen parity. */
+  gapUnit?: CssLengthUnit;
+  columnGapUnit?: CssLengthUnit;
+  rowGapUnit?: CssLengthUnit;
+  paddingUnit?: CssLengthUnit;
 }
 
 export type LayoutSizingMode = 'fixed' | 'hug' | 'fill' | 'relative';
-export type LayoutChildPosition = 'relative' | 'absolute';
+export type LayoutChildPosition = 'relative' | 'absolute' | 'fixed' | 'sticky';
 export type HorizontalConstraint = 'left' | 'right' | 'left-right' | 'center' | 'scale';
 export type VerticalConstraint = 'top' | 'bottom' | 'top-bottom' | 'center' | 'scale';
 
+export interface NodeInsetOffsets {
+  top?: CssLengthValue;
+  right?: CssLengthValue;
+  bottom?: CssLengthValue;
+  left?: CssLengthValue;
+}
+
 export interface NodeLayoutChildConfig {
-  /** Positioning mode inside an Auto-Layout parent: 'relative' participates in flow; 'absolute' floats via constraints. */
+  /** Positioning mode: relative, absolute, fixed, or sticky. */
   position?: LayoutChildPosition;
   widthMode?: LayoutSizingMode;
   heightMode?: LayoutSizingMode;
+  /** Optional explicit CSS length value (px, %, vw, vh, dvh, rem, em) for fixed width codegen. */
+  widthValue?: CssLengthValue;
+  /** Optional explicit CSS length value (px, %, vw, vh, dvh, rem, em) for fixed height codegen. */
+  heightValue?: CssLengthValue;
   /** Percentage width (1–100+) when widthMode === 'relative'. */
   widthPercent?: number;
   /** Percentage height (1–100+) when heightMode === 'relative'. */
@@ -88,12 +128,26 @@ export interface NodeLayoutChildConfig {
   flexGrow?: number;
   /** Optional CSS Grid column span (1–12) when parent layout mode is 'grid'. */
   gridColumnSpan?: number;
-  /** Optional stacking order when overlapping siblings or positioned absolutely. */
+  /** When true inside a Grid parent, emits grid-column: 1 / -1. */
+  gridColumnSpanFull?: boolean;
+  /** Optional CSS Grid row span (1–6) when parent layout mode is 'grid'. */
+  gridRowSpan?: number;
+  /** Optional CSS Scroll Snap child alignment. */
+  scrollSnapAlign?: ScrollSnapAlign;
+  /** Optional stacking order when overlapping siblings or positioned absolutely/sticky/fixed. */
   zIndex?: number;
   minWidth?: number;
   maxWidth?: number;
   minHeight?: number;
   maxHeight?: number;
+  minWidthValue?: CssLengthValue;
+  maxWidthValue?: CssLengthValue;
+  minHeightValue?: CssLengthValue;
+  maxHeightValue?: CssLengthValue;
+  /** Optional CSS aspect-ratio string (e.g. '16 / 9', '1 / 1', 'auto'). */
+  aspectRatio?: string;
+  /** Optional CSS inset offsets (top/right/bottom/left) for positioned elements. */
+  inset?: NodeInsetOffsets;
   constraints?: {
     horizontal: HorizontalConstraint;
     vertical: VerticalConstraint;
@@ -108,6 +162,57 @@ export interface ResponsiveNodeOverride {
   gridColumns?: number;
   gap?: number;
   padding?: NodePadding;
+}
+
+export type InteractiveStateId = 'default' | 'hover' | 'active' | 'focus' | 'disabled';
+export type PseudoStateKey = Exclude<InteractiveStateId, 'default'>;
+export type TransitionPreset = 'none' | 'fast' | 'smooth' | 'bouncy';
+export type NodeCursorType = 'default' | 'pointer' | 'grab' | 'text' | 'not-allowed';
+export type BorderLineStyle = 'solid' | 'dashed' | 'dotted';
+
+export interface NodeTransitionConfig {
+  preset: TransitionPreset;
+  durationMs?: number;
+  durationUnit?: 'ms' | 's';
+}
+
+export interface NodeStateOverride {
+  fill?: string;
+  stroke?: string;
+  strokeWidth?: number;
+  opacity?: number;
+  radius?: number;
+  scale?: number;
+  translateY?: number;
+  shadowPreset?: 'none' | 'soft' | 'medium' | 'hard' | 'neon-glow';
+}
+
+export interface NodeCssFilters {
+  brightness?: number;
+  contrast?: number;
+  saturate?: number;
+  grayscale?: number;
+}
+
+export interface BorderSideStyle {
+  width: number;
+  widthUnit?: CssLengthUnit;
+  color: string;
+  style?: BorderLineStyle;
+}
+
+export interface BorderSidesConfig {
+  top?: BorderSideStyle;
+  right?: BorderSideStyle;
+  bottom?: BorderSideStyle;
+  left?: BorderSideStyle;
+}
+
+export interface CornerRadiiConfig {
+  topLeft: number;
+  topRight: number;
+  bottomRight: number;
+  bottomLeft: number;
 }
 
 export interface NodeTokenBindings {
@@ -236,6 +341,12 @@ export interface NodeBase {
   ariaLabel?: string;
   /** Optional link href when semanticTag is 'a'. */
   href?: string;
+  /** Optional link target when semanticTag is 'a' ('_blank' emits rel="noopener noreferrer"). */
+  linkTarget?: '_self' | '_blank';
+  /** Optional HTML id attribute for semantic web export. */
+  htmlId?: string;
+  /** Optional extra CSS className(s) for semantic web export. */
+  className?: string;
   /** Optional container Auto-Layout (Flex / Grid) configuration. */
   layout?: NodeLayoutConfig;
   /** Optional child sizing & constraint rules inside an Auto-Layout or responsive parent. */
@@ -248,6 +359,16 @@ export interface NodeBase {
   blendMode?: BlendMode;
   /** Optional visual effects stack (Drop Shadow, Inner Shadow, Layer Blur, Backdrop Blur). */
   effects?: VisualEffect[];
+  /** Optional CSS image/element filters (brightness, contrast, saturate, grayscale). */
+  cssFilters?: NodeCssFilters;
+  /** Optional web interaction properties (cursor, pointer-events, user-select). */
+  cursor?: NodeCursorType;
+  pointerEvents?: 'auto' | 'none';
+  userSelect?: 'auto' | 'none';
+  /** Optional CSS transition preset and duration. */
+  transition?: NodeTransitionConfig;
+  /** Optional CSS pseudo-state visual overrides (:hover, :active, :focus, :disabled). */
+  stateOverrides?: Partial<Record<PseudoStateKey, NodeStateOverride>>;
   /** When true, W and H scale proportionally in the Inspector and across all canvas resize handles. */
   aspectRatioLocked?: boolean;
 }
@@ -260,9 +381,16 @@ export interface ShapeStyle {
   fill: string;
   stroke: string;
   strokeWidth: number;
+  strokeWidthUnit?: CssLengthUnit;
+  strokeStyle?: BorderLineStyle;
   strokeDasharray?: string;
   strokeAlign?: StrokeAlign;
+  /** Optional per-side CSS border definitions (top/right/bottom/left). */
+  borderSides?: BorderSidesConfig;
   radius?: number;
+  radiusUnit?: CssLengthUnit;
+  /** Optional individual corner radii (TL/TR/BR/BL). */
+  cornerRadii?: CornerRadiiConfig;
   /** Optional ordered multi-fill paint stack (bottom-to-top; falls back to `fill` when omitted). */
   fills?: FillPaint[];
 }
@@ -367,10 +495,13 @@ export interface TextNode extends NodeBase {
   style: {
     fill: string;
     fontSize: number;
+    fontSizeUnit?: 'px' | 'rem' | 'em';
     fontFamily: string;
     fontWeight: number;
     letterSpacing: number;
+    letterSpacingUnit?: 'px' | 'em';
     lineHeight: number;
+    lineHeightUnit?: '' | 'px' | '%';
     textAlign?: TextAlign;
     verticalAlign?: TextVerticalAlign;
     textWrap?: TextWrapMode;
@@ -384,8 +515,13 @@ export type ImageFitMode = 'cover' | 'contain' | 'fill';
 export interface ImageStyle {
   fit: ImageFitMode;
   radius?: number;
+  radiusUnit?: CssLengthUnit;
+  cornerRadii?: CornerRadiiConfig;
   stroke?: string;
   strokeWidth?: number;
+  strokeWidthUnit?: CssLengthUnit;
+  strokeStyle?: BorderLineStyle;
+  borderSides?: BorderSidesConfig;
 }
 
 export interface ImageNode extends NodeBase {

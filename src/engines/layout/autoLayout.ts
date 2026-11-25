@@ -1,10 +1,14 @@
 import type {
   BreakpointId,
+  CssLengthValue,
   DesignNode,
   DesignTokenCollection,
+  LayoutDirection,
+  LayoutMode,
   NodeLayoutConfig,
   NodePadding,
 } from '../../core/document/types';
+import { parseAspectRatioNumeric } from '../../core/document/cssUnits';
 import { resolveNodeWithTokens } from '../../core/document/tokens';
 
 export const BREAKPOINT_PRESETS: Record<BreakpointId, { id: BreakpointId; label: string; width: number }> = {
@@ -190,6 +194,95 @@ function resolveAbsolutePinnedChildren(
   }
 }
 
+function isOutOfFlowPosition(position: string | undefined): boolean {
+  return position === 'absolute' || position === 'fixed';
+}
+
+function resolveCssLengthToPx(val: CssLengthValue | undefined, referencePx: number, fallbackPx: number): number {
+  if (!val || !Number.isFinite(val.value)) return fallbackPx;
+  switch (val.unit) {
+    case 'px':
+      return val.value;
+    case '%':
+      return (val.value / 100) * referencePx;
+    case 'rem':
+    case 'em':
+      return val.value * 16;
+    case 'vw':
+      return (val.value / 100) * 1440;
+    case 'vh':
+    case 'dvh':
+      return (val.value / 100) * 900;
+    default:
+      return val.value;
+  }
+}
+
+function parseCustomGridTrackWidths(
+  template: string | undefined,
+  innerWidth: number,
+  colGap: number,
+): number[] | null {
+  if (!template) return null;
+  const trimmed = template.trim();
+  if (!trimmed) return null;
+
+  // Handle repeat(N, track) shorthand
+  const repeatMatch = /^repeat\(\s*(\d+)\s*,\s*([^)]+)\)$/.exec(trimmed);
+  const rawTokens = repeatMatch
+    ? Array.from({ length: Math.max(1, Math.min(24, Number(repeatMatch[1]))) }, () => repeatMatch[2].trim())
+    : trimmed.split(/\s+/).filter(Boolean);
+
+  if (rawTokens.length === 0 || rawTokens.length > 24) return null;
+
+  const totalGap = Math.max(0, rawTokens.length - 1) * colGap;
+  const available = Math.max(1, innerWidth - totalGap);
+
+  const fixedPx: Array<number | null> = [];
+  const frWeights: number[] = [];
+  let usedFixed = 0;
+  let totalFr = 0;
+
+  for (const token of rawTokens) {
+    if (token.endsWith('fr')) {
+      const weight = Number(token.slice(0, -2));
+      const safeWeight = Number.isFinite(weight) && weight > 0 ? weight : 1;
+      fixedPx.push(null);
+      frWeights.push(safeWeight);
+      totalFr += safeWeight;
+    } else if (token.endsWith('px')) {
+      const px = Math.max(1, Number(token.slice(0, -2)) || 100);
+      fixedPx.push(px);
+      frWeights.push(0);
+      usedFixed += px;
+    } else if (token.endsWith('%')) {
+      const pct = Math.max(1, Number(token.slice(0, -1)) || 50);
+      const px = Math.max(1, (pct / 100) * available);
+      fixedPx.push(px);
+      frWeights.push(0);
+      usedFixed += px;
+    } else if (token.endsWith('rem') || token.endsWith('em')) {
+      const val = Math.max(0.5, Number(token.replace(/r?em$/, '')) || 10);
+      const px = val * 16;
+      fixedPx.push(px);
+      frWeights.push(0);
+      usedFixed += px;
+    } else {
+      // auto / minmax(...) fallback -> 1fr share
+      fixedPx.push(null);
+      frWeights.push(1);
+      totalFr += 1;
+    }
+  }
+
+  const remaining = Math.max(1, available - usedFixed);
+  return rawTokens.map((_, idx) => {
+    const fixed = fixedPx[idx];
+    if (fixed !== null) return fixed;
+    return Math.max(1, (remaining * frWeights[idx]) / Math.max(1, totalFr));
+  });
+}
+
 function solveFlexContainer(
   container: DesignNode,
   allVisibleChildren: DesignNode[],
@@ -199,10 +292,12 @@ function solveFlexContainer(
   const layout = container.layout;
   if (!layout || layout.mode !== 'flex') return;
 
-  const flowChildren = allVisibleChildren.filter((c) => c.layoutChild?.position !== 'absolute');
-  const absoluteChildren = allVisibleChildren.filter((c) => c.layoutChild?.position === 'absolute');
+  const rawFlowChildren = allVisibleChildren.filter((c) => !isOutOfFlowPosition(c.layoutChild?.position));
+  const absoluteChildren = allVisibleChildren.filter((c) => isOutOfFlowPosition(c.layoutChild?.position));
 
-  const isRow = layout.direction === 'row';
+  const isRow = layout.direction === 'row' || layout.direction === 'row-reverse';
+  const isReverse = layout.direction === 'row-reverse' || layout.direction === 'column-reverse';
+  const flowChildren = isReverse ? [...rawFlowChildren].reverse() : rawFlowChildren;
   const wrap = layout.wrap === 'wrap';
   const justify = layout.justifyContent ?? 'start';
   const align = layout.alignItems ?? 'start';
@@ -244,9 +339,12 @@ function solveFlexContainer(
     }
 
     let baseHeight = latestChild.height;
+    const ratio = parseAspectRatioNumeric(childCfg?.aspectRatio);
     if (heightMode === 'relative') {
       const pct = Math.max(1, childCfg?.heightPercent ?? 100) / 100;
       baseHeight = clampSize(innerHeight * pct, childCfg?.minHeight, childCfg?.maxHeight);
+    } else if (ratio && heightMode === 'fixed') {
+      baseHeight = clampSize(baseWidth / ratio, childCfg?.minHeight, childCfg?.maxHeight);
     } else if (heightMode === 'fixed') {
       baseHeight = clampSize(latestChild.height, childCfg?.minHeight, childCfg?.maxHeight);
     }
@@ -414,110 +512,227 @@ function solveGridContainer(
   const layout = container.layout;
   if (!layout || layout.mode !== 'grid') return;
 
-  const flowChildren = allVisibleChildren.filter((c) => c.layoutChild?.position !== 'absolute');
-  const absoluteChildren = allVisibleChildren.filter((c) => c.layoutChild?.position === 'absolute');
+  const flowChildren = allVisibleChildren.filter((c) => !isOutOfFlowPosition(c.layoutChild?.position));
+  const absoluteChildren = allVisibleChildren.filter((c) => isOutOfFlowPosition(c.layoutChild?.position));
 
-  const cols = Math.max(1, Math.round(layout.gridColumns ?? 2));
   const colGap = Math.max(0, layout.columnGap ?? layout.gap);
   const rowGap = Math.max(0, layout.rowGap ?? layout.gap);
   const pad = layout.padding;
-
   const innerWidth = Math.max(1, container.width - pad.left - pad.right);
-  const cellWidth = Math.max(1, (innerWidth - colGap * (cols - 1)) / cols);
+
+  const columnsMode = layout.gridColumnsMode ?? 'fixed';
+  let trackWidths: number[];
+  if (columnsMode === 'auto-fit') {
+    const minCardPx = Math.max(
+      40,
+      resolveCssLengthToPx(layout.gridMinColumnWidth, innerWidth, 220),
+    );
+    const autoCols = Math.max(1, Math.min(24, Math.floor((innerWidth + colGap) / (minCardPx + colGap))));
+    const cellW = Math.max(1, (innerWidth - colGap * (autoCols - 1)) / autoCols);
+    trackWidths = Array.from({ length: autoCols }, () => cellW);
+  } else if (columnsMode === 'custom') {
+    const parsed = parseCustomGridTrackWidths(layout.gridTemplateColumns, innerWidth, colGap);
+    if (parsed && parsed.length > 0) {
+      trackWidths = parsed;
+    } else {
+      const fallbackCols = Math.max(1, Math.round(layout.gridColumns ?? 2));
+      const cellW = Math.max(1, (innerWidth - colGap * (fallbackCols - 1)) / fallbackCols);
+      trackWidths = Array.from({ length: fallbackCols }, () => cellW);
+    }
+  } else {
+    const cols = Math.max(1, Math.round(layout.gridColumns ?? 2));
+    const cellW = Math.max(1, (innerWidth - colGap * (cols - 1)) / cols);
+    trackWidths = Array.from({ length: cols }, () => cellW);
+  }
+
+  const cols = trackWidths.length;
+  const trackOffsets: number[] = [];
+  let xAcc = 0;
+  for (let c = 0; c < cols; c += 1) {
+    trackOffsets.push(xAcc);
+    xAcc += trackWidths[c] + colGap;
+  }
+
   const align = layout.alignItems ?? 'stretch';
   const justify = layout.justifyContent ?? 'start';
 
-  // Pack children into rows respecting optional gridColumnSpan (1..cols)
-  interface GridPlacement {
+  // 2D occupancy grid supporting both gridColumnSpan (including full) and gridRowSpan (Bento grids)
+  interface GridCellPlacement {
     child: DesignNode;
+    rowStart: number;
     colStart: number;
-    span: number;
+    colSpan: number;
+    rowSpan: number;
   }
-  const rows: GridPlacement[][] = [];
-  let currentRow: GridPlacement[] = [];
-  let colCursor = 0;
+  const occupied: boolean[][] = [];
+  const placements: GridCellPlacement[] = [];
+
+  const ensureRow = (r: number) => {
+    while (occupied.length <= r) {
+      occupied.push(Array.from({ length: cols }, () => false));
+    }
+  };
+
+  const canPlace = (row: number, col: number, colSpan: number, rowSpan: number): boolean => {
+    if (col + colSpan > cols) return false;
+    for (let dr = 0; dr < rowSpan; dr += 1) {
+      ensureRow(row + dr);
+      for (let dc = 0; dc < colSpan; dc += 1) {
+        if (occupied[row + dr][col + dc]) return false;
+      }
+    }
+    return true;
+  };
+
+  const markOccupied = (row: number, col: number, colSpan: number, rowSpan: number): void => {
+    for (let dr = 0; dr < rowSpan; dr += 1) {
+      ensureRow(row + dr);
+      for (let dc = 0; dc < colSpan; dc += 1) {
+        occupied[row + dr][col + dc] = true;
+      }
+    }
+  };
+
+  let scanRow = 0;
+  let scanCol = 0;
 
   for (const rawChild of flowChildren) {
     const child = nodeById.get(rawChild.id) ?? rawChild;
-    const span = Math.max(1, Math.min(cols, Math.round(child.layoutChild?.gridColumnSpan ?? 1)));
-    if (colCursor > 0 && colCursor + span > cols) {
-      rows.push(currentRow);
-      currentRow = [];
-      colCursor = 0;
-    }
-    currentRow.push({ child, colStart: colCursor, span });
-    colCursor += span;
-    if (colCursor >= cols) {
-      rows.push(currentRow);
-      currentRow = [];
-      colCursor = 0;
+    const colSpan = child.layoutChild?.gridColumnSpanFull
+      ? cols
+      : Math.max(1, Math.min(cols, Math.round(child.layoutChild?.gridColumnSpan ?? 1)));
+    const rowSpan = Math.max(1, Math.min(6, Math.round(child.layoutChild?.gridRowSpan ?? 1)));
+
+    let placed = false;
+    let r = scanRow;
+    let c = scanCol;
+    while (!placed && r < 256) {
+      if (canPlace(r, c, colSpan, rowSpan)) {
+        markOccupied(r, c, colSpan, rowSpan);
+        placements.push({ child, rowStart: r, colStart: c, colSpan, rowSpan });
+        scanRow = r;
+        scanCol = c + colSpan;
+        if (scanCol >= cols) {
+          scanRow += 1;
+          scanCol = 0;
+        }
+        placed = true;
+      } else {
+        c += 1;
+        if (c >= cols) {
+          r += 1;
+          c = 0;
+        }
+      }
     }
   }
-  if (currentRow.length > 0) rows.push(currentRow);
 
-  let yCursor = container.y + pad.top;
+  const totalRows = Math.max(
+    occupied.length,
+    layout.gridRowsMode === 'fixed' && layout.gridRows ? Math.round(layout.gridRows) : 0,
+  );
+  const rowHeights: number[] = Array.from({ length: totalRows }, () => 1);
 
-  for (const rowPlacements of rows) {
-    const rowHeight = Math.max(...rowPlacements.map((p) => p.child.height), 1);
-
-    for (const { child, colStart, span } of rowPlacements) {
-      const childCfg = child.layoutChild;
-      const spanWidth = Math.max(1, cellWidth * span + colGap * (span - 1));
-      const widthMode = childCfg?.widthMode ?? 'fill';
-      const heightMode = childCfg?.heightMode ?? 'fixed';
-
-      let nextW: number;
-      if (widthMode === 'fixed') {
-        nextW = clampSize(child.width, childCfg?.minWidth, childCfg?.maxWidth);
-      } else if (widthMode === 'relative') {
-        const pct = Math.max(1, childCfg?.widthPercent ?? 100) / 100;
-        nextW = clampSize(spanWidth * pct, childCfg?.minWidth, childCfg?.maxWidth);
-      } else {
-        nextW = clampSize(spanWidth, childCfg?.minWidth, childCfg?.maxWidth);
+  // Pass A: single-row children establish natural row heights
+  for (const p of placements) {
+    if (p.rowSpan === 1) {
+      rowHeights[p.rowStart] = Math.max(rowHeights[p.rowStart] ?? 1, p.child.height);
+    }
+  }
+  // Pass B: multi-row children expand rows proportionally if taller than summed rows
+  for (const p of placements) {
+    if (p.rowSpan > 1) {
+      let spanH = 0;
+      for (let dr = 0; dr < p.rowSpan; dr += 1) {
+        spanH += rowHeights[p.rowStart + dr] ?? 1;
       }
-
-      const effectiveAlign =
-        childCfg?.alignSelf && childCfg.alignSelf !== 'auto' ? childCfg.alignSelf : align;
-      let nextH: number;
-      if (heightMode === 'fill' || effectiveAlign === 'stretch') {
-        nextH = clampSize(rowHeight, childCfg?.minHeight, childCfg?.maxHeight);
-      } else if (heightMode === 'relative') {
-        const pct = Math.max(1, childCfg?.heightPercent ?? 100) / 100;
-        nextH = clampSize(rowHeight * pct, childCfg?.minHeight, childCfg?.maxHeight);
-      } else {
-        nextH = clampSize(child.height, childCfg?.minHeight, childCfg?.maxHeight);
+      spanH += Math.max(0, p.rowSpan - 1) * rowGap;
+      if (p.child.height > spanH) {
+        const deficit = (p.child.height - spanH) / p.rowSpan;
+        for (let dr = 0; dr < p.rowSpan; dr += 1) {
+          rowHeights[p.rowStart + dr] = (rowHeights[p.rowStart + dr] ?? 1) + deficit;
+        }
       }
+    }
+  }
 
-      let cellX = container.x + pad.left + colStart * (cellWidth + colGap);
-      if (nextW < spanWidth) {
-        if (justify === 'center') cellX += (spanWidth - nextW) / 2;
-        else if (justify === 'end') cellX += spanWidth - nextW;
-      }
+  const rowOffsets: number[] = [];
+  let yAcc = 0;
+  for (let r = 0; r < totalRows; r += 1) {
+    rowOffsets.push(yAcc);
+    yAcc += rowHeights[r] + rowGap;
+  }
 
-      let nextY = yCursor;
-      if (effectiveAlign === 'center') nextY = yCursor + (rowHeight - nextH) / 2;
-      else if (effectiveAlign === 'end') nextY = yCursor + (rowHeight - nextH);
+  for (const { child, rowStart, colStart, colSpan, rowSpan } of placements) {
+    const childCfg = child.layoutChild;
+    let spanWidth = 0;
+    for (let dc = 0; dc < colSpan; dc += 1) {
+      spanWidth += trackWidths[colStart + dc] ?? 1;
+    }
+    spanWidth = Math.max(1, spanWidth + colGap * (colSpan - 1));
 
-      const prev = nodeById.get(child.id) ?? child;
-      const dx = roundPx(cellX) - prev.x;
-      const dy = roundPx(nextY) - prev.y;
-      nodeById.set(prev.id, {
-        ...prev,
-        x: roundPx(cellX),
-        y: roundPx(nextY),
-        width: nextW,
-        height: nextH,
-      });
-      shiftSubtree(nodeById, childrenByParent, prev.id, dx, dy);
+    let spanHeight = 0;
+    for (let dr = 0; dr < rowSpan; dr += 1) {
+      spanHeight += rowHeights[rowStart + dr] ?? 1;
+    }
+    spanHeight = Math.max(1, spanHeight + rowGap * (rowSpan - 1));
+
+    const widthMode = childCfg?.widthMode ?? 'fill';
+    const heightMode = childCfg?.heightMode ?? 'fixed';
+
+    let nextW: number;
+    if (widthMode === 'fixed') {
+      nextW = clampSize(child.width, childCfg?.minWidth, childCfg?.maxWidth);
+    } else if (widthMode === 'relative') {
+      const pct = Math.max(1, childCfg?.widthPercent ?? 100) / 100;
+      nextW = clampSize(spanWidth * pct, childCfg?.minWidth, childCfg?.maxWidth);
+    } else {
+      nextW = clampSize(spanWidth, childCfg?.minWidth, childCfg?.maxWidth);
     }
 
-    yCursor += rowHeight + rowGap;
+    const effectiveAlign =
+      childCfg?.alignSelf && childCfg.alignSelf !== 'auto' ? childCfg.alignSelf : align;
+    const ratio = parseAspectRatioNumeric(childCfg?.aspectRatio);
+    let nextH: number;
+    if (ratio && heightMode !== 'fill') {
+      nextH = clampSize(nextW / ratio, childCfg?.minHeight, childCfg?.maxHeight);
+    } else if (heightMode === 'fill' || effectiveAlign === 'stretch' || rowSpan > 1) {
+      nextH = clampSize(spanHeight, childCfg?.minHeight, childCfg?.maxHeight);
+    } else if (heightMode === 'relative') {
+      const pct = Math.max(1, childCfg?.heightPercent ?? 100) / 100;
+      nextH = clampSize(spanHeight * pct, childCfg?.minHeight, childCfg?.maxHeight);
+    } else {
+      nextH = clampSize(child.height, childCfg?.minHeight, childCfg?.maxHeight);
+    }
+
+    let cellX = container.x + pad.left + (trackOffsets[colStart] ?? 0);
+    if (nextW < spanWidth) {
+      if (justify === 'center') cellX += (spanWidth - nextW) / 2;
+      else if (justify === 'end') cellX += spanWidth - nextW;
+    }
+
+    const rowY = container.y + pad.top + (rowOffsets[rowStart] ?? 0);
+    let nextY = rowY;
+    if (effectiveAlign === 'center') nextY = rowY + (spanHeight - nextH) / 2;
+    else if (effectiveAlign === 'end') nextY = rowY + (spanHeight - nextH);
+
+    const prev = nodeById.get(child.id) ?? child;
+    const dx = roundPx(cellX) - prev.x;
+    const dy = roundPx(nextY) - prev.y;
+    nodeById.set(prev.id, {
+      ...prev,
+      x: roundPx(cellX),
+      y: roundPx(nextY),
+      width: nextW,
+      height: nextH,
+    });
+    shiftSubtree(nodeById, childrenByParent, prev.id, dx, dy);
   }
 
   const latest = nodeById.get(container.id) ?? container;
   let resolvedContainer = latest;
-  if (container.layoutChild?.heightMode === 'hug' && rows.length > 0) {
-    const usedH = yCursor - rowGap - container.y + pad.bottom;
+  if (container.layoutChild?.heightMode === 'hug' && totalRows > 0) {
+    const usedH = yAcc - rowGap + pad.top + pad.bottom;
     resolvedContainer = {
       ...latest,
       height: clampSize(usedH, container.layoutChild?.minHeight, container.layoutChild?.maxHeight),
@@ -670,4 +885,151 @@ export function applyAutoLayoutToNodes(
       height: computed.height,
     };
   });
+}
+
+export interface FrameModeConversionResult {
+  readonly nextNodes: DesignNode[];
+  readonly detectedDirection: LayoutDirection;
+  readonly estimatedGap: number;
+  readonly childOrderIds: string[];
+}
+
+/**
+ * Pure deterministic converter for switching a Frame between Freeform ('none'),
+ * Stack ('flex'), and Grid ('grid').
+ * When converting Freeform -> Stack, detects dominant visual axis, sorts children
+ * by visual order, estimates initial positive gap, and solves layout so the caller
+ * can commit the entire transition in ONE atomic Native Command transaction.
+ */
+export function computeFrameModeConversion(
+  nodes: readonly DesignNode[],
+  containerId: string,
+  targetMode: LayoutMode,
+  tokens?: DesignTokenCollection,
+): FrameModeConversionResult | null {
+  const container = nodes.find((n) => n.id === containerId);
+  if (!container) return null;
+
+  const existingLayout = container.layout;
+  const basePadding: NodePadding = existingLayout?.padding ?? { top: 16, right: 16, bottom: 16, left: 16 };
+  const directChildren = nodes.filter(
+    (n) => n.parentId === containerId && n.visible && n.onCanvas !== false && !isOutOfFlowPosition(n.layoutChild?.position),
+  );
+
+  if (targetMode === 'none') {
+    const nextNodes = nodes.map((node) =>
+      node.id === containerId
+        ? {
+            ...node,
+            layout: {
+              ...(existingLayout ?? {
+                direction: 'column' as const,
+                gap: 12,
+                padding: basePadding,
+              }),
+              mode: 'none' as const,
+            },
+          }
+        : node,
+    );
+    return {
+      nextNodes,
+      detectedDirection: existingLayout?.direction ?? 'column',
+      estimatedGap: existingLayout?.gap ?? 12,
+      childOrderIds: directChildren.map((c) => c.id),
+    };
+  }
+
+  let detectedDirection: LayoutDirection = existingLayout?.direction ?? 'column';
+  let estimatedGap = existingLayout?.gap ?? 12;
+  let orderedChildren = [...directChildren];
+
+  if (targetMode === 'flex' && (!existingLayout || existingLayout.mode === 'none') && directChildren.length >= 2) {
+    const centersX = directChildren.map((c) => c.x + c.width / 2);
+    const centersY = directChildren.map((c) => c.y + c.height / 2);
+    const spreadX = Math.max(...centersX) - Math.min(...centersX);
+    const spreadY = Math.max(...centersY) - Math.min(...centersY);
+    detectedDirection = spreadX > spreadY ? 'row' : 'column';
+
+    orderedChildren.sort((a, b) =>
+      detectedDirection === 'row'
+        ? (a.x - b.x) || (a.y - b.y)
+        : (a.y - b.y) || (a.x - b.x),
+    );
+
+    const positiveGaps: number[] = [];
+    for (let i = 1; i < orderedChildren.length; i += 1) {
+      const prev = orderedChildren[i - 1];
+      const curr = orderedChildren[i];
+      const delta = detectedDirection === 'row'
+        ? curr.x - (prev.x + prev.width)
+        : curr.y - (prev.y + prev.height);
+      if (delta >= 0) positiveGaps.push(delta);
+    }
+    if (positiveGaps.length > 0) {
+      const avg = positiveGaps.reduce((acc, g) => acc + g, 0) / positiveGaps.length;
+      estimatedGap = Math.max(0, Math.min(96, Math.round(avg / 2) * 2));
+    } else {
+      estimatedGap = 12;
+    }
+  } else if (targetMode === 'grid') {
+    orderedChildren.sort((a, b) => (Math.round(a.y / 16) - Math.round(b.y / 16)) || (a.x - b.x));
+  }
+
+  const nextLayout: NodeLayoutConfig =
+    targetMode === 'flex'
+      ? {
+          ...(existingLayout ?? {
+            direction: detectedDirection,
+            gap: estimatedGap,
+            padding: basePadding,
+          }),
+          mode: 'flex',
+          direction: (!existingLayout || existingLayout.mode === 'none') ? detectedDirection : existingLayout.direction,
+          gap: (!existingLayout || existingLayout.mode === 'none') ? estimatedGap : existingLayout.gap,
+          justifyContent: existingLayout?.justifyContent ?? 'start',
+          alignItems: existingLayout?.alignItems ?? 'start',
+          padding: basePadding,
+        }
+      : {
+          ...(existingLayout ?? {
+            direction: 'row',
+            gap: 16,
+            padding: basePadding,
+          }),
+          mode: 'grid',
+          gridColumnsMode: existingLayout?.gridColumnsMode ?? 'fixed',
+          gridColumns: existingLayout?.gridColumns ?? 2,
+          gridRowsMode: existingLayout?.gridRowsMode ?? 'auto',
+          gap: existingLayout?.gap ?? 16,
+          columnGap: existingLayout?.columnGap ?? existingLayout?.gap ?? 16,
+          rowGap: existingLayout?.rowGap ?? existingLayout?.gap ?? 16,
+          alignItems: existingLayout?.alignItems ?? 'stretch',
+          padding: basePadding,
+        };
+
+  // Reorder direct children slots in-place so visual order becomes DOM/AST order
+  const orderedIds = orderedChildren.map((c) => c.id);
+  const orderedSet = new Set(orderedIds);
+  let childInsertCursor = 0;
+  const reorderedWithLayout: DesignNode[] = nodes.map((node) => {
+    if (node.id === containerId) {
+      return { ...node, layout: nextLayout };
+    }
+    if (orderedSet.has(node.id)) {
+      const replacement = orderedChildren[childInsertCursor];
+      childInsertCursor += 1;
+      return replacement ?? node;
+    }
+    return node;
+  });
+
+  const solvedNodes = applyAutoLayoutToNodes(reorderedWithLayout, containerId, tokens);
+
+  return {
+    nextNodes: solvedNodes,
+    detectedDirection: nextLayout.direction,
+    estimatedGap: nextLayout.gap,
+    childOrderIds: orderedIds,
+  };
 }

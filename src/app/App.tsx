@@ -948,6 +948,8 @@ export function App() {
         onUpdateSelected={motionAutoKeyBridge.handleInspectorUpdateSelected}
         onUpdateSelectedStyle={motionAutoKeyBridge.handleInspectorUpdateSelectedStyle}
         onApplyAutoLayout={designSystem.applyAutoLayout}
+        onConvertFrameLayoutMode={designSystem.convertFrameLayoutMode}
+        onSwitchBreakpoint={designSystem.setActiveBreakpoint}
         onUpdateInstanceOverride={selectionActions.updateInstanceOverride}
         onUpdateInstanceVariant={designSystem.updateInstanceVariant}
         onUpdateInstanceSlot={designSystem.updateInstanceSlot}

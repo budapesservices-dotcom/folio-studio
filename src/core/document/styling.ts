@@ -14,6 +14,8 @@ import type {
   DesignNode,
   FillPaint,
   GradientStop,
+  NodeCssFilters,
+  NodeTransitionConfig,
   VisualEffect,
 } from './types';
 
@@ -321,6 +323,11 @@ export function buildCssEffectsAndBlendDeclarations(
     }
   }
 
+  const extraFilter = buildCssFilterString(node.cssFilters);
+  if (extraFilter) {
+    filters.push(extraFilter);
+  }
+
   if (boxShadows.length > 0) {
     declarations.push(`box-shadow: ${boxShadows.join(', ')};`);
   }
@@ -337,6 +344,56 @@ export function buildCssEffectsAndBlendDeclarations(
   }
 
   return declarations;
+}
+
+export function buildCssFilterString(cssFilters: NodeCssFilters | undefined): string {
+  if (!cssFilters) return '';
+  const parts: string[] = [];
+  if (cssFilters.brightness !== undefined && cssFilters.brightness !== 100) {
+    parts.push(`brightness(${roundStyleNum(cssFilters.brightness)}%)`);
+  }
+  if (cssFilters.contrast !== undefined && cssFilters.contrast !== 100) {
+    parts.push(`contrast(${roundStyleNum(cssFilters.contrast)}%)`);
+  }
+  if (cssFilters.saturate !== undefined && cssFilters.saturate !== 100) {
+    parts.push(`saturate(${roundStyleNum(cssFilters.saturate)}%)`);
+  }
+  if (cssFilters.grayscale !== undefined && cssFilters.grayscale > 0) {
+    parts.push(`grayscale(${roundStyleNum(cssFilters.grayscale)}%)`);
+  }
+  return parts.join(' ');
+}
+
+export function buildNodeTransitionCss(transition: NodeTransitionConfig | undefined): string | null {
+  if (!transition || transition.preset === 'none') return null;
+  const defaultMs =
+    transition.preset === 'fast'
+      ? 150
+      : transition.preset === 'bouncy'
+        ? 360
+        : 240;
+  const durationMs = transition.durationMs ?? defaultMs;
+  const timing =
+    transition.preset === 'fast'
+      ? 'ease-out'
+      : transition.preset === 'bouncy'
+        ? 'cubic-bezier(0.34, 1.56, 0.64, 1)'
+        : 'cubic-bezier(0.22, 1, 0.36, 1)';
+  const durationStr =
+    transition.durationUnit === 's'
+      ? `${roundStyleNum(durationMs / 1000)}s`
+      : `${Math.round(durationMs)}ms`;
+  return `all ${durationStr} ${timing}`;
+}
+
+export function resolveShadowPresetCss(
+  preset: 'none' | 'soft' | 'medium' | 'hard' | 'neon-glow',
+): string | null {
+  if (preset === 'none') return 'none';
+  if (preset === 'soft') return '0px 4px 12px 0px rgba(15, 23, 42, 0.18)';
+  if (preset === 'medium') return '0px 12px 28px -2px rgba(15, 23, 42, 0.32)';
+  if (preset === 'hard') return '0px 24px 48px -4px rgba(0, 0, 0, 0.52)';
+  return '0px 0px 22px 2px rgba(0, 229, 255, 0.55)';
 }
 
 export function buildSvgPaintId(prefix: string, nodeId: string, paintIndex: number): string {

@@ -7,8 +7,17 @@ import {
 import { sanitizeProjectNetworkSecrets } from '../../core/document/networkSecrets';
 import { getActivePage } from '../../core/document/project';
 import {
+  formatCssLengthValue,
+  isSafeCssGridTemplate,
+  isSafeHtmlClassName,
+  isSafeHtmlId,
+  normalizeCssAspectRatio,
+} from '../../core/document/cssUnits';
+import {
   buildCssBackgroundFromFills,
   buildCssEffectsAndBlendDeclarations,
+  buildNodeTransitionCss,
+  resolveShadowPresetCss,
 } from '../../core/document/styling';
 import {
   generateDesignTokensCss,
@@ -18,8 +27,11 @@ import {
 } from '../../core/document/tokens';
 import type {
   AssetReference,
+  BorderSidesConfig,
   CodeModuleRecord,
   ComponentDefinition,
+  CornerRadiiConfig,
+  CssLengthUnit,
   DesignNode,
   DesignTokenCollection,
   FolioPage,
@@ -27,6 +39,7 @@ import type {
   NodeLayoutConfig,
   NodePadding,
   PathNode,
+  PseudoStateKey,
   SemanticHtmlTag,
 } from '../../core/document/types';
 import { serializePathPointsToSvgD } from '../../core/document/vector';
@@ -347,6 +360,140 @@ export function buildChildrenMap(nodes: readonly DesignNode[]): {
   return { roots, childrenByParent, nodeById };
 }
 
+function emitOverflowAndScrollSnap(layout: NodeLayoutConfig, declarations: string[]): void {
+  if (layout.overflow === 'scroll' || layout.overflow === 'auto') {
+    declarations.push('overflow: auto;');
+  } else if (layout.overflow === 'scroll-y') {
+    declarations.push('overflow-y: auto;');
+    declarations.push('overflow-x: hidden;');
+  } else if (layout.overflow === 'scroll-x') {
+    declarations.push('overflow-x: auto;');
+    declarations.push('overflow-y: hidden;');
+  } else if (layout.overflow === 'hidden') {
+    declarations.push('overflow: hidden;');
+  } else if (layout.overflow === 'visible') {
+    declarations.push('overflow: visible;');
+  }
+
+  if (layout.scrollSnapType === 'x') {
+    declarations.push('scroll-snap-type: x mandatory;');
+  } else if (layout.scrollSnapType === 'y') {
+    declarations.push('scroll-snap-type: y mandatory;');
+  }
+}
+
+function formatPaddingWithUnit(padding: NodePadding, unit: CssLengthUnit = 'px'): string {
+  const t = roundCss(padding.top);
+  const r = roundCss(padding.right);
+  const b = roundCss(padding.bottom);
+  const l = roundCss(padding.left);
+  if (t === r && r === b && b === l) return `${t}${unit}`;
+  if (t === b && l === r) return `${t}${unit} ${r}${unit}`;
+  return `${t}${unit} ${r}${unit} ${b}${unit} ${l}${unit}`;
+}
+
+function emitBorderSidesCss(borderSides: BorderSidesConfig, declarations: string[]): boolean {
+  let emitted = false;
+  const sideEntries: Array<['top' | 'right' | 'bottom' | 'left', BorderSidesConfig['top']]> = [
+    ['top', borderSides.top],
+    ['right', borderSides.right],
+    ['bottom', borderSides.bottom],
+    ['left', borderSides.left],
+  ];
+  for (const [side, cfg] of sideEntries) {
+    if (!cfg || cfg.width <= 0 || !cfg.color || cfg.color === 'none') continue;
+    const unit = cfg.widthUnit ?? 'px';
+    const style = cfg.style ?? 'solid';
+    const color = sanitizeCssValue(cfg.color, 'transparent');
+    declarations.push(`border-${side}: ${roundCss(cfg.width)}${unit} ${style} ${color};`);
+    emitted = true;
+  }
+  return emitted;
+}
+
+function formatCornerRadiiCss(radii: CornerRadiiConfig, unit: CssLengthUnit = 'px'): string {
+  const tl = roundCss(radii.topLeft);
+  const tr = roundCss(radii.topRight);
+  const br = roundCss(radii.bottomRight);
+  const bl = roundCss(radii.bottomLeft);
+  if (tl === tr && tr === br && br === bl) return `${tl}${unit}`;
+  return `${tl}${unit} ${tr}${unit} ${br}${unit} ${bl}${unit}`;
+}
+
+export interface PseudoStateCssRule {
+  readonly selector: string;
+  readonly declarations: string[];
+}
+
+const PSEUDO_STATE_ORDER: readonly PseudoStateKey[] = ['hover', 'focus', 'active', 'disabled'];
+
+/**
+ * Generates deterministic CSS pseudo-state rules (:hover, :focus, :active, :disabled)
+ * shared across HTML/CSS Compiler, Live Preview, and React TSX Compiler.
+ */
+export function buildNodePseudoStateCssRules(
+  node: DesignNode,
+  selector: string,
+): PseudoStateCssRule[] {
+  const overrides = node.stateOverrides;
+  if (!overrides) return [];
+  const rules: PseudoStateCssRule[] = [];
+
+  for (const stateKey of PSEUDO_STATE_ORDER) {
+    const patch = overrides[stateKey];
+    if (!patch) continue;
+    const decls: string[] = [];
+    if (patch.fill) {
+      const safeFill = sanitizeCssValue(patch.fill, 'transparent');
+      if (node.type === 'text') {
+        decls.push(`color: ${safeFill};`);
+      } else {
+        decls.push(`background: ${safeFill};`);
+      }
+    }
+    if (patch.stroke) {
+      decls.push(`border-color: ${sanitizeCssValue(patch.stroke, 'transparent')};`);
+    }
+    if (patch.strokeWidth !== undefined) {
+      decls.push(`border-width: ${roundCss(patch.strokeWidth)}px;`);
+      if (!patch.stroke) {
+        decls.push('border-style: solid;');
+      }
+    }
+    if (patch.opacity !== undefined) {
+      decls.push(`opacity: ${roundCss(patch.opacity)};`);
+    }
+    if (patch.radius !== undefined) {
+      decls.push(`border-radius: ${roundCss(patch.radius)}px;`);
+    }
+    const transforms: string[] = [];
+    if (Math.abs(node.rotation) > 0.01) {
+      transforms.push(`rotate(${roundCss(node.rotation)}deg)`);
+    }
+    if (patch.translateY !== undefined && Math.abs(patch.translateY) > 0.01) {
+      transforms.push(`translateY(${roundCss(patch.translateY)}px)`);
+    }
+    if (patch.scale !== undefined && Math.abs(patch.scale - 1) > 0.001) {
+      transforms.push(`scale(${roundCss(patch.scale)})`);
+    }
+    if (transforms.length > 0 && (patch.translateY !== undefined || patch.scale !== undefined)) {
+      decls.push(`transform: ${transforms.join(' ')};`);
+    }
+    if (patch.shadowPreset) {
+      const shadowVal = resolveShadowPresetCss(patch.shadowPreset);
+      if (shadowVal) decls.push(`box-shadow: ${shadowVal};`);
+    }
+    if (decls.length > 0) {
+      const stateSelector =
+        stateKey === 'disabled'
+          ? `${selector}:disabled, ${selector}[aria-disabled="true"]`
+          : `${selector}:${stateKey}`;
+      rules.push({ selector: stateSelector, declarations: decls });
+    }
+  }
+  return rules;
+}
+
 export function buildNodeCssDeclarations(
   node: DesignNode,
   tokens: DesignTokenCollection,
@@ -377,48 +524,128 @@ export function buildNodeCssDeclarations(
     } else {
       const rowGap = roundCss(node.layout.rowGap ?? node.layout.gap);
       const colGap = roundCss(node.layout.columnGap ?? node.layout.gap);
-      declarations.push(rowGap === colGap ? `gap: ${rowGap}px;` : `gap: ${rowGap}px ${colGap}px;`);
+      const rowUnit = node.layout.rowGapUnit ?? node.layout.gapUnit ?? 'px';
+      const colUnit = node.layout.columnGapUnit ?? node.layout.gapUnit ?? 'px';
+      declarations.push(
+        rowGap === colGap && rowUnit === colUnit
+          ? `gap: ${rowGap}${rowUnit};`
+          : `gap: ${rowGap}${rowUnit} ${colGap}${colUnit};`,
+      );
     }
     const padVar = resolveTokenCssVar(tokens, node.tokenBindings?.padding);
-    declarations.push(`padding: ${padVar ?? formatPadding(node.layout.padding)};`);
-    if (node.layout.overflow === 'scroll') {
-      declarations.push('overflow: auto;');
-    } else if (node.layout.overflow === 'hidden') {
-      declarations.push('overflow: hidden;');
-    } else if (node.layout.overflow === 'visible') {
-      declarations.push('overflow: visible;');
-    }
+    declarations.push(
+      `padding: ${padVar ?? formatPaddingWithUnit(node.layout.padding, node.layout.paddingUnit ?? 'px')};`,
+    );
+    emitOverflowAndScrollSnap(node.layout, declarations);
   } else if (node.layout && node.layout.mode === 'grid') {
     declarations.push('display: grid;');
-    const cols = Math.max(1, Math.round(node.layout.gridColumns ?? 2));
-    declarations.push(`grid-template-columns: repeat(${cols}, minmax(0, 1fr));`);
+    const colMode = node.layout.gridColumnsMode ?? 'fixed';
+    if (colMode === 'auto-fit') {
+      const minW = formatCssLengthValue(node.layout.gridMinColumnWidth ?? { value: 220, unit: 'px' });
+      declarations.push(`grid-template-columns: repeat(auto-fit, minmax(${minW}, 1fr));`);
+    } else if (colMode === 'custom' && node.layout.gridTemplateColumns && isSafeCssGridTemplate(node.layout.gridTemplateColumns)) {
+      declarations.push(`grid-template-columns: ${node.layout.gridTemplateColumns.trim()};`);
+    } else {
+      const cols = Math.max(1, Math.round(node.layout.gridColumns ?? 2));
+      declarations.push(`grid-template-columns: repeat(${cols}, minmax(0, 1fr));`);
+    }
+
+    if (node.layout.gridRowsMode === 'fixed' && node.layout.gridRows && node.layout.gridRows >= 1) {
+      declarations.push(`grid-template-rows: repeat(${Math.round(node.layout.gridRows)}, minmax(0, 1fr));`);
+    } else if (
+      node.layout.gridRowsMode === 'custom'
+      && node.layout.gridTemplateRows
+      && isSafeCssGridTemplate(node.layout.gridTemplateRows)
+    ) {
+      declarations.push(`grid-template-rows: ${node.layout.gridTemplateRows.trim()};`);
+    }
+
+    if (node.layout.justifyContent && node.layout.justifyContent !== 'start') {
+      declarations.push(`justify-items: ${mapJustifyContent(node.layout.justifyContent)};`);
+    }
+    if (node.layout.alignItems && node.layout.alignItems !== 'stretch') {
+      declarations.push(`align-items: ${mapAlignItems(node.layout.alignItems)};`);
+    }
+
     const gapVar = resolveTokenCssVar(tokens, node.tokenBindings?.gap);
     if (gapVar) {
       declarations.push(`gap: ${gapVar};`);
     } else {
       const rowGap = roundCss(node.layout.rowGap ?? node.layout.gap);
       const colGap = roundCss(node.layout.columnGap ?? node.layout.gap);
-      declarations.push(rowGap === colGap ? `gap: ${rowGap}px;` : `gap: ${rowGap}px ${colGap}px;`);
+      const rowUnit = node.layout.rowGapUnit ?? node.layout.gapUnit ?? 'px';
+      const colUnit = node.layout.columnGapUnit ?? node.layout.gapUnit ?? 'px';
+      declarations.push(
+        rowGap === colGap && rowUnit === colUnit
+          ? `gap: ${rowGap}${rowUnit};`
+          : `gap: ${rowGap}${rowUnit} ${colGap}${colUnit};`,
+      );
     }
     const padVar = resolveTokenCssVar(tokens, node.tokenBindings?.padding);
-    declarations.push(`padding: ${padVar ?? formatPadding(node.layout.padding)};`);
-    if (node.layout.overflow === 'scroll') {
-      declarations.push('overflow: auto;');
-    } else if (node.layout.overflow === 'hidden') {
-      declarations.push('overflow: hidden;');
-    } else if (node.layout.overflow === 'visible') {
-      declarations.push('overflow: visible;');
-    }
+    declarations.push(
+      `padding: ${padVar ?? formatPaddingWithUnit(node.layout.padding, node.layout.paddingUnit ?? 'px')};`,
+    );
+    emitOverflowAndScrollSnap(node.layout, declarations);
+  } else if (node.layout && node.layout.mode === 'none') {
+    emitOverflowAndScrollSnap(node.layout, declarations);
   }
 
-  const isAbsoluteInAutoLayout = isChildOfAutoLayout && node.layoutChild?.position === 'absolute';
+  const explicitPosition = node.layoutChild?.position;
+  const isOutOfFlowInAutoLayout =
+    isChildOfAutoLayout && (explicitPosition === 'absolute' || explicitPosition === 'fixed');
+  const resolvedFixedWidth = node.layoutChild?.widthValue
+    ? formatCssLengthValue(node.layoutChild.widthValue)
+    : `${roundCss(node.width)}px`;
+  const resolvedFixedHeight = node.layoutChild?.heightValue
+    ? formatCssLengthValue(node.layoutChild.heightValue)
+    : `${roundCss(node.height)}px`;
 
-  if (isChildOfAutoLayout && !isAbsoluteInAutoLayout) {
-    declarations.push('position: relative;');
+  const emitBoundsAndPositionExtras = () => {
+    const cfg = node.layoutChild;
+    if (!cfg) return;
+    if (cfg.minWidthValue) declarations.push(`min-width: ${formatCssLengthValue(cfg.minWidthValue)};`);
+    else if (cfg.minWidth !== undefined) declarations.push(`min-width: ${roundCss(cfg.minWidth)}px;`);
+    if (cfg.maxWidthValue) declarations.push(`max-width: ${formatCssLengthValue(cfg.maxWidthValue)};`);
+    else if (cfg.maxWidth !== undefined) declarations.push(`max-width: ${roundCss(cfg.maxWidth)}px;`);
+    if (cfg.minHeightValue) declarations.push(`min-height: ${formatCssLengthValue(cfg.minHeightValue)};`);
+    else if (cfg.minHeight !== undefined) declarations.push(`min-height: ${roundCss(cfg.minHeight)}px;`);
+    if (cfg.maxHeightValue) declarations.push(`max-height: ${formatCssLengthValue(cfg.maxHeightValue)};`);
+    else if (cfg.maxHeight !== undefined) declarations.push(`max-height: ${roundCss(cfg.maxHeight)}px;`);
+    if (cfg.aspectRatio) {
+      const normalized = normalizeCssAspectRatio(cfg.aspectRatio);
+      if (normalized && normalized !== 'auto') {
+        declarations.push(`aspect-ratio: ${normalized};`);
+      }
+    }
+    if (cfg.scrollSnapAlign && cfg.scrollSnapAlign !== 'none') {
+      declarations.push(`scroll-snap-align: ${cfg.scrollSnapAlign};`);
+    }
+  };
+
+  const emitExplicitInsets = () => {
+    const inset = node.layoutChild?.inset;
+    if (!inset) return false;
+    let hasInset = false;
+    if (inset.top) { declarations.push(`top: ${formatCssLengthValue(inset.top)};`); hasInset = true; }
+    if (inset.right) { declarations.push(`right: ${formatCssLengthValue(inset.right)};`); hasInset = true; }
+    if (inset.bottom) { declarations.push(`bottom: ${formatCssLengthValue(inset.bottom)};`); hasInset = true; }
+    if (inset.left) { declarations.push(`left: ${formatCssLengthValue(inset.left)};`); hasInset = true; }
+    return hasInset;
+  };
+
+  if (isChildOfAutoLayout && !isOutOfFlowInAutoLayout) {
+    declarations.push(`position: ${explicitPosition === 'sticky' ? 'sticky' : 'relative'};`);
+    if (explicitPosition === 'sticky') {
+      if (!emitExplicitInsets()) {
+        declarations.push('top: 0px;');
+      }
+    }
     const widthMode = node.layoutChild?.widthMode ?? 'fixed';
     const heightMode = node.layoutChild?.heightMode ?? 'fixed';
     const parentMode = parent?.layout?.mode ?? 'flex';
-    const parentIsRow = parentMode === 'flex' && (parent?.layout?.direction ?? 'row') === 'row';
+    const parentIsRow =
+      parentMode === 'flex'
+      && (parent?.layout?.direction === 'row' || parent?.layout?.direction === 'row-reverse' || !parent?.layout?.direction);
     const growWeight = Math.max(1, roundCss(node.layoutChild?.flexGrow ?? 1));
 
     if (widthMode === 'fill') {
@@ -434,7 +661,7 @@ export function buildNodeCssDeclarations(
     } else if (widthMode === 'hug') {
       declarations.push('width: fit-content;');
     } else {
-      declarations.push(`width: ${roundCss(node.width)}px;`);
+      declarations.push(`width: ${resolvedFixedWidth};`);
     }
 
     if (heightMode === 'fill') {
@@ -449,16 +676,24 @@ export function buildNodeCssDeclarations(
     } else if (heightMode === 'hug') {
       declarations.push('height: fit-content;');
     } else if (node.type !== 'text') {
-      declarations.push(`min-height: ${roundCss(node.height)}px;`);
+      if (node.layoutChild?.heightValue && node.layoutChild.heightValue.unit !== 'px') {
+        declarations.push(`height: ${resolvedFixedHeight};`);
+      } else {
+        declarations.push(`min-height: ${resolvedFixedHeight};`);
+      }
     }
 
-    if (parentMode === 'grid' && node.layoutChild?.gridColumnSpan && node.layoutChild.gridColumnSpan > 1) {
-      declarations.push(`grid-column: span ${Math.round(node.layoutChild.gridColumnSpan)};`);
+    if (parentMode === 'grid') {
+      if (node.layoutChild?.gridColumnSpanFull) {
+        declarations.push('grid-column: 1 / -1;');
+      } else if (node.layoutChild?.gridColumnSpan && node.layoutChild.gridColumnSpan > 1) {
+        declarations.push(`grid-column: span ${Math.round(node.layoutChild.gridColumnSpan)};`);
+      }
+      if (node.layoutChild?.gridRowSpan && node.layoutChild.gridRowSpan > 1) {
+        declarations.push(`grid-row: span ${Math.round(node.layoutChild.gridRowSpan)};`);
+      }
     }
-    if (node.layoutChild?.minWidth !== undefined) declarations.push(`min-width: ${roundCss(node.layoutChild.minWidth)}px;`);
-    if (node.layoutChild?.maxWidth !== undefined) declarations.push(`max-width: ${roundCss(node.layoutChild.maxWidth)}px;`);
-    if (node.layoutChild?.minHeight !== undefined) declarations.push(`min-height: ${roundCss(node.layoutChild.minHeight)}px;`);
-    if (node.layoutChild?.maxHeight !== undefined) declarations.push(`max-height: ${roundCss(node.layoutChild.maxHeight)}px;`);
+    emitBoundsAndPositionExtras();
     if (node.layoutChild?.alignSelf && node.layoutChild.alignSelf !== 'auto') {
       declarations.push(`align-self: ${mapAlignItems(node.layoutChild.alignSelf)};`);
     }
@@ -466,37 +701,59 @@ export function buildNodeCssDeclarations(
       declarations.push(`z-index: ${Math.round(node.layoutChild.zIndex)};`);
     }
   } else if (hasRootAutoLayout && !parent && !isInstanceChild) {
-    declarations.push('position: relative;');
+    const pos = explicitPosition ?? 'relative';
+    declarations.push(`position: ${pos};`);
+    if (pos === 'sticky' || pos === 'fixed' || pos === 'absolute') {
+      const emitted = emitExplicitInsets();
+      if (pos === 'sticky' && !emitted) declarations.push('top: 0px;');
+    }
     const rootWMode = node.layoutChild?.widthMode ?? 'fill';
     const rootHMode = node.layoutChild?.heightMode ?? 'fixed';
     if (rootWMode === 'hug') declarations.push('width: fit-content;');
     else if (rootWMode === 'relative') declarations.push(`width: ${roundCss(node.layoutChild?.widthPercent ?? 100)}%;`);
-    else if (rootWMode === 'fixed') declarations.push(`width: ${roundCss(node.width)}px;`);
+    else if (rootWMode === 'fixed') declarations.push(`width: ${resolvedFixedWidth};`);
     else declarations.push('width: 100%;');
 
     if (rootHMode === 'hug') declarations.push('height: fit-content;');
     else if (rootHMode === 'relative') declarations.push(`height: ${roundCss(node.layoutChild?.heightPercent ?? 100)}%;`);
-    else declarations.push(`min-height: ${roundCss(node.height)}px;`);
+    else if (node.layoutChild?.heightValue && node.layoutChild.heightValue.unit !== 'px') {
+      declarations.push(`height: ${resolvedFixedHeight};`);
+    } else {
+      declarations.push(`min-height: ${resolvedFixedHeight};`);
+    }
+    emitBoundsAndPositionExtras();
+    if (node.layoutChild?.zIndex !== undefined) {
+      declarations.push(`z-index: ${Math.round(node.layoutChild.zIndex)};`);
+    }
   } else {
     const relX = roundCss(node.x - originOffset.x);
     const relY = roundCss(node.y - originOffset.y);
-    declarations.push('position: absolute;');
-    declarations.push(`left: ${relX}px;`);
-    declarations.push(`top: ${relY}px;`);
+    const pos = explicitPosition === 'fixed' || explicitPosition === 'sticky' ? explicitPosition : 'absolute';
+    declarations.push(`position: ${pos};`);
+    const hasExplicitInsets = emitExplicitInsets();
+    if (!hasExplicitInsets) {
+      declarations.push(`left: ${relX}px;`);
+      declarations.push(`top: ${relY}px;`);
+    }
     if (node.layoutChild?.widthMode === 'relative') {
       declarations.push(`width: ${roundCss(node.layoutChild.widthPercent ?? 100)}%;`);
     } else if (node.layoutChild?.widthMode === 'hug') {
       declarations.push('width: fit-content;');
+    } else if (node.layoutChild?.widthMode === 'fill') {
+      declarations.push('width: 100%;');
     } else {
-      declarations.push(`width: ${roundCss(node.width)}px;`);
+      declarations.push(`width: ${resolvedFixedWidth};`);
     }
     if (node.layoutChild?.heightMode === 'relative') {
       declarations.push(`height: ${roundCss(node.layoutChild.heightPercent ?? 100)}%;`);
     } else if (node.layoutChild?.heightMode === 'hug') {
       declarations.push('height: fit-content;');
+    } else if (node.layoutChild?.heightMode === 'fill') {
+      declarations.push('height: 100%;');
     } else if (node.type !== 'text') {
-      declarations.push(`height: ${roundCss(node.height)}px;`);
+      declarations.push(`height: ${resolvedFixedHeight};`);
     }
+    emitBoundsAndPositionExtras();
     if (node.layoutChild?.zIndex !== undefined) {
       declarations.push(`z-index: ${Math.round(node.layoutChild.zIndex)};`);
     }
@@ -507,6 +764,19 @@ export function buildNodeCssDeclarations(
   }
   if (node.opacity < 0.999) {
     declarations.push(`opacity: ${roundCss(node.opacity)};`);
+  }
+  if (node.cursor && node.cursor !== 'default') {
+    declarations.push(`cursor: ${node.cursor};`);
+  }
+  if (node.pointerEvents === 'none') {
+    declarations.push('pointer-events: none;');
+  }
+  if (node.userSelect === 'none') {
+    declarations.push('user-select: none;');
+  }
+  const transitionCss = buildNodeTransitionCss(node.transition);
+  if (transitionCss) {
+    declarations.push(`transition: ${transitionCss};`);
   }
 
   if (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') {
@@ -522,28 +792,34 @@ export function buildNodeCssDeclarations(
     if (fillVal && fillVal !== 'none') {
       declarations.push(`background: ${fillVal};`);
     }
-    if (node.style.strokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
+    const emittedPerSide = node.style.borderSides
+      ? emitBorderSidesCss(node.style.borderSides, declarations)
+      : false;
+    if (!emittedPerSide && node.style.strokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
       const strokeVal = strokeVar ?? sanitizeCssValue(node.style.stroke, 'transparent');
-      const borderStyle = resolveCssBorderStyle(node.style.strokeDasharray);
+      const borderStyle = node.style.strokeStyle ?? resolveCssBorderStyle(node.style.strokeDasharray);
       const sw = roundCss(node.style.strokeWidth);
+      const swUnit = node.style.strokeWidthUnit ?? 'px';
       if (node.style.strokeAlign === 'outside') {
-        declarations.push(`outline: ${sw}px ${borderStyle} ${strokeVal};`);
+        declarations.push(`outline: ${sw}${swUnit} ${borderStyle} ${strokeVal};`);
         declarations.push('outline-offset: 0;');
       } else if (node.style.strokeAlign === 'inside') {
         declarations.push('box-sizing: border-box;');
-        declarations.push(`border: ${sw}px ${borderStyle} ${strokeVal};`);
+        declarations.push(`border: ${sw}${swUnit} ${borderStyle} ${strokeVal};`);
       } else {
-        declarations.push(`border: ${sw}px ${borderStyle} ${strokeVal};`);
+        declarations.push(`border: ${sw}${swUnit} ${borderStyle} ${strokeVal};`);
       }
     }
     if (node.type === 'ellipse') {
       declarations.push('border-radius: 9999px;');
     } else if (radiusVar) {
       declarations.push(`border-radius: ${radiusVar};`);
+    } else if (node.style.cornerRadii) {
+      declarations.push(`border-radius: ${formatCornerRadiiCss(node.style.cornerRadii, node.style.radiusUnit ?? 'px')};`);
     } else if (node.style.radius !== undefined && node.style.radius > 0) {
-      declarations.push(`border-radius: ${roundCss(node.style.radius)}px;`);
+      declarations.push(`border-radius: ${roundCss(node.style.radius)}${node.style.radiusUnit ?? 'px'};`);
     }
-    if (node.type === 'frame' && node.clipContent) {
+    if (node.type === 'frame' && node.clipContent && !node.layout?.overflow) {
       declarations.push('overflow: hidden;');
     }
   } else if (node.type === 'image') {
@@ -551,31 +827,40 @@ export function buildNodeCssDeclarations(
     const radiusVar = resolveTokenCssVar(tokens, node.tokenBindings?.radius);
     declarations.push('display: block;');
     declarations.push(`object-fit: ${node.style.fit};`);
+    const emittedPerSide = node.style.borderSides
+      ? emitBorderSidesCss(node.style.borderSides, declarations)
+      : false;
     const imgStrokeWidth = node.style.strokeWidth ?? 0;
-    if (imgStrokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
+    if (!emittedPerSide && imgStrokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
       const strokeVal = strokeVar ?? sanitizeCssValue(node.style.stroke, 'transparent');
       const dasharray =
         'strokeDasharray' in node.style && typeof node.style.strokeDasharray === 'string'
           ? node.style.strokeDasharray
           : undefined;
-      const borderStyle = resolveCssBorderStyle(dasharray);
-      declarations.push(`border: ${roundCss(imgStrokeWidth)}px ${borderStyle} ${strokeVal};`);
+      const borderStyle = node.style.strokeStyle ?? resolveCssBorderStyle(dasharray);
+      const swUnit = node.style.strokeWidthUnit ?? 'px';
+      declarations.push(`border: ${roundCss(imgStrokeWidth)}${swUnit} ${borderStyle} ${strokeVal};`);
     }
     if (radiusVar) {
       declarations.push(`border-radius: ${radiusVar};`);
+    } else if (node.style.cornerRadii) {
+      declarations.push(`border-radius: ${formatCornerRadiiCss(node.style.cornerRadii, node.style.radiusUnit ?? 'px')};`);
     } else if (node.style.radius !== undefined && node.style.radius > 0) {
-      declarations.push(`border-radius: ${roundCss(node.style.radius)}px;`);
+      declarations.push(`border-radius: ${roundCss(node.style.radius)}${node.style.radiusUnit ?? 'px'};`);
     }
   } else if (node.type === 'text') {
     const fillVar = resolveTokenCssVar(tokens, node.tokenBindings?.fill);
     const fontSizeVar = resolveTokenCssVar(tokens, node.tokenBindings?.fontSize);
+    const fsUnit = node.style.fontSizeUnit ?? 'px';
+    const lhUnit = node.style.lineHeightUnit ?? '';
+    const lsUnit = node.style.letterSpacingUnit ?? 'px';
     declarations.push(`color: ${fillVar ?? sanitizeCssValue(node.style.fill, '#111827')};`);
     declarations.push(`font-family: ${sanitizeCssValue(node.style.fontFamily, 'system-ui, sans-serif')};`);
-    declarations.push(`font-size: ${fontSizeVar ?? `${roundCss(node.style.fontSize)}px`};`);
+    declarations.push(`font-size: ${fontSizeVar ?? `${roundCss(node.style.fontSize)}${fsUnit}`};`);
     declarations.push(`font-weight: ${Math.round(node.style.fontWeight)};`);
-    declarations.push(`line-height: ${roundCss(node.style.lineHeight)};`);
-    if (Math.abs(node.style.letterSpacing) > 0.01) {
-      declarations.push(`letter-spacing: ${roundCss(node.style.letterSpacing)}px;`);
+    declarations.push(`line-height: ${roundCss(node.style.lineHeight)}${lhUnit};`);
+    if (Math.abs(node.style.letterSpacing) > 0.001) {
+      declarations.push(`letter-spacing: ${roundCss(node.style.letterSpacing)}${lsUnit};`);
     }
     if (node.style.textAlign && node.style.textAlign !== 'left') {
       declarations.push(`text-align: ${node.style.textAlign};`);
@@ -752,10 +1037,19 @@ export function compilePageHtmlCss(
       cssMappings,
     );
 
+    const pseudoRules = buildNodePseudoStateCssRules(node, selector);
+    for (const rule of pseudoRules) {
+      pushCssRule(cssLines, rule.selector, rule.declarations);
+    }
+
+    const restoreDisplay =
+      node.layout?.mode === 'flex' ? 'flex' : node.layout?.mode === 'grid' ? 'grid' : 'block';
+
     if (node.responsive?.tablet) {
       const t = node.responsive.tablet;
       const tDecls: string[] = [];
       if (t.visible === false) tDecls.push('display: none;');
+      else if (t.visible === true && !node.visible) tDecls.push(`display: ${restoreDisplay};`);
       if (t.width !== undefined) tDecls.push(`width: ${roundCss(t.width)}px;`);
       if (t.height !== undefined) tDecls.push(`min-height: ${roundCss(t.height)}px;`);
       if (t.layoutDirection) tDecls.push(`flex-direction: ${t.layoutDirection};`);
@@ -771,6 +1065,7 @@ export function compilePageHtmlCss(
       const m = node.responsive.mobile;
       const mDecls: string[] = [];
       if (m.visible === false) mDecls.push('display: none;');
+      else if (m.visible === true && !node.visible) mDecls.push(`display: ${restoreDisplay};`);
       if (m.width !== undefined) mDecls.push(`width: ${roundCss(m.width)}px;`);
       if (m.height !== undefined) mDecls.push(`min-height: ${roundCss(m.height)}px;`);
       if (m.layoutDirection) mDecls.push(`flex-direction: ${m.layoutDirection};`);
@@ -802,16 +1097,27 @@ export function compilePageHtmlCss(
     emitNodeCss(node, className, parent, isChildOfAutoLayout, isInstanceChild, originOffset);
 
     const tag = resolveSemanticTag(node);
-    const attrs: string[] = [
-      `class="${escapeAttr(className)}"`,
+    const extraClass = node.className?.trim() && isSafeHtmlClassName(node.className.trim())
+      ? ` ${node.className.trim()}`
+      : '';
+    const attrs: string[] = [];
+    if (node.htmlId?.trim() && isSafeHtmlId(node.htmlId.trim())) {
+      attrs.push(`id="${escapeAttr(node.htmlId.trim())}"`);
+    }
+    attrs.push(
+      `class="${escapeAttr(`${className}${extraClass}`)}"`,
       `data-folio-id="${escapeAttr(emittedId)}"`,
-    ];
+    );
     if (node.ariaLabel?.trim()) {
       attrs.push(`aria-label="${escapeAttr(node.ariaLabel.trim())}"`);
     }
     if (tag === 'a') {
       const safeHref = sanitizeHref(node.href);
       attrs.push(`href="${escapeAttr(safeHref ?? '#')}"`);
+      if (node.linkTarget === '_blank') {
+        attrs.push('target="_blank"');
+        attrs.push('rel="noopener noreferrer"');
+      }
     }
     if (tag === 'button') {
       attrs.push('type="button"');

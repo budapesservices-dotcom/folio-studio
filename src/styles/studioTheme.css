@@ -2163,4 +2163,688 @@ textarea:focus-visible {
   font-size: 10.5px !important;
 }
 
+/* ============================================================================
+ * 12. FOLIO WEB-STANDARD HYBRID INSPECTOR & PINNED-UNIT NUMERIC INPUT
+ * Palette: #12161A surface, #4A5568 structure, #00E5FF active/override/state
+ * ============================================================================ */
+
+/* Active Pseudo-State Editing Highlight (#00E5FF) */
+.inspector-content.is-state-editing {
+  box-shadow: inset 0 0 0 1.5px #00E5FF;
+  border-radius: 8px;
+}
+
+.folio-override-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: #00E5FF;
+  box-shadow: 0 0 6px rgba(0, 229, 255, 0.75);
+  flex-shrink: 0;
+}
+
+/* Interactive State Switcher Pill */
+.folio-state-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.folio-state-switcher-pill {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #4A5568;
+  border-radius: 8px;
+  background: #12161A;
+}
+
+.folio-state-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 3px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 110ms ease, color 110ms ease, border-color 110ms ease;
+}
+
+.folio-state-pill-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.folio-state-pill-btn.is-active {
+  background: rgba(74, 85, 104, 0.42);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: var(--text-primary);
+}
+
+.folio-state-pill-btn.is-pseudo-active {
+  background: rgba(0, 229, 255, 0.14);
+  border-color: #00E5FF;
+  color: #00E5FF;
+}
+
+.folio-pseudo-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 7px;
+  border: 1px solid rgba(0, 229, 255, 0.48);
+  border-radius: 7px;
+  background: rgba(0, 229, 255, 0.07);
+}
+
+.folio-pseudo-banner-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.folio-pseudo-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: #00E5FF;
+}
+
+.folio-transition-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+}
+
+.folio-transition-row > :only-child {
+  grid-column: 1 / -1;
+}
+
+/* Standard Hybrid NumericUnitInput: [ Scrub Label + Input | Preset | Pinned Unit ] */
+.folio-num-unit {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid #4A5568;
+  border-radius: 6px;
+  background: #12161A;
+  transition: border-color 110ms ease, box-shadow 110ms ease;
+}
+
+.folio-num-unit:focus-within {
+  border-color: #00E5FF;
+  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.25);
+}
+
+.folio-num-unit.is-invalid {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.35);
+}
+
+.folio-num-unit.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.folio-num-unit-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px 0 6px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  user-select: none;
+  cursor: ew-resize;
+  flex-shrink: 0;
+}
+
+.folio-num-unit-label:hover {
+  color: #00E5FF;
+}
+
+.folio-num-unit-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  padding: 0 3px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.folio-num-unit-preset-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+
+.folio-num-unit-preset-btn {
+  width: 16px;
+  padding: 0;
+  border: none;
+  border-left: 1px solid rgba(74, 85, 104, 0.55);
+  background: transparent;
+  color: var(--muted);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.folio-num-unit-preset-btn:hover {
+  color: #00E5FF;
+  background: rgba(0, 229, 255, 0.08);
+}
+
+.folio-num-unit-preset-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 60;
+  min-width: 126px;
+  max-height: 190px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid #4A5568;
+  border-radius: 8px;
+  background: #12161A;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5);
+}
+
+.folio-num-unit-preset-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 7px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.folio-num-unit-preset-item:hover {
+  background: rgba(0, 229, 255, 0.14);
+  color: #00E5FF;
+}
+
+.folio-num-unit-select {
+  flex-shrink: 0;
+  max-width: 44px;
+  padding: 0 3px;
+  border: none;
+  border-left: 1px solid rgba(74, 85, 104, 0.65);
+  border-radius: 0 5px 5px 0;
+  background: rgba(74, 85, 104, 0.22);
+  color: #00E5FF;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  cursor: pointer;
+  outline: none;
+}
+
+.folio-num-unit-pinned-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border-left: 1px solid rgba(74, 85, 104, 0.55);
+  background: rgba(74, 85, 104, 0.16);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+/* Shared Inspector Layout Grids & Compact Controls */
+.folio-dual-grid,
+.folio-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  align-items: center;
+}
+
+.folio-triple-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.folio-aspect-row {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+}
+
+.folio-origin-flip-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.folio-flip-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.folio-opacity-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.folio-compact-select {
+  height: 26px !important;
+  font-size: 10.5px !important;
+}
+
+.folio-code-input,
+.folio-web-attr-input,
+.folio-color-paste-input {
+  width: 100%;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid #4A5568;
+  border-radius: 6px;
+  background: #12161A;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.folio-code-input:focus,
+.folio-web-attr-input:focus,
+.folio-color-paste-input:focus {
+  outline: none;
+  border-color: #00E5FF;
+}
+
+.folio-code-input.is-invalid {
+  border-color: #ef4444;
+}
+
+.folio-css-readout {
+  padding: 4px 7px;
+  border: 1px dashed rgba(0, 229, 255, 0.35);
+  border-radius: 5px;
+  background: rgba(0, 229, 255, 0.05);
+  color: #00E5FF;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  word-break: break-all;
+}
+
+.folio-align-svg {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.folio-align-svg svg {
+  width: 14px;
+  height: 14px;
+}
+
+.framer-wrap-chip {
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid #4A5568;
+  border-radius: 5px;
+  background: #12161A;
+  font-size: 9.5px;
+}
+
+/* Section 4 (Appearance), Section 6 (Effects), Section 7 (Responsive/Semantic/A11y) */
+.folio-appearance-stack,
+.folio-effects-stack,
+.folio-responsive-semantic-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.folio-prop-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(74, 85, 104, 0.28);
+}
+
+.folio-prop-group:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.folio-prop-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.folio-prop-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.folio-mini-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.folio-mini-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #4A5568;
+  border-radius: 6px;
+  background: #12161A;
+}
+
+.folio-mini-seg-btn {
+  height: 18px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.folio-mini-seg-btn.is-active {
+  background: rgba(0, 229, 255, 0.16);
+  color: #00E5FF;
+}
+
+.folio-seg-3,
+.folio-seg-4 {
+  display: grid;
+  gap: 3px;
+  padding: 2px;
+  border: 1px solid #4A5568;
+  border-radius: 7px;
+  background: #12161A;
+}
+
+.folio-seg-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.folio-seg-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.folio-seg-btn {
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.folio-seg-btn.is-active {
+  border-color: rgba(0, 229, 255, 0.5);
+  background: rgba(0, 229, 255, 0.14);
+  color: #00E5FF;
+}
+
+.folio-seg-btn.has-side-val:not(.is-active) {
+  color: var(--text-primary);
+}
+
+.folio-color-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.folio-chip-btn {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #4A5568;
+  border-radius: 6px;
+  background: #12161A;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.folio-chip-btn:hover,
+.folio-chip-btn.is-active,
+.folio-chip-btn.is-accent {
+  border-color: #00E5FF;
+  background: rgba(0, 229, 255, 0.14);
+  color: #00E5FF;
+}
+
+.folio-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.folio-slider-inline-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 34px;
+  gap: 6px;
+  align-items: center;
+}
+
+.folio-range-slider {
+  width: 100%;
+  accent-color: #00E5FF;
+  cursor: pointer;
+}
+
+.folio-slider-readout {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.folio-gradient-box,
+.folio-perside-box,
+.folio-shadow-custom-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid rgba(74, 85, 104, 0.55);
+  border-radius: 7px;
+  background: rgba(18, 22, 26, 0.72);
+}
+
+.folio-gradient-stops {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.folio-gradient-stop-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+}
+
+.folio-token-select {
+  height: 24px !important;
+  font-size: 10px !important;
+}
+
+/* Responsive Breakpoints & A11y Audit Box */
+.folio-bp-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.folio-bp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid #4A5568;
+  border-radius: 7px;
+  background: #12161A;
+}
+
+.folio-bp-card.is-current {
+  border-color: #00E5FF;
+  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.2);
+}
+
+.folio-bp-name-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.folio-bp-vis-btn {
+  height: 20px;
+  border: 1px solid rgba(74, 85, 104, 0.65);
+  border-radius: 5px;
+  background: rgba(74, 85, 104, 0.2);
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.folio-bp-vis-btn.is-visible {
+  border-color: rgba(0, 229, 255, 0.4);
+  color: #00E5FF;
+}
+
+.folio-bp-vis-btn.is-hidden {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.folio-checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.folio-a11y-status-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid #4A5568;
+  border-radius: 7px;
+  background: #12161A;
+}
+
+.folio-a11y-pass {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #86efac;
+}
+
+.folio-a11y-dot.is-pass {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #22c55e;
+}
+
+.folio-a11y-issues-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.folio-a11y-issue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  font-size: 10px;
+}
+
+.folio-a11y-issue-row.is-error {
+  background: rgba(239, 68, 68, 0.14);
+  color: #fecaca;
+}
+
+.folio-a11y-issue-row.is-warning {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fde68a;
+}
+
+.folio-a11y-issue-text {
+  min-width: 0;
+  line-height: 1.3;
+}
+
+
 

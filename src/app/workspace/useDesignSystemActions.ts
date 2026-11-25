@@ -9,10 +9,12 @@ import type {
   DesignTokenCollection,
   FolioDocument,
   FolioProject,
+  LayoutMode,
 } from '../../core/document/types';
+import { classifyNodeChange } from '../../core/document/nodeChanges';
 import { getProjectDesignTokens } from '../../core/document/tokens';
-import { applyAutoLayoutToNodes } from '../../engines/layout/autoLayout';
-import type { WorkspaceCommandClient } from '../mainCanvasCommandClient';
+import { applyAutoLayoutToNodes, computeFrameModeConversion } from '../../engines/layout/autoLayout';
+import { stripUndefinedEntries, type WorkspaceCommandClient } from '../mainCanvasCommandClient';
 
 export interface UseDesignSystemActionsArgs {
   project: FolioProject;
@@ -85,6 +87,82 @@ export function useDesignSystemActions({
       }
     },
     [focusedDocument, activeBreakpoint, designTokens, focusedCommandClient, setNotice],
+  );
+
+  const convertFrameLayoutMode = useCallback(
+    (containerId: string, targetMode: LayoutMode) => {
+      const result = computeFrameModeConversion(focusedDocument.nodes, containerId, targetMode, designTokens);
+      if (!result) return;
+
+      const astView = focusedCommandClient.getActiveAstView();
+      const beforeById = new Map(focusedDocument.nodes.map((n) => [n.id, n]));
+      const changedNodes = result.nextNodes.filter((node) => {
+        const prev = beforeById.get(node.id);
+        return prev !== undefined && classifyNodeChange(prev, node).hasAnyChange;
+      });
+
+      const currentChildIds = focusedDocument.nodes
+        .filter((n) => n.parentId === containerId && result.childOrderIds.includes(n.id))
+        .map((n) => n.id);
+      const orderChanged =
+        result.childOrderIds.length > 1 &&
+        result.childOrderIds.some((id, idx) => currentChildIds[idx] !== id);
+
+      const modeLabel = targetMode === 'flex' ? 'Stack' : targetMode === 'grid' ? 'Grid' : 'Freeform';
+      const desc = `Switch Frame layout to ${modeLabel}`;
+      const commands = [];
+
+      if (orderChanged) {
+        for (let i = 1; i < result.childOrderIds.length; i += 1) {
+          const prevId = result.childOrderIds[i - 1];
+          const currId = result.childOrderIds[i];
+          commands.push(
+            focusedCommandClient.createEnvelope(
+              'layer.move',
+              { kind: 'document', address: astView.address },
+              {
+                node: { document: astView.address, nodeId: currId },
+                target: { document: astView.address, nodeId: prevId },
+                position: 'after',
+              },
+              desc,
+            ),
+          );
+        }
+      }
+
+      if (changedNodes.length === 1) {
+        commands.push(
+          focusedCommandClient.createEnvelope(
+            'node.replace',
+            { kind: 'node', ref: { document: astView.address, nodeId: changedNodes[0].id } },
+            { node: stripUndefinedEntries(changedNodes[0]) },
+            desc,
+          ),
+        );
+      } else if (changedNodes.length > 1) {
+        commands.push(
+          focusedCommandClient.createEnvelope(
+            'node.update-many',
+            { kind: 'document', address: astView.address },
+            { nodes: changedNodes.map((n) => stripUndefinedEntries(n)) },
+            desc,
+          ),
+        );
+      }
+
+      if (commands.length === 0) return;
+
+      const tx = focusedCommandClient.executeTransaction(commands);
+      if (tx.status === 'applied') {
+        setNotice(
+          targetMode === 'flex'
+            ? `Converted Frame to ${result.detectedDirection} Stack (gap ${result.estimatedGap}px).`
+            : `Switched Frame to ${modeLabel} layout.`,
+        );
+      }
+    },
+    [focusedDocument, designTokens, focusedCommandClient, setNotice],
   );
 
   const updateInstanceVariant = useCallback(
@@ -177,6 +255,7 @@ export function useDesignSystemActions({
     designTokens,
     updateDesignTokens,
     applyAutoLayout,
+    convertFrameLayoutMode,
     updateInstanceVariant,
     updateInstanceSlot,
     updateMasterContract,

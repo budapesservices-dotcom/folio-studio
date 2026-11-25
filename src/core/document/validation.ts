@@ -10,6 +10,14 @@ import {
   type FolioProjectV1,
 } from './types';
 import { isOverrideFieldCompatibleWithNodeType } from './components';
+import {
+  isCssLengthUnit,
+  isCssLengthValue,
+  isSafeCssAspectRatio,
+  isSafeCssGridTemplate,
+  isSafeHtmlClassName,
+  isSafeHtmlId,
+} from './cssUnits';
 import { isBlendMode, isFillPaint, isVisualEffect } from './styling';
 import { validateDesignTokenCollection, validateNodeTokenBindings } from './tokens';
 
@@ -84,7 +92,7 @@ function isValidatedDesignNode(value: unknown): value is DesignNode {
 
 export const SEMANTIC_HTML_TAGS = new Set([
   'div', 'section', 'header', 'footer', 'nav', 'main', 'article', 'aside',
-  'button', 'a', 'h1', 'h2', 'h3', 'p', 'span', 'ul', 'li', 'form', 'input', 'img',
+  'button', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'ul', 'li', 'form', 'input', 'img',
 ]);
 
 const TEXT_ALIGN_VALUES = new Set(['left', 'center', 'right', 'justify']);
@@ -94,6 +102,7 @@ const TEXT_TRANSFORM_VALUES = new Set(['none', 'uppercase', 'lowercase', 'capita
 const TEXT_DECORATION_VALUES = new Set(['none', 'underline', 'line-through']);
 const IMAGE_FIT_VALUES = new Set(['cover', 'contain', 'fill']);
 const STROKE_ALIGN_VALUES = new Set(['inside', 'center', 'outside']);
+const BORDER_LINE_STYLES = new Set(['solid', 'dashed', 'dotted']);
 const CLIP_MASK_MODE_VALUES = new Set(['inside', 'outside']);
 const DRAW_MODE_VALUES = new Set(['normal', 'inside', 'outside']);
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/i;
@@ -101,17 +110,30 @@ const MAX_COMPONENT_NESTING_DEPTH = 16;
 
 const BREAKPOINT_IDS = new Set(['desktop', 'tablet', 'mobile']);
 const LAYOUT_MODES = new Set(['none', 'flex', 'grid']);
-const LAYOUT_DIRECTIONS = new Set(['row', 'column']);
+const LAYOUT_DIRECTIONS = new Set(['row', 'column', 'row-reverse', 'column-reverse']);
 const LAYOUT_WRAPS = new Set(['nowrap', 'wrap']);
 const LAYOUT_JUSTIFY = new Set(['start', 'center', 'end', 'space-between', 'space-around', 'space-evenly']);
 const LAYOUT_ALIGN = new Set(['start', 'center', 'end', 'stretch']);
-const LAYOUT_OVERFLOW_VALUES = new Set(['visible', 'hidden', 'scroll']);
+const LAYOUT_OVERFLOW_VALUES = new Set(['visible', 'hidden', 'scroll', 'scroll-y', 'scroll-x', 'auto']);
 const LAYOUT_PADDING_MODES = new Set(['uniform', 'per-side']);
+const GRID_COLUMNS_MODES = new Set(['fixed', 'auto-fit', 'custom']);
+const GRID_ROWS_MODES = new Set(['auto', 'fixed', 'custom']);
+const SCROLL_SNAP_TYPES = new Set(['none', 'x', 'y']);
+const SCROLL_SNAP_ALIGNS = new Set(['none', 'start', 'center', 'end']);
 const LAYOUT_SIZING_MODES = new Set(['fixed', 'hug', 'fill', 'relative']);
-const LAYOUT_CHILD_POSITIONS = new Set(['relative', 'absolute']);
+const LAYOUT_CHILD_POSITIONS = new Set(['relative', 'absolute', 'fixed', 'sticky']);
 const ALIGN_SELF_VALUES = new Set(['auto', 'start', 'center', 'end', 'stretch']);
 const HORIZONTAL_CONSTRAINTS = new Set(['left', 'right', 'left-right', 'center', 'scale']);
 const VERTICAL_CONSTRAINTS = new Set(['top', 'bottom', 'top-bottom', 'center', 'scale']);
+const CURSOR_TYPES = new Set(['default', 'pointer', 'grab', 'text', 'not-allowed']);
+const AUTO_NONE_VALUES = new Set(['auto', 'none']);
+const LINK_TARGET_VALUES = new Set(['_self', '_blank']);
+const TRANSITION_PRESETS = new Set(['none', 'fast', 'smooth', 'bouncy']);
+const PSEUDO_STATE_KEYS = new Set(['hover', 'active', 'focus', 'disabled']);
+const SHADOW_PRESET_VALUES = new Set(['none', 'soft', 'medium', 'hard', 'neon-glow']);
+const FONT_SIZE_UNITS = new Set(['px', 'rem', 'em']);
+const LETTER_SPACING_UNITS = new Set(['px', 'em']);
+const LINE_HEIGHT_UNITS = new Set(['', 'px', '%']);
 const TOKEN_LAYERS = new Set(['primitive', 'semantic']);
 const TOKEN_CATEGORIES = new Set(['color', 'spacing', 'radius', 'typography']);
 const TOKEN_UNITS = new Set(['px', 'rem', '%', 'em']);
@@ -138,6 +160,82 @@ function isNodePadding(value: unknown): boolean {
   );
 }
 
+function isNodeInsetOffsets(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value.top === undefined || isCssLengthValue(value.top)) &&
+    (value.right === undefined || isCssLengthValue(value.right)) &&
+    (value.bottom === undefined || isCssLengthValue(value.bottom)) &&
+    (value.left === undefined || isCssLengthValue(value.left))
+  );
+}
+
+export function isBorderSideStyle(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isFiniteNumber(value.width) && value.width >= 0 && value.width <= 128 &&
+    (value.widthUnit === undefined || isCssLengthUnit(value.widthUnit)) &&
+    isString(value.color) && value.color.length <= 128 &&
+    (value.style === undefined || BORDER_LINE_STYLES.has(String(value.style)))
+  );
+}
+
+export function isBorderSidesConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value.top === undefined || isBorderSideStyle(value.top)) &&
+    (value.right === undefined || isBorderSideStyle(value.right)) &&
+    (value.bottom === undefined || isBorderSideStyle(value.bottom)) &&
+    (value.left === undefined || isBorderSideStyle(value.left))
+  );
+}
+
+export function isCornerRadiiConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isFiniteNumber(value.topLeft) && value.topLeft >= 0 &&
+    isFiniteNumber(value.topRight) && value.topRight >= 0 &&
+    isFiniteNumber(value.bottomRight) && value.bottomRight >= 0 &&
+    isFiniteNumber(value.bottomLeft) && value.bottomLeft >= 0
+  );
+}
+
+export function isNodeTransitionConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    TRANSITION_PRESETS.has(String(value.preset)) &&
+    (value.durationMs === undefined || (isFiniteNumber(value.durationMs) && value.durationMs >= 0 && value.durationMs <= 10000)) &&
+    (value.durationUnit === undefined || value.durationUnit === 'ms' || value.durationUnit === 's')
+  );
+}
+
+export function isNodeStateOverrides(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(([stateKey, override]) => {
+    if (!PSEUDO_STATE_KEYS.has(stateKey) || !isRecord(override)) return false;
+    return (
+      (override.fill === undefined || (isString(override.fill) && override.fill.length <= 128)) &&
+      (override.stroke === undefined || (isString(override.stroke) && override.stroke.length <= 128)) &&
+      (override.strokeWidth === undefined || (isFiniteNumber(override.strokeWidth) && override.strokeWidth >= 0 && override.strokeWidth <= 128)) &&
+      (override.opacity === undefined || (isFiniteNumber(override.opacity) && override.opacity >= 0 && override.opacity <= 1)) &&
+      (override.radius === undefined || (isFiniteNumber(override.radius) && override.radius >= 0 && override.radius <= 9999)) &&
+      (override.scale === undefined || (isFiniteNumber(override.scale) && override.scale >= 0.1 && override.scale <= 5)) &&
+      (override.translateY === undefined || (isFiniteNumber(override.translateY) && override.translateY >= -500 && override.translateY <= 500)) &&
+      (override.shadowPreset === undefined || SHADOW_PRESET_VALUES.has(String(override.shadowPreset)))
+    );
+  });
+}
+
+export function isNodeCssFilters(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value.brightness === undefined || (isFiniteNumber(value.brightness) && value.brightness >= 0 && value.brightness <= 300)) &&
+    (value.contrast === undefined || (isFiniteNumber(value.contrast) && value.contrast >= 0 && value.contrast <= 300)) &&
+    (value.saturate === undefined || (isFiniteNumber(value.saturate) && value.saturate >= 0 && value.saturate <= 300)) &&
+    (value.grayscale === undefined || (isFiniteNumber(value.grayscale) && value.grayscale >= 0 && value.grayscale <= 100))
+  );
+}
+
 export function isNodeLayoutConfig(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
@@ -150,8 +248,19 @@ export function isNodeLayoutConfig(value: unknown): boolean {
     (value.columnGap === undefined || (isFiniteNumber(value.columnGap) && value.columnGap >= 0)) &&
     (value.rowGap === undefined || (isFiniteNumber(value.rowGap) && value.rowGap >= 0)) &&
     (value.gridColumns === undefined || (isFiniteNumber(value.gridColumns) && value.gridColumns >= 1 && value.gridColumns <= 24)) &&
+    (value.gridColumnsMode === undefined || GRID_COLUMNS_MODES.has(String(value.gridColumnsMode))) &&
+    (value.gridMinColumnWidth === undefined || (isCssLengthValue(value.gridMinColumnWidth) && value.gridMinColumnWidth.value > 0)) &&
+    (value.gridTemplateColumns === undefined || (isString(value.gridTemplateColumns) && (value.gridTemplateColumns.trim() === '' || isSafeCssGridTemplate(value.gridTemplateColumns)))) &&
+    (value.gridRowsMode === undefined || GRID_ROWS_MODES.has(String(value.gridRowsMode))) &&
+    (value.gridRows === undefined || (isFiniteNumber(value.gridRows) && value.gridRows >= 1 && value.gridRows <= 24)) &&
+    (value.gridTemplateRows === undefined || (isString(value.gridTemplateRows) && (value.gridTemplateRows.trim() === '' || isSafeCssGridTemplate(value.gridTemplateRows)))) &&
     (value.overflow === undefined || LAYOUT_OVERFLOW_VALUES.has(String(value.overflow))) &&
+    (value.scrollSnapType === undefined || SCROLL_SNAP_TYPES.has(String(value.scrollSnapType))) &&
     (value.paddingMode === undefined || LAYOUT_PADDING_MODES.has(String(value.paddingMode))) &&
+    (value.gapUnit === undefined || isCssLengthUnit(value.gapUnit)) &&
+    (value.columnGapUnit === undefined || isCssLengthUnit(value.columnGapUnit)) &&
+    (value.rowGapUnit === undefined || isCssLengthUnit(value.rowGapUnit)) &&
+    (value.paddingUnit === undefined || isCssLengthUnit(value.paddingUnit)) &&
     isNodePadding(value.padding)
   );
 }
@@ -162,16 +271,27 @@ export function isNodeLayoutChildConfig(value: unknown): boolean {
     (value.position === undefined || LAYOUT_CHILD_POSITIONS.has(String(value.position))) &&
     (value.widthMode === undefined || LAYOUT_SIZING_MODES.has(String(value.widthMode))) &&
     (value.heightMode === undefined || LAYOUT_SIZING_MODES.has(String(value.heightMode))) &&
+    (value.widthValue === undefined || (isCssLengthValue(value.widthValue) && value.widthValue.value >= 0)) &&
+    (value.heightValue === undefined || (isCssLengthValue(value.heightValue) && value.heightValue.value >= 0)) &&
     (value.widthPercent === undefined || (isFiniteNumber(value.widthPercent) && value.widthPercent > 0 && value.widthPercent <= 1000)) &&
     (value.heightPercent === undefined || (isFiniteNumber(value.heightPercent) && value.heightPercent > 0 && value.heightPercent <= 1000)) &&
     (value.alignSelf === undefined || ALIGN_SELF_VALUES.has(String(value.alignSelf))) &&
     (value.flexGrow === undefined || (isFiniteNumber(value.flexGrow) && value.flexGrow >= 0)) &&
     (value.gridColumnSpan === undefined || (isFiniteNumber(value.gridColumnSpan) && value.gridColumnSpan >= 1 && value.gridColumnSpan <= 24)) &&
+    (value.gridColumnSpanFull === undefined || typeof value.gridColumnSpanFull === 'boolean') &&
+    (value.gridRowSpan === undefined || (isFiniteNumber(value.gridRowSpan) && value.gridRowSpan >= 1 && value.gridRowSpan <= 12)) &&
+    (value.scrollSnapAlign === undefined || SCROLL_SNAP_ALIGNS.has(String(value.scrollSnapAlign))) &&
     (value.zIndex === undefined || (isFiniteNumber(value.zIndex) && value.zIndex >= -9999 && value.zIndex <= 9999)) &&
     (value.minWidth === undefined || (isFiniteNumber(value.minWidth) && value.minWidth >= 0)) &&
     (value.maxWidth === undefined || (isFiniteNumber(value.maxWidth) && value.maxWidth >= 0)) &&
     (value.minHeight === undefined || (isFiniteNumber(value.minHeight) && value.minHeight >= 0)) &&
     (value.maxHeight === undefined || (isFiniteNumber(value.maxHeight) && value.maxHeight >= 0)) &&
+    (value.minWidthValue === undefined || (isCssLengthValue(value.minWidthValue) && value.minWidthValue.value >= 0)) &&
+    (value.maxWidthValue === undefined || (isCssLengthValue(value.maxWidthValue) && value.maxWidthValue.value >= 0)) &&
+    (value.minHeightValue === undefined || (isCssLengthValue(value.minHeightValue) && value.minHeightValue.value >= 0)) &&
+    (value.maxHeightValue === undefined || (isCssLengthValue(value.maxHeightValue) && value.maxHeightValue.value >= 0)) &&
+    (value.aspectRatio === undefined || (isString(value.aspectRatio) && (value.aspectRatio.trim() === '' || isSafeCssAspectRatio(value.aspectRatio)))) &&
+    (value.inset === undefined || isNodeInsetOffsets(value.inset)) &&
     (value.constraints === undefined || (
       isRecord(value.constraints) &&
       HORIZONTAL_CONSTRAINTS.has(String(value.constraints.horizontal)) &&
@@ -370,12 +490,21 @@ function isCommonNode(value: Record<string, unknown>): boolean {
     (value.semanticTag === undefined || SEMANTIC_HTML_TAGS.has(String(value.semanticTag))) &&
     (value.ariaLabel === undefined || isString(value.ariaLabel)) &&
     (value.href === undefined || isString(value.href)) &&
+    (value.linkTarget === undefined || LINK_TARGET_VALUES.has(String(value.linkTarget))) &&
+    (value.htmlId === undefined || (isString(value.htmlId) && isSafeHtmlId(value.htmlId))) &&
+    (value.className === undefined || (isString(value.className) && isSafeHtmlClassName(value.className))) &&
     (value.layout === undefined || isNodeLayoutConfig(value.layout)) &&
     (value.layoutChild === undefined || isNodeLayoutChildConfig(value.layoutChild)) &&
     (value.responsive === undefined || isResponsiveOverrides(value.responsive)) &&
     (value.tokenBindings === undefined || isNodeTokenBindings(value.tokenBindings)) &&
     (value.blendMode === undefined || isBlendMode(value.blendMode)) &&
     (value.effects === undefined || (Array.isArray(value.effects) && value.effects.length <= 16 && value.effects.every(isVisualEffect))) &&
+    (value.cssFilters === undefined || isNodeCssFilters(value.cssFilters)) &&
+    (value.cursor === undefined || CURSOR_TYPES.has(String(value.cursor))) &&
+    (value.pointerEvents === undefined || AUTO_NONE_VALUES.has(String(value.pointerEvents))) &&
+    (value.userSelect === undefined || AUTO_NONE_VALUES.has(String(value.userSelect))) &&
+    (value.transition === undefined || isNodeTransitionConfig(value.transition)) &&
+    (value.stateOverrides === undefined || isNodeStateOverrides(value.stateOverrides)) &&
     (value.aspectRatioLocked === undefined || typeof value.aspectRatioLocked === 'boolean')
   );
 }
@@ -386,9 +515,14 @@ function isShapeStyle(value: unknown): boolean {
     isString(value.fill) &&
     isString(value.stroke) &&
     isFiniteNumber(value.strokeWidth) && value.strokeWidth >= 0 &&
+    (value.strokeWidthUnit === undefined || isCssLengthUnit(value.strokeWidthUnit)) &&
+    (value.strokeStyle === undefined || BORDER_LINE_STYLES.has(String(value.strokeStyle))) &&
     (value.strokeDasharray === undefined || isString(value.strokeDasharray)) &&
     (value.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(value.strokeAlign))) &&
+    (value.borderSides === undefined || isBorderSidesConfig(value.borderSides)) &&
     (value.radius === undefined || (isFiniteNumber(value.radius) && value.radius >= 0)) &&
+    (value.radiusUnit === undefined || isCssLengthUnit(value.radiusUnit)) &&
+    (value.cornerRadii === undefined || isCornerRadiiConfig(value.cornerRadii)) &&
     (value.fills === undefined || (Array.isArray(value.fills) && value.fills.length <= 16 && value.fills.every(isFillPaint)))
   );
 }
@@ -487,10 +621,13 @@ function isDesignNode(value: unknown): value is DesignNode {
     return (
       isString(style.fill) &&
       isFiniteNumber(style.fontSize) && style.fontSize > 0 &&
+      (style.fontSizeUnit === undefined || FONT_SIZE_UNITS.has(String(style.fontSizeUnit))) &&
       isString(style.fontFamily) &&
       isFiniteNumber(style.fontWeight) &&
       isFiniteNumber(style.letterSpacing) &&
+      (style.letterSpacingUnit === undefined || LETTER_SPACING_UNITS.has(String(style.letterSpacingUnit))) &&
       isFiniteNumber(style.lineHeight) && style.lineHeight > 0 &&
+      (style.lineHeightUnit === undefined || LINE_HEIGHT_UNITS.has(String(style.lineHeightUnit))) &&
       (style.textAlign === undefined || TEXT_ALIGN_VALUES.has(String(style.textAlign))) &&
       (style.verticalAlign === undefined || TEXT_VERTICAL_ALIGN_VALUES.has(String(style.verticalAlign))) &&
       (style.textWrap === undefined || TEXT_WRAP_VALUES.has(String(style.textWrap))) &&
@@ -513,8 +650,13 @@ function isDesignNode(value: unknown): value is DesignNode {
     return (
       IMAGE_FIT_VALUES.has(String(style.fit)) &&
       (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
+      (style.radiusUnit === undefined || isCssLengthUnit(style.radiusUnit)) &&
+      (style.cornerRadii === undefined || isCornerRadiiConfig(style.cornerRadii)) &&
       (style.stroke === undefined || isString(style.stroke)) &&
-      (style.strokeWidth === undefined || (isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0))
+      (style.strokeWidth === undefined || (isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0)) &&
+      (style.strokeWidthUnit === undefined || isCssLengthUnit(style.strokeWidthUnit)) &&
+      (style.strokeStyle === undefined || BORDER_LINE_STYLES.has(String(style.strokeStyle))) &&
+      (style.borderSides === undefined || isBorderSidesConfig(style.borderSides))
     );
   }
 

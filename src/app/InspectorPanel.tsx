@@ -2,14 +2,13 @@ import type { JSX, RefObject } from 'preact';
 import { useState } from 'preact/hooks';
 import { CURATED_FONT_FAMILIES } from '../core/document/fonts';
 import {
-  applyShadowPresetToEffects,
-  detectShadowPreset,
-  SHADOW_PRESETS,
-  type ShadowPresetId,
-} from '../core/document/styling';
+  parseAspectRatioNumeric,
+  type CssLengthUnit,
+  type CssLengthValue,
+  type CssUnitOption,
+} from '../core/document/cssUnits';
 import type {
   AssetReference,
-  BlendMode,
   BreakpointId,
   ComponentDefinition,
   ComponentSlotDefinition,
@@ -20,13 +19,23 @@ import type {
   EllipseNode,
   FolioProject,
   FrameNode,
-  ImageFitMode,
+  InteractiveStateId,
+  LayoutChildPosition,
+  LayoutMode,
+  LayoutSizingMode,
+  NodeInsetOffsets,
+  NodeLayoutChildConfig,
+  NodeStateOverride,
+  NodeTransitionConfig,
   PathNode,
+  PseudoStateKey,
   RectNode,
-  StrokeAlign,
   TextAlign,
+  TextDecorationMode,
   TextNode,
+  TextTransformMode,
   TextVerticalAlign,
+  TransitionPreset,
 } from '../core/document/types';
 import { computeProportionalDimensions } from '../engines/canvas/geometry';
 import { PANEL_RESIZE_CONSTRAINTS, type ResizablePanelId } from './panelResize';
@@ -49,11 +58,13 @@ import {
   InspectorAccordionSection,
   InspectorAccordionToolbar,
 } from './workspace/InspectorAccordion';
-import {
-  PresetStepperSlider,
-  VisualColorAlphaControl,
-} from './workspace/InspectorZeroTypingControls';
+import { NumericUnitInput, type NumericUnitPreset } from './workspace/NumericUnitInput';
 import { InspectorFrameLayoutSection } from './workspace/InspectorFrameLayoutSection';
+import { InspectorAppearanceSection } from './workspace/InspectorAppearanceSection';
+import { InspectorModernEffectsSection } from './workspace/InspectorModernEffectsSection';
+import { InspectorResponsiveSemanticSection } from './workspace/InspectorResponsiveSemanticSection';
+import { InspectorComponentContractSection } from './workspace/InspectorComponentContractSection';
+import { InspectorInteractionsSection } from './workspace/InspectorInteractionsSection';
 import type {
   QuickInteractionConfig,
   QuickInteractionEntry,
@@ -97,6 +108,8 @@ export interface InspectorPanelProps {
   onUpdateSelected: (patch: Partial<DesignNode>) => void;
   onUpdateSelectedStyle: (patch: Record<string, string | number>) => void;
   onApplyAutoLayout: (containerId: string) => void;
+  onConvertFrameLayoutMode?: (containerId: string, mode: LayoutMode) => void;
+  onSwitchBreakpoint?: (bp: BreakpointId) => void;
   onUpdateInstanceOverride: (childNodeId: string, patch: { fill?: string; text?: string }) => void;
   onUpdateInstanceVariant: (axisId: string, optionId: string) => void;
   onUpdateInstanceSlot: (slotId: string, patch: { text?: string; visible?: boolean }) => void;
@@ -137,26 +150,94 @@ export interface InspectorPanelProps {
 }
 
 type AccordionSectionId =
-  | 'position'
-  | 'fill-stroke'
+  | 'layout-frame'
+  | 'size-position'
+  | 'appearance'
   | 'text'
-  | 'effects-masking'
+  | 'modern-effects'
+  | 'responsive-semantic'
   | 'component-logic';
 
 const DEFAULT_ACCORDION_STATE: Record<AccordionSectionId, boolean> = {
-  position: true,
-  'fill-stroke': true,
+  'layout-frame': true,
+  'size-position': true,
+  appearance: true,
   text: true,
-  'effects-masking': false,
+  'modern-effects': false,
+  'responsive-semantic': false,
   'component-logic': false,
 };
 
-const DIMENSION_PRESETS = [24, 48, 80, 120, 160, 240, 320, 480, 640, 800, 1200] as const;
-const POSITION_PRESETS = [0, 16, 32, 64, 120, 200, 320, 480, 640] as const;
-const RADIUS_PRESETS = [0, 4, 8, 12, 16, 24, 32, 48, 999] as const;
-const STROKE_WIDTH_PRESETS = [0, 1, 2, 3, 4, 6, 8, 12, 16] as const;
-const FONT_SIZE_PRESETS = [12, 14, 16, 18, 20, 24, 32, 40, 48, 64, 72] as const;
-const ROTATION_PRESETS = [0, 45, 90, 180] as const;
+const INTERACTIVE_STATES: ReadonlyArray<{ id: InteractiveStateId; label: string }> = [
+  { id: 'default', label: 'Default' },
+  { id: 'hover', label: 'Hover' },
+  { id: 'active', label: 'Active' },
+  { id: 'focus', label: 'Focus' },
+  { id: 'disabled', label: 'Dis' },
+];
+
+const TRANSITION_PRESET_DEFAULTS: Record<TransitionPreset, { durationMs: number; easing: string }> = {
+  none: { durationMs: 0, easing: 'ease' },
+  fast: { durationMs: 140, easing: 'ease-out' },
+  smooth: { durationMs: 260, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+  bouncy: { durationMs: 360, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)' },
+};
+
+const DIMENSION_UNITS: readonly CssUnitOption[] = ['px', '%', 'vw', 'vh', 'dvh', 'rem', 'em', 'fit', 'fill'];
+const BOUND_UNITS: readonly CssUnitOption[] = ['auto', 'px', '%', 'vw', 'vh', 'dvh', 'rem'];
+const INSET_UNITS: readonly CssUnitOption[] = ['auto', 'px', '%', 'rem'];
+const POSITION_UNITS: readonly CssUnitOption[] = ['px'];
+const ROTATION_UNITS: readonly CssUnitOption[] = ['deg'];
+const DURATION_UNITS: readonly CssUnitOption[] = ['ms', 's'];
+const FONT_SIZE_UNITS: readonly CssUnitOption[] = ['px', 'rem', 'em'];
+const LINE_HEIGHT_UNITS: readonly CssUnitOption[] = ['', 'px', '%'];
+const LETTER_SPACING_UNITS: readonly CssUnitOption[] = ['px', 'em'];
+
+const CONTAINER_MAX_WIDTH_PRESETS: readonly NumericUnitPreset[] = [
+  { label: 'Auto (None)', value: 0, keyword: 'auto' },
+  { label: 'SM (640px)', value: 640, unit: 'px' },
+  { label: 'MD (768px)', value: 768, unit: 'px' },
+  { label: 'LG (1024px)', value: 1024, unit: 'px' },
+  { label: 'XL (1280px)', value: 1280, unit: 'px' },
+  { label: '2XL (1440px)', value: 1440, unit: 'px' },
+];
+
+const BOUND_PRESETS: readonly NumericUnitPreset[] = [
+  { label: 'Auto (None)', value: 0, keyword: 'auto' },
+  { label: '160 px', value: 160, unit: 'px' },
+  { label: '320 px', value: 320, unit: 'px' },
+  { label: '640 px', value: 640, unit: 'px' },
+  { label: '100 %', value: 100, unit: '%' },
+  { label: '100 vh', value: 100, unit: 'vh' },
+];
+
+const DIMENSION_PRESETS: readonly NumericUnitPreset[] = [
+  { label: 'Fit Content', value: 0, keyword: 'fit' },
+  { label: 'Fill Container', value: 0, keyword: 'fill' },
+  { label: '100 %', value: 100, unit: '%' },
+  { label: '100 vw', value: 100, unit: 'vw' },
+  { label: '100 dvh', value: 100, unit: 'dvh' },
+  { label: '320 px', value: 320, unit: 'px' },
+  { label: '640 px', value: 640, unit: 'px' },
+  { label: '1280 px', value: 1280, unit: 'px' },
+];
+
+const Z_INDEX_PRESETS: readonly NumericUnitPreset[] = [
+  { label: 'Base (0)', value: 0 },
+  { label: 'Sticky (10)', value: 10 },
+  { label: 'Dropdown (20)', value: 20 },
+  { label: 'Modal (50)', value: 50 },
+  { label: 'Top (100)', value: 100 },
+];
+
+const ASPECT_RATIO_OPTIONS = [
+  { value: '', label: 'Auto' },
+  { value: '1/1', label: '1 : 1 (Square)' },
+  { value: '4/3', label: '4 : 3 (Classic)' },
+  { value: '16/9', label: '16 : 9 (Widescreen)' },
+  { value: '21/9', label: '21 : 9 (Ultrawide)' },
+  { value: '9/16', label: '9 : 16 (Vertical)' },
+] as const;
 
 const FONT_WEIGHT_OPTIONS = [
   { label: 'Light (300)', value: 300 },
@@ -164,44 +245,74 @@ const FONT_WEIGHT_OPTIONS = [
   { label: 'Medium (500)', value: 500 },
   { label: 'SemiBold (600)', value: 600 },
   { label: 'Bold (700)', value: 700 },
+  { label: 'ExtraBold (800)', value: 800 },
 ] as const;
 
-const LINE_HEIGHT_PRESETS = [
-  { label: 'Tight (1.1)', value: 1.1 },
-  { label: 'Normal (1.35)', value: 1.35 },
-  { label: 'Relaxed (1.6)', value: 1.6 },
-  { label: 'Loose (1.85)', value: 1.85 },
-] as const;
-
-const LETTER_SPACING_PRESETS = [
-  { label: 'Tight (-0.5px)', value: -0.5 },
-  { label: 'Normal (0px)', value: 0 },
-  { label: 'Wide (1px)', value: 1 },
-  { label: 'Extra Wide (2.5px)', value: 2.5 },
-] as const;
-
-const BLEND_MODE_OPTIONS: ReadonlyArray<{ value: BlendMode; label: string }> = [
-  { value: 'normal', label: 'Normal' },
-  { value: 'multiply', label: 'Multiply' },
-  { value: 'screen', label: 'Screen' },
-  { value: 'overlay', label: 'Overlay' },
-  { value: 'darken', label: 'Darken' },
-  { value: 'lighten', label: 'Lighten' },
-  { value: 'soft-light', label: 'Soft Light' },
-  { value: 'difference', label: 'Difference' },
+const FONT_SIZE_PRESETS: readonly NumericUnitPreset[] = [
+  { label: '12 px', value: 12, unit: 'px' },
+  { label: '14 px', value: 14, unit: 'px' },
+  { label: '16 px (1rem)', value: 16, unit: 'px' },
+  { label: '20 px', value: 20, unit: 'px' },
+  { label: '24 px', value: 24, unit: 'px' },
+  { label: '32 px', value: 32, unit: 'px' },
+  { label: '48 px', value: 48, unit: 'px' },
+  { label: '64 px', value: 64, unit: 'px' },
 ];
 
-function resolveStrokeStyleKey(dasharray?: string): 'solid' | 'dashed' | 'dotted' {
-  const trimmed = dasharray?.trim();
-  if (!trimmed) return 'solid';
-  const first = Number(trimmed.split(/[\s,]+/)[0]);
-  return Number.isFinite(first) && first > 0 && first <= 3 ? 'dotted' : 'dashed';
+const LINE_HEIGHT_PRESETS: readonly NumericUnitPreset[] = [
+  { label: 'Tight (1.1)', value: 1.1 },
+  { label: 'Snug (1.25)', value: 1.25 },
+  { label: 'Normal (1.4)', value: 1.4 },
+  { label: 'Relaxed (1.6)', value: 1.6 },
+  { label: 'Loose (1.85)', value: 1.85 },
+];
+
+const LETTER_SPACING_PRESETS: readonly NumericUnitPreset[] = [
+  { label: 'Tight (-0.5px)', value: -0.5, unit: 'px' },
+  { label: 'Normal (0px)', value: 0, unit: 'px' },
+  { label: 'Wide (1px)', value: 1, unit: 'px' },
+  { label: 'Caps (0.08em)', value: 0.08, unit: 'em' },
+];
+
+type LayoutChildConstraints = NonNullable<NodeLayoutChildConfig['constraints']>;
+type PinPresetId = 'tl' | 'tc' | 'tr' | 'center' | 'bl' | 'br' | 'stretch';
+
+const PIN_PRESETS: readonly {
+  id: PinPresetId;
+  label: string;
+  title: string;
+  constraints: LayoutChildConstraints;
+}[] = [
+  { id: 'tl', label: 'TL', title: 'Pin Top-Left', constraints: { horizontal: 'left', vertical: 'top' } },
+  { id: 'tc', label: 'TC', title: 'Pin Top-Center', constraints: { horizontal: 'center', vertical: 'top' } },
+  { id: 'tr', label: 'TR', title: 'Pin Top-Right', constraints: { horizontal: 'right', vertical: 'top' } },
+  { id: 'center', label: 'Ctr', title: 'Pin Center', constraints: { horizontal: 'center', vertical: 'center' } },
+  { id: 'bl', label: 'BL', title: 'Pin Bottom-Left', constraints: { horizontal: 'left', vertical: 'bottom' } },
+  { id: 'br', label: 'BR', title: 'Pin Bottom-Right', constraints: { horizontal: 'right', vertical: 'bottom' } },
+  { id: 'stretch', label: 'Fill', title: 'Pin All Sides', constraints: { horizontal: 'left-right', vertical: 'top-bottom' } },
+];
+
+function detectActivePinPreset(constraints?: LayoutChildConstraints): PinPresetId | null {
+  const h = constraints?.horizontal ?? 'left';
+  const v = constraints?.vertical ?? 'top';
+  const match = PIN_PRESETS.find((p) => p.constraints.horizontal === h && p.constraints.vertical === v);
+  return match?.id ?? null;
 }
 
-function strokeStyleKeyToDasharray(key: 'solid' | 'dashed' | 'dotted'): string {
-  if (key === 'dashed') return '8 5';
-  if (key === 'dotted') return '2 4';
-  return '';
+function toLengthUnit(unit: CssUnitOption, fallback: CssLengthUnit = 'px'): CssLengthUnit {
+  if (
+    unit === 'px' ||
+    unit === '%' ||
+    unit === 'vw' ||
+    unit === 'vh' ||
+    unit === 'dvh' ||
+    unit === 'rem' ||
+    unit === 'em' ||
+    unit === 'fr'
+  ) {
+    return unit;
+  }
+  return fallback;
 }
 
 function renderHorizontalAlignIcon(align: TextAlign): JSX.Element {
@@ -261,17 +372,27 @@ interface InspectorSelectedNodeBodyProps {
   scopedNodes: readonly DesignNode[];
   selectedInstanceComponent: ComponentDefinition | null;
   editingMasterComponent: ComponentDefinition | null;
-  instanceOverrideTargets: InspectorOverrideTargets | null;
+  activeBreakpoint: BreakpointId;
   designTokens: DesignTokenCollection;
-  assets: readonly AssetReference[];
   defaultFillColor: string;
+  project?: FolioProject;
+  activePageId?: string;
   onCommitEdit: () => void;
   onUpdateSelected: (patch: Partial<DesignNode>) => void;
   onUpdateSelectedStyle: (patch: Record<string, string | number>) => void;
   onApplyAutoLayout: (containerId: string) => void;
-  onUpdateInstanceOverride: (childNodeId: string, patch: { fill?: string; text?: string }) => void;
+  onConvertFrameLayoutMode?: (containerId: string, mode: LayoutMode) => void;
+  onSwitchBreakpoint?: (bp: BreakpointId) => void;
   onUpdateInstanceVariant: (axisId: string, optionId: string) => void;
   onUpdateInstanceSlot: (slotId: string, patch: { text?: string; visible?: boolean }) => void;
+  onUpdateMasterContract: (
+    component: ComponentDefinition,
+    patch: {
+      variants?: ComponentVariantAxis[];
+      slots?: ComponentSlotDefinition[];
+      nodeLogicEnabled?: boolean;
+    },
+  ) => void;
   onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
   onResetInstanceOverrides: () => void;
   onDetachInstance: () => void;
@@ -280,6 +401,17 @@ interface InspectorSelectedNodeBodyProps {
   onSimplifyPath: (target: EditorTarget) => void;
   onChooseTool: (toolId: CanvasToolId, target: EditorTarget) => void;
   onDuplicateSelection: () => void;
+  onCreateQuickInteraction?: (
+    scopeContext: QuickInteractionScopeContext,
+    config: QuickInteractionConfig,
+  ) => { entryId: string } | null;
+  onUpdateQuickInteraction?: (
+    entry: QuickInteractionEntry,
+    layerId: string,
+    nextConfig: QuickInteractionConfig,
+  ) => void;
+  onDeleteQuickInteraction?: (entry: QuickInteractionEntry) => void;
+  onOpenInteractionInNodeGraph?: (graphId: string, nodeIds: readonly string[]) => void;
   studioActions?: StudioVectorActions;
 }
 
@@ -289,17 +421,20 @@ function InspectorSelectedNodeBody({
   scopedNodes,
   selectedInstanceComponent,
   editingMasterComponent,
-  instanceOverrideTargets,
+  activeBreakpoint,
   designTokens,
-  assets,
   defaultFillColor,
+  project,
+  activePageId,
   onCommitEdit,
   onUpdateSelected,
   onUpdateSelectedStyle,
   onApplyAutoLayout,
-  onUpdateInstanceOverride,
+  onConvertFrameLayoutMode,
+  onSwitchBreakpoint,
   onUpdateInstanceVariant,
   onUpdateInstanceSlot,
+  onUpdateMasterContract,
   onToggleComponentNodeLogic,
   onResetInstanceOverrides,
   onDetachInstance,
@@ -308,23 +443,47 @@ function InspectorSelectedNodeBody({
   onSimplifyPath,
   onChooseTool,
   onDuplicateSelection,
+  onCreateQuickInteraction,
+  onUpdateQuickInteraction,
+  onDeleteQuickInteraction,
+  onOpenInteractionInNodeGraph,
   studioActions,
 }: InspectorSelectedNodeBodyProps) {
   const [openSections, setOpenSections] = useState<Record<AccordionSectionId, boolean>>(
     DEFAULT_ACCORDION_STATE,
   );
+  const [activeState, setActiveState] = useState<InteractiveStateId>('default');
   const [transformOrigin, setTransformOrigin] = useState<TransformOriginAnchor>('tl');
+  const [showMinMax, setShowMinMax] = useState(false);
 
   const isTextNode = selectedNode.type === 'text';
-  const isComponentContext =
-    selectedNode.type === 'component-instance' || Boolean(editingMasterComponent);
+  const isConvertibleVector =
+    selectedNode.type === 'rect' || selectedNode.type === 'ellipse' || selectedNode.type === 'frame';
+  const isPathNode = selectedNode.type === 'path';
+  const hasQuickInteractions = Boolean(
+    project &&
+      activePageId &&
+      onCreateQuickInteraction &&
+      onUpdateQuickInteraction &&
+      onDeleteQuickInteraction &&
+      onOpenInteractionInNodeGraph,
+  );
+  const isComponentLogicVisible =
+    selectedNode.type === 'component-instance' ||
+    Boolean(editingMasterComponent) ||
+    isPathNode ||
+    isConvertibleVector ||
+    hasQuickInteractions ||
+    Boolean(studioActions?.onOpenNodeLogic);
 
   const visibleSectionIds: AccordionSectionId[] = [
-    'position',
-    'fill-stroke',
+    'layout-frame',
+    'size-position',
+    'appearance',
     ...(isTextNode ? (['text'] as const) : []),
-    'effects-masking',
-    ...(isComponentContext ? (['component-logic'] as const) : []),
+    'modern-effects',
+    'responsive-semantic',
+    ...(isComponentLogicVisible ? (['component-logic'] as const) : []),
   ];
 
   const openCount = visibleSectionIds.filter((id) => openSections[id]).length;
@@ -346,6 +505,89 @@ function InspectorSelectedNodeBody({
     });
   };
 
+  const isPseudoState = activeState !== 'default';
+  const pseudoKey = activeState as PseudoStateKey;
+  const activeStateOverride: NodeStateOverride | undefined = isPseudoState
+    ? selectedNode.stateOverrides?.[pseudoKey]
+    : undefined;
+
+  const updateActiveStateOverride = (patch: Partial<NodeStateOverride>, commit = true) => {
+    if (!isPseudoState) return;
+    const nextEntry: NodeStateOverride = {
+      ...(selectedNode.stateOverrides?.[pseudoKey] ?? {}),
+      ...patch,
+    };
+    onUpdateSelected({
+      stateOverrides: {
+        ...(selectedNode.stateOverrides ?? {}),
+        [pseudoKey]: nextEntry,
+      },
+    });
+    if (commit) onCommitEdit();
+  };
+
+  const resetActiveStateOverride = () => {
+    if (!isPseudoState || !selectedNode.stateOverrides) return;
+    const nextOverrides = { ...selectedNode.stateOverrides };
+    delete nextOverrides[pseudoKey];
+    onUpdateSelected({
+      stateOverrides: Object.keys(nextOverrides).length > 0 ? nextOverrides : undefined,
+    });
+    onCommitEdit();
+  };
+
+  const handleUpdateExtendedStyle = (patch: Record<string, unknown>) => {
+    const isPrimitiveOnly = Object.values(patch).every(
+      (value) => typeof value === 'string' || typeof value === 'number',
+    );
+    if (isPrimitiveOnly) {
+      onUpdateSelectedStyle(patch as Record<string, string | number>);
+      return;
+    }
+    if (
+      selectedNode.type === 'rect' ||
+      selectedNode.type === 'frame' ||
+      selectedNode.type === 'ellipse' ||
+      selectedNode.type === 'path' ||
+      selectedNode.type === 'text' ||
+      selectedNode.type === 'image'
+    ) {
+      onUpdateSelected({
+        style: {
+          ...selectedNode.style,
+          ...patch,
+        },
+      } as Partial<DesignNode>);
+    }
+  };
+
+  const parentNode = selectedNode.parentId
+    ? scopedNodes.find((node) => node.id === selectedNode.parentId) ?? null
+    : null;
+  const parentLayout = parentNode?.layout;
+  const isInsideAutoLayout = Boolean(parentLayout && parentLayout.mode !== 'none');
+
+  const layoutChild: NodeLayoutChildConfig = {
+    widthMode: 'fixed',
+    heightMode: 'fixed',
+    flexGrow: 1,
+    position: 'relative',
+    alignSelf: 'auto',
+    ...(selectedNode.layoutChild ?? {}),
+  };
+
+  const commitLayoutChild = (patch: Partial<NodeLayoutChildConfig>, commit = true) => {
+    const nextChild: NodeLayoutChildConfig = { ...layoutChild, ...patch };
+    onUpdateSelected({ layoutChild: nextChild });
+    if ((selectedNode.type === 'frame' || selectedNode.type === 'group') && selectedNode.layout?.mode && selectedNode.layout.mode !== 'none') {
+      onApplyAutoLayout(selectedNode.id);
+    }
+    if (parentNode && isInsideAutoLayout) {
+      onApplyAutoLayout(parentNode.id);
+    }
+    if (commit) onCommitEdit();
+  };
+
   const isAspectRatioLocked = Boolean(selectedNode.aspectRatioLocked);
   const anchorCoords = getAnchorCoordinates(selectedNode, transformOrigin);
 
@@ -355,7 +597,8 @@ function InspectorSelectedNodeBody({
     let nextW = axis === 'width' ? safeNext : selectedNode.width;
     let nextH = axis === 'height' ? safeNext : selectedNode.height;
     if (isAspectRatioLocked) {
-      const anchor = selectedNode.height > 0 ? selectedNode.width / selectedNode.height : 1;
+      const explicitRatio = parseAspectRatioNumeric(layoutChild.aspectRatio);
+      const anchor = explicitRatio ?? (selectedNode.height > 0 ? selectedNode.width / selectedNode.height : 1);
       const next = computeProportionalDimensions({
         currentWidth: selectedNode.width,
         currentHeight: selectedNode.height,
@@ -380,41 +623,127 @@ function InspectorSelectedNodeBody({
     onUpdateSelected(computeResizePatchForOrigin(selectedNode, transformOrigin, nextW, nextH));
   };
 
-  const parentNode = selectedNode.parentId
-    ? scopedNodes.find((node) => node.id === selectedNode.parentId) ?? null
-    : null;
+  const resolveDimensionUnit = (axis: 'width' | 'height'): CssUnitOption => {
+    const mode: LayoutSizingMode = axis === 'width' ? layoutChild.widthMode : layoutChild.heightMode;
+    if (mode === 'hug') return 'fit';
+    if (mode === 'fill') return 'fill';
+    if (mode === 'relative') return '%';
+    const cssVal = axis === 'width' ? layoutChild.widthValue : layoutChild.heightValue;
+    return cssVal?.unit ?? 'px';
+  };
 
-  const hasShapeStroke =
-    selectedNode.type === 'rect' ||
-    selectedNode.type === 'ellipse' ||
-    selectedNode.type === 'frame' ||
-    selectedNode.type === 'path';
+  const resolveDimensionNumeric = (axis: 'width' | 'height'): number => {
+    const mode: LayoutSizingMode = axis === 'width' ? layoutChild.widthMode : layoutChild.heightMode;
+    if (mode === 'relative') {
+      return axis === 'width' ? (layoutChild.widthPercent ?? 100) : (layoutChild.heightPercent ?? 100);
+    }
+    const cssVal = axis === 'width' ? layoutChild.widthValue : layoutChild.heightValue;
+    if (cssVal && cssVal.unit !== 'px') return cssVal.value;
+    return axis === 'width' ? Math.round(selectedNode.width) : Math.round(selectedNode.height);
+  };
 
-  const activeShadowPreset = detectShadowPreset(selectedNode.effects);
-  const layerBlurEffect = (selectedNode.effects ?? []).find(
-    (item) => item.type === 'layer-blur' && item.visible !== false,
-  );
-  const bgBlurEffect = (selectedNode.effects ?? []).find(
-    (item) => item.type === 'backdrop-blur' && item.visible !== false,
-  );
-  const layerBlurPx = layerBlurEffect && layerBlurEffect.type === 'layer-blur' ? layerBlurEffect.radius : 0;
-  const bgBlurPx = bgBlurEffect && bgBlurEffect.type === 'backdrop-blur' ? bgBlurEffect.radius : 0;
+  const applyDimensionPayload = (
+    axis: 'width' | 'height',
+    payload: { kind: 'numeric' | 'keyword'; value: number; unit: CssUnitOption },
+    commit: boolean,
+  ) => {
+    const modeKey = axis === 'width' ? 'widthMode' : 'heightMode';
+    const pctKey = axis === 'width' ? 'widthPercent' : 'heightPercent';
+    const cssValKey = axis === 'width' ? 'widthValue' : 'heightValue';
 
-  const updateBlurEffect = (kind: 'layer-blur' | 'backdrop-blur', radius: number) => {
-    const rest = (selectedNode.effects ?? []).filter((item) => item.type !== kind);
-    const nextEffects =
-      radius <= 0
-        ? rest
-        : [
-            ...rest,
-            {
-              id: `effect-${kind}`,
-              type: kind,
-              visible: true,
-              radius,
-            } as const,
-          ];
-    onUpdateSelected({ effects: nextEffects });
+    if (payload.unit === 'fit') {
+      commitLayoutChild({ [modeKey]: 'hug', [cssValKey]: undefined }, commit);
+      return;
+    }
+    if (payload.unit === 'fill') {
+      commitLayoutChild({ [modeKey]: 'fill', [cssValKey]: undefined }, commit);
+      return;
+    }
+    if (payload.unit === '%') {
+      commitLayoutChild(
+        {
+          [modeKey]: 'relative',
+          [pctKey]: Math.max(1, Math.min(100, payload.value)),
+          [cssValKey]: { value: Math.max(1, Math.min(100, payload.value)), unit: '%' },
+        },
+        commit,
+      );
+      return;
+    }
+    const lenUnit = toLengthUnit(payload.unit, 'px');
+    const nextCssVal: CssLengthValue = { value: payload.value, unit: lenUnit };
+    if (lenUnit === 'px') {
+      handleDimensionChange(axis, payload.value);
+      if (layoutChild[modeKey] !== 'fixed' || layoutChild[cssValKey]) {
+        commitLayoutChild({ [modeKey]: 'fixed', [cssValKey]: undefined }, false);
+      }
+      if (commit) onCommitEdit();
+      return;
+    }
+    commitLayoutChild({ [modeKey]: 'fixed', [cssValKey]: nextCssVal }, commit);
+  };
+
+  const resolveBound = (
+    key: 'minWidth' | 'maxWidth' | 'minHeight' | 'maxHeight',
+  ): { value: number; unit: CssUnitOption } => {
+    const cssKey = `${key}Value` as const;
+    const cssVal = layoutChild[cssKey];
+    if (cssVal) return { value: cssVal.value, unit: cssVal.unit };
+    const pxVal = layoutChild[key];
+    if (typeof pxVal === 'number' && pxVal > 0) return { value: pxVal, unit: 'px' };
+    return { value: 0, unit: 'auto' };
+  };
+
+  const applyBound = (
+    key: 'minWidth' | 'maxWidth' | 'minHeight' | 'maxHeight',
+    payload: { kind: 'numeric' | 'keyword'; value: number; unit: CssUnitOption },
+    commit: boolean,
+  ) => {
+    const cssKey = `${key}Value` as const;
+    if (payload.unit === 'auto' || payload.value <= 0) {
+      commitLayoutChild({ [key]: undefined, [cssKey]: undefined }, commit);
+      return;
+    }
+    const lenUnit = toLengthUnit(payload.unit, 'px');
+    commitLayoutChild(
+      {
+        [key]: lenUnit === 'px' ? payload.value : layoutChild[key],
+        [cssKey]: { value: payload.value, unit: lenUnit },
+      },
+      commit,
+    );
+  };
+
+  const activeBoundsCount = (['minWidth', 'maxWidth', 'minHeight', 'maxHeight'] as const).filter(
+    (k) => resolveBound(k).unit !== 'auto',
+  ).length;
+
+  const positionType: LayoutChildPosition = layoutChild.position ?? 'relative';
+  const showInsets = positionType !== 'relative';
+  const showPinPresets = !isInsideAutoLayout || positionType === 'absolute';
+  const activePinPreset = detectActivePinPreset(layoutChild.constraints);
+
+  const updateInset = (
+    side: keyof NodeInsetOffsets,
+    payload: { kind: 'numeric' | 'keyword'; value: number; unit: CssUnitOption },
+    commit: boolean,
+  ) => {
+    const nextInset: NodeInsetOffsets = { ...(layoutChild.inset ?? {}) };
+    if (payload.unit === 'auto') {
+      delete nextInset[side];
+    } else {
+      nextInset[side] = { value: payload.value, unit: toLengthUnit(payload.unit, 'px') };
+    }
+    commitLayoutChild(
+      { inset: Object.keys(nextInset).length > 0 ? nextInset : undefined },
+      commit,
+    );
+  };
+
+  const currentTransition: NodeTransitionConfig = selectedNode.transition ?? {
+    preset: 'none',
+    durationMs: 0,
+    easing: 'ease',
   };
 
   const currentDrawMode: DrawMaskMode = selectedNode.drawMode ?? 'normal';
@@ -426,9 +755,28 @@ function InspectorSelectedNodeBody({
       ? editingMasterComponent
       : selectedInstanceComponent ?? editingMasterComponent;
 
+  const layoutBadge =
+    selectedNode.type === 'frame' || selectedNode.type === 'group'
+      ? selectedNode.layout?.mode === 'flex'
+        ? 'STACK'
+        : selectedNode.layout?.mode === 'grid'
+          ? 'GRID'
+          : 'FREE'
+      : parentLayout?.mode === 'grid'
+        ? 'GRID ITEM'
+        : parentLayout?.mode === 'flex'
+          ? 'STACK ITEM'
+          : 'WEB';
+
+  const hasAnyStateOverrides = (stateId: InteractiveStateId): boolean => {
+    if (stateId === 'default') return false;
+    const entry = selectedNode.stateOverrides?.[stateId];
+    return Boolean(entry && Object.keys(entry).length > 0);
+  };
+
   return (
-    <div class="inspector-content inspector-zero-typing">
-      {/* Top Expand/Collapse All Bar */}
+    <div class={`inspector-content inspector-zero-typing${isPseudoState ? ' is-state-editing' : ''}`}>
+      {/* Global Expand All / Collapse All Bar */}
       <InspectorAccordionToolbar
         allExpanded={allExpanded}
         openCount={openCount}
@@ -436,8 +784,8 @@ function InspectorSelectedNodeBody({
         onToggleAll={toggleAllSections}
       />
 
-      {/* a. Quick Actions Header (Always Visible — ONLY text input in sidebar) */}
-      <section class="inspector-quick-header" aria-label="Quick actions header">
+      {/* SECTION 1 — HEADER IDENTITY & INTERACTIVE STATE SWITCHER (ALWAYS VISIBLE) */}
+      <section class="inspector-quick-header" aria-label="Identity and interactive states">
         <div class="inspector-quick-name-row">
           <input
             type="text"
@@ -504,6 +852,142 @@ function InspectorSelectedNodeBody({
           )}
         </div>
 
+        {/* Interactive State Switcher Pill: Default | Hover | Active | Focus | Disabled */}
+        <div class="folio-state-block">
+          <div class="folio-state-switcher-pill" role="tablist" aria-label="Interactive state switcher">
+            {INTERACTIVE_STATES.map((st) => {
+              const active = activeState === st.id;
+              const overridden = hasAnyStateOverrides(st.id);
+              return (
+                <button
+                  key={st.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  class={`folio-state-pill-btn${active ? ' is-active' : ''}${
+                    active && st.id !== 'default' ? ' is-pseudo-active' : ''
+                  }`}
+                  title={st.id === 'disabled' ? 'Disabled State (:disabled)' : `${st.label} State`}
+                  onClick={() => setActiveState(st.id)}
+                >
+                  <span>{st.label}</span>
+                  {overridden && <span class="folio-override-dot" aria-hidden="true" />}
+                </button>
+              );
+            })}
+          </div>
+
+          {isPseudoState && (
+            <div class="folio-pseudo-banner" role="status">
+              <div class="folio-pseudo-banner-row">
+                <span class="folio-pseudo-badge">Editing :{activeState}</span>
+                <button
+                  type="button"
+                  class="inspector-mini-btn"
+                  disabled={!activeStateOverride}
+                  onClick={resetActiveStateOverride}
+                >
+                  Reset :{activeState}
+                </button>
+              </div>
+              <div class="folio-triple-grid">
+                <NumericUnitInput
+                  label="Op"
+                  ariaLabel={`${activeState} opacity`}
+                  value={Math.round((activeStateOverride?.opacity ?? selectedNode.opacity) * 100)}
+                  unit="%"
+                  units={['%']}
+                  min={0}
+                  max={100}
+                  step={5}
+                  hasOverrideDot={typeof activeStateOverride?.opacity === 'number'}
+                  onChange={(p) =>
+                    updateActiveStateOverride({ opacity: Math.max(0, Math.min(1, p.value / 100)) })
+                  }
+                />
+                <NumericUnitInput
+                  label="Scl"
+                  ariaLabel={`${activeState} scale`}
+                  value={activeStateOverride?.scale ?? 1}
+                  unit=""
+                  units={['']}
+                  min={0.2}
+                  max={2}
+                  step={0.02}
+                  precision={2}
+                  hasOverrideDot={typeof activeStateOverride?.scale === 'number'}
+                  onChange={(p) => updateActiveStateOverride({ scale: p.value })}
+                />
+                <NumericUnitInput
+                  label="dY"
+                  ariaLabel={`${activeState} translate Y`}
+                  value={activeStateOverride?.translateY ?? 0}
+                  unit="px"
+                  units={['px']}
+                  min={-120}
+                  max={120}
+                  step={1}
+                  allowNegative
+                  hasOverrideDot={typeof activeStateOverride?.translateY === 'number'}
+                  onChange={(p) => updateActiveStateOverride({ translateY: p.value })}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* CSS Transition Preset & Duration */}
+          <div class="folio-transition-row">
+            <select
+              class="select-field folio-compact-select"
+              aria-label="CSS Transition Preset"
+              value={currentTransition.preset}
+              onChange={(event) => {
+                const preset = event.currentTarget.value as TransitionPreset;
+                if (preset === 'none') {
+                  onUpdateSelected({ transition: undefined });
+                } else {
+                  const def = TRANSITION_PRESET_DEFAULTS[preset];
+                  onUpdateSelected({
+                    transition: {
+                      preset,
+                      durationMs: def.durationMs,
+                      easing: def.easing,
+                    },
+                  });
+                }
+                onCommitEdit();
+              }}
+            >
+              <option value="none">Transition: None</option>
+              <option value="fast">Fast (140ms)</option>
+              <option value="smooth">Smooth (260ms)</option>
+              <option value="bouncy">Bouncy (360ms)</option>
+            </select>
+            {currentTransition.preset !== 'none' && (
+              <NumericUnitInput
+                label="Dur"
+                ariaLabel="Transition Duration"
+                value={currentTransition.durationMs}
+                unit="ms"
+                units={DURATION_UNITS}
+                min={0}
+                max={3000}
+                step={20}
+                onChange={(p) => {
+                  const ms = p.unit === 's' ? Math.round(p.value * 1000) : Math.round(p.value);
+                  onUpdateSelected({
+                    transition: {
+                      ...currentTransition,
+                      durationMs: Math.max(0, ms),
+                    },
+                  });
+                  onCommitEdit();
+                }}
+              />
+            )}
+          </div>
+        </div>
+
         {studioActions && (
           <div class="inspector-similar-row">
             <select
@@ -526,12 +1010,30 @@ function InspectorSelectedNodeBody({
         )}
       </section>
 
-      {/* b. Position & Size (Default Open) */}
+      {/* SECTION 2 — LAYOUT & FRAME (DEFAULT OPEN) */}
       <InspectorAccordionSection
-        id="position"
-        title="Position & Size"
+        id="layout-frame"
+        title="Layout & Frame"
+        badge={layoutBadge}
+        isOpen={openSections['layout-frame']}
+        onToggle={toggleSection}
+      >
+        <InspectorFrameLayoutSection
+          selectedNode={selectedNode}
+          parentNode={parentNode}
+          onUpdateSelected={onUpdateSelected}
+          onApplyAutoLayout={onApplyAutoLayout}
+          onConvertFrameLayoutMode={onConvertFrameLayoutMode}
+          onCommitEdit={onCommitEdit}
+        />
+      </InspectorAccordionSection>
+
+      {/* SECTION 3 — SIZE & POSITION (DEFAULT OPEN) */}
+      <InspectorAccordionSection
+        id="size-position"
+        title="Size & Position"
         badge={`${Math.round(selectedNode.width)}×${Math.round(selectedNode.height)}`}
-        isOpen={openSections.position}
+        isOpen={openSections['size-position']}
         onToggle={toggleSection}
       >
         {studioActions && (
@@ -565,399 +1067,388 @@ function InspectorSelectedNodeBody({
           </div>
         )}
 
+        {/* Width & Height with Pinned Units (px/%/vw/vh/dvh/rem/em/Fit/Fill) + Aspect Ratio */}
         <div class="inspector-acc-group">
-          <div class="inspector-origin-bar">
-            <TransformOriginSelector value={transformOrigin} onChange={setTransformOrigin} />
-            <div class="inspector-origin-meta">
-              <span class="inspector-sublabel">Origin ({transformOrigin.toUpperCase()})</span>
-              <button
-                type="button"
-                class={`inspector-mini-btn${isAspectRatioLocked ? ' is-active' : ''}`}
-                aria-pressed={isAspectRatioLocked}
-                onClick={() => {
-                  onUpdateSelected({ aspectRatioLocked: !isAspectRatioLocked });
-                  onCommitEdit();
-                }}
-              >
-                {isAspectRatioLocked ? 'Ratio Locked' : 'Lock Ratio'}
-              </button>
-            </div>
+          <div class="folio-dual-grid">
+            <NumericUnitInput
+              label="W"
+              ariaLabel="Width"
+              value={resolveDimensionNumeric('width')}
+              unit={resolveDimensionUnit('width')}
+              units={DIMENSION_UNITS}
+              presets={DIMENSION_PRESETS}
+              min={1}
+              max={10000}
+              step={2}
+              onPreview={(p) => applyDimensionPayload('width', p, false)}
+              onChange={(p) => applyDimensionPayload('width', p, true)}
+            />
+            <NumericUnitInput
+              label="H"
+              ariaLabel="Height"
+              value={resolveDimensionNumeric('height')}
+              unit={resolveDimensionUnit('height')}
+              units={DIMENSION_UNITS}
+              presets={DIMENSION_PRESETS}
+              min={1}
+              max={10000}
+              step={2}
+              onPreview={(p) => applyDimensionPayload('height', p, false)}
+              onChange={(p) => applyDimensionPayload('height', p, true)}
+            />
           </div>
 
-          <PresetStepperSlider
-            label="W"
-            ariaLabel="Width"
-            value={Math.round(selectedNode.width)}
-            min={8}
-            max={1920}
-            step={4}
-            presets={DIMENSION_PRESETS}
-            onChange={(next) => handleDimensionChange('width', next)}
-            onCommit={onCommitEdit}
-          />
-          <PresetStepperSlider
-            label="H"
-            ariaLabel="Height"
-            value={Math.round(selectedNode.height)}
-            min={8}
-            max={1920}
-            step={4}
-            presets={DIMENSION_PRESETS}
-            onChange={(next) => handleDimensionChange('height', next)}
-            onCommit={onCommitEdit}
-          />
-          <PresetStepperSlider
-            label="X"
-            ariaLabel="X Position"
-            value={Math.round(anchorCoords.x)}
-            min={-400}
-            max={1920}
-            step={4}
-            presets={POSITION_PRESETS}
-            onChange={(next) =>
-              onUpdateSelected(computePositionPatchForOrigin(selectedNode, transformOrigin, 'x', next))
-            }
-            onCommit={onCommitEdit}
-          />
-          <PresetStepperSlider
-            label="Y"
-            ariaLabel="Y Position"
-            value={Math.round(anchorCoords.y)}
-            min={-400}
-            max={1920}
-            step={4}
-            presets={POSITION_PRESETS}
-            onChange={(next) =>
-              onUpdateSelected(computePositionPatchForOrigin(selectedNode, transformOrigin, 'y', next))
-            }
-            onCommit={onCommitEdit}
-          />
+          <div class="folio-aspect-row">
+            <button
+              type="button"
+              class={`inspector-mini-btn${isAspectRatioLocked ? ' is-accent' : ''}`}
+              aria-pressed={isAspectRatioLocked}
+              title="Lock proportional aspect ratio"
+              onClick={() => {
+                onUpdateSelected({ aspectRatioLocked: !isAspectRatioLocked });
+                onCommitEdit();
+              }}
+            >
+              {isAspectRatioLocked ? '🔒 Locked' : '🔓 Unlock'}
+            </button>
+            <select
+              class="select-field folio-compact-select"
+              aria-label="Aspect Ratio Preset"
+              value={layoutChild.aspectRatio ?? ''}
+              onChange={(event) => {
+                const raw = event.currentTarget.value;
+                if (!raw) {
+                  commitLayoutChild({ aspectRatio: undefined }, true);
+                  return;
+                }
+                const numeric = parseAspectRatioNumeric(raw);
+                if (numeric && selectedNode.width > 0) {
+                  const nextHeight = Math.max(8, Math.round(selectedNode.width / numeric));
+                  onUpdateSelected({
+                    height: nextHeight,
+                    aspectRatioLocked: true,
+                    layoutChild: { ...layoutChild, aspectRatio: raw },
+                  });
+                  if (parentNode && isInsideAutoLayout) onApplyAutoLayout(parentNode.id);
+                  onCommitEdit();
+                } else {
+                  commitLayoutChild({ aspectRatio: raw }, true);
+                }
+              }}
+            >
+              {ASPECT_RATIO_OPTIONS.map((opt) => (
+                <option key={opt.value || 'auto'} value={opt.value}>
+                  Ratio: {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          {(selectedNode.type === 'rect' || selectedNode.type === 'frame' || selectedNode.type === 'image') && (
-            <PresetStepperSlider
-              label="Radius"
-              ariaLabel="Corner Radius"
-              value={Math.round(selectedNode.style.radius ?? 0)}
-              min={0}
-              max={160}
-              step={2}
-              presets={RADIUS_PRESETS}
-              onChange={(next) => onUpdateSelectedStyle({ radius: Math.max(0, next) })}
-              onCommit={onCommitEdit}
-            />
-          )}
+          {/* Min / Max Bounds (Container Presets 640/768/1024/1280/1440px) */}
+          <div class="framer-minmax-wrap">
+            <button
+              type="button"
+              class={`framer-minmax-toggle${showMinMax || activeBoundsCount > 0 ? ' is-active' : ''}`}
+              aria-expanded={showMinMax}
+              onClick={() => setShowMinMax((prev) => !prev)}
+            >
+              <span>Min / Max Bounds</span>
+              <span class="framer-minmax-meta">
+                {activeBoundsCount > 0 ? `${activeBoundsCount} active` : showMinMax ? 'Hide' : 'Set'}
+              </span>
+            </button>
+            {showMinMax && (
+              <div class="framer-minmax-panel">
+                <div class="folio-dual-grid">
+                  <NumericUnitInput
+                    label="MinW"
+                    ariaLabel="Min Width"
+                    value={resolveBound('minWidth').value}
+                    unit={resolveBound('minWidth').unit}
+                    units={BOUND_UNITS}
+                    presets={BOUND_PRESETS}
+                    min={0}
+                    max={4000}
+                    step={8}
+                    onChange={(p) => applyBound('minWidth', p, true)}
+                  />
+                  <NumericUnitInput
+                    label="MaxW"
+                    ariaLabel="Max Width"
+                    value={resolveBound('maxWidth').value}
+                    unit={resolveBound('maxWidth').unit}
+                    units={BOUND_UNITS}
+                    presets={CONTAINER_MAX_WIDTH_PRESETS}
+                    min={0}
+                    max={4000}
+                    step={8}
+                    onChange={(p) => applyBound('maxWidth', p, true)}
+                  />
+                  <NumericUnitInput
+                    label="MinH"
+                    ariaLabel="Min Height"
+                    value={resolveBound('minHeight').value}
+                    unit={resolveBound('minHeight').unit}
+                    units={BOUND_UNITS}
+                    presets={BOUND_PRESETS}
+                    min={0}
+                    max={4000}
+                    step={8}
+                    onChange={(p) => applyBound('minHeight', p, true)}
+                  />
+                  <NumericUnitInput
+                    label="MaxH"
+                    ariaLabel="Max Height"
+                    value={resolveBound('maxHeight').value}
+                    unit={resolveBound('maxHeight').unit}
+                    units={BOUND_UNITS}
+                    presets={BOUND_PRESETS}
+                    min={0}
+                    max={4000}
+                    step={8}
+                    onChange={(p) => applyBound('maxHeight', p, true)}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
+        {/* Position Type (Relative | Absolute | Fixed | Sticky) + Insets + Pinning */}
         <div class="inspector-acc-group">
-          <div class="inspector-sublabel-row">
-            <span class="inspector-sublabel">Rotation</span>
-            <span class="zt-value-readout">{Math.round(selectedNode.rotation)}°</span>
-          </div>
-          <div class="inspector-quick-row cols-4">
-            {ROTATION_PRESETS.map((deg) => (
+          <span class="framer-mini-kicker">Position Type</span>
+          <div class="framer-seg-row cols-4" role="group" aria-label="CSS Position Type">
+            {(
+              [
+                { value: 'relative', label: 'Relative' },
+                { value: 'absolute', label: 'Absolute' },
+                { value: 'fixed', label: 'Fixed' },
+                { value: 'sticky', label: 'Sticky' },
+              ] as const
+            ).map((opt) => (
               <button
-                key={deg}
+                key={opt.value}
                 type="button"
-                class={`inspector-mini-btn${Math.round(selectedNode.rotation) === deg ? ' is-active' : ''}`}
-                onClick={() => {
-                  onUpdateSelected({ rotation: deg });
-                  onCommitEdit();
-                }}
+                class={`framer-seg-btn${positionType === opt.value ? ' is-active' : ''}`}
+                aria-pressed={positionType === opt.value}
+                onClick={() =>
+                  commitLayoutChild({
+                    position: opt.value as LayoutChildPosition,
+                    ...(opt.value === 'sticky' && !layoutChild.inset?.top
+                      ? { inset: { ...(layoutChild.inset ?? {}), top: { value: 0, unit: 'px' } } }
+                      : {}),
+                  })
+                }
               >
-                {deg}°
+                {opt.label}
               </button>
             ))}
           </div>
-          <input
-            type="range"
-            class="zt-range-slider"
-            aria-label="Rotation angle"
-            min={-180}
-            max={180}
-            step={1}
-            value={Math.round(selectedNode.rotation)}
-            style={{
-              '--slider-pct': `${Math.max(0, Math.min(100, ((Math.round(selectedNode.rotation) + 180) / 360) * 100))}%`,
-            } as Record<string, string>}
-            onInput={(event) => onUpdateSelected({ rotation: Number(event.currentTarget.value) })}
-            onPointerUp={onCommitEdit}
-            onKeyUp={onCommitEdit}
-            onBlur={onCommitEdit}
-          />
-          {studioActions && (
-            <div class="inspector-quick-row cols-2">
-              <button type="button" class="inspector-mini-btn" onClick={() => studioActions.onFlip('horizontal')}>
-                Flip Horizontal
-              </button>
-              <button type="button" class="inspector-mini-btn" onClick={() => studioActions.onFlip('vertical')}>
-                Flip Vertical
-              </button>
+
+          {showInsets && (
+            <div class="folio-dual-grid">
+              {(
+                [
+                  { side: 'top', label: 'Top' },
+                  { side: 'right', label: 'Right' },
+                  { side: 'bottom', label: 'Bot' },
+                  { side: 'left', label: 'Left' },
+                ] as const
+              ).map((item) => {
+                const current = layoutChild.inset?.[item.side];
+                return (
+                  <NumericUnitInput
+                    key={item.side}
+                    label={item.label}
+                    ariaLabel={`Inset ${item.side}`}
+                    value={current?.value ?? 0}
+                    unit={current?.unit ?? 'auto'}
+                    units={INSET_UNITS}
+                    min={-2000}
+                    max={2000}
+                    step={2}
+                    allowNegative
+                    onChange={(p) => updateInset(item.side, p, true)}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          {showPinPresets && (
+            <div class="framer-subcontrol">
+              <span class="framer-mini-kicker">Pin Anchor</span>
+              <div class="framer-pin-grid" role="group" aria-label="Pin anchor constraints">
+                {PIN_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    class={`framer-seg-btn${activePinPreset === preset.id ? ' is-active' : ''}`}
+                    title={preset.title}
+                    aria-pressed={activePinPreset === preset.id}
+                    onClick={() => commitLayoutChild({ constraints: preset.constraints })}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>
 
-        <InspectorFrameLayoutSection
+        {/* Canvas X / Y, Rotation, Flip, Transform Origin, Opacity & Z-Index */}
+        <div class="inspector-acc-group">
+          <div class="folio-dual-grid">
+            <NumericUnitInput
+              label="X"
+              ariaLabel="Position X"
+              value={Math.round(anchorCoords.x)}
+              unit="px"
+              units={POSITION_UNITS}
+              min={-4000}
+              max={8000}
+              step={2}
+              allowNegative
+              onPreview={(p) =>
+                onUpdateSelected(computePositionPatchForOrigin(selectedNode, transformOrigin, 'x', p.value))
+              }
+              onChange={(p) => {
+                onUpdateSelected(computePositionPatchForOrigin(selectedNode, transformOrigin, 'x', p.value));
+                onCommitEdit();
+              }}
+            />
+            <NumericUnitInput
+              label="Y"
+              ariaLabel="Position Y"
+              value={Math.round(anchorCoords.y)}
+              unit="px"
+              units={POSITION_UNITS}
+              min={-4000}
+              max={8000}
+              step={2}
+              allowNegative
+              onPreview={(p) =>
+                onUpdateSelected(computePositionPatchForOrigin(selectedNode, transformOrigin, 'y', p.value))
+              }
+              onChange={(p) => {
+                onUpdateSelected(computePositionPatchForOrigin(selectedNode, transformOrigin, 'y', p.value));
+                onCommitEdit();
+              }}
+            />
+          </div>
+
+          <div class="folio-dual-grid">
+            <NumericUnitInput
+              label="Rot"
+              ariaLabel="Rotation angle"
+              value={Math.round(selectedNode.rotation)}
+              unit="deg"
+              units={ROTATION_UNITS}
+              min={-360}
+              max={360}
+              step={1}
+              allowNegative
+              onPreview={(p) => onUpdateSelected({ rotation: p.value })}
+              onChange={(p) => {
+                onUpdateSelected({ rotation: p.value });
+                onCommitEdit();
+              }}
+            />
+            <NumericUnitInput
+              label="Z"
+              ariaLabel="Z-Index"
+              value={Math.round(layoutChild.zIndex ?? 0)}
+              unit=""
+              units={['']}
+              presets={Z_INDEX_PRESETS}
+              min={-100}
+              max={9999}
+              step={1}
+              precision={0}
+              allowNegative
+              onChange={(p) => commitLayoutChild({ zIndex: Math.round(p.value) })}
+            />
+          </div>
+
+          <div class="folio-origin-flip-row">
+            <TransformOriginSelector value={transformOrigin} onChange={setTransformOrigin} />
+            <div class="folio-flip-col">
+              {studioActions && (
+                <div class="inspector-quick-row cols-2">
+                  <button
+                    type="button"
+                    class="inspector-mini-btn"
+                    title="Flip Horizontal"
+                    onClick={studioActions.onFlipHorizontal}
+                  >
+                    ⇄ Flip H
+                  </button>
+                  <button
+                    type="button"
+                    class="inspector-mini-btn"
+                    title="Flip Vertical"
+                    onClick={studioActions.onFlipVertical}
+                  >
+                    ⇅ Flip V
+                  </button>
+                </div>
+              )}
+              <div class="folio-opacity-compact">
+                <div class="inspector-sublabel-row">
+                  <span class="framer-mini-kicker">Opacity</span>
+                  <span class="zt-value-readout">{Math.round(selectedNode.opacity * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  class="zt-range-slider"
+                  aria-label="Opacity percentage"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={Math.round(selectedNode.opacity * 100)}
+                  style={{
+                    '--slider-pct': `${Math.max(0, Math.min(100, Math.round(selectedNode.opacity * 100)))}%`,
+                  } as Record<string, string>}
+                  onInput={(event) =>
+                    onUpdateSelected({
+                      opacity: Math.min(1, Math.max(0, Number(event.currentTarget.value) / 100)),
+                    })
+                  }
+                  onPointerUp={onCommitEdit}
+                  onKeyUp={onCommitEdit}
+                  onBlur={onCommitEdit}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </InspectorAccordionSection>
+
+      {/* SECTION 4 — FILL, BORDER & RADIUS (DEFAULT OPEN) */}
+      <InspectorAccordionSection
+        id="appearance"
+        title="Fill, Border & Radius"
+        badge={isPseudoState ? `:${activeState}` : undefined}
+        isOpen={openSections.appearance}
+        onToggle={toggleSection}
+      >
+        <InspectorAppearanceSection
           selectedNode={selectedNode}
-          parentNode={parentNode}
+          activeState={activeState}
+          designTokens={designTokens}
+          defaultFillColor={defaultFillColor}
           onUpdateSelected={onUpdateSelected}
-          onApplyAutoLayout={onApplyAutoLayout}
+          onUpdateSelectedStyle={handleUpdateExtendedStyle}
           onCommitEdit={onCommitEdit}
         />
       </InspectorAccordionSection>
 
-      {/* c. Fill & Stroke (Default Open) */}
-      <InspectorAccordionSection
-        id="fill-stroke"
-        title="Fill & Stroke"
-        isOpen={openSections['fill-stroke']}
-        onToggle={toggleSection}
-      >
-        {selectedNode.type === 'group' ? (
-          <p class="field-help">Group container — select a child layer to edit fill or stroke.</p>
-        ) : selectedNode.type === 'component-instance' ? (
-          instanceOverrideTargets?.fillNode ? (
-            <VisualColorAlphaControl
-              label="Instance Fill"
-              value={
-                selectedNode.overrides[instanceOverrideTargets.fillNode.id]?.fill ??
-                instanceOverrideTargets.fillNode.style.fill
-              }
-              fallbackHex={defaultFillColor}
-              designTokens={designTokens}
-              onChangeColor={(nextColor) =>
-                onUpdateInstanceOverride(instanceOverrideTargets.fillNode!.id, { fill: nextColor })
-              }
-              onCommit={onCommitEdit}
-            />
-          ) : (
-            <p class="field-help">Linked Component Instance — edit colors via Variants or Master.</p>
-          )
-        ) : selectedNode.type === 'image' ? (
-          <div class="inspector-acc-group">
-            {(() => {
-              const linkedAsset = assets.find((item) => item.id === selectedNode.assetId);
-              return (
-                <div class="vector-meta-row">
-                  <span>Asset</span>
-                  <strong>
-                    {linkedAsset?.width && linkedAsset?.height
-                      ? `${linkedAsset.width}×${linkedAsset.height}px`
-                      : (linkedAsset?.name ?? selectedNode.assetId)}
-                  </strong>
-                </div>
-              );
-            })()}
-            <label class="field-label">
-              Object Fit
-              <select
-                class="select-field"
-                aria-label="Image fit mode"
-                value={selectedNode.style.fit}
-                onChange={(event) => {
-                  onUpdateSelectedStyle({ fit: event.currentTarget.value as ImageFitMode });
-                  onCommitEdit();
-                }}
-              >
-                <option value="cover">Cover (Crop)</option>
-                <option value="contain">Contain (Fit)</option>
-                <option value="fill">Fill (Stretch)</option>
-              </select>
-            </label>
-            <VisualColorAlphaControl
-              label="Stroke"
-              value={selectedNode.style.stroke ?? 'transparent'}
-              fallbackHex="#00E5FF"
-              boundTokenId={selectedNode.tokenBindings?.stroke}
-              designTokens={designTokens}
-              onChangeColor={(nextColor) =>
-                onUpdateSelectedStyle({
-                  stroke: nextColor,
-                  strokeWidth:
-                    nextColor === 'transparent'
-                      ? 0
-                      : Math.max(1, selectedNode.style.strokeWidth ?? 0),
-                })
-              }
-              onBindToken={(tokenId) =>
-                onUpdateSelected({
-                  tokenBindings: { ...(selectedNode.tokenBindings ?? {}), stroke: tokenId },
-                })
-              }
-              onCommit={onCommitEdit}
-            />
-            <PresetStepperSlider
-              label="Stroke Width"
-              ariaLabel="Stroke Width"
-              value={selectedNode.style.strokeWidth ?? 0}
-              min={0}
-              max={32}
-              step={1}
-              presets={STROKE_WIDTH_PRESETS}
-              onChange={(next) => onUpdateSelectedStyle({ strokeWidth: next })}
-              onCommit={onCommitEdit}
-            />
-          </div>
-        ) : (
-          <div class="inspector-acc-group">
-            <VisualColorAlphaControl
-              label="Fill"
-              value={selectedNode.style.fill}
-              fallbackHex={defaultFillColor}
-              boundTokenId={selectedNode.tokenBindings?.fill}
-              designTokens={designTokens}
-              onChangeColor={(nextColor) => onUpdateSelectedStyle({ fill: nextColor })}
-              onBindToken={(tokenId) =>
-                onUpdateSelected({
-                  tokenBindings: { ...(selectedNode.tokenBindings ?? {}), fill: tokenId },
-                })
-              }
-              onCommit={onCommitEdit}
-            />
-
-            {hasShapeStroke && (
-              <>
-                <div class="inspector-swap-row">
-                  <button
-                    type="button"
-                    class="inspector-mini-btn"
-                    title="Swap Fill and Stroke colors"
-                    onClick={() => {
-                      const prevFill = selectedNode.style.fill;
-                      const prevStroke = selectedNode.style.stroke;
-                      onUpdateSelectedStyle({
-                        fill: prevStroke === 'none' ? 'transparent' : prevStroke,
-                        stroke: prevFill === 'none' ? 'transparent' : prevFill,
-                        strokeWidth: Math.max(1, selectedNode.style.strokeWidth),
-                      });
-                      onCommitEdit();
-                    }}
-                  >
-                    ⇄ Swap Fill &amp; Stroke
-                  </button>
-                </div>
-
-                <VisualColorAlphaControl
-                  label="Stroke"
-                  value={selectedNode.style.stroke}
-                  fallbackHex="#00E5FF"
-                  boundTokenId={selectedNode.tokenBindings?.stroke}
-                  designTokens={designTokens}
-                  onChangeColor={(nextColor) =>
-                    onUpdateSelectedStyle({
-                      stroke: nextColor,
-                      strokeWidth:
-                        nextColor === 'transparent' || nextColor === 'none'
-                          ? 0
-                          : Math.max(1, selectedNode.style.strokeWidth),
-                    })
-                  }
-                  onBindToken={(tokenId) =>
-                    onUpdateSelected({
-                      tokenBindings: { ...(selectedNode.tokenBindings ?? {}), stroke: tokenId },
-                    })
-                  }
-                  onCommit={onCommitEdit}
-                />
-
-                <PresetStepperSlider
-                  label="Stroke Width"
-                  ariaLabel="Stroke Width"
-                  value={selectedNode.style.strokeWidth}
-                  min={0}
-                  max={32}
-                  step={1}
-                  presets={STROKE_WIDTH_PRESETS}
-                  onChange={(next) => onUpdateSelectedStyle({ strokeWidth: next })}
-                  onCommit={onCommitEdit}
-                />
-
-                <div class="field-grid single-row">
-                  <label class="field-label">
-                    Stroke Style
-                    <select
-                      class="select-field"
-                      aria-label="Stroke Style"
-                      value={resolveStrokeStyleKey(selectedNode.style.strokeDasharray)}
-                      onChange={(event) => {
-                        const key = event.currentTarget.value as 'solid' | 'dashed' | 'dotted';
-                        onUpdateSelectedStyle({ strokeDasharray: strokeStyleKeyToDasharray(key) });
-                        onCommitEdit();
-                      }}
-                    >
-                      <option value="solid">Solid</option>
-                      <option value="dashed">Dashed</option>
-                      <option value="dotted">Dotted</option>
-                    </select>
-                  </label>
-                  <label class="field-label">
-                    Position
-                    <select
-                      class="select-field"
-                      aria-label="Stroke Position"
-                      value={selectedNode.style.strokeAlign ?? 'center'}
-                      onChange={(event) => {
-                        onUpdateSelectedStyle({ strokeAlign: event.currentTarget.value as StrokeAlign });
-                        onCommitEdit();
-                      }}
-                    >
-                      <option value="inside">Inside</option>
-                      <option value="center">Center</option>
-                      <option value="outside">Outside</option>
-                    </select>
-                  </label>
-                </div>
-
-                <div class="inspector-quick-row cols-2">
-                  {selectedNode.type === 'path' ? (
-                    <>
-                      <button
-                        type="button"
-                        class="inspector-mini-btn"
-                        onClick={() => onChooseTool('direct-selection', activeEditorId)}
-                      >
-                        Edit Anchors
-                      </button>
-                      <button
-                        type="button"
-                        class="inspector-mini-btn"
-                        onClick={() => onSimplifyPath(activeEditorId)}
-                      >
-                        Simplify Path
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      class="inspector-mini-btn inspector-span-full"
-                      onClick={() => onConvertToPath(activeEditorId)}
-                    >
-                      Convert to Vector Path
-                    </button>
-                  )}
-                </div>
-
-                {selectedNode.type === 'path' && (
-                  <label class="toggle-row">
-                    <span>Closed Contour</span>
-                    <input
-                      type="checkbox"
-                      checked={selectedNode.closed}
-                      onChange={() => onTogglePathClosed(activeEditorId)}
-                    />
-                  </label>
-                )}
-              </>
-            )}
-          </div>
-        )}
-      </InspectorAccordionSection>
-
-      {/* d. Text & Paragraph (Contextual — Only when Text Node is Selected, Default Open) */}
+      {/* SECTION 5 — TEXT & PARAGRAPH (CONTEXTUAL — TEXT NODES ONLY, DEFAULT OPEN) */}
       {isTextNode && (
         <InspectorAccordionSection
           id="text"
           title="Text & Paragraph"
-          badge={`${Math.round(selectedNode.style.fontSize)}px`}
+          badge={`${selectedNode.style.fontSize}${selectedNode.style.fontSizeUnit ?? 'px'}`}
           isOpen={openSections.text}
           onToggle={toggleSection}
         >
@@ -966,338 +1457,219 @@ function InspectorSelectedNodeBody({
               Font Family
               <select
                 class="select-field"
-                aria-label="Font family"
+                aria-label="Font Family"
                 value={selectedNode.style.fontFamily}
                 onChange={(event) => {
                   onUpdateSelectedStyle({ fontFamily: event.currentTarget.value });
                   onCommitEdit();
                 }}
               >
-                {!INSPECTOR_FONT_FAMILIES.some((opt) => opt.value === selectedNode.style.fontFamily) && (
-                  <option value={selectedNode.style.fontFamily}>{selectedNode.style.fontFamily}</option>
-                )}
-                {INSPECTOR_FONT_FAMILIES.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
+                {INSPECTOR_FONT_FAMILIES.map((font) => (
+                  <option key={font.value} value={font.value}>
+                    {font.label}
                   </option>
                 ))}
               </select>
             </label>
 
-            <label class="field-label">
-              Font Weight
-              <select
-                class="select-field"
-                aria-label="Font weight"
-                value={String(selectedNode.style.fontWeight)}
-                onChange={(event) => {
-                  onUpdateSelectedStyle({ fontWeight: Number(event.currentTarget.value) });
+            <div class="folio-dual-grid">
+              <label class="field-label">
+                Weight
+                <select
+                  class="select-field"
+                  aria-label="Font Weight"
+                  value={String(selectedNode.style.fontWeight)}
+                  onChange={(event) => {
+                    onUpdateSelectedStyle({ fontWeight: Number(event.currentTarget.value) });
+                    onCommitEdit();
+                  }}
+                >
+                  {FONT_WEIGHT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={String(opt.value)}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <NumericUnitInput
+                label="Size"
+                ariaLabel="Font Size"
+                value={selectedNode.style.fontSize}
+                unit={selectedNode.style.fontSizeUnit ?? 'px'}
+                units={FONT_SIZE_UNITS}
+                presets={FONT_SIZE_PRESETS}
+                min={8}
+                max={240}
+                step={1}
+                onPreview={(p) =>
+                  handleUpdateExtendedStyle({
+                    fontSize: p.value,
+                    fontSizeUnit: p.unit === 'rem' || p.unit === 'em' ? p.unit : 'px',
+                  })
+                }
+                onChange={(p) => {
+                  handleUpdateExtendedStyle({
+                    fontSize: p.value,
+                    fontSizeUnit: p.unit === 'rem' || p.unit === 'em' ? p.unit : 'px',
+                  });
                   onCommitEdit();
                 }}
-              >
-                {!FONT_WEIGHT_OPTIONS.some((opt) => opt.value === selectedNode.style.fontWeight) && (
-                  <option value={String(selectedNode.style.fontWeight)}>
-                    Weight ({selectedNode.style.fontWeight})
-                  </option>
-                )}
-                {FONT_WEIGHT_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={String(opt.value)}>
-                    {opt.label}
-                  </option>
+              />
+            </div>
+
+            <div class="folio-dual-grid">
+              <NumericUnitInput
+                label="LH"
+                ariaLabel="Line Height"
+                value={selectedNode.style.lineHeight}
+                unit={selectedNode.style.lineHeightUnit ?? ''}
+                units={LINE_HEIGHT_UNITS}
+                presets={LINE_HEIGHT_PRESETS}
+                min={0.5}
+                max={400}
+                step={0.05}
+                precision={2}
+                onChange={(p) => {
+                  handleUpdateExtendedStyle({
+                    lineHeight: p.value,
+                    lineHeightUnit: p.unit === 'px' || p.unit === '%' ? p.unit : '',
+                  });
+                  onCommitEdit();
+                }}
+              />
+              <NumericUnitInput
+                label="LS"
+                ariaLabel="Letter Spacing"
+                value={selectedNode.style.letterSpacing ?? 0}
+                unit={selectedNode.style.letterSpacingUnit ?? 'px'}
+                units={LETTER_SPACING_UNITS}
+                presets={LETTER_SPACING_PRESETS}
+                min={-10}
+                max={40}
+                step={0.25}
+                precision={2}
+                allowNegative
+                onChange={(p) => {
+                  handleUpdateExtendedStyle({
+                    letterSpacing: p.value,
+                    letterSpacingUnit: p.unit === 'em' ? 'em' : 'px',
+                  });
+                  onCommitEdit();
+                }}
+              />
+            </div>
+
+            {/* 4-Button Horizontal Align */}
+            <div class="framer-subcontrol">
+              <span class="framer-mini-kicker">Horizontal Alignment</span>
+              <div class="framer-seg-row cols-4" role="group" aria-label="Text horizontal alignment">
+                {(['left', 'center', 'right', 'justify'] as const).map((align) => (
+                  <button
+                    key={align}
+                    type="button"
+                    class={`framer-seg-btn${selectedNode.style.align === align ? ' is-active' : ''}`}
+                    aria-label={`Align ${align}`}
+                    aria-pressed={selectedNode.style.align === align}
+                    onClick={() => {
+                      onUpdateSelectedStyle({ align });
+                      onCommitEdit();
+                    }}
+                  >
+                    <span class="folio-align-svg">{renderHorizontalAlignIcon(align)}</span>
+                  </button>
                 ))}
-              </select>
-            </label>
-
-            <PresetStepperSlider
-              label="Font Size"
-              ariaLabel="Font Size"
-              value={Math.round(selectedNode.style.fontSize)}
-              min={8}
-              max={160}
-              step={2}
-              presets={FONT_SIZE_PRESETS}
-              onChange={(next) => onUpdateSelectedStyle({ fontSize: Math.max(8, next) })}
-              onCommit={onCommitEdit}
-            />
-
-            <div class="field-grid single-row">
-              <label class="field-label">
-                Line Height
-                <select
-                  class="select-field"
-                  aria-label="Line height preset"
-                  value={String(selectedNode.style.lineHeight)}
-                  onChange={(event) => {
-                    onUpdateSelectedStyle({ lineHeight: Number(event.currentTarget.value) });
-                    onCommitEdit();
-                  }}
-                >
-                  {!LINE_HEIGHT_PRESETS.some(
-                    (opt) => Math.abs(opt.value - selectedNode.style.lineHeight) < 0.02,
-                  ) && (
-                    <option value={String(selectedNode.style.lineHeight)}>
-                      Custom ({selectedNode.style.lineHeight})
-                    </option>
-                  )}
-                  {LINE_HEIGHT_PRESETS.map((opt) => (
-                    <option key={opt.value} value={String(opt.value)}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label class="field-label">
-                Letter Spacing
-                <select
-                  class="select-field"
-                  aria-label="Letter spacing preset"
-                  value={String(selectedNode.style.letterSpacing)}
-                  onChange={(event) => {
-                    onUpdateSelectedStyle({ letterSpacing: Number(event.currentTarget.value) });
-                    onCommitEdit();
-                  }}
-                >
-                  {!LETTER_SPACING_PRESETS.some(
-                    (opt) => Math.abs(opt.value - selectedNode.style.letterSpacing) < 0.05,
-                  ) && (
-                    <option value={String(selectedNode.style.letterSpacing)}>
-                      Custom ({selectedNode.style.letterSpacing}px)
-                    </option>
-                  )}
-                  {LETTER_SPACING_PRESETS.map((opt) => (
-                    <option key={opt.value} value={String(opt.value)}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div class="inspector-align-row">
-              <span class="inspector-sublabel">Horizontal Alignment</span>
-              <div class="inspector-icon-seg-group cols-4" role="group" aria-label="Horizontal text alignment">
-                {(['left', 'center', 'right', 'justify'] as const).map((align) => {
-                  const active = (selectedNode.style.textAlign ?? 'left') === align;
-                  const label = align.charAt(0).toUpperCase() + align.slice(1);
-                  return (
-                    <button
-                      key={align}
-                      type="button"
-                      class={`inspector-icon-btn${active ? ' is-active' : ''}`}
-                      aria-pressed={active}
-                      aria-label={`Align ${label}`}
-                      title={`Align ${label}`}
-                      onClick={() => {
-                        onUpdateSelectedStyle({ textAlign: align });
-                        onCommitEdit();
-                      }}
-                    >
-                      {renderHorizontalAlignIcon(align)}
-                    </button>
-                  );
-                })}
               </div>
             </div>
 
-            <div class="inspector-align-row">
-              <span class="inspector-sublabel">Vertical Alignment</span>
-              <div class="inspector-icon-seg-group cols-3" role="group" aria-label="Vertical text alignment">
-                {(['top', 'middle', 'bottom'] as const).map((vAlign) => {
-                  const active = (selectedNode.style.verticalAlign ?? 'top') === vAlign;
-                  const label = vAlign.charAt(0).toUpperCase() + vAlign.slice(1);
-                  return (
-                    <button
-                      key={vAlign}
-                      type="button"
-                      class={`inspector-icon-btn${active ? ' is-active' : ''}`}
-                      aria-pressed={active}
-                      aria-label={`Vertical Align ${label}`}
-                      title={`Vertical Align ${label}`}
-                      onClick={() => {
-                        onUpdateSelectedStyle({ verticalAlign: vAlign });
-                        onCommitEdit();
-                      }}
-                    >
-                      {renderVerticalAlignIcon(vAlign)}
-                    </button>
-                  );
-                })}
+            {/* 3-Button Vertical Align */}
+            <div class="framer-subcontrol">
+              <span class="framer-mini-kicker">Vertical Alignment</span>
+              <div class="framer-seg-row cols-3" role="group" aria-label="Text vertical alignment">
+                {(['top', 'middle', 'bottom'] as const).map((valign) => (
+                  <button
+                    key={valign}
+                    type="button"
+                    class={`framer-seg-btn${(selectedNode.style.verticalAlign ?? 'top') === valign ? ' is-active' : ''}`}
+                    aria-label={`Vertical align ${valign}`}
+                    aria-pressed={(selectedNode.style.verticalAlign ?? 'top') === valign}
+                    onClick={() => {
+                      onUpdateSelectedStyle({ verticalAlign: valign });
+                      onCommitEdit();
+                    }}
+                  >
+                    <span class="folio-align-svg">{renderVerticalAlignIcon(valign)}</span>
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div class="field-grid single-row">
+            <div class="folio-dual-grid">
               <label class="field-label">
-                Case
+                Transform
                 <select
                   class="select-field"
-                  aria-label="Text case"
+                  aria-label="Text Transform"
                   value={selectedNode.style.textTransform ?? 'none'}
                   onChange={(event) => {
-                    onUpdateSelectedStyle({ textTransform: event.currentTarget.value });
+                    onUpdateSelectedStyle({
+                      textTransform: event.currentTarget.value as TextTransformMode,
+                    });
                     onCommitEdit();
                   }}
                 >
-                  <option value="none">Normal</option>
+                  <option value="none">None</option>
                   <option value="uppercase">UPPERCASE</option>
                   <option value="lowercase">lowercase</option>
-                  <option value="capitalize">Title Case</option>
+                  <option value="capitalize">Capitalize</option>
                 </select>
               </label>
               <label class="field-label">
                 Decoration
                 <select
                   class="select-field"
-                  aria-label="Text decoration"
+                  aria-label="Text Decoration"
                   value={selectedNode.style.textDecoration ?? 'none'}
                   onChange={(event) => {
-                    onUpdateSelectedStyle({ textDecoration: event.currentTarget.value });
+                    onUpdateSelectedStyle({
+                      textDecoration: event.currentTarget.value as TextDecorationMode,
+                    });
                     onCommitEdit();
                   }}
                 >
                   <option value="none">None</option>
                   <option value="underline">Underline</option>
-                  <option value="line-through">Strikethrough</option>
+                  <option value="line-through">Strike</option>
                 </select>
               </label>
             </div>
-
-            <label class="toggle-row">
-              <span>Wrap Text Inside Box</span>
-              <input
-                type="checkbox"
-                checked={(selectedNode.style.textWrap ?? 'wrap') === 'wrap'}
-                onChange={(event) => {
-                  onUpdateSelectedStyle({
-                    textWrap: event.currentTarget.checked ? 'wrap' : 'nowrap',
-                  });
-                  onCommitEdit();
-                }}
-              />
-            </label>
           </div>
         </InspectorAccordionSection>
       )}
 
-      {/* e. Effects & Masking (Default Collapsed) */}
+      {/* SECTION 6 — MODERN EFFECTS (DEFAULT COLLAPSED) */}
       <InspectorAccordionSection
-        id="effects-masking"
-        title="Effects & Masking"
-        badge={currentDrawMode !== 'normal' ? currentDrawMode.toUpperCase() : `${Math.round(selectedNode.opacity * 100)}%`}
-        isOpen={openSections['effects-masking']}
+        id="modern-effects"
+        title="Modern Effects"
+        badge={
+          (selectedNode.effects?.length ?? 0) > 0 || Boolean(selectedNode.cssFilters)
+            ? 'ACTIVE'
+            : undefined
+        }
+        isOpen={openSections['modern-effects']}
         onToggle={toggleSection}
       >
-        <div class="inspector-acc-group">
-          <div class="inspector-sublabel-row">
-            <span class="inspector-sublabel">Opacity</span>
-            <span class="zt-value-readout">{Math.round(selectedNode.opacity * 100)}%</span>
-          </div>
-          <input
-            type="range"
-            class="zt-range-slider"
-            aria-label="Opacity percentage"
-            min={0}
-            max={100}
-            step={1}
-            value={Math.round(selectedNode.opacity * 100)}
-            style={{
-              '--slider-pct': `${Math.max(0, Math.min(100, Math.round(selectedNode.opacity * 100)))}%`,
-            } as Record<string, string>}
-            onInput={(event) =>
-              onUpdateSelected({
-                opacity: Math.min(1, Math.max(0, Number(event.currentTarget.value) / 100)),
-              })
-            }
-            onPointerUp={onCommitEdit}
-            onKeyUp={onCommitEdit}
-            onBlur={onCommitEdit}
-          />
+        <InspectorModernEffectsSection
+          selectedNode={selectedNode}
+          activeState={activeState}
+          onUpdateSelected={onUpdateSelected}
+          onCommitEdit={onCommitEdit}
+        />
 
-          <div class="field-grid single-row">
-            <label class="field-label">
-              Blend Mode
-              <select
-                class="select-field"
-                aria-label="Blend mode"
-                value={selectedNode.blendMode ?? 'normal'}
-                onChange={(event) => {
-                  onUpdateSelected({ blendMode: event.currentTarget.value as BlendMode });
-                  onCommitEdit();
-                }}
-              >
-                {BLEND_MODE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label class="field-label">
-              Shadow Preset
-              <select
-                class="select-field"
-                aria-label="Shadow preset"
-                value={activeShadowPreset}
-                onChange={(event) => {
-                  const presetId = event.currentTarget.value as ShadowPresetId;
-                  onUpdateSelected({
-                    effects: applyShadowPresetToEffects(selectedNode.effects, presetId),
-                  });
-                  onCommitEdit();
-                }}
-              >
-                {SHADOW_PRESETS.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div class="inspector-sublabel-row">
-            <span class="inspector-sublabel">Layer Blur</span>
-            <span class="zt-value-readout">{Math.round(layerBlurPx)}px</span>
-          </div>
-          <input
-            type="range"
-            class="zt-range-slider"
-            aria-label="Layer blur"
-            min={0}
-            max={48}
-            step={1}
-            value={Math.round(layerBlurPx)}
-            style={{
-              '--slider-pct': `${Math.max(0, Math.min(100, (Math.round(layerBlurPx) / 48) * 100))}%`,
-            } as Record<string, string>}
-            onInput={(event) => updateBlurEffect('layer-blur', Number(event.currentTarget.value))}
-            onPointerUp={onCommitEdit}
-            onKeyUp={onCommitEdit}
-            onBlur={onCommitEdit}
-          />
-
-          <div class="inspector-sublabel-row">
-            <span class="inspector-sublabel">Background Blur</span>
-            <span class="zt-value-readout">{Math.round(bgBlurPx)}px</span>
-          </div>
-          <input
-            type="range"
-            class="zt-range-slider"
-            aria-label="Background blur"
-            min={0}
-            max={48}
-            step={1}
-            value={Math.round(bgBlurPx)}
-            style={{
-              '--slider-pct': `${Math.max(0, Math.min(100, (Math.round(bgBlurPx) / 48) * 100))}%`,
-            } as Record<string, string>}
-            onInput={(event) => updateBlurEffect('backdrop-blur', Number(event.currentTarget.value))}
-            onPointerUp={onCommitEdit}
-            onKeyUp={onCommitEdit}
-            onBlur={onCommitEdit}
-          />
-
+        {/* Vector Draw Masking Mode */}
+        <div class="inspector-acc-group" style={{ marginTop: '8px' }}>
           <label class="field-label">
-            Draw Mode (Vector Masking)
+            Vector Masking Mode
             <select
               class="select-field"
               aria-label="Draw mode"
@@ -1317,7 +1689,6 @@ function InspectorSelectedNodeBody({
               <option value="outside">Draw Outside (Inverted Mask)</option>
             </select>
           </label>
-
           {showPermanentSubtract && studioActions && (
             <button
               type="button"
@@ -1330,76 +1701,124 @@ function InspectorSelectedNodeBody({
         </div>
       </InspectorAccordionSection>
 
-      {/* f. Component & Logic (Contextual — Default Collapsed) */}
-      {isComponentContext && (
+      {/* SECTION 7 — RESPONSIVE, SEMANTIC HTML & A11Y (DEFAULT COLLAPSED) */}
+      <InspectorAccordionSection
+        id="responsive-semantic"
+        title="Responsive, Semantic & A11y"
+        badge={selectedNode.semanticTag ? `<${selectedNode.semanticTag}>` : activeBreakpoint.toUpperCase()}
+        isOpen={openSections['responsive-semantic']}
+        onToggle={toggleSection}
+      >
+        <InspectorResponsiveSemanticSection
+          selectedNode={selectedNode}
+          activeBreakpoint={activeBreakpoint}
+          project={project}
+          activePageId={activePageId}
+          onSwitchBreakpoint={onSwitchBreakpoint}
+          onUpdateSelected={onUpdateSelected}
+          onCommitEdit={onCommitEdit}
+        />
+      </InspectorAccordionSection>
+
+      {/* SECTION 8 — COMPONENT, VECTOR & LOGIC (CONTEXTUAL, DEFAULT COLLAPSED) */}
+      {isComponentLogicVisible && (
         <InspectorAccordionSection
           id="component-logic"
           title="Component & Logic"
-          badge={selectedInstanceComponent?.name ?? editingMasterComponent?.name ?? 'LINKED'}
+          badge={selectedInstanceComponent?.name ?? editingMasterComponent?.name ?? (isPathNode ? 'PATH' : 'LOGIC')}
           isOpen={openSections['component-logic']}
           onToggle={toggleSection}
         >
           <div class="inspector-acc-group">
-            {selectedNode.type === 'component-instance' && selectedInstanceComponent && (
-              <>
-                {(selectedInstanceComponent.variants ?? []).map((axis) => {
-                  const activeOptionId =
-                    selectedNode.variantSelection?.[axis.id] ?? axis.defaultOptionId;
-                  return (
-                    <label key={axis.id} class="field-label">
-                      {axis.name}
-                      <select
-                        class="select-field"
-                        aria-label={`Variant ${axis.name}`}
-                        value={activeOptionId}
-                        onChange={(event) => {
-                          onUpdateInstanceVariant(axis.id, event.currentTarget.value);
-                          onCommitEdit();
-                        }}
-                      >
-                        {axis.options.map((opt) => (
-                          <option key={opt.id} value={opt.id}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  );
-                })}
+            {/* Component Instance & Master Contract */}
+            {(selectedNode.type === 'component-instance' || editingMasterComponent) && (
+              <InspectorComponentContractSection
+                instanceNode={selectedNode.type === 'component-instance' ? selectedNode : null}
+                instanceComponent={selectedInstanceComponent}
+                editingMasterComponent={editingMasterComponent}
+                onUpdateInstanceVariant={onUpdateInstanceVariant}
+                onUpdateInstanceSlot={onUpdateInstanceSlot}
+                onUpdateMasterContract={onUpdateMasterContract}
+                onToggleComponentNodeLogic={onToggleComponentNodeLogic}
+              />
+            )}
 
-                {(selectedInstanceComponent.slots ?? []).map((slot) => {
-                  const slotState = selectedNode.slotAssignments?.[slot.id];
-                  const isVisible = slotState?.visible ?? true;
-                  return (
-                    <label key={slot.id} class="toggle-row">
-                      <span>Slot: {slot.name}</span>
-                      <input
-                        type="checkbox"
-                        checked={isVisible}
-                        onChange={(event) => {
-                          onUpdateInstanceSlot(slot.id, { visible: event.currentTarget.checked });
-                          onCommitEdit();
-                        }}
-                      />
-                    </label>
-                  );
-                })}
+            {selectedNode.type === 'component-instance' && (
+              <div class="inspector-quick-row cols-2">
+                <button
+                  type="button"
+                  class="inspector-mini-btn"
+                  onClick={onResetInstanceOverrides}
+                  disabled={Object.keys(selectedNode.overrides).length === 0}
+                >
+                  Reset Overrides
+                </button>
+                <button type="button" class="inspector-mini-btn" onClick={onDetachInstance}>
+                  Detach Instance
+                </button>
+              </div>
+            )}
 
-                <div class="inspector-quick-row cols-2">
+            {/* Vector Path Operations */}
+            {(isConvertibleVector || isPathNode) && (
+              <div class="inspector-quick-row cols-2">
+                {isConvertibleVector && (
                   <button
                     type="button"
                     class="inspector-mini-btn"
-                    onClick={onResetInstanceOverrides}
-                    disabled={Object.keys(selectedNode.overrides).length === 0}
+                    onClick={() => onConvertToPath(activeEditorId)}
                   >
-                    Reset Overrides
+                    Convert to Path
                   </button>
-                  <button type="button" class="inspector-mini-btn" onClick={onDetachInstance}>
-                    Detach Instance
-                  </button>
-                </div>
-              </>
+                )}
+                {isPathNode && (
+                  <>
+                    <button
+                      type="button"
+                      class="inspector-mini-btn"
+                      onClick={() => onChooseTool('direct-select', activeEditorId)}
+                    >
+                      Edit Points (A)
+                    </button>
+                    <button
+                      type="button"
+                      class="inspector-mini-btn"
+                      onClick={() => onTogglePathClosed(activeEditorId)}
+                    >
+                      {selectedNode.closed ? 'Open Path' : 'Close Path'}
+                    </button>
+                    <button
+                      type="button"
+                      class="inspector-mini-btn"
+                      onClick={() => onSimplifyPath(activeEditorId)}
+                    >
+                      Simplify Path
+                    </button>
+                  </>
+                )}
+              </div>
             )}
+
+            {/* Quick Interactions */}
+            {project &&
+              activePageId &&
+              onCreateQuickInteraction &&
+              onUpdateQuickInteraction &&
+              onDeleteQuickInteraction &&
+              onOpenInteractionInNodeGraph && (
+                <InspectorInteractionsSection
+                  project={project}
+                  activeEditorId={activeEditorId}
+                  activePageId={activePageId}
+                  editingMasterComponent={editingMasterComponent}
+                  selectedNode={selectedNode}
+                  scopedNodes={scopedNodes}
+                  onCreateQuickInteraction={onCreateQuickInteraction}
+                  onUpdateQuickInteraction={onUpdateQuickInteraction}
+                  onDeleteQuickInteraction={onDeleteQuickInteraction}
+                  onOpenInteractionInNodeGraph={onOpenInteractionInNodeGraph}
+                />
+              )}
 
             {targetLogicComponent && onToggleComponentNodeLogic && (
               <label class="toggle-row">
@@ -1446,9 +1865,8 @@ export function InspectorPanel({
   canRemoveFromCanvas,
   selectedInstanceComponent,
   editingMasterComponent = null,
-  instanceOverrideTargets,
+  activeBreakpoint,
   designTokens,
-  assets = [],
   defaultFillColor,
   renderIcon,
   onStartResize,
@@ -1460,9 +1878,11 @@ export function InspectorPanel({
   onUpdateSelected,
   onUpdateSelectedStyle,
   onApplyAutoLayout,
-  onUpdateInstanceOverride,
+  onConvertFrameLayoutMode,
+  onSwitchBreakpoint,
   onUpdateInstanceVariant,
   onUpdateInstanceSlot,
+  onUpdateMasterContract,
   onToggleComponentNodeLogic,
   onResetInstanceOverrides,
   onDetachInstance,
@@ -1474,7 +1894,13 @@ export function InspectorPanel({
   onInsertImageFiles,
   onDuplicateSelection,
   onCopySelection,
+  project,
+  activePageId,
   scopedNodes = [],
+  onCreateQuickInteraction,
+  onUpdateQuickInteraction,
+  onDeleteQuickInteraction,
+  onOpenInteractionInNodeGraph,
   studioActions,
 }: InspectorPanelProps) {
   const triggerImagePicker = () => {
@@ -1500,7 +1926,11 @@ export function InspectorPanel({
       }}
       onKeyDown={(event) => {
         const target = event.target as HTMLElement;
-        if (event.key === 'Enter' && target.matches('input:not([type="checkbox"]):not([type="range"])')) {
+        if (
+          event.key === 'Enter' &&
+          target.matches('input:not([type="checkbox"]):not([type="range"])') &&
+          !target.classList.contains('folio-num-unit-input')
+        ) {
           event.preventDefault();
           target.blur();
           onCommitEdit();
@@ -1566,17 +1996,20 @@ export function InspectorPanel({
           scopedNodes={scopedNodes}
           selectedInstanceComponent={selectedInstanceComponent}
           editingMasterComponent={editingMasterComponent}
-          instanceOverrideTargets={instanceOverrideTargets}
+          activeBreakpoint={activeBreakpoint}
           designTokens={designTokens}
-          assets={assets}
           defaultFillColor={defaultFillColor}
+          project={project}
+          activePageId={activePageId}
           onCommitEdit={onCommitEdit}
           onUpdateSelected={onUpdateSelected}
           onUpdateSelectedStyle={onUpdateSelectedStyle}
           onApplyAutoLayout={onApplyAutoLayout}
-          onUpdateInstanceOverride={onUpdateInstanceOverride}
+          onConvertFrameLayoutMode={onConvertFrameLayoutMode}
+          onSwitchBreakpoint={onSwitchBreakpoint}
           onUpdateInstanceVariant={onUpdateInstanceVariant}
           onUpdateInstanceSlot={onUpdateInstanceSlot}
+          onUpdateMasterContract={onUpdateMasterContract}
           onToggleComponentNodeLogic={onToggleComponentNodeLogic}
           onResetInstanceOverrides={onResetInstanceOverrides}
           onDetachInstance={onDetachInstance}
@@ -1585,6 +2018,10 @@ export function InspectorPanel({
           onSimplifyPath={onSimplifyPath}
           onChooseTool={onChooseTool}
           onDuplicateSelection={onDuplicateSelection}
+          onCreateQuickInteraction={onCreateQuickInteraction}
+          onUpdateQuickInteraction={onUpdateQuickInteraction}
+          onDeleteQuickInteraction={onDeleteQuickInteraction}
+          onOpenInteractionInNodeGraph={onOpenInteractionInNodeGraph}
           studioActions={studioActions}
         />
       ) : effectiveSelectedCount > 1 ? (
