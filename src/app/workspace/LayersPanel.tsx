@@ -1,9 +1,14 @@
 import type { JSX, RefObject } from 'preact';
-import { useRef } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { EffectiveLayerState, LayerDropPosition, LayerPanelRow } from '../../core/document/layers';
 import type { DesignNode } from '../../core/document/types';
 import type { EditorTarget } from '../editorContext';
 import { PANEL_RESIZE_CONSTRAINTS, type ResizablePanelId } from '../panelResize';
+import {
+  computeLayerVirtualWindow,
+  computeScrollTopForLayerIndex,
+  LAYER_VIEWPORT_FALLBACK_HEIGHT,
+} from './layerListVirtualization';
 import { tokenizeLayerSearchQuery, type LayerRenameSession } from './layerOperations';
 import { LayerTypeIcon, StudioIcon } from './StudioIcon';
 
@@ -89,18 +94,125 @@ export function LayersPanel({
   onToggleLayerProperty,
 }: LayersPanelProps) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const layerListRef = useRef<HTMLDivElement | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(LAYER_VIEWPORT_FALLBACK_HEIGHT);
+
   const searchTokens = isSearchActive ? tokenizeLayerSearchQuery(searchQuery) : [];
   const effectiveMatchCount = searchMatchCount ?? layerSourceNodes.length;
-  const nodeById = new Map<string, DesignNode>();
-  const maskBaseIds = new Set<string>();
-  for (const item of layerSourceNodes) {
-    nodeById.set(item.id, item);
-    if (item.clipMaskBaseId) {
-      maskBaseIds.add(item.clipMaskBaseId);
+
+  useEffect(() => {
+    const listEl = layerListRef.current;
+    if (!listEl) return;
+
+    const commitHeight = () => {
+      const h = listEl.clientHeight;
+      if (Number.isFinite(h) && h > 0) {
+        setViewportHeight((prev) => (Math.abs(prev - h) >= 2 ? h : prev));
+      }
+    };
+
+    commitHeight();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', commitHeight);
+      return () => {
+        window.removeEventListener('resize', commitHeight);
+      };
     }
-  }
-  const selectedIdSet = new Set(selectedNodeIds);
-  const collapsedIdSet = new Set(collapsedLayerIds);
+
+    const observer = new ResizeObserver(() => commitHeight());
+    observer.observe(listEl);
+    return () => observer.disconnect();
+  }, [visible]);
+
+  useEffect(() => () => {
+    if (scrollRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = null;
+    }
+  }, []);
+
+  const handleLayerListScroll = (event: JSX.TargetedUIEvent<HTMLDivElement>) => {
+    const nextTop = event.currentTarget.scrollTop;
+    if (typeof requestAnimationFrame !== 'function') {
+      setScrollTop(nextTop);
+      return;
+    }
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const liveTop = layerListRef.current?.scrollTop ?? nextTop;
+      setScrollTop(liveTop);
+    });
+  };
+
+  const { nodeById, maskBaseIds } = useMemo(() => {
+    const byId = new Map<string, DesignNode>();
+    const masks = new Set<string>();
+    for (const item of layerSourceNodes) {
+      byId.set(item.id, item);
+      if (item.clipMaskBaseId) {
+        masks.add(item.clipMaskBaseId);
+      }
+    }
+    return { nodeById: byId, maskBaseIds: masks };
+  }, [layerSourceNodes]);
+
+  const selectedIdSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
+  const collapsedIdSet = useMemo(() => new Set(collapsedLayerIds), [collapsedLayerIds]);
+
+  const pinnedIndices = useMemo(() => {
+    if (!layerRename?.anchorId) return undefined;
+    const idx = layerRows.findIndex((row) => row.node.id === layerRename.anchorId);
+    return idx >= 0 ? [idx] : undefined;
+  }, [layerRename?.anchorId, layerRows]);
+
+  const virtualWindow = useMemo(
+    () =>
+      computeLayerVirtualWindow({
+        totalCount: layerRows.length,
+        scrollTop,
+        viewportHeight,
+        pinnedIndices,
+      }),
+    [layerRows.length, scrollTop, viewportHeight, pinnedIndices],
+  );
+
+  // Clamp scroll position when filtering or switching editors shrinks the list.
+  useEffect(() => {
+    const listEl = layerListRef.current;
+    if (!listEl) return;
+    const maxScroll = Math.max(0, virtualWindow.totalHeightPx - viewportHeight);
+    if (listEl.scrollTop > maxScroll) {
+      listEl.scrollTop = maxScroll;
+      setScrollTop(maxScroll);
+    }
+  }, [virtualWindow.totalHeightPx, viewportHeight, activeEditorId, focusedPageId, isSearchActive]);
+
+  // Keep single-selected layer visible when virtualized.
+  const primarySelectedId = selectedNodeIds.length === 1 ? selectedNodeIds[0] : null;
+  useEffect(() => {
+    if (!virtualWindow.isVirtualized || !primarySelectedId) return;
+    const listEl = layerListRef.current;
+    if (!listEl) return;
+    const idx = layerRows.findIndex((row) => row.node.id === primarySelectedId);
+    if (idx < 0) return;
+    const targetTop = computeScrollTopForLayerIndex({
+      index: idx,
+      scrollTop: listEl.scrollTop,
+      viewportHeight: listEl.clientHeight || viewportHeight,
+    });
+    if (targetTop !== null) {
+      listEl.scrollTop = targetTop;
+      setScrollTop(targetTop);
+    }
+  }, [primarySelectedId, virtualWindow.isVirtualized, layerRows, viewportHeight]);
+
+  const visibleLayerRows = virtualWindow.isVirtualized
+    ? layerRows.slice(virtualWindow.startIndex, virtualWindow.endIndex)
+    : layerRows;
+
   return (
     <aside
       class={`layers-panel ${visible ? '' : 'is-hidden'}${activeEditorId === 'component' ? ' is-component-context' : ''}`}
@@ -207,8 +319,23 @@ export function LayersPanel({
           <span class="layer-page-context-label">{layerContextLabel}</span>
         </span>
       </div>
-      <div class="layer-list" role="tree" aria-label="Document layers">
-        {layerRows.map(({ node, depth, hasChildren }) => {
+      <div
+        ref={layerListRef}
+        class="layer-list"
+        role="tree"
+        aria-label="Document layers"
+        data-virtualized={virtualWindow.isVirtualized ? 'true' : 'false'}
+        onScroll={handleLayerListScroll}
+      >
+        {virtualWindow.isVirtualized && virtualWindow.topSpacerPx > 0 && (
+          <div
+            class="layer-virtual-spacer"
+            aria-hidden="true"
+            style={{ height: `${virtualWindow.topSpacerPx}px` }}
+          />
+        )}
+        {visibleLayerRows.map(({ node, depth, hasChildren }, sliceIdx) => {
+          const rowIndex = virtualWindow.startIndex + sliceIdx;
           const selected = selectedIdSet.has(node.id);
           const effective = layerEffectiveStates.get(node.id);
           const clipBaseName = node.clipMaskBaseId
@@ -228,6 +355,8 @@ export function LayersPanel({
               key={node.id}
               role="treeitem"
               aria-level={depth + 1}
+              aria-setsize={virtualWindow.isVirtualized ? layerRows.length : undefined}
+              aria-posinset={virtualWindow.isVirtualized ? rowIndex + 1 : undefined}
               aria-selected={selected}
               aria-expanded={hasChildren ? !collapsed : undefined}
               tabIndex={0}
@@ -375,6 +504,13 @@ export function LayersPanel({
             </div>
           );
         })}
+        {virtualWindow.isVirtualized && virtualWindow.bottomSpacerPx > 0 && (
+          <div
+            class="layer-virtual-spacer"
+            aria-hidden="true"
+            style={{ height: `${virtualWindow.bottomSpacerPx}px` }}
+          />
+        )}
         {layerSourceNodes.length === 0 && (
           <div class="empty-layers">Your layers will appear here.</div>
         )}

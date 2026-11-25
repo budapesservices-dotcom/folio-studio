@@ -484,8 +484,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .layer-page-context.is-component { border-color: rgba(229, 154, 76, 0.38); color: #f5c794; background: rgba(229, 154, 76, 0.12); }
 .layer-page-context.is-component::before { background: #e59a4c; box-shadow: 0 0 6px rgba(229, 154, 76, 0.6); }
 .layer-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-height: 0; margin-right: 6px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 0 4px 10px 8px; }
+.layer-virtual-spacer { flex: 0 0 auto; width: 100%; pointer-events: none; }
 .layer-row { position: relative; display: flex; flex: 0 0 auto; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 0 5px 3px; border: 1px solid transparent; border-radius: 5px; text-align: left; color: #aeb5c2; background: transparent; cursor: grab; user-select: none; transition: background-color 140ms cubic-bezier(0.16, 1, 0.3, 1), border-color 140ms cubic-bezier(0.16, 1, 0.3, 1), color 140ms ease; }
+.layer-row[draggable='false'] { cursor: pointer; }
 .layer-row:active { cursor: grabbing; }
+.layer-row[draggable='false']:active { cursor: pointer; }
 .layer-row:hover { background: #222936; }
 .layer-row.selected { color: #e6e1ff; background: #302b4b; border-color: #48406d; }
 .layer-row.dragging { opacity: .38; }

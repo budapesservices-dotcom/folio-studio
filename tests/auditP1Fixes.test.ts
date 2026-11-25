@@ -114,8 +114,8 @@ describe('Audit P1 Regression Suite', () => {
 
   it('P1-3 & P1-6: precomputes O(N) lookup maps and disables drag-reorder during active search in LayersPanel', () => {
     const layersSource = RAW_SOURCES['../src/app/workspace/LayersPanel.tsx'] ?? '';
-    expect(layersSource).toContain('const nodeById = new Map<string, DesignNode>();');
-    expect(layersSource).toContain('const maskBaseIds = new Set<string>();');
+    expect(layersSource).toContain('new Map<string, DesignNode>()');
+    expect(layersSource).toContain('new Set<string>()');
     expect(layersSource).toContain('draggable={!isSearchActive}');
     expect(layersSource).toContain('onDragStart={isSearchActive ? undefined :');
     expect(layersSource).toContain('onDrop={isSearchActive ? undefined :');

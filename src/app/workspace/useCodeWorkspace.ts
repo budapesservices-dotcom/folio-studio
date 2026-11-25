@@ -26,6 +26,11 @@ import {
 } from '../../engines/codegen';
 import { toPageFileSlug } from '../../engines/codegen/sanitize';
 import { stripUndefinedEntries, type MainCanvasCommandClient } from '../mainCanvasCommandClient';
+import {
+  computePreviewDebounceMs,
+  createDeferredTaskScheduler,
+  type DeferredTaskScheduler,
+} from './previewCompilationScheduler';
 
 export type CodeWorkspaceViewMode = 'split' | 'code' | 'preview';
 
@@ -162,16 +167,136 @@ export function useCodeWorkspace({
     }
   }, [selectedNodeId, previewPageNodes, mappedTargetNodeId]);
 
-  const compiled = useMemo(
-    () =>
-      compileFolioProject(project, {
-        target: outputTarget,
-        pageId: previewPage.id,
-        themeId: previewThemeId,
-        includeAllPages: true,
-      }),
-    [project, outputTarget, previewPage.id, previewThemeId],
+  const shouldRenderPreview = open && viewMode !== 'code';
+
+  const compileProjectSnapshot = (
+    proj: FolioProject,
+    target: CodeOutputTarget,
+    pageId: string,
+    themeId: string,
+  ): CompiledProjectOutput =>
+    compileFolioProject(proj, {
+      target,
+      pageId,
+      themeId,
+      includeAllPages: true,
+    });
+
+  const compilePreviewSnapshot = (
+    proj: FolioProject,
+    pageId: string,
+    themeId: string,
+    scripts: boolean,
+  ): string =>
+    buildLivePreviewHtml(proj, {
+      pageId,
+      themeId,
+      includeCustomScripts: scripts,
+    });
+
+  const [compiled, setCompiled] = useState<CompiledProjectOutput>(() =>
+    open
+      ? compileProjectSnapshot(project, outputTarget, previewPage.id, previewThemeId)
+      : {
+          target: outputTarget,
+          activePageId: previewPage.id,
+          activeThemeId: previewThemeId,
+          files: [],
+          summary: {
+            totalFiles: 0,
+            generatedCount: 0,
+            mappedCount: 0,
+            customCount: 0,
+            extensionCount: 0,
+            mappedNodeCount: 0,
+          },
+        },
   );
+
+  const [previewHtml, setPreviewHtml] = useState<string>(() =>
+    shouldRenderPreview
+      ? compilePreviewSnapshot(project, previewPage.id, previewThemeId, includeCustomScripts)
+      : '',
+  );
+
+  const compileSchedulerRef = useRef<DeferredTaskScheduler | null>(null);
+  if (!compileSchedulerRef.current) {
+    compileSchedulerRef.current = createDeferredTaskScheduler();
+  }
+
+  // Track last-committed explicit control keys so user clicks (open, page, theme,
+  // target, viewMode, scripts) flush immediately while rapid Canvas drags debounce.
+  const prevCompileContextRef = useRef({
+    open,
+    outputTarget,
+    pageId: previewPage.id,
+    themeId: previewThemeId,
+    includeCustomScripts,
+    shouldRenderPreview,
+    project,
+  });
+
+  useEffect(() => {
+    const scheduler = compileSchedulerRef.current!;
+    const prev = prevCompileContextRef.current;
+    const explicitControlChanged =
+      prev.open !== open ||
+      prev.outputTarget !== outputTarget ||
+      prev.pageId !== previewPage.id ||
+      prev.themeId !== previewThemeId ||
+      prev.includeCustomScripts !== includeCustomScripts ||
+      prev.shouldRenderPreview !== shouldRenderPreview;
+    const projectChanged = prev.project !== project;
+
+    prevCompileContextRef.current = {
+      open,
+      outputTarget,
+      pageId: previewPage.id,
+      themeId: previewThemeId,
+      includeCustomScripts,
+      shouldRenderPreview,
+      project,
+    };
+
+    if (!open) {
+      scheduler.cancel();
+      return;
+    }
+
+    if (!explicitControlChanged && !projectChanged) {
+      return;
+    }
+
+    const delayMs = explicitControlChanged
+      ? 0
+      : computePreviewDebounceMs(previewPage.document.nodes.length);
+
+    scheduler.schedule(
+      delayMs,
+      () => {
+        setCompiled(compileProjectSnapshot(project, outputTarget, previewPage.id, previewThemeId));
+        if (shouldRenderPreview) {
+          setPreviewHtml(
+            compilePreviewSnapshot(project, previewPage.id, previewThemeId, includeCustomScripts),
+          );
+        }
+      },
+      { immediate: explicitControlChanged },
+    );
+  }, [
+    open,
+    project,
+    outputTarget,
+    previewPage.id,
+    previewPage.document.nodes.length,
+    previewThemeId,
+    includeCustomScripts,
+    shouldRenderPreview,
+  ]);
+
+  useEffect(() => () => {
+    compileSchedulerRef.current?.cancel();
+  }, []);
 
   const selectedFile = useMemo(() => {
     const exact = compiled.files.find((file) => file.path === selectedFilePath);
@@ -187,18 +312,6 @@ export function useCodeWorkspace({
       setSelectedFilePath(selectedFile.path);
     }
   }, [selectedFile, selectedFilePath]);
-
-  const previewHtml = useMemo(
-    () =>
-      open
-        ? buildLivePreviewHtml(project, {
-            pageId: previewPage.id,
-            themeId: previewThemeId,
-            includeCustomScripts,
-          })
-        : '',
-    [open, project, previewPage.id, previewThemeId, includeCustomScripts],
-  );
 
   const WORKER_A11Y_NODE_THRESHOLD = 100;
   const shouldOffloadA11y = previewPage.document.nodes.length >= WORKER_A11Y_NODE_THRESHOLD;
@@ -530,7 +643,10 @@ export function useCodeWorkspace({
       setMappedTargetNodeId(nodeId);
       setMappedFeedback(null);
     },
-    refreshPreview: () => setRefreshNonce((count) => count + 1),
+    refreshPreview: () => {
+      compileSchedulerRef.current?.flush();
+      setRefreshNonce((count) => count + 1);
+    },
     applyMappedPatch,
     addCustomModule,
     addNodeExtension,
