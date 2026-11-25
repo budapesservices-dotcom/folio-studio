@@ -14,11 +14,9 @@ import type {
   LayoutMode,
   LayoutOverflow,
   LayoutPaddingMode,
-  NodeCursor,
+  NodeCursorType,
   NodeLayoutChildConfig,
   NodeLayoutConfig,
-  NodePointerEvents,
-  NodeUserSelect,
   ScrollSnapAlign,
   ScrollSnapType,
 } from '../../core/document/types';
@@ -75,8 +73,7 @@ const DEFAULT_LAYOUT: NodeLayoutConfig = {
   alignItems: 'stretch',
   gridColumns: 2,
   gridColumnsMode: 'fixed',
-  gridMinColumnWidth: 220,
-  gridMinColumnWidthUnit: 'px',
+  gridMinColumnWidth: { value: 220, unit: 'px' },
   gridRowsMode: 'auto',
   gridRows: 2,
   overflow: 'hidden',
@@ -93,14 +90,12 @@ const DEFAULT_LAYOUT_CHILD: NodeLayoutChildConfig = {
 
 const MATRIX_AXIS_VALUES: readonly ('start' | 'center' | 'end')[] = ['start', 'center', 'end'];
 
-const CURSOR_OPTIONS: ReadonlyArray<{ value: NodeCursor; label: string }> = [
+const CURSOR_OPTIONS: ReadonlyArray<{ value: NodeCursorType; label: string }> = [
   { value: 'default', label: 'Default' },
   { value: 'pointer', label: 'Pointer (Hand)' },
   { value: 'grab', label: 'Grab' },
   { value: 'text', label: 'Text (I-Beam)' },
   { value: 'not-allowed', label: 'Not Allowed' },
-  { value: 'move', label: 'Move' },
-  { value: 'crosshair', label: 'Crosshair' },
 ];
 
 export interface InspectorFrameLayoutSectionProps {
@@ -191,8 +186,8 @@ export function InspectorFrameLayoutSection({
   const gridRowsMode: GridRowsMode = layout.gridRowsMode ?? 'auto';
   const gapUnit: CssLengthUnit = layout.gapUnit ?? 'px';
   const paddingUnit: CssLengthUnit = layout.paddingUnit ?? 'px';
-  const minColUnit: CssLengthUnit = layout.gridMinColumnWidthUnit ?? 'px';
-  const minColWidth = Math.max(40, Math.round(layout.gridMinColumnWidth ?? 220));
+  const minColUnit: CssLengthUnit = layout.gridMinColumnWidth?.unit ?? 'px';
+  const minColWidth = Math.max(1, Math.round((layout.gridMinColumnWidth?.value ?? 220) * 100) / 100);
   const scrollSnapType: ScrollSnapType = layout.scrollSnapType ?? 'none';
 
   const commitContainerLayout = (
@@ -586,7 +581,7 @@ export function InspectorFrameLayoutSection({
                         commitContainerLayout({
                           gridColumnsMode: opt.value,
                           ...(opt.value === 'auto-fit' && !layout.gridMinColumnWidth
-                            ? { gridMinColumnWidth: 220, gridMinColumnWidthUnit: 'px' }
+                            ? { gridMinColumnWidth: { value: 220, unit: 'px' } }
                             : {}),
                           ...(opt.value === 'custom' && !layout.gridTemplateColumns
                             ? { gridTemplateColumns: '240px 1fr' }
@@ -630,15 +625,17 @@ export function InspectorFrameLayoutSection({
                     unit={minColUnit}
                     units={GRID_MIN_WIDTH_UNITS}
                     presets={GRID_MIN_WIDTH_PRESETS}
-                    min={40}
+                    min={minColUnit === 'px' ? 40 : 1}
                     max={1200}
                     step={10}
                     onPreview={(p) =>
                       commitContainerLayout(
                         {
                           gridColumnsMode: 'auto-fit',
-                          gridMinColumnWidth: p.value,
-                          gridMinColumnWidthUnit: toLengthUnit(p.unit, minColUnit),
+                          gridMinColumnWidth: {
+                            value: p.value,
+                            unit: toLengthUnit(p.unit, minColUnit),
+                          },
                         },
                         undefined,
                         false,
@@ -647,8 +644,10 @@ export function InspectorFrameLayoutSection({
                     onChange={(p) =>
                       commitContainerLayout({
                         gridColumnsMode: 'auto-fit',
-                        gridMinColumnWidth: p.value,
-                        gridMinColumnWidthUnit: toLengthUnit(p.unit, minColUnit),
+                        gridMinColumnWidth: {
+                          value: p.value,
+                          unit: toLengthUnit(p.unit, minColUnit),
+                        },
                       })
                     }
                   />
@@ -1174,7 +1173,7 @@ export function InspectorFrameLayoutSection({
             aria-label="CSS Cursor"
             value={selectedNode.cursor ?? 'default'}
             onChange={(event) => {
-              const next = event.currentTarget.value as NodeCursor;
+              const next = event.currentTarget.value as NodeCursorType;
               onUpdateSelected({ cursor: next === 'default' ? undefined : next });
               onCommitEdit();
             }}
@@ -1204,7 +1203,7 @@ export function InspectorFrameLayoutSection({
                   aria-pressed={(selectedNode.pointerEvents ?? 'auto') === opt.value}
                   onClick={() => {
                     onUpdateSelected({
-                      pointerEvents: opt.value === 'auto' ? undefined : (opt.value as NodePointerEvents),
+                      pointerEvents: opt.value === 'auto' ? undefined : opt.value,
                     });
                     onCommitEdit();
                   }}
@@ -1231,7 +1230,7 @@ export function InspectorFrameLayoutSection({
                   aria-pressed={(selectedNode.userSelect ?? 'auto') === opt.value}
                   onClick={() => {
                     onUpdateSelected({
-                      userSelect: opt.value === 'auto' ? undefined : (opt.value as NodeUserSelect),
+                      userSelect: opt.value === 'auto' ? undefined : opt.value,
                     });
                     onCommitEdit();
                   }}

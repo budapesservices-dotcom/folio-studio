@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { createRef } from 'preact';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -23,30 +21,34 @@ import type { FrameNode, RectNode } from '../src/core/document/types';
 import { validateProject } from '../src/core/document/validation';
 import { createEditorState } from '../src/app/editorReducer';
 import { createCanonicalEditorStore } from '../src/app/editorStore';
-import { createMainCanvasCommandClient } from '../src/app/mainCanvasCommandClient';
+import { createMainCanvasCommandClient, stripUndefinedEntries } from '../src/app/mainCanvasCommandClient';
 import { InspectorPanel, type InspectorPanelProps } from '../src/app/InspectorPanel';
 import {
   computeAutoLayoutNodes,
   computeFrameModeConversion,
 } from '../src/engines/layout/autoLayout';
+import { compileFolioProject } from '../src/engines/codegen';
 import {
-  compileLivePreviewHtml,
+  buildLivePreviewHtml,
   compilePageHtmlCss,
 } from '../src/engines/codegen/htmlCssCompiler';
-import { compileReactProjectFiles } from '../src/engines/codegen/reactCompiler';
 
-const numericUnitInputSource = readFileSync(
-  resolve(process.cwd(), 'src/app/workspace/NumericUnitInput.tsx'),
-  'utf8',
+const RAW_SOURCE_FILES = import.meta.glob<string>(
+  [
+    '../src/app/workspace/NumericUnitInput.tsx',
+    '../src/app/workspace/InspectorFrameLayoutSection.tsx',
+    '../src/app/InspectorPanel.tsx',
+  ],
+  {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  },
 );
-const frameLayoutSectionSource = readFileSync(
-  resolve(process.cwd(), 'src/app/workspace/InspectorFrameLayoutSection.tsx'),
-  'utf8',
-);
-const inspectorPanelSource = readFileSync(
-  resolve(process.cwd(), 'src/app/InspectorPanel.tsx'),
-  'utf8',
-);
+
+const numericUnitInputSource = RAW_SOURCE_FILES['../src/app/workspace/NumericUnitInput.tsx'] ?? '';
+const frameLayoutSectionSource = RAW_SOURCE_FILES['../src/app/workspace/InspectorFrameLayoutSection.tsx'] ?? '';
+const inspectorPanelSource = RAW_SOURCE_FILES['../src/app/InspectorPanel.tsx'] ?? '';
 
 describe('Part A — NumericUnitInput Parser, Safe Inline Math & CSS Safety', () => {
   it('evaluates safe inline math expressions without eval and rejects unsafe input', () => {
@@ -62,52 +64,56 @@ describe('Part A — NumericUnitInput Parser, Safe Inline Math & CSS Safety', ()
   it('splits smart-pasted numeric+unit strings, evaluates math, handles keywords, and rejects invalid CSS', () => {
     const allowed = ['px', '%', 'vw', 'vh', 'dvh', 'rem', 'em', 'fit', 'fill'] as const;
 
-    expect(parseNumericUnitInput('100vh', 'px', allowed)).toEqual({
+    expect(parseNumericUnitInput('100vh', { fallbackUnit: 'px', allowedUnits: allowed })).toEqual({
       ok: true,
       kind: 'numeric',
       value: 100,
       unit: 'vh',
     });
 
-    expect(parseNumericUnitInput('50%', 'px', allowed)).toEqual({
+    expect(parseNumericUnitInput('50%', { fallbackUnit: 'px', allowedUnits: allowed })).toEqual({
       ok: true,
       kind: 'numeric',
       value: 50,
       unit: '%',
     });
 
-    expect(parseNumericUnitInput('100/3', '%', allowed, { precision: 2 })).toEqual({
+    expect(
+      parseNumericUnitInput('100/3', { fallbackUnit: '%', allowedUnits: allowed, precision: 2 }),
+    ).toEqual({
       ok: true,
       kind: 'numeric',
       value: 33.33,
       unit: '%',
     });
 
-    expect(parseNumericUnitInput('1.5rem', 'px', allowed)).toEqual({
+    expect(parseNumericUnitInput('1.5rem', { fallbackUnit: 'px', allowedUnits: allowed })).toEqual({
       ok: true,
       kind: 'numeric',
       value: 1.5,
       unit: 'rem',
     });
 
-    expect(parseNumericUnitInput('fit', 'px', allowed)).toEqual({
+    expect(parseNumericUnitInput('fit', { fallbackUnit: 'px', allowedUnits: allowed })).toEqual({
       ok: true,
       kind: 'keyword',
-      value: 0,
-      unit: 'fit',
+      keyword: 'fit',
     });
 
-    expect(parseNumericUnitInput('fill', 'px', allowed)).toEqual({
+    expect(parseNumericUnitInput('fill', { fallbackUnit: 'px', allowedUnits: allowed })).toEqual({
       ok: true,
       kind: 'keyword',
-      value: 0,
-      unit: 'fill',
+      keyword: 'fill',
     });
 
     // Rejects disallowed unit or injection
-    expect(parseNumericUnitInput('100cm', 'px', allowed).ok).toBe(false);
-    expect(parseNumericUnitInput('expression(alert(1))', 'px', allowed).ok).toBe(false);
-    expect(parseNumericUnitInput('-50', 'px', allowed, { allowNegative: false }).ok).toBe(false);
+    expect(parseNumericUnitInput('100cm', { fallbackUnit: 'px', allowedUnits: allowed }).ok).toBe(false);
+    expect(
+      parseNumericUnitInput('expression(alert(1))', { fallbackUnit: 'px', allowedUnits: allowed }).ok,
+    ).toBe(false);
+    expect(
+      parseNumericUnitInput('-50', { fallbackUnit: 'px', allowedUnits: allowed, allowNegative: false }).ok,
+    ).toBe(false);
   });
 
   it('validates CSS Grid templates, aspect ratios, HTML IDs/classes, and color strings safely', () => {
@@ -134,7 +140,8 @@ describe('Part A — NumericUnitInput Parser, Safe Inline Math & CSS Safety', ()
     expect(numericUnitInputSource).not.toMatch(/type=["']number["']/);
     expect(frameLayoutSectionSource).not.toMatch(/type=["']number["']/);
     expect(inspectorPanelSource).not.toMatch(/type=["']number["']/);
-    expect(numericUnitInputSource).toContain('onBlur={commitDraft}');
+    expect(numericUnitInputSource).toContain('onBlur=');
+    expect(numericUnitInputSource).toContain('commitDraft(event.currentTarget.value)');
     expect(numericUnitInputSource).toContain("event.key === 'Enter'");
   });
 });
@@ -199,39 +206,43 @@ describe('Part B — Dual-Mode Frame Engine (Freeform <-> Stack <-> Full CSS Gri
     const store = createCanonicalEditorStore(createEditorState(project));
     const client = createMainCanvasCommandClient(store);
 
-    const beforeNodes = store.getState().project.pages[0].document.nodes;
+    const beforeNodes = store.getSnapshot().editorState.project.pages[0].document.nodes;
     const conversion = computeFrameModeConversion(beforeNodes, 'frame-dual', 'flex');
     expect(conversion).not.toBeNull();
-    expect(conversion!.nextLayout.mode).toBe('flex');
-    expect(conversion!.nextLayout.direction).toBe('row');
-    expect(conversion!.nextLayout.gap).toBe(40);
-    expect(conversion!.orderedChildIds).toEqual(['child-a', 'child-c', 'child-b']);
+    const convertedCandidate = conversion!.nextNodes.find((n) => n.id === 'frame-dual') as FrameNode;
+    expect(convertedCandidate.layout?.mode).toBe('flex');
+    expect(conversion!.detectedDirection).toBe('row');
+    expect(conversion!.estimatedGap).toBe(40);
+    expect(conversion!.childOrderIds).toEqual(['child-a', 'child-c', 'child-b']);
 
-    // Commit in 1 atomic Native Command transaction
-    const txRes = client.executeTransaction(
-      [
+    // Commit in 1 atomic Native Command transaction (matching useDesignSystemActions.convertFrameLayoutMode)
+    const astView = client.getActiveAstView();
+    const reorderEnvelopes = conversion!.childOrderIds.slice(1).map((currId, idx) =>
+      client.createEnvelope(
+        'layer.move',
+        { kind: 'document', address: astView.address },
         {
-          type: 'layer.reorder',
-          payload: {
-            nodeIds: conversion!.orderedChildIds,
-            targetParentId: 'frame-dual',
-            targetIndex: 0,
-          },
+          node: { document: astView.address, nodeId: currId },
+          target: { document: astView.address, nodeId: conversion!.childOrderIds[idx] },
+          position: 'before' as const,
         },
-        {
-          type: 'node.update-many',
-          payload: {
-            nodes: conversion!.nodes.filter(
-              (n) => n.id === 'frame-dual' || n.parentId === 'frame-dual',
-            ),
-          },
-        },
-      ],
+        'Convert frame to Stack',
+      ),
+    );
+    const updateEnvelope = client.createEnvelope(
+      'node.update-many',
+      { kind: 'document', address: astView.address },
+      {
+        nodes: conversion!.nextNodes
+          .filter((n) => n.id === 'frame-dual' || n.parentId === 'frame-dual')
+          .map((n) => stripUndefinedEntries(n)),
+      },
       'Convert frame to Stack',
     );
+    const txRes = client.executeTransaction([...reorderEnvelopes, updateEnvelope]);
     expect(txRes.status).toBe('applied');
 
-    const afterConvert = store.getState().project.pages[0].document.nodes;
+    const afterConvert = store.getSnapshot().editorState.project.pages[0].document.nodes;
     const convertedFrame = afterConvert.find((n) => n.id === 'frame-dual') as FrameNode;
     expect(convertedFrame.layout?.mode).toBe('flex');
     expect(convertedFrame.layout?.direction).toBe('row');
@@ -242,7 +253,7 @@ describe('Part B — Dual-Mode Frame Engine (Freeform <-> Stack <-> Full CSS Gri
 
     // 1 single Undo restores original Freeform mode, order, and coordinates cleanly
     expect(client.undo().status).toBe('applied');
-    const afterUndo = store.getState().project.pages[0].document.nodes;
+    const afterUndo = store.getSnapshot().editorState.project.pages[0].document.nodes;
     const restoredFrame = afterUndo.find((n) => n.id === 'frame-dual') as FrameNode;
     expect(restoredFrame.layout?.mode).toBe('none');
     expect(afterUndo.filter((n) => n.parentId === 'frame-dual').map((n) => n.id)).toEqual([
@@ -255,8 +266,11 @@ describe('Part B — Dual-Mode Frame Engine (Freeform <-> Stack <-> Full CSS Gri
     // 1 single Redo re-applies the Stack conversion
     expect(client.redo().status).toBe('applied');
     expect(
-      (store.getState().project.pages[0].document.nodes.find((n) => n.id === 'frame-dual') as FrameNode)
-        .layout?.mode,
+      (
+        store
+          .getSnapshot()
+          .editorState.project.pages[0].document.nodes.find((n) => n.id === 'frame-dual') as FrameNode
+      ).layout?.mode,
     ).toBe('flex');
   });
 
@@ -281,8 +295,7 @@ describe('Part B — Dual-Mode Frame Engine (Freeform <-> Stack <-> Full CSS Gri
         padding: { top: 20, right: 20, bottom: 20, left: 20 },
         gridColumns: 3,
         gridColumnsMode: 'auto-fit',
-        gridMinColumnWidth: 200,
-        gridMinColumnWidthUnit: 'px',
+        gridMinColumnWidth: { value: 200, unit: 'px' },
         gridRowsMode: 'fixed',
         gridRows: 3,
       },
@@ -321,7 +334,9 @@ describe('Part B — Dual-Mode Frame Engine (Freeform <-> Stack <-> Full CSS Gri
       layoutChild: { widthMode: 'fill', heightMode: 'fixed' },
     };
 
-    const solved = computeAutoLayoutNodes([gridFrame, banner, tallHero, card1, card2], 'bento-grid');
+    const solved = computeAutoLayoutNodes([gridFrame, banner, tallHero, card1, card2], {
+      onlyContainerId: 'bento-grid',
+    });
     const byId = new Map(solved.map((n) => [n.id, n]));
 
     // Banner spans full inner width (720 - 40 = 680)
@@ -368,8 +383,7 @@ describe('Part C & D — Codegen Parity (HTML/CSS, Live Preview, React TSX) & .f
         paddingUnit: 'px',
         gridColumns: 3,
         gridColumnsMode: 'auto-fit',
-        gridMinColumnWidth: 240,
-        gridMinColumnWidthUnit: 'px',
+        gridMinColumnWidth: { value: 240, unit: 'px' },
         gridRowsMode: 'custom',
         gridTemplateRows: 'auto 1fr',
         overflow: 'scroll-x',
@@ -412,7 +426,7 @@ describe('Part C & D — Codegen Parity (HTML/CSS, Live Preview, React TSX) & .f
         cornerRadii: { topLeft: 16, topRight: 16, bottomRight: 4, bottomLeft: 4 },
       },
       cssFilters: { brightness: 105, contrast: 110 },
-      transition: { preset: 'smooth', durationMs: 240, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+      transition: { preset: 'smooth', durationMs: 240 },
       stateOverrides: {
         hover: {
           fill: '#1E293B',
@@ -455,7 +469,7 @@ describe('Part C & D — Codegen Parity (HTML/CSS, Live Preview, React TSX) & .f
     expect(validation.ok).toBe(true);
 
     // 2. HTML/CSS Compiler assertions
-    const compiled = compilePageHtmlCss(project, page.id);
+    const compiled = compilePageHtmlCss(project, page);
     expect(compiled.pageCssContent).toContain('repeat(auto-fit, minmax(240px, 1fr))');
     expect(compiled.pageCssContent).toContain('grid-template-rows: auto 1fr;');
     expect(compiled.pageCssContent).toContain('overflow-x: auto;');
@@ -487,15 +501,19 @@ describe('Part C & D — Codegen Parity (HTML/CSS, Live Preview, React TSX) & .f
     expect(compiled.htmlFile.content).toContain('<h4 ');
 
     // 3. Live Preview parity
-    const previewHtml = compileLivePreviewHtml(project, page.id);
+    const previewHtml = buildLivePreviewHtml(project, { pageId: page.id });
     expect(previewHtml).toContain('repeat(auto-fit, minmax(240px, 1fr))');
     expect(previewHtml).toContain(':hover');
     expect(previewHtml).toContain('scroll-snap-type: x mandatory;');
 
-    // 4. React TSX parity
-    const reactFiles = compileReactProjectFiles(project, page.id);
-    const pageTsx = reactFiles.find((f) => f.path.startsWith('src/pages/') && f.path.endsWith('.tsx'));
-    const pageCss = reactFiles.find((f) => f.path.startsWith('src/pages/') && f.path.endsWith('.css'));
+    // 4. React TSX + Stylesheet parity
+    const reactOutput = compileFolioProject(project, { target: 'react', pageId: page.id });
+    const pageTsx = reactOutput.files.find(
+      (f) => f.path.startsWith('src/pages/') && f.path.endsWith('.tsx'),
+    );
+    const pageCss = reactOutput.files.find(
+      (f) => f.path.startsWith('src/styles/') && f.path.endsWith('.css') && f.path !== 'src/styles/tokens.css',
+    );
     expect(pageTsx?.content).toContain('id="pricing-grid"');
     expect(pageTsx?.content).toContain('target="_blank"');
     expect(pageTsx?.content).toContain('rel="noopener noreferrer"');

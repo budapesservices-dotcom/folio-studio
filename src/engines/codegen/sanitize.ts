@@ -100,6 +100,64 @@ export function sanitizeCssValue(raw: string, fallback = 'transparent'): string 
   return cleaned;
 }
 
+const SAFE_IMAGE_DATA_URI = /^data:image\/(?:png|jpe?g|gif|webp|avif);base64,[a-zA-Z0-9+/=\s]+$/i;
+const SAFE_IMAGE_PROTOCOLS = new Set(['http:', 'https:']);
+
+/**
+ * Validates dynamic image URLs for runtime overrides and generated exports.
+ * Allows `http:`, `https:`, relative paths (`/`, `./`, `../`, excluding `//`),
+ * and base64 raster data URIs (png/jpeg/gif/webp/avif).
+ * Rejects protocol-relative URLs (`//`), `javascript:`, `vbscript:`, `mailto:`, `#`,
+ * `data:text/html`, and `data:image/svg+xml`.
+ */
+export function sanitizeImageUrl(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const cleaned = trimmed.replace(/[\u0000-\u001F\u007F]/g, '');
+  if (!cleaned) return null;
+  if (cleaned.startsWith('//') || cleaned.startsWith('#')) {
+    return null;
+  }
+  if (SAFE_IMAGE_DATA_URI.test(cleaned)) {
+    return cleaned;
+  }
+  if (cleaned.startsWith('/') || cleaned.startsWith('./') || cleaned.startsWith('../')) {
+    return cleaned;
+  }
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(cleaned);
+  if (!schemeMatch) {
+    return /^[a-zA-Z0-9._~/?&=%-]+$/.test(cleaned) ? cleaned : null;
+  }
+  const protocol = `${schemeMatch[1].toLowerCase()}:`;
+  if (!SAFE_IMAGE_PROTOCOLS.has(protocol)) {
+    return null;
+  }
+  try {
+    const parsed = new URL(cleaned);
+    if (!SAFE_IMAGE_PROTOCOLS.has(parsed.protocol.toLowerCase())) {
+      return null;
+    }
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sanitizes a dynamic CSS transform string so untrusted runtime values cannot
+ * break out of style rules or invoke `url()` / `expression()` / script schemes.
+ */
+export function sanitizeCssTransformValue(raw: string | undefined): string {
+  if (!raw) return '';
+  const cleaned = raw.replace(/[\u0000-\u001F\u007F\r\n;{}<>\\]/g, '').trim();
+  if (!cleaned) return '';
+  if (/\/\*|\*\/|@import|\b(?:expression|url|javascript|vbscript|data|behavior)\s*[:(]/i.test(cleaned)) {
+    return '';
+  }
+  return cleaned;
+}
+
 export function toKebabCase(input: string, fallback = 'item'): string {
   const slug = input
     .trim()

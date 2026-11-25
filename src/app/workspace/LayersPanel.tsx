@@ -1,9 +1,10 @@
 import type { JSX, RefObject } from 'preact';
+import { useRef } from 'preact/hooks';
 import type { EffectiveLayerState, LayerDropPosition, LayerPanelRow } from '../../core/document/layers';
 import type { DesignNode } from '../../core/document/types';
 import type { EditorTarget } from '../editorContext';
 import { PANEL_RESIZE_CONSTRAINTS, type ResizablePanelId } from '../panelResize';
-import type { LayerRenameSession } from './layerOperations';
+import { tokenizeLayerSearchQuery, type LayerRenameSession } from './layerOperations';
 import { LayerTypeIcon, StudioIcon } from './StudioIcon';
 
 export interface LayersPanelProps {
@@ -24,6 +25,11 @@ export interface LayersPanelProps {
   layerRename: LayerRenameSession | null;
   layerRenameInputRef: RefObject<HTMLInputElement>;
   layerColorPickerKey: string | null;
+  searchQuery?: string;
+  isSearchActive?: boolean;
+  searchMatchedIds?: ReadonlySet<string>;
+  searchMatchCount?: number;
+  onSearchQueryChange?: (value: string) => void;
   onStartResize: (panel: ResizablePanelId, event: MouseEvent) => void;
   onResizeDoubleClick: (panel: ResizablePanelId, event: MouseEvent) => void;
   onResizeKeyDown: (panel: ResizablePanelId, event: KeyboardEvent) => void;
@@ -60,6 +66,11 @@ export function LayersPanel({
   layerRename,
   layerRenameInputRef,
   layerColorPickerKey,
+  searchQuery = '',
+  isSearchActive = false,
+  searchMatchedIds,
+  searchMatchCount,
+  onSearchQueryChange,
   onStartResize,
   onResizeDoubleClick,
   onResizeKeyDown,
@@ -77,6 +88,19 @@ export function LayersPanel({
   onToggleColorPicker,
   onToggleLayerProperty,
 }: LayersPanelProps) {
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const searchTokens = isSearchActive ? tokenizeLayerSearchQuery(searchQuery) : [];
+  const effectiveMatchCount = searchMatchCount ?? layerSourceNodes.length;
+  const nodeById = new Map<string, DesignNode>();
+  const maskBaseIds = new Set<string>();
+  for (const item of layerSourceNodes) {
+    nodeById.set(item.id, item);
+    if (item.clipMaskBaseId) {
+      maskBaseIds.add(item.clipMaskBaseId);
+    }
+  }
+  const selectedIdSet = new Set(selectedNodeIds);
+  const collapsedIdSet = new Set(collapsedLayerIds);
   return (
     <aside
       class={`layers-panel ${visible ? '' : 'is-hidden'}${activeEditorId === 'component' ? ' is-component-context' : ''}`}
@@ -102,8 +126,80 @@ export function LayersPanel({
       <div class="panel-heading">
         <h2>Layers</h2>
       </div>
+      {onSearchQueryChange && (
+        <div class="layer-search-bar">
+          <div class="layer-search-wrap">
+            <svg
+              class="layer-search-icon"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+            <input
+              ref={searchInputRef}
+              type="search"
+              class="layer-search-input"
+              placeholder="Filter layers by name or ID..."
+              aria-label="Search layers by name or ID"
+              autoComplete="off"
+              spellcheck={false}
+              value={searchQuery}
+              onInput={(event) => onSearchQueryChange(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (searchQuery) {
+                    onSearchQueryChange('');
+                  } else {
+                    event.currentTarget.blur();
+                  }
+                  return;
+                }
+                if (event.key === 'Enter' && isSearchActive) {
+                  const firstMatch = layerRows.find(
+                    ({ node }) => !searchMatchedIds || searchMatchedIds.has(node.id),
+                  );
+                  if (firstMatch) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onSelectLayer(firstMatch.node.id, {});
+                  }
+                }
+              }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                class="layer-search-clear"
+                title="Clear layer search"
+                aria-label="Clear layer search"
+                onClick={() => {
+                  onSearchQueryChange('');
+                  searchInputRef.current?.focus();
+                }}
+              >
+                ×
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <div class="layer-list-heading" data-page-id={focusedPageId}>
-        <span class="layer-list-count">LAYERS · {layerSourceNodes.length}</span>
+        <span class="layer-list-count">
+          {isSearchActive
+            ? `${effectiveMatchCount} / ${layerSourceNodes.length} MATCHES`
+            : `LAYERS · ${layerSourceNodes.length}`}
+        </span>
         <span
           class={`layer-page-context${activeEditorId === 'component' ? ' is-component' : ''}`}
           title={layerContextTitle}
@@ -113,14 +209,20 @@ export function LayersPanel({
       </div>
       <div class="layer-list" role="tree" aria-label="Document layers">
         {layerRows.map(({ node, depth, hasChildren }) => {
-          const selected = selectedNodeIds.includes(node.id);
+          const selected = selectedIdSet.has(node.id);
           const effective = layerEffectiveStates.get(node.id);
           const clipBaseName = node.clipMaskBaseId
-            ? layerSourceNodes.find((item) => item.id === node.clipMaskBaseId)?.name ?? 'another layer'
+            ? nodeById.get(node.clipMaskBaseId)?.name ?? 'another layer'
             : '';
-          const isMaskBase = layerSourceNodes.some((item) => item.clipMaskBaseId === node.id);
-          const collapsed = collapsedLayerIds.includes(node.id);
-          const dropClass = layerDropTarget?.nodeId === node.id ? ('drop-' + layerDropTarget.position) : '';
+          const isMaskBase = maskBaseIds.has(node.id);
+          const isSearchDirectMatch = !isSearchActive || !searchMatchedIds || searchMatchedIds.has(node.id);
+          const isSearchAncestor = isSearchActive && !isSearchDirectMatch;
+          const matchedViaId = isSearchActive
+            && isSearchDirectMatch
+            && searchTokens.length > 0
+            && !searchTokens.every((token) => node.name.toLowerCase().includes(token));
+          const collapsed = !isSearchActive && collapsedIdSet.has(node.id);
+          const dropClass = !isSearchActive && layerDropTarget?.nodeId === node.id ? ('drop-' + layerDropTarget.position) : '';
           return (
             <div
               key={node.id}
@@ -129,7 +231,7 @@ export function LayersPanel({
               aria-selected={selected}
               aria-expanded={hasChildren ? !collapsed : undefined}
               tabIndex={0}
-              draggable={true}
+              draggable={!isSearchActive}
               class={
                 'layer-row '
                 + (selected ? 'selected ' : '')
@@ -138,6 +240,7 @@ export function LayersPanel({
                 + (effective?.locked ? 'layer-inherited-locked ' : '')
                 + (node.clipMaskBaseId ? 'layer-row-clipped ' : '')
                 + (isMaskBase ? 'layer-row-mask-base ' : '')
+                + (isSearchAncestor ? 'layer-row-search-ancestor ' : '')
                 + dropClass
               }
               style={{ paddingLeft: (8 + depth * 15 + (node.clipMaskBaseId ? 14 : 0)) + 'px' }}
@@ -149,26 +252,29 @@ export function LayersPanel({
                   onSelectLayer(node.id, event);
                 }
               }}
-              onDragStart={(event) => onStartDrag(node.id, event)}
-              onDragOver={(event) => onDragOver(node.id, event)}
-              onDrop={(event) => onDrop(node.id, event)}
-              onDragEnd={onDragEnd}
-              onDragLeave={() => onDragLeave(node.id)}
+              onDragStart={isSearchActive ? undefined : (event) => onStartDrag(node.id, event)}
+              onDragOver={isSearchActive ? undefined : (event) => onDragOver(node.id, event)}
+              onDrop={isSearchActive ? undefined : (event) => onDrop(node.id, event)}
+              onDragEnd={isSearchActive ? undefined : onDragEnd}
+              onDragLeave={isSearchActive ? undefined : () => onDragLeave(node.id)}
               title={
                 node.onCanvas === false
                   ? 'Restore ' + node.name + ' to Canvas. Its last position, size and appearance will be kept.'
-                  : 'Select ' + node.name + '. It is already on Canvas; dragging it there again will not create a duplicate.'
+                  : isSearchActive
+                    ? `${node.name} (${node.id}) — Clear search to drag-reorder`
+                    : `${node.name} (${node.id})`
               }
             >
               {hasChildren ? (
                 <button
                   type="button"
                   class="layer-disclosure"
-                  title={collapsed ? 'Expand sub-layers' : 'Collapse sub-layers'}
+                  disabled={isSearchActive}
+                  title={isSearchActive ? 'Expanded while searching' : (collapsed ? 'Expand sub-layers' : 'Collapse sub-layers')}
                   aria-label={collapsed ? ('Expand ' + node.name) : ('Collapse ' + node.name)}
                   onClick={(event) => {
                     event.stopPropagation();
-                    onToggleCollapsed(node.id);
+                    if (!isSearchActive) onToggleCollapsed(node.id);
                   }}
                 >
                   <StudioIcon name={collapsed ? 'chevronRight' : 'chevronDown'} />
@@ -210,7 +316,16 @@ export function LayersPanel({
                   onBlur={() => onFinishRename(true)}
                 />
               ) : (
-                <span class={'layer-name ' + (isMaskBase ? 'layer-mask-base-name' : '')}>{node.name}</span>
+                <span class="layer-name-group">
+                  <span class={'layer-name ' + (isMaskBase ? 'layer-mask-base-name' : '')}>{node.name}</span>
+                  {matchedViaId && (
+                    <span class="layer-id-badge" title={`Matched ID: ${node.htmlId ? `#${node.htmlId} · ` : ''}${node.id}`}>
+                      {node.htmlId && searchTokens.some((token) => node.htmlId?.toLowerCase().includes(token))
+                        ? `#${node.htmlId}`
+                        : node.id}
+                    </span>
+                  )}
+                </span>
               )}
               <div class="layer-actions">
                 <button
@@ -262,6 +377,23 @@ export function LayersPanel({
         })}
         {layerSourceNodes.length === 0 && (
           <div class="empty-layers">Your layers will appear here.</div>
+        )}
+        {layerSourceNodes.length > 0 && isSearchActive && layerRows.length === 0 && (
+          <div class="empty-layers is-search-empty" role="status">
+            <span>No layers match “{searchQuery.trim()}”.</span>
+            {onSearchQueryChange && (
+              <button
+                type="button"
+                class="layer-search-reset-btn"
+                onClick={() => {
+                  onSearchQueryChange('');
+                  searchInputRef.current?.focus();
+                }}
+              >
+                Clear search
+              </button>
+            )}
+          </div>
         )}
       </div>
     </aside>

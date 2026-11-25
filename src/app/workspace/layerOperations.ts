@@ -2,6 +2,8 @@ import {
   expandSelectedLayerIds,
   getClippingMaskBaseId,
   getLayerAncestorIds,
+  getLayerAncestorIdsFromMap,
+  getLayerPanelRows,
   getSelectedLayerRootIds,
   type LayerDropPosition,
   type LayerPanelRow,
@@ -265,5 +267,93 @@ export function computeClampedContextMenuPosition(
   return {
     x: Math.max(margin, Math.min(clientX, viewport.width - menuSize.width - margin)),
     y: Math.max(margin, Math.min(clientY, viewport.height - menuSize.height - margin)),
+  };
+}
+
+export interface FilteredLayerRowsResult {
+  isFiltering: boolean;
+  rows: LayerPanelRow[];
+  matchedIds: ReadonlySet<string>;
+  matchCount: number;
+}
+
+/**
+ * Splits a raw layer search query into normalized lowercase search tokens.
+ */
+export function tokenizeLayerSearchQuery(rawQuery: string): string[] {
+  return rawQuery
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * Returns true when every query token matches the layer's display name,
+ * canonical AST node ID, or optional semantic HTML ID (case-insensitive).
+ */
+export function matchesLayerSearchQuery(
+  node: Pick<DesignNode, 'id' | 'name' | 'htmlId'>,
+  tokens: readonly string[],
+): boolean {
+  if (tokens.length === 0) return true;
+  const name = node.name.toLowerCase();
+  const id = node.id.toLowerCase();
+  const htmlId = node.htmlId?.toLowerCase() ?? '';
+  return tokens.every((token) => name.includes(token) || id.includes(token) || htmlId.includes(token));
+}
+
+/**
+ * Filters Layers panel rows by node name, canonical AST ID, or HTML ID while
+ * preserving ancestor hierarchy context and auto-expanding collapsed branches
+ * that contain matching descendants.
+ */
+export function filterLayerPanelRows(
+  nodes: readonly DesignNode[],
+  collapsedIds: readonly string[],
+  rawQuery: string,
+): FilteredLayerRowsResult {
+  const tokens = tokenizeLayerSearchQuery(rawQuery);
+  if (tokens.length === 0) {
+    return {
+      isFiltering: false,
+      rows: getLayerPanelRows(nodes, collapsedIds),
+      matchedIds: new Set<string>(),
+      matchCount: nodes.length,
+    };
+  }
+
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const matchedIds = new Set<string>();
+  const visibleIds = new Set<string>();
+
+  for (const node of nodes) {
+    if (matchesLayerSearchQuery(node, tokens)) {
+      matchedIds.add(node.id);
+      visibleIds.add(node.id);
+      for (const ancestorId of getLayerAncestorIdsFromMap(nodeById, node.id)) {
+        visibleIds.add(ancestorId);
+      }
+    }
+  }
+
+  if (matchedIds.size === 0) {
+    return {
+      isFiltering: true,
+      rows: [],
+      matchedIds,
+      matchCount: 0,
+    };
+  }
+
+  // Expand all branches while searching so matching descendants inside collapsed
+  // frames/groups remain discoverable in their true parent hierarchy.
+  const expandedRows = getLayerPanelRows(nodes, []);
+  const rows = expandedRows.filter((row) => visibleIds.has(row.node.id));
+  return {
+    isFiltering: true,
+    rows,
+    matchedIds,
+    matchCount: matchedIds.size,
   };
 }

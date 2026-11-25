@@ -123,7 +123,7 @@ export function useDesignSystemActions({
               {
                 node: { document: astView.address, nodeId: currId },
                 target: { document: astView.address, nodeId: prevId },
-                position: 'after',
+                position: 'before',
               },
               desc,
             ),

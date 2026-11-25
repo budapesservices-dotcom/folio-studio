@@ -355,9 +355,14 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
 
           const templatesBtn = document.querySelector('button[aria-label="Template library"]');
           templatesBtn.click();
-          await new Promise((r) => setTimeout(r, 60));
-
-          const menu = document.querySelector('.template-library-popover');
+          let menu = null;
+          let searchInput = null;
+          for (let attempt = 0; attempt < 50; attempt += 1) {
+            menu = document.querySelector('.template-library-popover');
+            searchInput = menu?.querySelector('input.template-library-search') ?? null;
+            if (menu && searchInput && menu.querySelector('.template-card-primary')) break;
+            await new Promise((r) => setTimeout(r, 40));
+          }
           const firstItem = menu?.querySelector('.template-card-primary');
           const rect = firstItem?.getBoundingClientRect();
           const hit = rect ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) : null;
@@ -366,7 +371,6 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
           const initialSections = Array.from(menu.querySelectorAll('.template-library-section'))
             .map((el) => el.getAttribute('data-template-section'));
 
-          const searchInput = menu.querySelector('input.template-library-search');
           const setSearch = async (val) => {
             searchInput.value = val;
             searchInput.dispatchEvent(new Event('input', { bubbles: true }));

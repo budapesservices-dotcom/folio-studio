@@ -1,5 +1,5 @@
 import type { JSX, RefObject } from 'preact';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { CURATED_FONT_FAMILIES } from '../core/document/fonts';
 import {
   parseAspectRatioNumeric,
@@ -31,9 +31,9 @@ import type {
   PseudoStateKey,
   RectNode,
   TextAlign,
-  TextDecorationMode,
+  TextDecoration,
   TextNode,
-  TextTransformMode,
+  TextTransform,
   TextVerticalAlign,
   TransitionPreset,
 } from '../core/document/types';
@@ -176,11 +176,11 @@ const INTERACTIVE_STATES: ReadonlyArray<{ id: InteractiveStateId; label: string 
   { id: 'disabled', label: 'Dis' },
 ];
 
-const TRANSITION_PRESET_DEFAULTS: Record<TransitionPreset, { durationMs: number; easing: string }> = {
-  none: { durationMs: 0, easing: 'ease' },
-  fast: { durationMs: 140, easing: 'ease-out' },
-  smooth: { durationMs: 260, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
-  bouncy: { durationMs: 360, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)' },
+const TRANSITION_PRESET_DEFAULTS: Record<TransitionPreset, { durationMs: number }> = {
+  none: { durationMs: 0 },
+  fast: { durationMs: 150 },
+  smooth: { durationMs: 240 },
+  bouncy: { durationMs: 360 },
 };
 
 const DIMENSION_UNITS: readonly CssUnitOption[] = ['px', '%', 'vw', 'vh', 'dvh', 'rem', 'em', 'fit', 'fill'];
@@ -456,6 +456,10 @@ function InspectorSelectedNodeBody({
   const [transformOrigin, setTransformOrigin] = useState<TransformOriginAnchor>('tl');
   const [showMinMax, setShowMinMax] = useState(false);
 
+  useEffect(() => {
+    setActiveState('default');
+  }, [selectedNode.id]);
+
   const isTextNode = selectedNode.type === 'text';
   const isConvertibleVector =
     selectedNode.type === 'rect' || selectedNode.type === 'ellipse' || selectedNode.type === 'frame';
@@ -624,7 +628,8 @@ function InspectorSelectedNodeBody({
   };
 
   const resolveDimensionUnit = (axis: 'width' | 'height'): CssUnitOption => {
-    const mode: LayoutSizingMode = axis === 'width' ? layoutChild.widthMode : layoutChild.heightMode;
+    const mode: LayoutSizingMode =
+      (axis === 'width' ? layoutChild.widthMode : layoutChild.heightMode) ?? 'fixed';
     if (mode === 'hug') return 'fit';
     if (mode === 'fill') return 'fill';
     if (mode === 'relative') return '%';
@@ -633,7 +638,8 @@ function InspectorSelectedNodeBody({
   };
 
   const resolveDimensionNumeric = (axis: 'width' | 'height'): number => {
-    const mode: LayoutSizingMode = axis === 'width' ? layoutChild.widthMode : layoutChild.heightMode;
+    const mode: LayoutSizingMode =
+      (axis === 'width' ? layoutChild.widthMode : layoutChild.heightMode) ?? 'fixed';
     if (mode === 'relative') {
       return axis === 'width' ? (layoutChild.widthPercent ?? 100) : (layoutChild.heightPercent ?? 100);
     }
@@ -743,7 +749,7 @@ function InspectorSelectedNodeBody({
   const currentTransition: NodeTransitionConfig = selectedNode.transition ?? {
     preset: 'none',
     durationMs: 0,
-    easing: 'ease',
+    durationUnit: 'ms',
   };
 
   const currentDrawMode: DrawMaskMode = selectedNode.drawMode ?? 'normal';
@@ -951,7 +957,7 @@ function InspectorSelectedNodeBody({
                     transition: {
                       preset,
                       durationMs: def.durationMs,
-                      easing: def.easing,
+                      durationUnit: 'ms',
                     },
                   });
                 }
@@ -959,26 +965,32 @@ function InspectorSelectedNodeBody({
               }}
             >
               <option value="none">Transition: None</option>
-              <option value="fast">Fast (140ms)</option>
-              <option value="smooth">Smooth (260ms)</option>
+              <option value="fast">Fast (150ms)</option>
+              <option value="smooth">Smooth (240ms)</option>
               <option value="bouncy">Bouncy (360ms)</option>
             </select>
             {currentTransition.preset !== 'none' && (
               <NumericUnitInput
                 label="Dur"
                 ariaLabel="Transition Duration"
-                value={currentTransition.durationMs}
-                unit="ms"
+                value={
+                  currentTransition.durationUnit === 's'
+                    ? Number(((currentTransition.durationMs ?? 240) / 1000).toFixed(2))
+                    : (currentTransition.durationMs ?? 240)
+                }
+                unit={currentTransition.durationUnit ?? 'ms'}
                 units={DURATION_UNITS}
                 min={0}
                 max={3000}
                 step={20}
                 onChange={(p) => {
-                  const ms = p.unit === 's' ? Math.round(p.value * 1000) : Math.round(p.value);
+                  const durationUnit: 'ms' | 's' = p.unit === 's' ? 's' : 'ms';
+                  const ms = durationUnit === 's' ? Math.round(p.value * 1000) : Math.round(p.value);
                   onUpdateSelected({
                     transition: {
                       ...currentTransition,
                       durationMs: Math.max(0, ms),
+                      durationUnit,
                     },
                   });
                   onCommitEdit();
@@ -1379,7 +1391,7 @@ function InspectorSelectedNodeBody({
                     type="button"
                     class="inspector-mini-btn"
                     title="Flip Horizontal"
-                    onClick={studioActions.onFlipHorizontal}
+                    onClick={() => studioActions.onFlip('horizontal')}
                   >
                     ⇄ Flip H
                   </button>
@@ -1387,7 +1399,7 @@ function InspectorSelectedNodeBody({
                     type="button"
                     class="inspector-mini-btn"
                     title="Flip Vertical"
-                    onClick={studioActions.onFlipVertical}
+                    onClick={() => studioActions.onFlip('vertical')}
                   >
                     ⇅ Flip V
                   </button>
@@ -1568,11 +1580,11 @@ function InspectorSelectedNodeBody({
                   <button
                     key={align}
                     type="button"
-                    class={`framer-seg-btn${selectedNode.style.align === align ? ' is-active' : ''}`}
+                    class={`framer-seg-btn${(selectedNode.style.textAlign ?? 'left') === align ? ' is-active' : ''}`}
                     aria-label={`Align ${align}`}
-                    aria-pressed={selectedNode.style.align === align}
+                    aria-pressed={(selectedNode.style.textAlign ?? 'left') === align}
                     onClick={() => {
-                      onUpdateSelectedStyle({ align });
+                      onUpdateSelectedStyle({ textAlign: align });
                       onCommitEdit();
                     }}
                   >
@@ -1613,7 +1625,7 @@ function InspectorSelectedNodeBody({
                   value={selectedNode.style.textTransform ?? 'none'}
                   onChange={(event) => {
                     onUpdateSelectedStyle({
-                      textTransform: event.currentTarget.value as TextTransformMode,
+                      textTransform: event.currentTarget.value as TextTransform,
                     });
                     onCommitEdit();
                   }}
@@ -1632,7 +1644,7 @@ function InspectorSelectedNodeBody({
                   value={selectedNode.style.textDecoration ?? 'none'}
                   onChange={(event) => {
                     onUpdateSelectedStyle({
-                      textDecoration: event.currentTarget.value as TextDecorationMode,
+                      textDecoration: event.currentTarget.value as TextDecoration,
                     });
                     onCommitEdit();
                   }}
@@ -1776,7 +1788,7 @@ function InspectorSelectedNodeBody({
                     <button
                       type="button"
                       class="inspector-mini-btn"
-                      onClick={() => onChooseTool('direct-select', activeEditorId)}
+                      onClick={() => onChooseTool('direct-selection', activeEditorId)}
                     >
                       Edit Points (A)
                     </button>

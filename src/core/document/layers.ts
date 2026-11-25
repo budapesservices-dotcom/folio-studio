@@ -15,11 +15,25 @@ export interface EffectiveLayerState {
 
 /** Reduce a selection to its independent roots (a selected Group counts once). */
 export function getSelectedLayerRootIds(nodes: readonly DesignNode[], selectedIds: readonly string[]): string[] {
-  const available = new Set(nodes.map((node) => node.id));
-  const selected = new Set(selectedIds.filter((id) => available.has(id)));
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const selected = new Set<string>();
+  for (const id of selectedIds) {
+    if (nodeById.has(id)) selected.add(id);
+  }
+  const hasSelectedAncestor = (nodeId: string): boolean => {
+    const visited = new Set<string>([nodeId]);
+    let current = nodeById.get(nodeId);
+    let parentId = current ? getParentId(current, nodeById) : null;
+    while (parentId && !visited.has(parentId)) {
+      if (selected.has(parentId)) return true;
+      visited.add(parentId);
+      current = nodeById.get(parentId);
+      parentId = current ? getParentId(current, nodeById) : null;
+    }
+    return false;
+  };
   return nodes
-    .filter((node) => selected.has(node.id))
-    .filter((node) => ![...getLayerAncestorIds(nodes, node.id)].some((ancestorId) => selected.has(ancestorId)))
+    .filter((node) => selected.has(node.id) && !hasSelectedAncestor(node.id))
     .map((node) => node.id);
 }
 
@@ -173,7 +187,7 @@ export function getLayerFrameClipAncestorIds(
   return resolveFrameClipAncestorIdsFromMap(nodeById, nodeId);
 }
 
-function getParentId(node: DesignNode, nodeById: Map<string, DesignNode>): string | null {
+function getParentId(node: DesignNode, nodeById: ReadonlyMap<string, DesignNode>): string | null {
   const parentId = node.parentId;
   return parentId && parentId !== node.id && nodeById.has(parentId) ? parentId : null;
 }
@@ -277,23 +291,45 @@ export function getEffectiveLayerStates(nodes: readonly DesignNode[]): Map<strin
   return states;
 }
 
+function collectLayerDescendantIdsFromMap(
+  children: ReadonlyMap<string | null, DesignNode[]>,
+  nodeId: string,
+  into: Set<string>,
+): void {
+  const stack: DesignNode[] = [];
+  const initial = children.get(nodeId);
+  if (initial && initial.length > 0) {
+    for (let i = initial.length - 1; i >= 0; i -= 1) {
+      stack.push(initial[i]);
+    }
+  }
+  while (stack.length > 0) {
+    const child = stack.pop()!;
+    if (into.has(child.id)) continue;
+    into.add(child.id);
+    const grandChildren = children.get(child.id);
+    if (grandChildren && grandChildren.length > 0) {
+      for (let i = grandChildren.length - 1; i >= 0; i -= 1) {
+        if (!into.has(grandChildren[i].id)) stack.push(grandChildren[i]);
+      }
+    }
+  }
+}
+
 export function getLayerDescendantIds(nodes: readonly DesignNode[], nodeId: string): Set<string> {
   const children = getChildrenMap(nodes);
   const result = new Set<string>();
-  const visit = (id: string) => {
-    for (const child of children.get(id) ?? []) {
-      if (result.has(child.id)) continue;
-      result.add(child.id);
-      visit(child.id);
-    }
-  };
-  if (nodes.some((node) => node.id === nodeId)) visit(nodeId);
+  if (nodes.some((node) => node.id === nodeId)) {
+    collectLayerDescendantIdsFromMap(children, nodeId, result);
+  }
   return result;
 }
 
-/** Returns the ancestor chain for a layer, closest parent first. */
-export function getLayerAncestorIds(nodes: readonly DesignNode[], nodeId: string): Set<string> {
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+/** Returns the ancestor chain for a layer using a prebuilt node lookup map (O(depth)). */
+export function getLayerAncestorIdsFromMap(
+  nodeById: ReadonlyMap<string, DesignNode>,
+  nodeId: string,
+): Set<string> {
   const result = new Set<string>();
   let current = nodeById.get(nodeId);
   let parentId = current ? getParentId(current, nodeById) : null;
@@ -307,15 +343,22 @@ export function getLayerAncestorIds(nodes: readonly DesignNode[], nodeId: string
   return result;
 }
 
+/** Returns the ancestor chain for a layer, closest parent first. */
+export function getLayerAncestorIds(nodes: readonly DesignNode[], nodeId: string): Set<string> {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  return getLayerAncestorIdsFromMap(nodeById, nodeId);
+}
+
 /** Expands selected parent IDs into their complete nested subtrees in document order. */
 export function expandSelectedLayerIds(nodes: readonly DesignNode[], selectedIds: readonly string[]): string[] {
   const available = new Set(nodes.map((node) => node.id));
+  const children = getChildrenMap(nodes);
   const included = new Set<string>();
 
   selectedIds.forEach((id) => {
-    if (!available.has(id)) return;
+    if (!available.has(id) || included.has(id)) return;
     included.add(id);
-    getLayerDescendantIds(nodes, id).forEach((childId) => included.add(childId));
+    collectLayerDescendantIdsFromMap(children, id, included);
   });
 
   return nodes.filter((node) => included.has(node.id)).map((node) => node.id);

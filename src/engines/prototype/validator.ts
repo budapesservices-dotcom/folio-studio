@@ -15,7 +15,7 @@ import type {
   LogicGraph,
   LogicVariableDefinition,
 } from '../../core/document/types';
-import { sanitizeHref } from '../codegen/sanitize';
+import { sanitizeCssTransformValue, sanitizeHref, sanitizeImageUrl } from '../codegen/sanitize';
 import {
   LOGIC_COMPARE_OPERATORS,
   areLogicPortTypesCompatible,
@@ -782,7 +782,10 @@ export function validateLogicGraphSemantics(
         if (property === 'opacity' && typeof node.data.opacity === 'number' && (node.data.opacity < 0 || node.data.opacity > 1)) {
           push('error', 'INVALID_NODE_CONFIG', `Set Layer node "${node.id}" opacity must be between 0 and 1.`, { nodeId: node.id });
         }
-        if (property === 'image' && typeof node.data.imageUrl === 'string' && node.data.imageUrl.trim() && !sanitizeHref(node.data.imageUrl.trim())) {
+        if (property === 'transform' && !hasDynamicValue && typeof node.data.transform === 'string' && node.data.transform.trim() && !sanitizeCssTransformValue(node.data.transform)) {
+          push('error', 'UNSAFE_CSS_VALUE', `Set Layer node "${node.id}" contains an unsafe CSS transform value.`, { nodeId: node.id });
+        }
+        if (property === 'image' && typeof node.data.imageUrl === 'string' && node.data.imageUrl.trim() && !sanitizeImageUrl(node.data.imageUrl.trim())) {
           push('error', 'UNSAFE_NAVIGATE_URL', `Set Layer node "${node.id}" uses an unsafe image URL.`, { nodeId: node.id });
         }
         break;

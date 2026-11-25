@@ -8,10 +8,13 @@ import {
   computeClampedPopoverPosition,
   computeLayerRenameUpdates,
   computeLayerSelection,
+  filterLayerPanelRows,
   getLayerContextMenuCapabilities,
   getLayerDropPosition,
   getLayerDropPositionFromRatio,
   LAYER_COLOR_PRESETS,
+  matchesLayerSearchQuery,
+  tokenizeLayerSearchQuery,
 } from '../src/app/workspace/layerOperations';
 import {
   clampCanvasZoom,
@@ -223,6 +226,62 @@ describe('workspace/layerOperations', () => {
     const ctxClamped = computeClampedContextMenuPosition(1420, 880, { width: 1440, height: 900 });
     expect(ctxClamped.x).toBe(1440 - 208 - 8);
     expect(ctxClamped.y).toBe(900 - 240 - 8);
+  });
+
+  it('filters layers by name, canonical AST ID, or HTML ID while preserving ancestor context', () => {
+    const heroGroup: GroupNode = makeGroupNode('grp-hero-01', 'Hero Section');
+    const nestedGroup: GroupNode = {
+      ...makeGroupNode('grp-cta-02', 'CTA Stack'),
+      parentId: 'grp-hero-01',
+    };
+    const ctaButton: DesignNode = {
+      ...createRectNode(0),
+      id: 'node-btn-991a',
+      name: 'Primary Button',
+      htmlId: 'checkout-cta',
+      parentId: 'grp-cta-02',
+    };
+    const footerTitle: DesignNode = {
+      ...createTextNode(0),
+      id: 'node-footer-title',
+      name: 'Footer Heading',
+    };
+    const nodes: DesignNode[] = [footerTitle, heroGroup, nestedGroup, ctaButton];
+
+    // Empty query preserves collapsed state
+    const unfiltered = filterLayerPanelRows(nodes, ['grp-hero-01'], '   ');
+    expect(unfiltered.isFiltering).toBe(false);
+    expect(unfiltered.rows.map((row) => row.node.id)).toEqual(['grp-hero-01', 'node-footer-title']);
+    expect(unfiltered.matchCount).toBe(4);
+
+    // Search by display name + ID token (case-insensitive, multi-token) auto-expands collapsed ancestors
+    const byName = filterLayerPanelRows(nodes, ['grp-hero-01', 'grp-cta-02'], 'primary btn');
+    expect(byName.isFiltering).toBe(true);
+    expect(byName.matchCount).toBe(1);
+    expect([...byName.matchedIds]).toEqual(['node-btn-991a']);
+    expect(byName.rows.map((row) => ({ id: row.node.id, depth: row.depth }))).toEqual([
+      { id: 'grp-hero-01', depth: 0 },
+      { id: 'grp-cta-02', depth: 1 },
+      { id: 'node-btn-991a', depth: 2 },
+    ]);
+
+    // Search by canonical AST node ID
+    const byId = filterLayerPanelRows(nodes, ['grp-hero-01'], '991A');
+    expect(byId.matchCount).toBe(1);
+    expect([...byId.matchedIds]).toEqual(['node-btn-991a']);
+    expect(byId.rows.map((row) => row.node.id)).toEqual(['grp-hero-01', 'grp-cta-02', 'node-btn-991a']);
+
+    // Search by semantic HTML ID
+    expect(matchesLayerSearchQuery(ctaButton, tokenizeLayerSearchQuery('checkout-cta'))).toBe(true);
+    const byHtmlId = filterLayerPanelRows(nodes, [], 'checkout-cta');
+    expect(byHtmlId.matchCount).toBe(1);
+    expect([...byHtmlId.matchedIds]).toEqual(['node-btn-991a']);
+
+    // Non-matching query yields empty rows with 0 matches
+    const emptyResult = filterLayerPanelRows(nodes, [], 'nonexistent-xyz');
+    expect(emptyResult.isFiltering).toBe(true);
+    expect(emptyResult.matchCount).toBe(0);
+    expect(emptyResult.rows).toEqual([]);
   });
 });
 

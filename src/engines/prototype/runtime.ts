@@ -22,7 +22,7 @@ import type {
   LogicValueType,
   LogicVariableValue,
 } from '../../core/document/types';
-import { sanitizeHref } from '../codegen/sanitize';
+import { sanitizeCssTransformValue, sanitizeHref, sanitizeImageUrl } from '../codegen/sanitize';
 import { isBuiltInLogicNodeType, type LogicCompareOperator } from './catalog';
 import {
   getInstanceIdFromExpandedGraphId,
@@ -1215,18 +1215,25 @@ export function createPrototypeRuntime(
             ov.opacity = Number.isFinite(rawOp) ? Math.max(0, Math.min(1, rawOp)) : 1;
             appliedValue = ov.opacity;
           } else if (property === 'transform') {
-            ov.transform = String(hasDynVal ? connectedVal ?? '' : node.data.transform ?? '');
-            appliedValue = ov.transform;
+            const rawTransform = String(hasDynVal ? connectedVal ?? '' : node.data.transform ?? '').trim();
+            const safeTransform = sanitizeCssTransformValue(rawTransform);
+            if (rawTransform && !safeTransform) {
+              warnings.push(`Set Layer "${node.id}" blocked unsafe CSS transform value.`);
+            } else {
+              ov.transform = safeTransform;
+              appliedValue = safeTransform;
+            }
           } else if (property === 'text') {
             ov.text = String(hasDynVal ? connectedVal ?? '' : node.data.text ?? '');
             appliedValue = ov.text;
           } else if (property === 'image') {
             const url = String(hasDynVal ? connectedVal ?? '' : node.data.imageUrl ?? '').trim();
-            if (url && !sanitizeHref(url)) {
+            const safeUrl = url ? sanitizeImageUrl(url) : '';
+            if (url && !safeUrl) {
               warnings.push(`Set Layer "${node.id}" blocked unsafe image URL.`);
             } else {
-              ov.imageUrl = url;
-              appliedValue = url;
+              ov.imageUrl = safeUrl ?? '';
+              appliedValue = safeUrl ?? '';
             }
           } else if (property === 'disabled') {
             ov.disabled = hasDynVal ? Boolean(connectedVal) : Boolean(node.data.disabled);

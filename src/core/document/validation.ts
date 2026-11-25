@@ -1045,11 +1045,36 @@ export function isLogicFramePreset(value: unknown): value is import('./types').L
   return isLogicFrame(value.frame, nodeIds);
 }
 
+function isSafeSvgDataUri(trimmed: string): boolean {
+  const commaIdx = trimmed.indexOf(',');
+  if (commaIdx < 0) return false;
+  const header = trimmed.slice(0, commaIdx).toLowerCase();
+  const payload = trimmed.slice(commaIdx + 1);
+  let decoded = '';
+  try {
+    if (header.includes(';base64')) {
+      const normalized = payload.replace(/\s+/g, '');
+      decoded = atob(normalized);
+    } else {
+      decoded = decodeURIComponent(payload);
+    }
+  } catch {
+    return false;
+  }
+  return !/(?:<\s*script\b|<\s*foreignobject\b|\bon[a-z]+\s*=|(?:javascript|vbscript)\s*:)/i.test(decoded);
+}
+
 function isSafeAssetSource(source: string): boolean {
-  const trimmed = source.trim();
+  const trimmed = source.replace(/[\u0000-\u001F\u007F]/g, '').trim();
   if (!trimmed) return true;
+  if (trimmed.startsWith('//')) return false;
   if (/^(?:javascript|vbscript):/i.test(trimmed)) return false;
-  if (/^data:\s*text\/html/i.test(trimmed)) return false;
+  if (/^data:\s*(?:text\/html|application\/xhtml\+xml|text\/javascript|application\/javascript)/i.test(trimmed)) {
+    return false;
+  }
+  if (/^data:\s*image\/svg\+xml/i.test(trimmed)) {
+    return isSafeSvgDataUri(trimmed);
+  }
   return true;
 }
 

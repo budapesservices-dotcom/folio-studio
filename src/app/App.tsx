@@ -400,47 +400,33 @@ export function App() {
     }));
   }, []);
 
-  const mainToolOperationExecutor = createToolOperationExecutor({
-    workspace: 'main',
-    commandClient: mainCommandClient,
-    shell: {
-      isHydrating: () => isHydrating,
-      onSelectionChange: (nodeIds) => {
-        selectionSourceRef.current = 'canvas';
-        mainCommandClient.selectNodes(nodeIds, 'Select layers on canvas');
-        if (nodeIds.length > 0) windows.setInspectorVisible(true);
+  const buildToolExecutor = (workspace: EditorTarget) => {
+    const isMain = workspace === 'main';
+    const commandClient = isMain ? mainCommandClient : componentCommandClient;
+    return createToolOperationExecutor({
+      workspace,
+      commandClient,
+      shell: {
+        isHydrating: () => isHydrating,
+        onSelectionChange: (nodeIds) => {
+          selectionSourceRef.current = 'canvas';
+          commandClient.selectNodes(nodeIds, isMain ? 'Select layers on canvas' : 'Select layers on component canvas');
+          if (isMain && nodeIds.length > 0) windows.setInspectorVisible(true);
+        },
+        onPanChange: isMain ? windows.setMainPan : windows.setComponentCanvasPan,
+        onZoomChange: isMain ? windows.setZoom : windows.setComponentCanvasZoom,
+        onToolChange: (nextTool) => chooseCanvasTool(nextTool, workspace),
+        onNotice: setNotice,
+        onSampledColorOptionChange: applySampledColorOption,
+        onCanvasMutationCommitted: (kind) => {
+          selectionSourceRef.current = 'canvas';
+          if (isMain && kind === 'create') windows.setInspectorVisible(true);
+        },
       },
-      onPanChange: windows.setMainPan,
-      onZoomChange: windows.setZoom,
-      onToolChange: (nextTool) => chooseCanvasTool(nextTool, 'main'),
-      onNotice: setNotice,
-      onSampledColorOptionChange: applySampledColorOption,
-      onCanvasMutationCommitted: (kind) => {
-        selectionSourceRef.current = 'canvas';
-        if (kind === 'create') windows.setInspectorVisible(true);
-      },
-    },
-  });
-
-  const componentToolOperationExecutor = createToolOperationExecutor({
-    workspace: 'component',
-    commandClient: componentCommandClient,
-    shell: {
-      isHydrating: () => isHydrating,
-      onSelectionChange: (nodeIds) => {
-        selectionSourceRef.current = 'canvas';
-        componentCommandClient.selectNodes(nodeIds, 'Select layers on component canvas');
-      },
-      onPanChange: windows.setComponentCanvasPan,
-      onZoomChange: windows.setComponentCanvasZoom,
-      onToolChange: (nextTool) => chooseCanvasTool(nextTool, 'component'),
-      onNotice: setNotice,
-      onSampledColorOptionChange: applySampledColorOption,
-      onCanvasMutationCommitted: () => {
-        selectionSourceRef.current = 'canvas';
-      },
-    },
-  });
+    });
+  };
+  const mainToolOperationExecutor = buildToolExecutor('main');
+  const componentToolOperationExecutor = buildToolExecutor('component');
 
   const enterFullscreen = () => {
     const root = document.querySelector('.app-shell') as HTMLElement | null;
@@ -742,6 +728,11 @@ export function App() {
         layerRename={layers.layerRename}
         layerRenameInputRef={layers.layerRenameInputRef}
         layerColorPickerKey={layers.layerColorPickerKey}
+        searchQuery={layers.layerSearchQuery}
+        isSearchActive={layers.isSearchActive}
+        searchMatchedIds={layers.searchMatchedIds}
+        searchMatchCount={layers.searchMatchCount}
+        onSearchQueryChange={layers.setLayerSearchQuery}
         onStartResize={panelResize.startPanelResize}
         onResizeDoubleClick={panelResize.handlePanelResizeDoubleClick}
         onResizeKeyDown={panelResize.handlePanelResizeKeyDown}
@@ -1082,20 +1073,12 @@ export function App() {
             : 'layer'
         }
         capabilities={layers.contextMenuCapabilities}
-        referenceWarning={
-          layers.layerContextMenu?.editorId === 'main'
-            ? (() => {
-              const refs = findCrossStudioNodeReferences(state.project, layers.layerContextMenu.nodeIds, activePage.id);
-              return refs.totalCount > 0
-                ? {
-                  logicCount: refs.logicBindings.length,
-                  motionCount: refs.animationTracks.length,
-                  codeExtensionCount: refs.codeExtensions.length,
-                }
-                : null;
-            })()
-            : null
-        }
+        referenceWarning={layers.layerContextMenu?.editorId === 'main' ? (() => {
+          const refs = findCrossStudioNodeReferences(state.project, layers.layerContextMenu.nodeIds, activePage.id);
+          return refs.totalCount > 0
+            ? { logicCount: refs.logicBindings.length, motionCount: refs.animationTracks.length, codeExtensionCount: refs.codeExtensions.length }
+            : null;
+        })() : null}
         onRename={(nodeId) => { layers.setLayerContextMenu(null); layers.beginLayerRename(nodeId, false); }}
         onGroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).groupLayers(rootIds); }}
         onUngroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).ungroupLayers(rootIds); }}

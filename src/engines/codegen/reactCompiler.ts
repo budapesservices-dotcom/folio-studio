@@ -615,15 +615,27 @@ function buildComponentFiles(
     const scopedIdExpr = `scopedId(${nodeIdLit})`;
     const dynOvExpr = `logicOverrides?.[${scopedIdExpr}]`;
 
-    const attrs: string[] = [
-      `className=${escapeTsString(cls)}`,
+    const extraClass =
+      node.className?.trim() && isSafeHtmlClassName(node.className.trim())
+        ? ` ${node.className.trim()}`
+        : '';
+    const attrs: string[] = [];
+    if (node.htmlId?.trim() && isSafeHtmlId(node.htmlId.trim())) {
+      attrs.push(`id=${escapeTsString(node.htmlId.trim())}`);
+    }
+    attrs.push(
+      `className=${escapeTsString(`${cls}${extraClass}`)}`,
       supportsScopedLogic ? `data-folio-id={${scopedIdExpr}}` : `data-folio-id=${nodeIdLit}`,
-    ];
+    );
     if (node.ariaLabel?.trim()) {
       attrs.push(`aria-label=${escapeTsString(node.ariaLabel.trim())}`);
     }
     if (tag === 'a') {
       attrs.push(`href=${escapeTsString(sanitizeHref(node.href) ?? '#')}`);
+      if (node.linkTarget === '_blank') {
+        attrs.push('target="_blank"');
+        attrs.push('rel="noopener noreferrer"');
+      }
     }
     if (tag === 'button') {
       attrs.push('type="button"');

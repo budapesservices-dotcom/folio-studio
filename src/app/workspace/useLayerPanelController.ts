@@ -4,7 +4,6 @@ import type { DesignNode, FolioDocument } from '../../core/document/types';
 import {
   expandSelectedLayerIds,
   getEffectiveLayerStates,
-  getLayerPanelRows,
   type LayerDropPosition,
 } from '../../core/document/layers';
 import { getActiveEditorContext, type EditorTarget } from '../editorContext';
@@ -15,6 +14,7 @@ import {
   computeClampedPopoverPosition,
   computeLayerRenameUpdates,
   computeLayerSelection,
+  filterLayerPanelRows,
   getLayerContextMenuCapabilities,
   getLayerDropPosition,
   type LayerContextMenuState,
@@ -79,16 +79,25 @@ export function useLayerPanelController({
     left: number;
   } | null>(null);
 
+  const [layerSearchQuery, setLayerSearchQuery] = useState('');
+
+  // Clear active filter when switching pages or between Main/Component Canvas
+  // so layers in the newly focused document are immediately visible.
+  useEffect(() => {
+    setLayerSearchQuery('');
+  }, [activeEditorId, focusedDocument.id]);
+
   const layerSourceNodes: DesignNode[] = focusedDocument.nodes;
   const activeCollapsedLayers = collapsedLayers[activeEditorId];
   const layerSourceIds = useMemo(
     () => new Set(layerSourceNodes.map((node) => node.id)),
     [layerSourceNodes],
   );
-  const layerRows = useMemo(
-    () => getLayerPanelRows(layerSourceNodes, activeCollapsedLayers),
-    [layerSourceNodes, activeCollapsedLayers],
+  const filteredLayers = useMemo(
+    () => filterLayerPanelRows(layerSourceNodes, activeCollapsedLayers, layerSearchQuery),
+    [layerSourceNodes, activeCollapsedLayers, layerSearchQuery],
   );
+  const layerRows = filteredLayers.rows;
   const layerEffectiveStates = useMemo(
     () => getEffectiveLayerStates(layerSourceNodes),
     [layerSourceNodes],
@@ -456,6 +465,11 @@ export function useLayerPanelController({
     layerSourceNodes,
     activeCollapsedLayers,
     layerRows,
+    layerSearchQuery,
+    setLayerSearchQuery,
+    isSearchActive: filteredLayers.isFiltering,
+    searchMatchedIds: filteredLayers.matchedIds,
+    searchMatchCount: filteredLayers.matchCount,
     layerEffectiveStates,
     layerDropTarget,
     layerContextMenu,
