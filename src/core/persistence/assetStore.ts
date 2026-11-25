@@ -332,16 +332,113 @@ export function sanitizeSvgMarkup(rawSvg: string): string {
     }
   }
 
-  let clean = rawSvg
-    // Remove disallowed elements and their bodies (including SMIL animate/set and style)
-    .replace(
-      /<(script|foreignObject|iframe|object|embed|applet|meta|link|style|animate|animateTransform|animateMotion|set|handler|listener)\b[^>]*>[\s\S]*?<\/\1>/gi,
-      '',
-    )
-    .replace(
-      /<(script|foreignObject|iframe|object|embed|applet|meta|link|style|animate|animateTransform|animateMotion|set|handler|listener)\b[^>]*\/?>/gi,
-      '',
-    )
+  const stripDisallowedSvgBlocks = (source: string): string => {
+    const blockedTags = new Set([
+      'script',
+      'foreignobject',
+      'iframe',
+      'object',
+      'embed',
+      'applet',
+      'meta',
+      'link',
+      'style',
+      'animate',
+      'animatetransform',
+      'animatemotion',
+      'set',
+      'handler',
+      'listener',
+    ]);
+    const lower = source.toLowerCase();
+    const missingCloseTag = new Set<string>();
+    const out: string[] = [];
+    let cursor = 0;
+
+    while (cursor < source.length) {
+      const openIdx = source.indexOf('<', cursor);
+      if (openIdx === -1) {
+        out.push(source.slice(cursor));
+        break;
+      }
+
+      // Check if `<` starts a disallowed opening or closing tag
+      const isClosing = source[openIdx + 1] === '/';
+      let nameStart = openIdx + (isClosing ? 2 : 1);
+      let nameEnd = nameStart;
+      while (nameEnd < source.length && /[a-zA-Z0-9_-]/.test(source[nameEnd])) {
+        nameEnd += 1;
+      }
+      const tagName = lower.slice(nameStart, nameEnd);
+      const boundaryChar = source[nameEnd] ?? '';
+      const isTagBoundary =
+        nameEnd > nameStart &&
+        (boundaryChar === '' || /[\s/>]/.test(boundaryChar));
+
+      if (!isTagBoundary || !blockedTags.has(tagName)) {
+        out.push(source.slice(cursor, openIdx + 1));
+        cursor = openIdx + 1;
+        continue;
+      }
+
+      out.push(source.slice(cursor, openIdx));
+
+      // Scan to end of the opening/closing tag `>` respecting quoted attribute values
+      let tagClose = nameEnd;
+      let quote: '"' | "'" | null = null;
+      while (tagClose < source.length) {
+        const c = source[tagClose];
+        if (quote) {
+          if (c === quote) quote = null;
+        } else if (c === '"' || c === "'") {
+          quote = c;
+        } else if (c === '>') {
+          break;
+        }
+        tagClose += 1;
+      }
+      if (tagClose >= source.length) {
+        // Unterminated disallowed tag at EOF -> drop rest
+        break;
+      }
+
+      const selfClosing = !isClosing && source[tagClose - 1] === '/';
+      cursor = tagClose + 1;
+
+      if (isClosing || selfClosing || missingCloseTag.has(tagName)) {
+        continue;
+      }
+
+      // Skip inner body linearly until matching `</tagName ...>` if present
+      const closeNeedle = `</${tagName}`;
+      let searchPos = cursor;
+      let matchedCloseEnd = -1;
+      while (searchPos < lower.length) {
+        const found = lower.indexOf(closeNeedle, searchPos);
+        if (found === -1) {
+          missingCloseTag.add(tagName);
+          break;
+        }
+        const afterName = found + closeNeedle.length;
+        const nextCh = lower[afterName] ?? '';
+        if (nextCh === '>' || /\s/.test(nextCh)) {
+          const gt = source.indexOf('>', afterName);
+          if (gt !== -1) {
+            matchedCloseEnd = gt + 1;
+          }
+          break;
+        }
+        searchPos = found + 1;
+      }
+      if (matchedCloseEnd !== -1) {
+        cursor = matchedCloseEnd;
+      }
+    }
+
+    return out.join('');
+  };
+
+  let clean = stripDisallowedSvgBlocks(rawSvg)
     // Strip inline on* event handlers separated by whitespace OR slash (`<svg/onload=...>`)
     .replace(/(?:[\s/]+)on[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s/>]+)/gi, '')
     // Neutralize dangerous href/xlink:href/src (quoted OR unquoted, including HTML entities)

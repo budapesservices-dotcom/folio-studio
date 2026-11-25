@@ -21,6 +21,7 @@ import {
   type PipelineOriginChildRef,
   type PipelineTargetMode,
 } from '../../engines/prototype';
+import { analyzeRegexPattern } from '../../engines/codegen/sanitize';
 import { getUsedSourceReferenceIds } from './nodeLogicGraphHelpers';
 import type { NodeLogicInspectorTab } from './NodeLogicInspector';
 
@@ -1173,16 +1174,37 @@ export function NodeLogicNodeFields({
             renderScopedDataPicker('Right / B from Pipeline (Scoped)', 'rightRef')
           )}
           {mode === 'regex' ? (
-            <label class="nl-field">
-              <span>Regex pattern</span>
-              <input
-                class="nl-input"
-                type="text"
-                placeholder="e.g. ^[^@]+@[^@]+\.[^@]+$"
-                value={typeof node.data.pattern === 'string' ? node.data.pattern : ''}
-                onInput={(event) => onUpdateNodeData(node.id, { pattern: event.currentTarget.value })}
-              />
-            </label>
+            <>
+              <label class="nl-field">
+                <span>Regex pattern</span>
+                <input
+                  class="nl-input"
+                  type="text"
+                  placeholder="e.g. ^[^@]+@[^@]+\.[^@]+$"
+                  value={typeof node.data.pattern === 'string' ? node.data.pattern : ''}
+                  onInput={(event) => onUpdateNodeData(node.id, { pattern: event.currentTarget.value })}
+                />
+                {typeof node.data.pattern === 'string' && node.data.pattern.length > 0 && (() => {
+                  const regexCheck = analyzeRegexPattern(node.data.pattern);
+                  if (regexCheck.ok) return null;
+                  return (
+                    <span class="nl-field-error" role="alert">
+                      {regexCheck.reason ?? 'Invalid or unsafe regular expression.'}
+                    </span>
+                  );
+                })()}
+              </label>
+              <label class="nl-field">
+                <span>Left / A fallback</span>
+                <input
+                  class="nl-input"
+                  type="text"
+                  placeholder="Value to test when no pipeline source is connected"
+                  value={node.data.left === null || node.data.left === undefined ? '' : String(node.data.left)}
+                  onInput={(event) => onUpdateNodeData(node.id, { left: event.currentTarget.value })}
+                />
+              </label>
+            </>
           ) : (
             <div class="nl-field-grid nl-field-grid-2">
               <label class="nl-field">

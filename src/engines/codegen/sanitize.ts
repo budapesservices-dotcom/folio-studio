@@ -97,124 +97,525 @@ const MAX_SAFE_REGEX_PATTERN_LENGTH = 200;
 const MAX_SAFE_REGEX_INPUT_LENGTH = 10_000;
 const MAX_SAFE_REGEX_NESTING = 6;
 const MAX_SAFE_REGEX_QUANTIFIER_BOUND = 100;
+const MAX_UNBOUNDED_WILDCARDS_PER_GROUP = 2;
+
+export interface RegexSafetyResult {
+  readonly ok: boolean;
+  readonly valid: boolean;
+  readonly safe: boolean;
+  readonly reason?: string;
+}
+
+const WILDCARD_CHAR_CLASSES = new Set([
+  '[\\s\\S]',
+  '[\\S\\s]',
+  '[\\d\\D]',
+  '[\\D\\d]',
+  '[\\w\\W]',
+  '[\\W\\w]',
+  '[^]',
+]);
+
+interface ParsedQuantifier {
+  length: number;
+  maxVal: number;
+  span: number;
+  isRepeating: boolean;
+  isUnbounded: boolean;
+  isNullable: boolean;
+  error?: string;
+  unsafe?: string;
+}
+
+function readQuantifierAt(pattern: string, index: number): ParsedQuantifier | null {
+  if (index >= pattern.length) return null;
+  const ch = pattern[index];
+  if (ch === '+' || ch === '*' || ch === '?') {
+    const lazy = pattern[index + 1] === '?' ? 1 : 0;
+    return {
+      length: 1 + lazy,
+      maxVal: ch === '?' ? 1 : Infinity,
+      span: ch === '?' ? 1 : Infinity,
+      isRepeating: ch === '+' || ch === '*',
+      isUnbounded: ch === '+' || ch === '*',
+      isNullable: ch === '*' || ch === '?',
+    };
+  }
+  if (ch === '{') {
+    const match = /^\{(\d+)(?:,(\d*))?\}/.exec(pattern.slice(index));
+    if (!match) return null;
+    const minVal = Number(match[1]);
+    const maxVal = match[2] === undefined ? minVal : match[2] === '' ? Infinity : Number(match[2]);
+    if (Number.isFinite(maxVal) && maxVal < minVal) {
+      return {
+        length: match[0].length,
+        maxVal,
+        span: 0,
+        isRepeating: false,
+        isUnbounded: false,
+        isNullable: false,
+        error: `Invalid quantifier range "{${match[1]},${match[2] ?? ''}}" (max is less than min).`,
+      };
+    }
+    if (
+      minVal > MAX_SAFE_REGEX_QUANTIFIER_BOUND ||
+      (Number.isFinite(maxVal) && maxVal > MAX_SAFE_REGEX_QUANTIFIER_BOUND)
+    ) {
+      return {
+        length: match[0].length,
+        maxVal,
+        span: Number.isFinite(maxVal) ? maxVal - minVal : Infinity,
+        isRepeating: maxVal > 1,
+        isUnbounded: !Number.isFinite(maxVal),
+        isNullable: minVal === 0,
+        unsafe: `Quantifier repetition bound exceeds maximum safe limit (${MAX_SAFE_REGEX_QUANTIFIER_BOUND}).`,
+      };
+    }
+    const lazy = pattern[index + match[0].length] === '?' ? 1 : 0;
+    return {
+      length: match[0].length + lazy,
+      maxVal,
+      span: Number.isFinite(maxVal) ? maxVal - minVal : Infinity,
+      isRepeating: maxVal > 1,
+      isUnbounded: !Number.isFinite(maxVal),
+      isNullable: minVal === 0,
+    };
+  }
+  return null;
+}
+
+function sigsOverlap(prevSig: string | null, nextSig: string | null): boolean {
+  if (!prevSig || !nextSig) return false;
+  return prevSig === 'WILDCARD' || nextSig === 'WILDCARD' || prevSig === nextSig;
+}
 
 /**
- * Checks whether a user-authored regex pattern is safe from catastrophic
- * backtracking (nested quantifiers, quantified alternations, backreferences,
- * or excessive length/repetition bounds).
+ * Analyzes a user-authored regex pattern for both syntax validity and ReDoS
+ * safety (nested quantifiers including optional-in-loop, quantified or nested
+ * alternations, numbered/named backreferences, quantified lookarounds,
+ * adjacent overlapping unbounded quantifiers, polynomial wildcard chains, and
+ * excessive length/nesting/repetition bounds).
  */
-export function isSafeRegexPattern(pattern: string): boolean {
-  if (!pattern || pattern.length > MAX_SAFE_REGEX_PATTERN_LENGTH) return false;
-  const stack: Array<{ hasQuantifier: boolean; hasAlternation: boolean }> = [
-    { hasQuantifier: false, hasAlternation: false },
-  ];
-  let inCharClass = false;
-  let lastWasQuantifier = false;
+export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
+  if (typeof pattern !== 'string' || !pattern) {
+    return { ok: false, valid: false, safe: false, reason: 'Regex pattern cannot be empty.' };
+  }
+  if (pattern.length > MAX_SAFE_REGEX_PATTERN_LENGTH) {
+    return {
+      ok: false,
+      valid: true,
+      safe: false,
+      reason: `Regex pattern exceeds maximum safe length (${MAX_SAFE_REGEX_PATTERN_LENGTH} characters).`,
+    };
+  }
 
-  for (let i = 0; i < pattern.length; i += 1) {
-    const ch = pattern[i];
-    if (ch === '\\') {
-      if (i + 1 >= pattern.length) return false;
-      const next = pattern[i + 1];
-      if (!inCharClass && next >= '1' && next <= '9') {
-        return false; // Reject backreferences
+  interface GroupFrame {
+    hasQuantifier: boolean;
+    hasUnboundedQuantifier: boolean;
+    quantifierCount: number;
+    maxQuantifierSpan: number;
+    hasAlternation: boolean;
+    isLookaround: boolean;
+    seenMandatoryAtom: boolean;
+    leadingUnboundedSig: string | null;
+    prevUnboundedSig: string | null;
+    wildcardUnboundedCount: number;
+  }
+
+  const stack: GroupFrame[] = [
+    {
+      hasQuantifier: false,
+      hasUnboundedQuantifier: false,
+      quantifierCount: 0,
+      maxQuantifierSpan: 0,
+      hasAlternation: false,
+      isLookaround: false,
+      seenMandatoryAtom: false,
+      leadingUnboundedSig: null,
+      prevUnboundedSig: null,
+      wildcardUnboundedCount: 0,
+    },
+  ];
+
+  const applyAtomQuantifier = (
+    frame: GroupFrame,
+    atomSig: string,
+    quant: ParsedQuantifier | null,
+  ): RegexSafetyResult | null => {
+    if (!quant) {
+      frame.seenMandatoryAtom = true;
+      frame.prevUnboundedSig = null;
+      return null;
+    }
+    if (quant.error) return { ok: false, valid: false, safe: false, reason: quant.error };
+    if (quant.unsafe) return { ok: false, valid: true, safe: false, reason: quant.unsafe };
+    frame.hasQuantifier = true;
+    frame.quantifierCount += 1;
+    if (quant.isUnbounded) {
+      frame.hasUnboundedQuantifier = true;
+      frame.maxQuantifierSpan = Infinity;
+    } else if (quant.span > frame.maxQuantifierSpan) {
+      frame.maxQuantifierSpan = quant.span;
+    }
+    if (quant.isUnbounded) {
+      if (atomSig === 'WILDCARD') {
+        frame.wildcardUnboundedCount += 1;
+        if (frame.wildcardUnboundedCount > MAX_UNBOUNDED_WILDCARDS_PER_GROUP) {
+          return {
+            ok: false,
+            valid: true,
+            safe: false,
+            reason: 'Too many unbounded wildcards in one group can cause polynomial backtracking.',
+          };
+        }
       }
-      i += 1;
-      lastWasQuantifier = false;
+      if (sigsOverlap(frame.prevUnboundedSig, atomSig)) {
+        return {
+          ok: false,
+          valid: true,
+          safe: false,
+          reason: 'Adjacent overlapping unbounded quantifiers can cause polynomial backtracking.',
+        };
+      }
+      if (!frame.seenMandatoryAtom && frame.leadingUnboundedSig === null) {
+        frame.leadingUnboundedSig = atomSig;
+      }
+      frame.prevUnboundedSig = atomSig;
+      if (!quant.isNullable) {
+        frame.seenMandatoryAtom = true;
+      }
+    } else if (!quant.isNullable) {
+      frame.seenMandatoryAtom = true;
+      frame.prevUnboundedSig = null;
+    }
+    return null;
+  };
+
+  let i = 0;
+
+  while (i < pattern.length) {
+    const frame = stack[stack.length - 1];
+    const ch = pattern[i];
+
+    // Escaped token (literal escape, shorthand class, or forbidden backreference)
+    if (ch === '\\') {
+      if (i + 1 >= pattern.length) {
+        return { ok: false, valid: false, safe: false, reason: 'Trailing backslash at end of regex pattern.' };
+      }
+      const next = pattern[i + 1];
+      if (next >= '1' && next <= '9') {
+        return {
+          ok: false,
+          valid: true,
+          safe: false,
+          reason: 'Numbered backreferences (\\1-\\9) are disabled to prevent backtracking freezes.',
+        };
+      }
+      if (next === 'k' && pattern[i + 2] === '<') {
+        return {
+          ok: false,
+          valid: true,
+          safe: false,
+          reason: 'Named backreferences (\\k<...>) are disabled to prevent backtracking freezes.',
+        };
+      }
+      const isZeroWidthBoundary = next === 'b' || next === 'B';
+      let tokenLen = 2;
+      if (next === 'x' && i + 3 < pattern.length) tokenLen = 4;
+      else if (next === 'u') {
+        const braceU = /^\\u\{[0-9a-fA-F]+\}/.exec(pattern.slice(i));
+        if (braceU) tokenLen = braceU[0].length;
+        else if (i + 5 < pattern.length) tokenLen = 6;
+      } else if ((next === 'p' || next === 'P') && pattern[i + 2] === '{') {
+        const propClose = pattern.indexOf('}', i + 3);
+        if (propClose === -1) {
+          return { ok: false, valid: false, safe: false, reason: 'Unclosed Unicode property escape.' };
+        }
+        tokenLen = propClose - i + 1;
+      }
+      const atomSig = `esc:${pattern.slice(i, i + tokenLen)}`;
+      i += tokenLen;
+
+      if (isZeroWidthBoundary) {
+        continue;
+      }
+
+      const quant = readQuantifierAt(pattern, i);
+      if (quant) {
+        i += quant.length;
+        if (readQuantifierAt(pattern, i)) {
+          return { ok: false, valid: false, safe: false, reason: 'Stacked quantifiers are not allowed.' };
+        }
+      }
+      const err = applyAtomQuantifier(frame, atomSig, quant);
+      if (err) return err;
       continue;
     }
-    if (inCharClass) {
-      if (ch === ']') inCharClass = false;
-      continue;
-    }
+
+    // Character class `[...]`
     if (ch === '[') {
-      inCharClass = true;
-      lastWasQuantifier = false;
+      let j = i + 1;
+      let closed = false;
+      while (j < pattern.length) {
+        if (pattern[j] === '\\') {
+          j += 2;
+          continue;
+        }
+        if (pattern[j] === ']') {
+          closed = true;
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      if (!closed) {
+        return { ok: false, valid: false, safe: false, reason: 'Unclosed character class "[".' };
+      }
+      const clsText = pattern.slice(i, j);
+      const atomSig = WILDCARD_CHAR_CLASSES.has(clsText) ? 'WILDCARD' : `cls:${clsText}`;
+      i = j;
+
+      const quant = readQuantifierAt(pattern, i);
+      if (quant) {
+        i += quant.length;
+        if (readQuantifierAt(pattern, i)) {
+          return { ok: false, valid: false, safe: false, reason: 'Stacked quantifiers are not allowed.' };
+        }
+      }
+      const err = applyAtomQuantifier(frame, atomSig, quant);
+      if (err) return err;
       continue;
     }
+
+    // Group open `(` (capturing, non-capturing `(?:`, lookaround `(?=`/`(?!`/`(?<=`/`(?<!`, named `(?<name>`)
     if (ch === '(') {
-      if (stack.length > MAX_SAFE_REGEX_NESTING) return false;
-      stack.push({ hasQuantifier: false, hasAlternation: false });
-      lastWasQuantifier = false;
+      if (stack.length > MAX_SAFE_REGEX_NESTING) {
+        return {
+          ok: false,
+          valid: true,
+          safe: false,
+          reason: `Regex nesting exceeds maximum safe depth (${MAX_SAFE_REGEX_NESTING}).`,
+        };
+      }
+      let isLookaround = false;
+      if (pattern[i + 1] === '?') {
+        const p2 = pattern[i + 2];
+        if (p2 === ':') {
+          i += 3;
+        } else if (p2 === '=' || p2 === '!') {
+          isLookaround = true;
+          i += 3;
+        } else if (p2 === '<') {
+          const p3 = pattern[i + 3];
+          if (p3 === '=' || p3 === '!') {
+            isLookaround = true;
+            i += 4;
+          } else {
+            const nameMatch = /^([A-Za-z_$][A-Za-z0-9_$]*)>/.exec(pattern.slice(i + 3));
+            if (!nameMatch) {
+              return { ok: false, valid: false, safe: false, reason: 'Invalid named capturing group syntax.' };
+            }
+            i += 3 + nameMatch[0].length;
+          }
+        } else {
+          return { ok: false, valid: false, safe: false, reason: 'Unsupported or invalid group syntax "(?...".' };
+        }
+      } else {
+        i += 1;
+      }
+      stack.push({
+        hasQuantifier: false,
+        hasUnboundedQuantifier: false,
+        quantifierCount: 0,
+        maxQuantifierSpan: 0,
+        hasAlternation: false,
+        isLookaround,
+        seenMandatoryAtom: false,
+        leadingUnboundedSig: null,
+        prevUnboundedSig: null,
+        wildcardUnboundedCount: 0,
+      });
       continue;
     }
+
+    // Group close `)`
     if (ch === ')') {
       if (stack.length <= 1) {
-        lastWasQuantifier = false;
-        continue;
+        return { ok: false, valid: false, safe: false, reason: 'Unmatched closing parenthesis ")".' };
       }
       const popped = stack.pop()!;
       const parent = stack[stack.length - 1];
-      let j = i + 1;
-      let isRepeatingQuantifier = false;
-      if (j < pattern.length) {
-        const next = pattern[j];
-        if (next === '+' || next === '*') {
-          isRepeatingQuantifier = true;
-          j += 1;
-          if (pattern[j] === '?') j += 1;
-        } else if (next === '{') {
-          const braceMatch = /^\{(\d+)(?:,(\d*))?\}/.exec(pattern.slice(j));
-          if (braceMatch) {
-            const minVal = Number(braceMatch[1]);
-            const maxVal = braceMatch[2] === undefined ? minVal : braceMatch[2] === '' ? Infinity : Number(braceMatch[2]);
-            if (minVal > MAX_SAFE_REGEX_QUANTIFIER_BOUND || (Number.isFinite(maxVal) && maxVal > MAX_SAFE_REGEX_QUANTIFIER_BOUND)) {
-              return false;
+      i += 1;
+
+      const quant = readQuantifierAt(pattern, i);
+      if (quant) {
+        if (quant.error) return { ok: false, valid: false, safe: false, reason: quant.error };
+        if (quant.unsafe) return { ok: false, valid: true, safe: false, reason: quant.unsafe };
+        i += quant.length;
+        if (readQuantifierAt(pattern, i)) {
+          return { ok: false, valid: false, safe: false, reason: 'Stacked quantifiers are not allowed.' };
+        }
+        if (quant.isRepeating) {
+          if (popped.isLookaround) {
+            return { ok: false, valid: true, safe: false, reason: 'Quantified lookaround groups are not allowed.' };
+          }
+          const isSmallBoundedInner =
+            !quant.isUnbounded &&
+            quant.maxVal <= 4 &&
+            !popped.hasAlternation &&
+            !popped.hasUnboundedQuantifier &&
+            popped.quantifierCount <= 1 &&
+            popped.maxQuantifierSpan <= 4;
+          if ((popped.hasQuantifier || popped.hasAlternation) && !isSmallBoundedInner) {
+            return {
+              ok: false,
+              valid: true,
+              safe: false,
+              reason: 'Nested quantifiers or quantified alternations can cause catastrophic backtracking.',
+            };
+          }
+          parent.hasQuantifier = true;
+          parent.quantifierCount += 1;
+          if (quant.isUnbounded) {
+            parent.hasUnboundedQuantifier = true;
+            parent.maxQuantifierSpan = Infinity;
+            if (sigsOverlap(parent.prevUnboundedSig, 'GROUP')) {
+              return {
+                ok: false,
+                valid: true,
+                safe: false,
+                reason: 'Adjacent overlapping unbounded quantifiers can cause polynomial backtracking.',
+              };
             }
-            if (maxVal > 1) isRepeatingQuantifier = true;
-            j += braceMatch[0].length;
-            if (pattern[j] === '?') j += 1;
+            if (!parent.seenMandatoryAtom && parent.leadingUnboundedSig === null) {
+              parent.leadingUnboundedSig = 'GROUP';
+            }
+            parent.prevUnboundedSig = 'GROUP';
+          } else {
+            if (quant.span > parent.maxQuantifierSpan) parent.maxQuantifierSpan = quant.span;
+            if (!quant.isNullable) {
+              parent.seenMandatoryAtom = true;
+              parent.prevUnboundedSig = null;
+            }
+          }
+        } else {
+          // Optional/single quantifier like `(...)?` or `(...){0,1}` still counts as a quantifier for outer loops
+          parent.hasQuantifier = true;
+          parent.quantifierCount += 1;
+          if (popped.hasUnboundedQuantifier) parent.hasUnboundedQuantifier = true;
+          if (quant.span > parent.maxQuantifierSpan) parent.maxQuantifierSpan = quant.span;
+          if (popped.maxQuantifierSpan > parent.maxQuantifierSpan) parent.maxQuantifierSpan = popped.maxQuantifierSpan;
+          if (!quant.isNullable && !popped.isLookaround) {
+            parent.seenMandatoryAtom = true;
+            parent.prevUnboundedSig = null;
+          }
+        }
+      } else {
+        if (popped.hasQuantifier) parent.hasQuantifier = true;
+        if (popped.hasUnboundedQuantifier) parent.hasUnboundedQuantifier = true;
+        parent.quantifierCount += popped.quantifierCount;
+        if (popped.maxQuantifierSpan > parent.maxQuantifierSpan) {
+          parent.maxQuantifierSpan = popped.maxQuantifierSpan;
+        }
+        if (popped.hasAlternation && !popped.isLookaround) parent.hasAlternation = true;
+        if (!popped.isLookaround) {
+          if (sigsOverlap(parent.prevUnboundedSig, popped.leadingUnboundedSig)) {
+            return {
+              ok: false,
+              valid: true,
+              safe: false,
+              reason: 'Adjacent overlapping unbounded quantifiers can cause polynomial backtracking.',
+            };
+          }
+          if (!parent.seenMandatoryAtom && parent.leadingUnboundedSig === null && popped.leadingUnboundedSig) {
+            parent.leadingUnboundedSig = popped.leadingUnboundedSig;
+          }
+          if (popped.seenMandatoryAtom) {
+            parent.seenMandatoryAtom = true;
+            parent.prevUnboundedSig = popped.prevUnboundedSig;
+          } else if (popped.prevUnboundedSig !== null) {
+            parent.prevUnboundedSig = popped.prevUnboundedSig;
+          }
+          parent.wildcardUnboundedCount += popped.wildcardUnboundedCount;
+          if (parent.wildcardUnboundedCount > MAX_UNBOUNDED_WILDCARDS_PER_GROUP) {
+            return {
+              ok: false,
+              valid: true,
+              safe: false,
+              reason: 'Too many unbounded wildcards in one group can cause polynomial backtracking.',
+            };
           }
         }
       }
-      if (isRepeatingQuantifier) {
-        if (popped.hasQuantifier || popped.hasAlternation) return false;
-        parent.hasQuantifier = true;
-        i = j - 1;
-        lastWasQuantifier = true;
-      } else {
-        if (popped.hasQuantifier) parent.hasQuantifier = true;
-        lastWasQuantifier = false;
-      }
       continue;
     }
+
+    // Alternation `|`
     if (ch === '|') {
-      stack[stack.length - 1].hasAlternation = true;
-      lastWasQuantifier = false;
+      frame.hasAlternation = true;
+      frame.seenMandatoryAtom = false;
+      frame.prevUnboundedSig = null;
+      frame.wildcardUnboundedCount = 0;
+      i += 1;
       continue;
     }
-    if (ch === '+' || ch === '*') {
-      if (lastWasQuantifier) return false;
-      stack[stack.length - 1].hasQuantifier = true;
-      lastWasQuantifier = true;
-      if (pattern[i + 1] === '?') i += 1;
+
+    // Anchors `^` and `$`
+    if (ch === '^' || ch === '$') {
+      i += 1;
       continue;
     }
-    if (ch === '?') {
-      if (lastWasQuantifier) return false;
-      lastWasQuantifier = true;
-      continue;
+
+    // Stray quantifier without a preceding quantifiable atom
+    const strayQuant = readQuantifierAt(pattern, i);
+    if (strayQuant) {
+      return {
+        ok: false,
+        valid: false,
+        safe: false,
+        reason: `Unexpected quantifier "${ch}" with nothing to repeat.`,
+      };
     }
-    if (ch === '{') {
-      const braceMatch = /^\{(\d+)(?:,(\d*))?\}/.exec(pattern.slice(i));
-      if (braceMatch) {
-        if (lastWasQuantifier) return false;
-        const minVal = Number(braceMatch[1]);
-        const maxVal = braceMatch[2] === undefined ? minVal : braceMatch[2] === '' ? Infinity : Number(braceMatch[2]);
-        if (minVal > MAX_SAFE_REGEX_QUANTIFIER_BOUND || (Number.isFinite(maxVal) && maxVal > MAX_SAFE_REGEX_QUANTIFIER_BOUND)) {
-          return false;
-        }
-        if (maxVal > 1) stack[stack.length - 1].hasQuantifier = true;
-        i += braceMatch[0].length - 1;
-        if (pattern[i + 1] === '?') i += 1;
-        lastWasQuantifier = true;
-        continue;
+
+    // Regular literal or wildcard `.`
+    const atomSig = ch === '.' ? 'WILDCARD' : `lit:${ch}`;
+    i += 1;
+
+    const quant = readQuantifierAt(pattern, i);
+    if (quant) {
+      i += quant.length;
+      if (readQuantifierAt(pattern, i)) {
+        return { ok: false, valid: false, safe: false, reason: 'Stacked quantifiers are not allowed.' };
       }
     }
-    lastWasQuantifier = false;
+    const err = applyAtomQuantifier(frame, atomSig, quant);
+    if (err) return err;
   }
 
-  return true;
+  if (stack.length !== 1) {
+    return { ok: false, valid: false, safe: false, reason: 'Unclosed opening parenthesis "(".' };
+  }
+
+  try {
+    new RegExp(pattern);
+  } catch (err) {
+    return {
+      ok: false,
+      valid: false,
+      safe: false,
+      reason: err instanceof Error ? err.message : 'Invalid regular expression syntax.',
+    };
+  }
+
+  return { ok: true, valid: true, safe: true };
+}
+
+/**
+ * Checks whether a user-authored regex pattern is syntactically valid and safe
+ * from catastrophic/polynomial backtracking.
+ */
+export function isSafeRegexPattern(pattern: string): boolean {
+  return analyzeRegexPattern(pattern).ok;
 }
 
 /**
@@ -223,7 +624,7 @@ export function isSafeRegexPattern(pattern: string): boolean {
  */
 export function safeRegexTest(pattern: string, input: string): boolean {
   if (!isSafeRegexPattern(pattern)) return false;
-  if (input.length > MAX_SAFE_REGEX_INPUT_LENGTH) return false;
+  if (typeof input !== 'string' || input.length > MAX_SAFE_REGEX_INPUT_LENGTH) return false;
   try {
     return new RegExp(pattern).test(input);
   } catch {

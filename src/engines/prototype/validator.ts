@@ -15,7 +15,7 @@ import type {
   LogicGraph,
   LogicVariableDefinition,
 } from '../../core/document/types';
-import { sanitizeCssTransformValue, sanitizeHref, sanitizeImageUrl } from '../codegen/sanitize';
+import { analyzeRegexPattern, sanitizeCssTransformValue, sanitizeHref, sanitizeImageUrl } from '../codegen/sanitize';
 import {
   LOGIC_COMPARE_OPERATORS,
   areLogicPortTypesCompatible,
@@ -742,12 +742,29 @@ export function validateLogicGraphSemantics(
           }
         } else if (mode === 'regex') {
           const pattern = typeof node.data.pattern === 'string' ? node.data.pattern : '';
-          if (pattern) {
-            try {
-              // Verify pattern syntax safely
-              new RegExp(pattern);
-            } catch {
-              push('error', 'INVALID_NODE_CONFIG', `Condition node "${node.id}" has an invalid regular expression.`, { nodeId: node.id });
+          if (!pattern.trim()) {
+            push(
+              'warning',
+              'INVALID_NODE_CONFIG',
+              `Condition node "${node.id}" uses Regex Match with an empty pattern (always evaluates to false).`,
+              { nodeId: node.id },
+            );
+          } else {
+            const regexCheck = analyzeRegexPattern(pattern);
+            if (!regexCheck.valid) {
+              push(
+                'error',
+                'INVALID_NODE_CONFIG',
+                `Condition node "${node.id}" has an invalid regular expression: ${regexCheck.reason ?? 'syntax error.'}`,
+                { nodeId: node.id },
+              );
+            } else if (!regexCheck.safe) {
+              push(
+                'error',
+                'UNSAFE_REGEX_PATTERN',
+                `Condition node "${node.id}" has an unsafe regular expression: ${regexCheck.reason ?? 'pattern may freeze execution.'}`,
+                { nodeId: node.id },
+              );
             }
           }
         }
