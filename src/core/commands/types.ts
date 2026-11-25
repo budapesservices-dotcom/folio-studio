@@ -1,5 +1,6 @@
 import type { DocumentAddress, NativeNodeRef } from '../document/ast';
 import type { LayerDropPosition } from '../document/layers';
+import type { SelectSimilarCriterion } from '../document/selectionQueries';
 import type {
   AnimationClip,
   AssetReference,
@@ -221,6 +222,12 @@ export interface SelectionSetPayload {
   nodeIds: string[];
 }
 
+export type SelectionDeselectPayload = Record<string, never>;
+export type SelectionInvertPayload = Record<string, never>;
+export interface SelectionSelectSimilarPayload {
+  criterion: SelectSimilarCriterion;
+}
+
 export type HistoryCommitEditPayload = Record<string, never>;
 export type HistoryUndoPayload = Record<string, never>;
 export type HistoryRedoPayload = Record<string, never>;
@@ -327,6 +334,9 @@ export type LayerUngroupCommand = NativeCommandEnvelope<'layer.ungroup', LayerUn
 export type LayerCreateClippingMaskCommand = NativeCommandEnvelope<'layer.create-clipping-mask', LayerClippingMaskPayload>;
 export type LayerRemoveClippingMaskCommand = NativeCommandEnvelope<'layer.remove-clipping-mask', LayerClippingMaskPayload>;
 export type SelectionSetCommand = NativeCommandEnvelope<'selection.set', SelectionSetPayload>;
+export type SelectionDeselectCommand = NativeCommandEnvelope<'selection.deselect', SelectionDeselectPayload>;
+export type SelectionInvertCommand = NativeCommandEnvelope<'selection.invert', SelectionInvertPayload>;
+export type SelectionSelectSimilarCommand = NativeCommandEnvelope<'selection.select-similar', SelectionSelectSimilarPayload>;
 export type HistoryCommitEditCommand = NativeCommandEnvelope<'history.commit-edit', HistoryCommitEditPayload>;
 export type HistoryUndoCommand = NativeCommandEnvelope<'history.undo', HistoryUndoPayload>;
 export type HistoryRedoCommand = NativeCommandEnvelope<'history.redo', HistoryRedoPayload>;
@@ -370,6 +380,9 @@ export type ExtendedNativeCommand =
   | NodeUpdateManyCommand
   | NodeEditCommand
   | SelectionSetCommand
+  | SelectionDeselectCommand
+  | SelectionInvertCommand
+  | SelectionSelectSimilarCommand
   | HistoryCommitEditCommand
   | HistoryUndoCommand
   | HistoryRedoCommand;
@@ -410,6 +423,9 @@ export type NativeCommandPayload =
   | LayerUngroupPayload
   | LayerClippingMaskPayload
   | SelectionSetPayload
+  | SelectionDeselectPayload
+  | SelectionInvertPayload
+  | SelectionSelectSimilarPayload
   | HistoryCommitEditPayload
   | HistoryUndoPayload
   | HistoryRedoPayload;

@@ -47,6 +47,8 @@ function shapeStyleChanged(before: ShapeStyle, after: ShapeStyle): boolean {
     before.fill !== after.fill ||
     before.stroke !== after.stroke ||
     before.strokeWidth !== after.strokeWidth ||
+    before.strokeDasharray !== after.strokeDasharray ||
+    before.strokeAlign !== after.strokeAlign ||
     before.radius !== after.radius ||
     (before.fills !== after.fills &&
       JSON.stringify(before.fills ?? []) !== JSON.stringify(after.fills ?? []))
@@ -61,6 +63,7 @@ function pathStyleChanged(before: PathStyle, after: PathStyle): boolean {
     before.strokeLinecap !== after.strokeLinecap ||
     before.strokeLinejoin !== after.strokeLinejoin ||
     before.strokeDasharray !== after.strokeDasharray ||
+    before.strokeAlign !== after.strokeAlign ||
     before.fillRule !== after.fillRule ||
     before.arrowStart !== after.arrowStart ||
     before.arrowEnd !== after.arrowEnd ||
@@ -187,6 +190,7 @@ function hasTypeSpecificExtendedChange(before: DesignNode, after: DesignNode): b
         before.style.letterSpacing !== after.style.letterSpacing ||
         before.style.lineHeight !== after.style.lineHeight ||
         before.style.textAlign !== after.style.textAlign ||
+        before.style.verticalAlign !== after.style.verticalAlign ||
         before.style.textWrap !== after.style.textWrap ||
         before.style.textTransform !== after.style.textTransform ||
         before.style.textDecoration !== after.style.textDecoration
@@ -291,6 +295,8 @@ export function classifyNodeChange(
     (before.layerColor ?? undefined) !== (after.layerColor ?? undefined) ||
     (before.parentId ?? null) !== (after.parentId ?? null) ||
     (before.clipMaskBaseId ?? undefined) !== (after.clipMaskBaseId ?? undefined) ||
+    (before.clipMaskMode ?? undefined) !== (after.clipMaskMode ?? undefined) ||
+    (before.drawMode ?? undefined) !== (after.drawMode ?? undefined) ||
     (before.semanticTag ?? undefined) !== (after.semanticTag ?? undefined) ||
     (before.ariaLabel ?? undefined) !== (after.ariaLabel ?? undefined) ||
     (before.href ?? undefined) !== (after.href ?? undefined) ||

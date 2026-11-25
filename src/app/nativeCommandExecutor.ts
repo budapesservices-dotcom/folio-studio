@@ -1001,6 +1001,7 @@ function prepareCommandStep(
   const adapterContext: NativeCommandAdapterContext = {
     document: targetDocument,
     resolvedNodes,
+    selectedNodeIds: snapshot.editorState.selectedNodeIds,
     ...(liveComponentMasterDocument ? { liveComponentMasterDocument } : {}),
   };
   let candidateState = snapshot.editorState;

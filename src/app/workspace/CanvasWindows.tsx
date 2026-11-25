@@ -287,6 +287,7 @@ export function MainCanvasWindow({
               onDropImageFiles={onDropImageFiles}
               rendererMode={rendererMode}
               onGpuMetrics={setGpuMetrics}
+              contextMenuActions={studioActions}
             />
           </div>
         </FloatingWindow>
@@ -613,6 +614,7 @@ export function ComponentCanvasWindow({
                 onToolOperationBatch={onToolOperationBatch}
                 onLayerDrop={onLayerDrop}
                 onDropImageFiles={onDropImageFiles}
+                contextMenuActions={studioActions}
               />
             ) : (
               <div class="component-canvas-empty" role="status">

@@ -87,11 +87,15 @@ export const SEMANTIC_HTML_TAGS = new Set([
   'button', 'a', 'h1', 'h2', 'h3', 'p', 'span', 'ul', 'li', 'form', 'input', 'img',
 ]);
 
-const TEXT_ALIGN_VALUES = new Set(['left', 'center', 'right']);
+const TEXT_ALIGN_VALUES = new Set(['left', 'center', 'right', 'justify']);
+const TEXT_VERTICAL_ALIGN_VALUES = new Set(['top', 'middle', 'bottom']);
 const TEXT_WRAP_VALUES = new Set(['wrap', 'nowrap']);
 const TEXT_TRANSFORM_VALUES = new Set(['none', 'uppercase', 'lowercase', 'capitalize']);
 const TEXT_DECORATION_VALUES = new Set(['none', 'underline', 'line-through']);
 const IMAGE_FIT_VALUES = new Set(['cover', 'contain', 'fill']);
+const STROKE_ALIGN_VALUES = new Set(['inside', 'center', 'outside']);
+const CLIP_MASK_MODE_VALUES = new Set(['inside', 'outside']);
+const DRAW_MODE_VALUES = new Set(['normal', 'inside', 'outside']);
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/i;
 const MAX_COMPONENT_NESTING_DEPTH = 16;
 
@@ -351,6 +355,8 @@ function isCommonNode(value: Record<string, unknown>): boolean {
     (value.onCanvas === undefined || typeof value.onCanvas === 'boolean') &&
     (value.parentId === undefined || value.parentId === null || (isString(value.parentId) && value.parentId.length > 0)) &&
     (value.clipMaskBaseId === undefined || (isString(value.clipMaskBaseId) && value.clipMaskBaseId.length > 0)) &&
+    (value.clipMaskMode === undefined || CLIP_MASK_MODE_VALUES.has(String(value.clipMaskMode))) &&
+    (value.drawMode === undefined || DRAW_MODE_VALUES.has(String(value.drawMode))) &&
     (value.semanticTag === undefined || SEMANTIC_HTML_TAGS.has(String(value.semanticTag))) &&
     (value.ariaLabel === undefined || isString(value.ariaLabel)) &&
     (value.href === undefined || isString(value.href)) &&
@@ -370,6 +376,8 @@ function isShapeStyle(value: unknown): boolean {
     isString(value.fill) &&
     isString(value.stroke) &&
     isFiniteNumber(value.strokeWidth) && value.strokeWidth >= 0 &&
+    (value.strokeDasharray === undefined || isString(value.strokeDasharray)) &&
+    (value.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(value.strokeAlign))) &&
     (value.radius === undefined || (isFiniteNumber(value.radius) && value.radius >= 0)) &&
     (value.fills === undefined || (Array.isArray(value.fills) && value.fills.length <= 16 && value.fills.every(isFillPaint)))
   );
@@ -410,6 +418,7 @@ function isPathStyle(value: unknown): boolean {
     (value.strokeLinecap === undefined || ['butt', 'round', 'square'].includes(String(value.strokeLinecap))) &&
     (value.strokeLinejoin === undefined || ['miter', 'round', 'bevel'].includes(String(value.strokeLinejoin))) &&
     (value.strokeDasharray === undefined || isString(value.strokeDasharray)) &&
+    (value.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(value.strokeAlign))) &&
     (value.fillRule === undefined || value.fillRule === 'nonzero' || value.fillRule === 'evenodd') &&
     (value.arrowStart === undefined || typeof value.arrowStart === 'boolean') &&
     (value.arrowEnd === undefined || typeof value.arrowEnd === 'boolean') &&
@@ -473,6 +482,7 @@ function isDesignNode(value: unknown): value is DesignNode {
       isFiniteNumber(style.letterSpacing) &&
       isFiniteNumber(style.lineHeight) && style.lineHeight > 0 &&
       (style.textAlign === undefined || TEXT_ALIGN_VALUES.has(String(style.textAlign))) &&
+      (style.verticalAlign === undefined || TEXT_VERTICAL_ALIGN_VALUES.has(String(style.verticalAlign))) &&
       (style.textWrap === undefined || TEXT_WRAP_VALUES.has(String(style.textWrap))) &&
       (style.textTransform === undefined || TEXT_TRANSFORM_VALUES.has(String(style.textTransform))) &&
       (style.textDecoration === undefined || TEXT_DECORATION_VALUES.has(String(style.textDecoration)))

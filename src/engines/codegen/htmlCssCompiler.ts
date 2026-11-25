@@ -179,6 +179,113 @@ function buildInlineSvgMarkup(
   return svgLines;
 }
 
+function resolveCssBorderStyle(strokeDasharray?: string): 'solid' | 'dashed' | 'dotted' {
+  const trimmed = strokeDasharray?.trim();
+  if (!trimmed) return 'solid';
+  const firstToken = Number(trimmed.split(/[\s,]+/)[0]);
+  if (Number.isFinite(firstToken) && firstToken > 0 && firstToken <= 3) {
+    return 'dotted';
+  }
+  return 'dashed';
+}
+
+export function needsSvgMaskForClip(node: DesignNode, base: DesignNode): boolean {
+  if (node.clipMaskMode === 'outside') return true;
+  if (base.type === 'path') return true;
+  if (Math.abs(base.rotation) > 0.01) return true;
+  return false;
+}
+
+export function buildVectorMaskId(prefix: string, nodeId: string, mode: 'inside' | 'outside'): string {
+  const safePrefix = prefix.replace(/[^a-zA-Z0-9_-]/g, '_') || 'page';
+  const safeId = nodeId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return `folio-mask-${safePrefix}-${mode}-${safeId}`;
+}
+
+export function buildVectorMaskDefsLines(
+  nodes: readonly DesignNode[],
+  prefix: string,
+  jsxMode: boolean,
+  indent: string,
+): string[] {
+  const nodeById = new Map<string, DesignNode>();
+  for (const item of nodes) nodeById.set(item.id, item);
+
+  const maskBlocks: string[] = [];
+  for (const node of nodes) {
+    if (!node.clipMaskBaseId || node.onCanvas === false) continue;
+    const base = nodeById.get(node.clipMaskBaseId);
+    if (!base || !needsSvgMaskForClip(node, base)) continue;
+
+    const mode: 'inside' | 'outside' = node.clipMaskMode === 'outside' ? 'outside' : 'inside';
+    const maskId = buildVectorMaskId(prefix, node.id, mode);
+    const dx = roundCss(base.x - node.x);
+    const dy = roundCss(base.y - node.y);
+    const baseFill = mode === 'outside' ? '#000000' : '#ffffff';
+    const bgFill = mode === 'outside' ? '#ffffff' : '#000000';
+    const cx = roundCss(dx + base.width / 2);
+    const cy = roundCss(dy + base.height / 2);
+    const rotTransform = Math.abs(base.rotation) > 0.01 ? `rotate(${roundCss(base.rotation)} ${cx} ${cy})` : '';
+
+    let shapeEl = '';
+    if (base.type === 'ellipse') {
+      const rx = roundCss(Math.max(0.5, base.width / 2));
+      const ry = roundCss(Math.max(0.5, base.height / 2));
+      const transformAttr = rotTransform ? ` transform="${escapeAttr(rotTransform)}"` : '';
+      shapeEl = `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${baseFill}"${transformAttr} />`;
+    } else if (base.type === 'path') {
+      const d = serializePathPointsToSvgD(base.points, base.closed, base.subpaths);
+      const fullTransform = rotTransform
+        ? `${rotTransform} translate(${dx} ${dy})`
+        : `translate(${dx} ${dy})`;
+      const fillRuleAttr =
+        base.style.fillRule === 'evenodd'
+          ? jsxMode
+            ? ' fillRule="evenodd"'
+            : ' fill-rule="evenodd"'
+          : '';
+      shapeEl = `<path d="${escapeAttr(d)}" transform="${escapeAttr(fullTransform)}" fill="${baseFill}"${fillRuleAttr} />`;
+    } else {
+      const w = roundCss(Math.max(1, base.width));
+      const h = roundCss(Math.max(1, base.height));
+      const radius =
+        (base.type === 'rect' || base.type === 'frame' || base.type === 'image') && base.style.radius
+          ? roundCss(Math.max(0, base.style.radius))
+          : 0;
+      const rxAttr = radius > 0 ? ` rx="${radius}"` : '';
+      const transformAttr = rotTransform ? ` transform="${escapeAttr(rotTransform)}"` : '';
+      shapeEl = `<rect x="${dx}" y="${dy}" width="${w}" height="${h}"${rxAttr} fill="${baseFill}"${transformAttr} />`;
+    }
+
+    maskBlocks.push(
+      `${indent}    <mask id="${escapeAttr(maskId)}" maskUnits="userSpaceOnUse" x="-10000" y="-10000" width="20000" height="20000">`,
+      `${indent}      <rect x="-10000" y="-10000" width="20000" height="20000" fill="${bgFill}" />`,
+      `${indent}      ${shapeEl}`,
+      `${indent}    </mask>`,
+    );
+  }
+
+  if (maskBlocks.length === 0) return [];
+
+  if (jsxMode) {
+    return [
+      `${indent}<svg width={0} height={0} aria-hidden="true" style={{ position: "absolute", width: 0, height: 0, overflow: "hidden", pointerEvents: "none" }}>`,
+      `${indent}  <defs>`,
+      ...maskBlocks,
+      `${indent}  </defs>`,
+      `${indent}</svg>`,
+    ];
+  }
+
+  return [
+    `${indent}<svg width="0" height="0" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none">`,
+    `${indent}  <defs>`,
+    ...maskBlocks,
+    `${indent}  </defs>`,
+    `${indent}</svg>`,
+  ];
+}
+
 export function compileTokensCssFile(project: FolioProject): CompiledCodeFile {
   const tokens = getProjectDesignTokens(project);
   const blocks: string[] = [
@@ -248,9 +355,11 @@ export function buildNodeCssDeclarations(
     isInstanceChild: boolean;
     hasRootAutoLayout: boolean;
     originOffset: { x: number; y: number };
+    nodeById?: ReadonlyMap<string, DesignNode>;
+    maskPrefix?: string;
   },
 ): string[] {
-  const { parent, isChildOfAutoLayout, isInstanceChild, hasRootAutoLayout, originOffset } = options;
+  const { parent, isChildOfAutoLayout, isInstanceChild, hasRootAutoLayout, originOffset, nodeById, maskPrefix } = options;
   const declarations: string[] = [];
 
   if (!node.visible) {
@@ -348,7 +457,17 @@ export function buildNodeCssDeclarations(
     }
     if (node.style.strokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
       const strokeVal = strokeVar ?? sanitizeCssValue(node.style.stroke, 'transparent');
-      declarations.push(`border: ${roundCss(node.style.strokeWidth)}px solid ${strokeVal};`);
+      const borderStyle = resolveCssBorderStyle(node.style.strokeDasharray);
+      const sw = roundCss(node.style.strokeWidth);
+      if (node.style.strokeAlign === 'outside') {
+        declarations.push(`outline: ${sw}px ${borderStyle} ${strokeVal};`);
+        declarations.push('outline-offset: 0;');
+      } else if (node.style.strokeAlign === 'inside') {
+        declarations.push('box-sizing: border-box;');
+        declarations.push(`border: ${sw}px ${borderStyle} ${strokeVal};`);
+      } else {
+        declarations.push(`border: ${sw}px ${borderStyle} ${strokeVal};`);
+      }
     }
     if (node.type === 'ellipse') {
       declarations.push('border-radius: 9999px;');
@@ -368,7 +487,8 @@ export function buildNodeCssDeclarations(
     const imgStrokeWidth = node.style.strokeWidth ?? 0;
     if (imgStrokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
       const strokeVal = strokeVar ?? sanitizeCssValue(node.style.stroke, 'transparent');
-      declarations.push(`border: ${roundCss(imgStrokeWidth)}px solid ${strokeVal};`);
+      const borderStyle = resolveCssBorderStyle(node.style.strokeDasharray);
+      declarations.push(`border: ${roundCss(imgStrokeWidth)}px ${borderStyle} ${strokeVal};`);
     }
     if (radiusVar) {
       declarations.push(`border-radius: ${radiusVar};`);
@@ -389,6 +509,12 @@ export function buildNodeCssDeclarations(
     if (node.style.textAlign && node.style.textAlign !== 'left') {
       declarations.push(`text-align: ${node.style.textAlign};`);
     }
+    if (node.style.verticalAlign === 'middle' || node.style.verticalAlign === 'bottom') {
+      declarations.push('display: flex;');
+      declarations.push('flex-direction: column;');
+      declarations.push(`justify-content: ${node.style.verticalAlign === 'middle' ? 'center' : 'flex-end'};`);
+      declarations.push(`height: ${roundCss(node.height)}px;`);
+    }
     if (node.style.textTransform && node.style.textTransform !== 'none') {
       declarations.push(`text-transform: ${node.style.textTransform};`);
     }
@@ -404,6 +530,35 @@ export function buildNodeCssDeclarations(
     }
   } else if (node.type === 'component-instance') {
     declarations.push('overflow: visible;');
+  }
+
+  if (node.clipMaskBaseId && nodeById) {
+    const base = nodeById.get(node.clipMaskBaseId);
+    if (base) {
+      const mode: 'inside' | 'outside' = node.clipMaskMode === 'outside' ? 'outside' : 'inside';
+      if (needsSvgMaskForClip(node, base)) {
+        const maskId = buildVectorMaskId(maskPrefix ?? 'page', node.id, mode);
+        declarations.push(`mask: url(#${maskId});`);
+        declarations.push(`-webkit-mask: url(#${maskId});`);
+      } else if (base.type === 'ellipse') {
+        const rx = roundCss(Math.max(0.5, base.width / 2));
+        const ry = roundCss(Math.max(0.5, base.height / 2));
+        const cx = roundCss(base.x - node.x + base.width / 2);
+        const cy = roundCss(base.y - node.y + base.height / 2);
+        declarations.push(`clip-path: ellipse(${rx}px ${ry}px at ${cx}px ${cy}px);`);
+      } else {
+        const top = roundCss(base.y - node.y);
+        const left = roundCss(base.x - node.x);
+        const right = roundCss(node.x + node.width - (base.x + base.width));
+        const bottom = roundCss(node.y + node.height - (base.y + base.height));
+        const radius =
+          (base.type === 'rect' || base.type === 'frame' || base.type === 'image') && base.style.radius
+            ? roundCss(Math.max(0, base.style.radius))
+            : 0;
+        const roundPart = radius > 0 ? ` round ${radius}px` : '';
+        declarations.push(`clip-path: inset(${top}px ${right}px ${bottom}px ${left}px${roundPart});`);
+      }
+    }
   }
 
   const effectAndBlendDecls = buildCssEffectsAndBlendDeclarations(node);
@@ -470,7 +625,7 @@ export function compilePageHtmlCss(
     project.assets.map((asset) => [asset.id, asset]),
   );
 
-  const { roots, childrenByParent } = buildChildrenMap(page.document.nodes);
+  const { roots, childrenByParent, nodeById } = buildChildrenMap(page.document.nodes);
   const htmlBodyLines: string[] = [];
   const htmlMappings: CodeMappingEntry[] = [];
   const cssLines: string[] = [
@@ -512,6 +667,8 @@ export function compilePageHtmlCss(
       isInstanceChild,
       hasRootAutoLayout,
       originOffset,
+      nodeById,
+      maskPrefix: slug,
     });
 
     pushCssRule(
@@ -747,6 +904,10 @@ export function compilePageHtmlCss(
   );
 
   const htmlLineOffset = htmlPreambleLines.length;
+  const pageMaskDefs = buildVectorMaskDefsLines(page.document.nodes, slug, false, '    ');
+  if (pageMaskDefs.length > 0) {
+    htmlBodyLines.push(...pageMaskDefs);
+  }
   const emptyVisited = new Set<string>();
   for (const root of roots) {
     emitNodeHtml(

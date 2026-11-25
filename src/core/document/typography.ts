@@ -184,3 +184,23 @@ export function getSvgTextAnchorAndX(
   }
   return { anchor: 'start', xPos: x };
 }
+
+export function computeTextVerticalOffset(
+  boxHeight: number,
+  lineCount: number,
+  fontSize: number,
+  lineHeight: number,
+  verticalAlign?: 'top' | 'middle' | 'bottom',
+): number {
+  if (!verticalAlign || verticalAlign === 'top') return 0;
+  const safeLines = Math.max(1, lineCount);
+  const safeFont = Math.max(1, fontSize);
+  const safeLineHeight = Math.max(0.5, lineHeight);
+  const contentHeight = (safeLines - 1) * safeFont * safeLineHeight + safeFont;
+  const freeSpace = Math.max(0, boxHeight - contentHeight);
+  if (verticalAlign === 'middle') {
+    return Math.round((freeSpace / 2) * 100) / 100;
+  }
+  return Math.round(freeSpace * 100) / 100;
+}
+

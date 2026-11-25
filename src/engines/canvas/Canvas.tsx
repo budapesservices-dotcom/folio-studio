@@ -31,7 +31,9 @@ import {
   buildSpatialIndexForNodes,
   computeVisibleArtboardRect,
   cullVisibleRenderNodes,
+  toCanvasPoint,
 } from './canvasHelpers';
+import { hitTestNodesAtPoint } from './hitTest';
 import { CanvasInteractiveOverlays } from './CanvasOverlays';
 import { CanvasSceneLayer } from './CanvasSceneLayer';
 import {
@@ -62,6 +64,17 @@ import {
   type ToolWorkspaceScope,
 } from './tools/types';
 import './canvas.css';
+
+import type { DrawMaskMode } from '../../core/document/types';
+import type { SelectSimilarCriterion } from '../../core/document/selectionQueries';
+
+export interface CanvasContextMenuActions {
+  readonly onDeselect: () => void;
+  readonly onInvertSelection: () => void;
+  readonly onSelectSimilar: (criterion: SelectSimilarCriterion) => void;
+  readonly onSetDrawMode: (mode: DrawMaskMode) => void;
+  readonly onPermanentSubtractOutside: () => void;
+}
 
 interface CanvasProps {
   document: FolioDocument;
@@ -94,6 +107,7 @@ interface CanvasProps {
   onInlineTextCommit?: (nodeId: string, text: string) => void;
   rendererMode?: ViewportRendererMode;
   onGpuMetrics?: (metrics: GpuSceneMetrics | null) => void;
+  contextMenuActions?: CanvasContextMenuActions;
 }
 
 interface PanSession {
@@ -146,15 +160,18 @@ export function Canvas({
   onInlineTextCommit,
   rendererMode = 'auto',
   onGpuMetrics,
+  contextMenuActions,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   const inlineTextInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<DesignNode[] | null>(null);
   const [previewNodes, setPreviewNodes] = useState<DesignNode[] | null>(null);
   const [previewCreateNodes, setPreviewCreateNodes] = useState<DesignNode[] | null>(null);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const [isImageFileDragOver, setIsImageFileDragOver] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
   const panRef = useRef<PanSession | null>(null);
   const toolSessionRef = useRef<CanvasToolSession | null>(null);
@@ -1003,36 +1020,78 @@ export function Canvas({
     }
   };
 
-  const resolveGpuHitNodeId = (point: { x: number; y: number }): string | null => {
-    const hits = spatialIndex.queryPoint(point.x, point.y, 4 * invZoom);
-    // queryPoint() already returns hits sorted highest zIndex (topmost) first.
-    for (let i = 0; i < hits.length; i += 1) {
-      const hitId = hits[i];
-      const node = nodeById.get(hitId);
-      if (!node || node.type === 'group') continue;
-      const state = layerStates.get(hitId);
-      if (!state?.visible || state.locked) continue;
-      return hitId;
-    }
-    return null;
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handlePointerDownOutside = (event: PointerEvent) => {
+      if (contextMenuRef.current && event.target instanceof Node && contextMenuRef.current.contains(event.target)) {
+        return;
+      }
+      setContextMenu(null);
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDownOutside, true);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDownOutside, true);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [contextMenu]);
+
+  const resolveShapeAwareHitNodeId = (point: { x: number; y: number }): string | null => {
+    const tol = 4 * invZoom;
+    const spatialHits = spatialIndex.queryPoint(point.x, point.y, Math.max(8, tol * 2));
+    if (spatialHits.length === 0) return null;
+    const candidateIds = new Set(spatialHits);
+    return hitTestNodesAtPoint(visibleRenderNodes, point, layerStates, {
+      strokeTolerance: tol,
+      candidateIds,
+    });
   };
 
   const createPointerInput = (event: JSX.TargetedPointerEvent<SVGSVGElement>): CanvasToolPointerInput => {
     const raw = buildCanvasPointerInput(event, scrollAreaRef.current);
     if (
-      gpuHybridActive &&
-      raw.targetNodeId === null &&
       raw.resizeHandle === null &&
       !raw.rotateHandle &&
       !raw.smartHandleHit &&
       !raw.anchorHit
     ) {
-      const hitNodeId = resolveGpuHitNodeId(raw.point);
-      if (hitNodeId) {
-        return { ...raw, targetNodeId: hitNodeId };
+      const svgRect = event.currentTarget.getBoundingClientRect();
+      const hasMeasuredViewport = svgRect.width > 1 && svgRect.height > 1;
+      if (hasMeasuredViewport || gpuHybridActive) {
+        const shapeHitId = resolveShapeAwareHitNodeId(raw.point);
+        return { ...raw, targetNodeId: shapeHitId };
       }
     }
     return raw;
+  };
+
+  const handleCanvasContextMenu = (event: JSX.TargetedMouseEvent<SVGSVGElement>) => {
+    if (!contextMenuActions) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const point = toCanvasPoint(event.currentTarget, event.clientX, event.clientY);
+    const hitId = resolveShapeAwareHitNodeId(point);
+    if (hitId && !selectedNodeIds.includes(hitId)) {
+      evaluateAndDispatchOperation(
+        createToolOperation(
+          toolId,
+          workspace,
+          { kind: 'select-nodes', nodeIds: [hitId] },
+          { description: 'Select layer for context menu', atomicHistoryStep: false },
+        ),
+      );
+    }
+    const maxW = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const maxH = typeof window !== 'undefined' ? window.innerHeight : 720;
+    setContextMenu({
+      x: Math.max(8, Math.min(event.clientX, maxW - 236)),
+      y: Math.max(8, Math.min(event.clientY, maxH - 320)),
+    });
   };
 
   const applyToolTransition = (
@@ -1199,17 +1258,10 @@ export function Canvas({
     if (toolId !== 'select' && toolId !== 'direct-selection') return;
     const target = event.target as Element;
     if (target.closest('[data-smart-handle]')) return;
-    let nodeId = target.closest('[data-node-id]')?.getAttribute('data-node-id') ?? null;
-    if (!nodeId && gpuHybridActive) {
-      const rect = event.currentTarget.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        const pt = {
-          x: ((event.clientX - rect.left) / rect.width) * effectiveDocWidth,
-          y: ((event.clientY - rect.top) / rect.height) * document.height,
-        };
-        nodeId = resolveGpuHitNodeId(pt);
-      }
-    }
+    const svgRect = event.currentTarget.getBoundingClientRect();
+    let nodeId = svgRect.width > 1 && svgRect.height > 1
+      ? resolveShapeAwareHitNodeId(toCanvasPoint(event.currentTarget, event.clientX, event.clientY))
+      : (target.closest('[data-node-id]')?.getAttribute('data-node-id') ?? null);
     if (!nodeId) return;
     const node = nodeById.get(nodeId);
     if (!node || node.type !== 'text') return;
@@ -1439,6 +1491,7 @@ export function Canvas({
             onPointerUp={finishPointer}
             onPointerCancel={cancelPointer}
             onDblClick={handleDoubleClick}
+            onContextMenu={handleCanvasContextMenu}
           >
             {!gpuHybridActive && (
               <CanvasSceneLayer
@@ -1541,6 +1594,113 @@ export function Canvas({
         </svg>
         </div>
       </div>
+
+      {contextMenu && contextMenuActions && (() => {
+        const primarySelected = selectedNodes.length === 1 ? selectedNodes[0] : null;
+        const activeDrawMode = primarySelected?.drawMode ?? 'normal';
+        const hasOutsideTargets = Boolean(
+          primarySelected && (
+            (primarySelected.clipMaskBaseId && primarySelected.clipMaskMode === 'outside') ||
+            canvasNodes.some((n) => n.clipMaskBaseId === primarySelected.id && n.clipMaskMode === 'outside')
+          ),
+        );
+        const runMenuAction = (fn: () => void) => {
+          setContextMenu(null);
+          fn();
+        };
+        return (
+          <div
+            ref={contextMenuRef}
+            class="canvas-context-menu"
+            role="menu"
+            aria-label="Canvas selection and draw mode menu"
+            style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+          >
+            <div class="canvas-context-menu-header">Selection</div>
+            <button
+              type="button"
+              role="menuitem"
+              class="canvas-context-menu-item"
+              disabled={selectedNodeIds.length === 0}
+              onClick={() => runMenuAction(contextMenuActions.onDeselect)}
+            >
+              <span>Deselect</span>
+              <kbd>Ctrl+D</kbd>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class="canvas-context-menu-item"
+              onClick={() => runMenuAction(contextMenuActions.onInvertSelection)}
+            >
+              <span>Invert Selection</span>
+              <kbd>Ctrl+Shift+I</kbd>
+            </button>
+            <div class="canvas-context-menu-divider" role="separator" />
+            <div class="canvas-context-menu-header">Select Similar</div>
+            <button
+              type="button"
+              role="menuitem"
+              class="canvas-context-menu-item"
+              disabled={selectedNodeIds.length === 0}
+              onClick={() => runMenuAction(() => contextMenuActions.onSelectSimilar('fill'))}
+            >
+              <span>Same Fill</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class="canvas-context-menu-item"
+              disabled={selectedNodeIds.length === 0}
+              onClick={() => runMenuAction(() => contextMenuActions.onSelectSimilar('stroke'))}
+            >
+              <span>Same Stroke</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class="canvas-context-menu-item"
+              disabled={selectedNodeIds.length === 0}
+              onClick={() => runMenuAction(() => contextMenuActions.onSelectSimilar('type'))}
+            >
+              <span>Same Node Type</span>
+            </button>
+            {selectedNodes.length > 0 && (
+              <>
+                <div class="canvas-context-menu-divider" role="separator" />
+                <div class="canvas-context-menu-header">Draw Mode</div>
+                {([
+                  { id: 'normal', label: 'Draw Normal' },
+                  { id: 'inside', label: 'Draw Inside' },
+                  { id: 'outside', label: 'Draw Outside' },
+                ] as const).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={activeDrawMode === item.id}
+                    class={`canvas-context-menu-item${activeDrawMode === item.id ? ' is-active' : ''}`}
+                    onClick={() => runMenuAction(() => contextMenuActions.onSetDrawMode(item.id))}
+                  >
+                    <span>{item.label}</span>
+                    {activeDrawMode === item.id && <span class="canvas-context-menu-check">●</span>}
+                  </button>
+                ))}
+                {hasOutsideTargets && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="canvas-context-menu-item is-accent"
+                    onClick={() => runMenuAction(contextMenuActions.onPermanentSubtractOutside)}
+                  >
+                    <span>Permanent Subtract (Pathfinder)</span>
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

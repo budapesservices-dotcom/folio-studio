@@ -174,9 +174,26 @@ export function useWorkspaceShortcuts({
         pasteSelection(activeEditorId);
         return;
       }
-      if (modifier && key === 'd' && ids.length > 0) {
+      if (event.key === 'Escape' && !event.defaultPrevented && ids.length > 0) {
+        event.preventDefault();
+        activeClient.deselectAll('Deselect layers');
+        return;
+      }
+      if (modifier && !event.shiftKey && key === 'd') {
+        event.preventDefault();
+        if (ids.length > 0) {
+          activeClient.deselectAll('Deselect layers');
+        }
+        return;
+      }
+      if (modifier && event.shiftKey && key === 'd' && ids.length > 0) {
         event.preventDefault();
         duplicateSelection(activeEditorId);
+        return;
+      }
+      if (modifier && event.shiftKey && key === 'i') {
+        event.preventDefault();
+        activeClient.invertSelection('Invert selection');
         return;
       }
       if ((event.key === 'Delete' || event.key === 'Backspace') && ids.length > 0) {

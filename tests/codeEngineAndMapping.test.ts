@@ -474,7 +474,7 @@ describe('Tahap 3 — Mapped Round-Trip Sync & Custom Code Preservation via Nati
 
   it('persists Custom & Extension codeModules via code.update-modules with Undo/Redo and preserves them across Canvas visual edits', () => {
     expect(Object.keys(NATIVE_COMMAND_REGISTRY).length).toBe(14);
-    expect(Object.keys(ALL_NATIVE_COMMAND_REGISTRY).length).toBe(39);
+    expect(Object.keys(ALL_NATIVE_COMMAND_REGISTRY).length).toBe(42);
 
     const project = createInitialProject('Sync Demo');
     const store = createCanonicalEditorStore(createEditorState(project));

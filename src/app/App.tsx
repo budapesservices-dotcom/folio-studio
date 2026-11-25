@@ -352,7 +352,7 @@ export function App() {
     activeEditorId, isHydrating, state, componentState, selectedNode, selectedNodes,
     editingComponentId: componentMaster.editingComponentId, toolOptions, onUpdateToolOptions: updateToolOptions,
     focusedCommandClient, getCommandClient, selectionSourceRef, clipboardRef,
-    setWorkspaceToolId, setInspectorVisible: windows.setInspectorVisible, setNotice,
+    setWorkspaceToolId, setInspectorVisible: windows.setInspectorVisible, setNotice, openNodeLogic: windows.openNodeLogic,
   });
   const activeStudioActions = selectionActions.createStudioActionsForTarget(activeEditorId);
 

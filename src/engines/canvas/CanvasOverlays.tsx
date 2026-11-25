@@ -104,6 +104,85 @@ export function SelectionOverlay({
   );
 }
 
+/**
+ * Renders thin #00E5FF shape-accurate contour paths following each selected node's
+ * actual vector geometry (ellipse, rounded rect, rotated shape, Bezier/polygon/star path).
+ */
+export function ShapeContourOverlay({
+  nodes,
+  invZoom,
+}: {
+  nodes: readonly DesignNode[];
+  invZoom: number;
+}) {
+  if (nodes.length === 0) return null;
+  return (
+    <g class="canvas-shape-contours" pointer-events="none">
+      {nodes.map((node) => {
+        if (node.type === 'group') return null;
+        const transform = node.rotation
+          ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
+          : undefined;
+        const drawModeClass =
+          node.drawMode === 'inside'
+            ? ' is-draw-inside'
+            : node.drawMode === 'outside'
+              ? ' is-draw-outside'
+              : '';
+        return (
+          <g key={`contour-${node.id}`} transform={transform} data-selection-contour={node.id}>
+            {node.type === 'ellipse' && (
+              <ellipse
+                class={`canvas-selection-contour${drawModeClass}`}
+                cx={node.x + node.width / 2}
+                cy={node.y + node.height / 2}
+                rx={node.width / 2}
+                ry={node.height / 2}
+              />
+            )}
+            {(node.type === 'rect' || node.type === 'frame' || node.type === 'image') && (
+              <rect
+                class={`canvas-selection-contour${drawModeClass}`}
+                x={node.x}
+                y={node.y}
+                width={Math.max(1, node.width)}
+                height={Math.max(1, node.height)}
+                rx={node.style.radius ?? 0}
+              />
+            )}
+            {node.type === 'path' && (
+              <g transform={`translate(${node.x} ${node.y})`}>
+                <path
+                  class={`canvas-selection-contour${drawModeClass}`}
+                  d={serializePathPointsToSvgD(node.points, node.closed, node.subpaths)}
+                />
+              </g>
+            )}
+            {(node.type === 'text' || node.type === 'component-instance') && (
+              <rect
+                class={`canvas-selection-contour${drawModeClass}`}
+                x={node.x}
+                y={node.y}
+                width={Math.max(1, node.width)}
+                height={Math.max(1, node.height)}
+              />
+            )}
+            {(node.drawMode === 'inside' || node.drawMode === 'outside') && (
+              <HudBadge
+                x={node.x + node.width / 2}
+                y={node.y - 16 * invZoom}
+                text={node.drawMode === 'inside' ? 'DRAW INSIDE' : 'DRAW OUTSIDE'}
+                variant="default"
+                invZoom={invZoom}
+              />
+            )}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
 export function VectorAnchorOverlay({
   nodes,
   interactive,
@@ -712,6 +791,10 @@ export function CanvasInteractiveOverlays({
             </g>
           )}
         </g>
+      )}
+
+      {selectedNodes.length > 0 && toolId !== 'shape-builder' && (
+        <ShapeContourOverlay nodes={selectedNodes} invZoom={invZoom} />
       )}
 
       {showSelectionBox && selectionBounds && (

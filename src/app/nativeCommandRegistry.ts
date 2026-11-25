@@ -1,5 +1,6 @@
 import type { EditorAction } from './editorReducer';
 import type { DesignNode, FolioDocument } from '../core/document/types';
+import { computeInvertedSelectionIds, computeSimilarSelectionIds } from '../core/document/selectionQueries';
 import {
   validateAnimationCreateClipPayload,
   validateAnimationDeleteClipPayload,
@@ -35,6 +36,7 @@ import {
   validatePageSetActivePayload,
   validateProjectRenamePayload,
   validateProjectReplacePayload,
+  validateSelectionSelectSimilarPayload,
   validateSelectionSetPayload,
   validateTokensUpdatePayload,
   type ValidationOutcome,
@@ -51,6 +53,8 @@ export interface NativeCommandAdapterContext {
   document?: FolioDocument;
   /** Resolved from the addressed document in payload order when applicable. */
   resolvedNodes: readonly DesignNode[];
+  /** Current selected node IDs in the editor state (used by selection.invert / selection.select-similar). */
+  selectedNodeIds?: readonly string[];
   /** Live canonical component master document reference verified by CAS before reducer execution. */
   liveComponentMasterDocument?: FolioDocument;
 }
@@ -582,6 +586,48 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
     toEditorActions(command: NativeCommand): readonly EditorAction[] {
       if (command.type !== 'selection.set') return [];
       return [{ type: 'select-nodes', nodeIds: [...command.payload.nodeIds] }];
+    },
+  }),
+  'selection.deselect': Object.freeze({
+    type: 'selection.deselect' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['document'] as const),
+    requiredPermission: 'selection.update',
+    mutatesProject: false,
+    validatePayload: validateEmptyCommandPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'selection.deselect') return [];
+      return [{ type: 'select-nodes', nodeIds: [] }];
+    },
+  }),
+  'selection.invert': Object.freeze({
+    type: 'selection.invert' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['document'] as const),
+    requiredPermission: 'selection.update',
+    mutatesProject: false,
+    validatePayload: validateEmptyCommandPayload,
+    toEditorActions(command: NativeCommand, context: NativeCommandAdapterContext): readonly EditorAction[] {
+      if (command.type !== 'selection.invert' || !context.document) return [];
+      const nextIds = computeInvertedSelectionIds(context.document.nodes, context.selectedNodeIds ?? []);
+      return [{ type: 'select-nodes', nodeIds: nextIds }];
+    },
+  }),
+  'selection.select-similar': Object.freeze({
+    type: 'selection.select-similar' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['document'] as const),
+    requiredPermission: 'selection.update',
+    mutatesProject: false,
+    validatePayload: validateSelectionSelectSimilarPayload,
+    toEditorActions(command: NativeCommand, context: NativeCommandAdapterContext): readonly EditorAction[] {
+      if (command.type !== 'selection.select-similar' || !context.document) return [];
+      const nextIds = computeSimilarSelectionIds(
+        context.document.nodes,
+        context.selectedNodeIds ?? [],
+        command.payload.criterion,
+      );
+      return [{ type: 'select-nodes', nodeIds: nextIds }];
     },
   }),
   'history.commit-edit': Object.freeze({

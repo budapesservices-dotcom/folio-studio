@@ -494,3 +494,154 @@ export function createDefaultVisualEffect(
       return { id: effectId, type: 'backdrop-blur', radius: 16, visible: true };
   }
 }
+
+export interface ParsedColorWithAlpha {
+  readonly hex: string;
+  readonly alpha: number;
+  readonly isTransparent: boolean;
+}
+
+function channelToHex(value: number): string {
+  return Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, '0').toUpperCase();
+}
+
+export function isTransparentColor(raw: string | undefined): boolean {
+  if (!raw) return true;
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed || trimmed === 'none' || trimmed === 'transparent' || trimmed === '#00000000' || trimmed === '#0000') {
+    return true;
+  }
+  const rgbaMatch = /^rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/i.exec(trimmed);
+  if (rgbaMatch && Number(rgbaMatch[4]) <= 0) return true;
+  const hex8Match = /^#([0-9a-f]{6})([0-9a-f]{2})$/i.exec(trimmed);
+  if (hex8Match && parseInt(hex8Match[2], 16) === 0) return true;
+  return false;
+}
+
+export function parseColorWithAlpha(raw: string | undefined, fallbackHex = '#8B7CF6'): ParsedColorWithAlpha {
+  const safeFallback = /^#[0-9a-f]{6}$/i.test(fallbackHex) ? fallbackHex.toUpperCase() : '#8B7CF6';
+  if (!raw) return { hex: safeFallback, alpha: 0, isTransparent: true };
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+  if (!trimmed || lower === 'none' || lower === 'transparent') {
+    return { hex: safeFallback, alpha: 0, isTransparent: true };
+  }
+
+  const hex3 = /^#([0-9a-f]{3})$/i.exec(trimmed);
+  if (hex3) {
+    const [r, g, b] = hex3[1];
+    return { hex: `#${r}${r}${g}${g}${b}${b}`.toUpperCase(), alpha: 1, isTransparent: false };
+  }
+
+  const hex4 = /^#([0-9a-f]{4})$/i.exec(trimmed);
+  if (hex4) {
+    const [r, g, b, a] = hex4[1];
+    const alpha = roundStyleNum(parseInt(a + a, 16) / 255);
+    return {
+      hex: `#${r}${r}${g}${g}${b}${b}`.toUpperCase(),
+      alpha,
+      isTransparent: alpha <= 0,
+    };
+  }
+
+  const hex6 = /^#([0-9a-f]{6})$/i.exec(trimmed);
+  if (hex6) {
+    return { hex: `#${hex6[1]}`.toUpperCase(), alpha: 1, isTransparent: false };
+  }
+
+  const hex8 = /^#([0-9a-f]{6})([0-9a-f]{2})$/i.exec(trimmed);
+  if (hex8) {
+    const alpha = roundStyleNum(parseInt(hex8[2], 16) / 255);
+    return {
+      hex: `#${hex8[1]}`.toUpperCase(),
+      alpha,
+      isTransparent: alpha <= 0,
+    };
+  }
+
+  const rgbMatch = /^rgba?\(\s*([\d.]+)\s*[,\s]\s*([\d.]+)\s*[,\s]\s*([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i.exec(trimmed);
+  if (rgbMatch) {
+    const r = Number(rgbMatch[1]);
+    const g = Number(rgbMatch[2]);
+    const b = Number(rgbMatch[3]);
+    let alpha = 1;
+    if (rgbMatch[4] !== undefined) {
+      alpha = rgbMatch[4].endsWith('%')
+        ? clamp01(parseFloat(rgbMatch[4]) / 100)
+        : clamp01(Number(rgbMatch[4]));
+    }
+    const roundedAlpha = roundStyleNum(alpha);
+    return {
+      hex: `#${channelToHex(r)}${channelToHex(g)}${channelToHex(b)}`,
+      alpha: roundedAlpha,
+      isTransparent: roundedAlpha <= 0,
+    };
+  }
+
+  return { hex: safeFallback, alpha: 1, isTransparent: false };
+}
+
+export function formatColorWithAlpha(hex: string, alpha: number): string {
+  const clamped = roundStyleNum(clamp01(alpha));
+  if (clamped <= 0) return 'transparent';
+  const parsed = parseColorWithAlpha(hex, '#8B7CF6');
+  if (clamped >= 0.999) return parsed.hex;
+  const r = parseInt(parsed.hex.slice(1, 3), 16);
+  const g = parseInt(parsed.hex.slice(3, 5), 16);
+  const b = parseInt(parsed.hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${clamped})`;
+}
+
+export type ShadowPresetId = 'none' | 'soft' | 'medium' | 'deep' | 'neon-glow';
+
+export interface ShadowPresetDefinition {
+  readonly id: ShadowPresetId;
+  readonly label: string;
+  readonly shadow: Omit<Extract<VisualEffect, { type: 'drop-shadow' }>, 'id' | 'type' | 'visible'> | null;
+}
+
+export const SHADOW_PRESETS: readonly ShadowPresetDefinition[] = Object.freeze([
+  { id: 'none', label: 'None', shadow: null },
+  { id: 'soft', label: 'Soft', shadow: { x: 0, y: 4, blur: 12, spread: 0, color: 'rgba(15, 23, 42, 0.18)' } },
+  { id: 'medium', label: 'Medium', shadow: { x: 0, y: 12, blur: 28, spread: -2, color: 'rgba(15, 23, 42, 0.32)' } },
+  { id: 'deep', label: 'Deep', shadow: { x: 0, y: 24, blur: 48, spread: -4, color: 'rgba(0, 0, 0, 0.52)' } },
+  { id: 'neon-glow', label: 'Neon Glow', shadow: { x: 0, y: 0, blur: 22, spread: 2, color: 'rgba(0, 229, 255, 0.55)' } },
+]);
+
+export function detectShadowPreset(effects: readonly VisualEffect[] | undefined): ShadowPresetId {
+  const activeDrop = (effects ?? []).find((fx): fx is Extract<VisualEffect, { type: 'drop-shadow' }> =>
+    fx.type === 'drop-shadow' && fx.visible !== false,
+  );
+  if (!activeDrop) return 'none';
+  for (const preset of SHADOW_PRESETS) {
+    if (!preset.shadow) continue;
+    if (
+      preset.shadow.x === activeDrop.x &&
+      preset.shadow.y === activeDrop.y &&
+      preset.shadow.blur === activeDrop.blur &&
+      preset.shadow.color.toLowerCase() === activeDrop.color.toLowerCase()
+    ) {
+      return preset.id;
+    }
+  }
+  return 'medium';
+}
+
+export function applyShadowPresetToEffects(
+  effects: readonly VisualEffect[] | undefined,
+  presetId: ShadowPresetId,
+): VisualEffect[] | undefined {
+  const retained = (effects ?? []).filter((fx) => fx.type !== 'drop-shadow');
+  const preset = SHADOW_PRESETS.find((item) => item.id === presetId);
+  if (!preset || !preset.shadow) {
+    return retained.length > 0 ? retained : undefined;
+  }
+  const nextShadow: VisualEffect = {
+    id: `fx-shadow-${presetId}`,
+    type: 'drop-shadow',
+    ...preset.shadow,
+    visible: true,
+  };
+  return [nextShadow, ...retained];
+}
+

@@ -1,5 +1,6 @@
-import type { ComponentInstanceNode, DesignNode, VectorShapeMeta } from '../../core/document/types';
+import type { ComponentInstanceNode, DesignNode, DrawMaskMode, VectorShapeMeta } from '../../core/document/types';
 import { expandSelectedLayerIds, getEffectiveLayerStates } from '../../core/document/layers';
+import type { SelectSimilarCriterion } from '../../core/document/selectionQueries';
 import { detachComponentInstance } from '../../core/document/components';
 import { getActiveDocument } from '../../core/document/project';
 import { getProjectDesignTokens } from '../../core/document/tokens';
@@ -65,6 +66,7 @@ export interface UseSelectionAndVectorActionsOptions {
   setWorkspaceToolId: (target: EditorTarget, toolId: CanvasToolId) => void;
   setInspectorVisible: (visible: boolean) => void;
   setNotice: (message: string) => void;
+  openNodeLogic?: () => void;
 }
 
 export function useSelectionAndVectorActions({
@@ -84,6 +86,7 @@ export function useSelectionAndVectorActions({
   setWorkspaceToolId,
   setInspectorVisible,
   setNotice,
+  openNodeLogic,
 }: UseSelectionAndVectorActionsOptions) {
   const updateSelected = (patch: Partial<DesignNode>) => {
     const selectedIds = new Set(selectedNodes.map((n) => n.id));
@@ -699,6 +702,130 @@ export function useSelectionAndVectorActions({
     }
   };
 
+  const deselectSelection = (target: EditorTarget = activeEditorId) => {
+    if (isHydrating) return;
+    getCommandClient(target).deselectAll('Deselect layers');
+  };
+
+  const invertSelection = (target: EditorTarget = activeEditorId) => {
+    if (isHydrating) return;
+    const result = getCommandClient(target).invertSelection('Invert selection');
+    if (result.status === 'no-op') {
+      setNotice('No selectable sibling layers to invert.');
+    }
+  };
+
+  const selectSimilar = (target: EditorTarget = activeEditorId, criterion: SelectSimilarCriterion) => {
+    if (isHydrating) return;
+    const context = getActiveEditorContext(target, state, componentState);
+    if (context.state.selectedNodeIds.length === 0) {
+      setNotice('Select at least one layer before running Select Similar.');
+      return;
+    }
+    const result = getCommandClient(target).selectSimilar(criterion, `Select similar (${criterion})`);
+    if (result.status === 'no-op') {
+      setNotice(`No additional layers match the same ${criterion}.`);
+    }
+  };
+
+  const setDrawMode = (target: EditorTarget = activeEditorId, mode: DrawMaskMode) => {
+    if (isHydrating) return;
+    const context = getActiveEditorContext(target, state, componentState);
+    const layerStates = getEffectiveLayerStates(context.document.nodes);
+    const targets = context.document.nodes.filter(
+      (node) =>
+        context.state.selectedNodeIds.includes(node.id) &&
+        node.type !== 'group' &&
+        layerStates.get(node.id)?.visible &&
+        !layerStates.get(node.id)?.locked,
+    );
+    if (targets.length === 0) {
+      setNotice('Select an unlocked object to change its Draw Mode.');
+      return;
+    }
+    const updated = targets.map((node) => {
+      if (node.type === 'frame' && mode === 'inside') {
+        return { ...node, drawMode: mode, clipContent: true };
+      }
+      return { ...node, drawMode: mode };
+    });
+    getCommandClient(target).transformNodes(updated, `Set draw mode (${mode})`);
+    if (mode === 'inside') {
+      setNotice('Draw Inside active: new shapes will clip inside the selected container.');
+    } else if (mode === 'outside') {
+      setNotice('Draw Outside active: new shapes will mask outside the selected contour.');
+    } else {
+      setNotice('Draw Mode reset to Normal.');
+    }
+  };
+
+  const permanentSubtractOutside = (target: EditorTarget = activeEditorId) => {
+    if (isHydrating) return;
+    const context = getActiveEditorContext(target, state, componentState);
+    const nodes = context.document.nodes;
+    const layerStates = getEffectiveLayerStates(nodes);
+    const activeNode = context.selectedNode;
+    if (!activeNode) {
+      setNotice('Select a Draw Outside shape or its base contour first.');
+      return;
+    }
+
+    const baseNode =
+      activeNode.clipMaskBaseId && activeNode.clipMaskMode === 'outside'
+        ? nodes.find((node) => node.id === activeNode.clipMaskBaseId) ?? null
+        : activeNode;
+    if (!baseNode) {
+      setNotice('Could not locate the base shape for Draw Outside subtraction.');
+      return;
+    }
+
+    const outsideOverlays =
+      activeNode.clipMaskBaseId && activeNode.clipMaskMode === 'outside'
+        ? [activeNode]
+        : nodes.filter(
+          (node) =>
+            node.clipMaskBaseId === baseNode.id &&
+            node.clipMaskMode === 'outside' &&
+            layerStates.get(node.id)?.visible &&
+            !layerStates.get(node.id)?.locked,
+        );
+
+    if (outsideOverlays.length === 0) {
+      setNotice('No Draw Outside shapes are masked against this object.');
+      return;
+    }
+
+    const kernels = getComputeKernels();
+    const removeIds: string[] = [];
+    const insertNodes: DesignNode[] = [];
+    for (const overlay of outsideOverlays) {
+      const subtracted = kernels.vector.booleanOp([overlay, baseNode], 'subtract');
+      if (!subtracted) continue;
+      removeIds.push(overlay.id);
+      insertNodes.push({
+        ...subtracted,
+        id: createStudioVectorId('path-subtract'),
+        name: `${overlay.name} (Cutout)`,
+        ...(overlay.parentId ? { parentId: overlay.parentId } : {}),
+        clipMaskBaseId: undefined,
+        clipMaskMode: undefined,
+      });
+    }
+
+    if (removeIds.length === 0 || insertNodes.length === 0) {
+      setNotice('Permanent Subtract requires overlapping vector shapes.');
+      return;
+    }
+
+    getCommandClient(target).replaceNodes(
+      removeIds,
+      insertNodes,
+      'Permanent Subtract (Draw Outside)',
+      insertNodes.map((n) => n.id),
+    );
+    setNotice(`Permanently subtracted ${insertNodes.length} Draw Outside shape${insertNodes.length === 1 ? '' : 's'} with Pathfinder.`);
+  };
+
   const createStudioActionsForTarget = (target: EditorTarget): StudioVectorActions => ({
     onPathfinder: (operation) => handlePathfinder(target, operation),
     onDividePathfinder: () => handleDividePathfinder(target),
@@ -719,6 +846,12 @@ export function useSelectionAndVectorActions({
     onGroupSelection: () => handleGroupSelection(target),
     onUngroupSelection: () => handleUngroupSelection(target),
     onCreateClippingMask: () => handleCreateClippingMask(target),
+    onDeselect: () => deselectSelection(target),
+    onInvertSelection: () => invertSelection(target),
+    onSelectSimilar: (criterion) => selectSimilar(target, criterion),
+    onSetDrawMode: (mode) => setDrawMode(target, mode),
+    onPermanentSubtractOutside: () => permanentSubtractOutside(target),
+    ...(openNodeLogic ? { onOpenNodeLogic: openNodeLogic } : {}),
   });
 
   return {
@@ -751,6 +884,11 @@ export function useSelectionAndVectorActions({
     copySelection,
     cutSelection,
     pasteSelection,
+    deselectSelection,
+    invertSelection,
+    selectSimilar,
+    setDrawMode,
+    permanentSubtractOutside,
     createStudioActionsForTarget,
   };
 }

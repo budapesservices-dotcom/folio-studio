@@ -23,7 +23,7 @@ import {
   hasSvgFilterEffects,
   sanitizeStyleColor,
 } from '../../core/document/styling';
-import { getSvgTextAnchorAndX, wrapTextLines } from '../../core/document/typography';
+import { computeTextVerticalOffset, getSvgTextAnchorAndX, wrapTextLines } from '../../core/document/typography';
 import { serializePathPointsToSvgD } from '../../core/document/vector';
 import { resolveAssetDisplayUrl } from '../../core/persistence/assetStore';
 import { computeAutoLayoutNodes } from '../layout/autoLayout';
@@ -47,6 +47,10 @@ export function sanitizeMaskIdSegment(raw: string): string {
 
 export function buildMaskElementId(scopePrefix: string, baseId: string): string {
   return `${scopePrefix}--${sanitizeMaskIdSegment(baseId)}`;
+}
+
+export function buildOutsideMaskElementId(scopePrefix: string, baseId: string): string {
+  return `${scopePrefix}--outside--${sanitizeMaskIdSegment(baseId)}`;
 }
 
 export function buildFrameClipElementId(scopePrefix: string, frameId: string): string {
@@ -99,10 +103,10 @@ function buildArrowheadPolygon(
   return `${tip.x},${tip.y} ${backX + px * wing},${backY + py * wing} ${backX - px * wing},${backY - py * wing}`;
 }
 
-function renderPathArrowheads(node: PathNode, mask: boolean) {
+function renderPathArrowheads(node: PathNode, mask: boolean, maskFill = '#fff') {
   if (node.closed || node.points.length < 2) return null;
   if (!node.style.arrowStart && !node.style.arrowEnd) return null;
-  const color = mask ? '#fff' : (node.style.stroke !== 'none' && node.style.stroke !== '#00000000' ? node.style.stroke : node.style.fill);
+  const color = mask ? maskFill : (node.style.stroke !== 'none' && node.style.stroke !== '#00000000' ? node.style.stroke : node.style.fill);
   if (!color || color === 'none') return null;
   const size = Math.max(10, Math.min(28, (node.style.strokeWidth || 2) * 3.8));
   const arrows = [];
@@ -197,6 +201,16 @@ function NodeStyleDefs({
           );
         }
       });
+    }
+
+    if (node.type === 'path' && node.style.strokeAlign === 'inside' && node.style.strokeWidth > 0 && node.style.stroke !== 'none') {
+      const clipId = `${maskPrefix}--pathclip--${sanitizeMaskIdSegment(node.id)}`;
+      const pathD = serializePathPointsToSvgD(node.points, node.closed, node.subpaths);
+      defs.push(
+        <clipPath key={clipId} id={clipId} clipPathUnits="userSpaceOnUse">
+          <path d={pathD} fill-rule={node.style.fillRule ?? 'nonzero'} />
+        </clipPath>,
+      );
     }
 
     if (node.type === 'image' && (node.style.radius ?? 0) > 0) {
@@ -322,11 +336,13 @@ function renderBackdropBlurOverlay(
 export function NodeShape({
   node,
   mask = false,
+  maskFill = '#fff',
   maskPrefix = 'folio',
   assetById,
 }: {
   node: PrimitiveNode;
   mask?: boolean;
+  maskFill?: string;
   maskPrefix?: string;
   assetById?: ReadonlyMap<string, AssetReference>;
 }) {
@@ -361,7 +377,14 @@ export function NodeShape({
       {node.type === 'frame' && (() => {
         const fills = getVisibleFillPaints(node);
         const rx = node.style.radius ?? 0;
-        const dash = node.isSection && !mask ? '6 4' : undefined;
+        const dash = !mask
+          ? (node.style.strokeDasharray || (node.isSection ? '6 4' : undefined))
+          : undefined;
+        const sw = node.style.strokeWidth;
+        const strokeAlign = node.style.strokeAlign ?? 'center';
+        const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
+        const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
+        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
         return (
           <g>
             {!mask && (
@@ -382,7 +405,7 @@ export function NodeShape({
               </text>
             )}
             {renderBackdropBlurOverlay(node, mask, rx)}
-            {mask || fills.length <= 1 ? (
+            {mask || (fills.length <= 1 && !needsSeparateStroke) ? (
               <rect
                 x={node.x}
                 y={node.y}
@@ -391,14 +414,14 @@ export function NodeShape({
                 rx={rx}
                 fill={
                   mask
-                    ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff')
+                    ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
                     : fills.length === 1
                       ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
                       : 'none'
                 }
                 fill-opacity={!mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined}
-                stroke={mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke}
-                stroke-width={node.style.strokeWidth}
+                stroke={mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke}
+                stroke-width={sw}
                 stroke-dasharray={dash}
               />
             ) : (
@@ -419,16 +442,16 @@ export function NodeShape({
                     />
                   );
                 })}
-                {node.style.strokeWidth > 0 && node.style.stroke !== 'none' && (
+                {hasStroke && (
                   <rect
-                    x={node.x}
-                    y={node.y}
-                    width={node.width}
-                    height={node.height}
-                    rx={rx}
+                    x={node.x + strokeDelta}
+                    y={node.y + strokeDelta}
+                    width={Math.max(0, node.width - strokeDelta * 2)}
+                    height={Math.max(0, node.height - strokeDelta * 2)}
+                    rx={rx > 0 ? Math.max(0, rx - strokeDelta) : 0}
                     fill="none"
                     stroke={node.style.stroke}
-                    stroke-width={node.style.strokeWidth}
+                    stroke-width={sw}
                     stroke-dasharray={dash}
                   />
                 )}
@@ -440,10 +463,16 @@ export function NodeShape({
       {node.type === 'rect' && (() => {
         const fills = getVisibleFillPaints(node);
         const rx = node.style.radius ?? 0;
+        const dash = !mask ? (node.style.strokeDasharray || undefined) : undefined;
+        const sw = node.style.strokeWidth;
+        const strokeAlign = node.style.strokeAlign ?? 'center';
+        const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
+        const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
+        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
         return (
           <>
             {renderBackdropBlurOverlay(node, mask, rx)}
-            {mask || fills.length <= 1 ? (
+            {mask || (fills.length <= 1 && !needsSeparateStroke) ? (
               <rect
                 x={node.x}
                 y={node.y}
@@ -452,14 +481,15 @@ export function NodeShape({
                 rx={rx}
                 fill={
                   mask
-                    ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff')
+                    ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
                     : fills.length === 1
                       ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
                       : 'none'
                 }
                 fill-opacity={!mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined}
-                stroke={mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke}
-                stroke-width={node.style.strokeWidth}
+                stroke={mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke}
+                stroke-width={sw}
+                stroke-dasharray={dash}
               />
             ) : (
               <>
@@ -479,16 +509,17 @@ export function NodeShape({
                     />
                   );
                 })}
-                {node.style.strokeWidth > 0 && node.style.stroke !== 'none' && (
+                {hasStroke && (
                   <rect
-                    x={node.x}
-                    y={node.y}
-                    width={node.width}
-                    height={node.height}
-                    rx={rx}
+                    x={node.x + strokeDelta}
+                    y={node.y + strokeDelta}
+                    width={Math.max(0, node.width - strokeDelta * 2)}
+                    height={Math.max(0, node.height - strokeDelta * 2)}
+                    rx={rx > 0 ? Math.max(0, rx - strokeDelta) : 0}
                     fill="none"
                     stroke={node.style.stroke}
-                    stroke-width={node.style.strokeWidth}
+                    stroke-width={sw}
+                    stroke-dasharray={dash}
                   />
                 )}
               </>
@@ -500,10 +531,16 @@ export function NodeShape({
         const fills = getVisibleFillPaints(node);
         const cx = node.x + node.width / 2;
         const cy = node.y + node.height / 2;
+        const dash = !mask ? (node.style.strokeDasharray || undefined) : undefined;
+        const sw = node.style.strokeWidth;
+        const strokeAlign = node.style.strokeAlign ?? 'center';
+        const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
+        const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
+        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
         return (
           <>
             {renderBackdropBlurOverlay(node, mask, 0, true)}
-            {mask || fills.length <= 1 ? (
+            {mask || (fills.length <= 1 && !needsSeparateStroke) ? (
               <ellipse
                 cx={cx}
                 cy={cy}
@@ -511,14 +548,15 @@ export function NodeShape({
                 ry={node.height / 2}
                 fill={
                   mask
-                    ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff')
+                    ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
                     : fills.length === 1
                       ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
                       : 'none'
                 }
                 fill-opacity={!mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined}
-                stroke={mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke}
-                stroke-width={node.style.strokeWidth}
+                stroke={mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke}
+                stroke-width={sw}
+                stroke-dasharray={dash}
               />
             ) : (
               <>
@@ -537,15 +575,16 @@ export function NodeShape({
                     />
                   );
                 })}
-                {node.style.strokeWidth > 0 && node.style.stroke !== 'none' && (
+                {hasStroke && (
                   <ellipse
                     cx={cx}
                     cy={cy}
-                    rx={node.width / 2}
-                    ry={node.height / 2}
+                    rx={Math.max(0, node.width / 2 - strokeDelta)}
+                    ry={Math.max(0, node.height / 2 - strokeDelta)}
                     fill="none"
                     stroke={node.style.stroke}
-                    stroke-width={node.style.strokeWidth}
+                    stroke-width={sw}
+                    stroke-dasharray={dash}
                   />
                 )}
               </>
@@ -556,6 +595,25 @@ export function NodeShape({
       {node.type === 'path' && (() => {
         const pathD = serializePathPointsToSvgD(node.points, node.closed, node.subpaths);
         const fills = getVisibleFillPaints(node);
+        const sw = node.style.strokeWidth;
+        const strokeAlign = node.style.strokeAlign ?? 'center';
+        const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
+        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
+        const insideClipAttr = strokeAlign === 'inside'
+          ? `url(#${maskPrefix}--pathclip--${sanitizeMaskIdSegment(node.id)})`
+          : undefined;
+        const strokeEl = hasStroke ? (
+          <path
+            d={pathD}
+            fill="none"
+            stroke={node.style.stroke}
+            stroke-width={strokeAlign === 'center' ? sw : sw * 2}
+            stroke-linecap={node.style.strokeLinecap ?? 'round'}
+            stroke-linejoin={node.style.strokeLinejoin ?? 'round'}
+            stroke-dasharray={node.style.strokeDasharray || undefined}
+            clip-path={insideClipAttr}
+          />
+        ) : null;
         return (
           <g transform={`translate(${node.x} ${node.y})`}>
             {!mask && !node.closed && (
@@ -563,32 +621,33 @@ export function NodeShape({
                 d={pathD}
                 fill="none"
                 stroke="transparent"
-                stroke-width={Math.max(12, node.style.strokeWidth + 8)}
+                stroke-width={Math.max(12, sw + 8)}
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 pointer-events="stroke"
               />
             )}
-            {mask || fills.length <= 1 ? (
+            {mask || (fills.length <= 1 && !needsSeparateStroke) ? (
               <path
                 d={pathD}
                 fill={
                   mask
-                    ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff')
+                    ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
                     : fills.length === 1
                       ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
                       : 'none'
                 }
                 fill-opacity={!mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined}
                 fill-rule={node.style.fillRule ?? 'nonzero'}
-                stroke={mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke}
-                stroke-width={node.style.strokeWidth}
+                stroke={mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke}
+                stroke-width={sw}
                 stroke-linecap={node.style.strokeLinecap ?? 'round'}
                 stroke-linejoin={node.style.strokeLinejoin ?? 'round'}
                 stroke-dasharray={node.style.strokeDasharray || undefined}
               />
             ) : (
               <>
+                {strokeAlign === 'outside' && strokeEl}
                 {fills.map((paint, index) => {
                   const resolved = resolveFillAttribute(paint, node.id, index, maskPrefix);
                   return (
@@ -602,20 +661,10 @@ export function NodeShape({
                     />
                   );
                 })}
-                {node.style.strokeWidth > 0 && node.style.stroke !== 'none' && (
-                  <path
-                    d={pathD}
-                    fill="none"
-                    stroke={node.style.stroke}
-                    stroke-width={node.style.strokeWidth}
-                    stroke-linecap={node.style.strokeLinecap ?? 'round'}
-                    stroke-linejoin={node.style.strokeLinejoin ?? 'round'}
-                    stroke-dasharray={node.style.strokeDasharray || undefined}
-                  />
-                )}
+                {strokeAlign !== 'outside' && strokeEl}
               </>
             )}
-            {renderPathArrowheads(node, mask)}
+            {renderPathArrowheads(node, mask, maskFill)}
           </g>
         );
       })()}
@@ -629,15 +678,23 @@ export function NodeShape({
           textWrap: node.style.textWrap,
           textTransform: node.style.textTransform,
         });
-        const { anchor, xPos } = getSvgTextAnchorAndX(node.x, node.width, node.style.textAlign);
+        const isJustify = node.style.textAlign === 'justify';
+        const { anchor, xPos } = getSvgTextAnchorAndX(node.x, node.width, isJustify ? 'left' : node.style.textAlign);
+        const verticalOffset = computeTextVerticalOffset(
+          node.height,
+          lines.length,
+          node.style.fontSize,
+          node.style.lineHeight,
+          node.style.verticalAlign,
+        );
         const decoration = node.style.textDecoration && node.style.textDecoration !== 'none'
           ? node.style.textDecoration
           : undefined;
         return (
           <text
             x={xPos}
-            y={node.y}
-            fill={mask ? '#fff' : node.style.fill}
+            y={node.y + verticalOffset}
+            fill={mask ? maskFill : node.style.fill}
             font-size={node.style.fontSize}
             font-family={node.style.fontFamily}
             font-weight={node.style.fontWeight}
@@ -646,15 +703,24 @@ export function NodeShape({
             text-decoration={decoration}
             dominant-baseline="hanging"
           >
-            {lines.map((line, index) => (
-              <tspan
-                key={`${node.id}-${index}`}
-                x={xPos}
-                dy={index === 0 ? 0 : node.style.fontSize * node.style.lineHeight}
-              >
-                {line || ' '}
-              </tspan>
-            ))}
+            {lines.map((line, index) => {
+              const shouldJustifyLine =
+                isJustify &&
+                index < lines.length - 1 &&
+                line.trim().includes(' ') &&
+                node.width > node.style.fontSize * 2;
+              return (
+                <tspan
+                  key={`${node.id}-${index}`}
+                  x={xPos}
+                  dy={index === 0 ? 0 : node.style.fontSize * node.style.lineHeight}
+                  textLength={shouldJustifyLine ? node.width : undefined}
+                  lengthAdjust={shouldJustifyLine ? 'spacing' : undefined}
+                >
+                  {line || ' '}
+                </tspan>
+              );
+            })}
           </text>
         );
       })()}
@@ -669,7 +735,7 @@ export function NodeShape({
               width={imgNode.width}
               height={imgNode.height}
               rx={rx}
-              fill="#fff"
+              fill={maskFill}
             />
           );
         }
@@ -742,6 +808,7 @@ export function ClipMaskArtwork({
   nodes,
   components,
   maskPrefix,
+  maskFill = '#fff',
   nodeById,
   componentById,
   assetById,
@@ -753,6 +820,7 @@ export function ClipMaskArtwork({
   nodes: DesignNode[];
   components: ComponentDefinition[];
   maskPrefix: string;
+  maskFill?: string;
   nodeById?: ReadonlyMap<string, DesignNode>;
   componentById?: ReadonlyMap<string, ComponentDefinition>;
   assetById?: ReadonlyMap<string, AssetReference>;
@@ -767,7 +835,7 @@ export function ClipMaskArtwork({
       .map((id) => resolvedNodeById.get(id))
       .filter((item): item is DesignNode => item !== undefined && item.type !== 'group' && Boolean(states.get(item.id)?.visible));
     if (descendants.length === 0) {
-      return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#fff" opacity={node.opacity} />;
+      return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill={maskFill} opacity={node.opacity} />;
     }
     return (
       <g>
@@ -778,6 +846,7 @@ export function ClipMaskArtwork({
             nodes={nodes}
             components={components}
             maskPrefix={maskPrefix}
+            maskFill={maskFill}
             nodeById={resolvedNodeById}
             componentById={componentById}
             assetById={assetById}
@@ -798,7 +867,7 @@ export function ClipMaskArtwork({
       const transform = node.rotation
         ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
         : undefined;
-      return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#fff" opacity={node.opacity} transform={transform} />;
+      return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill={maskFill} opacity={node.opacity} transform={transform} />;
     }
     const nextVisited = new Set(visited);
     nextVisited.add(node.componentId);
@@ -854,6 +923,7 @@ export function ClipMaskArtwork({
                     nodes={visibleChildren}
                     components={components}
                     maskPrefix={instanceMaskPrefix}
+                    maskFill={maskFill}
                     nodeById={childNodeById}
                     componentById={resolvedComponents}
                     assetById={assetById}
@@ -862,7 +932,7 @@ export function ClipMaskArtwork({
                     depth={depth + 1}
                   />
                 )
-                : <NodeShape key={child.id} node={child as PrimitiveNode} mask maskPrefix={instanceMaskPrefix} assetById={assetById} />;
+                : <NodeShape key={child.id} node={child as PrimitiveNode} mask maskFill={maskFill} maskPrefix={instanceMaskPrefix} assetById={assetById} />;
               const clipped = frameIds.reduceRight(
                 (artwork, frameId) => <g clip-path={`url(#${buildFrameClipElementId(instanceMaskPrefix, frameId)})`}>{artwork}</g>,
                 shape,
@@ -877,7 +947,7 @@ export function ClipMaskArtwork({
     );
   }
 
-  return <NodeShape node={node as PrimitiveNode} mask maskPrefix={maskPrefix} assetById={assetById} />;
+  return <NodeShape node={node as PrimitiveNode} mask maskFill={maskFill} maskPrefix={maskPrefix} assetById={assetById} />;
 }
 
 export function DocumentMaskDefs({
@@ -913,11 +983,15 @@ export function DocumentMaskDefs({
   const resolvedClipMaskMap = clipMaskMap ?? buildLayerClipMaskMap(nodes, resolvedNodeById);
   const resolvedFrameClipMap = frameClipMap ?? buildFrameClipAncestorMap(nodes, resolvedNodeById);
   const referencedSet = new Set<string>();
+  const referencedOutsideSet = new Set<string>();
   const referencedFrameSet = new Set<string>();
   for (const node of nodes) {
     const baseIds = resolvedClipMaskMap.get(node.id);
     if (baseIds) {
       for (const baseId of baseIds) referencedSet.add(baseId);
+    }
+    if (node.clipMaskBaseId && node.clipMaskMode === 'outside') {
+      referencedOutsideSet.add(node.clipMaskBaseId);
     }
     const frameIds = resolvedFrameClipMap.get(node.id);
     if (frameIds) {
@@ -927,6 +1001,7 @@ export function DocumentMaskDefs({
 
   const resolvedComponents = getComponentById(components, componentById);
   const referencedBaseIds = [...referencedSet];
+  const referencedOutsideBaseIds = [...referencedOutsideSet];
   const referencedFrameIds = [...referencedFrameSet];
   return (
     <>
@@ -951,6 +1026,37 @@ export function DocumentMaskDefs({
               nodes={nodes}
               components={components}
               maskPrefix={maskPrefix}
+              nodeById={resolvedNodeById}
+              componentById={resolvedComponents}
+              assetById={assetById}
+              tokens={tokens}
+              visitedComponentIds={visitedComponentIds}
+              depth={depth}
+            />
+          </mask>
+        );
+      })}
+      {referencedOutsideBaseIds.map((baseId) => {
+        const base = resolvedNodeById.get(baseId);
+        if (!base) return null;
+        return (
+          <mask
+            key={`mask-outside-${baseId}`}
+            id={buildOutsideMaskElementId(maskPrefix, baseId)}
+            maskUnits="userSpaceOnUse"
+            maskContentUnits="userSpaceOnUse"
+            x="0"
+            y="0"
+            width={width}
+            height={height}
+          >
+            <rect x="0" y="0" width={width} height={height} fill="#fff" />
+            <ClipMaskArtwork
+              node={base}
+              nodes={nodes}
+              components={components}
+              maskPrefix={maskPrefix}
+              maskFill="#000"
               nodeById={resolvedNodeById}
               componentById={resolvedComponents}
               assetById={assetById}
@@ -1181,7 +1287,13 @@ export function MaskedNodeArtwork({
     baseArtwork,
   );
   return maskIds.reduceRight(
-    (artwork, maskId) => <g mask={`url(#${buildMaskElementId(maskPrefix, maskId)})`}>{artwork}</g>,
+    (artwork, maskId) => {
+      const isOutside = maskId === node.clipMaskBaseId && node.clipMaskMode === 'outside';
+      const urlId = isOutside
+        ? buildOutsideMaskElementId(maskPrefix, maskId)
+        : buildMaskElementId(maskPrefix, maskId);
+      return <g mask={`url(#${urlId})`}>{artwork}</g>;
+    },
     frameClipped,
   );
 }

@@ -4,8 +4,9 @@
  * calculation, Artboard alignment, Step & Repeat cloning, and Studio Swatches.
  */
 
-import type { DesignNode, VectorShapeMeta } from '../../core/document/types';
+import type { DesignNode, DrawMaskMode, VectorShapeMeta } from '../../core/document/types';
 import type { LayerDropPosition } from '../../core/document/layers';
+import type { SelectSimilarCriterion } from '../../core/document/selectionQueries';
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { Alignment, DistributionAxis } from '../../engines/canvas/geometry';
 import { cloneNodesSubtree } from '../nodeClipboard';
@@ -41,6 +42,12 @@ export interface StudioVectorActions {
   readonly onGroupSelection: () => void;
   readonly onUngroupSelection: () => void;
   readonly onCreateClippingMask: () => void;
+  readonly onDeselect: () => void;
+  readonly onInvertSelection: () => void;
+  readonly onSelectSimilar: (criterion: SelectSimilarCriterion) => void;
+  readonly onSetDrawMode: (mode: DrawMaskMode) => void;
+  readonly onPermanentSubtractOutside: () => void;
+  readonly onOpenNodeLogic?: () => void;
 }
 
 export interface StrokeDashPreset {

@@ -202,6 +202,10 @@ export interface NodeBase {
   onCanvas?: boolean;
   /** Base layer ID whose alpha bounds this layer as a Photoshop-style clipping layer. */
   clipMaskBaseId?: string;
+  /** Vector clipping polarity when `clipMaskBaseId` is set ('inside' default, 'outside' inverted SVG mask). */
+  clipMaskMode?: ClipMaskMode;
+  /** Active draw-clipping mode for shape/frame containers ('normal', 'inside', 'outside'). */
+  drawMode?: DrawMaskMode;
   /** Optional web semantic HTML tag (defaults to structural role when omitted). */
   semanticTag?: SemanticHtmlTag;
   /** Optional accessible label (aria-label) for semantic HTML export & a11y. */
@@ -224,10 +228,16 @@ export interface NodeBase {
   aspectRatioLocked?: boolean;
 }
 
+export type StrokeAlign = 'inside' | 'center' | 'outside';
+export type ClipMaskMode = 'inside' | 'outside';
+export type DrawMaskMode = 'normal' | 'inside' | 'outside';
+
 export interface ShapeStyle {
   fill: string;
   stroke: string;
   strokeWidth: number;
+  strokeDasharray?: string;
+  strokeAlign?: StrokeAlign;
   radius?: number;
   /** Optional ordered multi-fill paint stack (bottom-to-top; falls back to `fill` when omitted). */
   fills?: FillPaint[];
@@ -265,6 +275,7 @@ export interface PathStyle {
   strokeLinecap?: 'butt' | 'round' | 'square';
   strokeLinejoin?: 'miter' | 'round' | 'bevel';
   strokeDasharray?: string;
+  strokeAlign?: StrokeAlign;
   fillRule?: 'nonzero' | 'evenodd';
   arrowStart?: boolean;
   arrowEnd?: boolean;
@@ -320,7 +331,8 @@ export interface PathNode extends NodeBase {
   shapeMeta?: VectorShapeMeta;
 }
 
-export type TextAlign = 'left' | 'center' | 'right';
+export type TextAlign = 'left' | 'center' | 'right' | 'justify';
+export type TextVerticalAlign = 'top' | 'middle' | 'bottom';
 export type TextWrapMode = 'wrap' | 'nowrap';
 export type TextTransform = 'none' | 'uppercase' | 'lowercase' | 'capitalize';
 export type TextDecoration = 'none' | 'underline' | 'line-through';
@@ -336,6 +348,7 @@ export interface TextNode extends NodeBase {
     letterSpacing: number;
     lineHeight: number;
     textAlign?: TextAlign;
+    verticalAlign?: TextVerticalAlign;
     textWrap?: TextWrapMode;
     textTransform?: TextTransform;
     textDecoration?: TextDecoration;

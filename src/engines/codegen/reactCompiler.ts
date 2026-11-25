@@ -17,6 +17,7 @@ import {
   buildArrowheadPoints,
   buildChildrenMap,
   buildNodeCssDeclarations,
+  buildVectorMaskDefsLines,
   resolveSemanticTag,
   resolveTokenCssVar,
   roundCss,
@@ -203,6 +204,8 @@ function buildComponentStylesheet(
       isInstanceChild: true,
       hasRootAutoLayout: false,
       originOffset,
+      nodeById,
+      maskPrefix: toKebabCase(componentName, 'comp'),
     });
     if (declarations.length > 0) {
       const startLine = lines.length + 1;
@@ -576,6 +579,15 @@ function buildComponentFiles(
 
   lines.push('  return (');
   lines.push(`    <div ${rootAttrs.join(' ')}>`);
+  const compMaskDefs = buildVectorMaskDefsLines(
+    component.document.nodes,
+    toKebabCase(componentName, 'comp'),
+    true,
+    '      ',
+  );
+  if (compMaskDefs.length > 0) {
+    lines.push(...compMaskDefs);
+  }
 
   const { roots, childrenByParent } = buildChildrenMap(component.document.nodes);
   const mappings: CodeMappingEntry[] = [];
@@ -857,6 +869,10 @@ function buildPageReactFile(
   }
   lines.push('  return (');
   lines.push(`    <main className=${escapeTsString(`folio-page-${slug}`)} data-folio-page=${escapeTsString(page.id)}>`);
+  const pageMaskDefs = buildVectorMaskDefsLines(page.document.nodes, slug, true, '      ');
+  if (pageMaskDefs.length > 0) {
+    lines.push(...pageMaskDefs);
+  }
 
   const { roots, childrenByParent } = buildChildrenMap(page.document.nodes);
   const mappings: CodeMappingEntry[] = [];

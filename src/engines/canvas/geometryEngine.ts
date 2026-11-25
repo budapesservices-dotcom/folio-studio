@@ -31,6 +31,21 @@ const GEOMETRY_ENGINE_SEAL: unique symbol = Symbol('folio.geometry-engine.valida
 export const MIN_VIEWPORT_ZOOM = 0.15;
 export const MAX_VIEWPORT_ZOOM = 8;
 
+const DRAW_MODE_TOOL_IDS = new Set<CanvasToolId>([
+  'draw-rect',
+  'draw-ellipse',
+  'draw-polygon',
+  'draw-star',
+  'draw-line',
+  'draw-arrow',
+  'draw-text',
+  'pen',
+  'curvature',
+  'pencil',
+  'frame',
+  'section',
+]);
+
 export interface GeometryValidationContext {
   readonly document: FolioDocument;
   readonly selectedNodeIds: readonly string[];
@@ -287,11 +302,46 @@ export function evaluateToolOperation(
         }
         seenBatchIds.add(node.id);
       }
+      const activeDrawHost =
+        DRAW_MODE_TOOL_IDS.has(operation.toolId) && context.selectedNodeIds.length === 1
+          ? (() => {
+            const candidate = nodeById.get(context.selectedNodeIds[0]);
+            if (!candidate) return null;
+            if (candidate.drawMode !== 'inside' && candidate.drawMode !== 'outside') return null;
+            const hostState = layerStates.get(candidate.id);
+            if (!hostState?.visible || hostState.locked) return null;
+            return candidate;
+          })()
+          : null;
+
+      const resolvedCreated: DesignNode[] = activeDrawHost
+        ? created.map((node) => {
+          if (node.parentId || node.clipMaskBaseId) return node;
+          if (activeDrawHost.drawMode === 'inside') {
+            if (activeDrawHost.type === 'frame') {
+              return { ...node, parentId: activeDrawHost.id };
+            }
+            return {
+              ...node,
+              ...(activeDrawHost.parentId ? { parentId: activeDrawHost.parentId } : {}),
+              clipMaskBaseId: activeDrawHost.id,
+              clipMaskMode: 'inside' as const,
+            };
+          }
+          return {
+            ...node,
+            ...(activeDrawHost.parentId ? { parentId: activeDrawHost.parentId } : {}),
+            clipMaskBaseId: activeDrawHost.id,
+            clipMaskMode: 'outside' as const,
+          };
+        })
+        : [...created];
+
       return {
         status: 'ready',
         operation: sealValidatedOperation(operation, {
           kind: 'create-nodes',
-          nodes: [...created],
+          nodes: resolvedCreated,
           ...(operation.payload.openInlineTextForNodeId
             ? { openInlineTextForNodeId: operation.payload.openInlineTextForNodeId }
             : {}),

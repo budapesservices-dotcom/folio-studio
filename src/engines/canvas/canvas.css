@@ -6,33 +6,50 @@
 .canvas-node {
   user-select: none;
 }
+.canvas-selection-contour {
+  fill: none;
+  stroke: #00e5ff;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.canvas-selection-contour.is-draw-inside {
+  stroke: #00e5ff;
+  stroke-width: 2;
+  stroke-dasharray: 6 3;
+}
+.canvas-selection-contour.is-draw-outside {
+  stroke: #f59e0b;
+  stroke-width: 2;
+  stroke-dasharray: 6 3;
+}
 .canvas-selection-outline {
   fill: none;
-  stroke: #8b7cf6;
-  stroke-width: 1.75;
-  stroke-dasharray: 7 4;
+  stroke: rgba(0, 229, 255, 0.72);
+  stroke-width: 1.25;
+  stroke-dasharray: 6 4;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 .canvas-selection-outline.is-scale {
-  stroke: #38bdf8;
+  stroke: #00e5ff;
   stroke-dasharray: 4 3;
 }
 .artboard[data-workspace="component"] .canvas-selection-outline {
-  stroke: #e59a4c;
+  stroke: rgba(0, 229, 255, 0.78);
 }
 .canvas-resize-handle {
-  fill: #f8f7ff;
-  stroke: #806ff0;
-  stroke-width: 2;
+  fill: #12161a;
+  stroke: #00e5ff;
+  stroke-width: 1.85;
   vector-effect: non-scaling-stroke;
   pointer-events: all;
 }
 .canvas-resize-handle.is-scale {
-  stroke: #38bdf8;
+  stroke: #00e5ff;
 }
 .artboard[data-workspace="component"] .canvas-resize-handle {
-  stroke: #e59a4c;
+  stroke: #00e5ff;
 }
 .canvas-rotate-zone {
   fill: transparent;
@@ -107,15 +124,15 @@
 }
 
 .canvas-marquee {
-  fill: #8d7cff22;
-  stroke: #a99aff;
+  fill: rgba(0, 229, 255, 0.1);
+  stroke: #00e5ff;
   stroke-width: 1.25;
   stroke-dasharray: 5 3;
   vector-effect: non-scaling-stroke;
 }
 .artboard[data-workspace="component"] .canvas-marquee {
-  fill: rgba(229, 154, 76, 0.12);
-  stroke: #e59a4c;
+  fill: rgba(0, 229, 255, 0.1);
+  stroke: #00e5ff;
 }
 
 /* Selection handles communicate the active transform before dragging. */
@@ -633,3 +650,74 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* Canvas Right-Click Selection & Draw Mode Context Menu */
+.canvas-context-menu {
+  position: fixed;
+  z-index: 1600;
+  min-width: 224px;
+  padding: 6px;
+  border: 1px solid #4a5568;
+  border-radius: 8px;
+  background: #12161a;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.canvas-context-section-label {
+  padding: 4px 8px 2px;
+  color: #94a3b8;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.canvas-context-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #e2e8f0;
+  font-size: 11.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.canvas-context-item:hover:not(:disabled) {
+  border-color: rgba(0, 229, 255, 0.45);
+  background: rgba(0, 229, 255, 0.12);
+  color: #ffffff;
+}
+
+.canvas-context-item.is-active {
+  border-color: #00e5ff;
+  background: rgba(0, 229, 255, 0.16);
+  color: #00e5ff;
+}
+
+.canvas-context-item:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.canvas-context-shortcut {
+  color: #94a3b8;
+  font-size: 10px;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+.canvas-context-divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: rgba(74, 85, 104, 0.65);
+}
+

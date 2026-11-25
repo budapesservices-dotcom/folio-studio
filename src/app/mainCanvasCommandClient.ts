@@ -2,6 +2,7 @@ import { createDocumentAstView, type DocumentAddress, type NativeAstDocumentView
 import { classifyNodeChange, hasExtendedNodeChange } from '../core/document/nodeChanges';
 import { getActivePage } from '../core/document/project';
 import type { LayerDropPosition } from '../core/document/layers';
+import type { SelectSimilarCriterion } from '../core/document/selectionQueries';
 import type {
   AnimationClip,
   AssetReference,
@@ -221,6 +222,9 @@ export interface MainCanvasCommandClient {
   deleteNodes(nodeIds: readonly string[], description?: string): NativeCommandResult;
   setNodesCanvasState(nodeIds: readonly string[], onCanvas: boolean, description?: string): NativeCommandResult;
   selectNodes(nodeIds: readonly string[], description?: string): NativeCommandResult;
+  deselectAll(description?: string): NativeCommandResult;
+  invertSelection(description?: string): NativeCommandResult;
+  selectSimilar(criterion: SelectSimilarCriterion, description?: string): NativeCommandResult;
   commitEdit(description?: string): NativeCommandResult;
   undo(description?: string): NativeCommandResult;
   redo(description?: string): NativeCommandResult;
@@ -767,6 +771,36 @@ export function createWorkspaceCommandClient(
         'selection.set',
         { kind: 'document', address: astView.address },
         { nodeIds: [...nodeIds] },
+        description,
+      );
+    },
+
+    deselectAll(description = 'Deselect layers') {
+      const astView = getActiveAstView();
+      return submit(
+        'selection.deselect',
+        { kind: 'document', address: astView.address },
+        {},
+        description,
+      );
+    },
+
+    invertSelection(description = 'Invert selection') {
+      const astView = getActiveAstView();
+      return submit(
+        'selection.invert',
+        { kind: 'document', address: astView.address },
+        {},
+        description,
+      );
+    },
+
+    selectSimilar(criterion, description = `Select similar (${criterion})`) {
+      const astView = getActiveAstView();
+      return submit(
+        'selection.select-similar',
+        { kind: 'document', address: astView.address },
+        { criterion },
         description,
       );
     },

@@ -322,6 +322,8 @@ const COMMON_NODE_KEYS = [
   'parentId',
   'onCanvas',
   'clipMaskBaseId',
+  'clipMaskMode',
+  'drawMode',
   'semanticTag',
   'ariaLabel',
   'href',
@@ -344,7 +346,7 @@ const INSTANCE_NODE_KEYS = [
   'slotAssignments',
 ] as const;
 
-const SHAPE_STYLE_KEYS = ['fill', 'fills', 'stroke', 'strokeWidth', 'radius'] as const;
+const SHAPE_STYLE_KEYS = ['fill', 'fills', 'stroke', 'strokeWidth', 'strokeDasharray', 'strokeAlign', 'radius'] as const;
 const PATH_STYLE_KEYS = [
   'fill',
   'fills',
@@ -353,6 +355,7 @@ const PATH_STYLE_KEYS = [
   'strokeLinecap',
   'strokeLinejoin',
   'strokeDasharray',
+  'strokeAlign',
   'fillRule',
   'arrowStart',
   'arrowEnd',
@@ -365,6 +368,7 @@ const TEXT_STYLE_KEYS = [
   'letterSpacing',
   'lineHeight',
   'textAlign',
+  'verticalAlign',
   'textWrap',
   'textTransform',
   'textDecoration',
@@ -389,8 +393,12 @@ const VALID_PATH_KINDS = new Set([
 ]);
 const VALID_STROKE_LINECAPS = new Set(['butt', 'round', 'square']);
 const VALID_STROKE_LINEJOINS = new Set(['miter', 'round', 'bevel']);
+const VALID_STROKE_ALIGNS = new Set(['inside', 'center', 'outside']);
+const VALID_CLIP_MASK_MODES = new Set(['inside', 'outside']);
+const VALID_DRAW_MODES = new Set(['normal', 'inside', 'outside']);
 const VALID_POINT_TYPES = new Set(['corner', 'smooth', 'symmetric']);
-const VALID_TEXT_ALIGNS = new Set(['left', 'center', 'right']);
+const VALID_TEXT_ALIGNS = new Set(['left', 'center', 'right', 'justify']);
+const VALID_TEXT_VERTICAL_ALIGNS = new Set(['top', 'middle', 'bottom']);
 const VALID_TEXT_WRAPS = new Set(['wrap', 'nowrap']);
 const VALID_TEXT_TRANSFORMS = new Set(['none', 'uppercase', 'lowercase', 'capitalize']);
 const VALID_TEXT_DECORATIONS = new Set(['none', 'underline', 'line-through']);
@@ -558,6 +566,18 @@ function validateShapeStyle(
   if (!isFiniteNumber(value.strokeWidth) || value.strokeWidth < 0) {
     return fail('INVALID_GEOMETRY', `${path}.strokeWidth must be a finite number >= 0.`, `${path}.strokeWidth`);
   }
+  if (
+    value.strokeDasharray !== undefined &&
+    (typeof value.strokeDasharray !== 'string' || value.strokeDasharray.length > TOOL_OPERATION_LIMITS.maxColorLength)
+  ) {
+    return fail('INVALID_NODE', `${path}.strokeDasharray must be a string.`, `${path}.strokeDasharray`);
+  }
+  if (
+    value.strokeAlign !== undefined &&
+    (typeof value.strokeAlign !== 'string' || !VALID_STROKE_ALIGNS.has(value.strokeAlign))
+  ) {
+    return fail('INVALID_NODE', `${path}.strokeAlign must be "inside", "center", or "outside".`, `${path}.strokeAlign`);
+  }
   if (value.radius !== undefined && (!isFiniteNumber(value.radius) || value.radius < 0)) {
     return fail('INVALID_GEOMETRY', `${path}.radius must be a finite number >= 0.`, `${path}.radius`);
   }
@@ -607,6 +627,12 @@ function validatePathStyle(
   ) {
     return fail('INVALID_NODE', `${path}.strokeDasharray must be a string.`, `${path}.strokeDasharray`);
   }
+  if (
+    value.strokeAlign !== undefined &&
+    (typeof value.strokeAlign !== 'string' || !VALID_STROKE_ALIGNS.has(value.strokeAlign))
+  ) {
+    return fail('INVALID_NODE', `${path}.strokeAlign must be "inside", "center", or "outside".`, `${path}.strokeAlign`);
+  }
   if (value.fillRule !== undefined && value.fillRule !== 'nonzero' && value.fillRule !== 'evenodd') {
     return fail('INVALID_NODE', `${path}.fillRule must be "nonzero" or "evenodd".`, `${path}.fillRule`);
   }
@@ -655,6 +681,12 @@ export function validateDesignNodePayload(
   }
   if (value.clipMaskBaseId !== undefined && !isNonEmptyString(value.clipMaskBaseId)) {
     return fail('INVALID_NODE', `${path}.clipMaskBaseId must be a non-empty string.`, `${path}.clipMaskBaseId`);
+  }
+  if (value.clipMaskMode !== undefined && (typeof value.clipMaskMode !== 'string' || !VALID_CLIP_MASK_MODES.has(value.clipMaskMode))) {
+    return fail('INVALID_NODE', `${path}.clipMaskMode must be "inside" or "outside".`, `${path}.clipMaskMode`);
+  }
+  if (value.drawMode !== undefined && (typeof value.drawMode !== 'string' || !VALID_DRAW_MODES.has(value.drawMode))) {
+    return fail('INVALID_NODE', `${path}.drawMode must be "normal", "inside", or "outside".`, `${path}.drawMode`);
   }
   if (value.blendMode !== undefined && !isBlendMode(value.blendMode)) {
     return fail('INVALID_NODE', `${path}.blendMode is not a supported BlendMode.`, `${path}.blendMode`);
@@ -769,7 +801,10 @@ export function validateDesignNodePayload(
         return fail('INVALID_GEOMETRY', `Text node ${value.id} has invalid lineHeight.`, `${path}.style.lineHeight`);
       }
       if (style.textAlign !== undefined && (typeof style.textAlign !== 'string' || !VALID_TEXT_ALIGNS.has(style.textAlign))) {
-        return fail('INVALID_NODE', `${path}.style.textAlign must be "left", "center", or "right".`, `${path}.style.textAlign`);
+        return fail('INVALID_NODE', `${path}.style.textAlign must be "left", "center", "right", or "justify".`, `${path}.style.textAlign`);
+      }
+      if (style.verticalAlign !== undefined && (typeof style.verticalAlign !== 'string' || !VALID_TEXT_VERTICAL_ALIGNS.has(style.verticalAlign))) {
+        return fail('INVALID_NODE', `${path}.style.verticalAlign must be "top", "middle", or "bottom".`, `${path}.style.verticalAlign`);
       }
       if (style.textWrap !== undefined && (typeof style.textWrap !== 'string' || !VALID_TEXT_WRAPS.has(style.textWrap))) {
         return fail('INVALID_NODE', `${path}.style.textWrap must be "wrap" or "nowrap".`, `${path}.style.textWrap`);

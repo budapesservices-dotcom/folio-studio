@@ -289,7 +289,7 @@ export function GlobalToolbar({
                   </button>
                   <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.hasSelection} onClick={() => runMenuAction(menuActions.onDuplicate)}>
                     <span>Duplicate</span>
-                    <kbd class="global-menu-shortcut">Ctrl+D</kbd>
+                    <kbd class="global-menu-shortcut">Ctrl+Shift+D</kbd>
                   </button>
                   <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating} onClick={() => runMenuAction(menuActions.onSelectAll)}>
                     <span>Select All</span>

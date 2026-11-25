@@ -65,6 +65,9 @@ import type {
   PageSetActivePayload,
   ProjectRenamePayload,
   ProjectReplacePayload,
+  SelectionDeselectPayload,
+  SelectionInvertPayload,
+  SelectionSelectSimilarPayload,
   SelectionSetPayload,
   TokensUpdatePayload,
 } from './types';
@@ -359,10 +362,15 @@ function isLayerDropPosition(value: unknown): value is LayerDropPosition {
 const COMMON_NODE_KEYS = [
   'id', 'name', 'type', 'x', 'y', 'width', 'height', 'rotation',
   'opacity', 'blendMode', 'effects', 'visible', 'locked', 'aspectRatioLocked', 'layerColor', 'parentId', 'onCanvas', 'clipMaskBaseId',
+  'clipMaskMode', 'drawMode',
   'semanticTag', 'ariaLabel', 'href', 'layout', 'layoutChild', 'responsive', 'tokenBindings',
 ] as const;
 
-const TEXT_ALIGN_VALUES = new Set(['left', 'center', 'right']);
+const TEXT_ALIGN_VALUES = new Set(['left', 'center', 'right', 'justify']);
+const TEXT_VERTICAL_ALIGN_VALUES = new Set(['top', 'middle', 'bottom']);
+const STROKE_ALIGN_VALUES = new Set(['inside', 'center', 'outside']);
+const CLIP_MASK_MODE_VALUES = new Set(['inside', 'outside']);
+const DRAW_MODE_VALUES = new Set(['normal', 'inside', 'outside']);
 const TEXT_WRAP_VALUES = new Set(['wrap', 'nowrap']);
 const TEXT_TRANSFORM_VALUES = new Set(['none', 'uppercase', 'lowercase', 'capitalize']);
 const TEXT_DECORATION_VALUES = new Set(['none', 'underline', 'line-through']);
@@ -397,6 +405,8 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     (value.onCanvas !== undefined && typeof value.onCanvas !== 'boolean') ||
     (value.parentId !== undefined && value.parentId !== null && !isNonEmptyString(value.parentId)) ||
     (value.clipMaskBaseId !== undefined && !isNonEmptyString(value.clipMaskBaseId)) ||
+    (value.clipMaskMode !== undefined && !CLIP_MASK_MODE_VALUES.has(String(value.clipMaskMode))) ||
+    (value.drawMode !== undefined && !DRAW_MODE_VALUES.has(String(value.drawMode))) ||
     (value.semanticTag !== undefined && !SEMANTIC_HTML_TAGS.has(String(value.semanticTag))) ||
     (value.ariaLabel !== undefined && (typeof value.ariaLabel !== 'string' || value.ariaLabel.length > 512)) ||
     (value.href !== undefined && (typeof value.href !== 'string' || value.href.length > 2048)) ||
@@ -417,12 +427,14 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       return false;
     }
     const style = value.style;
-    if (!hasOnlyKeys(style, ['fill', 'fills', 'stroke', 'strokeWidth', 'radius'])) return false;
+    if (!hasOnlyKeys(style, ['fill', 'fills', 'stroke', 'strokeWidth', 'strokeDasharray', 'strokeAlign', 'radius'])) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
       (style.fills === undefined || isValidFillsList(style.fills)) &&
       typeof style.stroke === 'string' && style.stroke.length <= 128 &&
       isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0 &&
+      (style.strokeDasharray === undefined || (typeof style.strokeDasharray === 'string' && style.strokeDasharray.length <= 128)) &&
+      (style.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(style.strokeAlign))) &&
       (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
       (value.clipContent === undefined || typeof value.clipContent === 'boolean') &&
       (value.isSection === undefined || typeof value.isSection === 'boolean')
@@ -432,12 +444,14 @@ function isDesignNodeData(value: unknown): value is DesignNode {
   if (value.type === 'rect' || value.type === 'ellipse') {
     if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'style']) || !isRecord(value.style)) return false;
     const style = value.style;
-    if (!hasOnlyKeys(style, ['fill', 'fills', 'stroke', 'strokeWidth', 'radius'])) return false;
+    if (!hasOnlyKeys(style, ['fill', 'fills', 'stroke', 'strokeWidth', 'strokeDasharray', 'strokeAlign', 'radius'])) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
       (style.fills === undefined || isValidFillsList(style.fills)) &&
       typeof style.stroke === 'string' && style.stroke.length <= 128 &&
       isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0 &&
+      (style.strokeDasharray === undefined || (typeof style.strokeDasharray === 'string' && style.strokeDasharray.length <= 128)) &&
+      (style.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(style.strokeAlign))) &&
       (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0))
     );
   }
@@ -508,7 +522,7 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     const style = value.style;
     if (!hasOnlyKeys(style, [
       'fill', 'fills', 'stroke', 'strokeWidth', 'strokeLinecap', 'strokeLinejoin',
-      'strokeDasharray', 'fillRule', 'arrowStart', 'arrowEnd',
+      'strokeDasharray', 'strokeAlign', 'fillRule', 'arrowStart', 'arrowEnd',
     ])) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
@@ -518,6 +532,7 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       (style.strokeLinecap === undefined || ['butt', 'round', 'square'].includes(String(style.strokeLinecap))) &&
       (style.strokeLinejoin === undefined || ['miter', 'round', 'bevel'].includes(String(style.strokeLinejoin))) &&
       (style.strokeDasharray === undefined || (typeof style.strokeDasharray === 'string' && style.strokeDasharray.length <= 128)) &&
+      (style.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(style.strokeAlign))) &&
       (style.fillRule === undefined || style.fillRule === 'nonzero' || style.fillRule === 'evenodd') &&
       (style.arrowStart === undefined || typeof style.arrowStart === 'boolean') &&
       (style.arrowEnd === undefined || typeof style.arrowEnd === 'boolean')
@@ -530,7 +545,7 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     const style = value.style;
     if (!hasOnlyKeys(style, [
       'fill', 'fontSize', 'fontFamily', 'fontWeight', 'letterSpacing', 'lineHeight',
-      'textAlign', 'textWrap', 'textTransform', 'textDecoration',
+      'textAlign', 'verticalAlign', 'textWrap', 'textTransform', 'textDecoration',
     ])) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
@@ -540,6 +555,7 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       isFiniteNumber(style.letterSpacing) &&
       isFiniteNumber(style.lineHeight) && style.lineHeight > 0 &&
       (style.textAlign === undefined || TEXT_ALIGN_VALUES.has(String(style.textAlign))) &&
+      (style.verticalAlign === undefined || TEXT_VERTICAL_ALIGN_VALUES.has(String(style.verticalAlign))) &&
       (style.textWrap === undefined || TEXT_WRAP_VALUES.has(String(style.textWrap))) &&
       (style.textTransform === undefined || TEXT_TRANSFORM_VALUES.has(String(style.textTransform))) &&
       (style.textDecoration === undefined || TEXT_DECORATION_VALUES.has(String(style.textDecoration)))
@@ -1199,9 +1215,31 @@ export function validateSelectionSetPayload(
   return { ok: true, value: { nodeIds } };
 }
 
+export function validateSelectionSelectSimilarPayload(
+  value: unknown,
+): ValidationOutcome<SelectionSelectSimilarPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['criterion']) ||
+    (data.criterion !== 'fill' && data.criterion !== 'stroke' && data.criterion !== 'type')
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Select similar requires a valid criterion ("fill", "stroke", or "type").');
+  }
+  return { ok: true, value: { criterion: data.criterion } };
+}
+
 export function validateEmptyCommandPayload(
   value: unknown,
-): ValidationOutcome<HistoryCommitEditPayload | HistoryUndoPayload | HistoryRedoPayload> {
+): ValidationOutcome<
+  | SelectionDeselectPayload
+  | SelectionInvertPayload
+  | HistoryCommitEditPayload
+  | HistoryUndoPayload
+  | HistoryRedoPayload
+> {
   const normalized = cloneRuntimeData(value);
   if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
   const data = normalized.value;
