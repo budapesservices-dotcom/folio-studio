@@ -329,6 +329,9 @@ export interface EyedropperLoupeState {
   readonly x: number;
   readonly y: number;
   readonly color: string;
+  readonly hex: string;
+  readonly alpha: number;
+  readonly isTransparent: boolean;
   readonly sourceName: string;
   readonly target: string;
 }
@@ -412,43 +415,59 @@ export function CanvasInteractiveOverlays({
 }: CanvasInteractiveOverlaysProps) {
   return (
     <>
-      {/* Shape Builder hatch patterns live in the interactive overlay so zoom ticks never invalidate static scene memoization. */}
-      {toolId === 'shape-builder' && (
+      {/* Dynamic overlay patterns (Shape Builder hatch + Eyedropper transparency checkerboard) */}
+      {(toolId === 'shape-builder' || toolId === 'eyedropper') && (
         <defs>
-          <pattern
-            id={`${maskPrefix}-sb-merge`}
-            width={10 * invZoom}
-            height={10 * invZoom}
-            patternUnits="userSpaceOnUse"
-            patternTransform="rotate(45)"
-          >
-            <rect width={10 * invZoom} height={10 * invZoom} fill="rgba(56, 189, 248, 0.28)" />
-            <line
-              x1="0"
-              y1="0"
-              x2="0"
-              y2={10 * invZoom}
-              stroke="rgba(255, 255, 255, 0.55)"
-              stroke-width={2 * invZoom}
-            />
-          </pattern>
-          <pattern
-            id={`${maskPrefix}-sb-punch`}
-            width={10 * invZoom}
-            height={10 * invZoom}
-            patternUnits="userSpaceOnUse"
-            patternTransform="rotate(-45)"
-          >
-            <rect width={10 * invZoom} height={10 * invZoom} fill="rgba(244, 63, 94, 0.34)" />
-            <line
-              x1="0"
-              y1="0"
-              x2="0"
-              y2={10 * invZoom}
-              stroke="rgba(255, 255, 255, 0.55)"
-              stroke-width={2 * invZoom}
-            />
-          </pattern>
+          {toolId === 'shape-builder' && (
+            <>
+              <pattern
+                id={`${maskPrefix}-sb-merge`}
+                width={10 * invZoom}
+                height={10 * invZoom}
+                patternUnits="userSpaceOnUse"
+                patternTransform="rotate(45)"
+              >
+                <rect width={10 * invZoom} height={10 * invZoom} fill="rgba(56, 189, 248, 0.28)" />
+                <line
+                  x1="0"
+                  y1="0"
+                  x2="0"
+                  y2={10 * invZoom}
+                  stroke="rgba(255, 255, 255, 0.55)"
+                  stroke-width={2 * invZoom}
+                />
+              </pattern>
+              <pattern
+                id={`${maskPrefix}-sb-punch`}
+                width={10 * invZoom}
+                height={10 * invZoom}
+                patternUnits="userSpaceOnUse"
+                patternTransform="rotate(-45)"
+              >
+                <rect width={10 * invZoom} height={10 * invZoom} fill="rgba(244, 63, 94, 0.34)" />
+                <line
+                  x1="0"
+                  y1="0"
+                  x2="0"
+                  y2={10 * invZoom}
+                  stroke="rgba(255, 255, 255, 0.55)"
+                  stroke-width={2 * invZoom}
+                />
+              </pattern>
+            </>
+          )}
+          {toolId === 'eyedropper' && (
+            <pattern
+              id={`${maskPrefix}-loupe-checker`}
+              width="8"
+              height="8"
+              patternUnits="userSpaceOnUse"
+            >
+              <rect width="8" height="8" fill="#cbd5e1" />
+              <rect width="4" height="4" fill="#64748b" />
+              <rect x="4" y="4" width="4" height="4" fill="#64748b" />
+            </pattern>
+          )}
         </defs>
       )}
 
@@ -618,6 +637,9 @@ export function CanvasInteractiveOverlays({
         <polyline
           class={'canvas-freehand-preview is-' + toolOverlay.mode}
           points={toolOverlay.points.map((pt) => `${pt.x},${pt.y}`).join(' ')}
+          stroke={toolOverlay.strokeColor}
+          stroke-width={toolOverlay.strokeWidth}
+          stroke-linecap={toolOverlay.strokeLinecap}
           pointer-events="none"
         />
       )}
@@ -988,26 +1010,84 @@ export function CanvasInteractiveOverlays({
         />
       )}
 
-      {/* Live Eyedropper Loupe (Edge-Clamped to Artboard Bounds) */}
+      {/* Live Vector Brush Size Ring */}
+      {toolId === 'brush' && hoverPoint && (
+        <circle
+          class="canvas-brush-cursor-ring"
+          cx={hoverPoint.x}
+          cy={hoverPoint.y}
+          r={Math.max(1.5, toolOptions.brushSize / 2)}
+          stroke={toolOptions.brushColor === 'transparent' ? '#94a3b8' : toolOptions.brushColor}
+          pointer-events="none"
+        />
+      )}
+
+      {/* Live Vector Eraser Size Ring */}
+      {toolId === 'eraser' && hoverPoint && (
+        <circle
+          class="canvas-eraser-cursor-ring"
+          cx={hoverPoint.x}
+          cy={hoverPoint.y}
+          r={Math.max(2, toolOptions.eraserSize / 2)}
+          pointer-events="none"
+        />
+      )}
+
+      {/* Live Eyedropper Circular Magnifier Swatch Loupe (Edge-Clamped to Artboard Bounds) */}
       {eyedropperLoupe && (() => {
-        const flipX = eyedropperLoupe.x + 152 * invZoom > docWidth;
-        const flipY = eyedropperLoupe.y - 48 * invZoom < 0;
-        const offsetX = flipX ? -144 : 22;
-        const offsetY = flipY ? 26 : -26;
+        const flipX = eyedropperLoupe.x + 128 * invZoom > docWidth;
+        const flipY = eyedropperLoupe.y - 68 * invZoom < 0;
+        const offsetX = flipX ? -54 : 54;
+        const offsetY = flipY ? 50 : -50;
+        const alphaPct = Math.round(eyedropperLoupe.alpha * 100);
+        const primaryMeta = eyedropperLoupe.isTransparent
+          ? 'TRANSPARENT'
+          : alphaPct < 100
+            ? `${eyedropperLoupe.target} · ${alphaPct}%`
+            : `${eyedropperLoupe.target} · 100%`;
         return (
           <g
             class="canvas-eyedropper-loupe"
+            data-testid="eyedropper-loupe"
             transform={`translate(${eyedropperLoupe.x} ${eyedropperLoupe.y}) scale(${invZoom})`}
             pointer-events="none"
           >
+            {/* Subtle cursor reticle */}
+            <circle class="canvas-loupe-reticle" cx="0" cy="0" r="5.5" />
             <g transform={`translate(${offsetX} ${offsetY})`}>
-              <rect class="canvas-loupe-card" x="-2" y="-16" width="126" height="32" rx="6" />
-              <circle class="canvas-loupe-swatch" cx="14" cy="0" r="9.5" fill={eyedropperLoupe.color} />
-              <text class="canvas-loupe-hex" x="30" y="-3" dominant-baseline="middle">
-                {eyedropperLoupe.color.toUpperCase().slice(0, 7)}
+              {/* Outer circular magnifier ring */}
+              <circle class="canvas-loupe-outer-shadow" cx="0" cy="0" r="26" />
+              <circle cx="0" cy="0" r="23" fill={`url(#${maskPrefix}-loupe-checker)`} />
+              <circle
+                cx="0"
+                cy="0"
+                r="23"
+                fill={eyedropperLoupe.isTransparent ? 'none' : eyedropperLoupe.color}
+              />
+              {eyedropperLoupe.isTransparent && (
+                <line x1="-15" y1="15" x2="15" y2="-15" stroke="#ef4444" stroke-width="2.4" />
+              )}
+              <circle
+                class="canvas-loupe-ring-rim"
+                cx="0"
+                cy="0"
+                r="23"
+              />
+              <circle
+                class="canvas-loupe-ring-inner"
+                cx="0"
+                cy="0"
+                r="14"
+              />
+              <line class="canvas-loupe-cross" x1="-6" y1="0" x2="6" y2="0" />
+              <line class="canvas-loupe-cross" x1="0" y1="-6" x2="0" y2="6" />
+              {/* Compact visual metadata pill below the magnifier */}
+              <rect class="canvas-loupe-card" x="-48" y="29" width="96" height="24" rx="5" />
+              <text class="canvas-loupe-hex" x="0" y="38" text-anchor="middle" dominant-baseline="middle">
+                {primaryMeta}
               </text>
-              <text class="canvas-loupe-meta" x="30" y="9" dominant-baseline="middle">
-                {eyedropperLoupe.target} · {eyedropperLoupe.sourceName.slice(0, 9)}
+              <text class="canvas-loupe-meta" x="0" y="48" text-anchor="middle" dominant-baseline="middle">
+                {eyedropperLoupe.sourceName.slice(0, 14)}
               </text>
             </g>
           </g>

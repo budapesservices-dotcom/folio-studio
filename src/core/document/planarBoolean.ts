@@ -177,13 +177,18 @@ export function findInteriorPoint(poly: readonly PlanarPoint[]): PlanarPoint {
   return centroid;
 }
 
-interface RawSegment {
+export interface RawPlanarSegment {
   a: PlanarPoint;
   b: PlanarPoint;
 }
 
-function collectSegments(shapes: readonly PlanarShapeInput[]): RawSegment[] {
-  const segments: RawSegment[] = [];
+export interface PlanarFacesFromSegmentsResult {
+  vertices: PlanarPoint[];
+  faces: PlanarFace[];
+}
+
+function collectSegments(shapes: readonly PlanarShapeInput[]): RawPlanarSegment[] {
+  const segments: RawPlanarSegment[] = [];
   for (const shape of shapes) {
     for (const contour of shape.contours) {
       if (contour.length < 3) continue;
@@ -216,8 +221,8 @@ function projectParam(p: PlanarPoint, a: PlanarPoint, b: PlanarPoint): number {
 }
 
 function findSegmentIntersections(
-  s1: RawSegment,
-  s2: RawSegment,
+  s1: RawPlanarSegment,
+  s2: RawPlanarSegment,
   splits1: number[],
   splits2: number[],
 ): void {
@@ -257,11 +262,15 @@ function findSegmentIntersections(
 }
 
 /**
- * Builds the exact 2D planar face arrangement for any collection of overlapping
- * convex or concave shapes.
+ * Builds all minimal bounded interior planar faces formed by arbitrary 2D line segments
+ * (closed shapes and/or intersecting open strokes). When `pruneDangling` is true,
+ * iteratively strips degree-1 spurs (2-core extraction) so open line tails never pollute
+ * enclosed Paint Bucket regions.
  */
-export function buildPlanarArrangement(shapes: readonly PlanarShapeInput[]): PlanarArrangement {
-  const rawSegments = collectSegments(shapes);
+export function buildPlanarFacesFromSegments(
+  rawSegments: readonly RawPlanarSegment[],
+  options: { readonly pruneDangling?: boolean } = {},
+): PlanarFacesFromSegmentsResult {
   if (rawSegments.length === 0) return { vertices: [], faces: [] };
 
   const splitParams: number[][] = rawSegments.map(() => []);
@@ -376,6 +385,35 @@ export function buildPlanarArrangement(shapes: readonly PlanarShapeInput[]): Pla
     }
   }
 
+  let activeEdges: Array<[number, number]> = [...uniqueEdges.values()];
+
+  if (options.pruneDangling && activeEdges.length > 0) {
+    const adjacency: Set<number>[] = vertices.map(() => new Set<number>());
+    for (const [u, v] of activeEdges) {
+      adjacency[u].add(v);
+      adjacency[v].add(u);
+    }
+    const queue: number[] = [];
+    for (let i = 0; i < adjacency.length; i += 1) {
+      if (adjacency[i].size === 1) queue.push(i);
+    }
+    let head = 0;
+    while (head < queue.length) {
+      const u = queue[head++];
+      if (adjacency[u].size !== 1) continue;
+      for (const v of adjacency[u]) {
+        adjacency[v].delete(u);
+        if (adjacency[v].size === 1) queue.push(v);
+      }
+      adjacency[u].clear();
+    }
+    activeEdges = activeEdges.filter(([u, v]) => adjacency[u].has(v));
+  }
+
+  if (activeEdges.length < 3) {
+    return { vertices, faces: [] };
+  }
+
   // Build directed half-edges
   interface HalfEdge {
     id: number;
@@ -388,7 +426,7 @@ export function buildPlanarArrangement(shapes: readonly PlanarShapeInput[]): Pla
   const halfEdges: HalfEdge[] = [];
   const outgoing: number[][] = vertices.map(() => []);
 
-  for (const [u, v] of uniqueEdges.values()) {
+  for (const [u, v] of activeEdges) {
     const a = vertices[u];
     const b = vertices[v];
     const id1 = halfEdges.length;
@@ -453,21 +491,44 @@ export function buildPlanarArrangement(shapes: readonly PlanarShapeInput[]): Pla
     if (area <= MIN_FACE_AREA) continue;
 
     const interiorPoint = findInteriorPoint(polygon);
-    const memberShapeIndices: number[] = [];
-    for (let s = 0; s < shapes.length; s += 1) {
-      if (pointInContours(interiorPoint, shapes[s].contours)) {
-        memberShapeIndices.push(s);
-      }
-    }
-
-    // Only keep faces that actually belong to at least one input shape
-    if (memberShapeIndices.length === 0) continue;
-
     faces.push({
       id: faces.length,
       polygon,
       area,
       interiorPoint,
+      memberShapeIndices: [],
+    });
+  }
+
+  return { vertices, faces };
+}
+
+/**
+ * Builds the exact 2D planar face arrangement for any collection of overlapping
+ * convex or concave shapes.
+ */
+export function buildPlanarArrangement(shapes: readonly PlanarShapeInput[]): PlanarArrangement {
+  const rawSegments = collectSegments(shapes);
+  if (rawSegments.length === 0) return { vertices: [], faces: [] };
+
+  const { vertices, faces: rawFaces } = buildPlanarFacesFromSegments(rawSegments);
+  const faces: PlanarFace[] = [];
+
+  for (const rawFace of rawFaces) {
+    const memberShapeIndices: number[] = [];
+    for (let s = 0; s < shapes.length; s += 1) {
+      if (pointInContours(rawFace.interiorPoint, shapes[s].contours)) {
+        memberShapeIndices.push(s);
+      }
+    }
+    // Only keep faces that actually belong to at least one input shape
+    if (memberShapeIndices.length === 0) continue;
+
+    faces.push({
+      id: faces.length,
+      polygon: rawFace.polygon,
+      area: rawFace.area,
+      interiorPoint: rawFace.interiorPoint,
       memberShapeIndices,
     });
   }

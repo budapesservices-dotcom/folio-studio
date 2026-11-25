@@ -40,6 +40,9 @@ export default defineConfig(({ command }) => {
       output: {
         manualChunks(id) {
           if (id.includes('node_modules/preact')) return 'vendor-preact';
+          if (id.includes('/src/core/document/vectorDrawing')) {
+            return 'vector-drawing-engine';
+          }
           if (id.includes('/src/core/document/planarBoolean') || id.includes('/src/core/document/vector')) {
             return 'vector-engine';
           }

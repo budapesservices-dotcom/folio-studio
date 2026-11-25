@@ -259,6 +259,7 @@ export function MainCanvasWindow({
               toolId={toolId}
               toolOptions={toolOptions}
               selectedNodes={selectedNodes}
+              designTokens={designTokens}
               onChangeOptions={onChangeToolOptions}
               onPathfinder={onPathfinder}
               onConvertToPath={onConvertToPath}
@@ -588,6 +589,7 @@ export function ComponentCanvasWindow({
               toolId={toolId}
               toolOptions={toolOptions}
               selectedNodes={safeSelectedComponentNodes}
+              designTokens={designTokens}
               onChangeOptions={onChangeToolOptions}
               onPathfinder={onPathfinder}
               onConvertToPath={onConvertToPath}

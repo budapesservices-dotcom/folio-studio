@@ -150,17 +150,24 @@ export function createLineNode(
 export function createVectorPathNode(
   worldPoints: VectorAnchorPoint[],
   options: {
+    id?: string;
     name?: string;
     closed?: boolean;
     pathKind?: VectorPathKind;
     fill?: string;
     stroke?: string;
     strokeWidth?: number;
+    strokeLinecap?: 'butt' | 'round' | 'square';
+    strokeLinejoin?: 'miter' | 'round' | 'bevel';
+    strokeDasharray?: string;
+    fillRule?: 'nonzero' | 'evenodd';
   } = {},
 ): PathNode {
   const closed = Boolean(options.closed);
+  const base = baseNode(options.name ?? 'Vector Path', 0, 0, 1, 1);
   return normalizePathNode({
-    ...baseNode(options.name ?? 'Vector Path', 0, 0, 1, 1),
+    ...base,
+    ...(options.id ? { id: options.id } : {}),
     type: 'path',
     points: worldPoints,
     closed,
@@ -169,9 +176,10 @@ export function createVectorPathNode(
       fill: options.fill ?? (closed ? '#8B7CF6' : 'none'),
       stroke: options.stroke ?? '#20212A',
       strokeWidth: options.strokeWidth ?? (closed ? 0 : 3),
-      strokeLinecap: 'round',
-      strokeLinejoin: 'round',
-      fillRule: 'nonzero',
+      strokeLinecap: options.strokeLinecap ?? 'round',
+      strokeLinejoin: options.strokeLinejoin ?? 'round',
+      ...(options.strokeDasharray ? { strokeDasharray: options.strokeDasharray } : {}),
+      fillRule: options.fillRule ?? 'nonzero',
     },
   });
 }

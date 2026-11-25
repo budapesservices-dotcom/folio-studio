@@ -1,6 +1,18 @@
-import type { DesignNode, PathNode } from '../core/document/types';
+import type { DesignNode, DesignTokenCollection, PathNode } from '../core/document/types';
+import { formatColorWithAlpha, isTransparentColor, parseColorWithAlpha } from '../core/document/styling';
+import { resolveDesignTokenValue } from '../core/document/tokens';
 import type { PathfinderOperation } from '../core/document/vector';
-import type { CanvasToolId, CanvasToolOptions, ToolWorkspaceScope } from '../core/tools/operationContract';
+import type {
+  CanvasToolId,
+  CanvasToolOptions,
+  PaintBucketGapTolerance,
+  PaintBucketTarget,
+  ToolWorkspaceScope,
+  VectorBrushCap,
+  VectorBrushPreset,
+  VectorEraserMode,
+  VectorEraserTarget,
+} from '../core/tools/operationContract';
 import type { StudioVectorActions } from './workspace/inspectorVectorHelpers';
 
 export interface ToolOptionsBarProps {
@@ -8,6 +20,7 @@ export interface ToolOptionsBarProps {
   toolId: CanvasToolId;
   toolOptions: CanvasToolOptions;
   selectedNodes: DesignNode[];
+  designTokens?: DesignTokenCollection;
   onChangeOptions: (patch: Partial<CanvasToolOptions>) => void;
   onPathfinder: (operation: PathfinderOperation) => void;
   onConvertToPath: () => void;
@@ -31,12 +44,147 @@ const OPTION_TOOLS = new Set<CanvasToolId>([
   'pen',
   'curvature',
   'pencil',
+  'brush',
+  'eraser',
+  'paint-bucket',
   'smooth',
   'shape-builder',
   'draw-text',
   'eyedropper',
   'measure',
 ]);
+
+const BRUSH_SIZE_PRESETS = [2, 4, 8, 12, 18, 28, 44, 64, 100] as const;
+const ERASER_SIZE_PRESETS = [6, 12, 24, 36, 56, 80, 100] as const;
+const QUICK_COLOR_SWATCHES = ['#ffffff', '#111827', '#8b7cf6', '#38bdf8', '#22c55e', '#f59e0b', '#f43f5e'] as const;
+
+interface ZeroTypingColorControlProps {
+  label: string;
+  color: string;
+  tokenId?: string;
+  designTokens?: DesignTokenCollection;
+  onChangeColor: (nextColor: string, nextTokenId?: string) => void;
+}
+
+function ZeroTypingColorControl({
+  label,
+  color,
+  tokenId,
+  designTokens,
+  onChangeColor,
+}: ZeroTypingColorControlProps) {
+  const transparent = isTransparentColor(color);
+  const parsed = parseColorWithAlpha(color, '#8b7cf6');
+  const alphaPct = transparent ? 0 : Math.round(parsed.alpha * 100);
+  const colorTokens = (designTokens?.tokens ?? []).filter((token) => token.category === 'color');
+
+  return (
+    <div class="studio-opt-color-group" role="group" aria-label={`${label} color and opacity`}>
+      <label class="studio-opt-swatch" title={`${label} visual color picker`}>
+        <span>{label}</span>
+        <span class="studio-opt-checker">
+          <input
+            type="color"
+            aria-label={`${label} color picker`}
+            value={parsed.hex}
+            style={{ opacity: transparent ? 0 : Math.max(0.15, parsed.alpha) }}
+            onInput={(event) => {
+              const nextHex = (event.target as HTMLInputElement).value;
+              const nextAlpha = transparent ? 1 : Math.max(0.05, parsed.alpha);
+              onChangeColor(formatColorWithAlpha(nextHex, nextAlpha), undefined);
+            }}
+          />
+          {transparent && <span class="studio-opt-transparent-slash" aria-hidden="true" />}
+        </span>
+      </label>
+
+      <div class="studio-opt-swatches" role="group" aria-label={`${label} quick swatches`}>
+        {QUICK_COLOR_SWATCHES.map((swatch) => {
+          const isActive = !transparent && parsed.hex.toLowerCase() === swatch;
+          return (
+            <button
+              key={swatch}
+              type="button"
+              class={'studio-opt-swatch-dot' + (isActive ? ' is-active' : '')}
+              style={{ backgroundColor: swatch }}
+              aria-label={`Set ${label} color ${swatch}`}
+              aria-pressed={isActive}
+              title={swatch.toUpperCase()}
+              onClick={() => onChangeColor(formatColorWithAlpha(swatch, transparent ? 1 : parsed.alpha), undefined)}
+            />
+          );
+        })}
+      </div>
+
+      <button
+        type="button"
+        class={'studio-opt-btn studio-opt-transparent-btn' + (transparent ? ' is-active' : '')}
+        aria-pressed={transparent}
+        onClick={() => {
+          if (transparent) {
+            onChangeColor(formatColorWithAlpha(parsed.hex, 1), undefined);
+          } else {
+            onChangeColor('transparent', undefined);
+          }
+        }}
+        title={transparent ? `Restore solid ${label.toLowerCase()} color` : `Set ${label.toLowerCase()} to Transparent`}
+      >
+        <span>Transparent</span>
+      </button>
+
+      <label class="studio-opt-slider-field" title={`${label} opacity (${alphaPct}%)`}>
+        <span>Opacity</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="5"
+          aria-label={`${label} opacity`}
+          value={alphaPct}
+          onInput={(event) => {
+            const pct = Math.max(0, Math.min(100, Number((event.target as HTMLInputElement).value)));
+            if (pct <= 0) {
+              onChangeColor('transparent', undefined);
+            } else {
+              onChangeColor(formatColorWithAlpha(parsed.hex, pct / 100), undefined);
+            }
+          }}
+        />
+        <em>{alphaPct}%</em>
+      </label>
+
+      {colorTokens.length > 0 && (
+        <label class="studio-opt-select-field" title={`Bind ${label.toLowerCase()} to a Design Token`}>
+          <span>Token</span>
+          <select
+            aria-label={`${label} design token`}
+            value={tokenId ?? ''}
+            onChange={(event) => {
+              const nextId = (event.target as HTMLSelectElement).value;
+              if (!nextId || !designTokens) {
+                onChangeColor(color, undefined);
+                return;
+              }
+              const resolved = resolveDesignTokenValue(designTokens, nextId);
+              if (resolved.ok && resolved.cssValue.trim().length > 0) {
+                onChangeColor(resolved.cssValue, nextId);
+              } else {
+                onChangeColor(color, nextId);
+              }
+            }}
+          >
+            <option value="">Custom</option>
+            {colorTokens.map((token) => (
+              <option key={token.id} value={token.id}>
+                {token.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+    </div>
+  );
+}
 
 function PathfinderIcon({ op }: { op: PathfinderOperation }) {
   if (op === 'unite') {
@@ -87,6 +235,7 @@ export function ToolOptionsBar({
   toolId,
   toolOptions,
   selectedNodes,
+  designTokens,
   onChangeOptions,
   onPathfinder,
   onConvertToPath,
@@ -453,12 +602,253 @@ export function ToolOptionsBar({
               <span>Keep Tool</span>
             </button>
           )}
+          {toolId === 'brush' && (
+            <div class="studio-opt-drawing-row" data-testid="brush-options">
+              <span class="studio-options-label">Brush</span>
+              <label class="studio-opt-select-field" title="Vector brush nib preset">
+                <span>Preset</span>
+                <select
+                  aria-label="Brush preset"
+                  value={toolOptions.brushPreset}
+                  onChange={(event) =>
+                    onChangeOptions({ brushPreset: (event.target as HTMLSelectElement).value as VectorBrushPreset })
+                  }
+                >
+                  <option value="round">Round</option>
+                  <option value="calligraphy">Calligraphy</option>
+                  <option value="tapered">Tapered</option>
+                  <option value="marker">Marker</option>
+                </select>
+              </label>
+
+              <label class="studio-opt-slider-field" title="Brush width (2px–100px)">
+                <span>Size</span>
+                <input
+                  type="range"
+                  min="2"
+                  max="100"
+                  step="1"
+                  aria-label="Brush size slider"
+                  value={toolOptions.brushSize}
+                  onInput={(event) =>
+                    onChangeOptions({
+                      brushSize: Math.max(2, Math.min(100, Math.round(Number((event.target as HTMLInputElement).value)))),
+                    })
+                  }
+                />
+                <select
+                  aria-label="Brush size preset"
+                  class="studio-opt-inline-preset"
+                  value={BRUSH_SIZE_PRESETS.includes(toolOptions.brushSize as (typeof BRUSH_SIZE_PRESETS)[number])
+                    ? String(toolOptions.brushSize)
+                    : ''}
+                  onChange={(event) => {
+                    const next = Number((event.target as HTMLSelectElement).value);
+                    if (Number.isFinite(next) && next >= 2) onChangeOptions({ brushSize: next });
+                  }}
+                >
+                  {!BRUSH_SIZE_PRESETS.includes(toolOptions.brushSize as (typeof BRUSH_SIZE_PRESETS)[number]) && (
+                    <option value="">{toolOptions.brushSize}px</option>
+                  )}
+                  {BRUSH_SIZE_PRESETS.map((size) => (
+                    <option key={size} value={String(size)}>
+                      {size}px
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label class="studio-opt-slider-field" title="Pointer stabilizer smoothing (0%–100%)">
+                <span>Stabilizer</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  aria-label="Brush stabilizer"
+                  value={toolOptions.brushStabilizer}
+                  onInput={(event) =>
+                    onChangeOptions({
+                      brushStabilizer: Math.max(0, Math.min(100, Math.round(Number((event.target as HTMLInputElement).value)))),
+                    })
+                  }
+                />
+                <em>{toolOptions.brushStabilizer}%</em>
+              </label>
+
+              <label class="studio-opt-select-field" title="Stroke line cap shape">
+                <span>Cap</span>
+                <select
+                  aria-label="Brush line cap"
+                  value={toolOptions.brushCap}
+                  onChange={(event) =>
+                    onChangeOptions({ brushCap: (event.target as HTMLSelectElement).value as VectorBrushCap })
+                  }
+                >
+                  <option value="round">Round</option>
+                  <option value="square">Square</option>
+                  <option value="butt">Butt</option>
+                </select>
+              </label>
+
+              <ZeroTypingColorControl
+                label="Ink"
+                color={toolOptions.brushColor}
+                tokenId={toolOptions.brushTokenId}
+                designTokens={designTokens}
+                onChangeColor={(nextColor, nextTokenId) =>
+                  onChangeOptions({ brushColor: nextColor, brushTokenId: nextTokenId })
+                }
+              />
+            </div>
+          )}
+
+          {toolId === 'eraser' && (
+            <div class="studio-opt-drawing-row" data-testid="eraser-options">
+              <span class="studio-options-label">Eraser</span>
+              <label class="studio-opt-slider-field" title="Vector eraser diameter (4px–100px)">
+                <span>Size</span>
+                <input
+                  type="range"
+                  min="4"
+                  max="100"
+                  step="2"
+                  aria-label="Eraser size slider"
+                  value={toolOptions.eraserSize}
+                  onInput={(event) =>
+                    onChangeOptions({
+                      eraserSize: Math.max(4, Math.min(100, Math.round(Number((event.target as HTMLInputElement).value)))),
+                    })
+                  }
+                />
+                <select
+                  aria-label="Eraser size preset"
+                  class="studio-opt-inline-preset"
+                  value={ERASER_SIZE_PRESETS.includes(toolOptions.eraserSize as (typeof ERASER_SIZE_PRESETS)[number])
+                    ? String(toolOptions.eraserSize)
+                    : ''}
+                  onChange={(event) => {
+                    const next = Number((event.target as HTMLSelectElement).value);
+                    if (Number.isFinite(next) && next >= 4) onChangeOptions({ eraserSize: next });
+                  }}
+                >
+                  {!ERASER_SIZE_PRESETS.includes(toolOptions.eraserSize as (typeof ERASER_SIZE_PRESETS)[number]) && (
+                    <option value="">{toolOptions.eraserSize}px</option>
+                  )}
+                  {ERASER_SIZE_PRESETS.map((size) => (
+                    <option key={size} value={String(size)}>
+                      {size}px
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label class="studio-opt-select-field" title="How the vector eraser modifies touched paths">
+                <span>Mode</span>
+                <select
+                  aria-label="Eraser mode"
+                  value={toolOptions.eraserMode}
+                  onChange={(event) =>
+                    onChangeOptions({ eraserMode: (event.target as HTMLSelectElement).value as VectorEraserMode })
+                  }
+                >
+                  <option value="slice">Slice / Cut</option>
+                  <option value="object">Object Erase</option>
+                </select>
+              </label>
+
+              <label class="studio-opt-select-field" title="Which layers the eraser can affect">
+                <span>Target</span>
+                <select
+                  aria-label="Eraser target"
+                  value={toolOptions.eraserTarget}
+                  onChange={(event) =>
+                    onChangeOptions({ eraserTarget: (event.target as HTMLSelectElement).value as VectorEraserTarget })
+                  }
+                >
+                  <option value="selected">Selected Only</option>
+                  <option value="all">All Active Layers</option>
+                </select>
+              </label>
+            </div>
+          )}
+
+          {toolId === 'paint-bucket' && (
+            <div class="studio-opt-drawing-row" data-testid="paint-bucket-options">
+              <span class="studio-options-label">Bucket</span>
+              <ZeroTypingColorControl
+                label="Fill"
+                color={toolOptions.paintBucketColor}
+                tokenId={toolOptions.paintBucketTokenId}
+                designTokens={designTokens}
+                onChangeColor={(nextColor, nextTokenId) =>
+                  onChangeOptions({ paintBucketColor: nextColor, paintBucketTokenId: nextTokenId })
+                }
+              />
+
+              <label class="studio-opt-select-field" title="What clicking with Paint Bucket fills">
+                <span>Target</span>
+                <select
+                  aria-label="Paint Bucket target"
+                  value={toolOptions.paintBucketTarget}
+                  onChange={(event) =>
+                    onChangeOptions({
+                      paintBucketTarget: (event.target as HTMLSelectElement).value as PaintBucketTarget,
+                    })
+                  }
+                >
+                  <option value="fill">Fill</option>
+                  <option value="stroke">Stroke</option>
+                  <option value="smart-region">Smart Region</option>
+                </select>
+              </label>
+
+              <label class="studio-opt-select-field" title="Gap closing tolerance when filling enclosed empty regions">
+                <span>Gap Closing</span>
+                <select
+                  aria-label="Paint Bucket gap closing"
+                  value={toolOptions.paintBucketGapTolerance}
+                  onChange={(event) =>
+                    onChangeOptions({
+                      paintBucketGapTolerance: (event.target as HTMLSelectElement).value as PaintBucketGapTolerance,
+                    })
+                  }
+                >
+                  <option value="tight">Tight (0px)</option>
+                  <option value="medium">Medium</option>
+                  <option value="loose">Loose</option>
+                </select>
+              </label>
+            </div>
+          )}
+
           {toolId === 'shape-builder' && (
             <span class="studio-opt-hint">Drag across regions to merge · Hold Alt to punch out regions</span>
           )}
-          {toolId === 'eyedropper' && (
-            <span class="studio-opt-hint">Hover for live loupe · Click applies Fill · Shift+Click applies Stroke</span>
-          )}
+          {toolId === 'eyedropper' && (() => {
+            const activeColor = toolOptions.brushColor;
+            const transparent = isTransparentColor(activeColor);
+            const parsed = parseColorWithAlpha(activeColor, '#8b7cf6');
+            const alphaPct = transparent ? 0 : Math.round(parsed.alpha * 100);
+            return (
+              <div class="studio-opt-drawing-row" data-testid="eyedropper-options">
+                <span class="studio-options-label">Eyedropper</span>
+                <span class="studio-opt-sampled-readout" title="Last sampled color synced to Brush and Paint Bucket">
+                  <span class="studio-opt-checker">
+                    <span
+                      class="studio-opt-checker-fill"
+                      style={{ backgroundColor: transparent ? 'transparent' : activeColor }}
+                    />
+                    {transparent && <span class="studio-opt-transparent-slash" aria-hidden="true" />}
+                  </span>
+                  <span>{transparent ? 'Transparent' : `${alphaPct}%`}</span>
+                </span>
+                <span class="studio-opt-hint">
+                  Hover for live magnifier · Click samples Fill · Shift+Click samples Stroke · Syncs Brush &amp; Bucket
+                </span>
+              </div>
+            );
+          })()}
           {toolId === 'measure' && (
             <span class="studio-opt-hint">Drag to measure ΔX, ΔY, distance &amp; angle with smart snap (Shift snaps 45°)</span>
           )}

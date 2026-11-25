@@ -39,6 +39,9 @@ export type StudioCanvasToolId =
   | 'curvature'
   | 'anchor-point'
   | 'pencil'
+  | 'brush'
+  | 'eraser'
+  | 'paint-bucket'
   | 'smooth'
   | 'scissors'
   | 'shape-builder'
@@ -79,6 +82,9 @@ export const CANVAS_TOOL_IDS: readonly CanvasToolId[] = Object.freeze([
   'curvature',
   'anchor-point',
   'pencil',
+  'brush',
+  'eraser',
+  'paint-bucket',
   'smooth',
   'scissors',
   'shape-builder',
@@ -94,6 +100,13 @@ export function isCanvasToolId(value: unknown): value is CanvasToolId {
   return typeof value === 'string' && CANVAS_TOOL_ID_SET.has(value);
 }
 
+export type VectorBrushPreset = 'round' | 'calligraphy' | 'tapered' | 'marker';
+export type VectorBrushCap = 'round' | 'square' | 'butt';
+export type VectorEraserMode = 'slice' | 'object';
+export type VectorEraserTarget = 'selected' | 'all';
+export type PaintBucketTarget = 'fill' | 'stroke' | 'smart-region';
+export type PaintBucketGapTolerance = 'tight' | 'medium' | 'loose';
+
 export interface CanvasToolOptions {
   polygonSides: number;
   starPoints: number;
@@ -103,6 +116,22 @@ export interface CanvasToolOptions {
   fillColor: string;
   keepToolActive: boolean;
   smoothRadius: number;
+  /** Vector Brush settings (Zero-Typing) */
+  brushPreset: VectorBrushPreset;
+  brushSize: number;
+  brushStabilizer: number;
+  brushColor: string;
+  brushTokenId?: string;
+  brushCap: VectorBrushCap;
+  /** Vector Eraser settings (Zero-Typing) */
+  eraserSize: number;
+  eraserMode: VectorEraserMode;
+  eraserTarget: VectorEraserTarget;
+  /** Paint Bucket settings (Zero-Typing) */
+  paintBucketColor: string;
+  paintBucketTokenId?: string;
+  paintBucketTarget: PaintBucketTarget;
+  paintBucketGapTolerance: PaintBucketGapTolerance;
 }
 
 export const DEFAULT_CANVAS_TOOL_OPTIONS: CanvasToolOptions = {
@@ -114,6 +143,17 @@ export const DEFAULT_CANVAS_TOOL_OPTIONS: CanvasToolOptions = {
   fillColor: '#8B7CF6',
   keepToolActive: false,
   smoothRadius: 34,
+  brushPreset: 'round',
+  brushSize: 10,
+  brushStabilizer: 45,
+  brushColor: '#8B7CF6',
+  brushCap: 'round',
+  eraserSize: 24,
+  eraserMode: 'slice',
+  eraserTarget: 'selected',
+  paintBucketColor: '#8B7CF6',
+  paintBucketTarget: 'fill',
+  paintBucketGapTolerance: 'medium',
 };
 
 export type ToolOperationCategory =

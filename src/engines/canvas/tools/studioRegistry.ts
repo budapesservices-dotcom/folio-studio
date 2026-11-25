@@ -23,6 +23,7 @@ import {
   smoothTool,
 } from './vector-tools';
 import { shapeBuilderTool } from './shape-builder';
+import { paintBucketTool, vectorBrushTool, vectorEraserTool } from './drawing-tools';
 import { eyedropperTool, measureTool, rotateTool } from './utility-tools';
 import { ToolRegistry } from './registry';
 import type {
@@ -58,11 +59,14 @@ const ALL_STUDIO_TOOLS: CanvasToolHandler[] = [
   drawArrowTool,
   drawPolygonTool,
   drawStarTool,
-  // Vector Craft (Illustrator + Figma + Folio Shape Builder)
+  // Vector Craft & Vector-Native Drawing Suite
   penTool,
   curvatureTool,
   anchorPointTool,
   pencilTool,
+  vectorBrushTool,
+  vectorEraserTool,
+  paintBucketTool,
   smoothTool,
   scissorsTool,
   shapeBuilderTool,
@@ -85,7 +89,7 @@ export function getStudioTool(id: CanvasToolId): CanvasToolHandler {
 }
 
 /**
- * Main Canvas — Complete Figma Layout & Design Studio toolset + Folio Shape Builder.
+ * Main Canvas — Complete Figma Layout & Design Studio toolset + Folio Vector Drawing & Shape Builder.
  */
 export const MAIN_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
@@ -115,9 +119,9 @@ export const MAIN_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
     id: 'vector',
     label: 'Vector',
-    description: 'Draw custom Bezier paths (Pen), freehand strokes (Pencil), or fuse/punch regions with Shape Builder (Shift+M).',
+    description: 'Draw Bezier paths (Pen), Vector Brush (B), Vector Eraser (E), Paint Bucket (J), Pencil (N), or Shape Builder (Shift+M).',
     icon: 'pen',
-    tools: ['pen', 'pencil', 'shape-builder'],
+    tools: ['pen', 'pencil', 'brush', 'eraser', 'paint-bucket', 'shape-builder'],
     workspaces: ['main'],
   },
   {
@@ -147,9 +151,9 @@ export const MAIN_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
 ];
 
 /**
- * Component Canvas — Dedicated Adobe Illustrator Vector Craft Studio toolset.
- * Brings Pen, Curvature, Anchor Point, Pencil, Smooth, Scissors, Shape Builder,
- * Rotate (with custom pivot), and Vector Shapes right to the forefront.
+ * Component Canvas — Dedicated Adobe Illustrator Vector Craft & Vector-Native Drawing Studio toolset.
+ * Brings Pen, Vector Brush, Vector Eraser, Paint Bucket, Curvature, Anchor Point, Pencil,
+ * Smooth, Scissors, Shape Builder, Rotate (with custom pivot), and Vector Shapes right to the forefront.
  */
 export const COMPONENT_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
@@ -163,9 +167,9 @@ export const COMPONENT_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
     id: 'vector',
     label: 'Vector',
-    description: 'Illustrator Vector Suite: Pen (P), Curvature (U), Anchor Point (Shift+C), Pencil (N), Smooth, Scissors (C), Shape Builder (Shift+M).',
+    description: 'Vector Craft & Drawing Suite: Pen (P), Vector Brush (B), Vector Eraser (E), Paint Bucket (J), Curvature (U), Anchor Point, Pencil (N), Smooth, Scissors (C), Shape Builder.',
     icon: 'pen',
-    tools: ['pen', 'curvature', 'anchor-point', 'pencil', 'smooth', 'scissors', 'shape-builder'],
+    tools: ['pen', 'brush', 'eraser', 'paint-bucket', 'curvature', 'anchor-point', 'pencil', 'smooth', 'scissors', 'shape-builder'],
     workspaces: ['component'],
   },
   {
@@ -195,7 +199,7 @@ export const COMPONENT_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
     id: 'inspect',
     label: 'Inspect',
-    description: 'Eyedropper Loupe (I) color sampling and Precision Measure (M) redlines.',
+    description: 'Eyedropper Loupe (I) color & alpha sampling and Precision Measure (M) redlines.',
     icon: 'eyedropper',
     tools: ['eyedropper', 'measure'],
     workspaces: ['component'],
@@ -253,6 +257,9 @@ export function findStudioToolByShortcut(
     l: 'draw-line',
     g: 'draw-polygon',
     p: 'pen',
+    b: 'brush',
+    e: 'eraser',
+    j: 'paint-bucket',
     u: 'curvature',
     n: 'pencil',
     c: 'scissors',

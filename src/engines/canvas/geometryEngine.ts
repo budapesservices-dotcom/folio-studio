@@ -1,5 +1,6 @@
 import { getEffectiveLayerStates, type EffectiveLayerState } from '../../core/document/layers';
 import { classifyNodeListChange } from '../../core/document/nodeChanges';
+import { isTransparentColor } from '../../core/document/styling';
 import type { DesignNode, FolioDocument, TextNode, VectorAnchorPoint } from '../../core/document/types';
 import {
   isCanvasToolId,
@@ -42,6 +43,8 @@ const DRAW_MODE_TOOL_IDS = new Set<CanvasToolId>([
   'pen',
   'curvature',
   'pencil',
+  'brush',
+  'paint-bucket',
   'frame',
   'section',
 ]);
@@ -495,6 +498,7 @@ export function evaluateToolOperation(
         return { status: 'rejected', code: 'INVALID_COLOR', reason: 'Sampled color must be a non-empty string.' };
       }
       const colorTarget = operation.payload.target;
+      const transparent = isTransparentColor(color);
       const selectedSet = new Set(context.selectedNodeIds);
       const updatedNodes: DesignNode[] = [];
 
@@ -508,8 +512,8 @@ export function evaluateToolOperation(
               ...node,
               style: {
                 ...node.style,
-                stroke: color,
-                strokeWidth: Math.max(1, node.style.strokeWidth || 0),
+                stroke: transparent ? 'transparent' : color,
+                strokeWidth: transparent ? 0 : Math.max(1, node.style.strokeWidth || 0),
               },
             } as DesignNode);
           }
@@ -520,24 +524,30 @@ export function evaluateToolOperation(
           node.type === 'text' ||
           node.type === 'path'
         ) {
+          const nextStyle: Record<string, unknown> = {
+            ...node.style,
+            fill: transparent ? 'transparent' : color,
+          };
+          if ('fills' in nextStyle) delete nextStyle.fills;
           updatedNodes.push({
             ...node,
-            style: { ...node.style, fill: color },
+            style: nextStyle,
           } as DesignNode);
         }
       }
 
       const sourceName = operation.payload.sourceName || 'canvas';
+      const displayLabel = transparent ? 'TRANSPARENT' : color.toUpperCase();
       const noticeMessage =
         updatedNodes.length > 0
-          ? `Sampled ${color.toUpperCase()} (${colorTarget}) from ${sourceName} and applied to ${updatedNodes.length} layer${updatedNodes.length === 1 ? '' : 's'}.`
-          : `Sampled ${color.toUpperCase()} from ${sourceName} into active draw ${colorTarget}.`;
+          ? `Sampled ${displayLabel} (${colorTarget}) from ${sourceName} and applied to ${updatedNodes.length} layer${updatedNodes.length === 1 ? '' : 's'}.`
+          : `Sampled ${displayLabel} from ${sourceName} into active Brush, Paint Bucket & ${colorTarget}.`;
 
       return {
         status: 'ready',
         operation: sealValidatedOperation(operation, {
           kind: 'sample-color',
-          color,
+          color: transparent ? 'transparent' : color,
           sourceName,
           target: colorTarget,
           resolvedNodesToUpdate: updatedNodes,

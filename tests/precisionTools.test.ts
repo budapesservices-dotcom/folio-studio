@@ -477,8 +477,8 @@ describe('On-Canvas Smart Handles, Alt-Hover Redlines & Smart Measure (Breakthro
 });
 
 describe('Existing Tool Quality, Precision & Efficiency Polish (Zero New Tools)', () => {
-  it('strictly preserves exact tool counts (26 studio tools, 6 Wave 1 tools)', () => {
-    expect(studioToolRegistry.list()).toHaveLength(26);
+  it('strictly preserves exact tool counts (29 studio tools, 6 Wave 1 tools)', () => {
+    expect(studioToolRegistry.list()).toHaveLength(29);
     expect(canvasToolRegistry.list()).toHaveLength(6);
   });
 

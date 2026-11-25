@@ -389,6 +389,17 @@ export function App() {
     setNotice,
   });
 
+  const applySampledColorOption = useCallback((color: string, colorTarget: 'fill' | 'stroke') => {
+    setToolOptions((current) => ({
+      ...current,
+      ...(colorTarget === 'stroke' ? { strokeColor: color } : { fillColor: color }),
+      brushColor: color,
+      brushTokenId: undefined,
+      paintBucketColor: color,
+      paintBucketTokenId: undefined,
+    }));
+  }, []);
+
   const mainToolOperationExecutor = createToolOperationExecutor({
     workspace: 'main',
     commandClient: mainCommandClient,
@@ -403,11 +414,7 @@ export function App() {
       onZoomChange: windows.setZoom,
       onToolChange: (nextTool) => chooseCanvasTool(nextTool, 'main'),
       onNotice: setNotice,
-      onSampledColorOptionChange: (color, colorTarget) => {
-        setToolOptions((current) =>
-          colorTarget === 'stroke' ? { ...current, strokeColor: color } : { ...current, fillColor: color },
-        );
-      },
+      onSampledColorOptionChange: applySampledColorOption,
       onCanvasMutationCommitted: (kind) => {
         selectionSourceRef.current = 'canvas';
         if (kind === 'create') windows.setInspectorVisible(true);
@@ -428,11 +435,7 @@ export function App() {
       onZoomChange: windows.setComponentCanvasZoom,
       onToolChange: (nextTool) => chooseCanvasTool(nextTool, 'component'),
       onNotice: setNotice,
-      onSampledColorOptionChange: (color, colorTarget) => {
-        setToolOptions((current) =>
-          colorTarget === 'stroke' ? { ...current, strokeColor: color } : { ...current, fillColor: color },
-        );
-      },
+      onSampledColorOptionChange: applySampledColorOption,
       onCanvasMutationCommitted: () => {
         selectionSourceRef.current = 'canvas';
       },
@@ -566,7 +569,7 @@ export function App() {
     mainToolOperationExecutor,
     onUpdateSelectedFallback: selectionActions.updateSelected,
     onUpdateSelectedStyleFallback: selectionActions.updateSelectedStyle,
-    onSampledColorOption: (color, target) => setToolOptions((current) => (target === 'stroke' ? { ...current, strokeColor: color } : { ...current, fillColor: color })),
+    onSampledColorOption: applySampledColorOption,
     onCanvasInteraction: () => { selectionSourceRef.current = 'canvas'; },
   });
 

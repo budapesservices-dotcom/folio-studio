@@ -53,6 +53,7 @@ import {
 } from './geometryEngine';
 import { getStudioTool } from './tools/studioRegistry';
 import { extractSampledColor } from './tools/utility-tools';
+import { preloadVectorDrawingEngine } from './tools/vectorDrawingLoader';
 import {
   DEFAULT_CANVAS_TOOL_OPTIONS,
   type CanvasToolContext,
@@ -338,6 +339,9 @@ export function Canvas({
       pendingInlineEditRef.current = null;
     } else {
       setInlineTextEdit(null);
+    }
+    if (toolId === 'brush' || toolId === 'eraser' || toolId === 'paint-bucket') {
+      void preloadVectorDrawingEngine();
     }
   }, [toolId, document.id]);
 
@@ -672,6 +676,9 @@ export function Canvas({
     toolId === 'anchor-point' ||
     toolId === 'scissors' ||
     toolId === 'smooth' ||
+    toolId === 'brush' ||
+    toolId === 'eraser' ||
+    toolId === 'paint-bucket' ||
     (toolId === 'shape-builder' && Boolean(shapeBuilderHoverArrangement)) ||
     (altHeld && Boolean(selectionBounds) && (toolId === 'select' || toolId === 'direct-selection'));
 
@@ -703,6 +710,7 @@ export function Canvas({
     session: toolSessionRef.current,
     toolOptions,
     workspace,
+    designTokens,
     customPivot,
     activeAnchor,
   });
@@ -1380,11 +1388,15 @@ export function Canvas({
   const eyedropperLoupe = useMemo(() => {
     if (toolId !== 'eyedropper' || !hoverPoint) return null;
     const hitNode = hoverNodeId ? nodeById.get(hoverNodeId) : undefined;
-    const sampled = extractSampledColor(hitNode, document.background);
+    const preferTarget: 'fill' | 'stroke' = shiftHeld ? 'stroke' : 'fill';
+    const sampled = extractSampledColor(hitNode, document.background, preferTarget);
     return {
       x: hoverPoint.x,
       y: hoverPoint.y,
       color: sampled.color,
+      hex: sampled.hex,
+      alpha: sampled.alpha,
+      isTransparent: sampled.isTransparent,
       sourceName: sampled.sourceName,
       target: shiftHeld ? 'STROKE' : 'FILL',
     };

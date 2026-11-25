@@ -277,7 +277,7 @@ describe('Core Vector Math & Illustrator Pathfinder Engine', () => {
 });
 
 describe('Studio Tool Registry & Workspace Scoping', () => {
-  it('preserves Wave 1 canvasToolRegistry intact while exposing full 26-tool studioToolRegistry', () => {
+  it('preserves Wave 1 canvasToolRegistry intact while exposing full 29-tool studioToolRegistry', () => {
     expect(canvasToolRegistry.list().map((t) => t.id)).toEqual([
       'select',
       'direct-selection',
@@ -286,7 +286,7 @@ describe('Studio Tool Registry & Workspace Scoping', () => {
       'hand',
       'scrubby-zoom',
     ]);
-    expect(studioToolRegistry.list().length).toBe(26);
+    expect(studioToolRegistry.list().length).toBe(29);
   });
 
   it('scopes Figma layout tools to Main Canvas and Adobe Illustrator vector craft tools to Component Canvas', () => {

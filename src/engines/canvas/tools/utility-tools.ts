@@ -1,3 +1,9 @@
+import {
+  formatColorWithAlpha,
+  getVisibleFillPaints,
+  isTransparentColor,
+  parseColorWithAlpha,
+} from '../../../core/document/styling';
 import type { DesignNode } from '../../../core/document/types';
 import { getBounds, nodesGeometryChanged, rotateNodesAroundPivot, snapPointToTargets, type Bounds } from '../geometry';
 import { getCanvasUnitsPerPixel } from './geometry';
@@ -37,28 +43,127 @@ function remapRotatedClones(nodes: readonly DesignNode[], idMap: Record<string, 
   });
 }
 
+export interface SampledColorDetails {
+  readonly color: string;
+  readonly hex: string;
+  readonly alpha: number;
+  readonly isTransparent: boolean;
+  readonly sourceName: string;
+}
+
+function resolveColorWithNodeOpacity(rawColor: string | undefined, nodeOpacity: number, fallbackHex: string): {
+  color: string;
+  hex: string;
+  alpha: number;
+  isTransparent: boolean;
+} {
+  if (!rawColor || isTransparentColor(rawColor)) {
+    return { color: 'transparent', hex: fallbackHex, alpha: 0, isTransparent: true };
+  }
+  const parsed = parseColorWithAlpha(rawColor, fallbackHex);
+  const combinedAlpha = Math.max(0, Math.min(1, Math.round(parsed.alpha * nodeOpacity * 100) / 100));
+  if (combinedAlpha <= 0) {
+    return { color: 'transparent', hex: parsed.hex, alpha: 0, isTransparent: true };
+  }
+  const formatted = formatColorWithAlpha(parsed.hex, combinedAlpha);
+  return {
+    color: formatted,
+    hex: parsed.hex,
+    alpha: combinedAlpha,
+    isTransparent: false,
+  };
+}
+
 export function extractSampledColor(
   node: DesignNode | undefined,
   artboardBackground: string,
-): { color: string; sourceName: string } {
+  preferTarget: 'fill' | 'stroke' = 'fill',
+): SampledColorDetails {
   if (!node) {
+    if (isTransparentColor(artboardBackground)) {
+      return {
+        color: 'transparent',
+        hex: '#171B24',
+        alpha: 0,
+        isTransparent: true,
+        sourceName: 'Artboard',
+      };
+    }
+    const parsed = parseColorWithAlpha(artboardBackground, '#171B24');
     return {
-      color: artboardBackground === '#00000000' || artboardBackground === 'transparent' ? '#171B24' : artboardBackground,
+      color: formatColorWithAlpha(parsed.hex, parsed.alpha),
+      hex: parsed.hex,
+      alpha: parsed.alpha,
+      isTransparent: parsed.isTransparent,
       sourceName: 'Artboard',
     };
   }
-  if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame') {
-    const color = node.style.fill !== 'none' && node.style.fill !== '#00000000' ? node.style.fill : node.style.stroke;
-    return { color: color && color !== 'none' ? color : '#8B7CF6', sourceName: node.name };
+
+  const nodeOpacity = Number.isFinite(node.opacity) ? Math.max(0, Math.min(1, node.opacity)) : 1;
+
+  if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path') {
+    const hasStroke = node.style.strokeWidth > 0 && !isTransparentColor(node.style.stroke);
+    const paints = getVisibleFillPaints(node);
+    const topPaint = paints[paints.length - 1];
+    let rawFill: string | undefined = node.style.fill;
+    let paintOpacity = 1;
+    if (topPaint) {
+      paintOpacity = topPaint.opacity ?? 1;
+      if (topPaint.type === 'solid') {
+        rawFill = topPaint.color;
+      } else if (topPaint.stops.length > 0) {
+        rawFill = topPaint.stops[0].color;
+        paintOpacity *= topPaint.stops[0].opacity ?? 1;
+      }
+    }
+    const hasFill = !isTransparentColor(rawFill);
+
+    if (preferTarget === 'stroke') {
+      if (hasStroke) {
+        return {
+          ...resolveColorWithNodeOpacity(node.style.stroke, nodeOpacity, '#20212A'),
+          sourceName: node.name,
+        };
+      }
+      if (hasFill) {
+        return {
+          ...resolveColorWithNodeOpacity(rawFill, nodeOpacity * paintOpacity, '#8B7CF6'),
+          sourceName: node.name,
+        };
+      }
+      return { color: 'transparent', hex: '#20212A', alpha: 0, isTransparent: true, sourceName: node.name };
+    }
+
+    if (hasFill) {
+      return {
+        ...resolveColorWithNodeOpacity(rawFill, nodeOpacity * paintOpacity, '#8B7CF6'),
+        sourceName: node.name,
+      };
+    }
+    if (hasStroke) {
+      return {
+        ...resolveColorWithNodeOpacity(node.style.stroke, nodeOpacity, '#20212A'),
+        sourceName: node.name,
+      };
+    }
+    return { color: 'transparent', hex: '#8B7CF6', alpha: 0, isTransparent: true, sourceName: node.name };
   }
-  if (node.type === 'path') {
-    const color = node.style.fill !== 'none' && node.style.fill !== '#00000000' ? node.style.fill : node.style.stroke;
-    return { color: color && color !== 'none' ? color : '#20212A', sourceName: node.name };
-  }
+
   if (node.type === 'text') {
-    return { color: node.style.fill, sourceName: node.name };
+    return {
+      ...resolveColorWithNodeOpacity(node.style.fill, nodeOpacity, '#FFFFFF'),
+      sourceName: node.name,
+    };
   }
-  return { color: '#8B7CF6', sourceName: node.name };
+
+  if (node.type === 'image' && node.style.stroke && !isTransparentColor(node.style.stroke)) {
+    return {
+      ...resolveColorWithNodeOpacity(node.style.stroke, nodeOpacity, '#8B7CF6'),
+      sourceName: node.name,
+    };
+  }
+
+  return { color: '#8B7CF6', hex: '#8B7CF6', alpha: 1, isTransparent: false, sourceName: node.name };
 }
 
 /**
@@ -288,11 +393,16 @@ export const eyedropperTool: CanvasToolHandler = {
     const hit = event.targetNodeId
       ? context.canvasNodes.find((node) => node.id === event.targetNodeId)
       : undefined;
-    const sampled = extractSampledColor(hit, context.document.background);
     const target: 'fill' | 'stroke' = event.shiftKey ? 'stroke' : 'fill';
+    const sampled = extractSampledColor(hit, context.document.background, target);
+    const label = sampled.isTransparent
+      ? 'TRANSPARENT'
+      : sampled.alpha < 1
+        ? `${sampled.hex.toUpperCase()} (${Math.round(sampled.alpha * 100)}%)`
+        : sampled.hex.toUpperCase();
     return {
-      sampledColor: { ...sampled, target },
-      notice: `Sampled ${sampled.color.toUpperCase()} (${target}) from ${sampled.sourceName}.`,
+      sampledColor: { color: sampled.color, sourceName: sampled.sourceName, target },
+      notice: `Sampled ${label} (${target}) from ${sampled.sourceName}.`,
       preventDefault: true,
     };
   },

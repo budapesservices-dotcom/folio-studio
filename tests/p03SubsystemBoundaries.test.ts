@@ -98,7 +98,7 @@ function readImportsForSrc(relativeFromSrc: string): string[] {
 
 describe('P0.3 Subsystem Boundaries — Tool Operation Contract', () => {
   it('defines strict versioned envelopes for all studio tool categories', () => {
-    expect(CANVAS_TOOL_IDS).toHaveLength(26);
+    expect(CANVAS_TOOL_IDS).toHaveLength(29);
 
     const project = createInitialProject('Contract Test');
     const doc = getActiveDocument(project);
