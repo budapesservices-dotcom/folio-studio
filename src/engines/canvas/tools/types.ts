@@ -10,6 +10,11 @@ import {
   type ToolWorkspaceScope,
   type Wave1CanvasToolId,
 } from '../../../core/tools/operationContract';
+import type {
+  AutoLayoutReorderSlot,
+  GapAxis,
+  PaddingEdge,
+} from '../autoLayoutHandles';
 import type { Bounds, ResizeHandle, SnapGuide } from '../geometry';
 
 export {
@@ -32,7 +37,9 @@ export interface VectorAnchorHit {
 export type SmartHandleHit =
   | { kind: 'corner-radius'; nodeId: string; corner: 'nw' | 'ne' | 'se' | 'sw' }
   | { kind: 'star-inner'; nodeId: string }
-  | { kind: 'pivot' };
+  | { kind: 'pivot' }
+  | { kind: 'autolayout-padding'; nodeId: string; edge: PaddingEdge }
+  | { kind: 'autolayout-gap'; nodeId: string; axis: GapAxis; gapIndex: number };
 
 export interface CanvasToolPointerInput {
   pointerId: number;
@@ -79,6 +86,11 @@ export interface SelectTransformSession {
   cloneIdMap?: Record<string, string>;
   previewNodes?: DesignNode[];
   hudLabel?: string;
+  autoLayoutReorder?: {
+    containerId: string;
+    containerBounds: Bounds;
+    slot: AutoLayoutReorderSlot | null;
+  };
 }
 
 export interface SmartHandleSession {
@@ -88,10 +100,13 @@ export interface SmartHandleSession {
   start: { x: number; y: number };
   node?: DesignNode;
   previewNode?: DesignNode;
+  previewNodes?: DesignNode[];
   pivot?: { x: number; y: number };
   initialPivot?: { x: number; y: number } | null;
   hudLabel?: string;
   hudPoint?: { x: number; y: number };
+  activeEdges?: readonly PaddingEdge[];
+  activeGapAxes?: readonly GapAxis[];
 }
 
 export interface AnchorEditSession {
@@ -248,7 +263,8 @@ export type CanvasToolOverlay =
     }
   | { kind: 'rotate-ring'; center: { x: number; y: number }; radius: number; angleDeg: number }
   | { kind: 'measure'; start: { x: number; y: number }; end: { x: number; y: number }; dx: number; dy: number; distance: number; angleDeg: number; snappedStart?: boolean; snappedEnd?: boolean; inspectedBounds?: Bounds; inspectedLabel?: string }
-  | { kind: 'smart-hud'; x: number; y: number; text: string; variant?: 'default' | 'measure' | 'rotate' }
+  | { kind: 'smart-hud'; x: number; y: number; text: string; variant?: 'default' | 'measure' | 'rotate' | 'spacing' }
+  | { kind: 'autolayout-reorder'; containerBounds: Bounds; slot: AutoLayoutReorderSlot }
   | { kind: 'shape-builder'; arrangement: PlanarArrangement; touchedFaceIds: number[]; strokePoints: Array<{ x: number; y: number }>; mode: 'merge' | 'punch' };
 
 export interface CanvasToolTransition {
@@ -260,6 +276,7 @@ export interface CanvasToolTransition {
   createNodes?: DesignNode[];
   replaceNodeWithNodes?: { nodeId: string; nodes: DesignNode[] };
   replaceNodes?: { removeIds: string[]; insertNodes: DesignNode[] };
+  moveLayer?: { nodeId: string; targetId: string; position: 'before' | 'after' | 'inside' };
   sampledColor?: { color: string; sourceName: string; target?: 'fill' | 'stroke' };
   customPivot?: { x: number; y: number } | null;
   activeAnchor?: { nodeId: string; pointIndex: number } | null;

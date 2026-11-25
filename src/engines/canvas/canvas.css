@@ -210,12 +210,81 @@
   fill: #1d1812;
   stroke: #e59a4c;
 }
+.canvas-hud-badge.is-spacing rect {
+  fill: #24121b;
+  stroke: #f43f5e;
+}
 .canvas-hud-badge text {
   fill: #f0f3fa;
   font-size: 11px;
   font-weight: 600;
   font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
+}
+
+/* On-Canvas Auto-Layout Direct Manipulation Handles & Drag-to-Reorder Indicator */
+.canvas-al-spacing-zone {
+  stroke: rgba(244, 63, 94, 0.35);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-al-handle {
+  opacity: 0.72;
+  transition: opacity 110ms ease-out;
+}
+.canvas-al-handle:hover,
+.canvas-al-handle.is-active {
+  opacity: 1;
+}
+.canvas-al-handle.is-padding.is-horizontal,
+.canvas-al-handle.is-gap.is-horizontal {
+  cursor: ns-resize;
+}
+.canvas-al-handle.is-padding.is-vertical,
+.canvas-al-handle.is-gap.is-vertical {
+  cursor: ew-resize;
+}
+.canvas-al-handle-casing {
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.65;
+}
+.canvas-al-handle:hover .canvas-al-handle-casing,
+.canvas-al-handle.is-active .canvas-al-handle-casing {
+  stroke-width: 5.5;
+  opacity: 1;
+}
+.canvas-al-handle-bar {
+  stroke: #f43f5e;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-al-handle:hover .canvas-al-handle-bar,
+.canvas-al-handle.is-active .canvas-al-handle-bar {
+  stroke: #e11d48;
+  stroke-width: 3;
+}
+.canvas-al-reorder-container {
+  fill: rgba(0, 229, 255, 0.04);
+  stroke: rgba(0, 229, 255, 0.55);
+  stroke-width: 1.25;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-al-reorder-line {
+  stroke: #00e5ff;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-al-reorder-cap {
+  fill: #0f172a;
+  stroke: #00e5ff;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
 }
 
 /* Illustrator-grade Vector Anchor & Bezier Handle Overlays */

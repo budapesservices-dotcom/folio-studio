@@ -15,6 +15,7 @@ import {
   type CanvasToolId,
   type CommitInlineTextOperationPayload,
   type CreateNodesOperationPayload,
+  type MoveLayerOperationPayload,
   type NotifyOperationPayload,
   type ReplaceNodesOperationPayload,
   type ReplaceNodeWithNodesOperationPayload,
@@ -67,6 +68,7 @@ const SUPPORTED_OPERATION_KINDS: ReadonlySet<string> = new Set<SupportedToolOper
   'replace-nodes',
   'sample-color',
   'commit-inline-text',
+  'move-layer',
   'select-nodes',
   'viewport-update',
   'switch-tool',
@@ -155,6 +157,14 @@ function isReplaceNodesPayload(payload: unknown): payload is ReplaceNodesOperati
   return (
     isPlainRecord(payload) &&
     payload.kind === 'replace-nodes' &&
+    validateToolOperationPayload(payload, 'payload').ok
+  );
+}
+
+function isMoveLayerPayload(payload: unknown): payload is MoveLayerOperationPayload {
+  return (
+    isPlainRecord(payload) &&
+    payload.kind === 'move-layer' &&
     validateToolOperationPayload(payload, 'payload').ok
   );
 }
@@ -523,6 +533,10 @@ export function validateToolOperationEnvelope(input: unknown): ValidatedToolOper
       if (!isValidatedCommitInlineTextPayload(payload)) assertValidatedCommitInlineTextPayload(payload);
       break;
 
+    case 'move-layer':
+      if (!isMoveLayerPayload(payload)) assertStandardPayload(payload, 'move-layer');
+      break;
+
     case 'select-nodes':
       if (!isSelectNodesPayload(payload)) assertStandardPayload(payload, 'select-nodes');
       break;
@@ -888,6 +902,28 @@ export function createToolOperationExecutor(options: ToolOperationExecutorOption
           break;
         }
 
+        case 'move-layer': {
+          if (hydrating) {
+            opHydrationSkipReason.set(i, 'Skipped layer reorder while hydrating.');
+            break;
+          }
+          const envelope = options.commandClient.createEnvelope(
+            'layer.move',
+            { kind: 'document', address: astView.address },
+            {
+              node: { document: astView.address, nodeId: payload.nodeId },
+              target: { document: astView.address, nodeId: payload.targetId },
+              position: payload.position,
+            },
+            description ?? 'Reorder layer on canvas',
+            batchTransactionId,
+          );
+          opCommandIndex.set(i, commandEnvelopes.length);
+          opMutationKind.set(i, 'transform');
+          commandEnvelopes.push(envelope);
+          break;
+        }
+
         case 'select-nodes':
         case 'viewport-update':
         case 'switch-tool':
@@ -959,7 +995,8 @@ export function createToolOperationExecutor(options: ToolOperationExecutorOption
         case 'transform-nodes':
         case 'replace-node-with-nodes':
         case 'replace-nodes':
-        case 'commit-inline-text': {
+        case 'commit-inline-text':
+        case 'move-layer': {
           if (mutationKind && commandResult?.status === 'applied') {
             options.shell.onCanvasMutationCommitted?.(mutationKind);
           }

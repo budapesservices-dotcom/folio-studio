@@ -199,6 +199,13 @@ export interface CommitInlineTextOperationPayload {
   readonly text: string;
 }
 
+export interface MoveLayerOperationPayload {
+  readonly kind: 'move-layer';
+  readonly nodeId: string;
+  readonly targetId: string;
+  readonly position: 'before' | 'after' | 'inside';
+}
+
 export interface SelectNodesOperationPayload {
   readonly kind: 'select-nodes';
   readonly nodeIds: readonly string[];
@@ -226,7 +233,8 @@ export type DocumentMutationOperationPayload =
   | ReplaceNodeWithNodesOperationPayload
   | ReplaceNodesOperationPayload
   | SampleColorOperationPayload
-  | CommitInlineTextOperationPayload;
+  | CommitInlineTextOperationPayload
+  | MoveLayerOperationPayload;
 
 export type ToolOperationPayload =
   | DocumentMutationOperationPayload
@@ -257,7 +265,8 @@ export type DocumentMutationToolOperation =
   | ToolOperationEnvelope<ReplaceNodeWithNodesOperationPayload>
   | ToolOperationEnvelope<ReplaceNodesOperationPayload>
   | ToolOperationEnvelope<SampleColorOperationPayload>
-  | ToolOperationEnvelope<CommitInlineTextOperationPayload>;
+  | ToolOperationEnvelope<CommitInlineTextOperationPayload>
+  | ToolOperationEnvelope<MoveLayerOperationPayload>;
 
 export type ToolOperation =
   | DocumentMutationToolOperation
@@ -281,6 +290,11 @@ export interface ToolTransitionCommitOutput {
   readonly replaceNodes?: {
     readonly removeIds: readonly string[];
     readonly insertNodes: readonly DesignNode[];
+  };
+  readonly moveLayer?: {
+    readonly nodeId: string;
+    readonly targetId: string;
+    readonly position: 'before' | 'after' | 'inside';
   };
   readonly selection?: readonly string[];
   readonly sampledColor?: {
@@ -1187,6 +1201,7 @@ export function getToolOperationCategory(payload: ToolOperationPayload): ToolOpe
     case 'replace-nodes':
     case 'sample-color':
     case 'commit-inline-text':
+    case 'move-layer':
       return 'document-mutation';
     case 'select-nodes':
       return 'selection';
@@ -1206,6 +1221,7 @@ export function getExpectedCategoryForKind(kind: string): ToolOperationCategory 
     case 'replace-nodes':
     case 'sample-color':
     case 'commit-inline-text':
+    case 'move-layer':
       return 'document-mutation';
     case 'select-nodes':
       return 'selection';
@@ -1261,6 +1277,8 @@ function getDefaultMutationDescription(toolId: CanvasToolId, kind: DocumentMutat
       return 'Apply sampled color';
     case 'commit-inline-text':
       return 'Edit text on canvas';
+    case 'move-layer':
+      return 'Reorder layer on canvas';
   }
 }
 
@@ -1321,6 +1339,22 @@ export function extractToolOperationsFromTransition(
           insertNodes: transition.replaceNodes.insertNodes,
         },
         { description: getDefaultMutationDescription(toolId, 'replace-nodes') },
+      ),
+    );
+  }
+
+  if (transition.moveLayer) {
+    operations.push(
+      createToolOperation(
+        toolId,
+        workspace,
+        {
+          kind: 'move-layer',
+          nodeId: transition.moveLayer.nodeId,
+          targetId: transition.moveLayer.targetId,
+          position: transition.moveLayer.position,
+        },
+        { description: getDefaultMutationDescription(toolId, 'move-layer') },
       ),
     );
   }
@@ -1578,6 +1612,31 @@ export function validateToolOperationPayload(
           'INVALID_PAYLOAD',
           'commit-inline-text text must be a string.',
           `${pathPrefix}.text`,
+        );
+      }
+      return { ok: true };
+    }
+
+    case 'move-layer': {
+      const extra = findUnexpectedKey(input, ['kind', 'nodeId', 'targetId', 'position']);
+      if (extra) {
+        return fail(
+          'INVALID_PAYLOAD',
+          `Unexpected property "${extra}" on move-layer payload.`,
+          `${pathPrefix}.${extra}`,
+        );
+      }
+      if (!isNonEmptyString(input.nodeId)) {
+        return fail('INVALID_PAYLOAD', 'move-layer requires a non-empty string nodeId.', `${pathPrefix}.nodeId`);
+      }
+      if (!isNonEmptyString(input.targetId)) {
+        return fail('INVALID_PAYLOAD', 'move-layer requires a non-empty string targetId.', `${pathPrefix}.targetId`);
+      }
+      if (input.position !== 'before' && input.position !== 'after' && input.position !== 'inside') {
+        return fail(
+          'INVALID_PAYLOAD',
+          `move-layer position must be "before", "after", or "inside", received "${String(input.position)}".`,
+          `${pathPrefix}.position`,
         );
       }
       return { ok: true };

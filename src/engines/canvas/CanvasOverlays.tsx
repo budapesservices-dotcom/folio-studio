@@ -12,6 +12,11 @@ import {
   type PlanarFace,
 } from '../../core/document/vector';
 import { MaskedNodeArtwork, NodeShape, type PrimitiveNode } from './artwork';
+import {
+  computeAutoLayoutHandles,
+  type GapAxis,
+  type PaddingEdge,
+} from './autoLayoutHandles';
 import { planarFaceToSvgPath } from './canvasHelpers';
 import type { Bounds, ResizeHandle, SnapGuide, SpacingRedlineResult } from './geometry';
 import type {
@@ -308,7 +313,7 @@ export function HudBadge({
   x: number;
   y: number;
   text: string;
-  variant?: 'default' | 'measure' | 'rotate';
+  variant?: 'default' | 'measure' | 'rotate' | 'spacing';
   invZoom?: number;
 }) {
   const width = Math.max(46, text.length * 6.8 + 16);
@@ -335,6 +340,11 @@ export interface EyedropperLoupeState {
   readonly sourceName: string;
   readonly target: string;
 }
+
+export type HoveredAutoLayoutHandle =
+  | { readonly kind: 'padding'; readonly edge: PaddingEdge }
+  | { readonly kind: 'gap'; readonly axis: GapAxis; readonly index: number }
+  | null;
 
 export interface CanvasInteractiveOverlaysProps {
   readonly docWidth: number;
@@ -366,7 +376,11 @@ export interface CanvasInteractiveOverlaysProps {
   readonly shapeBuilderHoverArrangement: PlanarArrangement | null;
   readonly shapeBuilderHoveredFace: PlanarFace | null;
   readonly altHeld: boolean;
+  readonly shiftHeld?: boolean;
   readonly smartHandleNode: DesignNode | null;
+  readonly autoLayoutHandleContainer?: DesignNode | null;
+  readonly hoveredAutoLayoutHandle?: HoveredAutoLayoutHandle;
+  readonly onHoverAutoLayoutHandle?: (handle: HoveredAutoLayoutHandle) => void;
   readonly pivotPoint: { x: number; y: number } | null;
   readonly spacingRedlines: SpacingRedlineResult | null;
   readonly pathSnapWorldPoint: { x: number; y: number } | null;
@@ -405,7 +419,11 @@ export function CanvasInteractiveOverlays({
   shapeBuilderHoverArrangement,
   shapeBuilderHoveredFace,
   altHeld,
+  shiftHeld = false,
   smartHandleNode,
+  autoLayoutHandleContainer = null,
+  hoveredAutoLayoutHandle = null,
+  onHoverAutoLayoutHandle,
   pivotPoint,
   spacingRedlines,
   pathSnapWorldPoint,
@@ -413,11 +431,42 @@ export function CanvasInteractiveOverlays({
   eyedropperLoupe,
   guides,
 }: CanvasInteractiveOverlaysProps) {
+  const isAutoLayoutDirectActive =
+    toolOverlay?.kind === 'autolayout-reorder' ||
+    (toolSession?.kind === 'smart-handle' &&
+      (toolSession.handle.kind === 'autolayout-padding' || toolSession.handle.kind === 'autolayout-gap'));
+
+  const autoLayoutHandles =
+    autoLayoutHandleContainer &&
+    (toolId === 'select' || toolId === 'direct-selection') &&
+    (!toolSession || toolSession.kind === 'smart-handle')
+      ? computeAutoLayoutHandles(autoLayoutHandleContainer, canvasNodes, invZoom)
+      : null;
+
   return (
     <>
-      {/* Dynamic overlay patterns (Shape Builder hatch + Eyedropper transparency checkerboard) */}
-      {(toolId === 'shape-builder' || toolId === 'eyedropper') && (
+      {/* Dynamic overlay patterns (Shape Builder hatch, Auto-Layout spacing hatch, Eyedropper checkerboard) */}
+      {(toolId === 'shape-builder' || toolId === 'eyedropper' || Boolean(autoLayoutHandles)) && (
         <defs>
+          {autoLayoutHandles && (
+            <pattern
+              id={`${maskPrefix}-al-hatch`}
+              width={8 * invZoom}
+              height={8 * invZoom}
+              patternUnits="userSpaceOnUse"
+              patternTransform="rotate(45)"
+            >
+              <rect width={8 * invZoom} height={8 * invZoom} fill="rgba(244, 63, 94, 0.13)" />
+              <line
+                x1="0"
+                y1="0"
+                x2="0"
+                y2={8 * invZoom}
+                stroke="rgba(244, 63, 94, 0.42)"
+                stroke-width={1.25 * invZoom}
+              />
+            </pattern>
+          )}
           {toolId === 'shape-builder' && (
             <>
               <pattern
@@ -493,32 +542,21 @@ export function CanvasInteractiveOverlays({
       )}
 
       {/* Auto-Layout Inner Padding Guide on Selected Container */}
-      {selectedNodes.length === 1 &&
-        selectedNodes[0].layout &&
-        selectedNodes[0].layout.mode !== 'none' && (() => {
-          const container = selectedNodes[0];
-          const containerLayout = container.layout;
-          if (!containerLayout || containerLayout.mode === 'none') return null;
-          const pad = containerLayout.padding;
-          const innerW = Math.max(0, container.width - pad.left - pad.right);
-          const innerH = Math.max(0, container.height - pad.top - pad.bottom);
-          if (innerW <= 0 || innerH <= 0) return null;
-          return (
-            <rect
-              class="canvas-autolayout-padding-guide"
-              x={container.x + pad.left}
-              y={container.y + pad.top}
-              width={innerW}
-              height={innerH}
-              fill="none"
-              stroke="#38BDF8"
-              stroke-opacity="0.55"
-              stroke-width={1 * invZoom}
-              stroke-dasharray={`${4 * invZoom} ${3 * invZoom}`}
-              pointer-events="none"
-            />
-          );
-        })()}
+      {autoLayoutHandles && autoLayoutHandles.innerBounds.width > 0 && autoLayoutHandles.innerBounds.height > 0 && (
+        <rect
+          class="canvas-autolayout-padding-guide"
+          x={autoLayoutHandles.innerBounds.x}
+          y={autoLayoutHandles.innerBounds.y}
+          width={autoLayoutHandles.innerBounds.width}
+          height={autoLayoutHandles.innerBounds.height}
+          fill="none"
+          stroke="#38BDF8"
+          stroke-opacity="0.45"
+          stroke-width={1 * invZoom}
+          stroke-dasharray={`${4 * invZoom} ${3 * invZoom}`}
+          pointer-events="none"
+        />
+      )}
 
       {/* Live Alt+Drag Clone Ghost Preview */}
       {previewCreateNodes && previewCreateNodes.length > 0 && (
@@ -815,11 +853,11 @@ export function CanvasInteractiveOverlays({
         </g>
       )}
 
-      {selectedNodes.length > 0 && toolId !== 'shape-builder' && (
+      {!isAutoLayoutDirectActive && selectedNodes.length > 0 && toolId !== 'shape-builder' && (
         <ShapeContourOverlay nodes={selectedNodes} invZoom={invZoom} />
       )}
 
-      {showSelectionBox && selectionBounds && (
+      {!isAutoLayoutDirectActive && showSelectionBox && selectionBounds && (
         <SelectionOverlay
           bounds={selectionBounds}
           canResize={canResize && (toolId === 'select' || toolId === 'direct-selection' || toolId === 'scale')}
@@ -830,7 +868,8 @@ export function CanvasInteractiveOverlays({
       )}
 
       {/* On-Canvas Smart Handles: Corner Radius Knobs (Rect/Frame) */}
-      {smartHandleNode &&
+      {!isAutoLayoutDirectActive &&
+        smartHandleNode &&
         (smartHandleNode.type === 'rect' || smartHandleNode.type === 'frame') &&
         smartHandleNode.width >= 28 &&
         smartHandleNode.height >= 28 && (() => {
@@ -865,6 +904,187 @@ export function CanvasInteractiveOverlays({
             </g>
           );
         })()}
+
+      {/* On-Canvas Interactive Auto-Layout Padding & Gap Scrub Handles */}
+      {autoLayoutHandles && (() => {
+        const activeSmartSession = toolSession?.kind === 'smart-handle' ? toolSession : null;
+        const activePadEdges = new Set<PaddingEdge>();
+        if (activeSmartSession?.handle.kind === 'autolayout-padding') {
+          (activeSmartSession.activeEdges ?? [activeSmartSession.handle.edge]).forEach((e) => activePadEdges.add(e));
+        } else if (hoveredAutoLayoutHandle?.kind === 'padding') {
+          const hoveredEdge = hoveredAutoLayoutHandle.edge;
+          if (shiftHeld) {
+            activePadEdges.add('top');
+            activePadEdges.add('right');
+            activePadEdges.add('bottom');
+            activePadEdges.add('left');
+          } else if (altHeld) {
+            if (hoveredEdge === 'left' || hoveredEdge === 'right') {
+              activePadEdges.add('left');
+              activePadEdges.add('right');
+            } else {
+              activePadEdges.add('top');
+              activePadEdges.add('bottom');
+            }
+          } else {
+            activePadEdges.add(hoveredEdge);
+          }
+        }
+
+        const activeGapAxes = new Set<GapAxis>();
+        if (activeSmartSession?.handle.kind === 'autolayout-gap') {
+          (activeSmartSession.activeGapAxes ?? [activeSmartSession.handle.axis]).forEach((a) => activeGapAxes.add(a));
+        } else if (hoveredAutoLayoutHandle?.kind === 'gap') {
+          if (autoLayoutHandles.layoutMode === 'grid' && shiftHeld) {
+            activeGapAxes.add('horizontal');
+            activeGapAxes.add('vertical');
+          } else {
+            activeGapAxes.add(hoveredAutoLayoutHandle.axis);
+          }
+        }
+
+        const hatchFill = `url(#${maskPrefix}-al-hatch)`;
+
+        return (
+          <g class="canvas-autolayout-handles" data-testid="autolayout-direct-handles">
+            {/* Hatched Padding Zones (visible on hover or active scrub) */}
+            {autoLayoutHandles.paddingHandles.map((ph) =>
+              activePadEdges.has(ph.edge) ? (
+                <rect
+                  key={`al-pzone-${ph.edge}`}
+                  class="canvas-al-spacing-zone"
+                  x={ph.zoneRect.x}
+                  y={ph.zoneRect.y}
+                  width={Math.max(1, ph.zoneRect.width)}
+                  height={Math.max(1, ph.zoneRect.height)}
+                  fill={hatchFill}
+                  pointer-events="none"
+                />
+              ) : null,
+            )}
+
+            {/* Hatched Gap Corridors across ALL sibling gaps on active axis */}
+            {activeGapAxes.has('horizontal') &&
+              autoLayoutHandles.horizontalGapZones.map((zone, idx) => (
+                <rect
+                  key={`al-gzone-h-${idx}`}
+                  class="canvas-al-spacing-zone"
+                  x={zone.x}
+                  y={zone.y}
+                  width={Math.max(1, zone.width)}
+                  height={Math.max(1, zone.height)}
+                  fill={hatchFill}
+                  pointer-events="none"
+                />
+              ))}
+            {activeGapAxes.has('vertical') &&
+              autoLayoutHandles.verticalGapZones.map((zone, idx) => (
+                <rect
+                  key={`al-gzone-v-${idx}`}
+                  class="canvas-al-spacing-zone"
+                  x={zone.x}
+                  y={zone.y}
+                  width={Math.max(1, zone.width)}
+                  height={Math.max(1, zone.height)}
+                  fill={hatchFill}
+                  pointer-events="none"
+                />
+              ))}
+
+            {/* Interactive Padding Edge Scrub Handles */}
+            {autoLayoutHandles.paddingHandles.map((ph) => {
+              const isActive = activePadEdges.has(ph.edge);
+              const edgeLabel = ph.edge.charAt(0).toUpperCase() + ph.edge.slice(1);
+              return (
+                <g
+                  key={`al-pad-${ph.edge}`}
+                  class={`canvas-al-handle is-padding is-${ph.orientation}${isActive ? ' is-active' : ''}`}
+                  data-smart-handle="autolayout-padding"
+                  data-smart-node-id={autoLayoutHandles.containerId}
+                  data-smart-edge={ph.edge}
+                  data-testid={`autolayout-padding-handle-${ph.edge}`}
+                  pointer-events="all"
+                  onPointerEnter={() => onHoverAutoLayoutHandle?.({ kind: 'padding', edge: ph.edge })}
+                  onPointerLeave={() => onHoverAutoLayoutHandle?.(null)}
+                >
+                  <title>{`${edgeLabel} padding: ${ph.value}px (Drag to adjust · Alt opposite · Shift all · Ctrl 4px snap · Double-click reset)`}</title>
+                  <rect
+                    class="canvas-smart-handle-hit"
+                    x={ph.hitRect.x}
+                    y={ph.hitRect.y}
+                    width={Math.max(1, ph.hitRect.width)}
+                    height={Math.max(1, ph.hitRect.height)}
+                  />
+                  <line
+                    class="canvas-al-handle-casing"
+                    x1={ph.barLine.x1}
+                    y1={ph.barLine.y1}
+                    x2={ph.barLine.x2}
+                    y2={ph.barLine.y2}
+                  />
+                  <line
+                    class="canvas-al-handle-bar"
+                    x1={ph.barLine.x1}
+                    y1={ph.barLine.y1}
+                    x2={ph.barLine.x2}
+                    y2={ph.barLine.y2}
+                  />
+                </g>
+              );
+            })}
+
+            {/* Interactive Gap Scrub Handles */}
+            {autoLayoutHandles.gapHandles.map((gh) => {
+              const isActive = activeGapAxes.has(gh.axis);
+              const gapName = gh.isGrid
+                ? gh.axis === 'horizontal'
+                  ? 'Column gap'
+                  : 'Row gap'
+                : 'Gap';
+              const extraHint = gh.isGrid ? ' · Shift link row & column' : '';
+              return (
+                <g
+                  key={`al-${gh.id}`}
+                  class={`canvas-al-handle is-gap is-${gh.barOrientation}${isActive ? ' is-active' : ''}`}
+                  data-smart-handle="autolayout-gap"
+                  data-smart-node-id={autoLayoutHandles.containerId}
+                  data-smart-axis={gh.axis}
+                  data-smart-gap-index={String(gh.index)}
+                  data-testid={`autolayout-gap-handle-${gh.axis}-${gh.index}`}
+                  pointer-events="all"
+                  onPointerEnter={() =>
+                    onHoverAutoLayoutHandle?.({ kind: 'gap', axis: gh.axis, index: gh.index })
+                  }
+                  onPointerLeave={() => onHoverAutoLayoutHandle?.(null)}
+                >
+                  <title>{`${gapName}: ${gh.value}px (Drag to adjust${extraHint} · Ctrl 4px snap · Double-click reset)`}</title>
+                  <rect
+                    class="canvas-smart-handle-hit"
+                    x={gh.hitRect.x}
+                    y={gh.hitRect.y}
+                    width={Math.max(1, gh.hitRect.width)}
+                    height={Math.max(1, gh.hitRect.height)}
+                  />
+                  <line
+                    class="canvas-al-handle-casing"
+                    x1={gh.barLine.x1}
+                    y1={gh.barLine.y1}
+                    x2={gh.barLine.x2}
+                    y2={gh.barLine.y2}
+                  />
+                  <line
+                    class="canvas-al-handle-bar"
+                    x1={gh.barLine.x1}
+                    y1={gh.barLine.y1}
+                    x2={gh.barLine.x2}
+                    y2={gh.barLine.y2}
+                  />
+                </g>
+              );
+            })}
+          </g>
+        );
+      })()}
 
       {/* On-Canvas Smart Handle: Star Inner-Ratio Diamond Handle */}
       {smartHandleNode &&
@@ -988,7 +1208,7 @@ export function CanvasInteractiveOverlays({
         </g>
       )}
 
-      {/* Smart HUD Overlay (Corner Radius, Star Ratio, Clone, Pivot) */}
+      {/* Smart HUD Overlay (Corner Radius, Star Ratio, Clone, Pivot, Auto-Layout Padding/Gap) */}
       {toolOverlay?.kind === 'smart-hud' && (
         <HudBadge
           x={toolOverlay.x}
@@ -997,6 +1217,49 @@ export function CanvasInteractiveOverlays({
           variant={toolOverlay.variant ?? 'default'}
           invZoom={invZoom}
         />
+      )}
+
+      {/* Auto-Layout Drag-to-Reorder Live Cyan Insertion Indicator Bar */}
+      {toolOverlay?.kind === 'autolayout-reorder' && (
+        <g
+          class="canvas-al-reorder-overlay"
+          data-testid="autolayout-reorder-indicator"
+          pointer-events="none"
+        >
+          <rect
+            class="canvas-al-reorder-container"
+            x={toolOverlay.containerBounds.x}
+            y={toolOverlay.containerBounds.y}
+            width={Math.max(1, toolOverlay.containerBounds.width)}
+            height={Math.max(1, toolOverlay.containerBounds.height)}
+          />
+          <line
+            class="canvas-al-reorder-line"
+            x1={toolOverlay.slot.indicatorLine.x1}
+            y1={toolOverlay.slot.indicatorLine.y1}
+            x2={toolOverlay.slot.indicatorLine.x2}
+            y2={toolOverlay.slot.indicatorLine.y2}
+          />
+          <circle
+            class="canvas-al-reorder-cap"
+            cx={toolOverlay.slot.indicatorLine.x1}
+            cy={toolOverlay.slot.indicatorLine.y1}
+            r={3.5 * invZoom}
+          />
+          <circle
+            class="canvas-al-reorder-cap"
+            cx={toolOverlay.slot.indicatorLine.x2}
+            cy={toolOverlay.slot.indicatorLine.y2}
+            r={3.5 * invZoom}
+          />
+          <HudBadge
+            x={toolOverlay.slot.hudPoint.x}
+            y={toolOverlay.slot.hudPoint.y - 18 * invZoom}
+            text={toolOverlay.slot.hudText}
+            variant="default"
+            invZoom={invZoom}
+          />
+        </g>
       )}
 
       {/* Live Smooth Brush Radius Ring */}

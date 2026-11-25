@@ -186,6 +186,20 @@ export function buildCanvasPointerInput(
       if (nodeId) smartHandleHit = { kind: 'star-inner', nodeId };
     } else if (kind === 'pivot') {
       smartHandleHit = { kind: 'pivot' };
+    } else if (kind === 'autolayout-padding') {
+      const nodeId = smartEl.getAttribute('data-smart-node-id');
+      const edge = smartEl.getAttribute('data-smart-edge') as 'top' | 'right' | 'bottom' | 'left' | null;
+      if (nodeId && (edge === 'top' || edge === 'right' || edge === 'bottom' || edge === 'left')) {
+        smartHandleHit = { kind: 'autolayout-padding', nodeId, edge };
+      }
+    } else if (kind === 'autolayout-gap') {
+      const nodeId = smartEl.getAttribute('data-smart-node-id');
+      const axis = smartEl.getAttribute('data-smart-axis') as 'horizontal' | 'vertical' | null;
+      const gapIndexRaw = smartEl.getAttribute('data-smart-gap-index');
+      const gapIndex = gapIndexRaw !== null ? Number(gapIndexRaw) : 0;
+      if (nodeId && (axis === 'horizontal' || axis === 'vertical') && Number.isInteger(gapIndex) && gapIndex >= 0) {
+        smartHandleHit = { kind: 'autolayout-gap', nodeId, axis, gapIndex };
+      }
     }
   }
 

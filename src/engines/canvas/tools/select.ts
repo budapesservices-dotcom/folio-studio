@@ -1,4 +1,5 @@
 import { expandSelectedLayerIds, getCanvasClickSelectionIds, getLayerAncestorIds } from '../../../core/document/layers';
+import { classifyNodeChange } from '../../../core/document/nodeChanges';
 import type { DesignNode, FrameNode, PathNode, RectNode } from '../../../core/document/types';
 import {
   deleteAnchorPoint,
@@ -8,6 +9,15 @@ import {
   worldDeltaToNodeLocalDelta,
   worldPointToNodeLocal,
 } from '../../../core/document/vector';
+import {
+  buildAutoLayoutReorderPreviewNodes,
+  buildAutoLayoutScrubPreviewNodes,
+  computeScrubbedGap,
+  computeScrubbedPadding,
+  isAutoLayoutContainer,
+  resolveAutoLayoutKeyboardReorder,
+  resolveAutoLayoutReorder,
+} from '../autoLayoutHandles';
 import {
   getBounds,
   nodesGeometryChanged,
@@ -178,6 +188,87 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             };
           }
         }
+
+        if (event.smartHandleHit.kind === 'autolayout-padding') {
+          const targetId = event.smartHandleHit.nodeId;
+          const target = context.selectableNodes.find((node) => node.id === targetId);
+          if (target && isAutoLayoutContainer(target)) {
+            const edge = event.smartHandleHit.edge;
+            if ((event.detail ?? 0) >= 2) {
+              const reset = computeScrubbedPadding(target.layout, edge, 0, 0, {
+                altKey: event.altKey,
+                shiftKey: event.shiftKey,
+                resetZero: true,
+              });
+              const updatedNode: DesignNode = { ...target, layout: reset.nextLayout };
+              const edgeLabel = event.shiftKey ? 'all padding' : event.altKey ? (edge === 'left' || edge === 'right' ? 'horizontal padding' : 'vertical padding') : `${edge} padding`;
+              return {
+                commitNodes: [updatedNode],
+                selection: context.selectedNodeIds.length > 0 ? context.selectedNodeIds : [target.id],
+                notice: `Reset ${edgeLabel} to 0px.`,
+                preventDefault: true,
+              };
+            }
+            const init = computeScrubbedPadding(target.layout, edge, 0, 0, {
+              altKey: event.altKey,
+              shiftKey: event.shiftKey,
+            });
+            return {
+              session: {
+                kind: 'smart-handle',
+                pointerId: event.pointerId,
+                handle: event.smartHandleHit,
+                start: event.point,
+                node: target,
+                previewNode: target,
+                hudLabel: init.hudLabel,
+                hudPoint: event.point,
+                activeEdges: init.activeEdges,
+              },
+              capturePointer: true,
+              preventDefault: true,
+            };
+          }
+        }
+
+        if (event.smartHandleHit.kind === 'autolayout-gap') {
+          const targetId = event.smartHandleHit.nodeId;
+          const target = context.selectableNodes.find((node) => node.id === targetId);
+          if (target && isAutoLayoutContainer(target)) {
+            const axis = event.smartHandleHit.axis;
+            if ((event.detail ?? 0) >= 2) {
+              const reset = computeScrubbedGap(target.layout, axis, 0, 0, {
+                shiftKey: event.shiftKey,
+                resetZero: true,
+              });
+              const updatedNode: DesignNode = { ...target, layout: reset.nextLayout };
+              return {
+                commitNodes: [updatedNode],
+                selection: context.selectedNodeIds.length > 0 ? context.selectedNodeIds : [target.id],
+                notice: `Reset ${reset.hudLabel.split(':')[0].toLowerCase()} to 0px.`,
+                preventDefault: true,
+              };
+            }
+            const init = computeScrubbedGap(target.layout, axis, 0, 0, {
+              shiftKey: event.shiftKey,
+            });
+            return {
+              session: {
+                kind: 'smart-handle',
+                pointerId: event.pointerId,
+                handle: event.smartHandleHit,
+                start: event.point,
+                node: target,
+                previewNode: target,
+                hudLabel: init.hudLabel,
+                hudPoint: event.point,
+                activeGapAxes: init.activeAxes,
+              },
+              capturePointer: true,
+              preventDefault: true,
+            };
+          }
+        }
       }
 
       // Direct Selection (A): live rotation-safe vector anchor & Bezier handle editing!
@@ -281,6 +372,25 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       const scope = exactLayer || deepSelectSingle ? [hit.id] : getCanvasClickSelectionIds(context.canvasNodes, hit.id);
       const groupSelected = scope.every((id) => context.selectedNodeIds.includes(id));
 
+      // Double-clicking a non-text child inside a selected Auto-Layout container drills down into that child
+      // so designers can immediately drag-reorder or arrow-reorder it on canvas.
+      const hitParent = hit.parentId
+        ? context.canvasNodes.find((node) => node.id === hit.parentId) ?? null
+        : null;
+      const doubleClickDrillIntoFlowChild =
+        !exactLayer &&
+        !toggleMulti &&
+        (event.detail ?? 0) >= 2 &&
+        hit.type !== 'text' &&
+        isAutoLayoutContainer(hitParent) &&
+        context.selectedNodeIds.includes(hitParent.id);
+
+      // Clicking an already-selected single nested child keeps that child selected instead of popping back up to its parent.
+      const alreadySingleSelected =
+        !toggleMulti &&
+        context.selectedNodeIds.length === 1 &&
+        context.selectedNodeIds[0] === hit.id;
+
       let nextIds: string[];
       if (toggleMulti && groupSelected) {
         const removed = new Set(
@@ -290,7 +400,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         return { selection: nextIds, activeAnchor: null, preventDefault: true };
       } else if (toggleMulti) {
         nextIds = [...new Set([...context.selectedNodeIds, ...scope])];
-      } else if (deepSelectSingle) {
+      } else if (deepSelectSingle || doubleClickDrillIntoFlowChild || alreadySingleSelected) {
         nextIds = [hit.id];
       } else if (groupSelected && context.selectedNodeIds.length > 1) {
         // Clicking an already-selected member of a multi-selection keeps the multi-selection intact for dragging!
@@ -299,9 +409,40 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         nextIds = scope;
       }
 
-      const moving = context.selectableNodes.filter((node) => nextIds.includes(node.id));
+      // If dragging a single selected root whose parent is an Auto-Layout container, expand its own subtree for visual ghost preview
+      // while preserving `nextIds` selection.
+      const expandedMovingIds = nextIds.length === 1 && !exactLayer
+        ? expandSelectedLayerIds(context.canvasNodes, nextIds)
+        : nextIds;
+      const moving = context.selectableNodes.filter((node) => expandedMovingIds.includes(node.id));
       const bounds = getBounds(moving);
       if (!moving.length || !bounds) return { selection: nextIds, preventDefault: true };
+
+      // Check if we are dragging a single flow child root inside an Auto-Layout container
+      const movingIdSet = new Set(moving.map((n) => n.id));
+      const movingRoots = moving.filter((n) => !n.parentId || !movingIdSet.has(n.parentId));
+      let autoLayoutReorder: { containerId: string; containerBounds: { x: number; y: number; width: number; height: number }; slot: null } | undefined;
+      if (movingRoots.length === 1 && !uniformScale) {
+        const dragRoot = movingRoots[0];
+        const pos = dragRoot.layoutChild?.position;
+        const outOfFlow = pos === 'absolute' || pos === 'fixed' || pos === 'sticky';
+        if (!outOfFlow && dragRoot.parentId) {
+          const parentContainer = context.canvasNodes.find((n) => n.id === dragRoot.parentId);
+          if (isAutoLayoutContainer(parentContainer)) {
+            autoLayoutReorder = {
+              containerId: parentContainer.id,
+              containerBounds: {
+                x: parentContainer.x,
+                y: parentContainer.y,
+                width: parentContainer.width,
+                height: parentContainer.height,
+              },
+              slot: null,
+            };
+          }
+        }
+      }
+
       return {
         selection: nextIds,
         activeAnchor: null,
@@ -315,6 +456,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           ids: moving.map((n) => n.id),
           uniformScale,
           cloneMode: event.altKey,
+          ...(autoLayoutReorder ? { autoLayoutReorder } : {}),
         },
         capturePointer: true,
         preventDefault: true,
@@ -388,6 +530,63 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
               hudPoint: { x: event.point.x, y: event.point.y - 20 * unitsPerPx },
             },
             previewNodes: [previewNode],
+            preventDefault: true,
+          };
+        }
+
+        if (session.handle.kind === 'autolayout-padding' && session.node && isAutoLayoutContainer(session.node)) {
+          const dx = event.point.x - session.start.x;
+          const dy = event.point.y - session.start.y;
+          const result = computeScrubbedPadding(session.node.layout, session.handle.edge, dx, dy, {
+            altKey: event.altKey,
+            shiftKey: event.shiftKey,
+            snapKey: event.ctrlKey || event.metaKey,
+          });
+          const updatedContainer: DesignNode = { ...session.node, layout: result.nextLayout };
+          const livePreview = buildAutoLayoutScrubPreviewNodes(
+            context.document.nodes,
+            updatedContainer,
+            context.designTokens,
+            context.document.width,
+          );
+          return {
+            session: {
+              ...session,
+              previewNode: updatedContainer,
+              previewNodes: livePreview,
+              hudLabel: result.hudLabel,
+              hudPoint: { x: event.point.x, y: event.point.y - 18 * unitsPerPx },
+              activeEdges: result.activeEdges,
+            },
+            previewNodes: livePreview,
+            preventDefault: true,
+          };
+        }
+
+        if (session.handle.kind === 'autolayout-gap' && session.node && isAutoLayoutContainer(session.node)) {
+          const dx = event.point.x - session.start.x;
+          const dy = event.point.y - session.start.y;
+          const result = computeScrubbedGap(session.node.layout, session.handle.axis, dx, dy, {
+            shiftKey: event.shiftKey,
+            snapKey: event.ctrlKey || event.metaKey,
+          });
+          const updatedContainer: DesignNode = { ...session.node, layout: result.nextLayout };
+          const livePreview = buildAutoLayoutScrubPreviewNodes(
+            context.document.nodes,
+            updatedContainer,
+            context.designTokens,
+            context.document.width,
+          );
+          return {
+            session: {
+              ...session,
+              previewNode: updatedContainer,
+              previewNodes: livePreview,
+              hudLabel: result.hudLabel,
+              hudPoint: { x: event.point.x, y: event.point.y - 18 * unitsPerPx },
+              activeGapAxes: result.activeAxes,
+            },
+            previewNodes: livePreview,
             preventDefault: true,
           };
         }
@@ -542,6 +741,9 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             cloneIdMap,
             previewNodes: clonedPreview,
             hudLabel: `Clone · ΔX ${Math.round(snapped.dx)} · ΔY ${Math.round(snapped.dy)}`,
+            ...(session.autoLayoutReorder
+              ? { autoLayoutReorder: { ...session.autoLayoutReorder, slot: null } }
+              : {}),
           },
           previewNodes: null,
           previewCreateNodes: clonedPreview,
@@ -550,13 +752,84 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         };
       }
 
+      // On-Canvas Auto-Layout Drag-to-Reorder when dragging a flow child inside its Flex/Grid parent
+      if (session.autoLayoutReorder) {
+        const parentContainer = context.canvasNodes.find((n) => n.id === session.autoLayoutReorder?.containerId);
+        const sessionIdSet = new Set(session.nodes.map((n) => n.id));
+        const dragRoot = session.nodes.find((n) => !n.parentId || !sessionIdSet.has(n.parentId));
+        if (parentContainer && dragRoot) {
+          const reorderSlot = resolveAutoLayoutReorder(
+            parentContainer,
+            dragRoot,
+            event.point,
+            context.canvasNodes,
+          );
+          if (reorderSlot) {
+            const ghostRoot: DesignNode = {
+              ...dragRoot,
+              x: Math.round((dragRoot.x + dx) * 100) / 100,
+              y: Math.round((dragRoot.y + dy) * 100) / 100,
+            };
+            const liveSiblings = buildAutoLayoutReorderPreviewNodes(
+              context.document.nodes,
+              ghostRoot,
+              reorderSlot,
+              context.designTokens,
+              context.document.width,
+            );
+            // Offset any nested children of `dragRoot` along with `ghostRoot`
+            const liveById = new Map(liveSiblings.map((n) => [n.id, n]));
+            for (const movedNode of session.nodes) {
+              if (movedNode.id !== dragRoot.id) {
+                liveById.set(movedNode.id, {
+                  ...movedNode,
+                  x: Math.round((movedNode.x + dx) * 100) / 100,
+                  y: Math.round((movedNode.y + dy) * 100) / 100,
+                });
+              }
+            }
+            const previewNodes = Array.from(liveById.values());
+            return {
+              session: {
+                ...session,
+                cloneMode: false,
+                previewNodes,
+                hudLabel: undefined,
+                autoLayoutReorder: {
+                  ...session.autoLayoutReorder,
+                  containerBounds: {
+                    x: parentContainer.x,
+                    y: parentContainer.y,
+                    width: parentContainer.width,
+                    height: parentContainer.height,
+                  },
+                  slot: reorderSlot,
+                },
+              },
+              previewNodes,
+              previewCreateNodes: null,
+              guides: [],
+              preventDefault: true,
+            };
+          }
+        }
+      }
+
       const previewNodes = session.nodes.map((node) => ({
         ...node,
         x: Math.round((node.x + snapped.dx) * 100) / 100,
         y: Math.round((node.y + snapped.dy) * 100) / 100,
       }));
       return {
-        session: { ...session, cloneMode: false, previewNodes, hudLabel: undefined },
+        session: {
+          ...session,
+          cloneMode: false,
+          previewNodes,
+          hudLabel: undefined,
+          ...(session.autoLayoutReorder
+            ? { autoLayoutReorder: { ...session.autoLayoutReorder, slot: null } }
+            : {}),
+        },
         previewNodes,
         previewCreateNodes: null,
         guides: snapped.guides,
@@ -572,6 +845,20 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           return {
             session: null,
             notice: 'Updated custom rotation pivot (double-click pivot to reset).',
+            preventDefault: true,
+          };
+        }
+        if (
+          (session.handle.kind === 'autolayout-padding' || session.handle.kind === 'autolayout-gap') &&
+          session.node &&
+          session.previewNode
+        ) {
+          const changed = classifyNodeChange(session.node, session.previewNode).hasAnyChange;
+          return {
+            ...(changed ? { commitNodes: [session.previewNode] } : {}),
+            session: null,
+            previewNodes: null,
+            guides: [],
             preventDefault: true,
           };
         }
@@ -644,6 +931,26 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             previewCreateNodes: null,
             guides: [],
             notice: `Duplicated ${session.previewNodes.length} layer${session.previewNodes.length === 1 ? '' : 's'} with Alt+Drag.`,
+            preventDefault: true,
+          };
+        }
+        if (session.autoLayoutReorder?.slot) {
+          const slot = session.autoLayoutReorder.slot;
+          return {
+            ...(slot.move
+              ? {
+                  moveLayer: {
+                    nodeId: slot.draggedId,
+                    targetId: slot.move.targetId,
+                    position: slot.move.position,
+                  },
+                  notice: `Reordered layer to slot #${slot.displaySlotNumber}.`,
+                }
+              : {}),
+            session: null,
+            previewNodes: null,
+            previewCreateNodes: null,
+            guides: [],
             preventDefault: true,
           };
         }
@@ -752,6 +1059,40 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         }
 
         if (context.selectedNodes.length > 0) {
+          // Single flow child inside an Auto-Layout container reorders along the layout axis on Arrow keys!
+          if (!event.shiftKey) {
+            const selectedSet = new Set(context.selectedNodes.map((n) => n.id));
+            const selectedRoots = context.selectedNodes.filter((n) => !n.parentId || !selectedSet.has(n.parentId));
+            if (selectedRoots.length === 1 && selectedRoots[0].parentId) {
+              const singleChild = selectedRoots[0];
+              const parentContainer = context.canvasNodes.find((n) => n.id === singleChild.parentId);
+              if (isAutoLayoutContainer(parentContainer)) {
+                const reorder = resolveAutoLayoutKeyboardReorder(
+                  parentContainer,
+                  singleChild,
+                  event.key,
+                  context.canvasNodes,
+                );
+                if (reorder) {
+                  return {
+                    moveLayer: {
+                      nodeId: singleChild.id,
+                      targetId: reorder.targetId,
+                      position: reorder.position,
+                    },
+                    notice: `Reordered layer to slot #${reorder.displaySlotNumber}.`,
+                    preventDefault: true,
+                  };
+                }
+                // Consume arrow key cleanly on flow children so auto-layout doesn't create dead coordinate nudges
+                const pos = singleChild.layoutChild?.position;
+                if (pos !== 'absolute' && pos !== 'fixed' && pos !== 'sticky') {
+                  return { preventDefault: true };
+                }
+              }
+            }
+          }
+
           const nudged = context.selectedNodes.map((node) => ({
             ...node,
             x: Math.round((node.x + dx) * 100) / 100,
@@ -772,12 +1113,18 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         return { kind: 'marquee', bounds: rectangleBounds(session.start, session.current) };
       }
       if (session?.kind === 'smart-handle' && session.hudLabel && session.hudPoint) {
+        const variant =
+          session.handle.kind === 'pivot'
+            ? 'rotate'
+            : session.handle.kind === 'autolayout-padding' || session.handle.kind === 'autolayout-gap'
+              ? 'spacing'
+              : 'default';
         return {
           kind: 'smart-hud',
           x: session.hudPoint.x,
           y: session.hudPoint.y,
           text: session.hudLabel,
-          variant: session.handle.kind === 'pivot' ? 'rotate' : 'default',
+          variant,
         };
       }
       if (session?.kind === 'select-transform' && session.mode === 'rotate') {
@@ -787,6 +1134,13 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         };
         const radius = Math.max(32, Math.hypot(session.bounds.width, session.bounds.height) / 2);
         return { kind: 'rotate-ring', center, radius, angleDeg: session.currentAngle ?? 0 };
+      }
+      if (session?.kind === 'select-transform' && session.autoLayoutReorder?.slot) {
+        return {
+          kind: 'autolayout-reorder',
+          containerBounds: session.autoLayoutReorder.containerBounds,
+          slot: session.autoLayoutReorder.slot,
+        };
       }
       if (session?.kind === 'select-transform' && session.hudLabel && session.previewNodes?.length) {
         const b = getBounds(session.previewNodes);
@@ -805,10 +1159,21 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
 
     cursorStyle(context) {
       if (context.session?.kind === 'anchor-edit') return 'crosshair';
-      if (context.session?.kind === 'smart-handle') return 'grabbing';
+      if (context.session?.kind === 'smart-handle') {
+        if (context.session.handle.kind === 'autolayout-padding') {
+          return context.session.handle.edge === 'top' || context.session.handle.edge === 'bottom'
+            ? 'ns-resize'
+            : 'ew-resize';
+        }
+        if (context.session.handle.kind === 'autolayout-gap') {
+          return context.session.handle.axis === 'horizontal' ? 'ew-resize' : 'ns-resize';
+        }
+        return 'grabbing';
+      }
       if (context.session?.kind === 'select-transform') {
         if (context.session.mode === 'rotate') return 'grabbing';
         if (context.session.cloneMode) return 'copy';
+        if (context.session.autoLayoutReorder?.slot) return 'grabbing';
         if (context.session.mode === 'move') return 'move';
         const h = context.session.handle;
         if (h === 'n' || h === 's') return 'ns-resize';

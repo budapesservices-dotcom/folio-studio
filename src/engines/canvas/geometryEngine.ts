@@ -1,4 +1,4 @@
-import { getEffectiveLayerStates, type EffectiveLayerState } from '../../core/document/layers';
+import { getEffectiveLayerStates, getLayerDescendantIds, moveLayer, type EffectiveLayerState } from '../../core/document/layers';
 import { classifyNodeListChange } from '../../core/document/nodeChanges';
 import { isTransparentColor } from '../../core/document/styling';
 import type { DesignNode, FolioDocument, TextNode, VectorAnchorPoint } from '../../core/document/types';
@@ -10,6 +10,7 @@ import {
   type CanvasToolId,
   type CommitInlineTextOperationPayload,
   type CreateNodesOperationPayload,
+  type MoveLayerOperationPayload,
   type NotifyOperationPayload,
   type ReplaceNodesOperationPayload,
   type ReplaceNodeWithNodesOperationPayload,
@@ -84,6 +85,7 @@ export type ValidatedToolOperationPayload =
   | ReplaceNodesOperationPayload
   | ValidatedSampleColorPayload
   | ValidatedCommitInlineTextPayload
+  | MoveLayerOperationPayload
   | SelectNodesOperationPayload
   | ViewportUpdateOperationPayload
   | SwitchToolOperationPayload
@@ -111,6 +113,7 @@ export type ValidatedToolOperation =
   | ValidatedToolOperationEnvelope<ReplaceNodesOperationPayload>
   | ValidatedToolOperationEnvelope<ValidatedSampleColorPayload>
   | ValidatedToolOperationEnvelope<ValidatedCommitInlineTextPayload>
+  | ValidatedToolOperationEnvelope<MoveLayerOperationPayload>
   | ValidatedToolOperationEnvelope<SelectNodesOperationPayload>
   | ValidatedToolOperationEnvelope<ViewportUpdateOperationPayload>
   | ValidatedToolOperationEnvelope<SwitchToolOperationPayload>
@@ -584,6 +587,46 @@ export function evaluateToolOperation(
       };
     }
 
+    case 'move-layer': {
+      const { nodeId, targetId, position } = operation.payload;
+      if (!nodeById.has(nodeId)) {
+        return { status: 'rejected', code: 'TARGET_NOT_FOUND', reason: `Layer "${nodeId}" does not exist.` };
+      }
+      if (!nodeById.has(targetId)) {
+        return { status: 'rejected', code: 'TARGET_NOT_FOUND', reason: `Target layer "${targetId}" does not exist.` };
+      }
+      if (nodeId === targetId) {
+        return { status: 'no-op', code: 'NO_CHANGES', reason: 'Cannot reorder layer relative to itself.' };
+      }
+      if (layerStates.get(nodeId)?.locked) {
+        return { status: 'rejected', code: 'LOCKED_TARGET', reason: `Layer "${nodeId}" is locked.` };
+      }
+      const descendants = getLayerDescendantIds(nodes, nodeId);
+      if (descendants.has(targetId)) {
+        return {
+          status: 'rejected',
+          code: 'INVALID_GEOMETRY',
+          reason: `Cannot move layer "${nodeId}" relative to its own descendant "${targetId}".`,
+        };
+      }
+      const moved = moveLayer(nodes, nodeId, targetId, position);
+      const orderChanged =
+        moved.length !== nodes.length ||
+        moved.some((n, idx) => n.id !== nodes[idx]?.id || (n.parentId ?? null) !== (nodes[idx]?.parentId ?? null));
+      if (!orderChanged) {
+        return { status: 'no-op', code: 'NO_CHANGES', reason: 'Layer order did not change.' };
+      }
+      return {
+        status: 'ready',
+        operation: sealValidatedOperation(operation, {
+          kind: 'move-layer',
+          nodeId,
+          targetId,
+          position,
+        }) as ValidatedToolOperation,
+      };
+    }
+
     case 'select-nodes': {
       const seen = new Set<string>();
       const validIds: string[] = [];
@@ -735,6 +778,8 @@ export function evaluateToolOperationBatch(
       projectedNodes = projectedNodes.map((node) =>
         node.id === payload.resolvedNode.id ? payload.resolvedNode : node,
       );
+    } else if (payload.kind === 'move-layer') {
+      projectedNodes = moveLayer(projectedNodes, payload.nodeId, payload.targetId, payload.position);
     } else if (payload.kind === 'sample-color' && payload.resolvedNodesToUpdate.length > 0) {
       const byId = new Map(payload.resolvedNodesToUpdate.map((node) => [node.id, node]));
       projectedNodes = projectedNodes.map((node) => byId.get(node.id) ?? node);

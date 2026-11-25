@@ -34,7 +34,8 @@ import {
   toCanvasPoint,
 } from './canvasHelpers';
 import { hitTestNodesAtPoint } from './hitTest';
-import { CanvasInteractiveOverlays } from './CanvasOverlays';
+import { CanvasInteractiveOverlays, type HoveredAutoLayoutHandle } from './CanvasOverlays';
+import { isAutoLayoutContainer } from './autoLayoutHandles';
 import { CanvasSceneLayer } from './CanvasSceneLayer';
 import {
   GPU_HYBRID_AUTO_THRESHOLD,
@@ -102,6 +103,7 @@ interface CanvasProps {
   onCreateNodes?: (nodes: DesignNode[]) => void;
   onReplaceNodeWithNodes?: (nodeId: string, nodes: DesignNode[]) => void;
   onReplaceNodes?: (removeIds: string[], insertNodes: DesignNode[]) => void;
+  onMoveLayer?: (nodeId: string, targetId: string, position: 'before' | 'after' | 'inside') => void;
   onSampledColor?: (color: string, sourceName: string, target?: 'fill' | 'stroke') => void;
   onToolChange?: (toolId: CanvasToolId) => void;
   onToolNotice?: (message: string) => void;
@@ -155,6 +157,7 @@ export function Canvas({
   onCreateNodes,
   onReplaceNodeWithNodes,
   onReplaceNodes,
+  onMoveLayer,
   onSampledColor,
   onToolChange,
   onToolNotice,
@@ -186,6 +189,7 @@ export function Canvas({
   const [activeAnchor, setActiveAnchor] = useState<{ nodeId: string; pointIndex: number } | null>(null);
   const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(null);
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
+  const [hoveredAutoLayoutHandle, setHoveredAutoLayoutHandle] = useState<HoveredAutoLayoutHandle>(null);
   const lastPointerRef = useRef<{ point: { x: number; y: number } | null; nodeId: string | null }>({
     point: null,
     nodeId: null,
@@ -348,6 +352,7 @@ export function Canvas({
   useEffect(() => {
     setCustomPivot(null);
     setActiveAnchor(null);
+    setHoveredAutoLayoutHandle(null);
   }, [selectionKey, document.id]);
 
   const syncActiveSessionModifiersRef = useRef<(event: KeyboardEvent) => void>(() => {});
@@ -750,6 +755,9 @@ export function Canvas({
         return;
       case 'commit-inline-text':
         onInlineTextCommit?.(payload.nodeId, payload.text);
+        return;
+      case 'move-layer':
+        onMoveLayer?.(payload.nodeId, payload.targetId, payload.position);
         return;
       case 'select-nodes':
         onSelectionChange?.([...payload.nodeIds]);
@@ -1414,6 +1422,22 @@ export function Canvas({
       ? selectedNodes[0]
       : null;
 
+  // Detect a single selected root Auto-Layout container whether selected from Layers Panel (`[frame]`)
+  // or clicked on Canvas (`[frame, ...descendants]`).
+  const autoLayoutHandleContainer = useMemo(() => {
+    if ((toolId !== 'select' && toolId !== 'direct-selection') || selectedNodes.length === 0) {
+      return null;
+    }
+    if (toolSession && toolSession.kind !== 'smart-handle') {
+      return null;
+    }
+    const selectedSet = new Set(selectedNodes.map((n) => n.id));
+    const roots = selectedNodes.filter((n) => !n.parentId || !selectedSet.has(n.parentId));
+    if (roots.length !== 1) return null;
+    const candidate = roots[0];
+    return isAutoLayoutContainer(candidate) ? candidate : null;
+  }, [toolId, selectedNodes, toolSession]);
+
   const showPivotHandle = Boolean(selectionBounds) && (toolId === 'rotate' || customPivot !== null);
   const pivotPoint = showPivotHandle && selectionBounds
     ? (customPivot ?? {
@@ -1556,7 +1580,11 @@ export function Canvas({
             shapeBuilderHoverArrangement={shapeBuilderHoverArrangement}
             shapeBuilderHoveredFace={shapeBuilderHoveredFace}
             altHeld={altHeld}
+            shiftHeld={shiftHeld}
             smartHandleNode={smartHandleNode}
+            autoLayoutHandleContainer={autoLayoutHandleContainer}
+            hoveredAutoLayoutHandle={hoveredAutoLayoutHandle}
+            onHoverAutoLayoutHandle={setHoveredAutoLayoutHandle}
             pivotPoint={pivotPoint}
             spacingRedlines={spacingRedlines}
             pathSnapWorldPoint={pathSnapWorldPoint}
