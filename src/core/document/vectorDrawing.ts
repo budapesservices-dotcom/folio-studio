@@ -587,7 +587,7 @@ export function buildVectorBrushPathNode(
 // 2. VECTOR ERASER ENGINE (Slice/Cut Boolean & Segment Clipping + Object Erase)
 // ============================================================================
 
-function buildCapsulePolygon(a: Point2D, b: Point2D, radius: number, capSteps = 6): Point2D[] {
+function buildCapsulePolygon(a: Point2D, b: Point2D, radius: number, capSteps = 8): Point2D[] {
   const r = Math.max(1.5, radius);
   const dx = b.x - a.x;
   const dy = b.y - a.y;
@@ -595,7 +595,7 @@ function buildCapsulePolygon(a: Point2D, b: Point2D, radius: number, capSteps = 
 
   if (len < 0.25) {
     const circle: Point2D[] = [];
-    const steps = capSteps * 2;
+    const steps = Math.max(12, capSteps * 2);
     for (let i = 0; i < steps; i += 1) {
       const ang = (i / steps) * Math.PI * 2;
       circle.push({ x: roundCoord(a.x + Math.cos(ang) * r), y: roundCoord(a.y + Math.sin(ang) * r) });
@@ -618,18 +618,200 @@ function buildCapsulePolygon(a: Point2D, b: Point2D, radius: number, capSteps = 
   return pts;
 }
 
+function polylineHasSelfOverlap(points: readonly Point2D[], radius: number): boolean {
+  const n = points.length;
+  if (n <= 2) return false;
+  const minClearance = radius * 2.15;
+
+  // Reject sharp hairpins where inner offset edges would fold back over themselves
+  for (let i = 1; i < n - 1; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    const c = points[i + 1];
+    const v1x = b.x - a.x;
+    const v1y = b.y - a.y;
+    const v2x = c.x - b.x;
+    const v2y = c.y - b.y;
+    const l1 = Math.hypot(v1x, v1y);
+    const l2 = Math.hypot(v2x, v2y);
+    if (l1 < 1e-4 || l2 < 1e-4) continue;
+    const dot = (v1x * v2x + v1y * v2y) / (l1 * l2);
+    // Turning more than ~65 degrees in one step -> use safe capsules so inner offset never pinches
+    if (dot < 0.42) return true;
+    // Tight radius of curvature relative to eraser radius
+    const turnAngle = Math.acos(clamp(dot, -1, 1));
+    if (turnAngle > 0.08 && Math.min(l1, l2) < radius * Math.tan(turnAngle * 0.5) * 1.35) {
+      return true;
+    }
+  }
+
+  // Check non-adjacent segments for intersection or near-contact within 2*radius
+  for (let i = 0; i < n - 1; i += 1) {
+    for (let j = i + 2; j < n - 1; j += 1) {
+      if (segmentsIntersect(points[i], points[i + 1], points[j], points[j + 1])) return true;
+      if (
+        pointToSegmentDistance(points[i], points[j], points[j + 1]).distance < minClearance ||
+        pointToSegmentDistance(points[i + 1], points[j], points[j + 1]).distance < minClearance ||
+        pointToSegmentDistance(points[j], points[i], points[i + 1]).distance < minClearance ||
+        pointToSegmentDistance(points[j + 1], points[i], points[i + 1]).distance < minClearance
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function buildUnifiedSmoothEraserRibbon(points: readonly Point2D[], radius: number): Point2D[] {
+  const n = points.length;
+  const r = Math.max(1.5, radius);
+  const capSteps = 10;
+  if (n < 2) return buildCapsulePolygon(points[0] ?? { x: 0, y: 0 }, points[0] ?? { x: 0, y: 0 }, r, 8);
+
+  const tangents = computeTangents(points);
+  const left: Point2D[] = [];
+  const right: Point2D[] = [];
+
+  for (let i = 0; i < n; i += 1) {
+    const t = tangents[i];
+    const nx = -t.y;
+    const ny = t.x;
+    left.push({ x: roundCoord(points[i].x + nx * r), y: roundCoord(points[i].y + ny * r) });
+    right.push({ x: roundCoord(points[i].x - nx * r), y: roundCoord(points[i].y - ny * r) });
+  }
+
+  const endAngle = Math.atan2(tangents[n - 1].y, tangents[n - 1].x);
+  const startAngle = Math.atan2(tangents[0].y, tangents[0].x);
+  const poly: Point2D[] = [];
+
+  // Left side from start to end
+  for (let i = 0; i < n; i += 1) poly.push(left[i]);
+
+  // Smooth round endcap around last point from +PI/2 (left) around 0 (front) to -PI/2 (right)
+  const endPt = points[n - 1];
+  for (let i = 1; i < capSteps; i += 1) {
+    const ang = endAngle + Math.PI / 2 - (i / capSteps) * Math.PI;
+    poly.push({ x: roundCoord(endPt.x + Math.cos(ang) * r), y: roundCoord(endPt.y + Math.sin(ang) * r) });
+  }
+
+  // Right side from end back to start
+  for (let i = n - 1; i >= 0; i -= 1) poly.push(right[i]);
+
+  // Smooth round startcap around first point from -PI/2 (right) around -PI (back) to -3*PI/2 (left)
+  const startPt = points[0];
+  for (let i = 1; i < capSteps; i += 1) {
+    const ang = startAngle - Math.PI / 2 - (i / capSteps) * Math.PI;
+    poly.push({ x: roundCoord(startPt.x + Math.cos(ang) * r), y: roundCoord(startPt.y + Math.sin(ang) * r) });
+  }
+
+  return poly;
+}
+
 function buildEraserCapsules(eraserPoints: readonly Point2D[], radius: number): PlanarShapeInput[] {
-  const cleaned = dedupePolyline(eraserPoints, Math.max(1.2, radius * 0.2));
+  const cleaned = dedupePolyline(eraserPoints, Math.max(0.9, radius * 0.12));
   if (cleaned.length === 0) return [];
   if (cleaned.length === 1) {
     return [{ contours: [buildCapsulePolygon(cleaned[0], cleaned[0], radius, 8)] }];
   }
-  const simplified = simplifyPolyline(cleaned, Math.max(1.2, radius * 0.22));
+
+  // Gentle simplification that preserves graceful flowing curves instead of chunky facets
+  const tol = clamp(radius * 0.06, 0.55, 1.6);
+  let simplified = simplifyPolyline(cleaned, tol);
+
+  // Fast path: 1 single continuous smooth ribbon polygon for clean non-self-overlapping sweeps
+  if (!polylineHasSelfOverlap(simplified, radius)) {
+    const ribbon = buildUnifiedSmoothEraserRibbon(simplified, radius);
+    if (ribbon.length >= 3) {
+      return [{ contours: [ribbon] }];
+    }
+  }
+
+  // Self-overlapping scribble path: adaptive simplification budget keeps planar boolean fast
+  if (simplified.length > 36) {
+    simplified = simplifyPolyline(cleaned, Math.max(tol * 2, radius * 0.16));
+  }
   const shapes: PlanarShapeInput[] = [];
   for (let i = 0; i < simplified.length - 1; i += 1) {
-    shapes.push({ contours: [buildCapsulePolygon(simplified[i], simplified[i + 1], radius, 6)] });
+    shapes.push({ contours: [buildCapsulePolygon(simplified[i], simplified[i + 1], radius, 8)] });
   }
   return shapes;
+}
+
+/**
+ * Converts a closed planar polygon back into vector anchors while preserving sharp
+ * corners (e.g. rectangle edges & cut intersections) and fitting silky-smooth cubic
+ * Bezier handles along carved curved runs.
+ */
+function polygonToHybridBezierAnchors(poly: readonly Point2D[], epsilon = 0.45): VectorAnchorPoint[] {
+  if (poly.length < 3) return [];
+  const simplified = simplifyPolyline([...poly, poly[0]], epsilon);
+  if (simplified.length > 1) simplified.pop();
+  const pts = simplified.length >= 3 ? simplified : [...poly];
+  const n = pts.length;
+  if (n < 3) return [];
+
+  const isSmooth: boolean[] = new Array(n).fill(false);
+  const segLenIn: number[] = new Array(n).fill(0);
+  const segLenOut: number[] = new Array(n).fill(0);
+
+  for (let i = 0; i < n; i += 1) {
+    const prev = pts[(i - 1 + n) % n];
+    const curr = pts[i];
+    const next = pts[(i + 1) % n];
+    const v1x = curr.x - prev.x;
+    const v1y = curr.y - prev.y;
+    const v2x = next.x - curr.x;
+    const v2y = next.y - curr.y;
+    const l1 = Math.hypot(v1x, v1y);
+    const l2 = Math.hypot(v2x, v2y);
+    segLenIn[i] = l1;
+    segLenOut[i] = l2;
+    if (l1 < 1e-4 || l2 < 1e-4) continue;
+    const dot = clamp((v1x * v2x + v1y * v2y) / (l1 * l2), -1, 1);
+    const turnDeg = (Math.acos(dot) * 180) / Math.PI;
+    // Smooth curve vertex: gentle turn angle (< 36°) and not a junction of two long straight edges
+    if (turnDeg > 1.5 && turnDeg < 36 && !(l1 > 28 && l2 > 28 && turnDeg >= 10)) {
+      isSmooth[i] = true;
+    }
+  }
+
+  const tension = 0.22;
+  return pts.map((curr, i) => {
+    const prev = pts[(i - 1 + n) % n];
+    const next = pts[(i + 1) % n];
+    const base: VectorAnchorPoint = {
+      id: createAnchorId('vd'),
+      x: roundCoord(curr.x),
+      y: roundCoord(curr.y),
+      pointType: isSmooth[i] ? 'smooth' : 'corner',
+    };
+    if (!isSmooth[i]) return base;
+
+    const tx = next.x - prev.x;
+    const ty = next.y - prev.y;
+    const tLen = Math.hypot(tx, ty);
+    if (tLen < 1e-4) {
+      return { ...base, pointType: 'corner' };
+    }
+    const ux = tx / tLen;
+    const uy = ty / tLen;
+    // Clamp handle lengths cleanly to adjacent segment lengths to prevent any bulge or loop
+    const hInLen = Math.min(segLenIn[i] * 0.34, tLen * tension * 0.5);
+    const hOutLen = Math.min(segLenOut[i] * 0.34, tLen * tension * 0.5);
+
+    const prevIsLongStraight = segLenIn[i] > 32 && !isSmooth[(i - 1 + n) % n];
+    const nextIsLongStraight = segLenOut[i] > 32 && !isSmooth[(i + 1) % n];
+
+    return {
+      ...base,
+      ...(hInLen > 0.35 && !prevIsLongStraight
+        ? { handleIn: { x: roundCoord(curr.x - ux * hInLen), y: roundCoord(curr.y - uy * hInLen) } }
+        : {}),
+      ...(hOutLen > 0.35 && !nextIsLongStraight
+        ? { handleOut: { x: roundCoord(curr.x + ux * hOutLen), y: roundCoord(curr.y + uy * hOutLen) } }
+        : {}),
+    };
+  });
 }
 
 function segmentsIntersect(a1: Point2D, a2: Point2D, b1: Point2D, b2: Point2D): boolean {
@@ -761,40 +943,82 @@ function sliceClosedNodeWithEraser(
   const holes = assembled.filter((c) => c.isHole && c.points.length >= 3);
   if (outers.length === 0) return [];
 
-  // Assign each hole to its smallest enclosing outer shell
+  const computeAbsArea = (pts: readonly Point2D[]): number => {
+    let area = 0;
+    for (let k = 0; k < pts.length; k += 1) {
+      const a = pts[k];
+      const b = pts[(k + 1) % pts.length];
+      area += a.x * b.y - b.x * a.y;
+    }
+    return Math.abs(area) * 0.5;
+  };
+
+  // Assign each connected hole to its smallest enclosing outer shell
   const holesByOuter: Point2D[][][] = outers.map(() => []);
-  for (const hole of holes) {
-    const samplePt = hole.points[0];
+  const assignHoleToSmallestOuter = (holePts: Point2D[], checkAllInside = false) => {
+    const samplePt = holePts[0];
     let bestIdx = -1;
     let bestArea = Infinity;
     for (let i = 0; i < outers.length; i += 1) {
-      if (pointInSimplePolygon(samplePt, outers[i].points)) {
-        let area = 0;
-        const pts = outers[i].points;
-        for (let k = 0; k < pts.length; k += 1) {
-          const a = pts[k];
-          const b = pts[(k + 1) % pts.length];
-          area += a.x * b.y - b.x * a.y;
+      const outerPts = outers[i].points;
+      if (!pointInSimplePolygon(samplePt, outerPts)) continue;
+      if (checkAllInside) {
+        let allStrictlyInside = true;
+        for (const pt of holePts) {
+          if (!pointInSimplePolygon(pt, outerPts)) {
+            allStrictlyInside = false;
+            break;
+          }
+          // Ensure it doesn't lie on the outer boundary (connected cutouts are already carved into outer)
+          let minEdgeDist = Infinity;
+          for (let e = 0; e < outerPts.length; e += 1) {
+            const d = pointToSegmentDistance(pt, outerPts[e], outerPts[(e + 1) % outerPts.length]).distance;
+            if (d < minEdgeDist) minEdgeDist = d;
+          }
+          if (minEdgeDist < 0.25) {
+            allStrictlyInside = false;
+            break;
+          }
         }
-        const absArea = Math.abs(area) * 0.5;
-        if (absArea < bestArea) {
-          bestArea = absArea;
-          bestIdx = i;
-        }
+        if (!allStrictlyInside) continue;
+      }
+      const absArea = computeAbsArea(outerPts);
+      if (absArea < bestArea) {
+        bestArea = absArea;
+        bestIdx = i;
       }
     }
     if (bestIdx !== -1) {
-      holesByOuter[bestIdx].push(hole.points);
+      holesByOuter[bestIdx].push(holePts);
+    }
+  };
+
+  for (const hole of holes) {
+    assignHoleToSmallestOuter(hole.points, false);
+  }
+
+  // Also capture disconnected interior eraser cutouts (e.g., single-click dabs or strokes completely inside a shape)
+  const erasedFaces = arrangement.faces.filter(
+    (face) =>
+      face.memberShapeIndices.includes(0) &&
+      face.memberShapeIndices.some((idx) => idx >= 1),
+  );
+  if (erasedFaces.length > 0) {
+    const erasedAssembled = assembleFacesToContours(erasedFaces);
+    for (const erasedContour of erasedAssembled) {
+      if (erasedContour.isHole || erasedContour.points.length < 3) continue;
+      // Reverse winding so interior hole subpath has opposite orientation to outer contour
+      assignHoleToSmallestOuter([...erasedContour.points].reverse(), true);
     }
   }
 
   const baseStyle = getBasePathStyle(node);
   const resultNodes: PathNode[] = [];
   outers.forEach((outer, index) => {
-    const mainAnchors = polygonToCornerAnchors(outer.points, 0.55);
+    const mainAnchors = polygonToHybridBezierAnchors(outer.points, 0.45);
     if (mainAnchors.length < 3) return;
     const subpaths: VectorSubpath[] = holesByOuter[index]
-      .map((holePts) => polygonToCornerAnchors(holePts, 0.55))
+      .map((holePts) => polygonToHybridBezierAnchors(holePts, 0.45))
       .filter((pts) => pts.length >= 3)
       .map((pts) => ({ points: pts, closed: true }));
 
@@ -910,6 +1134,26 @@ function sliceOpenPathWithEraser(
 }
 
 /**
+ * Fast live hit-test helper for Object Erase mode preview while dragging.
+ */
+export function findTouchedEraserNodeIds(
+  selectableNodes: readonly DesignNode[],
+  selectedNodeIds: readonly string[],
+  rawEraserPoints: readonly Point2D[],
+  options: Pick<VectorEraserApplyOptions, 'size' | 'target'>,
+): string[] {
+  const eraserPolyline = dedupePolyline(rawEraserPoints, 1.5);
+  if (eraserPolyline.length === 0) return [];
+  const radius = clamp(Number.isFinite(options.size) ? options.size : 24, 4, 100) / 2;
+  const selectedSet = new Set(selectedNodeIds);
+  const candidates = (options.target === 'selected'
+    ? selectableNodes.filter((n) => selectedSet.has(n.id))
+    : selectableNodes
+  ).filter((n) => n.visible && !n.locked && n.onCanvas !== false && n.type !== 'group');
+  return candidates.filter((node) => eraserTouchesNode(node, eraserPolyline, radius)).map((n) => n.id);
+}
+
+/**
  * Executes Vector Eraser (`slice` or `object` mode) against eligible unlocked, visible nodes.
  * Returns atomic `removeIds` + `insertNodes` ready for `replaceNodes` -> `node.replace-many`.
  */
@@ -920,10 +1164,12 @@ export function applyVectorEraserOperation(
   options: VectorEraserApplyOptions,
   createId: () => string,
 ): VectorEraserResult {
-  const eraserPolyline = dedupePolyline(rawEraserPoints, 1.0);
-  if (eraserPolyline.length === 0) {
+  const deduped = dedupePolyline(rawEraserPoints, 0.75);
+  if (deduped.length === 0) {
     return { removeIds: [], insertNodes: [], touchedCount: 0 };
   }
+  // Gently stabilize multi-point freehand trails so curves flow organically while preserving exact endpoints
+  const eraserPolyline = deduped.length >= 3 ? stabilizeBrushPolyline(deduped, 26) : deduped;
 
   const radius = clamp(Number.isFinite(options.size) ? options.size : 24, 4, 100) / 2;
   const selectedSet = new Set(selectedNodeIds);

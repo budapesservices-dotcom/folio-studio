@@ -17,7 +17,7 @@ import {
   type GapAxis,
   type PaddingEdge,
 } from './autoLayoutHandles';
-import { planarFaceToSvgPath } from './canvasHelpers';
+import { buildSmoothSvgTrailPath, planarFaceToSvgPath } from './canvasHelpers';
 import type { Bounds, ResizeHandle, SnapGuide, SpacingRedlineResult } from './geometry';
 import type {
   CanvasToolId,
@@ -671,13 +671,14 @@ export function CanvasInteractiveOverlays({
           )}
         </g>
       )}
-      {toolOverlay?.kind === 'freehand' && toolOverlay.points.length >= 2 && (
-        <polyline
+      {toolOverlay?.kind === 'freehand' && toolOverlay.points.length >= 1 && (
+        <path
           class={'canvas-freehand-preview is-' + toolOverlay.mode}
-          points={toolOverlay.points.map((pt) => `${pt.x},${pt.y}`).join(' ')}
+          d={buildSmoothSvgTrailPath(toolOverlay.points)}
           stroke={toolOverlay.strokeColor}
           stroke-width={toolOverlay.strokeWidth}
-          stroke-linecap={toolOverlay.strokeLinecap}
+          stroke-linecap={toolOverlay.strokeLinecap ?? 'round'}
+          stroke-linejoin="round"
           pointer-events="none"
         />
       )}
@@ -1285,16 +1286,36 @@ export function CanvasInteractiveOverlays({
         />
       )}
 
-      {/* Live Vector Eraser Size Ring */}
-      {toolId === 'eraser' && hoverPoint && (
-        <circle
-          class="canvas-eraser-cursor-ring"
-          cx={hoverPoint.x}
-          cy={hoverPoint.y}
-          r={Math.max(2, toolOptions.eraserSize / 2)}
-          pointer-events="none"
-        />
-      )}
+      {/* Live Vector Eraser Dual-Contrast Brush Cursor Ring */}
+      {toolId === 'eraser' && hoverPoint && (() => {
+        const radius = Math.max(2, toolOptions.eraserSize / 2);
+        const isErasing = toolSession?.kind === 'freehand' && toolSession.mode === 'eraser';
+        return (
+          <g
+            class={`canvas-eraser-cursor-group${isErasing ? ' is-erasing' : ''}`}
+            pointer-events="none"
+          >
+            <circle
+              class="canvas-eraser-cursor-halo"
+              cx={hoverPoint.x}
+              cy={hoverPoint.y}
+              r={radius}
+            />
+            <circle
+              class="canvas-eraser-cursor-ring"
+              cx={hoverPoint.x}
+              cy={hoverPoint.y}
+              r={radius}
+            />
+            <circle
+              class="canvas-eraser-cursor-dot"
+              cx={hoverPoint.x}
+              cy={hoverPoint.y}
+              r={Math.max(1.25, 1.8 * invZoom)}
+            />
+          </g>
+        );
+      })()}
 
       {/* Live Eyedropper Circular Magnifier Swatch Loupe (Edge-Clamped to Artboard Bounds) */}
       {eyedropperLoupe && (() => {

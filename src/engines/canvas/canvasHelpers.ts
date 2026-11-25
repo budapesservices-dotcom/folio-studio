@@ -41,6 +41,37 @@ export function planarFaceToSvgPath(face: PlanarFace): string {
   return `M ${ring[0].x} ${ring[0].y} ` + ring.slice(1).map((p) => `L ${p.x} ${p.y}`).join(' ') + ' Z';
 }
 
+/**
+ * Converts a sequence of pointer points into a C1-smooth quadratic Bezier SVG path
+ * using midpoint interpolation. Handles 1-point clicks/dabs, 2-point lines, and 3+ point curves.
+ */
+export function buildSmoothSvgTrailPath(points: readonly { x: number; y: number }[]): string {
+  if (points.length === 0) return '';
+  const fmt = (n: number) => Math.round(n * 100) / 100;
+  const p0 = points[0];
+  if (points.length === 1) {
+    return `M ${fmt(p0.x)} ${fmt(p0.y)} L ${fmt(p0.x + 0.01)} ${fmt(p0.y)}`;
+  }
+  if (points.length === 2) {
+    const p1 = points[1];
+    return `M ${fmt(p0.x)} ${fmt(p0.y)} L ${fmt(p1.x)} ${fmt(p1.y)}`;
+  }
+  const parts: string[] = [`M ${fmt(p0.x)} ${fmt(p0.y)}`];
+  const firstMidX = (p0.x + points[1].x) * 0.5;
+  const firstMidY = (p0.y + points[1].y) * 0.5;
+  parts.push(`L ${fmt(firstMidX)} ${fmt(firstMidY)}`);
+  for (let i = 1; i < points.length - 1; i += 1) {
+    const curr = points[i];
+    const next = points[i + 1];
+    const midX = (curr.x + next.x) * 0.5;
+    const midY = (curr.y + next.y) * 0.5;
+    parts.push(`Q ${fmt(curr.x)} ${fmt(curr.y)} ${fmt(midX)} ${fmt(midY)}`);
+  }
+  const last = points[points.length - 1];
+  parts.push(`L ${fmt(last.x)} ${fmt(last.y)}`);
+  return parts.join(' ');
+}
+
 export function buildSpatialIndexForNodes(nodes: readonly DesignNode[]): SpatialIndexHandle {
   const entries: SpatialBoundsEntry[] = new Array(nodes.length);
   for (let i = 0; i < nodes.length; i += 1) {

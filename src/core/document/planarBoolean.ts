@@ -503,6 +503,47 @@ export function buildPlanarFacesFromSegments(
   return { vertices, faces };
 }
 
+function findAnnularInteriorPoint(
+  face: PlanarFace,
+  smallerFaces: readonly PlanarFace[],
+): PlanarPoint {
+  const isOutsideSmaller = (pt: PlanarPoint): boolean => {
+    for (const other of smallerFaces) {
+      if (pointInSimplePolygon(pt, other.polygon)) return false;
+    }
+    return true;
+  };
+
+  if (smallerFaces.length === 0 || isOutsideSmaller(face.interiorPoint)) {
+    return face.interiorPoint;
+  }
+
+  const poly = signedArea(face.polygon) >= 0 ? face.polygon : [...face.polygon].reverse();
+  const n = poly.length;
+  const offsets = [0.5, 1.5, 4, 0.15, 10];
+  for (const dist of offsets) {
+    for (let i = 0; i < n; i += 1) {
+      const a = poly[i];
+      const b = poly[(i + 1) % n];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-4) continue;
+      // For positive signedArea, (-dy, dx) / len points strictly inward
+      const nx = -dy / len;
+      const ny = dx / len;
+      const candidate: PlanarPoint = {
+        x: (a.x + b.x) * 0.5 + nx * dist,
+        y: (a.y + b.y) * 0.5 + ny * dist,
+      };
+      if (pointInSimplePolygon(candidate, poly) && isOutsideSmaller(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return face.interiorPoint;
+}
+
 /**
  * Builds the exact 2D planar face arrangement for any collection of overlapping
  * convex or concave shapes.
@@ -514,10 +555,14 @@ export function buildPlanarArrangement(shapes: readonly PlanarShapeInput[]): Pla
   const { vertices, faces: rawFaces } = buildPlanarFacesFromSegments(rawSegments);
   const faces: PlanarFace[] = [];
 
-  for (const rawFace of rawFaces) {
+  for (let i = 0; i < rawFaces.length; i += 1) {
+    const rawFace = rawFaces[i];
+    const smallerFaces = rawFaces.filter((other, j) => j !== i && other.area < rawFace.area - EPS);
+    const samplePt = findAnnularInteriorPoint(rawFace, smallerFaces);
+
     const memberShapeIndices: number[] = [];
     for (let s = 0; s < shapes.length; s += 1) {
-      if (pointInContours(rawFace.interiorPoint, shapes[s].contours)) {
+      if (pointInContours(samplePt, shapes[s].contours)) {
         memberShapeIndices.push(s);
       }
     }
@@ -528,7 +573,7 @@ export function buildPlanarArrangement(shapes: readonly PlanarShapeInput[]): Pla
       id: faces.length,
       polygon: rawFace.polygon,
       area: rawFace.area,
-      interiorPoint: rawFace.interiorPoint,
+      interiorPoint: samplePt,
       memberShapeIndices,
     });
   }

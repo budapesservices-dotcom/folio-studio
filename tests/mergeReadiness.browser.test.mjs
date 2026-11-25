@@ -1,8 +1,3 @@
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import { createServer as createViteServer } from 'vite';
 import {
@@ -20,165 +15,20 @@ import {
 import { getActivePage } from '../src/core/document/project';
 import { createDefaultDesignTokens } from '../src/core/document/tokens';
 import { buildLivePreviewHtml } from '../src/engines/codegen';
-
-const chromiumCandidates = [
-  process.env.CHROMIUM_BIN,
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-].filter(Boolean);
-
-function findChromium() {
-  for (const candidate of chromiumCandidates) {
-    if (existsSync(candidate)) return candidate;
-    const found = spawnSync('which', [candidate], { encoding: 'utf8' });
-    if (found.status === 0 && found.stdout.trim()) return found.stdout.trim();
-  }
-  return null;
-}
+import {
+  findChromium,
+  launchChromiumHtml,
+  launchChromiumSession,
+} from './helpers/chromiumHarness.mjs';
 
 const chromium = findChromium();
 
 async function launchChromium(url) {
-  const profile = mkdtempSync(join(tmpdir(), 'folio-merge-readiness-profile-'));
-  const activePortPath = join(profile, 'DevToolsActivePort');
-  const chromiumEnv = { ...process.env };
-  for (const key of [
-    'DBUS_SESSION_BUS_ADDRESS',
-    'DBUS_SESSION_BUS_PID',
-    'DBUS_SYSTEM_BUS_ADDRESS',
-    'DBUS_STARTER_ADDRESS',
-    'DBUS_STARTER_BUS_TYPE',
-  ]) delete chromiumEnv[key];
-
-  const child = spawn(chromium, [
-    '--headless=new',
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-gpu',
-    '--disable-background-networking',
-    '--disable-extensions',
-    '--disable-breakpad',
-    '--disable-crash-reporter',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--remote-allow-origins=*',
-    '--remote-debugging-address=127.0.0.1',
-    '--remote-debugging-port=0',
-    '--user-data-dir=' + profile,
-    url,
-  ], {
-    detached: process.platform !== 'win32',
-    stdio: ['ignore', 'ignore', 'pipe'],
-    env: chromiumEnv,
+  return launchChromiumSession(url, {
+    chromiumBin: chromium,
+    profilePrefix: 'folio-merge-readiness-profile-',
+    initialViewport: { width: 1440, height: 900 },
   });
-
-  let socket;
-  let stderr = '';
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
-
-  const cleanup = async () => {
-    try { socket?.close(); } catch { /* ignore */ }
-    if (process.platform !== 'win32' && child.pid) {
-      try { process.kill(-child.pid, 'SIGTERM'); } catch { /* ignore */ }
-      await delay(300);
-      try { process.kill(-child.pid, 'SIGKILL'); } catch { /* ignore */ }
-    } else {
-      try { child.kill('SIGKILL'); } catch { /* ignore */ }
-    }
-    rmSync(profile, { recursive: true, force: true });
-  };
-
-  try {
-    let port = null;
-    const deadline = Date.now() + 20000;
-    while (!port && Date.now() < deadline) {
-      if (existsSync(activePortPath)) {
-        const { readFileSync } = await import('node:fs');
-        const firstLine = readFileSync(activePortPath, 'utf8').split(/\r?\n/)[0]?.trim();
-        const parsed = Number.parseInt(firstLine ?? '', 10);
-        if (Number.isInteger(parsed) && parsed > 0) port = parsed;
-      }
-      if (!port) await delay(50);
-    }
-    if (!port) throw new Error(`Chromium DevToolsActivePort unavailable.\n${stderr}`);
-
-    let target = null;
-    while (!target && Date.now() < deadline) {
-      try {
-        const list = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json());
-        target = list.find((item) => item.type === 'page' && item.webSocketDebuggerUrl);
-      } catch {
-        // retry
-      }
-      if (!target) await delay(60);
-    }
-    if (!target) throw new Error(`Chromium CDP page target unavailable.\n${stderr}`);
-
-    socket = new WebSocket(target.webSocketDebuggerUrl);
-    let nextId = 1;
-    const pending = new Map();
-    const consoleErrors = [];
-    const pageErrors = [];
-
-    await new Promise((resolveOpen, rejectOpen) => {
-      socket.addEventListener('open', resolveOpen, { once: true });
-      socket.addEventListener('error', rejectOpen, { once: true });
-    });
-
-    socket.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data));
-      if (msg.id && pending.has(msg.id)) {
-        const { resolve, reject } = pending.get(msg.id);
-        pending.delete(msg.id);
-        if (msg.error) reject(new Error(msg.error.message));
-        else resolve(msg.result);
-        return;
-      }
-      if (msg.method === 'Runtime.consoleAPICalled' && msg.params?.type === 'error') {
-        consoleErrors.push(msg.params.args?.map((a) => a.value ?? a.description ?? '').join(' '));
-      }
-      if (msg.method === 'Runtime.exceptionThrown') {
-        const d = msg.params?.exceptionDetails;
-        pageErrors.push(d?.exception?.description ?? d?.text ?? 'Uncaught exception');
-      }
-    });
-
-    const send = (method, params = {}) => new Promise((resolve, reject) => {
-      const id = nextId++;
-      pending.set(id, { resolve, reject });
-      socket.send(JSON.stringify({ id, method, params }));
-    });
-
-    const evalJs = async (expression) => {
-      const result = await send('Runtime.evaluate', {
-        expression: `(async () => { ${expression} })()`,
-        returnByValue: true,
-        awaitPromise: true,
-      });
-      if (result.exceptionDetails) {
-        throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
-      }
-      return result.result?.value;
-    };
-
-    await send('Page.enable');
-    await send('Runtime.enable');
-    await send('Emulation.setDeviceMetricsOverride', {
-      width: 1440,
-      height: 900,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
-
-    return { send, evalJs, cleanup, consoleErrors, pageErrors };
-  } catch (error) {
-    await cleanup();
-    throw error;
-  }
 }
 
 describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', () => {
@@ -1091,8 +941,11 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
       page.document.nodes = [heroSection, safeLink, blockedLink, arrowPath, instance];
 
       const html = buildLivePreviewHtml(project, { pageId: page.id, themeId: 'theme-dark' });
-      const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
-      const browser = await launchChromium(dataUrl);
+      const browser = await launchChromiumHtml(html, {
+        chromiumBin: chromium,
+        profilePrefix: 'folio-merge-readiness-preview-',
+        initialViewport: { width: 1440, height: 900 },
+      });
 
       try {
         const rendered = await browser.evalJs(`
@@ -1264,8 +1117,11 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(browser.pageErrors).toEqual([]);
 
         // 6. Execute the exact Live Preview HTML in Chromium and click Visual card
-        const previewUrl = `data:text/html;charset=utf-8,${encodeURIComponent(result.previewSrcdoc)}`;
-        const previewBrowser = await launchChromium(previewUrl);
+        const previewBrowser = await launchChromiumHtml(result.previewSrcdoc, {
+          chromiumBin: chromium,
+          profilePrefix: 'folio-merge-readiness-logic-preview-',
+          initialViewport: { width: 1440, height: 900 },
+        });
         try {
           const domInteraction = await previewBrowser.evalJs(`
             const visibleText = () => Array.from(document.querySelectorAll('[data-folio-id]')).map((el) => el.textContent ?? '').join(' | ');

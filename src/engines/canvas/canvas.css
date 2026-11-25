@@ -386,8 +386,10 @@
   stroke-opacity: 0.78;
 }
 .canvas-freehand-preview.is-eraser {
+  fill: none;
+  stroke: rgba(244, 63, 94, 0.16);
   vector-effect: none;
-  stroke-opacity: 0.42;
+  stroke-opacity: 1;
 }
 
 /* Rotate overlay */
@@ -660,12 +662,31 @@
   stroke-width: 1.4;
   vector-effect: non-scaling-stroke;
 }
+.canvas-eraser-cursor-halo {
+  fill: rgba(244, 63, 94, 0.06);
+  stroke: rgba(15, 23, 42, 0.72);
+  stroke-width: 2.6;
+  vector-effect: non-scaling-stroke;
+}
 .canvas-eraser-cursor-ring {
-  fill: rgba(244, 63, 94, 0.14);
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 1.35;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-eraser-cursor-dot {
+  fill: #fb7185;
+  stroke: rgba(15, 23, 42, 0.75);
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-eraser-cursor-group.is-erasing .canvas-eraser-cursor-halo {
+  fill: rgba(244, 63, 94, 0.1);
+  stroke: rgba(15, 23, 42, 0.85);
+}
+.canvas-eraser-cursor-group.is-erasing .canvas-eraser-cursor-ring {
   stroke: #fb7185;
   stroke-width: 1.5;
-  stroke-dasharray: 4 2.5;
-  vector-effect: non-scaling-stroke;
 }
 
 /* Image file drag-and-drop highlight on canvas viewport */

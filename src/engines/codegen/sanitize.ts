@@ -184,17 +184,322 @@ function readQuantifierAt(pattern: string, index: number): ParsedQuantifier | nu
   return null;
 }
 
-function sigsOverlap(prevSig: string | null, nextSig: string | null): boolean {
-  if (!prevSig || !nextSig) return false;
-  return prevSig === 'WILDCARD' || nextSig === 'WILDCARD' || prevSig === nextSig;
+type CharSet = [number, number, number, number, number];
+
+const NON_ASCII_SPACE = 1;
+const NON_ASCII_OTHER = 2;
+const NON_ASCII_ALL = 3;
+const ALL_CHAR_SET: CharSet = [-1, -1, -1, -1, NON_ASCII_ALL];
+
+function createEmptyCharSet(): CharSet {
+  return [0, 0, 0, 0, 0];
+}
+
+function cloneCharSet(set: CharSet): CharSet {
+  return [set[0], set[1], set[2], set[3], set[4]];
+}
+
+function addCharCode(set: CharSet, code: number): void {
+  if (code < 0) return;
+  if (code < 128) {
+    set[code >>> 5] |= 1 << (code & 31);
+    return;
+  }
+  const isUnicodeSpace =
+    code === 0x00a0 ||
+    code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0x202f ||
+    code === 0x205f ||
+    code === 0x3000 ||
+    code === 0xfeff;
+  set[4] |= isUnicodeSpace ? NON_ASCII_SPACE : NON_ASCII_OTHER;
+}
+
+function addCharRange(set: CharSet, start: number, end: number): void {
+  const lo = Math.max(0, start);
+  const asciiHi = Math.min(end, 127);
+  for (let code = lo; code <= asciiHi; code += 1) {
+    set[code >>> 5] |= 1 << (code & 31);
+  }
+  if (end >= 128) {
+    set[4] |= NON_ASCII_ALL;
+  }
+}
+
+function unionCharSets(a: CharSet | null, b: CharSet | null): CharSet | null {
+  if (!a) return b ? cloneCharSet(b) : null;
+  if (!b) return cloneCharSet(a);
+  return [a[0] | b[0], a[1] | b[1], a[2] | b[2], a[3] | b[3], a[4] | b[4]];
+}
+
+function invertCharSet(set: CharSet): CharSet {
+  return [~set[0], ~set[1], ~set[2], ~set[3], ~set[4] & NON_ASCII_ALL];
+}
+
+function charSetsOverlap(a: CharSet | null, b: CharSet | null): boolean {
+  if (!a || !b) return false;
+  return (
+    ((a[0] & b[0]) | (a[1] & b[1]) | (a[2] & b[2]) | (a[3] & b[3]) | (a[4] & b[4])) !== 0
+  );
+}
+
+const DOT_CHAR_SET: CharSet = (() => {
+  const set: CharSet = [-1, -1, -1, -1, NON_ASCII_ALL];
+  set[0] &= ~((1 << 10) | (1 << 13)); // Exclude \n (10) and \r (13)
+  return set;
+})();
+
+const DIGIT_CHAR_SET: CharSet = (() => {
+  const set = createEmptyCharSet();
+  addCharRange(set, 48, 57);
+  return set;
+})();
+
+const WORD_CHAR_SET: CharSet = (() => {
+  const set = createEmptyCharSet();
+  addCharRange(set, 48, 57);
+  addCharRange(set, 65, 90);
+  addCharRange(set, 97, 122);
+  addCharCode(set, 95);
+  return set;
+})();
+
+const SPACE_CHAR_SET: CharSet = (() => {
+  const set = createEmptyCharSet();
+  for (const code of [9, 10, 11, 12, 13, 32]) addCharCode(set, code);
+  set[4] = NON_ASCII_SPACE;
+  return set;
+})();
+
+const NOT_DIGIT_CHAR_SET: CharSet = invertCharSet(DIGIT_CHAR_SET);
+const NOT_WORD_CHAR_SET: CharSet = invertCharSet(WORD_CHAR_SET);
+const NOT_SPACE_CHAR_SET: CharSet = invertCharSet(SPACE_CHAR_SET);
+
+function isWildcardCharSet(set: CharSet): boolean {
+  const dotMask0 = DOT_CHAR_SET[0];
+  return (
+    (set[0] & dotMask0) === dotMask0 &&
+    set[1] === -1 &&
+    set[2] === -1 &&
+    set[3] === -1 &&
+    set[4] === NON_ASCII_ALL
+  );
+}
+
+interface ParsedEscapeToken {
+  length: number;
+  set: CharSet;
+  singleCode: number | null;
+  error?: string;
+}
+
+function parseEscapeToken(pattern: string, index: number, inCharClass: boolean): ParsedEscapeToken {
+  const next = pattern[index + 1];
+  switch (next) {
+    case 'd':
+      return { length: 2, set: cloneCharSet(DIGIT_CHAR_SET), singleCode: null };
+    case 'D':
+      return { length: 2, set: cloneCharSet(NOT_DIGIT_CHAR_SET), singleCode: null };
+    case 'w':
+      return { length: 2, set: cloneCharSet(WORD_CHAR_SET), singleCode: null };
+    case 'W':
+      return { length: 2, set: cloneCharSet(NOT_WORD_CHAR_SET), singleCode: null };
+    case 's':
+      return { length: 2, set: cloneCharSet(SPACE_CHAR_SET), singleCode: null };
+    case 'S':
+      return { length: 2, set: cloneCharSet(NOT_SPACE_CHAR_SET), singleCode: null };
+    case 't': {
+      const set = createEmptyCharSet();
+      addCharCode(set, 9);
+      return { length: 2, set, singleCode: 9 };
+    }
+    case 'n': {
+      const set = createEmptyCharSet();
+      addCharCode(set, 10);
+      return { length: 2, set, singleCode: 10 };
+    }
+    case 'v': {
+      const set = createEmptyCharSet();
+      addCharCode(set, 11);
+      return { length: 2, set, singleCode: 11 };
+    }
+    case 'f': {
+      const set = createEmptyCharSet();
+      addCharCode(set, 12);
+      return { length: 2, set, singleCode: 12 };
+    }
+    case 'r': {
+      const set = createEmptyCharSet();
+      addCharCode(set, 13);
+      return { length: 2, set, singleCode: 13 };
+    }
+    case '0': {
+      const set = createEmptyCharSet();
+      addCharCode(set, 0);
+      return { length: 2, set, singleCode: 0 };
+    }
+    case 'b': {
+      const set = createEmptyCharSet();
+      if (inCharClass) {
+        addCharCode(set, 8);
+        return { length: 2, set, singleCode: 8 };
+      }
+      return { length: 2, set, singleCode: null };
+    }
+    case 'x': {
+      const hex = /^[0-9a-fA-F]{2}/.exec(pattern.slice(index + 2));
+      if (hex) {
+        const code = Number.parseInt(hex[0], 16);
+        const set = createEmptyCharSet();
+        addCharCode(set, code);
+        return { length: 4, set, singleCode: code };
+      }
+      break;
+    }
+    case 'u': {
+      const braceU = /^\\u\{([0-9a-fA-F]+)\}/.exec(pattern.slice(index));
+      if (braceU) {
+        const code = Number.parseInt(braceU[1], 16);
+        const set = createEmptyCharSet();
+        addCharCode(set, code);
+        return { length: braceU[0].length, set, singleCode: code };
+      }
+      const hex4 = /^[0-9a-fA-F]{4}/.exec(pattern.slice(index + 2));
+      if (hex4) {
+        const code = Number.parseInt(hex4[0], 16);
+        const set = createEmptyCharSet();
+        addCharCode(set, code);
+        return { length: 6, set, singleCode: code };
+      }
+      break;
+    }
+    case 'p':
+    case 'P': {
+      if (pattern[index + 2] === '{') {
+        const propClose = pattern.indexOf('}', index + 3);
+        if (propClose === -1) {
+          return {
+            length: 2,
+            set: cloneCharSet(ALL_CHAR_SET),
+            singleCode: null,
+            error: 'Unclosed Unicode property escape.',
+          };
+        }
+        return {
+          length: propClose - index + 1,
+          set: cloneCharSet(ALL_CHAR_SET),
+          singleCode: null,
+        };
+      }
+      break;
+    }
+    case 'c': {
+      const ctrl = pattern[index + 2];
+      if (ctrl && /[A-Za-z]/.test(ctrl)) {
+        const code = ctrl.charCodeAt(0) % 32;
+        const set = createEmptyCharSet();
+        addCharCode(set, code);
+        return { length: 3, set, singleCode: code };
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  const code = next.charCodeAt(0);
+  const set = createEmptyCharSet();
+  addCharCode(set, code);
+  return { length: 2, set, singleCode: code };
+}
+
+function parseCharClass(
+  pattern: string,
+  startIndex: number,
+): { endIndex: number; set: CharSet; isWildcard: boolean; error?: string } {
+  let j = startIndex + 1;
+  const negated = pattern[j] === '^';
+  if (negated) j += 1;
+
+  const set = createEmptyCharSet();
+  let closed = false;
+  let prevSingleCode: number | null = null;
+  let pendingRange = false;
+
+  while (j < pattern.length) {
+    const ch = pattern[j];
+    if (ch === ']') {
+      if (pendingRange) {
+        addCharCode(set, 45); // trailing '-' is literal
+      }
+      closed = true;
+      j += 1;
+      break;
+    }
+    if (ch === '-' && prevSingleCode !== null && !pendingRange && pattern[j + 1] !== ']') {
+      pendingRange = true;
+      j += 1;
+      continue;
+    }
+
+    let tokenSet: CharSet;
+    let singleCode: number | null;
+    if (ch === '\\') {
+      if (j + 1 >= pattern.length) {
+        return {
+          endIndex: j,
+          set,
+          isWildcard: false,
+          error: 'Unclosed character class "[".',
+        };
+      }
+      const esc = parseEscapeToken(pattern, j, true);
+      if (esc.error) {
+        return { endIndex: j, set, isWildcard: false, error: esc.error };
+      }
+      tokenSet = esc.set;
+      singleCode = esc.singleCode;
+      j += esc.length;
+    } else {
+      singleCode = ch.charCodeAt(0);
+      tokenSet = createEmptyCharSet();
+      addCharCode(tokenSet, singleCode);
+      j += 1;
+    }
+
+    if (pendingRange) {
+      if (prevSingleCode !== null && singleCode !== null && singleCode >= prevSingleCode) {
+        addCharRange(set, prevSingleCode, singleCode);
+      } else {
+        addCharCode(set, 45);
+        for (let k = 0; k < 5; k += 1) set[k] |= tokenSet[k];
+      }
+      prevSingleCode = null;
+      pendingRange = false;
+    } else {
+      for (let k = 0; k < 5; k += 1) set[k] |= tokenSet[k];
+      prevSingleCode = singleCode;
+    }
+  }
+
+  if (!closed) {
+    return { endIndex: j, set, isWildcard: false, error: 'Unclosed character class "[".' };
+  }
+
+  const finalSet = negated ? invertCharSet(set) : set;
+  const clsText = pattern.slice(startIndex, j);
+  const isWildcard = WILDCARD_CHAR_CLASSES.has(clsText) || isWildcardCharSet(finalSet);
+  return { endIndex: j, set: finalSet, isWildcard };
 }
 
 /**
  * Analyzes a user-authored regex pattern for both syntax validity and ReDoS
  * safety (nested quantifiers including optional-in-loop, quantified or nested
  * alternations, numbered/named backreferences, quantified lookarounds,
- * adjacent overlapping unbounded quantifiers, polynomial wildcard chains, and
- * excessive length/nesting/repetition bounds).
+ * adjacent overlapping unbounded quantifiers across character classes/shorthands/groups,
+ * polynomial wildcard chains, and excessive length/nesting/repetition bounds).
  */
 export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
   if (typeof pattern !== 'string' || !pattern) {
@@ -217,34 +522,44 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
     hasAlternation: boolean;
     isLookaround: boolean;
     seenMandatoryAtom: boolean;
-    leadingUnboundedSig: string | null;
-    prevUnboundedSig: string | null;
+    leadingUnboundedSet: CharSet | null;
+    trailingUnboundedSet: CharSet | null;
+    altLeadingSet: CharSet | null;
+    altTrailingSet: CharSet | null;
+    altAllMandatory: boolean;
+    groupCharSet: CharSet | null;
     wildcardUnboundedCount: number;
   }
 
-  const stack: GroupFrame[] = [
-    {
-      hasQuantifier: false,
-      hasUnboundedQuantifier: false,
-      quantifierCount: 0,
-      maxQuantifierSpan: 0,
-      hasAlternation: false,
-      isLookaround: false,
-      seenMandatoryAtom: false,
-      leadingUnboundedSig: null,
-      prevUnboundedSig: null,
-      wildcardUnboundedCount: 0,
-    },
-  ];
+  const makeFrame = (isLookaround: boolean): GroupFrame => ({
+    hasQuantifier: false,
+    hasUnboundedQuantifier: false,
+    quantifierCount: 0,
+    maxQuantifierSpan: 0,
+    hasAlternation: false,
+    isLookaround,
+    seenMandatoryAtom: false,
+    leadingUnboundedSet: null,
+    trailingUnboundedSet: null,
+    altLeadingSet: null,
+    altTrailingSet: null,
+    altAllMandatory: true,
+    groupCharSet: null,
+    wildcardUnboundedCount: 0,
+  });
+
+  const stack: GroupFrame[] = [makeFrame(false)];
 
   const applyAtomQuantifier = (
     frame: GroupFrame,
-    atomSig: string,
+    atomSet: CharSet,
+    isWildcard: boolean,
     quant: ParsedQuantifier | null,
   ): RegexSafetyResult | null => {
+    frame.groupCharSet = unionCharSets(frame.groupCharSet, atomSet);
     if (!quant) {
       frame.seenMandatoryAtom = true;
-      frame.prevUnboundedSig = null;
+      frame.trailingUnboundedSet = null;
       return null;
     }
     if (quant.error) return { ok: false, valid: false, safe: false, reason: quant.error };
@@ -258,7 +573,7 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
       frame.maxQuantifierSpan = quant.span;
     }
     if (quant.isUnbounded) {
-      if (atomSig === 'WILDCARD') {
+      if (isWildcard) {
         frame.wildcardUnboundedCount += 1;
         if (frame.wildcardUnboundedCount > MAX_UNBOUNDED_WILDCARDS_PER_GROUP) {
           return {
@@ -269,7 +584,7 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
           };
         }
       }
-      if (sigsOverlap(frame.prevUnboundedSig, atomSig)) {
+      if (charSetsOverlap(frame.trailingUnboundedSet, atomSet)) {
         return {
           ok: false,
           valid: true,
@@ -277,16 +592,18 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
           reason: 'Adjacent overlapping unbounded quantifiers can cause polynomial backtracking.',
         };
       }
-      if (!frame.seenMandatoryAtom && frame.leadingUnboundedSig === null) {
-        frame.leadingUnboundedSig = atomSig;
+      if (!frame.seenMandatoryAtom) {
+        frame.leadingUnboundedSet = unionCharSets(frame.leadingUnboundedSet, atomSet);
       }
-      frame.prevUnboundedSig = atomSig;
-      if (!quant.isNullable) {
+      if (quant.isNullable) {
+        frame.trailingUnboundedSet = unionCharSets(frame.trailingUnboundedSet, atomSet);
+      } else {
         frame.seenMandatoryAtom = true;
+        frame.trailingUnboundedSet = cloneCharSet(atomSet);
       }
     } else if (!quant.isNullable) {
       frame.seenMandatoryAtom = true;
-      frame.prevUnboundedSig = null;
+      frame.trailingUnboundedSet = null;
     }
     return null;
   };
@@ -320,21 +637,11 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
         };
       }
       const isZeroWidthBoundary = next === 'b' || next === 'B';
-      let tokenLen = 2;
-      if (next === 'x' && i + 3 < pattern.length) tokenLen = 4;
-      else if (next === 'u') {
-        const braceU = /^\\u\{[0-9a-fA-F]+\}/.exec(pattern.slice(i));
-        if (braceU) tokenLen = braceU[0].length;
-        else if (i + 5 < pattern.length) tokenLen = 6;
-      } else if ((next === 'p' || next === 'P') && pattern[i + 2] === '{') {
-        const propClose = pattern.indexOf('}', i + 3);
-        if (propClose === -1) {
-          return { ok: false, valid: false, safe: false, reason: 'Unclosed Unicode property escape.' };
-        }
-        tokenLen = propClose - i + 1;
+      const esc = parseEscapeToken(pattern, i, false);
+      if (esc.error) {
+        return { ok: false, valid: false, safe: false, reason: esc.error };
       }
-      const atomSig = `esc:${pattern.slice(i, i + tokenLen)}`;
-      i += tokenLen;
+      i += esc.length;
 
       if (isZeroWidthBoundary) {
         continue;
@@ -347,33 +654,18 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
           return { ok: false, valid: false, safe: false, reason: 'Stacked quantifiers are not allowed.' };
         }
       }
-      const err = applyAtomQuantifier(frame, atomSig, quant);
+      const err = applyAtomQuantifier(frame, esc.set, isWildcardCharSet(esc.set), quant);
       if (err) return err;
       continue;
     }
 
     // Character class `[...]`
     if (ch === '[') {
-      let j = i + 1;
-      let closed = false;
-      while (j < pattern.length) {
-        if (pattern[j] === '\\') {
-          j += 2;
-          continue;
-        }
-        if (pattern[j] === ']') {
-          closed = true;
-          j += 1;
-          break;
-        }
-        j += 1;
+      const parsedClass = parseCharClass(pattern, i);
+      if (parsedClass.error) {
+        return { ok: false, valid: false, safe: false, reason: parsedClass.error };
       }
-      if (!closed) {
-        return { ok: false, valid: false, safe: false, reason: 'Unclosed character class "[".' };
-      }
-      const clsText = pattern.slice(i, j);
-      const atomSig = WILDCARD_CHAR_CLASSES.has(clsText) ? 'WILDCARD' : `cls:${clsText}`;
-      i = j;
+      i = parsedClass.endIndex;
 
       const quant = readQuantifierAt(pattern, i);
       if (quant) {
@@ -382,7 +674,7 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
           return { ok: false, valid: false, safe: false, reason: 'Stacked quantifiers are not allowed.' };
         }
       }
-      const err = applyAtomQuantifier(frame, atomSig, quant);
+      const err = applyAtomQuantifier(frame, parsedClass.set, parsedClass.isWildcard, quant);
       if (err) return err;
       continue;
     }
@@ -423,18 +715,7 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
       } else {
         i += 1;
       }
-      stack.push({
-        hasQuantifier: false,
-        hasUnboundedQuantifier: false,
-        quantifierCount: 0,
-        maxQuantifierSpan: 0,
-        hasAlternation: false,
-        isLookaround,
-        seenMandatoryAtom: false,
-        leadingUnboundedSig: null,
-        prevUnboundedSig: null,
-        wildcardUnboundedCount: 0,
-      });
+      stack.push(makeFrame(isLookaround));
       continue;
     }
 
@@ -446,6 +727,15 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
       const popped = stack.pop()!;
       const parent = stack[stack.length - 1];
       i += 1;
+
+      const poppedLeading = unionCharSets(popped.altLeadingSet, popped.leadingUnboundedSet);
+      const poppedTrailing = unionCharSets(popped.altTrailingSet, popped.trailingUnboundedSet);
+      const poppedAllMandatory = popped.altAllMandatory && popped.seenMandatoryAtom;
+      const poppedGroupSet = popped.groupCharSet ?? cloneCharSet(ALL_CHAR_SET);
+
+      if (!popped.isLookaround && popped.groupCharSet) {
+        parent.groupCharSet = unionCharSets(parent.groupCharSet, popped.groupCharSet);
+      }
 
       const quant = readQuantifierAt(pattern, i);
       if (quant) {
@@ -479,7 +769,18 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
           if (quant.isUnbounded) {
             parent.hasUnboundedQuantifier = true;
             parent.maxQuantifierSpan = Infinity;
-            if (sigsOverlap(parent.prevUnboundedSig, 'GROUP')) {
+            if (isWildcardCharSet(poppedGroupSet)) {
+              parent.wildcardUnboundedCount += 1;
+              if (parent.wildcardUnboundedCount > MAX_UNBOUNDED_WILDCARDS_PER_GROUP) {
+                return {
+                  ok: false,
+                  valid: true,
+                  safe: false,
+                  reason: 'Too many unbounded wildcards in one group can cause polynomial backtracking.',
+                };
+              }
+            }
+            if (charSetsOverlap(parent.trailingUnboundedSet, poppedGroupSet)) {
               return {
                 ok: false,
                 valid: true,
@@ -487,15 +788,20 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
                 reason: 'Adjacent overlapping unbounded quantifiers can cause polynomial backtracking.',
               };
             }
-            if (!parent.seenMandatoryAtom && parent.leadingUnboundedSig === null) {
-              parent.leadingUnboundedSig = 'GROUP';
+            if (!parent.seenMandatoryAtom) {
+              parent.leadingUnboundedSet = unionCharSets(parent.leadingUnboundedSet, poppedGroupSet);
             }
-            parent.prevUnboundedSig = 'GROUP';
+            if (quant.isNullable) {
+              parent.trailingUnboundedSet = unionCharSets(parent.trailingUnboundedSet, poppedGroupSet);
+            } else {
+              parent.seenMandatoryAtom = true;
+              parent.trailingUnboundedSet = cloneCharSet(poppedGroupSet);
+            }
           } else {
             if (quant.span > parent.maxQuantifierSpan) parent.maxQuantifierSpan = quant.span;
-            if (!quant.isNullable) {
+            if (!quant.isNullable && poppedAllMandatory) {
               parent.seenMandatoryAtom = true;
-              parent.prevUnboundedSig = null;
+              parent.trailingUnboundedSet = null;
             }
           }
         } else {
@@ -505,9 +811,24 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
           if (popped.hasUnboundedQuantifier) parent.hasUnboundedQuantifier = true;
           if (quant.span > parent.maxQuantifierSpan) parent.maxQuantifierSpan = quant.span;
           if (popped.maxQuantifierSpan > parent.maxQuantifierSpan) parent.maxQuantifierSpan = popped.maxQuantifierSpan;
-          if (!quant.isNullable && !popped.isLookaround) {
-            parent.seenMandatoryAtom = true;
-            parent.prevUnboundedSig = null;
+          if (!popped.isLookaround) {
+            if (charSetsOverlap(parent.trailingUnboundedSet, poppedLeading)) {
+              return {
+                ok: false,
+                valid: true,
+                safe: false,
+                reason: 'Adjacent overlapping unbounded quantifiers can cause polynomial backtracking.',
+              };
+            }
+            if (!parent.seenMandatoryAtom) {
+              parent.leadingUnboundedSet = unionCharSets(parent.leadingUnboundedSet, poppedLeading);
+            }
+            if (!quant.isNullable && poppedAllMandatory) {
+              parent.seenMandatoryAtom = true;
+              parent.trailingUnboundedSet = poppedTrailing;
+            } else {
+              parent.trailingUnboundedSet = unionCharSets(parent.trailingUnboundedSet, poppedTrailing);
+            }
           }
         }
       } else {
@@ -519,7 +840,7 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
         }
         if (popped.hasAlternation && !popped.isLookaround) parent.hasAlternation = true;
         if (!popped.isLookaround) {
-          if (sigsOverlap(parent.prevUnboundedSig, popped.leadingUnboundedSig)) {
+          if (charSetsOverlap(parent.trailingUnboundedSet, poppedLeading)) {
             return {
               ok: false,
               valid: true,
@@ -527,14 +848,14 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
               reason: 'Adjacent overlapping unbounded quantifiers can cause polynomial backtracking.',
             };
           }
-          if (!parent.seenMandatoryAtom && parent.leadingUnboundedSig === null && popped.leadingUnboundedSig) {
-            parent.leadingUnboundedSig = popped.leadingUnboundedSig;
+          if (!parent.seenMandatoryAtom) {
+            parent.leadingUnboundedSet = unionCharSets(parent.leadingUnboundedSet, poppedLeading);
           }
-          if (popped.seenMandatoryAtom) {
+          if (poppedAllMandatory) {
             parent.seenMandatoryAtom = true;
-            parent.prevUnboundedSig = popped.prevUnboundedSig;
-          } else if (popped.prevUnboundedSig !== null) {
-            parent.prevUnboundedSig = popped.prevUnboundedSig;
+            parent.trailingUnboundedSet = poppedTrailing;
+          } else {
+            parent.trailingUnboundedSet = unionCharSets(parent.trailingUnboundedSet, poppedTrailing);
           }
           parent.wildcardUnboundedCount += popped.wildcardUnboundedCount;
           if (parent.wildcardUnboundedCount > MAX_UNBOUNDED_WILDCARDS_PER_GROUP) {
@@ -553,8 +874,12 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
     // Alternation `|`
     if (ch === '|') {
       frame.hasAlternation = true;
+      frame.altLeadingSet = unionCharSets(frame.altLeadingSet, frame.leadingUnboundedSet);
+      frame.altTrailingSet = unionCharSets(frame.altTrailingSet, frame.trailingUnboundedSet);
+      frame.altAllMandatory = frame.altAllMandatory && frame.seenMandatoryAtom;
       frame.seenMandatoryAtom = false;
-      frame.prevUnboundedSig = null;
+      frame.leadingUnboundedSet = null;
+      frame.trailingUnboundedSet = null;
       frame.wildcardUnboundedCount = 0;
       i += 1;
       continue;
@@ -578,7 +903,14 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
     }
 
     // Regular literal or wildcard `.`
-    const atomSig = ch === '.' ? 'WILDCARD' : `lit:${ch}`;
+    let atomSet: CharSet;
+    const isDot = ch === '.';
+    if (isDot) {
+      atomSet = cloneCharSet(DOT_CHAR_SET);
+    } else {
+      atomSet = createEmptyCharSet();
+      addCharCode(atomSet, ch.charCodeAt(0));
+    }
     i += 1;
 
     const quant = readQuantifierAt(pattern, i);
@@ -588,7 +920,7 @@ export function analyzeRegexPattern(pattern: string): RegexSafetyResult {
         return { ok: false, valid: false, safe: false, reason: 'Stacked quantifiers are not allowed.' };
       }
     }
-    const err = applyAtomQuantifier(frame, atomSig, quant);
+    const err = applyAtomQuantifier(frame, atomSet, isDot, quant);
     if (err) return err;
   }
 

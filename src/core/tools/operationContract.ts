@@ -150,7 +150,7 @@ export const DEFAULT_CANVAS_TOOL_OPTIONS: CanvasToolOptions = {
   brushCap: 'round',
   eraserSize: 24,
   eraserMode: 'slice',
-  eraserTarget: 'selected',
+  eraserTarget: 'all',
   paintBucketColor: '#8B7CF6',
   paintBucketTarget: 'fill',
   paintBucketGapTolerance: 'medium',

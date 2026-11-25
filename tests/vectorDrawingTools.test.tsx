@@ -10,8 +10,10 @@ import {
   applyPaintBucketOperation,
   applyVectorEraserOperation,
   buildVectorBrushPathNode,
+  findTouchedEraserNodeIds,
   stabilizeBrushPolyline,
 } from '../src/core/document/vectorDrawing';
+import { buildSmoothSvgTrailPath } from '../src/engines/canvas/canvasHelpers';
 import {
   DEFAULT_CANVAS_TOOL_OPTIONS,
   extractToolOperationsFromTransition,
@@ -488,6 +490,82 @@ describe('Vector Eraser Tool (Slice/Cut, Object Erase, Target Scoping, Atomic Un
     );
     expect(objectEraseAll.removeIds).toEqual(['open-1']);
     expect(objectEraseAll.insertNodes).toHaveLength(0);
+  });
+
+  it('produces smooth Bezier curved cuts on flowing sweeps, round holes on single clicks, and handles self-overlapping scribbles cleanly', () => {
+    const rect = makeRect('rect-curve', 100, 100, 260, 200, {
+      style: { fill: '#6366F1', stroke: '#FFFFFF', strokeWidth: 2, radius: 0 },
+    });
+
+    // 1. Flowing curved sweep slicing cleanly across the rectangle
+    const curveTrail = Array.from({ length: 18 }, (_, i) => {
+      const t = i / 17;
+      return {
+        x: 230 + Math.sin(t * Math.PI) * 38,
+        y: 70 + t * 260,
+      };
+    });
+    const curvedCut = applyVectorEraserOperation(
+      [rect],
+      [],
+      curveTrail,
+      { size: 24, mode: 'slice', target: 'all' },
+      () => nextId('curve-cut'),
+    );
+    expect(curvedCut.removeIds).toEqual(['rect-curve']);
+    expect(curvedCut.insertNodes.length).toBeGreaterThanOrEqual(2);
+    const curvedPaths = curvedCut.insertNodes as PathNode[];
+    // Must contain smooth Bezier anchors along the carved curve while preserving sharp rectangle corners
+    const allAnchors = curvedPaths.flatMap((p) => p.points);
+    expect(allAnchors.some((a) => a.pointType === 'smooth' && (a.handleIn || a.handleOut))).toBe(true);
+    expect(allAnchors.some((a) => a.pointType === 'corner')).toBe(true);
+
+    // 2. Single-click circular dab inside rectangle carves a smooth round compound hole
+    const dabResult = applyVectorEraserOperation(
+      [rect],
+      [],
+      [{ x: 230, y: 200 }],
+      { size: 40, mode: 'slice', target: 'all' },
+      () => nextId('dab-cut'),
+    );
+    expect(dabResult.removeIds).toEqual(['rect-curve']);
+    expect(dabResult.insertNodes).toHaveLength(1);
+    const punched = dabResult.insertNodes[0] as PathNode;
+    expect(punched.closed).toBe(true);
+    expect(punched.subpaths && punched.subpaths.length).toBe(1);
+    expect(punched.style.fillRule).toBe('evenodd');
+
+    // 3. Self-overlapping figure-8 scribble falls back cleanly without breaking geometry
+    const scribbleTrail = [
+      { x: 180, y: 160 },
+      { x: 260, y: 230 },
+      { x: 260, y: 160 },
+      { x: 180, y: 230 },
+      { x: 210, y: 195 },
+    ];
+    const scribbleResult = applyVectorEraserOperation(
+      [rect],
+      [],
+      scribbleTrail,
+      { size: 26, mode: 'slice', target: 'all' },
+      () => nextId('scribble-cut'),
+    );
+    expect(scribbleResult.removeIds).toEqual(['rect-curve']);
+    expect(scribbleResult.insertNodes.length).toBeGreaterThanOrEqual(1);
+
+    // 4. Live Object Erase preview hit-test helper & smooth SVG trail path builder
+    const otherRect = makeRect('rect-far', 600, 600, 80, 80);
+    const touched = findTouchedEraserNodeIds(
+      [rect, otherRect],
+      [],
+      [{ x: 150, y: 150 }, { x: 190, y: 170 }],
+      { size: 24, target: 'all' },
+    );
+    expect(touched).toEqual(['rect-curve']);
+
+    expect(buildSmoothSvgTrailPath([{ x: 10, y: 20 }])).toContain('M 10 20');
+    expect(buildSmoothSvgTrailPath([{ x: 10, y: 20 }, { x: 30, y: 40 }])).toBe('M 10 20 L 30 40');
+    expect(buildSmoothSvgTrailPath([{ x: 10, y: 20 }, { x: 20, y: 35 }, { x: 40, y: 25 }])).toContain('Q 20 35');
   });
 });
 

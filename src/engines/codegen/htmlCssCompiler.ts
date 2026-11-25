@@ -108,6 +108,12 @@ export function resolveTokenCssVar(
   return `var(${toCssVariableName(token.name)})`;
 }
 
+const VOID_HTML_TAGS = new Set<SemanticHtmlTag>(['img', 'input']);
+
+export function isVoidHtmlTag(tag: SemanticHtmlTag): boolean {
+  return VOID_HTML_TAGS.has(tag);
+}
+
 export function resolveSemanticTag(node: DesignNode): SemanticHtmlTag {
   if (node.semanticTag) return node.semanticTag;
   if (node.type === 'image') return 'img';
@@ -1146,7 +1152,17 @@ export function compilePageHtmlCss(
     const startLine = htmlLineOffset + htmlBodyLines.length + 1;
 
     if (node.type === 'text') {
-      htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}>${escapeHtml(node.text)}</${tag}>`);
+      if (tag === 'input') {
+        htmlBodyLines.push(
+          `${indent}<input ${attrs.join(' ')} type="text" value="${escapeAttr(node.text)}" readonly />`,
+        );
+      } else if (tag === 'img') {
+        htmlBodyLines.push(
+          `${indent}<img ${attrs.join(' ')} src="" alt="${escapeAttr(node.text || node.ariaLabel || node.name)}" />`,
+        );
+      } else {
+        htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}>${escapeHtml(node.text)}</${tag}>`);
+      }
     } else if (node.type === 'image') {
       const asset = assetsById.get(node.assetId);
       const src = asset
@@ -1161,10 +1177,12 @@ export function compilePageHtmlCss(
         `${indent}<img ${attrs.join(' ')} src="${escapeAttr(src)}" alt="${escapeAttr(alt)}" />`,
       );
     } else if (node.type === 'path') {
-      htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
+      const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+      htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
       htmlBodyLines.push(...buildInlineSvgMarkup(node, tokens, `${indent}  `));
-      htmlBodyLines.push(`${indent}</${tag}>`);
+      htmlBodyLines.push(`${indent}</${wrapperTag}>`);
     } else if (node.type === 'component-instance') {
+      const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
       const master = componentsById.get(node.componentId);
       if (master && !visitedComponentIds.has(master.id) && componentDepth < MAX_COMPONENT_RENDER_DEPTH) {
         const nextVisited = new Set(visitedComponentIds);
@@ -1177,7 +1195,7 @@ export function compilePageHtmlCss(
         const scaleY = node.height / masterH;
         const needsScale = Math.abs(scaleX - 1) > 0.001 || Math.abs(scaleY - 1) > 0.001;
         const childPrefix = `${emittedId}__`;
-        htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
+        htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
         if (needsScale) {
           const innerClass = `${className}__inner`;
           pushCssRule(cssLines, `.${innerClass}`, [
@@ -1221,17 +1239,26 @@ export function compilePageHtmlCss(
             );
           }
         }
-        htmlBodyLines.push(`${indent}</${tag}>`);
+        htmlBodyLines.push(`${indent}</${wrapperTag}>`);
       } else {
-        htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}></${tag}>`);
+        htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}></${wrapperTag}>`);
       }
     } else {
       const children = activeChildrenByParent.get(node.id) ?? [];
       const selfIsAutoLayout = Boolean(node.layout && node.layout.mode !== 'none');
       if (children.length === 0) {
-        htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}></${tag}>`);
+        if (tag === 'input') {
+          htmlBodyLines.push(`${indent}<input ${attrs.join(' ')} type="text" />`);
+        } else if (tag === 'img') {
+          htmlBodyLines.push(
+            `${indent}<img ${attrs.join(' ')} src="" alt="${escapeAttr(node.ariaLabel ?? node.name)}" />`,
+          );
+        } else {
+          htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}></${tag}>`);
+        }
       } else {
-        htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
+        const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+        htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
         const nextOrigin = { x: node.x, y: node.y };
         for (const child of children) {
           emitNodeHtml(
@@ -1248,7 +1275,7 @@ export function compilePageHtmlCss(
             componentDepth,
           );
         }
-        htmlBodyLines.push(`${indent}</${tag}>`);
+        htmlBodyLines.push(`${indent}</${wrapperTag}>`);
       }
     }
 

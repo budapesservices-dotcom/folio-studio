@@ -60,7 +60,13 @@ const textDecoder = new TextDecoder();
  * Uses a deterministic fixed DOS timestamp (2026-01-01 00:00:00) so identical project
  * inputs produce byte-for-byte reproducible archives.
  */
+export const MAX_ZIP_ENTRIES = 10_000;
+export const MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 128 * 1024 * 1024;
+
 export function buildZipArchive(entries: readonly ZipArchiveEntry[]): Uint8Array {
+  if (entries.length > 0xffff) {
+    throw new Error(`ZIP archive entry count (${entries.length}) exceeds standard PKZIP limit (65535).`);
+  }
   const seenPaths = new Set<string>();
   const prepared: Array<{
     pathBytes: Uint8Array;
@@ -94,6 +100,10 @@ export function buildZipArchive(entries: readonly ZipArchiveEntry[]): Uint8Array
 
     localSectionSize += 30 + pathBytes.length + dataBytes.length;
     centralSectionSize += 46 + pathBytes.length;
+  }
+
+  if (localSectionSize > 0xffffffff || centralSectionSize > 0xffffffff) {
+    throw new Error('ZIP archive exceeds standard 32-bit PKZIP size limit.');
   }
 
   const totalSize = localSectionSize + centralSectionSize + 22;
@@ -175,6 +185,9 @@ export function parseZipArchive(bytes: Uint8Array): ParsedZipEntry[] {
   }
 
   const totalEntries = view.getUint16(eocdOffset + 10, true);
+  if (totalEntries > MAX_ZIP_ENTRIES) {
+    throw new Error(`Invalid ZIP archive: entry count (${totalEntries}) exceeds safety limit (${MAX_ZIP_ENTRIES}).`);
+  }
   const centralSize = view.getUint32(eocdOffset + 12, true);
   const centralOffset = view.getUint32(eocdOffset + 16, true);
   const centralEnd = centralOffset + centralSize;
@@ -190,6 +203,14 @@ export function parseZipArchive(bytes: Uint8Array): ParsedZipEntry[] {
 
   const results: ParsedZipEntry[] = [];
   const seenPaths = new Set<string>();
+  const validatedEntries: Array<{
+    path: string;
+    localOffset: number;
+    dataStart: number;
+    dataEnd: number;
+    expectedCrc: number;
+  }> = [];
+  let totalExtractedBytes = 0;
 
   let cursor = centralOffset;
   for (let i = 0; i < totalEntries; i += 1) {
@@ -208,6 +229,12 @@ export function parseZipArchive(bytes: Uint8Array): ParsedZipEntry[] {
     const uncompressedSize = view.getUint32(cursor + 24, true);
     if (compressedSize !== uncompressedSize) {
       throw new Error('Invalid ZIP archive: Store-mode entry size mismatch.');
+    }
+    totalExtractedBytes += uncompressedSize;
+    if (totalExtractedBytes > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES) {
+      throw new Error(
+        `Invalid ZIP archive: total extracted size exceeds safety limit (${MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES} bytes).`,
+      );
     }
     const nameLen = view.getUint16(cursor + 28, true);
     const extraLen = view.getUint16(cursor + 30, true);
@@ -240,13 +267,27 @@ export function parseZipArchive(bytes: Uint8Array): ParsedZipEntry[] {
     if (dataStart > centralOffset || dataEnd > centralOffset || dataEnd < dataStart) {
       throw new Error(`Invalid ZIP archive: payload out of bounds for "${path}".`);
     }
+    validatedEntries.push({ path, localOffset, dataStart, dataEnd, expectedCrc });
+  }
 
-    const data = bytes.slice(dataStart, dataEnd);
-    const actualCrc = computeCrc32(data);
-    if (actualCrc !== expectedCrc) {
-      throw new Error(`CRC-32 mismatch for archive entry "${path}".`);
+  const sortedRanges = validatedEntries
+    .map((entry) => ({ start: entry.localOffset, end: entry.dataEnd, path: entry.path }))
+    .sort((a, b) => a.start - b.start);
+  for (let i = 1; i < sortedRanges.length; i += 1) {
+    if (sortedRanges[i].start < sortedRanges[i - 1].end) {
+      throw new Error(
+        `Invalid ZIP archive: overlapping entry payload ranges between "${sortedRanges[i - 1].path}" and "${sortedRanges[i].path}".`,
+      );
     }
-    results.push({ path, data, crc32: actualCrc });
+  }
+
+  for (const entry of validatedEntries) {
+    const data = bytes.slice(entry.dataStart, entry.dataEnd);
+    const actualCrc = computeCrc32(data);
+    if (actualCrc !== entry.expectedCrc) {
+      throw new Error(`CRC-32 mismatch for archive entry "${entry.path}".`);
+    }
+    results.push({ path: entry.path, data, crc32: actualCrc });
   }
 
   return results;

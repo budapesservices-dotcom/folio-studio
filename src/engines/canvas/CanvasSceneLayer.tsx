@@ -6,6 +6,14 @@ import type {
   DesignTokenCollection,
 } from '../../core/document/types';
 import { DocumentMaskDefs, MaskedNodeArtwork } from './artwork';
+import { buildSmoothSvgTrailPath } from './canvasHelpers';
+
+export interface LiveEraserPreview {
+  readonly points: ReadonlyArray<{ x: number; y: number }>;
+  readonly size: number;
+  readonly mode: 'slice' | 'object';
+  readonly targetNodeIds: ReadonlySet<string>;
+}
 
 export interface CanvasSceneLayerProps {
   readonly width: number;
@@ -25,6 +33,8 @@ export interface CanvasSceneLayerProps {
   readonly tokens?: DesignTokenCollection;
   /** Node IDs currently isolated onto the active drag overlay layer (skipped here without mutating scene arrays). */
   readonly hiddenNodeIds?: ReadonlySet<string> | null;
+  /** Live real-time SVG eraser cutout mask (Slice mode) or fade-out preview (Object mode) while dragging. */
+  readonly liveEraserPreview?: LiveEraserPreview | null;
   /** Monotonic revision from assetStore so async IndexedDB hydration invalidates React.memo cleanly. */
   readonly assetCacheRevision?: number;
 }
@@ -52,14 +62,56 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
   assetById,
   tokens,
   hiddenNodeIds,
+  liveEraserPreview,
 }: CanvasSceneLayerProps) {
   const artboardClipId = `${maskPrefix}--artboard-clip`;
+  const liveEraserMaskId = `${maskPrefix}--live-eraser-mask`;
+  const hasLiveSliceMask = Boolean(
+    liveEraserPreview &&
+      liveEraserPreview.mode === 'slice' &&
+      liveEraserPreview.points.length > 0 &&
+      liveEraserPreview.targetNodeIds.size > 0,
+  );
+  const liveEraserTrailD = hasLiveSliceMask && liveEraserPreview
+    ? buildSmoothSvgTrailPath(liveEraserPreview.points)
+    : '';
+  const liveEraserRadius = liveEraserPreview ? Math.max(2, liveEraserPreview.size / 2) : 12;
+
   return (
     <>
       <defs>
         <clipPath id={artboardClipId}>
           <rect x="0" y="0" width={width} height={height} />
         </clipPath>
+        {hasLiveSliceMask && liveEraserPreview && (
+          <mask
+            id={liveEraserMaskId}
+            maskUnits="userSpaceOnUse"
+            x="0"
+            y="0"
+            width={width}
+            height={height}
+          >
+            <rect x="0" y="0" width={width} height={height} fill="#ffffff" />
+            {liveEraserPreview.points.length === 1 ? (
+              <circle
+                cx={liveEraserPreview.points[0].x}
+                cy={liveEraserPreview.points[0].y}
+                r={liveEraserRadius}
+                fill="#000000"
+              />
+            ) : (
+              <path
+                d={liveEraserTrailD}
+                fill="none"
+                stroke="#000000"
+                stroke-width={Math.max(4, liveEraserPreview.size)}
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            )}
+          </mask>
+        )}
         <DocumentMaskDefs
           nodes={canvasNodes as DesignNode[]}
           width={width}
@@ -76,8 +128,10 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
       </defs>
       <rect x="0" y="0" width={width} height={height} fill={background} />
       <g clip-path={`url(#${artboardClipId})`}>
-        {renderNodes.map((node) => (
-          inlineEditNodeId === node.id || hiddenNodeIds?.has(node.id) ? null : (
+        {renderNodes.map((node) => {
+          if (inlineEditNodeId === node.id || hiddenNodeIds?.has(node.id)) return null;
+          const isEraserTarget = Boolean(liveEraserPreview?.targetNodeIds.has(node.id));
+          const artwork = (
             <MaskedNodeArtwork
               key={node.id}
               node={node}
@@ -91,8 +145,23 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
               assetById={assetById}
               tokens={tokens}
             />
-          )
-        ))}
+          );
+          if (hasLiveSliceMask && isEraserTarget) {
+            return (
+              <g key={node.id} mask={`url(#${liveEraserMaskId})`}>
+                {artwork}
+              </g>
+            );
+          }
+          if (liveEraserPreview?.mode === 'object' && isEraserTarget) {
+            return (
+              <g key={node.id} opacity={0.18}>
+                {artwork}
+              </g>
+            );
+          }
+          return artwork;
+        })}
       </g>
     </>
   );

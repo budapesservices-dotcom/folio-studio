@@ -221,6 +221,7 @@ export const vectorEraserTool: CanvasToolHandler = {
         mode: 'eraser',
         pointerId: event.pointerId,
         points: [startPt],
+        rawPoints: [startPt],
       },
       capturePointer: true,
       preventDefault: true,
@@ -231,14 +232,26 @@ export const vectorEraserTool: CanvasToolHandler = {
     if (!session || session.kind !== 'freehand' || session.mode !== 'eraser' || session.pointerId !== event.pointerId) {
       return {};
     }
-    const last = session.points[session.points.length - 1];
-    if (last && Math.hypot(event.point.x - last.x, event.point.y - last.y) < 1.5) {
+    const rawList = session.rawPoints ?? session.points;
+    const lastRaw = rawList[rawList.length - 1];
+    if (lastRaw && Math.hypot(event.point.x - lastRaw.x, event.point.y - lastRaw.y) < 0.85) {
       return { preventDefault: true };
     }
+    const nextRaw = [...rawList, { x: event.point.x, y: event.point.y }];
+
+    // Light exponential smoothing keeps the live eraser silky-smooth without lagging behind cursor
+    const prevSmooth = session.points[session.points.length - 1] ?? event.point;
+    const blend = 0.68;
+    const nextSmooth = {
+      x: prevSmooth.x + (event.point.x - prevSmooth.x) * blend,
+      y: prevSmooth.y + (event.point.y - prevSmooth.y) * blend,
+    };
+
     return {
       session: {
         ...session,
-        points: [...session.points, { x: event.point.x, y: event.point.y }],
+        points: [...session.points, nextSmooth],
+        rawPoints: nextRaw,
       },
       preventDefault: true,
     };
@@ -249,7 +262,7 @@ export const vectorEraserTool: CanvasToolHandler = {
       return {};
     }
     const opts = context.toolOptions ?? DEFAULT_CANVAS_TOOL_OPTIONS;
-    const trail = [...session.points, { x: event.point.x, y: event.point.y }];
+    const trail = [...(session.rawPoints ?? session.points), { x: event.point.x, y: event.point.y }];
 
     if (opts.eraserTarget === 'selected' && context.selectedNodeIds.length === 0) {
       return {
@@ -298,12 +311,26 @@ export const vectorEraserTool: CanvasToolHandler = {
         ? `Erased ${result.removeIds.length} vector layer${result.removeIds.length === 1 ? '' : 's'} completely.`
         : `Sliced ${result.removeIds.length} layer${result.removeIds.length === 1 ? '' : 's'} into ${result.insertNodes.length} vector path${result.insertNodes.length === 1 ? '' : 's'}.`;
 
+    // Keep carved pieces selected when erasing selected layers so consecutive strokes continue seamlessly;
+    // when erasing across all layers with nothing selected, avoid popping jarring selection boxes.
+    const removedSet = new Set(result.removeIds);
+    const hadSelectedTarget = context.selectedNodeIds.some((id) => removedSet.has(id));
+    const nextSelection =
+      opts.eraserTarget === 'selected'
+        ? result.insertNodes.map((n) => n.id)
+        : hadSelectedTarget
+          ? [
+              ...context.selectedNodeIds.filter((id) => !removedSet.has(id)),
+              ...result.insertNodes.map((n) => n.id),
+            ]
+          : context.selectedNodeIds.filter((id) => !removedSet.has(id));
+
     return {
       replaceNodes: {
         removeIds: result.removeIds,
         insertNodes: result.insertNodes,
       },
-      selection: result.insertNodes.map((n) => n.id),
+      selection: nextSelection,
       session: null,
       notice,
       preventDefault: true,
@@ -329,6 +356,8 @@ export const vectorEraserTool: CanvasToolHandler = {
       mode: 'eraser',
       points: session.points,
       strokeWidth: Math.max(4, opts.eraserSize),
+      strokeColor: opts.eraserMode === 'object' ? 'rgba(244, 63, 94, 0.28)' : 'rgba(244, 63, 94, 0.14)',
+      strokeLinecap: 'round',
     };
   },
   cursorStyle() {

@@ -20,6 +20,7 @@ import {
   buildNodeCssDeclarations,
   buildNodePseudoStateCssRules,
   buildVectorMaskDefsLines,
+  isVoidHtmlTag,
   resolveSemanticTag,
   resolveTokenCssVar,
   roundCss,
@@ -653,7 +654,7 @@ function buildComponentFiles(
       attrs.push(`onPointerMove={onLogicEvent ? (ev) => onLogicEvent("drag-move", ${scopedIdExpr}, { x: ev.clientX ?? 0, y: ev.clientY ?? 0 }) : undefined}`);
       attrs.push(`onPointerUp={onLogicEvent ? (ev) => onLogicEvent("drag-drop", ${scopedIdExpr}, { x: ev.clientX ?? 0, y: ev.clientY ?? 0 }) : undefined}`);
       attrs.push(`aria-disabled={${dynOvExpr}?.disabled ? "true" : undefined}`);
-      if (tag === 'button') {
+      if (tag === 'button' || tag === 'input') {
         attrs.push(`disabled={Boolean(${dynOvExpr}?.disabled)}`);
       }
     }
@@ -781,23 +782,47 @@ function buildComponentFiles(
       const contentExpr = supportsScopedLogic
         ? `${dynOvExpr}?.text ?? (${baseContentExpr})`
         : baseContentExpr;
-      lines.push(`${indent}<${tag} ${attrs.join(' ')}>{${contentExpr}}</${tag}>`);
+      if (tag === 'input') {
+        lines.push(`${indent}<input ${attrs.join(' ')} type="text" defaultValue={${contentExpr}} />`);
+      } else if (tag === 'img') {
+        lines.push(`${indent}<img ${attrs.join(' ')} src="" alt={${contentExpr}} />`);
+      } else {
+        lines.push(`${indent}<${tag} ${attrs.join(' ')}>{${contentExpr}}</${tag}>`);
+      }
     } else if (node.type === 'path') {
-      lines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
+      const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+      lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
       lines.push(...buildInlineJsxSvgLines(node, tokens, `${indent}  `, effectiveFillExpr));
-      lines.push(`${indent}</${tag}>`);
+      lines.push(`${indent}</${wrapperTag}>`);
     } else {
       const children = childrenByParent.get(node.id) ?? [];
       if (slot && children.length === 0) {
-        lines.push(`${indent}<${tag} ${attrs.join(' ')}>{${slot.contentProp}}</${tag}>`);
+        if (tag === 'input') {
+          lines.push(
+            `${indent}<input ${attrs.join(' ')} type="text" defaultValue={typeof ${slot.contentProp} === "string" || typeof ${slot.contentProp} === "number" ? String(${slot.contentProp}) : ""} />`,
+          );
+        } else if (tag === 'img') {
+          lines.push(
+            `${indent}<img ${attrs.join(' ')} src="" alt={typeof ${slot.contentProp} === "string" ? ${slot.contentProp} : ${escapeTsString(node.ariaLabel ?? node.name)}} />`,
+          );
+        } else {
+          lines.push(`${indent}<${tag} ${attrs.join(' ')}>{${slot.contentProp}}</${tag}>`);
+        }
       } else if (children.length === 0) {
-        lines.push(`${indent}<${tag} ${attrs.join(' ')} />`);
+        if (tag === 'input') {
+          lines.push(`${indent}<input ${attrs.join(' ')} type="text" />`);
+        } else if (tag === 'img') {
+          lines.push(`${indent}<img ${attrs.join(' ')} src="" alt=${escapeTsString(node.ariaLabel ?? node.name)} />`);
+        } else {
+          lines.push(`${indent}<${tag} ${attrs.join(' ')} />`);
+        }
       } else {
-        lines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
+        const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+        lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
         for (const child of children) {
           emitMasterJsx(child, depth + 1);
         }
-        lines.push(`${indent}</${tag}>`);
+        lines.push(`${indent}</${wrapperTag}>`);
       }
     }
 
@@ -1086,7 +1111,7 @@ function buildPageReactFile(
     }
     attrs.push(...logicPlan.getNodeEventAttrs(node.id));
     if (logicPlan.hasDynamicDisabled(node.id)) {
-      if (tag === 'button') {
+      if (tag === 'button' || tag === 'input') {
         attrs.push(`disabled={Boolean(logicOverrides[${escapeTsString(node.id)}]?.disabled)}`);
       }
       attrs.push(`aria-disabled={logicOverrides[${escapeTsString(node.id)}]?.disabled ? "true" : undefined}`);
@@ -1137,10 +1162,22 @@ function buildPageReactFile(
     }
 
     if (node.type === 'text') {
-      const textBody = logicPlan.hasDynamicText(node.id)
-        ? `{logicOverrides[${escapeTsString(node.id)}]?.text ?? ${escapeTsString(node.text)}}`
-        : escapeJsxText(node.text);
-      lines.push(`${indent}<${tag} ${attrs.join(' ')}>${textBody}</${tag}>`);
+      if (tag === 'input') {
+        const valueProp = logicPlan.hasDynamicText(node.id)
+          ? `defaultValue={logicOverrides[${escapeTsString(node.id)}]?.text ?? ${escapeTsString(node.text)}}`
+          : `defaultValue=${escapeTsString(node.text)}`;
+        lines.push(`${indent}<input ${attrs.join(' ')} type="text" ${valueProp} />`);
+      } else if (tag === 'img') {
+        const altProp = logicPlan.hasDynamicText(node.id)
+          ? `alt={logicOverrides[${escapeTsString(node.id)}]?.text ?? ${escapeTsString(node.text || node.ariaLabel || node.name)}}`
+          : `alt=${escapeTsString(node.text || node.ariaLabel || node.name)}`;
+        lines.push(`${indent}<img ${attrs.join(' ')} src="" ${altProp} />`);
+      } else {
+        const textBody = logicPlan.hasDynamicText(node.id)
+          ? `{logicOverrides[${escapeTsString(node.id)}]?.text ?? ${escapeTsString(node.text)}}`
+          : escapeJsxText(node.text);
+        lines.push(`${indent}<${tag} ${attrs.join(' ')}>${textBody}</${tag}>`);
+      }
     } else if (node.type === 'image') {
       const asset = assetsById.get(node.assetId);
       const src = asset ? `/${getAssetBundlePath(asset)}` : '';
@@ -1150,22 +1187,30 @@ function buildPageReactFile(
         : `src=${escapeTsString(src)}`;
       lines.push(`${indent}<img ${attrs.join(' ')} ${srcAttr} alt=${escapeTsString(alt)} />`);
     } else if (node.type === 'path') {
+      const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
       const dynamicPathFill = logicPlan.hasDynamicFill(node.id)
         ? `logicOverrides[${escapeTsString(node.id)}]?.fill`
         : undefined;
-      lines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
+      lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
       lines.push(...buildInlineJsxSvgLines(node, tokens, `${indent}  `, dynamicPathFill));
-      lines.push(`${indent}</${tag}>`);
+      lines.push(`${indent}</${wrapperTag}>`);
     } else {
       const children = childrenByParent.get(node.id) ?? [];
       if (children.length === 0) {
-        lines.push(`${indent}<${tag} ${attrs.join(' ')} />`);
+        if (tag === 'input') {
+          lines.push(`${indent}<input ${attrs.join(' ')} type="text" />`);
+        } else if (tag === 'img') {
+          lines.push(`${indent}<img ${attrs.join(' ')} src="" alt=${escapeTsString(node.ariaLabel ?? node.name)} />`);
+        } else {
+          lines.push(`${indent}<${tag} ${attrs.join(' ')} />`);
+        }
       } else {
-        lines.push(`${indent}<${tag} ${attrs.join(' ')}>`);
+        const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+        lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
         for (const child of children) {
           emitJsx(child, depth + 1);
         }
-        lines.push(`${indent}</${tag}>`);
+        lines.push(`${indent}</${wrapperTag}>`);
       }
     }
 

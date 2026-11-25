@@ -37,7 +37,7 @@ import {
 import { hitTestNodesAtPoint } from './hitTest';
 import { CanvasInteractiveOverlays, type HoveredAutoLayoutHandle } from './CanvasOverlays';
 import { isAutoLayoutContainer } from './autoLayoutHandles';
-import { CanvasSceneLayer } from './CanvasSceneLayer';
+import { CanvasSceneLayer, type LiveEraserPreview } from './CanvasSceneLayer';
 import {
   GPU_HYBRID_AUTO_THRESHOLD,
   type GpuSceneMetrics,
@@ -55,7 +55,7 @@ import {
 } from './geometryEngine';
 import { getStudioTool } from './tools/studioRegistry';
 import { extractSampledColor } from './tools/utility-tools';
-import { preloadVectorDrawingEngine } from './tools/vectorDrawingLoader';
+import { getLoadedVectorDrawingEngine, preloadVectorDrawingEngine } from './tools/vectorDrawingLoader';
 import {
   DEFAULT_CANVAS_TOOL_OPTIONS,
   type CanvasToolContext,
@@ -212,6 +212,13 @@ export function Canvas({
     svg: SVGSVGElement;
     pointerId: number;
   } | null>(null);
+  // Queue all coalesced pointer samples during active freehand strokes (Eraser, Brush, Pencil, Smooth)
+  // so fast curves never drop intermediate points between animation frames.
+  const pendingFreehandQueueRef = useRef<Array<{
+    input: CanvasToolPointerInput;
+    svg: SVGSVGElement;
+    pointerId: number;
+  }>>([]);
   const latestPanRef = useRef(pan);
   latestPanRef.current = pan;
   const emitViewportUpdateRef = useRef<(update: { pan?: { x: number; y: number }; zoom?: number }) => void>(() => {});
@@ -233,6 +240,7 @@ export function Canvas({
     pendingWheelDeltaRef.current = { dx: 0, dy: 0 };
     pointerMoveRafRef.current = null;
     pendingPointerMoveRef.current = null;
+    pendingFreehandQueueRef.current = [];
   };
 
   useEffect(() => () => cancelPendingMotionFrames(), []);
@@ -1088,6 +1096,10 @@ export function Canvas({
 
   const createPointerInput = (event: JSX.TargetedPointerEvent<SVGSVGElement>): CanvasToolPointerInput => {
     const raw = buildCanvasPointerInput(event, scrollAreaRef.current);
+    // Freehand drawing/erasing doesn't need expensive per-move shape hit-testing while dragging
+    if (toolSessionRef.current?.kind === 'freehand') {
+      return raw;
+    }
     if (
       raw.resizeHandle === null &&
       !raw.rotateHandle &&
@@ -1177,6 +1189,9 @@ export function Canvas({
     if ((event.target as Element)?.closest('.canvas-inline-text-editor')) return;
     if (inlineTextEdit) commitInlineText();
     const input = createPointerInput(event);
+    if (needsHoverTracking) {
+      setHoverPoint(input.point);
+    }
     const transition = activeTool.onPointerDown(input, createToolContext());
     if (transition.session) {
       lastActivePointerInputRef.current = input;
@@ -1202,10 +1217,13 @@ export function Canvas({
   };
   processPointerMoveRef.current = processPointerMove;
 
-  const flushPendingPointerMove = () => {
-    if (pointerMoveRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
-      cancelAnimationFrame(pointerMoveRafRef.current);
-      pointerMoveRafRef.current = null;
+  const drainPendingPointerMoves = () => {
+    const freehandQueue = pendingFreehandQueueRef.current;
+    if (freehandQueue.length > 0) {
+      pendingFreehandQueueRef.current = [];
+      for (const item of freehandQueue) {
+        processPointerMoveRef.current(item.input, item.svg, item.pointerId);
+      }
     }
     const queued = pendingPointerMoveRef.current;
     pendingPointerMoveRef.current = null;
@@ -1214,26 +1232,60 @@ export function Canvas({
     }
   };
 
+  const flushPendingPointerMove = () => {
+    if (pointerMoveRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(pointerMoveRafRef.current);
+      pointerMoveRafRef.current = null;
+    }
+    drainPendingPointerMoves();
+  };
+
   const handlePointerMove = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
-    const input = createPointerInput(event);
     const svg = event.currentTarget;
     const pointerId = event.pointerId;
+    const isFreehandActive = toolSessionRef.current?.kind === 'freehand';
     if (toolSessionRef.current) {
       event.preventDefault();
     }
-    if (typeof requestAnimationFrame !== 'function') {
-      processPointerMove(input, svg, pointerId);
-      return;
+
+    if (isFreehandActive) {
+      const baseInput = createPointerInput(event);
+      const coalesced =
+        typeof (event as unknown as PointerEvent).getCoalescedEvents === 'function'
+          ? (event as unknown as PointerEvent).getCoalescedEvents()
+          : [];
+      const samples: CanvasToolPointerInput[] =
+        coalesced && coalesced.length > 1
+          ? coalesced.map((ce) => ({
+              ...baseInput,
+              point: toCanvasPoint(svg, ce.clientX, ce.clientY),
+              clientX: ce.clientX,
+              clientY: ce.clientY,
+            }))
+          : [baseInput];
+
+      if (typeof requestAnimationFrame !== 'function') {
+        for (const sample of samples) {
+          processPointerMove(sample, svg, pointerId);
+        }
+        return;
+      }
+      for (const sample of samples) {
+        pendingFreehandQueueRef.current.push({ input: sample, svg, pointerId });
+      }
+    } else {
+      const input = createPointerInput(event);
+      if (typeof requestAnimationFrame !== 'function') {
+        processPointerMove(input, svg, pointerId);
+        return;
+      }
+      pendingPointerMoveRef.current = { input, svg, pointerId };
     }
-    pendingPointerMoveRef.current = { input, svg, pointerId };
+
     if (pointerMoveRafRef.current !== null) return;
     pointerMoveRafRef.current = requestAnimationFrame(() => {
       pointerMoveRafRef.current = null;
-      const queued = pendingPointerMoveRef.current;
-      pendingPointerMoveRef.current = null;
-      if (queued) {
-        processPointerMoveRef.current(queued.input, queued.svg, queued.pointerId);
-      }
+      drainPendingPointerMoves();
     });
   };
 
@@ -1243,6 +1295,7 @@ export function Canvas({
       pointerMoveRafRef.current = null;
     }
     pendingPointerMoveRef.current = null;
+    pendingFreehandQueueRef.current = [];
     lastPointerRef.current = { point: null, nodeId: null };
     setHoverPoint((prev) => (prev === null ? prev : null));
     setHoverNodeId((prev) => (prev === null ? prev : null));
@@ -1265,6 +1318,7 @@ export function Canvas({
       pointerMoveRafRef.current = null;
     }
     pendingPointerMoveRef.current = null;
+    pendingFreehandQueueRef.current = [];
     const input = createPointerInput(event);
     const transition = activeTool.onPointerCancel(input, createToolContext());
     applyToolTransition(transition, event.currentTarget, event.pointerId, event);
@@ -1368,12 +1422,73 @@ export function Canvas({
 
   const renderToolContext = createToolContext();
   const toolCursor = activeTool.cursorStyle(renderToolContext);
-  const toolOverlay = activeTool.renderOverlay(renderToolContext);
+  const effectiveCursor = toolId === 'eraser' && hoverPoint ? 'none' : toolCursor;
+  const rawToolOverlay = activeTool.renderOverlay(renderToolContext);
+  const isActiveEraserDrag = toolId === 'eraser' && toolSession?.kind === 'freehand' && toolSession.mode === 'eraser';
   const showVectorAnchors = VECTOR_OVERLAY_TOOLS.has(toolId) && selectedPathNodes.length > 0;
   const vectorAnchorsInteractive = toolId === 'direct-selection' || toolId === 'anchor-point';
   const showSelectionBox = Boolean(selectionBounds) &&
     toolId !== 'shape-builder' &&
+    !isActiveEraserDrag &&
     !(toolId === 'direct-selection' && selectedPathNodes.length === selectedNodes.length && selectedPathNodes.length > 0);
+
+  // Live 60fps real-time eraser preview: SVG cutout mask in Slice mode, live dimming in Object mode
+  const liveEraserPreview: LiveEraserPreview | null = useMemo(() => {
+    if (!isActiveEraserDrag || toolSession?.kind !== 'freehand' || toolSession.points.length === 0) {
+      return null;
+    }
+    const mode = toolOptions.eraserMode;
+    const target = toolOptions.eraserTarget;
+    const size = Math.max(4, toolOptions.eraserSize);
+
+    if (mode === 'object') {
+      const engine = getLoadedVectorDrawingEngine();
+      const touchedIds = engine
+        ? engine.findTouchedEraserNodeIds(selectableNodes, selectedNodeIds, toolSession.points, { size, target })
+        : [];
+      return {
+        points: toolSession.points,
+        size,
+        mode: 'object',
+        targetNodeIds: new Set(touchedIds),
+      };
+    }
+
+    const selectedSet = new Set(selectedNodeIds);
+    const sliceableIds = new Set<string>();
+    for (const node of selectableNodes) {
+      if (!node.visible || node.locked || node.onCanvas === false) continue;
+      if (target === 'selected' && !selectedSet.has(node.id)) continue;
+      if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path') {
+        sliceableIds.add(node.id);
+      }
+    }
+    if (sliceableIds.size === 0) return null;
+    return {
+      points: toolSession.points,
+      size,
+      mode: 'slice',
+      targetNodeIds: sliceableIds,
+    };
+  }, [
+    isActiveEraserDrag,
+    toolSession,
+    toolOptions.eraserMode,
+    toolOptions.eraserTarget,
+    toolOptions.eraserSize,
+    selectableNodes,
+    selectedNodeIds,
+  ]);
+
+  // In SVG DOM Slice mode, the live SVG mask already carves the real canvas cleanly underneath,
+  // so skip the translucent red ribbon overlay; keep it in GPU Hybrid or Object Erase modes.
+  const toolOverlay =
+    rawToolOverlay?.kind === 'freehand' &&
+    rawToolOverlay.mode === 'eraser' &&
+    !gpuHybridActive &&
+    liveEraserPreview?.mode === 'slice'
+      ? null
+      : rawToolOverlay;
 
   const spacingRedlines = useMemo(() => {
     if (!altHeld || toolSession || !selectionBounds) return null;
@@ -1535,7 +1650,7 @@ export function Canvas({
             data-workspace={workspace}
             data-breakpoint={activeBreakpoint}
             data-renderer={gpuHybridActive ? 'gpu-hybrid' : 'svg-dom'}
-            style={{ cursor: toolCursor }}
+            style={{ cursor: effectiveCursor }}
             viewBox={'0 0 ' + effectiveDocWidth + ' ' + document.height}
             role="application"
             aria-label="Folio design artboard. Use the active Tool Rack tool to select, draw, edit vector paths, navigate, or inspect artwork."
@@ -1565,6 +1680,7 @@ export function Canvas({
                 assetById={assetById}
                 tokens={designTokens}
                 hiddenNodeIds={isolatedPreviewIdSet}
+                liveEraserPreview={liveEraserPreview}
                 assetCacheRevision={assetCacheRevision}
               />
             )}

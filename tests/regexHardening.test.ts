@@ -102,6 +102,10 @@ describe('Regex Engine Hardening & 3-Way Parity', () => {
     { label: 'escaped bracket in char class', pattern: '^[a\\]b]+$', sample: 'a]b', expected: true },
     { label: 'hex color', pattern: '^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$', sample: '#ff00aa', expected: true },
     { label: 'word boundary', pattern: '\\bhello\\b', sample: 'say hello world', expected: true },
+    { label: 'disjoint non-digit then digit', pattern: '^\\D+\\d+$', sample: 'SKU42', expected: true },
+    { label: 'disjoint non-space space non-space', pattern: '^\\S+\\s+\\S+$', sample: 'hello world', expected: true },
+    { label: 'disjoint non-word then word', pattern: '^\\W+\\w+$', sample: '---folio', expected: true },
+    { label: 'disjoint alpha then numeric', pattern: '^[a-z]+[0-9]+$', sample: 'item99', expected: true },
   ];
 
   const syntaxInvalidCases: Array<{ label: string; pattern: string }> = [
@@ -145,6 +149,17 @@ describe('Regex Engine Hardening & 3-Way Parity', () => {
     { label: 'excessive pattern length', pattern: 'a'.repeat(201), attackInput: 'a'.repeat(201) },
     { label: 'bounded outer on unbounded inner', pattern: '(a+){2}$', attackInput: `${'a'.repeat(200)}!` },
     { label: 'excessive inner span in bounded loop', pattern: '(a{0,50}){4}$', attackInput: `${'a'.repeat(200)}!` },
+    { label: 'overlapping shorthand digit and literal 0', pattern: '^\\d*0*X$', attackInput: '0'.repeat(10_000) },
+    { label: 'multi-chain overlapping digit and literal 0', pattern: '^\\d*0*\\d*0*\\d*0*X$', attackInput: '0'.repeat(120) },
+    { label: 'nullable bridge between overlapping digit and 0', pattern: '^\\d*[a-z]*0*X$', attackInput: '0'.repeat(200) },
+    { label: 'overlapping shorthand word and literal a', pattern: '^\\w*a*X$', attackInput: 'a'.repeat(200) },
+    { label: 'overlapping character ranges [0-9] and [0-8]', pattern: '^[0-9]*[0-8]*X$', attackInput: '0'.repeat(200) },
+    { label: 'overlapping shorthand space and literal space', pattern: '^\\s* *X$', attackInput: ' '.repeat(200) },
+    { label: 'overlapping non-space and literal a', pattern: '^\\S*a*X$', attackInput: 'a'.repeat(200) },
+    { label: 'overlapping negated class and literal', pattern: '^[^0-9]*a*X$', attackInput: 'a'.repeat(200) },
+    { label: 'overlapping quantified group and literal', pattern: '^(?:0)+0+X$', attackInput: '0'.repeat(200) },
+    { label: 'overlapping quantified group and range', pattern: '^(?:\\d)+[0-5]+X$', attackInput: '0'.repeat(200) },
+    { label: 'overlapping unquantified alternation tail', pattern: '^(?:[0-9]+|[a-z]+)0+X$', attackInput: '0'.repeat(200) },
   ];
 
   it('accepts valid real-world patterns including lazy ??, lookarounds, named groups, and IPv4', () => {
