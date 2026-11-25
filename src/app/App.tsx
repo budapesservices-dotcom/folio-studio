@@ -349,22 +349,12 @@ export function App() {
 
   // Selection, alignment, vector pathfinder & clipboard actions
   const selectionActions = useSelectionAndVectorActions({
-    activeEditorId,
-    isHydrating,
-    state,
-    componentState,
-    selectedNode,
-    selectedNodes,
-    editingComponentId: componentMaster.editingComponentId,
-    toolOptions,
-    focusedCommandClient,
-    getCommandClient,
-    selectionSourceRef,
-    clipboardRef,
-    setWorkspaceToolId,
-    setInspectorVisible: windows.setInspectorVisible,
-    setNotice,
+    activeEditorId, isHydrating, state, componentState, selectedNode, selectedNodes,
+    editingComponentId: componentMaster.editingComponentId, toolOptions, onUpdateToolOptions: updateToolOptions,
+    focusedCommandClient, getCommandClient, selectionSourceRef, clipboardRef,
+    setWorkspaceToolId, setInspectorVisible: windows.setInspectorVisible, setNotice,
   });
+  const activeStudioActions = selectionActions.createStudioActionsForTarget(activeEditorId);
 
   // Document, Page, Template & Component insertion actions
   const pageActions = usePageAndTemplateActions({
@@ -715,6 +705,12 @@ export function App() {
         templateInsertMode={pageActions.templateInsertMode}
         canUndo={focusedEditor.state.past.length > 0}
         canRedo={focusedEditor.state.future.length > 0}
+        colorSwatch={{
+          fillColor: toolOptions.fillColor, strokeColor: toolOptions.strokeColor, strokeWidth: toolOptions.strokeWidth,
+          onChangeFill: (color) => activeStudioActions.onApplySwatch(color, 'fill'),
+          onChangeStroke: (color) => activeStudioActions.onApplySwatch(color, 'stroke'),
+          onSwap: activeStudioActions.onSwapFillAndStroke, onResetDefault: activeStudioActions.onResetDefaultColors,
+        }}
         onCloseTopMenus={() => setOpenMenu(null)}
         onToggleToolRack={setToolRackOpen}
         onChooseTool={(toolId) => chooseCanvasTool(toolId, activeEditorId)}
@@ -780,7 +776,7 @@ export function App() {
         activeBreakpoint={designSystem.activeBreakpoint}
         onChangeBreakpoint={designSystem.setActiveBreakpoint}
         selectedNodeIds={state.selectedNodeIds}
-        selectedNodes={selectedNodes}
+        selectedNodes={activeDocument.nodes.filter((node) => state.selectedNodeIds.includes(node.id))}
         toolId={workspaceTools.main}
         toolOptions={toolOptions}
         zoom={windows.zoom}
@@ -814,6 +810,7 @@ export function App() {
         onToolOperationBatch={(operations) => motionAutoKeyBridge.executeMainToolOperations(operations)}
         onLayerDrop={(nodeIds) => layers.dropLayersOnCanvas(nodeIds, 'main')}
         onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'main', point); }}
+        studioActions={selectionActions.createStudioActionsForTarget('main')}
       />
 
       <ComponentCanvasWindow
@@ -878,6 +875,7 @@ export function App() {
         onToolOperationBatch={(operations) => componentToolOperationExecutor.executeBatch(operations)}
         onLayerDrop={(nodeIds) => layers.dropLayersOnCanvas(nodeIds, 'component')}
         onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'component', point); }}
+        studioActions={selectionActions.createStudioActionsForTarget('component')}
       />
 
       <NodeLogicWindow
@@ -969,6 +967,7 @@ export function App() {
         onUpdateQuickInteraction={quickInteractions.updateQuickInteraction}
         onDeleteQuickInteraction={quickInteractions.deleteQuickInteraction}
         onOpenInteractionInNodeGraph={quickInteractions.openInteractionInNodeGraph}
+        studioActions={activeStudioActions}
       />
 
       <PagesRackPanel

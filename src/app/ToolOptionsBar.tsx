@@ -1,6 +1,7 @@
 import type { DesignNode, PathNode } from '../core/document/types';
 import type { PathfinderOperation } from '../core/document/vector';
 import type { CanvasToolId, CanvasToolOptions, ToolWorkspaceScope } from '../core/tools/operationContract';
+import type { StudioVectorActions } from './workspace/inspectorVectorHelpers';
 
 export interface ToolOptionsBarProps {
   workspace: ToolWorkspaceScope;
@@ -15,6 +16,7 @@ export interface ToolOptionsBarProps {
   onSimplifyPath: () => void;
   onTogglePathClosed: () => void;
   onSelectTool?: (toolId: CanvasToolId) => void;
+  studioActions?: StudioVectorActions;
 }
 
 const OPTION_TOOLS = new Set<CanvasToolId>([
@@ -52,6 +54,14 @@ function PathfinderIcon({ op }: { op: PathfinderOperation }) {
       </svg>
     );
   }
+  if (op === 'minus-back') {
+    return (
+      <svg viewBox="0 0 18 18" aria-hidden="true">
+        <rect x="3" y="3" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2 1.5" />
+        <path d="M11 7h4v8H7v-4h4V7z" fill="currentColor" opacity="0.92" />
+      </svg>
+    );
+  }
   if (op === 'intersect') {
     return (
       <svg viewBox="0 0 18 18" aria-hidden="true">
@@ -85,6 +95,7 @@ export function ToolOptionsBar({
   onSimplifyPath,
   onTogglePathClosed,
   onSelectTool,
+  studioActions,
 }: ToolOptionsBarProps) {
   const booleanCandidates = selectedNodes.filter(isBooleanCandidate);
   const canPathfinder = booleanCandidates.length >= 2;
@@ -162,6 +173,16 @@ export function ToolOptionsBar({
             type="button"
             class="studio-opt-btn"
             disabled={!canPathfinder}
+            onClick={() => onPathfinder('minus-back')}
+            title="Pathfinder Minus Back — subtract back shape from top shape"
+          >
+            <PathfinderIcon op="minus-back" />
+            <span>Minus Back</span>
+          </button>
+          <button
+            type="button"
+            class="studio-opt-btn"
+            disabled={!canPathfinder}
             onClick={() => onPathfinder('intersect')}
             title="Pathfinder Intersect — keep overlapping area of selected shapes"
           >
@@ -178,6 +199,17 @@ export function ToolOptionsBar({
             <PathfinderIcon op="exclude" />
             <span>Exclude</span>
           </button>
+          {studioActions && (
+            <button
+              type="button"
+              class="studio-opt-btn"
+              disabled={!canPathfinder}
+              onClick={studioActions.onDividePathfinder}
+              title="Pathfinder Divide — break overlapping shapes into individual editable regions"
+            >
+              <span>Divide</span>
+            </button>
+          )}
           {onSelectTool && (
             <button
               type="button"
@@ -206,6 +238,17 @@ export function ToolOptionsBar({
               >
                 <span>To Path</span>
               </button>
+              {studioActions && (
+                <button
+                  type="button"
+                  class="studio-opt-btn"
+                  disabled={booleanCandidates.length === 0}
+                  onClick={() => studioActions.onOffsetPath(8, true)}
+                  title="Offset / Contour Path (+8px outward copy)"
+                >
+                  <span>Offset +8</span>
+                </button>
+              )}
               <button
                 type="button"
                 class="studio-opt-btn"
@@ -233,6 +276,28 @@ export function ToolOptionsBar({
               >
                 <span>+90°</span>
               </button>
+              {studioActions && (
+                <>
+                  <button
+                    type="button"
+                    class="studio-opt-btn"
+                    disabled={!hasSelection}
+                    onClick={() => studioActions.onArrange('front')}
+                    title="Bring selected layer to Front"
+                  >
+                    <span>Front</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="studio-opt-btn"
+                    disabled={!hasSelection}
+                    onClick={() => studioActions.onArrange('back')}
+                    title="Send selected layer to Back"
+                  >
+                    <span>Back</span>
+                  </button>
+                </>
+              )}
             </>
           )}
           {firstPath && (
@@ -245,6 +310,26 @@ export function ToolOptionsBar({
               >
                 <span>Simplify</span>
               </button>
+              {studioActions && (
+                <>
+                  <button
+                    type="button"
+                    class="studio-opt-btn"
+                    onClick={() => studioActions.onConvertAllAnchors('smooth')}
+                    title="Convert all anchors to smooth Bezier curves"
+                  >
+                    <span>Smooth</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="studio-opt-btn"
+                    onClick={studioActions.onReversePath}
+                    title="Reverse path anchor order and arrowhead direction"
+                  >
+                    <span>Reverse</span>
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 class="studio-opt-btn"

@@ -1,4 +1,5 @@
 import type { JSX, RefObject } from 'preact';
+import { useState } from 'preact/hooks';
 import { CURATED_FONT_FAMILIES } from '../core/document/fonts';
 import type {
   AssetReference,
@@ -25,6 +26,23 @@ import { InspectorWebLayoutSection } from './workspace/InspectorWebLayoutSection
 import { InspectorComponentContractSection } from './workspace/InspectorComponentContractSection';
 import { InspectorEffectsAndStyleSection } from './workspace/InspectorEffectsAndStyleSection';
 import { InspectorInteractionsSection } from './workspace/InspectorInteractionsSection';
+import {
+  computePositionPatchForOrigin,
+  computeResizePatchForOrigin,
+  getAnchorCoordinates,
+  type StudioVectorActions,
+  type TransformOriginAnchor,
+} from './workspace/inspectorVectorHelpers';
+import {
+  InspectorAlignDistributeSection,
+  InspectorColorSwatchesSection,
+  InspectorStrokePenSection,
+  InspectorStudioTabBar,
+  InspectorTransformActions,
+  InspectorVectorShapingSection,
+  TransformOriginSelector,
+  type InspectorStudioTab,
+} from './workspace/InspectorVectorStudioSection';
 import type {
   QuickInteractionConfig,
   QuickInteractionEntry,
@@ -104,6 +122,7 @@ export interface InspectorPanelProps {
   ) => void;
   onDeleteQuickInteraction?: (entry: QuickInteractionEntry) => void;
   onOpenInteractionInNodeGraph?: (graphId: string, nodeIds: readonly string[]) => void;
+  studioActions?: StudioVectorActions;
 }
 
 function parseNumericInput(raw: string): number | null {
@@ -113,30 +132,54 @@ function parseNumericInput(raw: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-export function InspectorPanel({
-  visible,
-  width,
-  isResizing,
-  resizeHandleRef,
+interface InspectorSelectedNodeBodyProps {
+  activeEditorId: EditorTarget;
+  selectedNode: DesignNode;
+  safeSelectedNodes: readonly DesignNode[];
+  selectedInstanceComponent: ComponentDefinition | null;
+  editingMasterComponent: ComponentDefinition | null;
+  instanceOverrideTargets: InspectorOverrideTargets | null;
+  activeBreakpoint: BreakpointId;
+  designTokens: DesignTokenCollection;
+  assets: readonly AssetReference[];
+  defaultFillColor: string;
+  onCommitEdit: () => void;
+  onUpdateSelected: (patch: Partial<DesignNode>) => void;
+  onUpdateSelectedStyle: (patch: Record<string, string | number>) => void;
+  onApplyAutoLayout: (containerId: string) => void;
+  onUpdateInstanceOverride: (childNodeId: string, patch: { fill?: string; text?: string }) => void;
+  onUpdateInstanceVariant: (axisId: string, optionId: string) => void;
+  onUpdateInstanceSlot: (slotId: string, patch: { text?: string; visible?: boolean }) => void;
+  onUpdateMasterContract: InspectorPanelProps['onUpdateMasterContract'];
+  onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
+  onResetInstanceOverrides: () => void;
+  onDetachInstance: () => void;
+  onConvertToPath: (target: EditorTarget) => void;
+  onTogglePathClosed: (target: EditorTarget) => void;
+  onSimplifyPath: (target: EditorTarget) => void;
+  onChooseTool: (toolId: CanvasToolId, target: EditorTarget) => void;
+  project?: FolioProject;
+  activePageId?: string;
+  scopedNodes?: readonly DesignNode[];
+  onCreateQuickInteraction?: InspectorPanelProps['onCreateQuickInteraction'];
+  onUpdateQuickInteraction?: InspectorPanelProps['onUpdateQuickInteraction'];
+  onDeleteQuickInteraction?: InspectorPanelProps['onDeleteQuickInteraction'];
+  onOpenInteractionInNodeGraph?: InspectorPanelProps['onOpenInteractionInNodeGraph'];
+  studioActions?: StudioVectorActions;
+}
+
+function InspectorSelectedNodeBody({
   activeEditorId,
   selectedNode,
-  selectedNodes,
-  selectedCount,
-  canRemoveFromCanvas,
+  safeSelectedNodes,
   selectedInstanceComponent,
-  editingMasterComponent = null,
+  editingMasterComponent,
   instanceOverrideTargets,
   activeBreakpoint,
   designTokens,
-  assets = [],
+  assets,
   defaultFillColor,
-  renderIcon,
-  onStartResize,
-  onResizeDoubleClick,
-  onResizeKeyDown,
   onCommitEdit,
-  onHoverHint,
-  onRemoveFromCanvas,
   onUpdateSelected,
   onUpdateSelectedStyle,
   onApplyAutoLayout,
@@ -151,10 +194,6 @@ export function InspectorPanel({
   onTogglePathClosed,
   onSimplifyPath,
   onChooseTool,
-  onQuickAdd,
-  onInsertImageFiles,
-  onDuplicateSelection,
-  onCopySelection,
   project,
   activePageId,
   scopedNodes,
@@ -162,31 +201,15 @@ export function InspectorPanel({
   onUpdateQuickInteraction,
   onDeleteQuickInteraction,
   onOpenInteractionInNodeGraph,
-}: InspectorPanelProps) {
-  const triggerImagePicker = () => {
-    if (typeof document === 'undefined') return;
-    const input = document.getElementById('folio-inspector-image-input') as HTMLInputElement | null;
-    input?.click();
-  };
-  const safeSelectedNodes = Array.isArray(selectedNodes) ? selectedNodes : [];
-  const effectiveSelectedCount = Math.min(selectedCount, safeSelectedNodes.length);
-  const hasConvertibleInMulti = safeSelectedNodes.some(
-    (node) => node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame',
-  );
-  const hasPathsInMulti = safeSelectedNodes.some((node) => node.type === 'path');
-  const selectedIdsSet = new Set(safeSelectedNodes.map((n) => n.id));
-  const selectedRootNodes = safeSelectedNodes.filter((n) => !n.parentId || !selectedIdsSet.has(n.parentId));
-  const singleRootContainer =
-    !selectedNode &&
-    selectedRootNodes.length === 1 &&
-    (selectedRootNodes[0].type === 'frame' || selectedRootNodes[0].type === 'group')
-      ? selectedRootNodes[0]
-      : null;
+  studioActions,
+}: InspectorSelectedNodeBodyProps) {
+  const [activeStudioTab, setActiveStudioTab] = useState<InspectorStudioTab>('all');
+  const [transformOrigin, setTransformOrigin] = useState<TransformOriginAnchor>('tl');
 
-  const isAspectRatioLocked = Boolean(selectedNode?.aspectRatioLocked);
+  const isAspectRatioLocked = Boolean(selectedNode.aspectRatioLocked);
 
   const captureAspectRatioAnchor = (input: HTMLInputElement) => {
-    if (!selectedNode || selectedNode.width <= 0 || selectedNode.height <= 0) {
+    if (selectedNode.width <= 0 || selectedNode.height <= 0) {
       delete input.dataset.aspectAnchor;
       delete input.dataset.aspectAnchorNodeId;
       return;
@@ -196,153 +219,129 @@ export function InspectorPanel({
   };
 
   const handleDimensionInput = (axis: 'width' | 'height', input: HTMLInputElement) => {
-    if (!selectedNode) return;
     const value = parseNumericInput(input.value);
     if (value === null) return;
     const currentAxisValue = axis === 'width' ? selectedNode.width : selectedNode.height;
     const safeNext = normalizePositiveDimension(value, currentAxisValue);
-    if (!isAspectRatioLocked) {
-      onUpdateSelected(axis === 'width' ? { width: safeNext } : { height: safeNext });
+    let nextW = axis === 'width' ? safeNext : selectedNode.width;
+    let nextH = axis === 'height' ? safeNext : selectedNode.height;
+    if (isAspectRatioLocked) {
+      const storedAnchor =
+        input.dataset.aspectAnchorNodeId === selectedNode.id
+          ? Number(input.dataset.aspectAnchor)
+          : NaN;
+      const anchor =
+        Number.isFinite(storedAnchor) && storedAnchor > 0
+          ? storedAnchor
+          : selectedNode.height > 0
+            ? selectedNode.width / selectedNode.height
+            : 1;
+      const next = computeProportionalDimensions({
+        currentWidth: selectedNode.width,
+        currentHeight: selectedNode.height,
+        axis,
+        nextValue: safeNext,
+        lockAspectRatio: true,
+        anchorRatio: anchor,
+      });
+      nextW = next.width;
+      nextH = next.height;
+    }
+    if (transformOrigin === 'tl') {
+      onUpdateSelected(
+        isAspectRatioLocked
+          ? { width: nextW, height: nextH }
+          : axis === 'width'
+            ? { width: nextW }
+            : { height: nextH },
+      );
       return;
     }
-    const storedAnchor =
-      input.dataset.aspectAnchorNodeId === selectedNode.id
-        ? Number(input.dataset.aspectAnchor)
-        : NaN;
-    const anchor =
-      Number.isFinite(storedAnchor) && storedAnchor > 0
-        ? storedAnchor
-        : selectedNode.height > 0
-          ? selectedNode.width / selectedNode.height
-          : 1;
-    const next = computeProportionalDimensions({
-      currentWidth: selectedNode.width,
-      currentHeight: selectedNode.height,
-      axis,
-      nextValue: safeNext,
-      lockAspectRatio: true,
-      anchorRatio: anchor,
-    });
-    onUpdateSelected({ width: next.width, height: next.height });
+    onUpdateSelected(computeResizePatchForOrigin(selectedNode, transformOrigin, nextW, nextH));
   };
 
   const handleToggleAspectRatioLock = () => {
-    if (!selectedNode) return;
     onUpdateSelected({ aspectRatioLocked: !isAspectRatioLocked });
     onCommitEdit();
   };
 
+  const showTransform = activeStudioTab === 'all' || activeStudioTab === 'transform';
+  const showStyle = activeStudioTab === 'all' || activeStudioTab === 'style';
+  const showVector = activeStudioTab === 'all' || activeStudioTab === 'vector';
+  const showLayout = activeStudioTab === 'all' || activeStudioTab === 'layout';
+  const anchorCoords = getAnchorCoordinates(selectedNode, transformOrigin);
+  const activeFillForSwatches =
+    selectedNode.type !== 'component-instance' &&
+    selectedNode.type !== 'group' &&
+    selectedNode.type !== 'image'
+      ? selectedNode.style.fill
+      : undefined;
+  const activeStrokeForSwatches =
+    selectedNode.type === 'rect' ||
+    selectedNode.type === 'ellipse' ||
+    selectedNode.type === 'frame' ||
+    selectedNode.type === 'path' ||
+    selectedNode.type === 'image'
+      ? selectedNode.style.stroke
+      : undefined;
+
   return (
-    <aside
-      class={`inspector-panel ${visible ? '' : 'is-hidden'}`}
-      aria-hidden={!visible}
-      onFocusOut={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          onCommitEdit();
-        }
-      }}
-      onKeyDown={(event) => {
-        const target = event.target as HTMLElement;
-        if (event.key === 'Enter' && target.matches('input:not([type="checkbox"]):not([type="range"])')) {
-          event.preventDefault();
-          target.blur();
-          onCommitEdit();
-        }
-      }}
-      onMouseEnter={onHoverHint}
-    >
-      <div
-        ref={resizeHandleRef}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize Inspector panel"
-        aria-valuenow={width}
-        aria-valuemin={PANEL_RESIZE_CONSTRAINTS.inspector.minWidth}
-        aria-valuemax={PANEL_RESIZE_CONSTRAINTS.inspector.maxWidth}
-        tabIndex={visible ? 0 : -1}
-        data-resize-panel="inspector"
-        class={`panel-resize-handle panel-resize-handle-left ${isResizing ? 'is-active' : ''}`}
-        title="Drag to resize Inspector panel (double-click to reset)"
-        onPointerDown={(event) => event.stopPropagation()}
-        onMouseDown={(event) => onStartResize('inspector', event)}
-        onDblClick={(event) => onResizeDoubleClick('inspector', event)}
-        onKeyDown={(event) => onResizeKeyDown('inspector', event)}
-      />
-      <input
-        id="folio-inspector-image-input"
-        type="file"
-        accept="image/png,image/jpeg,image/webp,image/svg+xml"
-        multiple
-        style={{ display: 'none' }}
-        onChange={(event) => {
-          const fileList = event.currentTarget.files;
-          if (fileList && fileList.length > 0 && onInsertImageFiles) {
-            onInsertImageFiles(Array.from(fileList));
-          }
-          event.currentTarget.value = '';
-        }}
-      />
-      <div class="panel-heading inspector-heading">
-        <div>
-          <span class="panel-kicker">PROPERTIES</span>
-          <h2>Inspector</h2>
-          <span class={`panel-context-indicator${activeEditorId === 'component' ? ' is-component' : ''}`}>
-            {activeEditorId === 'component' ? 'COMPONENT CANVAS' : 'MAIN PAGE'}
-          </span>
-        </div>
-        {selectedNode && canRemoveFromCanvas && (
-          <button
-            class="icon-button danger"
-            title="Remove from Canvas only"
-            aria-label="Remove from Canvas only"
-            onClick={() => onRemoveFromCanvas(selectedNode.id)}
-          >
-            {renderIcon('trash')}
-          </button>
-        )}
-      </div>
+    <div class="inspector-content">
+      <InspectorStudioTabBar activeTab={activeStudioTab} onChangeTab={setActiveStudioTab} />
 
-      {selectedNode ? (
-        <div class="inspector-content">
-          <section class="property-section">
-            <div class="section-title">Layer</div>
-            <label class="field-label">
-              Name
-              <input
-                class="text-field"
-                value={selectedNode.name}
-                onInput={(event) => onUpdateSelected({ name: event.currentTarget.value })}
-              />
-            </label>
-          </section>
+      <section class="property-section">
+        <div class="section-title">Layer</div>
+        <label class="field-label">
+          Name
+          <input
+            class="text-field"
+            value={selectedNode.name}
+            onInput={(event) => onUpdateSelected({ name: event.currentTarget.value })}
+          />
+        </label>
+      </section>
 
+      {showTransform && (
+        <>
           <section class="property-section">
-            <div class="section-title">Position</div>
-            <div class="field-grid">
-              <label class="field-label">
-                X
-                <input
-                  class="number-field"
-                  type="number"
-                  value={Math.round(selectedNode.x)}
-                  onInput={(event) => {
-                    const value = parseNumericInput(event.currentTarget.value);
-                    if (value !== null) onUpdateSelected({ x: value });
-                  }}
-                />
-              </label>
-              <label class="field-label">
-                Y
-                <input
-                  class="number-field"
-                  type="number"
-                  value={Math.round(selectedNode.y)}
-                  onInput={(event) => {
-                    const value = parseNumericInput(event.currentTarget.value);
-                    if (value !== null) onUpdateSelected({ y: value });
-                  }}
-                />
-              </label>
+            <div class="section-title-row">
+              <span class="section-title">Position &amp; Transform</span>
+              <span class="inspector-scope-badge" title="Active 9-point reference origin">
+                {transformOrigin.toUpperCase()}
+              </span>
+            </div>
+            <div class="position-origin-layout">
+              <TransformOriginSelector value={transformOrigin} onChange={setTransformOrigin} />
+              <div class="field-grid">
+                <label class="field-label">
+                  X
+                  <input
+                    class="number-field"
+                    type="number"
+                    value={Math.round(anchorCoords.x)}
+                    onInput={(event) => {
+                      const value = parseNumericInput(event.currentTarget.value);
+                      if (value !== null) {
+                        onUpdateSelected(computePositionPatchForOrigin(selectedNode, transformOrigin, 'x', value));
+                      }
+                    }}
+                  />
+                </label>
+                <label class="field-label">
+                  Y
+                  <input
+                    class="number-field"
+                    type="number"
+                    value={Math.round(anchorCoords.y)}
+                    onInput={(event) => {
+                      const value = parseNumericInput(event.currentTarget.value);
+                      if (value !== null) {
+                        onUpdateSelected(computePositionPatchForOrigin(selectedNode, transformOrigin, 'y', value));
+                      }
+                    }}
+                  />
+                </label>
+              </div>
             </div>
             <div class="size-field-row">
               <label class="field-label">
@@ -422,31 +421,46 @@ export function InspectorPanel({
                 }}
               />
             </label>
-          </section>
-
-          {project &&
-            activePageId &&
-            scopedNodes &&
-            onCreateQuickInteraction &&
-            onUpdateQuickInteraction &&
-            onDeleteQuickInteraction &&
-            onOpenInteractionInNodeGraph && (
-              <InspectorInteractionsSection
-                project={project}
-                activeEditorId={activeEditorId}
-                activePageId={activePageId}
-                editingMasterComponent={activeEditorId === 'component' ? editingMasterComponent : null}
-                selectedNode={selectedNode}
-                scopedNodes={scopedNodes}
-                onCreateQuickInteraction={onCreateQuickInteraction}
-                onUpdateQuickInteraction={onUpdateQuickInteraction}
-                onDeleteQuickInteraction={onDeleteQuickInteraction}
-                onOpenInteractionInNodeGraph={onOpenInteractionInNodeGraph}
+            {studioActions && (
+              <InspectorTransformActions
+                studioActions={studioActions}
+                selectedCount={1}
+                hasGroupSelected={selectedNode.type === 'group'}
               />
             )}
+          </section>
 
-          <section class="property-section">
-            <div class="section-title">Appearance</div>
+          {studioActions && (
+            <InspectorAlignDistributeSection selectedCount={1} studioActions={studioActions} />
+          )}
+        </>
+      )}
+
+      {showLayout &&
+        project &&
+        activePageId &&
+        scopedNodes &&
+        onCreateQuickInteraction &&
+        onUpdateQuickInteraction &&
+        onDeleteQuickInteraction &&
+        onOpenInteractionInNodeGraph && (
+          <InspectorInteractionsSection
+            project={project}
+            activeEditorId={activeEditorId}
+            activePageId={activePageId}
+            editingMasterComponent={activeEditorId === 'component' ? editingMasterComponent : null}
+            selectedNode={selectedNode}
+            scopedNodes={scopedNodes}
+            onCreateQuickInteraction={onCreateQuickInteraction}
+            onUpdateQuickInteraction={onUpdateQuickInteraction}
+            onDeleteQuickInteraction={onDeleteQuickInteraction}
+            onOpenInteractionInNodeGraph={onOpenInteractionInNodeGraph}
+          />
+        )}
+
+      {showStyle && (
+      <section class="property-section">
+        <div class="section-title">Appearance</div>
             <label class="field-label">
               Opacity
               <div class="opacity-control-row">
@@ -718,14 +732,20 @@ export function InspectorPanel({
                     />
                   </label>
                 )}
-                {(selectedNode.type === 'rect' || selectedNode.type === 'ellipse' || selectedNode.type === 'frame') && (
+                <InspectorStrokePenSection
+                  selectedNode={selectedNode}
+                  onUpdateSelected={onUpdateSelected}
+                  onUpdateSelectedStyle={onUpdateSelectedStyle}
+                  studioActions={studioActions}
+                />
+                {!studioActions && (selectedNode.type === 'rect' || selectedNode.type === 'ellipse' || selectedNode.type === 'frame') && (
                   <div class="instance-actions">
                     <button type="button" onClick={() => onConvertToPath(activeEditorId)}>
                       Convert to Vector Path
                     </button>
                   </div>
                 )}
-                {selectedNode.type === 'path' && (
+                {!studioActions && selectedNode.type === 'path' && (
                   <>
                     <div class="vector-meta-row">
                       <span>Vector Path</span>
@@ -739,44 +759,6 @@ export function InspectorPanel({
                         onChange={() => onTogglePathClosed(activeEditorId)}
                       />
                     </label>
-                    <label class="toggle-row">
-                      <span>Dashed stroke</span>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(selectedNode.style.strokeDasharray)}
-                        onChange={(event) =>
-                          onUpdateSelectedStyle({ strokeDasharray: event.currentTarget.checked ? '8 5' : '' })
-                        }
-                      />
-                    </label>
-                    {!selectedNode.closed && (
-                      <div class="field-grid single-row">
-                        <label class="toggle-row">
-                          <span>Start Arrow</span>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(selectedNode.style.arrowStart)}
-                            onChange={(event) =>
-                              onUpdateSelected({
-                                style: { ...selectedNode.style, arrowStart: event.currentTarget.checked },
-                              } as Partial<DesignNode>)
-                            }
-                          />
-                        </label>
-                        <label class="toggle-row">
-                          <span>End Arrow</span>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(selectedNode.style.arrowEnd)}
-                            onChange={(event) =>
-                              onUpdateSelected({
-                                style: { ...selectedNode.style, arrowEnd: event.currentTarget.checked },
-                              } as Partial<DesignNode>)
-                            }
-                          />
-                        </label>
-                      </div>
-                    )}
                     <div class="instance-actions">
                       <button type="button" onClick={() => onChooseTool('direct-selection', activeEditorId)}>
                         Edit Anchors (A)
@@ -945,51 +927,260 @@ export function InspectorPanel({
               </>
             )}
           </section>
+          )}
 
-          <InspectorEffectsAndStyleSection
-            selectedNode={selectedNode}
-            defaultFillColor={defaultFillColor}
-            onUpdateSelected={onUpdateSelected}
-          />
+          {showStyle && studioActions && selectedNode.type !== 'group' && selectedNode.type !== 'component-instance' && (
+            <InspectorColorSwatchesSection
+              documentNodes={scopedNodes ?? []}
+              studioActions={studioActions}
+              activeFill={activeFillForSwatches}
+              activeStroke={activeStrokeForSwatches}
+            />
+          )}
 
-          <InspectorWebLayoutSection
-            selectedNode={selectedNode}
-            activeBreakpoint={activeBreakpoint}
-            designTokens={designTokens}
-            onUpdateSelected={onUpdateSelected}
-            onApplyAutoLayout={onApplyAutoLayout}
-          />
+          {showStyle && (
+            <InspectorEffectsAndStyleSection
+              selectedNode={selectedNode}
+              defaultFillColor={defaultFillColor}
+              onUpdateSelected={onUpdateSelected}
+            />
+          )}
 
-          <InspectorComponentContractSection
-            instanceNode={selectedNode.type === 'component-instance' ? selectedNode : null}
-            instanceComponent={selectedNode.type === 'component-instance' ? selectedInstanceComponent : null}
-            editingMasterComponent={activeEditorId === 'component' ? editingMasterComponent : null}
-            onUpdateInstanceVariant={onUpdateInstanceVariant}
-            onUpdateInstanceSlot={onUpdateInstanceSlot}
-            onUpdateMasterContract={onUpdateMasterContract}
-            onToggleComponentNodeLogic={onToggleComponentNodeLogic}
-          />
+          {showVector && studioActions && (
+            <InspectorVectorShapingSection
+              activeEditorId={activeEditorId}
+              selectedNode={selectedNode}
+              selectedNodes={safeSelectedNodes}
+              studioActions={studioActions}
+              onConvertToPath={onConvertToPath}
+              onTogglePathClosed={onTogglePathClosed}
+              onSimplifyPath={onSimplifyPath}
+              onChooseTool={onChooseTool}
+            />
+          )}
 
-          <section class="property-section last-section">
-            <div class="section-title">Layer options</div>
-            <label class="toggle-row">
-              <span>Visible</span>
-              <input
-                type="checkbox"
-                checked={selectedNode.visible}
-                onChange={(event) => onUpdateSelected({ visible: event.currentTarget.checked })}
+          {showLayout && (
+            <>
+              <InspectorWebLayoutSection
+                selectedNode={selectedNode}
+                activeBreakpoint={activeBreakpoint}
+                designTokens={designTokens}
+                onUpdateSelected={onUpdateSelected}
+                onApplyAutoLayout={onApplyAutoLayout}
               />
-            </label>
-            <label class="toggle-row">
-              <span>Locked</span>
-              <input
-                type="checkbox"
-                checked={selectedNode.locked}
-                onChange={(event) => onUpdateSelected({ locked: event.currentTarget.checked })}
+
+              <InspectorComponentContractSection
+                instanceNode={selectedNode.type === 'component-instance' ? selectedNode : null}
+                instanceComponent={selectedNode.type === 'component-instance' ? selectedInstanceComponent : null}
+                editingMasterComponent={activeEditorId === 'component' ? editingMasterComponent : null}
+                onUpdateInstanceVariant={onUpdateInstanceVariant}
+                onUpdateInstanceSlot={onUpdateInstanceSlot}
+                onUpdateMasterContract={onUpdateMasterContract}
+                onToggleComponentNodeLogic={onToggleComponentNodeLogic}
               />
-            </label>
-          </section>
+
+              <section class="property-section last-section">
+                <div class="section-title">Layer options</div>
+                <label class="toggle-row">
+                  <span>Visible</span>
+                  <input
+                    type="checkbox"
+                    checked={selectedNode.visible}
+                    onChange={(event) => onUpdateSelected({ visible: event.currentTarget.checked })}
+                  />
+                </label>
+                <label class="toggle-row">
+                  <span>Locked</span>
+                  <input
+                    type="checkbox"
+                    checked={selectedNode.locked}
+                    onChange={(event) => onUpdateSelected({ locked: event.currentTarget.checked })}
+                  />
+                </label>
+              </section>
+            </>
+          )}
         </div>
+  );
+}
+
+export function InspectorPanel({
+  visible,
+  width,
+  isResizing,
+  resizeHandleRef,
+  activeEditorId,
+  selectedNode,
+  selectedNodes,
+  selectedCount,
+  canRemoveFromCanvas,
+  selectedInstanceComponent,
+  editingMasterComponent = null,
+  instanceOverrideTargets,
+  activeBreakpoint,
+  designTokens,
+  assets = [],
+  defaultFillColor,
+  renderIcon,
+  onStartResize,
+  onResizeDoubleClick,
+  onResizeKeyDown,
+  onCommitEdit,
+  onHoverHint,
+  onRemoveFromCanvas,
+  onUpdateSelected,
+  onUpdateSelectedStyle,
+  onApplyAutoLayout,
+  onUpdateInstanceOverride,
+  onUpdateInstanceVariant,
+  onUpdateInstanceSlot,
+  onUpdateMasterContract,
+  onToggleComponentNodeLogic,
+  onResetInstanceOverrides,
+  onDetachInstance,
+  onConvertToPath,
+  onTogglePathClosed,
+  onSimplifyPath,
+  onChooseTool,
+  onQuickAdd,
+  onInsertImageFiles,
+  onDuplicateSelection,
+  onCopySelection,
+  project,
+  activePageId,
+  scopedNodes,
+  onCreateQuickInteraction,
+  onUpdateQuickInteraction,
+  onDeleteQuickInteraction,
+  onOpenInteractionInNodeGraph,
+  studioActions,
+}: InspectorPanelProps) {
+  const triggerImagePicker = () => {
+    if (typeof document === 'undefined') return;
+    const input = document.getElementById('folio-inspector-image-input') as HTMLInputElement | null;
+    input?.click();
+  };
+  const safeSelectedNodes = Array.isArray(selectedNodes) ? selectedNodes : [];
+  const effectiveSelectedCount = Math.min(selectedCount, safeSelectedNodes.length);
+  const hasConvertibleInMulti = safeSelectedNodes.some(
+    (node) => node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame',
+  );
+  const hasPathsInMulti = safeSelectedNodes.some((node) => node.type === 'path');
+  const selectedIdsSet = new Set(safeSelectedNodes.map((n) => n.id));
+  const selectedRootNodes = safeSelectedNodes.filter((n) => !n.parentId || !selectedIdsSet.has(n.parentId));
+  const singleRootContainer =
+    !selectedNode &&
+    selectedRootNodes.length === 1 &&
+    (selectedRootNodes[0].type === 'frame' || selectedRootNodes[0].type === 'group')
+      ? selectedRootNodes[0]
+      : null;
+
+  return (
+    <aside
+      class={`inspector-panel ${visible ? '' : 'is-hidden'}`}
+      aria-hidden={!visible}
+      onFocusOut={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          onCommitEdit();
+        }
+      }}
+      onKeyDown={(event) => {
+        const target = event.target as HTMLElement;
+        if (event.key === 'Enter' && target.matches('input:not([type="checkbox"]):not([type="range"])')) {
+          event.preventDefault();
+          target.blur();
+          onCommitEdit();
+        }
+      }}
+      onMouseEnter={onHoverHint}
+    >
+      <div
+        ref={resizeHandleRef}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize Inspector panel"
+        aria-valuenow={width}
+        aria-valuemin={PANEL_RESIZE_CONSTRAINTS.inspector.minWidth}
+        aria-valuemax={PANEL_RESIZE_CONSTRAINTS.inspector.maxWidth}
+        tabIndex={visible ? 0 : -1}
+        data-resize-panel="inspector"
+        class={`panel-resize-handle panel-resize-handle-left ${isResizing ? 'is-active' : ''}`}
+        title="Drag to resize Inspector panel (double-click to reset)"
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => onStartResize('inspector', event)}
+        onDblClick={(event) => onResizeDoubleClick('inspector', event)}
+        onKeyDown={(event) => onResizeKeyDown('inspector', event)}
+      />
+      <input
+        id="folio-inspector-image-input"
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/svg+xml"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(event) => {
+          const fileList = event.currentTarget.files;
+          if (fileList && fileList.length > 0 && onInsertImageFiles) {
+            onInsertImageFiles(Array.from(fileList));
+          }
+          event.currentTarget.value = '';
+        }}
+      />
+      <div class="panel-heading inspector-heading">
+        <div>
+          <span class="panel-kicker">PROPERTIES</span>
+          <h2>Inspector</h2>
+          <span class={`panel-context-indicator${activeEditorId === 'component' ? ' is-component' : ''}`}>
+            {activeEditorId === 'component' ? 'COMPONENT CANVAS' : 'MAIN PAGE'}
+          </span>
+        </div>
+        {selectedNode && canRemoveFromCanvas && (
+          <button
+            class="icon-button danger"
+            title="Remove from Canvas only"
+            aria-label="Remove from Canvas only"
+            onClick={() => onRemoveFromCanvas(selectedNode.id)}
+          >
+            {renderIcon('trash')}
+          </button>
+        )}
+      </div>
+
+      {selectedNode ? (
+        <InspectorSelectedNodeBody
+          activeEditorId={activeEditorId}
+          selectedNode={selectedNode}
+          safeSelectedNodes={safeSelectedNodes}
+          selectedInstanceComponent={selectedInstanceComponent}
+          editingMasterComponent={editingMasterComponent}
+          instanceOverrideTargets={instanceOverrideTargets}
+          activeBreakpoint={activeBreakpoint}
+          designTokens={designTokens}
+          assets={assets}
+          defaultFillColor={defaultFillColor}
+          onCommitEdit={onCommitEdit}
+          onUpdateSelected={onUpdateSelected}
+          onUpdateSelectedStyle={onUpdateSelectedStyle}
+          onApplyAutoLayout={onApplyAutoLayout}
+          onUpdateInstanceOverride={onUpdateInstanceOverride}
+          onUpdateInstanceVariant={onUpdateInstanceVariant}
+          onUpdateInstanceSlot={onUpdateInstanceSlot}
+          onUpdateMasterContract={onUpdateMasterContract}
+          onToggleComponentNodeLogic={onToggleComponentNodeLogic}
+          onResetInstanceOverrides={onResetInstanceOverrides}
+          onDetachInstance={onDetachInstance}
+          onConvertToPath={onConvertToPath}
+          onTogglePathClosed={onTogglePathClosed}
+          onSimplifyPath={onSimplifyPath}
+          onChooseTool={onChooseTool}
+          project={project}
+          activePageId={activePageId}
+          scopedNodes={scopedNodes}
+          onCreateQuickInteraction={onCreateQuickInteraction}
+          onUpdateQuickInteraction={onUpdateQuickInteraction}
+          onDeleteQuickInteraction={onDeleteQuickInteraction}
+          onOpenInteractionInNodeGraph={onOpenInteractionInNodeGraph}
+          studioActions={studioActions}
+        />
       ) : effectiveSelectedCount > 1 ? (
         singleRootContainer ? (
           <div class="inspector-content">
@@ -1007,6 +1198,16 @@ export function InspectorPanel({
                 </button>
               </div>
             </section>
+            {studioActions && (
+              <section class="property-section">
+                <div class="section-title">Transform &amp; Arrange</div>
+                <InspectorTransformActions
+                  studioActions={studioActions}
+                  selectedCount={effectiveSelectedCount}
+                  hasGroupSelected={singleRootContainer.type === 'group'}
+                />
+              </section>
+            )}
             {project &&
               activePageId &&
               scopedNodes &&
@@ -1036,28 +1237,62 @@ export function InspectorPanel({
             />
           </div>
         ) : (
-          <div class="inspector-empty multi-inspector">
-            <div class="empty-icon">{renderIcon('layers')}</div>
-            <strong>{effectiveSelectedCount} layers selected</strong>
-            <p>Drag to move, use the resize handles, align above the canvas, or run a batch action below.</p>
-            <div class="inspector-multi-actions">
-              <button type="button" onClick={onDuplicateSelection}>
-                Duplicate (Ctrl+D)
-              </button>
-              <button type="button" onClick={onCopySelection}>
-                Copy (Ctrl+C)
-              </button>
-              {hasConvertibleInMulti && (
-                <button type="button" onClick={() => onConvertToPath(activeEditorId)}>
-                  Convert to Vector Path
+          <div class="inspector-content multi-inspector">
+            <section class="property-section">
+              <div class="section-title-row">
+                <span class="section-title">{effectiveSelectedCount} Layers Selected</span>
+                <span class="inspector-scope-badge">MULTI</span>
+              </div>
+              <div class="inspector-multi-actions">
+                <button type="button" onClick={onDuplicateSelection}>
+                  Duplicate (Ctrl+D)
                 </button>
-              )}
-              {hasPathsInMulti && (
-                <button type="button" onClick={() => onSimplifyPath(activeEditorId)}>
-                  Simplify Paths
+                <button type="button" onClick={onCopySelection}>
+                  Copy (Ctrl+C)
                 </button>
-              )}
-            </div>
+                {hasConvertibleInMulti && (
+                  <button type="button" onClick={() => onConvertToPath(activeEditorId)}>
+                    Convert to Vector Path
+                  </button>
+                )}
+                {hasPathsInMulti && (
+                  <button type="button" onClick={() => onSimplifyPath(activeEditorId)}>
+                    Simplify Paths
+                  </button>
+                )}
+              </div>
+            </section>
+
+            {studioActions && (
+              <>
+                <InspectorAlignDistributeSection
+                  selectedCount={effectiveSelectedCount}
+                  studioActions={studioActions}
+                />
+                <InspectorVectorShapingSection
+                  activeEditorId={activeEditorId}
+                  selectedNode={null}
+                  selectedNodes={safeSelectedNodes}
+                  studioActions={studioActions}
+                  onConvertToPath={onConvertToPath}
+                  onTogglePathClosed={onTogglePathClosed}
+                  onSimplifyPath={onSimplifyPath}
+                  onChooseTool={onChooseTool}
+                />
+                <section class="property-section">
+                  <div class="section-title">Transform &amp; Arrange</div>
+                  <InspectorTransformActions
+                    studioActions={studioActions}
+                    selectedCount={effectiveSelectedCount}
+                    hasGroupSelected={safeSelectedNodes.some((node) => node.type === 'group')}
+                  />
+                </section>
+                <InspectorColorSwatchesSection
+                  documentNodes={scopedNodes ?? []}
+                  studioActions={studioActions}
+                />
+              </>
+            )}
           </div>
         )
       ) : activeEditorId === 'component' && editingMasterComponent ? (

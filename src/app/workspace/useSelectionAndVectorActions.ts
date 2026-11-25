@@ -1,14 +1,19 @@
-import type { ComponentInstanceNode, DesignNode } from '../../core/document/types';
+import type { ComponentInstanceNode, DesignNode, VectorShapeMeta } from '../../core/document/types';
 import { expandSelectedLayerIds, getEffectiveLayerStates } from '../../core/document/layers';
 import { detachComponentInstance } from '../../core/document/components';
 import { getActiveDocument } from '../../core/document/project';
 import { getProjectDesignTokens } from '../../core/document/tokens';
 import {
+  convertAllPathAnchors,
   convertShapeToPathNode,
+  divideNodesWithPathfinder,
   flipPathNode,
   normalizePathNode,
+  offsetPathNode,
+  reversePathNode,
   scalePathNodeGeometry,
   simplifyPathNode,
+  updateParametricPathNode,
   type PathfinderOperation,
 } from '../../core/document/vector';
 import { getComputeKernels, getComputeWorkerClient } from '../../core/kernels';
@@ -23,9 +28,24 @@ import {
   prepareNodesForPaste,
   type StudioClipboardPayload,
 } from '../nodeClipboard';
+import {
+  alignNodeToArtboard,
+  computeArrangeMoveSpec,
+  computeStepAndRepeatClones,
+  type ArrangeOrderAction,
+  type StepAndRepeatConfig,
+  type StudioVectorActions,
+} from './inspectorVectorHelpers';
+
+export type { StudioVectorActions };
 
 function clampPositiveDimension(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function createStudioVectorId(prefix: string): string {
+  const rand = globalThis.crypto?.randomUUID?.();
+  return `${prefix}-${rand ?? `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`}`;
 }
 
 export interface UseSelectionAndVectorActionsOptions {
@@ -37,6 +57,7 @@ export interface UseSelectionAndVectorActionsOptions {
   selectedNodes: DesignNode[];
   editingComponentId: string | null;
   toolOptions: CanvasToolOptions;
+  onUpdateToolOptions?: (patch: Partial<CanvasToolOptions>) => void;
   focusedCommandClient: MainCanvasCommandClient;
   getCommandClient: (target: EditorTarget) => MainCanvasCommandClient;
   selectionSourceRef: { current: 'layers' | 'canvas' };
@@ -55,6 +76,7 @@ export function useSelectionAndVectorActions({
   selectedNodes,
   editingComponentId,
   toolOptions,
+  onUpdateToolOptions,
   focusedCommandClient,
   getCommandClient,
   selectionSourceRef,
@@ -155,6 +177,11 @@ export function useSelectionAndVectorActions({
           return effective?.visible && !effective.locked;
         }),
     );
+    if (selected.length === 1) {
+      const aligned = alignNodeToArtboard(selected[0], doc.width, doc.height, alignment);
+      getCommandClient(target).transformNodes([aligned], `Align layer to artboard (${alignment})`);
+      return;
+    }
     if (selected.length < 2) return;
     getCommandClient(target).transformNodes(alignNodes(selected, alignment), `Align layers ${alignment}`);
   };
@@ -182,7 +209,7 @@ export function useSelectionAndVectorActions({
       setNotice('Select at least 2 shapes or vector paths for Pathfinder.');
       return;
     }
-    const newId = globalThis.crypto?.randomUUID?.() ?? `pathfinder-${Date.now()}`;
+    const newId = createStudioVectorId('pathfinder');
     const totalPathPoints = candidates.reduce(
       (sum, node) => sum + (node.type === 'path' ? node.points.length : 4),
       0,
@@ -224,6 +251,107 @@ export function useSelectionAndVectorActions({
     selectionSourceRef.current = 'canvas';
     getCommandClient(target).replaceNodes(candidateIds, [result], 'Replace vector nodes');
     setNotice(`Pathfinder ${operation} created “${result.name}”.`);
+  };
+
+  const handleDividePathfinder = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const candidates = doc.nodes.filter(
+      (node) =>
+        editor.selectedNodeIds.includes(node.id)
+        && (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path'),
+    );
+    if (candidates.length < 2) {
+      setNotice('Select at least 2 overlapping shapes to Divide.');
+      return;
+    }
+    const divided = divideNodesWithPathfinder(candidates, () => createStudioVectorId('divide'));
+    if (!divided || divided.length === 0) {
+      setNotice('Divide produced no closed regions. Make sure shapes have non-zero area.');
+      return;
+    }
+    selectionSourceRef.current = 'canvas';
+    getCommandClient(target).replaceNodes(
+      candidates.map((node) => node.id),
+      divided,
+      'Pathfinder Divide shapes',
+      divided.map((node) => node.id),
+    );
+    setNotice(`Divided selection into ${divided.length} editable vector region${divided.length === 1 ? '' : 's'}.`);
+  };
+
+  const handleOffsetPath = (target: EditorTarget, distancePx: number, keepOriginal: boolean) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const candidates = doc.nodes.filter(
+      (node) =>
+        editor.selectedNodeIds.includes(node.id)
+        && (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path'),
+    );
+    if (candidates.length === 0) {
+      setNotice('Select a shape or vector path to apply Offset / Contour.');
+      return;
+    }
+    const created = candidates
+      .map((node) => offsetPathNode(node, distancePx, createStudioVectorId('offset')))
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    if (created.length === 0) {
+      setNotice('Offset distance collapsed the shape geometry. Try a smaller inward value.');
+      return;
+    }
+    selectionSourceRef.current = 'canvas';
+    if (keepOriginal) {
+      getCommandClient(target).createNodes(created, `Offset path (${distancePx > 0 ? '+' : ''}${distancePx}px)`);
+    } else {
+      getCommandClient(target).replaceNodes(
+        candidates.map((node) => node.id),
+        created,
+        `Offset path (${distancePx > 0 ? '+' : ''}${distancePx}px)`,
+        created.map((node) => node.id),
+      );
+    }
+    setNotice(`Created ${created.length} offset contour${created.length === 1 ? '' : 's'} (${distancePx > 0 ? '+' : ''}${distancePx}px).`);
+  };
+
+  const handleReversePath = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const paths = doc.nodes.filter(
+      (node): node is Extract<DesignNode, { type: 'path' }> =>
+        editor.selectedNodeIds.includes(node.id) && node.type === 'path',
+    );
+    if (paths.length === 0) return;
+    getCommandClient(target).transformNodes(paths.map(reversePathNode), 'Reverse path direction');
+    setNotice(`Reversed path direction on ${paths.length} vector path${paths.length === 1 ? '' : 's'}.`);
+  };
+
+  const handleConvertAllAnchors = (target: EditorTarget, mode: 'smooth' | 'corner') => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const paths = doc.nodes.filter(
+      (node): node is Extract<DesignNode, { type: 'path' }> =>
+        editor.selectedNodeIds.includes(node.id) && node.type === 'path',
+    );
+    if (paths.length === 0) return;
+    getCommandClient(target).transformNodes(
+      paths.map((node) => convertAllPathAnchors(node, mode)),
+      mode === 'smooth' ? 'Smooth all vector anchors' : 'Sharpen all vector corners',
+    );
+    setNotice(mode === 'smooth' ? 'Converted anchors to smooth Bezier curves.' : 'Converted anchors to sharp corners.');
+  };
+
+  const handleUpdateParametricShape = (target: EditorTarget, meta: VectorShapeMeta) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const activeNode = doc.nodes.find((node) => node.id === editor.selectedNodeIds[0]);
+    if (!activeNode || activeNode.type !== 'path') return;
+    const updated = updateParametricPathNode(activeNode, meta);
+    getCommandClient(target).editNode(updated, `parametric:${activeNode.id}`, 'Adjust parametric shape');
   };
 
   const handleConvertToPath = (target: EditorTarget) => {
@@ -279,16 +407,182 @@ export function useSelectionAndVectorActions({
     getCommandClient(target).transformNodes(nextNodes, `Flip ${axis}`);
   };
 
-  const handleRotate90 = (target: EditorTarget) => {
+  const handleRotateBy = (target: EditorTarget, deltaDeg: number) => {
     if (isHydrating) return;
     const editor = target === 'main' ? state : componentState;
     const doc = getActiveDocument(editor.project);
     const selected = getTransformableNodes(doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
     if (selected.length === 0) return;
     getCommandClient(target).transformNodes(
-      selected.map((node) => ({ ...node, rotation: ((node.rotation || 0) + 90) % 360 })),
-      'Rotate +90°',
+      selected.map((node) => ({ ...node, rotation: (((node.rotation || 0) + deltaDeg) % 360 + 360) % 360 })),
+      `Rotate ${deltaDeg > 0 ? '+' : ''}${deltaDeg}°`,
     );
+  };
+
+  const handleResetRotation = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const selected = getTransformableNodes(doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id)));
+    if (selected.length === 0) return;
+    getCommandClient(target).transformNodes(
+      selected.map((node) => ({ ...node, rotation: 0 })),
+      'Reset rotation to 0°',
+    );
+  };
+
+  const handleRotate90 = (target: EditorTarget) => handleRotateBy(target, 90);
+
+  const handleArrangeOrder = (target: EditorTarget, action: ArrangeOrderAction) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const spec = computeArrangeMoveSpec(doc.nodes, editor.selectedNodeIds, action);
+    if (!spec) return;
+    getCommandClient(target).moveLayers(spec.nodeIds, spec.targetId, spec.position);
+  };
+
+  const handleStepAndRepeat = (target: EditorTarget, config: StepAndRepeatConfig) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const layerStates = getEffectiveLayerStates(doc.nodes);
+    const eligibleIds = editor.selectedNodeIds.filter((id) => {
+      const effective = layerStates.get(id);
+      return effective?.visible && !effective.locked;
+    });
+    if (eligibleIds.length === 0) return;
+    const clones = computeStepAndRepeatClones(doc.nodes, eligibleIds, config);
+    if (clones.length === 0) return;
+    selectionSourceRef.current = 'canvas';
+    getCommandClient(target).createNodes(clones, `Step & Repeat (${config.copies} copies)`);
+    setNotice(`Created ${clones.length} stepped clone${clones.length === 1 ? '' : 's'}.`);
+  };
+
+  const handleSwapFillAndStroke = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const styleable = doc.nodes.filter(
+      (node): node is Extract<DesignNode, { type: 'rect' | 'ellipse' | 'frame' | 'path' }> =>
+        editor.selectedNodeIds.includes(node.id)
+        && (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path'),
+    );
+
+    if (styleable.length > 0) {
+      const swapped = styleable.map((node) => {
+        const prevFill = node.style.fill;
+        const prevStroke = node.style.strokeWidth > 0 && node.style.stroke !== '#00000000'
+          ? node.style.stroke
+          : 'none';
+        const nextFill = prevStroke === 'none' ? 'none' : prevStroke;
+        const nextStroke = prevFill === 'none' || prevFill === '#00000000' ? '#00000000' : prevFill;
+        const nextStrokeWidth = nextStroke === '#00000000' ? 0 : Math.max(2, node.style.strokeWidth);
+        return {
+          ...node,
+          style: {
+            ...node.style,
+            fill: nextFill,
+            stroke: nextStroke,
+            strokeWidth: nextStrokeWidth,
+            ...(node.style.fills ? { fills: undefined } : {}),
+          },
+        } as DesignNode;
+      });
+      getCommandClient(target).transformNodes(swapped, 'Swap fill and stroke');
+    }
+
+    onUpdateToolOptions?.({
+      fillColor: toolOptions.strokeColor,
+      strokeColor: toolOptions.fillColor,
+    });
+  };
+
+  const handleResetDefaultColors = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const styleable = doc.nodes.filter(
+      (node): node is Extract<DesignNode, { type: 'rect' | 'ellipse' | 'frame' | 'path' }> =>
+        editor.selectedNodeIds.includes(node.id)
+        && (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path'),
+    );
+    if (styleable.length > 0) {
+      getCommandClient(target).transformNodes(
+        styleable.map((node) => ({
+          ...node,
+          style: {
+            ...node.style,
+            fill: '#FFFFFF',
+            stroke: '#111827',
+            strokeWidth: 2,
+            ...(node.style.fills ? { fills: undefined } : {}),
+          },
+        }) as DesignNode),
+        'Reset default fill and stroke',
+      );
+    }
+    onUpdateToolOptions?.({ fillColor: '#FFFFFF', strokeColor: '#111827', strokeWidth: 2 });
+  };
+
+  const handleApplySwatch = (target: EditorTarget, color: string, channel: 'fill' | 'stroke') => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const selected = doc.nodes.filter((node) => editor.selectedNodeIds.includes(node.id));
+    const updated: DesignNode[] = [];
+    for (const node of selected) {
+      if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path') {
+        if (channel === 'fill') {
+          updated.push({
+            ...node,
+            style: {
+              ...node.style,
+              fill: color,
+              ...(node.style.fills ? { fills: undefined } : {}),
+            },
+          } as DesignNode);
+        } else {
+          updated.push({
+            ...node,
+            style: {
+              ...node.style,
+              stroke: color === 'none' ? '#00000000' : color,
+              strokeWidth: color === 'none' ? 0 : Math.max(1.5, node.style.strokeWidth),
+            },
+          } as DesignNode);
+        }
+      } else if (node.type === 'text' && channel === 'fill' && color !== 'none') {
+        updated.push({ ...node, style: { ...node.style, fill: color } });
+      }
+    }
+    if (updated.length > 0) {
+      getCommandClient(target).transformNodes(updated, `Apply ${channel} swatch`);
+    }
+    if (color !== 'none') {
+      onUpdateToolOptions?.(channel === 'fill' ? { fillColor: color } : { strokeColor: color });
+    }
+  };
+
+  const handleGroupSelection = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    if (editor.selectedNodeIds.length < 2) return;
+    getCommandClient(target).groupLayers(editor.selectedNodeIds);
+  };
+
+  const handleUngroupSelection = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    if (editor.selectedNodeIds.length === 0) return;
+    getCommandClient(target).ungroupLayers(editor.selectedNodeIds);
+  };
+
+  const handleCreateClippingMask = (target: EditorTarget) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    if (editor.selectedNodeIds.length === 0) return;
+    getCommandClient(target).createClippingMask(editor.selectedNodeIds[0]);
   };
 
   const handleSimplifyPath = (target: EditorTarget) => {
@@ -405,6 +699,28 @@ export function useSelectionAndVectorActions({
     }
   };
 
+  const createStudioActionsForTarget = (target: EditorTarget): StudioVectorActions => ({
+    onPathfinder: (operation) => handlePathfinder(target, operation),
+    onDividePathfinder: () => handleDividePathfinder(target),
+    onOffsetPath: (distancePx, keepOriginal) => handleOffsetPath(target, distancePx, keepOriginal),
+    onReversePath: () => handleReversePath(target),
+    onConvertAllAnchors: (mode) => handleConvertAllAnchors(target, mode),
+    onUpdateParametricShape: (meta) => handleUpdateParametricShape(target, meta),
+    onFlip: (axis) => handleFlipSelection(target, axis),
+    onRotateBy: (deltaDeg) => handleRotateBy(target, deltaDeg),
+    onResetRotation: () => handleResetRotation(target),
+    onAlign: (alignment) => alignSelection(alignment, target),
+    onDistribute: (axis) => distributeSelection(axis, target),
+    onArrange: (action) => handleArrangeOrder(target, action),
+    onStepAndRepeat: (config) => handleStepAndRepeat(target, config),
+    onSwapFillAndStroke: () => handleSwapFillAndStroke(target),
+    onResetDefaultColors: () => handleResetDefaultColors(target),
+    onApplySwatch: (color, channel) => handleApplySwatch(target, color, channel),
+    onGroupSelection: () => handleGroupSelection(target),
+    onUngroupSelection: () => handleUngroupSelection(target),
+    onCreateClippingMask: () => handleCreateClippingMask(target),
+  });
+
   return {
     updateSelected,
     updateSelectedStyle,
@@ -414,14 +730,27 @@ export function useSelectionAndVectorActions({
     alignSelection,
     distributeSelection,
     handlePathfinder,
+    handleDividePathfinder,
+    handleOffsetPath,
+    handleReversePath,
+    handleConvertAllAnchors,
+    handleUpdateParametricShape,
     handleConvertToPath,
     handleFlipSelection,
     handleRotate90,
+    handleRotateBy,
+    handleResetRotation,
+    handleArrangeOrder,
+    handleStepAndRepeat,
+    handleSwapFillAndStroke,
+    handleResetDefaultColors,
+    handleApplySwatch,
     handleSimplifyPath,
     handleTogglePathClosed,
     duplicateSelection,
     copySelection,
     cutSelection,
     pasteSelection,
+    createStudioActionsForTarget,
   };
 }

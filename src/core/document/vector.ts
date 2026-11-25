@@ -33,7 +33,7 @@ export interface Point2D {
   y: number;
 }
 
-export type PathfinderOperation = 'unite' | 'subtract' | 'intersect' | 'exclude';
+export type PathfinderOperation = 'unite' | 'subtract' | 'minus-back' | 'intersect' | 'exclude';
 
 const KAPPA = 0.5522847498307936;
 const EPS = 1e-6;
@@ -908,6 +908,230 @@ export function flipPathNode(node: PathNode, axis: 'horizontal' | 'vertical'): P
   };
 }
 
+/**
+ * Reverses the winding / point order of a PathNode and swaps each anchor's
+ * incoming and outgoing Bezier handles (Illustrator / CorelDRAW Reverse Path).
+ */
+export function reversePathNode(node: PathNode): PathNode {
+  const reversePoints = (pts: readonly VectorAnchorPoint[]): VectorAnchorPoint[] =>
+    [...pts].reverse().map((pt) => {
+      const next: VectorAnchorPoint = {
+        id: pt.id,
+        x: pt.x,
+        y: pt.y,
+        pointType: pt.pointType,
+      };
+      if (pt.handleOut) next.handleIn = { ...pt.handleOut };
+      if (pt.handleIn) next.handleOut = { ...pt.handleIn };
+      return next;
+    });
+
+  return {
+    ...node,
+    points: reversePoints(node.points),
+    ...(node.subpaths
+      ? { subpaths: node.subpaths.map((sp) => ({ closed: sp.closed, points: reversePoints(sp.points) })) }
+      : {}),
+  };
+}
+
+/**
+ * Converts every anchor point on a PathNode to either smooth Catmull-Rom Bezier
+ * curves or crisp sharp corners (CorelDRAW Shape Tool / Illustrator Smooth & Corner).
+ */
+export function convertAllPathAnchors(node: PathNode, mode: 'smooth' | 'corner'): PathNode {
+  const transformSubpath = (pts: readonly VectorAnchorPoint[], closed: boolean): VectorAnchorPoint[] => {
+    if (mode === 'corner') {
+      return pts.map((pt) => ({
+        id: pt.id,
+        x: pt.x,
+        y: pt.y,
+        pointType: 'corner',
+      }));
+    }
+    const fitted = fitCatmullRomToBezier(
+      pts.map((pt) => ({ x: pt.x, y: pt.y })),
+      closed,
+      0.24,
+    );
+    return fitted.map((pt, idx) => ({
+      ...pt,
+      id: pts[idx]?.id ?? pt.id,
+    }));
+  };
+
+  return normalizePathNode({
+    ...node,
+    shapeMeta: undefined,
+    points: transformSubpath(node.points, node.closed),
+    ...(node.subpaths
+      ? {
+          subpaths: node.subpaths.map((sp) => ({
+            closed: sp.closed,
+            points: transformSubpath(sp.points, sp.closed),
+          })),
+        }
+      : {}),
+  });
+}
+
+function offsetSimplePolygon(poly: readonly Point2D[], distance: number, miterLimit = 3.5): Point2D[] {
+  const n = poly.length;
+  if (n < 3 || Math.abs(distance) < 0.05) return [...poly];
+
+  // Ensure signed area sign is known (screen Y-down: positive signedArea = clockwise visual winding)
+  let twiceArea = 0;
+  for (let i = 0; i < n; i += 1) {
+    const a = poly[i];
+    const b = poly[(i + 1) % n];
+    twiceArea += a.x * b.y - b.x * a.y;
+  }
+  const orientation = twiceArea >= 0 ? 1 : -1;
+  const result: Point2D[] = [];
+
+  for (let i = 0; i < n; i += 1) {
+    const prev = poly[(i - 1 + n) % n];
+    const curr = poly[i];
+    const next = poly[(i + 1) % n];
+
+    const e1x = curr.x - prev.x;
+    const e1y = curr.y - prev.y;
+    const e2x = next.x - curr.x;
+    const e2y = next.y - curr.y;
+    const len1 = Math.hypot(e1x, e1y);
+    const len2 = Math.hypot(e2x, e2y);
+    if (len1 < EPS || len2 < EPS) {
+      result.push({ x: curr.x, y: curr.y });
+      continue;
+    }
+
+    // Outward unit normal in Y-down coordinates for CW polygon (orientation=+1): (dy, -dx)/len
+    const n1x = (e1y / len1) * orientation;
+    const n1y = (-e1x / len1) * orientation;
+    const n2x = (e2y / len2) * orientation;
+    const n2y = (-e2x / len2) * orientation;
+
+    const bx = n1x + n2x;
+    const by = n1y + n2y;
+    const bLen = Math.hypot(bx, by);
+    if (bLen < EPS) {
+      result.push({ x: curr.x + n1x * distance, y: curr.y + n1y * distance });
+      continue;
+    }
+
+    const ux = bx / bLen;
+    const uy = by / bLen;
+    const dot = Math.max(0.25, ux * n1x + uy * n1y);
+    const rawScale = distance / dot;
+    const clampedScale = Math.sign(rawScale) * Math.min(Math.abs(rawScale), Math.abs(distance) * miterLimit);
+    result.push({
+      x: roundCoord(curr.x + ux * clampedScale),
+      y: roundCoord(curr.y + uy * clampedScale),
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Illustrator Offset Path / CorelDRAW Contour Tool:
+ * Offsets any Rect, Ellipse, Frame, or Path contour outward (distance > 0) or
+ * inward (distance < 0) with miter-clamped corner joins.
+ */
+export function offsetPathNode(
+  node: DesignNode,
+  distancePx: number,
+  newId: string,
+): PathNode | null {
+  if (!Number.isFinite(distancePx) || Math.abs(distancePx) < 0.5) return null;
+  const world = toWorldPath(node);
+  if (!world) return null;
+
+  const sampledMain = sampleSubpathToPolygon(world.points, true, 14);
+  if (sampledMain.length < 3) return null;
+
+  // Compute original bounding box to reject inward offsets that exceed half-thickness
+  let origMinX = Infinity;
+  let origMaxX = -Infinity;
+  let origMinY = Infinity;
+  let origMaxY = -Infinity;
+  for (const pt of sampledMain) {
+    if (pt.x < origMinX) origMinX = pt.x;
+    if (pt.x > origMaxX) origMaxX = pt.x;
+    if (pt.y < origMinY) origMinY = pt.y;
+    if (pt.y > origMaxY) origMaxY = pt.y;
+  }
+  const origW = origMaxX - origMinX;
+  const origH = origMaxY - origMinY;
+  if (distancePx < 0 && Math.abs(distancePx) >= Math.min(origW, origH) / 2 - 0.5) {
+    return null;
+  }
+
+  const offsetMain = offsetSimplePolygon(sampledMain, distancePx);
+  if (offsetMain.length < 3) return null;
+
+  // Reject collapsed inward offset whose signed area vanished, flipped, or inverted edge directions
+  let origArea = 0;
+  let nextArea = 0;
+  let invertedEdges = 0;
+  for (let i = 0; i < sampledMain.length; i += 1) {
+    const a = sampledMain[i];
+    const b = sampledMain[(i + 1) % sampledMain.length];
+    const oa = offsetMain[i];
+    const ob = offsetMain[(i + 1) % offsetMain.length];
+    origArea += a.x * b.y - b.x * a.y;
+    nextArea += oa.x * ob.y - ob.x * oa.y;
+    const dot = (b.x - a.x) * (ob.x - oa.x) + (b.y - a.y) * (ob.y - oa.y);
+    if (dot < 0) invertedEdges += 1;
+  }
+  if (
+    Math.abs(nextArea) < 4 ||
+    origArea * nextArea < 0 ||
+    (distancePx < 0 && (Math.abs(nextArea) >= Math.abs(origArea) || invertedEdges > sampledMain.length / 2))
+  ) {
+    return null;
+  }
+
+  const mainAnchors = polygonToAnchors(offsetMain);
+  const subpaths: VectorSubpath[] = [];
+  if (world.subpaths) {
+    for (const sp of world.subpaths) {
+      const spPoly = sampleSubpathToPolygon(sp.points, true, 14);
+      if (spPoly.length >= 3) {
+        const offsetSp = offsetSimplePolygon(spPoly, -distancePx);
+        if (offsetSp.length >= 3) {
+          subpaths.push({ points: polygonToAnchors(offsetSp), closed: true });
+        }
+      }
+    }
+  }
+
+  const baseStyle = getBaseStyle(node);
+  return normalizePathNode({
+    id: newId,
+    name: `${node.name} Offset (${distancePx > 0 ? '+' : ''}${Math.round(distancePx)}px)`,
+    type: 'path',
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    rotation: 0,
+    opacity: node.opacity,
+    visible: true,
+    locked: false,
+    onCanvas: true,
+    ...(node.parentId !== undefined ? { parentId: node.parentId } : {}),
+    points: mainAnchors,
+    closed: true,
+    ...(subpaths.length > 0 ? { subpaths } : {}),
+    pathKind: 'outline',
+    style: {
+      ...baseStyle,
+      fillRule: subpaths.length > 0 ? 'evenodd' : baseStyle.fillRule,
+    },
+  });
+}
+
 // ============================================================================
 // Concave-Safe 2D Planar Pathfinder & Interactive Shape Builder Engine
 // ============================================================================
@@ -1060,9 +1284,11 @@ export function applyPathfinderOperation(
   if (vectorNodes.length < 2) return null;
 
   const baseNode = vectorNodes[0].node;
+  const topNode = vectorNodes[vectorNodes.length - 1].node;
   const opLabels: Record<PathfinderOperation, string> = {
     unite: 'United Path',
     subtract: 'Subtracted Path',
+    'minus-back': 'Minus Back Path',
     intersect: 'Intersected Path',
     exclude: 'Excluded Path',
   };
@@ -1072,11 +1298,18 @@ export function applyPathfinderOperation(
   const totalCount = vectorNodes.length;
 
   let selectedFaces: PlanarFace[];
+  let styleTemplate: DesignNode = baseNode;
   if (operation === 'unite') {
     selectedFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length >= 1);
   } else if (operation === 'subtract') {
     selectedFaces = arrangement.faces.filter(
       (face) => face.memberShapeIndices.length === 1 && face.memberShapeIndices[0] === 0,
+    );
+  } else if (operation === 'minus-back') {
+    const topIndex = totalCount - 1;
+    styleTemplate = topNode;
+    selectedFaces = arrangement.faces.filter(
+      (face) => face.memberShapeIndices.length === 1 && face.memberShapeIndices[0] === topIndex,
     );
   } else if (operation === 'intersect') {
     selectedFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length === totalCount);
@@ -1086,11 +1319,45 @@ export function applyPathfinderOperation(
 
   return buildPathNodeFromFaces(
     selectedFaces,
-    baseNode,
+    styleTemplate,
     newId,
     opLabels[operation],
     operation === 'unite' ? 'nonzero' : 'evenodd',
   );
+}
+
+/**
+ * Illustrator Pathfinder Divide / CorelDRAW Break Overlapping Shapes:
+ * Splits 2+ overlapping shapes into individual atomic planar PathNodes,
+ * each inheriting the style of its topmost contributing source shape.
+ */
+export function divideNodesWithPathfinder(
+  nodes: readonly DesignNode[],
+  createNewId: () => string,
+): PathNode[] | null {
+  const vectorNodes = nodes
+    .map((node) => ({ node, world: toWorldPath(node) }))
+    .filter((item): item is { node: DesignNode; world: NonNullable<ReturnType<typeof toWorldPath>> } => item.world !== null);
+
+  if (vectorNodes.length < 2) return null;
+  const arrangement = buildPlanarArrangement(vectorNodes.map((item) => worldPathToPlanarShape(item.world)));
+  if (arrangement.faces.length === 0) return null;
+
+  const divided: PathNode[] = [];
+  arrangement.faces.forEach((face, idx) => {
+    const topIdx = face.memberShapeIndices[face.memberShapeIndices.length - 1] ?? 0;
+    const template = vectorNodes[topIdx]?.node ?? vectorNodes[0].node;
+    const built = buildPathNodeFromFaces(
+      [face],
+      template,
+      createNewId(),
+      `${template.name} Part ${idx + 1}`,
+      'nonzero',
+    );
+    if (built) divided.push(built);
+  });
+
+  return divided.length > 0 ? divided : null;
 }
 
 /**

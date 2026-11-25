@@ -12,6 +12,7 @@ import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
 import { ToolOptionsBar } from '../ToolOptionsBar';
 import { stepCanvasZoom } from './canvasViewState';
 import { StudioIcon } from './StudioIcon';
+import type { StudioVectorActions } from './inspectorVectorHelpers';
 import type { ComponentRecoveryStatus } from './useComponentMasterLifecycle';
 
 const LazyNodeLogicWorkspace = lazy(() => import('./NodeLogicWorkspace'));
@@ -87,6 +88,7 @@ export interface MainCanvasWindowProps {
   onToolOperationBatch: (operations: readonly ValidatedToolOperation[]) => void;
   onLayerDrop: (nodeIds: string[]) => void;
   onDropImageFiles?: (files: readonly File[], point: { x: number; y: number }) => void;
+  studioActions?: StudioVectorActions;
 }
 
 export function MainCanvasWindow({
@@ -138,6 +140,7 @@ export function MainCanvasWindow({
   onToolOperationBatch,
   onLayerDrop,
   onDropImageFiles,
+  studioActions,
 }: MainCanvasWindowProps) {
   const [rendererMode, setRendererMode] = useState<ViewportRendererMode>('auto');
   const [gpuMetrics, setGpuMetrics] = useState<GpuSceneMetrics | null>(null);
@@ -264,6 +267,7 @@ export function MainCanvasWindow({
               onSimplifyPath={onSimplifyPath}
               onTogglePathClosed={onTogglePathClosed}
               onSelectTool={onSelectTool}
+              studioActions={studioActions}
             />
             <Canvas
               document={document}
@@ -378,6 +382,7 @@ export interface ComponentCanvasWindowProps {
   onToolOperationBatch: (operations: readonly ValidatedToolOperation[]) => void;
   onLayerDrop: (nodeIds: string[]) => void;
   onDropImageFiles?: (files: readonly File[], point: { x: number; y: number }) => void;
+  studioActions?: StudioVectorActions;
 }
 
 export function ComponentCanvasWindow({
@@ -438,6 +443,7 @@ export function ComponentCanvasWindow({
   onToolOperationBatch,
   onLayerDrop,
   onDropImageFiles,
+  studioActions,
 }: ComponentCanvasWindowProps) {
   const safeDocument = normalizeCanvasDocument(document);
   const safeNodes = safeDocument?.nodes ?? [];
@@ -589,6 +595,7 @@ export function ComponentCanvasWindow({
               onSimplifyPath={onSimplifyPath}
               onTogglePathClosed={onTogglePathClosed}
               onSelectTool={onSelectTool}
+              studioActions={studioActions}
             />
             {safeDocument ? (
               <Canvas

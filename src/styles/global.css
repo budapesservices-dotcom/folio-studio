@@ -8230,4 +8230,606 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   border-color: rgba(164, 148, 255, 0.45);
 }
 
+/* ==========================================================================
+   Adobe Illustrator & CorelDRAW Vector Studio: Tool Rail Swatch Dock &
+   Right-Hand Inspector Pro Controls
+   ========================================================================== */
+
+.tool-rail-swatch-dock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  width: 46px;
+  margin-top: auto;
+  padding: 6px 0 4px;
+  border-top: 1px solid #282f3d;
+}
+
+.tool-rail-swatch-dock + .rail-bottom {
+  margin-top: 2px;
+}
+
+.rail-swatch-stage {
+  position: relative;
+  width: 34px;
+  height: 30px;
+}
+
+.rail-swatch-fill,
+.rail-swatch-stroke {
+  position: absolute;
+  display: block;
+  width: 19px;
+  height: 19px;
+  border-radius: 4px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 110ms ease, box-shadow 110ms ease;
+}
+
+.rail-swatch-fill {
+  top: 0;
+  left: 0;
+  z-index: 2;
+  border: 1.5px solid rgba(255, 255, 255, 0.72);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+
+.rail-swatch-stroke {
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  background: #141822;
+  border: 4px solid #20212a;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.rail-swatch-fill:hover,
+.rail-swatch-stroke:hover {
+  transform: scale(1.06);
+}
+
+.rail-swatch-fill input,
+.rail-swatch-stroke input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.rail-swatch-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.rail-swatch-mini-btn {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid #2d3545;
+  border-radius: 4px;
+  background: #141822;
+  color: #9ba5b8;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rail-swatch-mini-btn:hover {
+  color: #f4f2ff;
+  border-color: #5b528d;
+  background: #272242;
+}
+
+.tool-rail.is-component-studio .rail-swatch-mini-btn:hover {
+  color: #fff2e1;
+  border-color: rgba(229, 154, 76, 0.55);
+  background: rgba(229, 154, 76, 0.18);
+}
+
+/* Inspector Studio Mode Tabs */
+.inspector-studio-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 3px;
+  padding: 6px 10px;
+  background: #161b25;
+  border-bottom: 1px solid var(--line);
+}
+
+.inspector-studio-tab {
+  flex: 0 1 auto;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #8f9bb1;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 110ms ease, color 110ms ease, border-color 110ms ease;
+}
+
+.inspector-studio-tab:hover {
+  color: #e9edf7;
+  background: #222938;
+}
+
+.inspector-studio-tab.is-active {
+  color: #f5f3ff;
+  background: #302b58;
+  border-color: rgba(164, 148, 255, 0.45);
+}
+
+/* 9-Point Reference Origin Matrix + Position Grid */
+.position-origin-layout {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: end;
+  gap: 8px;
+}
+
+.transform-origin-matrix {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 3px;
+  width: 44px;
+  height: 44px;
+  padding: 5px;
+  border: 1px solid #2b3344;
+  border-radius: 6px;
+  background: #121621;
+}
+
+.transform-origin-dot {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 1px solid #3c465c;
+  border-radius: 2px;
+  background: #1f2636;
+  cursor: pointer;
+  transition: background 90ms ease, border-color 90ms ease, transform 90ms ease;
+}
+
+.transform-origin-dot:hover {
+  border-color: #a494ff;
+  background: #342f5c;
+}
+
+.transform-origin-dot.is-active {
+  border-color: #c7bdff;
+  background: #8b7cf6;
+  box-shadow: 0 0 0 1px rgba(139, 124, 246, 0.45);
+}
+
+/* Badges, Sublabels & Compact Action Grids */
+.inspector-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid #2e3648;
+  border-radius: 4px;
+  background: #141925;
+  color: #9ba7be;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.inspector-vector-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.inspector-sublabel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.inspector-sublabel {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #8f9bb1;
+  letter-spacing: 0.2px;
+}
+
+.inspector-sublabel-val {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #c9d2e3;
+}
+
+.inspector-mini-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.inspector-quick-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.inspector-quick-row.cols-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.inspector-mini-btn {
+  height: 25px;
+  padding: 0 5px;
+  border: 1px solid #2c3445;
+  border-radius: 5px;
+  background: #151a26;
+  color: #c9d2e3;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+}
+
+.inspector-mini-btn:hover:not(:disabled) {
+  color: #ffffff;
+  border-color: #5b528d;
+  background: #272344;
+}
+
+.inspector-mini-btn.is-active,
+.inspector-mini-btn.is-accent {
+  color: #f4f2ff;
+  border-color: rgba(164, 148, 255, 0.55);
+  background: #352e68;
+}
+
+.inspector-mini-btn.is-accent:hover:not(:disabled) {
+  background: #443b84;
+}
+
+.inspector-mini-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Align & Distribute Icon Grid */
+.inspector-align-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.inspector-icon-btn {
+  display: grid;
+  place-items: center;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #2c3445;
+  border-radius: 5px;
+  background: #141925;
+  color: #bac4d8;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+}
+
+.inspector-icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.inspector-icon-btn:hover:not(:disabled) {
+  color: #ffffff;
+  border-color: #5f5695;
+  background: #292447;
+}
+
+.inspector-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* Step & Repeat Card */
+.step-repeat-card {
+  border: 1px solid #283041;
+  border-radius: 6px;
+  background: #131823;
+  overflow: hidden;
+}
+
+.step-repeat-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  color: #b7c2d6;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.step-repeat-toggle:hover {
+  background: #1b2232;
+  color: #eef2fa;
+}
+
+.step-repeat-caret {
+  font-size: 13px;
+  color: #8f9bb1;
+}
+
+.step-repeat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 8px 8px;
+}
+
+.step-repeat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.inspector-studio-primary-btn,
+.inspector-studio-secondary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.inspector-studio-primary-btn {
+  border: 1px solid rgba(164, 148, 255, 0.5);
+  background: #3a3272;
+  color: #f4f2ff;
+}
+
+.inspector-studio-primary-btn:hover {
+  background: #483f8a;
+}
+
+.inspector-studio-secondary-btn {
+  margin-top: 6px;
+  border: 1px solid #30394d;
+  background: #161c29;
+  color: #cdd5e5;
+}
+
+.inspector-studio-secondary-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.inspector-studio-secondary-btn:hover:not(:disabled) {
+  border-color: #61579a;
+  background: #272242;
+  color: #ffffff;
+}
+
+.inspector-studio-secondary-btn:disabled {
+  opacity: 0.36;
+  cursor: default;
+}
+
+/* Color Swatches Palette */
+.swatch-palette-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.swatch-doc-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.swatch-doc-row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.swatch-cell {
+  position: relative;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: transform 90ms ease, box-shadow 90ms ease;
+}
+
+.swatch-cell:hover {
+  transform: scale(1.08);
+  z-index: 2;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.7);
+}
+
+.swatch-cell.is-fill-active {
+  box-shadow: 0 0 0 2px #a494ff;
+}
+
+.swatch-cell.is-stroke-active {
+  outline: 1.5px dashed #f59e0b;
+  outline-offset: 1px;
+}
+
+.swatch-cell-none {
+  background:
+    linear-gradient(135deg, transparent 43%, #ef4444 43%, #ef4444 57%, transparent 57%),
+    #1b2230;
+}
+
+.inspector-swatch-tip {
+  margin: 6px 0 0;
+  color: #7d889e;
+  font-size: 10px;
+}
+
+/* Stroke / Outline Pen Controls */
+.stroke-pen-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #242b3a;
+}
+
+.stroke-preset-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.stroke-seg-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.style-segmented-row.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 0;
+}
+
+.style-segmented-row.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0;
+}
+
+.stroke-arrow-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.compact-toggle {
+  flex: 1 1 auto;
+  margin: 0;
+  gap: 6px;
+}
+
+/* Pathfinder / Shaping Studio Grid, Parametric Shapes & Offset Path */
+.shaping-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.shaping-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 44px;
+  padding: 5px 4px;
+  border: 1px solid #2d3546;
+  border-radius: 6px;
+  background: #141925;
+  color: #c5cfe1;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+}
+
+.shaping-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.shaping-btn:hover:not(:disabled) {
+  border-color: #675ca3;
+  background: #272244;
+  color: #ffffff;
+}
+
+.shaping-btn:disabled {
+  opacity: 0.34;
+  cursor: default;
+}
+
+.parametric-shape-card,
+.offset-path-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 7px 8px;
+  border: 1px solid #283041;
+  border-radius: 6px;
+  background: #131823;
+}
+
+.offset-keep-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #9ba7be;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.offset-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.offset-unit {
+  color: #8f9bb1;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.inspector-path-craft-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+}
+
+
 

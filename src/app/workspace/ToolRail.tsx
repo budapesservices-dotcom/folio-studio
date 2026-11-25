@@ -25,6 +25,16 @@ export interface ToolRailGroupDescriptor {
   tools: readonly CanvasToolId[];
 }
 
+export interface ToolRailColorSwatchProps {
+  fillColor: string;
+  strokeColor: string;
+  strokeWidth: number;
+  onChangeFill: (color: string) => void;
+  onChangeStroke: (color: string) => void;
+  onSwap: () => void;
+  onResetDefault: () => void;
+}
+
 export interface ToolRailProps {
   toolRailRef: RefObject<HTMLElement>;
   activeEditorId: EditorTarget;
@@ -35,6 +45,7 @@ export interface ToolRailProps {
   templateInsertMode: TemplateInsertMode;
   canUndo: boolean;
   canRedo: boolean;
+  colorSwatch?: ToolRailColorSwatchProps;
   onCloseTopMenus: () => void;
   onToggleToolRack: (groupId: string | null) => void;
   onChooseTool: (toolId: CanvasToolId) => void;
@@ -55,6 +66,7 @@ export function ToolRail({
   templateInsertMode,
   canUndo,
   canRedo,
+  colorSwatch,
   onCloseTopMenus,
   onToggleToolRack,
   onChooseTool,
@@ -183,6 +195,67 @@ export function ToolRail({
           </Suspense>
         )}
       </div>
+      {colorSwatch && (
+        <div
+          class="tool-rail-swatch-dock"
+          aria-label="Fill and Stroke swatches"
+          onMouseEnter={() => onUpdateToolbarHint(
+            'FILL & STROKE SWATCHES',
+            'Illustrator / CorelDRAW color dock: pick Fill or Stroke color, swap Fill & Stroke, or reset to default White/Ink.',
+          )}
+        >
+          <div class="rail-swatch-stage">
+            <label
+              class="rail-swatch-stroke"
+              style={{
+                borderColor: colorSwatch.strokeColor.startsWith('#') ? colorSwatch.strokeColor.slice(0, 7) : '#20212a',
+              }}
+              title={`Stroke color (${colorSwatch.strokeColor.toUpperCase()} · ${colorSwatch.strokeWidth}px)`}
+            >
+              <input
+                type="color"
+                aria-label="Active stroke color"
+                value={colorSwatch.strokeColor.startsWith('#') && colorSwatch.strokeColor.length >= 7 ? colorSwatch.strokeColor.slice(0, 7) : '#20212a'}
+                onInput={(event) => colorSwatch.onChangeStroke(event.currentTarget.value)}
+              />
+            </label>
+            <label
+              class="rail-swatch-fill"
+              style={{
+                backgroundColor: colorSwatch.fillColor.startsWith('#') ? colorSwatch.fillColor.slice(0, 7) : '#8b7cf6',
+              }}
+              title={`Fill color (${colorSwatch.fillColor.toUpperCase()})`}
+            >
+              <input
+                type="color"
+                aria-label="Active fill color"
+                value={colorSwatch.fillColor.startsWith('#') && colorSwatch.fillColor.length >= 7 ? colorSwatch.fillColor.slice(0, 7) : '#8b7cf6'}
+                onInput={(event) => colorSwatch.onChangeFill(event.currentTarget.value)}
+              />
+            </label>
+          </div>
+          <div class="rail-swatch-controls">
+            <button
+              type="button"
+              class="rail-swatch-mini-btn"
+              title="Swap Fill & Stroke"
+              aria-label="Swap Fill and Stroke"
+              onClick={colorSwatch.onSwap}
+            >
+              ⇄
+            </button>
+            <button
+              type="button"
+              class="rail-swatch-mini-btn"
+              title="Default Fill (White) & Stroke (Ink)"
+              aria-label="Reset default Fill and Stroke"
+              onClick={colorSwatch.onResetDefault}
+            >
+              ◧
+            </button>
+          </div>
+        </div>
+      )}
       <div class="rail-bottom">
         <button class="tool-button" title="Undo" aria-label="Undo" disabled={!canUndo} onClick={onUndo}>
           <StudioIcon name="undo" />
