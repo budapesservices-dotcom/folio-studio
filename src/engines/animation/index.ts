@@ -73,3 +73,13 @@ export {
   type ImportedMorphKeyframe,
 } from './componentMorphImport';
 
+export {
+  buildNodeSvgSmilAnimations,
+  buildSvgPathMorphSmil,
+  documentHasAnyAnimations,
+  getEffectivePageAnimationDurationMs,
+  type NodeSvgAnimationBundle,
+  type SvgMorphTrackSmilResult,
+} from './svgExport';
+
+

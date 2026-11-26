@@ -13,6 +13,7 @@ import { compilePageAnimationsCss } from './codegen';
 import { applyAnimatedPosesToDocument, evaluateClipAtTime } from './evaluator';
 import { encodeAnimatedGif, type GifFrameInput } from './gifEncoder';
 import { muxIsoBmffVideo, muxWebmVideo, type MuxedVideoSample } from './videoMuxer';
+import { getEffectivePageAnimationDurationMs } from './svgExport';
 
 export type MotionExportFormatId =
   | 'mp4'
@@ -20,6 +21,7 @@ export type MotionExportFormatId =
   | 'webm'
   | 'gif'
   | 'png-sequence'
+  | 'svg'
   | 'html5'
   | 'css'
   | 'json';
@@ -113,6 +115,19 @@ export const MOTION_EXPORT_FORMATS: readonly MotionExportFormatSpec[] = [
     supportsResolution: true,
     supportsQuality: false,
     description: 'Lossless frame-by-frame PNGs + manifest.json with full RGBA transparency.',
+  },
+  {
+    id: 'svg',
+    label: 'Animated SVG',
+    shortLabel: 'SVG',
+    extension: 'svg',
+    mimeType: 'image/svg+xml;charset=utf-8',
+    category: 'web',
+    supportsAlpha: true,
+    supportsFps: false,
+    supportsResolution: false,
+    supportsQuality: false,
+    description: 'Resolution-independent vector SVG with native SMIL animations & shape morphing.',
   },
   {
     id: 'html5',
@@ -462,6 +477,7 @@ export async function renderAnimatedFrameToCanvas(
     assets: project.assets,
     breakpoint: options.breakpoint ?? 'desktop',
     rasterizeSafe: true,
+    animationTimeMs: timeMs,
   });
 
   const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
@@ -743,10 +759,40 @@ export async function exportMotionAnimation(
   const filename = createMotionExportFilename(project.metadata.name, clipName, options.format);
   const startMs = Math.max(0, Math.round(options.startMs));
   const rawEnd = Math.round(options.endMs);
-  const endMs = Math.max(startMs, rawEnd > startMs ? rawEnd : (clip?.durationMs ?? 1000));
+  const effectiveDuration = getEffectivePageAnimationDurationMs(project, page, clip);
+  const endMs = Math.max(startMs, rawEnd > startMs ? rawEnd : effectiveDuration);
   const durationMs = Math.max(100, endMs - startMs);
 
   // --- Lightweight Web / Code Formats (Instant, zero canvas rasterization needed) ---
+  if (options.format === 'svg') {
+    options.onProgress?.({ phase: 'encoding', frame: 1, totalFrames: 1, percent: 80, message: 'Compiling standalone Animated SVG…' });
+    const svgDoc = options.transparentBackground
+      ? { ...page.document, background: 'transparent' }
+      : page.document;
+    const svg = serializeDocumentToSvgString(svgDoc, project.components, {
+      title: `${project.metadata.name} - ${clipName}`,
+      designTokens: getProjectDesignTokens(project),
+      assets: project.assets,
+      breakpoint: options.breakpoint ?? 'desktop',
+      embedAnimations: true,
+      activeClip: clip,
+    });
+    const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+    options.onProgress?.({ phase: 'complete', frame: 1, totalFrames: 1, percent: 100, message: 'Animated SVG ready.' });
+    return {
+      blob,
+      filename,
+      format: 'svg',
+      codecLabel: 'Standalone SMIL Animated SVG',
+      width: page.document.width,
+      height: page.document.height,
+      fps: 60,
+      totalFrames: 1,
+      durationMs,
+      sizeBytes: blob.size,
+    };
+  }
+
   if (options.format === 'html5') {
     options.onProgress?.({ phase: 'encoding', frame: 1, totalFrames: 1, percent: 80, message: 'Compiling standalone HTML5 animation…' });
     const html = buildLivePreviewHtml(project, {

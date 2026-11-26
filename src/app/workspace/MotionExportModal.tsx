@@ -1,6 +1,7 @@
 import { createPortal } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { AnimationClip, BreakpointId, FolioPage, FolioProject } from '../../core/document/types';
+import { getEffectivePageAnimationDurationMs } from '../../engines/animation/svgExport';
 import {
   MOTION_EXPORT_FORMATS,
   MOTION_EXPORT_RESOLUTIONS,
@@ -60,7 +61,10 @@ export function MotionExportModal({
     [pageClips, selectedClipId, activeClip],
   );
 
-  const clipDurationMs = selectedClip?.durationMs ?? 1200;
+  const clipDurationMs = useMemo(
+    () => getEffectivePageAnimationDurationMs(project, activePage, selectedClip),
+    [project, activePage, selectedClip],
+  );
   const [startMs, setStartMs] = useState<number>(0);
   const [endMs, setEndMs] = useState<number>(clipDurationMs);
 
@@ -84,10 +88,10 @@ export function MotionExportModal({
 
   useEffect(() => {
     setStartMs(0);
-    setEndMs(selectedClip?.durationMs ?? 1200);
+    setEndMs(clipDurationMs);
     setLastResult(null);
     setErrorMessage(null);
-  }, [selectedClip?.id, selectedClip?.durationMs]);
+  }, [selectedClip?.id, clipDurationMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -211,6 +215,7 @@ export function MotionExportModal({
     }
     if (format === 'gif') return transparentBackground ? 'GIF89a LZW + Alpha' : 'GIF89a LZW 256-Color';
     if (format === 'png-sequence') return transparentBackground ? 'Lossless PNG RGBA + manifest.json' : 'Lossless PNG + manifest.json';
+    if (format === 'svg') return 'Standalone SMIL Animated SVG';
     if (format === 'html5') return 'Standalone HTML5 + CSS @keyframes';
     if (format === 'css') return 'CSS3 @keyframes + Custom Curves';
     return 'Folio Motion JSON v1';

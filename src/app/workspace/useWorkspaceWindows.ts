@@ -13,7 +13,12 @@ import {
   type WorkspaceLayoutV1,
   type WorkspacePreferencesLoadResult,
 } from '../workspacePreferences';
-import { readCanvasViewState, type CanvasViewState } from './canvasViewState';
+import {
+  DEFAULT_CANVAS_ZOOM,
+  computeCenteredComponentView,
+  readCanvasViewState,
+  type CanvasViewState,
+} from './canvasViewState';
 
 export interface UseWorkspaceWindowsOptions {
   setActiveEditorId: (target: EditorTarget) => void;
@@ -103,6 +108,32 @@ export function useWorkspaceWindows({
   }, []);
   const setComponentCanvasPan = useCallback((pan: { x: number; y: number }) => {
     setComponentView((view) => ({ ...view, pan }));
+  }, []);
+  const resetMainView = useCallback(() => {
+    setMainView({ zoom: DEFAULT_CANVAS_ZOOM, pan: { x: 0, y: 0 } });
+  }, []);
+  const centerComponentCanvasView = useCallback((docWidth: number, docHeight: number) => {
+    const applyCenteredView = () => {
+      let vpW = 900;
+      let vpH = 560;
+      if (typeof document !== 'undefined') {
+        const compStage = document.querySelector<HTMLElement>('.component-canvas-window .canvas-scroll-area');
+        const fallbackStage = document.querySelector<HTMLElement>('.workspace-center');
+        const rect = compStage?.getBoundingClientRect() ?? fallbackStage?.getBoundingClientRect();
+        if (rect && rect.width > 160 && rect.height > 140) {
+          vpW = rect.width;
+          vpH = rect.height;
+        } else if (typeof window !== 'undefined') {
+          vpW = Math.max(480, window.innerWidth - 520);
+          vpH = Math.max(320, window.innerHeight - 160);
+        }
+      }
+      setComponentView(computeCenteredComponentView(docWidth, docHeight, vpW, vpH));
+    };
+    applyCenteredView();
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => applyCenteredView());
+    }
   }, []);
 
   const [canvasMinimized, setCanvasMinimized] = useState(
@@ -487,10 +518,12 @@ export function useWorkspaceWindows({
     zoom: mainView.zoom,
     setZoom,
     setMainPan,
+    resetMainView,
     componentView,
     componentCanvasZoom: componentView.zoom,
     setComponentCanvasZoom,
     setComponentCanvasPan,
+    centerComponentCanvasView,
     canvasMinimized,
     setCanvasMinimized,
     canvasClosed,

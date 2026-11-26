@@ -252,7 +252,10 @@ export function GlobalToolbar({
                 aria-haspopup="menu"
                 aria-expanded={openMenu === 'file'}
                 onClick={() => onToggleMenu('file')}
-                onMouseEnter={() => onUpdateToolbarHint('FILE', 'Create, open, or export native .flop projects.')}
+                onMouseEnter={() => {
+                  if (openMenu !== null && openMenu !== 'file') onToggleMenu('file');
+                  onUpdateToolbarHint('FILE', 'Create, open, or export native .flop projects.');
+                }}
               >
                 File
               </button>
@@ -320,7 +323,10 @@ export function GlobalToolbar({
                 aria-haspopup="menu"
                 aria-expanded={openMenu === 'edit'}
                 onClick={() => onToggleMenu('edit')}
-                onMouseEnter={() => onUpdateToolbarHint('EDIT', 'History, clipboard, grouping, masking, and selection commands.')}
+                onMouseEnter={() => {
+                  if (openMenu !== null && openMenu !== 'edit') onToggleMenu('edit');
+                  onUpdateToolbarHint('EDIT', 'History, clipboard, grouping, masking, and selection commands.');
+                }}
               >
                 Edit
               </button>
@@ -349,7 +355,7 @@ export function GlobalToolbar({
                   </button>
                   <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.hasSelection} onClick={() => runMenuAction(menuActions.onDuplicate)}>
                     <span>Duplicate</span>
-                    <kbd class="global-menu-shortcut">Ctrl+Shift+D</kbd>
+                    <kbd class="global-menu-shortcut">Ctrl+D</kbd>
                   </button>
                   <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating} onClick={() => runMenuAction(menuActions.onSelectAll)}>
                     <span>Select All</span>
@@ -401,7 +407,10 @@ export function GlobalToolbar({
                 aria-haspopup="menu"
                 aria-expanded={openMenu === 'view'}
                 onClick={() => onToggleMenu('view')}
-                onMouseEnter={() => onUpdateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.')}
+                onMouseEnter={() => {
+                  if (openMenu !== null && openMenu !== 'view') onToggleMenu('view');
+                  onUpdateToolbarHint('VIEW', 'Workspace display, panels, zoom and window layout controls.');
+                }}
               >
                 View
               </button>
@@ -452,7 +461,10 @@ export function GlobalToolbar({
                 aria-haspopup="menu"
                 aria-expanded={openMenu === 'tools'}
                 onClick={() => onToggleMenu('tools')}
-                onMouseEnter={() => onUpdateToolbarHint('TOOLS', 'Switch canvas tools and invoke vector pathfinder or transform operations.')}
+                onMouseEnter={() => {
+                  if (openMenu !== null && openMenu !== 'tools') onToggleMenu('tools');
+                  onUpdateToolbarHint('TOOLS', 'Switch canvas tools and invoke vector pathfinder or transform operations.');
+                }}
               >
                 Tools
               </button>
@@ -518,7 +530,10 @@ export function GlobalToolbar({
                 aria-haspopup="menu"
                 aria-expanded={openMenu === 'option'}
                 onClick={() => onToggleMenu('option')}
-                onMouseEnter={() => onUpdateToolbarHint('OPTION', 'Design token themes, workspace racks, and layout preferences.')}
+                onMouseEnter={() => {
+                  if (openMenu !== null && openMenu !== 'option') onToggleMenu('option');
+                  onUpdateToolbarHint('OPTION', 'Design token themes, workspace racks, and layout preferences.');
+                }}
               >
                 Option
               </button>
@@ -567,7 +582,10 @@ export function GlobalToolbar({
                 aria-haspopup="menu"
                 aria-expanded={openMenu === 'help'}
                 onClick={() => onToggleMenu('help')}
-                onMouseEnter={() => onUpdateToolbarHint('HELP', 'Open the categorized Keyboard Shortcuts cheat sheet.', ['KEY: ?', 'CTRL/CMD + /'])}
+                onMouseEnter={() => {
+                  if (openMenu !== null && openMenu !== 'help') onToggleMenu('help');
+                  onUpdateToolbarHint('HELP', 'Open the categorized Keyboard Shortcuts cheat sheet.', ['KEY: ?', 'CTRL/CMD + /']);
+                }}
               >
                 Help
               </button>

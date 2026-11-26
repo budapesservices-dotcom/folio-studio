@@ -15,6 +15,7 @@ import {
   type CanvasToolId,
   type CanvasToolOptions,
 } from '../engines/canvas/tools/types';
+import { documentHasAnyAnimations } from '../engines/animation/svgExport';
 import { InspectorPanel } from './InspectorPanel';
 import type { StudioClipboardPayload } from './nodeClipboard';
 import { createEditorState } from './editorReducer';
@@ -224,6 +225,7 @@ export function App() {
     setComponentRackOpen: windows.setComponentRackOpen,
     closePagesRack,
     closeComponentRack,
+    onCenterComponentCanvas: windows.centerComponentCanvasView,
     setNotice,
   });
 
@@ -611,6 +613,12 @@ export function App() {
     designTokens: designSystem.designTokens,
     focusedCommandClient,
     setActiveZoom: activeEditorId === 'main' ? windows.setZoom : windows.setComponentCanvasZoom,
+    onResetView: activeEditorId === 'main'
+      ? windows.resetMainView
+      : () => windows.centerComponentCanvasView(
+        componentDocument?.width ?? 420,
+        componentDocument?.height ?? 280,
+      ),
     onCut: selectionActions.cutSelection,
     onCopy: selectionActions.copySelection,
     onPaste: selectionActions.pasteSelection,
@@ -626,6 +634,19 @@ export function App() {
   });
   const activeMotionProject = activeEditorId === 'component' ? componentState.project : state.project;
   const activeMotionPage = getActivePage(activeMotionProject);
+  const motionExportProject = useMemo(() => {
+    if (activeEditorId !== 'component') return state.project;
+    return {
+      ...activeMotionProject,
+      metadata: {
+        ...activeMotionProject.metadata,
+        name: componentMaster.editingComponent?.name ?? activeMotionProject.metadata.name,
+      },
+      components: state.project.components,
+      assets: state.project.assets,
+      designTokens: state.project.designTokens,
+    };
+  }, [activeEditorId, state.project, activeMotionProject, componentMaster.editingComponent?.name]);
   const activeMotionSelectedNodeIds = focusedEditor.state.selectedNodeIds;
   const motion = useMotionPlayback({
     workspaceScope: activeEditorId,
@@ -658,15 +679,11 @@ export function App() {
     onCanvasInteraction: () => { selectionSourceRef.current = 'canvas'; },
   });
 
-  // Live animation clock for saved animated Component Instances placed on the Main Page
-  const hasAnimatedComponentsOnMain = useMemo(() => {
-    const componentsById = new Map(state.project.components.map((component) => [component.id, component]));
-    return activeDocument.nodes.some((node) => {
-      if (node.type !== 'component-instance' || node.onCanvas === false) return false;
-      const master = componentsById.get(node.componentId);
-      return Boolean(master?.animations?.some((clip) => clip.tracks.length > 0));
-    });
-  }, [activeDocument.nodes, state.project.components]);
+  // Live animation clock for saved animated Component Instances (including nested) placed on the Main Page
+  const hasAnimatedComponentsOnMain = useMemo(
+    () => documentHasAnyAnimations(activeDocument.nodes, state.project.components, null),
+    [activeDocument.nodes, state.project.components],
+  );
 
   const [componentAnimPlaying, setComponentAnimPlaying] = useState(true);
   const [componentAnimTimeMs, setComponentAnimTimeMs] = useState(0);
@@ -810,7 +827,14 @@ export function App() {
           else { windows.setNodeLogicClosed(true); windows.setNodeLogicMinimized(false); }
         }}
         onToggleCodeWorkspace={() => setCodeWorkspaceOpen((open) => { if (!open) setActiveEditorId('main'); return !open; })}
-        onToggleMotionTimeline={() => motion.toggleMotionOpen()}
+        onToggleMotionTimeline={() => {
+          if (!motion.motionOpen) {
+            closePagesRack();
+            closeComponentRack();
+            designSystem.closeTokensRack();
+          }
+          motion.toggleMotionOpen();
+        }}
         onEnterFullscreen={enterFullscreen}
         onUpdateToolbarHint={updateToolbarHint}
       />
@@ -930,6 +954,7 @@ export function App() {
         onUndo={() => focusedCommandClient.undo()}
         onRedo={() => focusedCommandClient.redo()}
         onZoomChange={windows.setZoom}
+        onResetView={windows.resetMainView}
         onMinimize={() => windows.setCanvasMinimized(true)}
         onRestore={() => windows.setCanvasMinimized(false)}
         onToggleFloating={() => windows.setCanvasWindowMode(windows.canvasFloating ? 'docked' : 'floating')}
@@ -1027,6 +1052,10 @@ export function App() {
         onUndo={() => componentCommandClient.undo()}
         onRedo={() => componentCommandClient.redo()}
         onZoomChange={windows.setComponentCanvasZoom}
+        onResetView={() => windows.centerComponentCanvasView(
+          componentDocument?.width ?? 420,
+          componentDocument?.height ?? 280,
+        )}
         onMinimize={() => { windows.setComponentCanvasMinimized(true); setActiveEditorId('main'); if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas'); }}
         onRestore={() => { windows.setComponentCanvasMinimized(false); setActiveEditorId('component'); windows.focusWindow('component-canvas'); }}
         onToggleFloating={() => windows.setComponentCanvasWindowMode(windows.componentCanvasFloating ? 'docked' : 'floating')}
@@ -1392,6 +1421,8 @@ export function App() {
       <WorkspaceModals
         project={state.project}
         activePage={activePage}
+        motionExportProject={motionExportProject}
+        motionExportPage={activeMotionPage}
         pageClips={motion.pageClips}
         activeClip={motion.activeClip}
         breakpoint={designSystem.activeBreakpoint}

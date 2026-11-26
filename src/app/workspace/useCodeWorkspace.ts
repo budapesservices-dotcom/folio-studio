@@ -507,11 +507,42 @@ export function useCodeWorkspace({
 
   const copySelectedFile = () => {
     if (!selectedFile) return;
+    const fallbackCopy = (): boolean => {
+      if (typeof document === 'undefined' || !document.body) return false;
+      const textarea = document.createElement('textarea');
+      textarea.value = selectedFile.content;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.top = '-9999px';
+      textarea.style.left = '-9999px';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      let copied = false;
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      } finally {
+        textarea.remove();
+      }
+      return copied;
+    };
+
     if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
       void navigator.clipboard.writeText(selectedFile.content).then(
         () => onNotice(`Copied ${selectedFile.path} to clipboard.`),
-        () => onNotice('Clipboard access was denied by the browser.'),
+        () => {
+          if (fallbackCopy()) {
+            onNotice(`Copied ${selectedFile.path} to clipboard.`);
+          } else {
+            onNotice('Clipboard access was denied by the browser.');
+          }
+        },
       );
+    } else if (fallbackCopy()) {
+      onNotice(`Copied ${selectedFile.path} to clipboard.`);
     } else {
       onNotice('Clipboard API is unavailable in this environment.');
     }

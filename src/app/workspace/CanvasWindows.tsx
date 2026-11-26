@@ -1,5 +1,5 @@
-import { lazy, Suspense } from 'preact/compat';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { createPortal, lazy, Suspense } from 'preact/compat';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { AssetReference, BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument, FolioProject } from '../../core/document/types';
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { CanvasToolId, CanvasToolOptions } from '../../core/tools/operationContract';
@@ -11,6 +11,7 @@ import { FloatingWindow } from '../FloatingWindow';
 import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
 import { ToolOptionsBar } from '../ToolOptionsBar';
 import { stepCanvasZoom } from './canvasViewState';
+import { clampContextMenuPosition } from './StudioContextMenu';
 import { StudioIcon } from './StudioIcon';
 import { isTransparentColor, parseColorWithAlpha } from '../../core/document/styling';
 import type { StudioVectorActions } from './inspectorVectorHelpers';
@@ -26,12 +27,41 @@ interface RendererModeMenuProps {
 
 function RendererModeMenu({ rendererMode, gpuMetrics, onChangeMode }: RendererModeMenuProps) {
   const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [coords, setCoords] = useState<{ x: number; y: number } | null>(null);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open || !anchorRef.current) {
+      setCoords(null);
+      return;
+    }
+    const updatePosition = () => {
+      if (!anchorRef.current) return;
+      const rect = anchorRef.current.getBoundingClientRect();
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1440;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 900;
+      const menuW = popoverRef.current?.offsetWidth || 232;
+      const menuH = popoverRef.current?.offsetHeight || 180;
+      setCoords(clampContextMenuPosition(rect.left, rect.bottom + 6, menuW, menuH, vw, vh));
+    };
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const handleOutside = (event: PointerEvent) => {
-      if (menuRef.current && event.target instanceof Node && menuRef.current.contains(event.target)) return;
+      const target = event.target;
+      if (target instanceof Node) {
+        if (anchorRef.current?.contains(target)) return;
+        if (popoverRef.current?.contains(target)) return;
+      }
       setOpen(false);
     };
     const handleKey = (event: KeyboardEvent) => {
@@ -47,8 +77,56 @@ function RendererModeMenu({ rendererMode, gpuMetrics, onChangeMode }: RendererMo
 
   const currentLabel = rendererMode === 'gpu-hybrid' ? 'GPU' : rendererMode === 'svg-dom' ? 'SVG' : 'Auto';
 
+  const menuEl = open ? (
+    <div
+      ref={popoverRef}
+      class="canvas-renderer-menu"
+      role="menu"
+      aria-label="Canvas viewport renderer"
+      data-testid="canvas-renderer-menu"
+      style={
+        coords
+          ? { position: 'fixed', left: `${coords.x}px`, top: `${coords.y}px`, right: 'auto' }
+          : { position: 'fixed', left: '-9999px', top: '-9999px', right: 'auto' }
+      }
+    >
+      <div class="studio-opt-popover-title">Viewport Renderer</div>
+      {([
+        { id: 'auto', label: 'Auto (Recommended)', detail: 'SVG < 250 layers · GPU ≥ 250' },
+        { id: 'gpu-hybrid', label: 'Hybrid GPU', detail: 'WebGL2 SDF + 512px Tile Cache' },
+        { id: 'svg-dom', label: 'SVG DOM', detail: 'Pure vector DOM rendering' },
+      ] as const).map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          role="menuitemradio"
+          aria-checked={rendererMode === item.id}
+          class={`studio-opt-popover-item${rendererMode === item.id ? ' is-active' : ''}`}
+          onClick={() => {
+            onChangeMode(item.id);
+            setOpen(false);
+          }}
+        >
+          <span class="renderer-menu-copy">
+            <strong>{item.label}</strong>
+            <small>{item.detail}</small>
+          </span>
+          {rendererMode === item.id && <span aria-hidden="true">✓</span>}
+        </button>
+      ))}
+      {gpuMetrics && (
+        <>
+          <div class="studio-opt-popover-divider" role="separator" />
+          <div class="renderer-menu-metrics">
+            {gpuMetrics.backend} · {gpuMetrics.instancedPrimitives} primitives · {gpuMetrics.lastFrameMs.toFixed(1)}ms
+          </div>
+        </>
+      )}
+    </div>
+  ) : null;
+
   return (
-    <div class="canvas-renderer-popover" ref={menuRef}>
+    <div class="canvas-renderer-popover" ref={anchorRef}>
       <button
         type="button"
         class={`renderer-mode-compact-btn${open ? ' is-open' : ''}${gpuMetrics ? ' is-gpu-active' : ''}`}
@@ -65,42 +143,7 @@ function RendererModeMenu({ rendererMode, gpuMetrics, onChangeMode }: RendererMo
         <span>{currentLabel}</span>
         <span class="renderer-mode-caret" aria-hidden="true">▾</span>
       </button>
-      {open && (
-        <div class="canvas-renderer-menu" role="menu" aria-label="Canvas viewport renderer">
-          <div class="studio-opt-popover-title">Viewport Renderer</div>
-          {([
-            { id: 'auto', label: 'Auto (Recommended)', detail: 'SVG < 250 layers · GPU ≥ 250' },
-            { id: 'gpu-hybrid', label: 'Hybrid GPU', detail: 'WebGL2 SDF + 512px Tile Cache' },
-            { id: 'svg-dom', label: 'SVG DOM', detail: 'Pure vector DOM rendering' },
-          ] as const).map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="menuitemradio"
-              aria-checked={rendererMode === item.id}
-              class={`studio-opt-popover-item${rendererMode === item.id ? ' is-active' : ''}`}
-              onClick={() => {
-                onChangeMode(item.id);
-                setOpen(false);
-              }}
-            >
-              <span class="renderer-menu-copy">
-                <strong>{item.label}</strong>
-                <small>{item.detail}</small>
-              </span>
-              {rendererMode === item.id && <span aria-hidden="true">✓</span>}
-            </button>
-          ))}
-          {gpuMetrics && (
-            <>
-              <div class="studio-opt-popover-divider" role="separator" />
-              <div class="renderer-menu-metrics">
-                {gpuMetrics.backend} · {gpuMetrics.instancedPrimitives} primitives · {gpuMetrics.lastFrameMs.toFixed(1)}ms
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      {menuEl && (typeof document !== 'undefined' ? createPortal(menuEl, document.body) : menuEl)}
     </div>
   );
 }
@@ -218,6 +261,7 @@ export interface MainCanvasWindowProps {
   onUndo: () => void;
   onRedo: () => void;
   onZoomChange: (next: number | ((current: number) => number)) => void;
+  onResetView?: () => void;
   onMinimize: () => void;
   onRestore: () => void;
   onToggleFloating: () => void;
@@ -276,6 +320,7 @@ export function MainCanvasWindow({
   onUndo,
   onRedo,
   onZoomChange,
+  onResetView,
   onMinimize,
   onRestore,
   onToggleFloating,
@@ -398,7 +443,14 @@ export function MainCanvasWindow({
                 <button class="zoom-button" title="Zoom out" onClick={() => onZoomChange((value) => stepCanvasZoom(value, 'out'))}>
                   <StudioIcon name="minus" />
                 </button>
-                <span class="zoom-value">{Math.round(zoom * 100)}%</span>
+                <button
+                  type="button"
+                  class="zoom-value"
+                  title="Reset zoom and center canvas"
+                  onClick={() => (onResetView ? onResetView() : onZoomChange(1))}
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
                 <button class="zoom-button" title="Zoom in" onClick={() => onZoomChange((value) => stepCanvasZoom(value, 'in'))}>
                   <StudioIcon name="plus" />
                 </button>
@@ -536,6 +588,7 @@ export interface ComponentCanvasWindowProps {
   onUndo: () => void;
   onRedo: () => void;
   onZoomChange: (next: number | ((current: number) => number)) => void;
+  onResetView?: () => void;
   onMinimize: () => void;
   onRestore: () => void;
   onToggleFloating: () => void;
@@ -599,6 +652,7 @@ export function ComponentCanvasWindow({
   onUndo,
   onRedo,
   onZoomChange,
+  onResetView,
   onMinimize,
   onRestore,
   onToggleFloating,
@@ -737,7 +791,14 @@ export function ComponentCanvasWindow({
                 <button class="zoom-button" title="Zoom out" onClick={() => onZoomChange((value) => stepCanvasZoom(value, 'out'))}>
                   <StudioIcon name="minus" />
                 </button>
-                <span class="zoom-value">{Math.round(zoom * 100)}%</span>
+                <button
+                  type="button"
+                  class="zoom-value"
+                  title="Fit and center component artboard"
+                  onClick={() => (onResetView ? onResetView() : onZoomChange(1))}
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
                 <button class="zoom-button" title="Zoom in" onClick={() => onZoomChange((value) => stepCanvasZoom(value, 'in'))}>
                   <StudioIcon name="plus" />
                 </button>

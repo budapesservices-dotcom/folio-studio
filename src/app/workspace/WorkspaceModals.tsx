@@ -4,9 +4,9 @@ import type { AnimationClip, BreakpointId, FolioPage, FolioProject } from '../..
 import type { EditorTarget } from '../editorContext';
 import type { KeyboardShortcutsModalProps } from '../KeyboardShortcutsModal';
 import { summarizeProjectForNewProjectDialog, type NewProjectActionMode } from '../newProjectFlow';
+import { MotionExportModal } from './MotionExportModal';
 import { NewProjectConfirmDialog } from './NewProjectConfirmDialog';
 
-const LazyMotionExportModal = lazy(() => import('./MotionExportModal').then((m) => ({ default: m.MotionExportModal })));
 const LazyDiagnosticsModal = lazy(() => import('./DiagnosticsModal'));
 const LazyKeyboardShortcutsModal = lazy(async () => {
   const module = await import('../KeyboardShortcutsModal');
@@ -24,6 +24,8 @@ const LazyKeyboardShortcutsModal = lazy(async () => {
 export interface WorkspaceModalsProps {
   project: FolioProject;
   activePage: FolioPage;
+  motionExportProject?: FolioProject;
+  motionExportPage?: FolioPage;
   pageClips: readonly AnimationClip[];
   activeClip: AnimationClip | null;
   breakpoint: BreakpointId;
@@ -56,6 +58,8 @@ export function WorkspaceModals(props: WorkspaceModalsProps) {
   const {
     project,
     activePage,
+    motionExportProject,
+    motionExportPage,
     pageClips,
     activeClip,
     breakpoint,
@@ -101,17 +105,15 @@ export function WorkspaceModals(props: WorkspaceModalsProps) {
       )}
 
       {motionExportOpen && (
-        <Suspense fallback={null}>
-          <LazyMotionExportModal
-            project={project}
-            activePage={activePage}
-            pageClips={pageClips}
-            activeClip={activeClip}
-            breakpoint={breakpoint}
-            onNotice={onNotice}
-            onClose={onCloseMotionExport}
-          />
-        </Suspense>
+        <MotionExportModal
+          project={motionExportProject ?? project}
+          activePage={motionExportPage ?? activePage}
+          pageClips={pageClips}
+          activeClip={activeClip}
+          breakpoint={breakpoint}
+          onNotice={onNotice}
+          onClose={onCloseMotionExport}
+        />
       )}
 
       {shortcutsModalOpen && !componentDeletionDialogOpen && !newProjectDialogOpen && (

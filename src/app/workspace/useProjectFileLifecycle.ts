@@ -800,8 +800,9 @@ export function useProjectFileLifecycle({
     setFileMenuOpen(false);
     if (isHydrating) return;
     try {
-      const [{ downloadSvgDocument }, portableProject] = await Promise.all([
+      const [{ downloadSvgDocument }, { documentHasAnyAnimations }, portableProject] = await Promise.all([
         import('../visualExport'),
+        import('../../engines/animation/svgExport'),
         materializeProjectAssetsForExport(project),
       ]);
       const target = resolveActiveExportTarget(
@@ -811,12 +812,28 @@ export function useProjectFileLifecycle({
         getEditingComponentId(),
       );
       const exportBreakpoint = activeEditorId === 'main' ? (getActiveBreakpoint?.() ?? 'desktop') : 'desktop';
+      const activeClip = activeEditorId === 'component'
+        ? (componentProject.animations?.find((clip) => clip.tracks.length > 0) ?? null)
+        : (portableProject.animations?.find(
+            (clip) => clip.pageId === portableProject.activePageId && clip.tracks.length > 0,
+          ) ?? null);
+      const hasAnimations = documentHasAnyAnimations(
+        target.document.nodes,
+        portableProject.components,
+        activeClip,
+      );
       downloadSvgDocument(target.document, portableProject.components, target.name, {
         designTokens: portableProject.designTokens,
         breakpoint: exportBreakpoint,
         assets: portableProject.assets,
+        embedAnimations: true,
+        activeClip,
       });
-      setNotice(`Exported "${target.name}" as standalone SVG.`);
+      setNotice(
+        hasAnimations
+          ? `Exported "${target.name}" as animated standalone SVG.`
+          : `Exported "${target.name}" as standalone SVG.`,
+      );
     } catch (error) {
       console.error('Folio could not export SVG:', error);
       const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';

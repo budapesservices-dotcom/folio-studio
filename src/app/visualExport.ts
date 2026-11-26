@@ -1,4 +1,5 @@
 import type {
+  AnimationClip,
   AssetReference,
   BreakpointId,
   ComponentDefinition,
@@ -34,6 +35,8 @@ import {
   getLayerRenderOrder,
 } from '../core/document/layers';
 import { computeAutoLayoutNodes, getBreakpointCanvasWidth } from '../engines/layout/autoLayout';
+import { applyAnimatedPosesToDocument, evaluateClipAtTime } from '../engines/animation/evaluator';
+import { buildNodeSvgSmilAnimations } from '../engines/animation/svgExport';
 
 type PrimitiveNode = Exclude<DesignNode, ComponentInstanceNode>;
 
@@ -46,6 +49,12 @@ export interface VisualExportOptions {
   assets?: readonly AssetReference[];
   /** When true (PNG canvas rasterization), skips <foreignObject> backdrop-blur elements that taint <canvas> in WebKit/Safari. */
   rasterizeSafe?: boolean;
+  /** When provided (e.g. during video/GIF/PNG-sequence export), evaluates animated component instances at this timestamp (ms). */
+  animationTimeMs?: number;
+  /** When true (standalone SVG export), embeds native SVG SMIL (<animate> / <animateTransform>) for page clips and animated component instances. */
+  embedAnimations?: boolean;
+  /** Optional active animation clip for the root document when `embedAnimations` is true. */
+  activeClip?: AnimationClip | null;
 }
 
 function escapeXml(value: string): string {
@@ -216,6 +225,44 @@ function serializeBackdropBlur(
   return `<foreignObject x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"><div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;border-radius:${borderRadius};backdrop-filter:blur(${blurRadius}px);-webkit-backdrop-filter:blur(${blurRadius}px);background:transparent;"></div></foreignObject>`;
 }
 
+function injectSvgSmilInsideElement(markup: string, smilMarkup: string): string {
+  if (!smilMarkup) return markup;
+  const selfClosingMatch = /<([a-zA-Z][\w:-]*)(\b[^>]*?)\s*\/>/.exec(markup);
+  if (selfClosingMatch && selfClosingMatch.index !== undefined) {
+    const [full, tag, attrs] = selfClosingMatch;
+    const replacement = `<${tag}${attrs}>${smilMarkup}</${tag}>`;
+    return `${markup.slice(0, selfClosingMatch.index)}${replacement}${markup.slice(selfClosingMatch.index + full.length)}`;
+  }
+  const textCloseIdx = markup.lastIndexOf('</text>');
+  if (textCloseIdx >= 0) {
+    return `${markup.slice(0, textCloseIdx)}${smilMarkup}${markup.slice(textCloseIdx)}`;
+  }
+  return markup;
+}
+
+function getComponentPrimaryAnimatedClip(component: ComponentDefinition): AnimationClip | null {
+  if (!component.animations || component.animations.length === 0) return null;
+  return component.animations.find((clip) => clip.tracks.length > 0) ?? null;
+}
+
+function evaluateComponentNodesAtTime(
+  component: ComponentDefinition,
+  nodes: readonly DesignNode[],
+  timeMs: number,
+): DesignNode[] {
+  const clip = getComponentPrimaryAnimatedClip(component);
+  if (!clip || clip.durationMs <= 0) return [...nodes];
+  const sampleTimeMs = clip.loop
+    ? ((timeMs % clip.durationMs) + clip.durationMs) % clip.durationMs
+    : Math.max(0, Math.min(clip.durationMs, timeMs));
+  const poses = evaluateClipAtTime(clip, sampleTimeMs);
+  const tempDoc: FolioDocument = {
+    ...component.document,
+    nodes: [...nodes],
+  };
+  return applyAnimatedPosesToDocument(tempDoc, poses).nodes;
+}
+
 function serializePrimitiveNode(
   node: PrimitiveNode,
   mask: boolean,
@@ -223,6 +270,8 @@ function serializePrimitiveNode(
   assetById: ReadonlyMap<string, AssetReference>,
   rasterizeSafe = false,
   maskFill = '#fff',
+  embedAnimations = false,
+  activeClip: AnimationClip | null = null,
 ): string {
   if (node.type === 'group') return '';
   const transformAttr = formatRotationTransform(node);
@@ -232,9 +281,36 @@ function serializePrimitiveNode(
     : '';
   const blendStyleAttr = buildBlendStyleAttr(node, mask);
   const cssFilterStyleAttr = buildCssFilterStyleAttr(node, mask);
+  const smil = embedAnimations && !mask && !rasterizeSafe && activeClip
+    ? buildNodeSvgSmilAnimations(node, activeClip)
+    : null;
 
   let inner = '';
-  if (node.type === 'frame' || node.type === 'rect') {
+  if (smil?.morphSmil && (node.type === 'frame' || node.type === 'rect' || node.type === 'ellipse' || node.type === 'path')) {
+    const fills = getVisibleFillPaints(node);
+    const fillRule = node.type === 'path' ? (node.style.fillRule ?? 'nonzero') : 'nonzero';
+    const linecap = node.type === 'path' ? (node.style.strokeLinecap ?? 'round') : 'round';
+    const linejoin = node.type === 'path' ? (node.style.strokeLinejoin ?? 'round') : 'round';
+    const dashAttr = node.type === 'path' && node.style.strokeDasharray
+      ? ` stroke-dasharray="${escapeXml(node.style.strokeDasharray)}"`
+      : '';
+    const sw = node.style.strokeWidth;
+    const morphInnerSmil = `${smil.morphSmil.animateMarkup}${smil.shapeSmilMarkup}`;
+    if (fills.length <= 1) {
+      const fillAttr = fills.length === 1
+        ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
+        : ' fill="none"';
+      inner = `<path d="${escapeXml(smil.morphSmil.initialD)}"${fillAttr} fill-rule="${fillRule}" stroke="${escapeXml(node.style.stroke)}" stroke-width="${sw}" stroke-linecap="${linecap}" stroke-linejoin="${linejoin}"${dashAttr}>${morphInnerSmil}</path>`;
+    } else {
+      const fillPaths = fills
+        .map((paint, idx) => `<path d="${escapeXml(smil.morphSmil!.initialD)}"${serializePaintFillAttr(paint, node.id, idx, prefix)} fill-rule="${fillRule}" stroke="none">${smil.morphSmil!.animateMarkup}</path>`)
+        .join('');
+      const strokePath = sw > 0 && node.style.stroke !== 'none'
+        ? `<path d="${escapeXml(smil.morphSmil.initialD)}" fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${sw}" stroke-linecap="${linecap}" stroke-linejoin="${linejoin}"${dashAttr}>${morphInnerSmil}</path>`
+        : '';
+      inner = `${fillPaths}${strokePath}`;
+    }
+  } else if (node.type === 'frame' || node.type === 'rect') {
     const fills = getVisibleFillPaints(node);
     const radii = node.style.cornerRadii;
     const usePerCornerPath = hasDistinctCornerRadii(radii);
@@ -414,8 +490,12 @@ function serializePrimitiveNode(
     }
   }
 
+  if (smil && !smil.morphSmil && smil.shapeSmilMarkup) {
+    inner = injectSvgSmilInsideElement(inner, smil.shapeSmilMarkup);
+  }
   const wrappedInner = cssFilterStyleAttr ? `<g${cssFilterStyleAttr}>${inner}</g>` : inner;
-  return `<g${transformAttr}${opacityAttr}${filterAttr}${blendStyleAttr}>${wrappedInner}</g>`;
+  const wrapperSmil = smil?.wrapperSmilMarkup ?? '';
+  return `<g${transformAttr}${opacityAttr}${filterAttr}${blendStyleAttr}>${wrapperSmil}${wrappedInner}</g>`;
 }
 
 function serializeClipMaskArtwork(
@@ -429,6 +509,7 @@ function serializeClipMaskArtwork(
   visitedComponentIds: ReadonlySet<string>,
   depth: number,
   maskFill = '#fff',
+  animationTimeMs?: number,
 ): string {
   if (node.type === 'group') {
     const states = getEffectiveLayerStates(nodes);
@@ -438,7 +519,7 @@ function serializeClipMaskArtwork(
     if (descendants.length === 0) {
       return `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="${maskFill}" opacity="${node.opacity}" />`;
     }
-    return `<g>${descendants.map((child) => serializeClipMaskArtwork(child, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, maskFill)).join('')}</g>`;
+    return `<g>${descendants.map((child) => serializeClipMaskArtwork(child, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, maskFill, animationTimeMs)).join('')}</g>`;
   }
 
   if (node.type === 'component-instance') {
@@ -454,7 +535,10 @@ function serializeClipMaskArtwork(
       tokens,
       canvasWidth: component.document.width,
     });
-    const resolved = laidOut.filter((child) => child.onCanvas !== false);
+    const evaluatedNodes = animationTimeMs !== undefined
+      ? evaluateComponentNodesAtTime(component, laidOut, animationTimeMs)
+      : laidOut;
+    const resolved = evaluatedNodes.filter((child) => child.onCanvas !== false);
     const childPrefix = `${prefix}-instmask-${sanitizeIdSegment(node.id)}`;
     const nextVisited = new Set(visitedComponentIds);
     nextVisited.add(node.componentId);
@@ -471,6 +555,9 @@ function serializeClipMaskArtwork(
       depth + 1,
       false,
       maskFill,
+      animationTimeMs,
+      false,
+      null,
     );
     return `<g${formatRotationTransform(node)} opacity="${node.opacity}"><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${content}</g></g>`;
   }
@@ -492,6 +579,7 @@ function serializeDefs(
   tokens: DesignTokenCollection | undefined,
   visitedComponentIds: ReadonlySet<string>,
   depth: number,
+  animationTimeMs?: number,
 ): string {
   const referencedMasks = new Set<string>();
   const referencedOutsideMasks = new Set<string>();
@@ -536,7 +624,7 @@ function serializeDefs(
   for (const baseId of referencedMasks) {
     const base = nodeById.get(baseId);
     if (!base) continue;
-    const artwork = serializeClipMaskArtwork(base, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, '#fff');
+    const artwork = serializeClipMaskArtwork(base, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, '#fff', animationTimeMs);
     defsParts.push(
       `<mask id="${maskId(prefix, baseId)}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}"><rect x="0" y="0" width="${width}" height="${height}" fill="#000" />${artwork}</mask>`,
     );
@@ -545,7 +633,7 @@ function serializeDefs(
   for (const baseId of referencedOutsideMasks) {
     const base = nodeById.get(baseId);
     if (!base) continue;
-    const artwork = serializeClipMaskArtwork(base, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, '#000');
+    const artwork = serializeClipMaskArtwork(base, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, '#000', animationTimeMs);
     defsParts.push(
       `<mask id="${outsideMaskId(prefix, baseId)}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}"><rect x="0" y="0" width="${width}" height="${height}" fill="#fff" />${artwork}</mask>`,
     );
@@ -595,6 +683,9 @@ function serializeNodesBlock(
   depth: number,
   rasterizeSafe = false,
   maskFill = '#fff',
+  animationTimeMs?: number,
+  embedAnimations = false,
+  activeClip: AnimationClip | null = null,
 ): string {
   const nodeById = new Map(canvasNodes.map((node) => [node.id, node]));
   const clipMaskMap = buildLayerClipMaskMap(canvasNodes, nodeById);
@@ -615,6 +706,7 @@ function serializeNodesBlock(
     tokens,
     visitedComponentIds,
     depth,
+    animationTimeMs,
   );
 
   const renderedNodes = getLayerRenderOrder(canvasNodes)
@@ -643,7 +735,11 @@ function serializeNodesBlock(
             tokens,
             canvasWidth: component.document.width,
           });
-          const resolvedChildren = laidOut.filter((child) => child.onCanvas !== false);
+          const compActiveClip = getComponentPrimaryAnimatedClip(component);
+          const evaluatedChildren = animationTimeMs !== undefined && !embedAnimations && compActiveClip
+            ? evaluateComponentNodesAtTime(component, laidOut, animationTimeMs)
+            : laidOut;
+          const resolvedChildren = evaluatedChildren.filter((child) => child.onCanvas !== false);
           const instPrefix = `${prefix}-inst-${sanitizeIdSegment(node.id)}`;
           const nextVisited = new Set(visitedComponentIds);
           nextVisited.add(node.componentId);
@@ -660,6 +756,9 @@ function serializeNodesBlock(
             depth + 1,
             rasterizeSafe,
             maskFill,
+            animationTimeMs,
+            embedAnimations,
+            embedAnimations ? compActiveClip : null,
           );
           const opacityAttr = node.opacity < 1 ? ` opacity="${node.opacity}"` : '';
           const filterAttr = !mask && hasSvgFilterEffects(node)
@@ -668,10 +767,22 @@ function serializeNodesBlock(
           const blendStyleAttr = buildBlendStyleAttr(node, mask);
           const cssFilterStyleAttr = buildCssFilterStyleAttr(node, mask);
           const innerWithCss = cssFilterStyleAttr ? `<g${cssFilterStyleAttr}>${inner}</g>` : inner;
-          markup = `<g${formatRotationTransform(node)}${opacityAttr}${filterAttr}${blendStyleAttr}><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${innerWithCss}</g></g>`;
+          const instanceSmil = embedAnimations && !mask && !rasterizeSafe && activeClip
+            ? (buildNodeSvgSmilAnimations(node, activeClip)?.wrapperSmilMarkup ?? '')
+            : '';
+          markup = `<g${formatRotationTransform(node)}${opacityAttr}${filterAttr}${blendStyleAttr}>${instanceSmil}<g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${innerWithCss}</g></g>`;
         }
       } else {
-        markup = serializePrimitiveNode(node, mask, prefix, assetById, rasterizeSafe, maskFill);
+        markup = serializePrimitiveNode(
+          node,
+          mask,
+          prefix,
+          assetById,
+          rasterizeSafe,
+          maskFill,
+          embedAnimations,
+          activeClip,
+        );
       }
 
       if (!markup) return '';
@@ -745,6 +856,10 @@ export function serializeDocumentToSvgString(
     new Set<string>(),
     0,
     Boolean(options.rasterizeSafe),
+    '#fff',
+    options.animationTimeMs,
+    Boolean(options.embedAnimations),
+    options.activeClip ?? null,
   );
 
   return [

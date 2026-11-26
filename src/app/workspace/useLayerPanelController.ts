@@ -174,12 +174,17 @@ export function useLayerPanelController({
         dismiss();
       }
     };
+    const handleScroll = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Node && layerContextMenuRef.current?.contains(target)) return;
+      dismiss();
+    };
     const controller = new AbortController();
     const { signal } = controller;
     document.addEventListener('pointerdown', handlePointerDown, { capture: true, signal });
     document.addEventListener('keydown', handleKeyDown, { capture: true, signal });
     window.addEventListener('resize', dismiss, { signal });
-    window.addEventListener('scroll', dismiss, { capture: true, signal });
+    window.addEventListener('scroll', handleScroll, { capture: true, signal });
     return () => controller.abort();
   }, [layerContextMenu]);
 

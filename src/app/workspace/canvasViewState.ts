@@ -29,6 +29,34 @@ export function stepCanvasZoom(currentZoom: number, direction: 'in' | 'out'): nu
   return clampCanvasZoom(Number(raw.toFixed(2)));
 }
 
+/**
+ * Computes a centered, aspect-fitted CanvasViewState (`pan: { x: 0, y: 0 }`) so any
+ * Component Master (tiny icon, square badge, tall card, or wide banner) opens dead-center
+ * inside the Component Canvas viewport without overflowing vertically or horizontally.
+ *
+ * `.canvas-stage` uses `width: zoom * 100%` of `.canvas-scroll-area`, so:
+ *   stageWidth  = zoom * availW
+ *   stageHeight = stageWidth * (docHeight / docWidth)
+ */
+export function computeCenteredComponentView(
+  docWidth: number,
+  docHeight: number,
+  viewportWidth = 900,
+  viewportHeight = 560,
+): CanvasViewState {
+  const safeDocW = Math.max(1, Number.isFinite(docWidth) ? docWidth : 420);
+  const safeDocH = Math.max(1, Number.isFinite(docHeight) ? docHeight : 280);
+  const availW = Math.max(240, (Number.isFinite(viewportWidth) ? viewportWidth : 900) - 64);
+  const availH = Math.max(200, (Number.isFinite(viewportHeight) ? viewportHeight : 560) - 116);
+  const maxZoomByWidth = 0.78;
+  const maxZoomByHeight = (0.74 * availH) / (availW * (safeDocH / safeDocW));
+  const rawZoom = Math.min(maxZoomByWidth, maxZoomByHeight);
+  return {
+    zoom: clampCanvasZoom(Number(rawZoom.toFixed(2))),
+    pan: { x: 0, y: 0 },
+  };
+}
+
 export function parseCanvasViewState(raw: string | null): CanvasViewState {
   if (!raw) {
     return { zoom: DEFAULT_CANVAS_ZOOM, pan: { x: 0, y: 0 } };

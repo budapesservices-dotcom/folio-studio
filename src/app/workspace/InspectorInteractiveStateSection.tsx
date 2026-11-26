@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { createPortal } from 'preact/compat';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type {
   DesignNode,
   InteractiveStateId,
@@ -10,6 +11,7 @@ import type {
 import type { CssUnitOption } from '../../core/document/cssUnits';
 import type { StudioVectorActions } from './inspectorVectorHelpers';
 import { NumericUnitInput } from './NumericUnitInput';
+import { clampContextMenuPosition } from './StudioContextMenu';
 
 export const INTERACTIVE_STATES: ReadonlyArray<{ id: InteractiveStateId; label: string }> = [
   { id: 'default', label: 'Default' },
@@ -319,13 +321,40 @@ export function InspectorQuickHeaderActions({
   onCommitEdit,
 }: InspectorQuickHeaderActionsProps) {
   const [moreOpen, setMoreOpen] = useState(false);
+  const [menuCoords, setMenuCoords] = useState<{ x: number; y: number } | null>(null);
   const moreRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!moreOpen || !moreRef.current) {
+      setMenuCoords(null);
+      return;
+    }
+    const updatePosition = () => {
+      if (!moreRef.current) return;
+      const rect = moreRef.current.getBoundingClientRect();
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1440;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 900;
+      const menuW = menuRef.current?.offsetWidth || 210;
+      const menuH = menuRef.current?.offsetHeight || 220;
+      setMenuCoords(clampContextMenuPosition(rect.right - menuW, rect.bottom + 5, menuW, menuH, vw, vh));
+    };
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [moreOpen]);
 
   useEffect(() => {
     if (!moreOpen) return;
     const handlePointerDown = (event: PointerEvent) => {
-      if (moreRef.current && event.target instanceof Node && moreRef.current.contains(event.target)) {
-        return;
+      const target = event.target;
+      if (target instanceof Node) {
+        if (moreRef.current?.contains(target)) return;
+        if (menuRef.current?.contains(target)) return;
       }
       setMoreOpen(false);
     };
@@ -391,8 +420,19 @@ export function InspectorQuickHeaderActions({
         >
           More ▾
         </button>
-        {moreOpen && (
-          <div class="inspector-more-menu" role="menu" aria-label="More layer actions" data-testid="inspector-more-actions-menu">
+        {moreOpen && (typeof document !== 'undefined' ? createPortal(
+          <div
+            ref={menuRef}
+            class="inspector-more-menu"
+            role="menu"
+            aria-label="More layer actions"
+            data-testid="inspector-more-actions-menu"
+            style={
+              menuCoords
+                ? { position: 'fixed', left: `${menuCoords.x}px`, top: `${menuCoords.y}px`, right: 'auto' }
+                : { position: 'fixed', left: '-9999px', top: '-9999px', right: 'auto' }
+            }
+          >
             {studioActions && (
               <>
                 <div class="studio-opt-popover-title">Selection</div>
@@ -472,8 +512,9 @@ export function InspectorQuickHeaderActions({
             >
               <span>Reset Opacity (100%)</span>
             </button>
-          </div>
-        )}
+          </div>,
+          document.body,
+        ) : null)}
       </div>
     </div>
   );

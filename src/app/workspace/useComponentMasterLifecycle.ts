@@ -53,6 +53,7 @@ export interface UseComponentMasterLifecycleOptions {
   setComponentRackOpen: (open: boolean) => void;
   closePagesRack: () => void;
   closeComponentRack: () => void;
+  onCenterComponentCanvas?: (docWidth: number, docHeight: number) => void;
   setNotice: (message: string) => void;
 }
 
@@ -73,6 +74,7 @@ export function useComponentMasterLifecycle({
   setComponentRackOpen,
   closePagesRack,
   closeComponentRack,
+  onCenterComponentCanvas,
   setNotice,
 }: UseComponentMasterLifecycleOptions) {
   const [componentReady, setComponentReady] = useState(false);
@@ -278,6 +280,7 @@ export function useComponentMasterLifecycle({
     focusWindow('component-canvas');
     setInspectorVisible(true);
     closeComponentRack();
+    onCenterComponentCanvas?.(component.document.width, component.document.height);
     setNotice(`Editing master: ${component.name}.`);
   };
 

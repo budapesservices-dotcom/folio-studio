@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { createPortal } from 'preact/compat';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type {
   AnimatableProperty,
@@ -44,7 +45,7 @@ import {
   type MotionPresetDefinition,
 } from '../../engines/animation';
 import { EasingCurveMiniSvg, MotionGraphEditor } from './MotionGraphEditor';
-import { StudioContextMenu, type StudioContextMenuEntry } from './StudioContextMenu';
+import { StudioContextMenu, clampContextMenuPosition, type StudioContextMenuEntry } from './StudioContextMenu';
 import { StudioIcon } from './StudioIcon';
 
 export interface MotionTimelinePanelProps {
@@ -183,6 +184,8 @@ export function MotionTimelinePanel({
   const [expandedOverrides, setExpandedOverrides] = useState<Readonly<Record<string, boolean>>>(() => ({}));
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [presetsCoords, setPresetsCoords] = useState<{ x: number; y: number } | null>(null);
+  const [moreCoords, setMoreCoords] = useState<{ x: number; y: number } | null>(null);
   const [newTrackNodeId, setNewTrackNodeId] = useState<string>('');
   const [newTrackProperty, setNewTrackProperty] = useState<AnimatableProperty>('y');
   const [contextMenu, setContextMenu] = useState<{
@@ -198,7 +201,10 @@ export function MotionTimelinePanel({
 
   const rulerRef = useRef<HTMLDivElement | null>(null);
   const lanesContainerRef = useRef<HTMLDivElement | null>(null);
+  const presetsAnchorRef = useRef<HTMLDivElement | null>(null);
+  const presetsMenuRef = useRef<HTMLDivElement | null>(null);
   const moreRef = useRef<HTMLDivElement | null>(null);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const pendingMorphAutoSelectRef = useRef<{ nodeIds: readonly string[]; timeMs: number } | null>(null);
   const activeClipRef = useRef<AnimationClip | null>(activeClip);
   activeClipRef.current = activeClip;
@@ -219,10 +225,84 @@ export function MotionTimelinePanel({
     }
   }, [activeClip]);
 
+  useLayoutEffect(() => {
+    if (!presetsOpen || !presetsAnchorRef.current) {
+      setPresetsCoords(null);
+      return;
+    }
+    const updatePosition = () => {
+      if (!presetsAnchorRef.current) return;
+      const rect = presetsAnchorRef.current.getBoundingClientRect();
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1440;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 900;
+      const menuW = presetsMenuRef.current?.offsetWidth || 248;
+      const menuH = presetsMenuRef.current?.offsetHeight || 260;
+      const preferAbove = rect.bottom + menuH + 12 > vh;
+      const rawY = preferAbove ? rect.top - menuH - 6 : rect.bottom + 6;
+      setPresetsCoords(clampContextMenuPosition(rect.left, rawY, menuW, menuH, vw, vh));
+    };
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [presetsOpen]);
+
+  useEffect(() => {
+    if (!presetsOpen) return;
+    const handleOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node) {
+        if (presetsAnchorRef.current?.contains(target)) return;
+        if (presetsMenuRef.current?.contains(target)) return;
+      }
+      setPresetsOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPresetsOpen(false);
+    };
+    window.addEventListener('pointerdown', handleOutside, true);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      window.removeEventListener('pointerdown', handleOutside, true);
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [presetsOpen]);
+
+  useLayoutEffect(() => {
+    if (!moreOpen || !moreRef.current) {
+      setMoreCoords(null);
+      return;
+    }
+    const updatePosition = () => {
+      if (!moreRef.current) return;
+      const rect = moreRef.current.getBoundingClientRect();
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1440;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 900;
+      const menuW = moreMenuRef.current?.offsetWidth || 216;
+      const menuH = moreMenuRef.current?.offsetHeight || 132;
+      const rawY = rect.top - menuH - 6;
+      setMoreCoords(clampContextMenuPosition(rect.right - menuW, rawY, menuW, menuH, vw, vh));
+    };
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [moreOpen]);
+
   useEffect(() => {
     if (!moreOpen) return;
     const handleOutside = (event: PointerEvent) => {
-      if (moreRef.current && event.target instanceof Node && moreRef.current.contains(event.target)) return;
+      const target = event.target;
+      if (target instanceof Node) {
+        if (moreRef.current?.contains(target)) return;
+        if (moreMenuRef.current?.contains(target)) return;
+      }
       setMoreOpen(false);
     };
     const handleKey = (event: KeyboardEvent) => {
@@ -925,36 +1005,54 @@ export function MotionTimelinePanel({
             + Clip
           </button>
 
-          <div class="mt-presets-anchor">
+          <div class="mt-presets-anchor" ref={presetsAnchorRef}>
             <button
               type="button"
               class={`mt-btn ${presetsOpen ? 'active' : ''}`}
               aria-haspopup="menu"
               aria-expanded={presetsOpen}
-              onClick={() => setPresetsOpen((open) => !open)}
+              data-testid="motion-presets-btn"
+              onClick={() => {
+                setMoreOpen(false);
+                setPresetsOpen((open) => !open);
+              }}
               title="Create a clip from a built-in motion preset"
             >
               Presets ▾
             </button>
-            {presetsOpen && (
-              <div class="mt-presets-menu" role="menu" aria-label="Motion presets">
-                {MOTION_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    role="menuitem"
-                    class="mt-preset-item"
-                    onClick={() => {
-                      setPresetsOpen(false);
-                      onApplyPreset(preset.id);
-                    }}
-                  >
-                    <strong>{preset.name}</strong>
-                    <span>{preset.description}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+            {presetsOpen && (() => {
+              const menu = (
+                <div
+                  ref={presetsMenuRef}
+                  class="mt-presets-menu"
+                  role="menu"
+                  aria-label="Motion presets"
+                  data-testid="motion-presets-menu"
+                  style={
+                    presetsCoords
+                      ? { position: 'fixed', left: `${presetsCoords.x}px`, top: `${presetsCoords.y}px` }
+                      : { position: 'fixed', left: '-9999px', top: '-9999px' }
+                  }
+                >
+                  {MOTION_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      role="menuitem"
+                      class="mt-preset-item"
+                      onClick={() => {
+                        setPresetsOpen(false);
+                        onApplyPreset(preset.id);
+                      }}
+                    >
+                      <strong>{preset.name}</strong>
+                      <span>{preset.description}</span>
+                    </button>
+                  ))}
+                </div>
+              );
+              return typeof document !== 'undefined' ? createPortal(menu, document.body) : menu;
+            })()}
           </div>
         </div>
 
@@ -1101,8 +1199,12 @@ export function MotionTimelinePanel({
               type="button"
               class="mt-btn mt-export-btn"
               data-testid="motion-export-btn"
-              onClick={onOpenMotionExport}
-              title="Export animation as MP4, MOV (H.264 / Alpha), WebM, GIF, PNG Sequence ZIP, HTML5, CSS, or JSON"
+              onClick={() => {
+                setPresetsOpen(false);
+                setMoreOpen(false);
+                onOpenMotionExport();
+              }}
+              title="Export animation as MP4, MOV (H.264 / Alpha), WebM, GIF, PNG Sequence ZIP, Animated SVG, HTML5, CSS, or JSON"
             >
               Export…
             </button>
@@ -1115,55 +1217,72 @@ export function MotionTimelinePanel({
               aria-expanded={moreOpen}
               data-testid="motion-more-btn"
               title="More clip actions (Autoplay, Live Preview, Delete Clip)"
-              onClick={() => setMoreOpen((open) => !open)}
+              onClick={() => {
+                setPresetsOpen(false);
+                setMoreOpen((open) => !open);
+              }}
             >
               More ▾
             </button>
-            {moreOpen && (
-              <div class="mt-more-menu" role="menu" aria-label="More motion clip actions">
-                <button
-                  type="button"
-                  role="menuitemcheckbox"
-                  aria-checked={Boolean(activeClip?.autoplay)}
-                  disabled={!activeClip}
-                  class={`studio-opt-popover-item${activeClip?.autoplay ? ' is-active' : ''}`}
-                  onClick={() => {
-                    handleToggleAutoplay();
-                    setMoreOpen(false);
-                  }}
+            {moreOpen && (() => {
+              const menu = (
+                <div
+                  ref={moreMenuRef}
+                  class="mt-more-menu"
+                  role="menu"
+                  aria-label="More motion clip actions"
+                  data-testid="motion-more-menu"
+                  style={
+                    moreCoords
+                      ? { position: 'fixed', left: `${moreCoords.x}px`, top: `${moreCoords.y}px`, right: 'auto', bottom: 'auto' }
+                      : { position: 'fixed', left: '-9999px', top: '-9999px', right: 'auto', bottom: 'auto' }
+                  }
                 >
-                  <span>Autoplay on Page Load</span>
-                  {activeClip?.autoplay && <span aria-hidden="true">✓</span>}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="studio-opt-popover-item"
-                  onClick={() => {
-                    setMoreOpen(false);
-                    onOpenLivePreview(activePage.id);
-                  }}
-                >
-                  <span>Test in Live Preview</span>
-                </button>
-                {activeClip && (
-                  <>
-                    <div class="studio-opt-popover-divider" role="separator" />
-                    <button
-                      type="button"
-                      role="menuitem"
-                      class="studio-opt-popover-item is-danger"
-                      onClick={() => {
-                        setMoreOpen(false);
-                        onDeleteClip();
-                      }}
-                    >
-                      <span>Delete Active Clip</span>
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={Boolean(activeClip?.autoplay)}
+                    disabled={!activeClip}
+                    class={`studio-opt-popover-item${activeClip?.autoplay ? ' is-active' : ''}`}
+                    onClick={() => {
+                      handleToggleAutoplay();
+                      setMoreOpen(false);
+                    }}
+                  >
+                    <span>Autoplay on Page Load</span>
+                    {activeClip?.autoplay && <span aria-hidden="true">✓</span>}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="studio-opt-popover-item"
+                    onClick={() => {
+                      setMoreOpen(false);
+                      onOpenLivePreview(activePage.id);
+                    }}
+                  >
+                    <span>Test in Live Preview</span>
+                  </button>
+                  {activeClip && (
+                    <>
+                      <div class="studio-opt-popover-divider" role="separator" />
+                      <button
+                        type="button"
+                        role="menuitem"
+                        class="studio-opt-popover-item is-danger"
+                        onClick={() => {
+                          setMoreOpen(false);
+                          onDeleteClip();
+                        }}
+                      >
+                        <span>Delete Active Clip</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              );
+              return typeof document !== 'undefined' ? createPortal(menu, document.body) : menu;
+            })()}
           </div>
           <button
             type="button"

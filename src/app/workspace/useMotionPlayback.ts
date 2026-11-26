@@ -119,10 +119,10 @@ export function useMotionPlayback({
     return pageClips[0];
   }, [pageClips, activeClipId]);
 
-  // Keep activeClipId aligned with page clips & reset playback cleanly on page or workspace switch.
-  const prevScopePageRef = useRef(`${workspaceScope}:${activePage.id}`);
+  // Keep activeClipId aligned with page clips & reset playback cleanly on page, component master, or workspace switch.
+  const prevScopePageRef = useRef(`${workspaceScope}:${activePage.id}:${activePage.document.id}`);
   useEffect(() => {
-    const key = `${workspaceScope}:${activePage.id}`;
+    const key = `${workspaceScope}:${activePage.id}:${activePage.document.id}`;
     if (prevScopePageRef.current !== key) {
       prevScopePageRef.current = key;
       setIsPlaying(false);
@@ -130,7 +130,7 @@ export function useMotionPlayback({
       setPlayheadMs(0);
       playheadRef.current = 0;
     }
-  }, [workspaceScope, activePage.id]);
+  }, [workspaceScope, activePage.id, activePage.document.id]);
 
   useEffect(() => {
     if (!activeClip) {

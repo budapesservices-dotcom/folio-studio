@@ -19,6 +19,7 @@ export interface BuildGlobalToolbarMenuActionsArgs {
   designTokens: DesignTokenCollection;
   focusedCommandClient: MainCanvasCommandClient;
   setActiveZoom: (next: number | ((current: number) => number)) => void;
+  onResetView?: () => void;
   onCut: (target: EditorTarget) => void;
   onCopy: (target: EditorTarget) => void;
   onPaste: (target: EditorTarget) => void;
@@ -45,6 +46,7 @@ export function buildGlobalToolbarMenuActions({
   designTokens,
   focusedCommandClient,
   setActiveZoom,
+  onResetView,
   onCut,
   onCopy,
   onPaste,
@@ -108,7 +110,10 @@ export function buildGlobalToolbarMenuActions({
     },
     onZoomIn: () => setActiveZoom((current) => stepCanvasZoom(current, 'in')),
     onZoomOut: () => setActiveZoom((current) => stepCanvasZoom(current, 'out')),
-    onZoomReset: () => setActiveZoom(1),
+    onZoomReset: () => {
+      if (onResetView) onResetView();
+      else setActiveZoom(1);
+    },
     onSelectTool: (toolId) => onSelectTool(toolId, activeEditorId),
     onPathfinder: (operation) => onPathfinder(activeEditorId, operation),
     onConvertToPath: () => onConvertToPath(activeEditorId),
