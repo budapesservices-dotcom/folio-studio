@@ -166,15 +166,12 @@ describe('Prioritas 3 — Hybrid GPU Viewport + WASM/Worker Compute Kernels', ()
       const flatIndex = new FlatGridSpatialIndex(entries);
 
       const rect = { minX: 480, minY: 360, maxX: 1680, maxY: 1260 };
-      const start = performance.now();
       const wasmHits = wasmIndex.queryRect(rect);
-      const elapsedMs = performance.now() - start;
       const flatHits = flatIndex.queryRect(rect);
 
       expect(wasmHits).toEqual(flatHits);
       expect(wasmHits.length).toBeGreaterThan(50);
-      // Must be blazingly fast on 10,000 nodes (< 4 ms target; generous CI ceiling 25 ms)
-      expect(elapsedMs).toBeLessThan(25);
+      // Strict wall-clock timing ceilings live in tests/p3MonsterEngine.perf.test.ts (serial).
 
       // Point query & snap candidate parity
       const ptHitsWasm = wasmIndex.queryPoint(610, 460, 4);
@@ -413,8 +410,8 @@ describe('Prioritas 3 — Hybrid GPU Viewport + WASM/Worker Compute Kernels', ()
       expect(packed.instanceCount).toBeGreaterThan(50);
       expect(packed.richNodes.length).toBeGreaterThan(5);
       expect(packed.instanceData.length).toBe(packed.instanceCount * GPU_INSTANCE_STRIDE_FLOATS);
-      // Full viewport pack + cull on 10,000 nodes should be blazingly fast
-      expect(packed.packMs).toBeLessThan(25);
+      expect(packed.packMs).toBeGreaterThanOrEqual(0);
+      // Strict wall-clock packing ceilings live in tests/p3MonsterEngine.perf.test.ts (serial).
 
       // Verify primitive eligibility guard (effects / gradients / sections route to rich tile pass)
       const solidRect = nodes[1] as RectNode;

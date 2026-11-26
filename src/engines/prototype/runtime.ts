@@ -379,6 +379,10 @@ export function createPrototypeRuntime(
   let variableNameToId = new Map<string, string>();
   let variables: Record<string, LogicVariableValue> = {};
   let privateMemory: Record<string, boolean> = {};
+  let memoryStorage: { local: Map<string, string>; session: Map<string, string> } = {
+    local: new Map(),
+    session: new Map(),
+  };
   let nodeOverrides: Record<string, PrototypeNodeOverride> = {};
   let playedAnimations: string[] = [];
   let toasts: PrototypeToastNotice[] = [];
@@ -429,6 +433,7 @@ export function createPrototypeRuntime(
     mounted = false;
     totalSteps = 0;
     privateMemory = {};
+    memoryStorage = { local: new Map(), session: new Map() };
     nodeOverrides = {};
     playedAnimations = [];
     toasts = [];
@@ -530,6 +535,12 @@ export function createPrototypeRuntime(
           if (kind === 'url-params') {
             const paramKey = typeof node.data.paramKey === 'string' ? node.data.paramKey.trim() : '';
             return paramKey && options.urlParams ? (options.urlParams[paramKey] ?? '') : '';
+          }
+          if (kind === 'storage') {
+            const storageKey = typeof node.data.storageKey === 'string' ? node.data.storageKey.trim() : '';
+            const scope = node.data.storageScope === 'session' ? 'session' : 'local';
+            const stored = storageKey ? memoryStorage[scope].get(storageKey) : undefined;
+            return stored !== undefined ? stored : (node.data.value ?? '');
           }
           const pId = typeof node.data.pageId === 'string' ? node.data.pageId : '';
           return (pId ? pagesById.get(pId)?.route : undefined) ?? activeRoute;
@@ -1483,6 +1494,47 @@ export function createPrototypeRuntime(
             }
             activeThemeId = themeId;
             stepPayload = { action: sysAction, themeId };
+          } else if (
+            sysAction === 'storage' ||
+            sysAction === 'storage.set' ||
+            sysAction === 'storage-set' ||
+            sysAction === 'storage.write'
+          ) {
+            const storageKey = typeof node.data.storageKey === 'string' ? node.data.storageKey.trim() : '';
+            const storageScope = node.data.storageScope === 'session' ? 'session' : 'local';
+            const rawVal = resolveInputValue(next.indexed, node, 'value', node.data.value ?? '', visiting, ctx, 'pipelineRef');
+            const serialized = typeof rawVal === 'string' ? rawVal : JSON.stringify(rawVal ?? '');
+            if (storageKey) {
+              memoryStorage[storageScope].set(storageKey, serialized);
+            }
+            stepPayload = {
+              action: sysAction,
+              storageKey,
+              storageScope,
+              value: rawVal,
+              storageMode: 'memory',
+            };
+          } else if (sysAction === 'storage.get' || sysAction === 'storage-get' || sysAction === 'storage.read') {
+            const storageKey = typeof node.data.storageKey === 'string' ? node.data.storageKey.trim() : '';
+            const storageScope = node.data.storageScope === 'session' ? 'session' : 'local';
+            const found = Boolean(storageKey && memoryStorage[storageScope].has(storageKey));
+            const readVal = found ? memoryStorage[storageScope].get(storageKey)! : (node.data.value ?? '');
+            stepPayload = {
+              action: sysAction,
+              storageKey,
+              storageScope,
+              value: readVal,
+              found,
+            };
+          } else if (sysAction === 'storage.remove' || sysAction === 'storage-remove' || sysAction === 'storage.delete') {
+            const storageKey = typeof node.data.storageKey === 'string' ? node.data.storageKey.trim() : '';
+            const storageScope = node.data.storageScope === 'session' ? 'session' : 'local';
+            if (storageKey) memoryStorage[storageScope].delete(storageKey);
+            stepPayload = { action: sysAction, storageKey, storageScope, removed: true };
+          } else if (sysAction === 'storage.clear' || sysAction === 'storage-clear') {
+            const storageScope = node.data.storageScope === 'session' ? 'session' : 'local';
+            memoryStorage[storageScope].clear();
+            stepPayload = { action: sysAction, storageScope, cleared: true };
           }
           const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({

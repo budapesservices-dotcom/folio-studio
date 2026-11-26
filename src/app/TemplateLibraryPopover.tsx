@@ -29,6 +29,7 @@ const FILTER_TABS: ReadonlyArray<{ id: FilterTab; label: string; ariaLabel: stri
 ];
 
 interface PreparedTemplatePreview {
+  readonly index: number;
   readonly template: StudioTemplateDefinition;
   readonly previewDocument: ReturnType<typeof buildTemplatePreviewDocument>;
   readonly layerCount: number;
@@ -37,12 +38,13 @@ interface PreparedTemplatePreview {
   readonly maskPrefix: string;
 }
 
-const PREPARED_TEMPLATE_PREVIEWS: readonly PreparedTemplatePreview[] = STUDIO_TEMPLATE_CATALOG.map((template) => {
+const PREPARED_TEMPLATE_PREVIEWS: readonly PreparedTemplatePreview[] = STUDIO_TEMPLATE_CATALOG.map((template, index) => {
   const previewDocument = buildTemplatePreviewDocument(template);
   const logicNodeCount = getTemplateLogicNodeCount(template);
   const padX = Math.max(8, Math.round(template.width * 0.06));
   const padY = Math.max(8, Math.round(template.height * 0.06));
   return {
+    index,
     template,
     previewDocument,
     layerCount: previewDocument.nodes.length,
@@ -76,11 +78,20 @@ export function TemplateLibraryPopover({
   const isVectorStudio = workspace === 'component';
   const [activeCategory, setActiveCategory] = useState<FilterTab>(isVectorStudio ? 'vectors' : 'all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [artworkLimit, setArtworkLimit] = useState(6);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setActiveCategory(isVectorStudio ? 'vectors' : 'all');
   }, [isVectorStudio]);
+
+  useEffect(() => {
+    if (artworkLimit >= PREPARED_TEMPLATE_PREVIEWS.length) return;
+    const id = window.requestAnimationFrame(() => {
+      setArtworkLimit((current) => Math.min(PREPARED_TEMPLATE_PREVIEWS.length, current + 6));
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [artworkLimit]);
 
   useEffect(() => {
     const id = window.requestAnimationFrame(() => {
@@ -119,6 +130,7 @@ export function TemplateLibraryPopover({
     : PREPARED_TEMPLATE_PREVIEWS.filter((entry) => entry.template.category === activeCategory).length;
 
   const renderTemplateCard = ({
+    index,
     template,
     previewDocument,
     layerCount,
@@ -126,6 +138,7 @@ export function TemplateLibraryPopover({
     viewBox,
     maskPrefix,
   }: PreparedTemplatePreview) => {
+    const shouldRenderArtwork = hasSearchQuery || activeCategory !== 'all' || index < artworkLimit;
     const titleSegments = splitHighlightSegments(template.name, searchTokens);
     const isPageTemplate = template.category === 'pages' && !isVectorStudio;
     const primaryMode: TemplateInsertMode = isPageTemplate ? 'page' : effectiveMode;
@@ -164,18 +177,20 @@ export function TemplateLibraryPopover({
             class={'template-card-preview ' + (template.previewSurface === 'light' ? 'is-light' : 'is-dark')}
             aria-hidden="true"
           >
-            <svg
-              class="template-card-svg"
-              viewBox={viewBox}
-              preserveAspectRatio="xMidYMid meet"
-              role="presentation"
-            >
-              <DocumentArtworkContent
-                document={previewDocument}
-                components={[]}
-                maskPrefix={maskPrefix}
-              />
-            </svg>
+            {shouldRenderArtwork && (
+              <svg
+                class="template-card-svg"
+                viewBox={viewBox}
+                preserveAspectRatio="xMidYMid meet"
+                role="presentation"
+              >
+                <DocumentArtworkContent
+                  document={previewDocument}
+                  components={[]}
+                  maskPrefix={maskPrefix}
+                />
+              </svg>
+            )}
           </span>
           <span class="template-card-body">
             <span class="template-card-name">

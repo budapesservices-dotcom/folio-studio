@@ -263,12 +263,12 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         `);
         expect(toolRackCheck).toEqual({
           flyoutClickable: true,
-          initialSections: ['ui', 'sections', 'vectors'],
-          heroSections: ['sections'],
-          heroCardIds: ['section-hero'],
+          initialSections: ['ui', 'sections', 'pages', 'vectors'],
+          heroSections: ['sections', 'pages', 'vectors'],
+          heroCardIds: ['section-hero-studio', 'page-saas-landing', 'vector-wave-banner'],
           vectorSections: ['vectors'],
           vectorCardCount: 5,
-          restoredCount: 15,
+          restoredCount: 23,
           dismissed: true,
         });
 

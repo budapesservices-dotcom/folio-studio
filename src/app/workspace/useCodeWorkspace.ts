@@ -565,8 +565,10 @@ export function useCodeWorkspace({
         const anchor = document.createElement('a');
         anchor.href = url;
         anchor.download = `${toPageFileSlug('', portableProject.metadata.name)}-${slug}.html`;
+        document.body.appendChild(anchor);
         anchor.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
         onNotice(`Exported standalone HTML (${anchor.download}).`);
       } catch (error) {
         const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
@@ -591,8 +593,10 @@ export function useCodeWorkspace({
         const anchor = document.createElement('a');
         anchor.href = url;
         anchor.download = bundle.fileName;
+        document.body.appendChild(anchor);
         anchor.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
         onNotice(`Exported ${bundle.fileName} (${bundle.entries.length} files).`);
       } catch (error) {
         const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';

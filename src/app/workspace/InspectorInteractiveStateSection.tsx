@@ -18,7 +18,7 @@ export const INTERACTIVE_STATES: ReadonlyArray<{ id: InteractiveStateId; label: 
   { id: 'hover', label: 'Hover' },
   { id: 'active', label: 'Active' },
   { id: 'focus', label: 'Focus' },
-  { id: 'disabled', label: 'Dis' },
+  { id: 'disabled', label: 'Disabled' },
 ];
 
 export const TRANSITION_PRESET_DEFAULTS: Record<TransitionPreset, { durationMs: number }> = {

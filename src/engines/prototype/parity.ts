@@ -152,7 +152,7 @@ export const NODE_RUNTIME_PARITY_MATRIX: readonly NodeRuntimeParityEntry[] = [
   { type: 'action.media-animation', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Play/pause/stop/reverse animation clips + pipeline origin clip resolution' },
   { type: 'action.navigate', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Internal, external, scroll-to, url-params, back/forward/reload with SAFE_HREF guard' },
   { type: 'action.overlay-toast', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Open/close modal/drawer + safe zero-innerHTML toast notifications' },
-  { type: 'action.system-form', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Theme switch, clipboard, focus/blur/reset form' },
+  { type: 'action.system-form', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Theme switch, clipboard, focus/blur/reset form, web storage (with sandbox in-memory fallback)' },
   // Flow & Timing (3)
   { type: 'flow.delay', headless: 'simulated', livePreview: 'full', reactCodegen: 'simulated', notes: 'Timed delay (real setTimeout in Live Preview; deterministic synchronous execution in Headless & React TSX)' },
   { type: 'flow.loop-timer', headless: 'simulated', livePreview: 'full', reactCodegen: 'simulated', notes: 'For-each list iteration full across all 3; interval timer real in Live Preview and single-tick simulated in Headless & React TSX' },

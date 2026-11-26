@@ -93,7 +93,7 @@ async function ensureTemplateComponentMode(browser) {
 }
 
 async function addShape(browser, label) {
-  const templateId = { Rectangle: 'ui-primary-button', Ellipse: 'ui-input-field', Text: 'ui-kpi-card' }[label];
+  const templateId = { Rectangle: 'ui-action-button', Ellipse: 'ui-smart-toggle', Text: 'ui-kpi-switcher' }[label];
   if (!templateId) throw new Error('Unsupported test shape: ' + label);
   await openCreateMenu(browser);
   await browser.click('.template-library-popover .template-card[data-template-id="' + templateId + '"] .template-card-primary');
@@ -166,7 +166,7 @@ async function installNativePersistenceProbe(browser) {
       }, 0);
     };
     const clickMenuItem = (label, mode) => {
-      const templateId = { Rectangle: 'ui-primary-button', Ellipse: 'ui-input-field', Text: 'ui-kpi-card' }[label];
+      const templateId = { Rectangle: 'ui-action-button', Ellipse: 'ui-smart-toggle', Text: 'ui-kpi-switcher' }[label];
       const item = document.querySelector(
         '.template-library-popover .template-card[data-template-id="' + templateId + '"] .template-card-primary',
       );

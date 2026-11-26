@@ -1923,6 +1923,9 @@ export function NodeLogicNodeFields({
               <option value="clipboard">Copy to Clipboard</option>
               <option value="download">Download File</option>
               <option value="storage">Save to Web Storage</option>
+              <option value="storage.get">Read from Web Storage</option>
+              <option value="storage.remove">Remove from Web Storage</option>
+              <option value="storage.clear">Clear Web Storage</option>
             </select>
           </label>
           {action === 'set-theme' && (
@@ -1942,11 +1945,11 @@ export function NodeLogicNodeFields({
           )}
           {(action === 'focus' || action === 'blur' || action === 'reset-form') &&
             renderPipelineTargetField('Target form / input layer', scopedAstNodes)}
-          {(action === 'clipboard' || action === 'download' || action === 'storage') && (
+          {(action === 'clipboard' || action === 'download' || action === 'storage' || action === 'storage.set' || action === 'storage.get') && (
             <>
               {renderScopedDataPicker('Payload from Pipeline (optional)', 'pipelineRef')}
               <label class="nl-field">
-                <span>Payload fallback (if Pipeline &amp; Value port unset)</span>
+                <span>{action === 'storage.get' ? 'Default fallback (if key not found)' : 'Payload fallback (if Pipeline & Value port unset)'}</span>
                 <input
                   class="nl-input"
                   type="text"
@@ -1968,18 +1971,20 @@ export function NodeLogicNodeFields({
               />
             </label>
           )}
-          {action === 'storage' && (
+          {(action === 'storage' || action.startsWith('storage.')) && (
             <div class="nl-field-grid nl-field-grid-2">
-              <label class="nl-field">
-                <span>Storage key</span>
-                <input
-                  class="nl-input"
-                  type="text"
-                  placeholder="folio_draft"
-                  value={typeof node.data.storageKey === 'string' ? node.data.storageKey : ''}
-                  onInput={(event) => onUpdateNodeData(node.id, { storageKey: event.currentTarget.value })}
-                />
-              </label>
+              {action !== 'storage.clear' && (
+                <label class="nl-field">
+                  <span>Storage key</span>
+                  <input
+                    class="nl-input"
+                    type="text"
+                    placeholder="folio_draft"
+                    value={typeof node.data.storageKey === 'string' ? node.data.storageKey : ''}
+                    onInput={(event) => onUpdateNodeData(node.id, { storageKey: event.currentTarget.value })}
+                  />
+                </label>
+              )}
               <label class="nl-field">
                 <span>Storage scope</span>
                 <select
