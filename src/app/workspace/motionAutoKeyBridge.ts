@@ -8,6 +8,7 @@ export interface MotionAutoKeyBridgeOptions {
   motion: MotionPlaybackController;
   inspectorSelectedNode: DesignNode | null;
   mainToolOperationExecutor: ToolOperationExecutor;
+  componentToolOperationExecutor: ToolOperationExecutor;
   onUpdateSelectedFallback: (patch: Partial<DesignNode>) => void;
   onUpdateSelectedStyleFallback: (patch: Record<string, string | number>) => void;
   onSampledColorOption: (color: string, target: 'fill' | 'stroke') => void;
@@ -20,18 +21,23 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
     motion,
     inspectorSelectedNode,
     mainToolOperationExecutor,
+    componentToolOperationExecutor,
     onUpdateSelectedFallback,
     onUpdateSelectedStyleFallback,
     onSampledColorOption,
     onCanvasInteraction,
   } = options;
 
-  const executeMainToolOperations = (operations: readonly ValidatedToolOperation[]) => {
-    if (!motion.motionOpen || !motion.autoKeyEnabled) {
-      if (motion.motionOpen && motion.isPlaying) {
+  const createWorkspaceExecutor = (
+    targetScope: 'main' | 'component',
+    executor: ToolOperationExecutor,
+  ) => (operations: readonly ValidatedToolOperation[]) => {
+    const autoKeyActiveHere = activeEditorId === targetScope && motion.motionOpen && motion.autoKeyEnabled;
+    if (!autoKeyActiveHere) {
+      if (activeEditorId === targetScope && motion.motionOpen && motion.isPlaying) {
         motion.pause();
       }
-      return mainToolOperationExecutor.executeBatch(operations);
+      return executor.executeBatch(operations);
     }
 
     if (motion.isPlaying) {
@@ -64,10 +70,10 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
         }
         remaining.push(operation);
       }
-      return remaining.length > 0 ? mainToolOperationExecutor.executeBatch(remaining) : [];
+      return remaining.length > 0 ? executor.executeBatch(remaining) : [];
     }
 
-    const reports = mainToolOperationExecutor.executeBatch(operations);
+    const reports = executor.executeBatch(operations);
     for (let i = 0; i < operations.length; i += 1) {
       if (reports[i]?.status !== 'applied') continue;
       const payload = operations[i].payload;
@@ -80,10 +86,12 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
     return reports;
   };
 
+  const executeMainToolOperations = createWorkspaceExecutor('main', mainToolOperationExecutor);
+  const executeComponentToolOperations = createWorkspaceExecutor('component', componentToolOperationExecutor);
+
   const handleInspectorUpdateSelected = (patch: Partial<DesignNode>, coalesceKey?: string) => {
     if (
-      activeEditorId === 'main'
-      && motion.motionOpen
+      motion.motionOpen
       && motion.autoKeyEnabled
       && inspectorSelectedNode
     ) {
@@ -126,8 +134,7 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
     coalesceKey?: string,
   ) => {
     if (
-      activeEditorId === 'main'
-      && motion.motionOpen
+      motion.motionOpen
       && motion.autoKeyEnabled
       && inspectorSelectedNode
       && inspectorSelectedNode.type !== 'component-instance'
@@ -157,6 +164,7 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
 
   return {
     executeMainToolOperations,
+    executeComponentToolOperations,
     handleInspectorUpdateSelected,
     handleInspectorUpdateSelectedStyle,
   };

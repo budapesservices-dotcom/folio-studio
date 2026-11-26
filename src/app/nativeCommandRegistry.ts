@@ -13,6 +13,7 @@ import {
   validateComponentRenamePayload,
   validateComponentSyncDocumentPayload,
   validateComponentUpdateContractPayload,
+  validateDocumentSetBackgroundPayload,
   validateEmptyCommandPayload,
   validateLayerClippingMaskPayload,
   validateLayerGroupPayload,
@@ -308,6 +309,17 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
       return [{ type: 'set-active-page', pageId: command.payload.pageId }];
     },
   }),
+  'document.set-background': Object.freeze({
+    type: 'document.set-background' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['document'] as const),
+    requiredPermission: 'node.update',
+    validatePayload: validateDocumentSetBackgroundPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'document.set-background') return [];
+      return [{ type: 'set-document-background', background: command.payload.background }];
+    },
+  }),
   'component.create': Object.freeze({
     type: 'component.create' as const,
     commandVersion: 1 as const,
@@ -331,6 +343,7 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
         type: 'sync-component-document',
         componentId: command.payload.componentId,
         document: command.payload.document,
+        ...(command.payload.animations !== undefined ? { animations: command.payload.animations } : {}),
         updatedAt: command.payload.updatedAt,
         expectedUpdatedAt: command.payload.expectedUpdatedAt,
         expectedMasterDocument: context.liveComponentMasterDocument,

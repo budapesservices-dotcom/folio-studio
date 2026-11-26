@@ -28,8 +28,9 @@ import {
   sanitizeStyleColor,
 } from '../../core/document/styling';
 import { computeTextVerticalOffset, getSvgTextAnchorAndX, wrapTextLines } from '../../core/document/typography';
-import { serializePathPointsToSvgD } from '../../core/document/vector';
+import { buildRoundedRectSvgPath, serializePathPointsToSvgD } from '../../core/document/vector';
 import { resolveAssetDisplayUrl } from '../../core/persistence/assetStore';
+import { evaluateComponentDocumentAtTime } from '../animation/evaluator';
 import { computeAutoLayoutNodes } from '../layout/autoLayout';
 import {
   buildFrameClipAncestorMap,
@@ -217,17 +218,31 @@ function NodeStyleDefs({
       );
     }
 
-    if (node.type === 'image' && (node.style.radius ?? 0) > 0) {
+    if (
+      node.type === 'image' &&
+      ((node.style.radius ?? 0) > 0 ||
+        Boolean(
+          node.style.cornerRadii &&
+            (node.style.cornerRadii.topLeft > 0 ||
+              node.style.cornerRadii.topRight > 0 ||
+              node.style.cornerRadii.bottomRight > 0 ||
+              node.style.cornerRadii.bottomLeft > 0),
+        ))
+    ) {
       const clipId = buildImageClipElementId(maskPrefix, node.id);
       defs.push(
         <clipPath key={clipId} id={clipId} clipPathUnits="userSpaceOnUse">
-          <rect
-            x={node.x}
-            y={node.y}
-            width={node.width}
-            height={node.height}
-            rx={node.style.radius ?? 0}
-          />
+          {node.style.cornerRadii ? (
+            <path d={buildRoundedRectSvgPath(node.x, node.y, node.width, node.height, node.style.cornerRadii)} />
+          ) : (
+            <rect
+              x={node.x}
+              y={node.y}
+              width={node.width}
+              height={node.height}
+              rx={node.style.radius ?? 0}
+            />
+          )}
         </clipPath>,
       );
     }
@@ -473,6 +488,7 @@ export function NodeShape({
       {node.type === 'frame' && (() => {
         const fills = getVisibleFillPaints(node);
         const rx = node.style.radius ?? 0;
+        const cornerRadii = node.style.cornerRadii;
         const dash = !mask
           ? (node.style.strokeDasharray || (node.isSection ? '6 4' : undefined))
           : undefined;
@@ -481,6 +497,29 @@ export function NodeShape({
         const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
         const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
         const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
+        const renderBox = (
+          key: string | undefined,
+          x: number,
+          y: number,
+          w: number,
+          h: number,
+          r: number,
+          cr: CornerRadiiConfig | undefined,
+          props: Record<string, unknown>,
+        ) =>
+          cr ? (
+            <path key={key} d={buildRoundedRectSvgPath(x, y, w, h, cr)} {...props} />
+          ) : (
+            <rect key={key} x={x} y={y} width={w} height={h} rx={r} {...props} />
+          );
+        const strokeRadii: CornerRadiiConfig | undefined = cornerRadii
+          ? {
+              topLeft: cornerRadii.topLeft > 0 ? Math.max(0, cornerRadii.topLeft - strokeDelta) : 0,
+              topRight: cornerRadii.topRight > 0 ? Math.max(0, cornerRadii.topRight - strokeDelta) : 0,
+              bottomRight: cornerRadii.bottomRight > 0 ? Math.max(0, cornerRadii.bottomRight - strokeDelta) : 0,
+              bottomLeft: cornerRadii.bottomLeft > 0 ? Math.max(0, cornerRadii.bottomLeft - strokeDelta) : 0,
+            }
+          : undefined;
         return (
           <g>
             {!mask && (
@@ -504,57 +543,45 @@ export function NodeShape({
                   : ''}
               </text>
             )}
-            {renderBackdropBlurOverlay(node, mask, rx, false, node.style.cornerRadii)}
+            {renderBackdropBlurOverlay(node, mask, rx, false, cornerRadii)}
             {mask || (fills.length <= 1 && !needsSeparateStroke) ? (
-              <rect
-                x={node.x}
-                y={node.y}
-                width={node.width}
-                height={node.height}
-                rx={rx}
-                fill={
-                  mask
-                    ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
-                    : fills.length === 1
-                      ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
-                      : 'none'
-                }
-                fill-opacity={!mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined}
-                stroke={node.style.borderSides && !mask ? 'none' : (mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke)}
-                stroke-width={node.style.borderSides && !mask ? 0 : sw}
-                stroke-dasharray={dash}
-              />
+              renderBox(undefined, node.x, node.y, node.width, node.height, rx, cornerRadii, {
+                fill: mask
+                  ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
+                  : fills.length === 1
+                    ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
+                    : 'none',
+                'fill-opacity': !mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined,
+                stroke: node.style.borderSides && !mask ? 'none' : (mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke),
+                'stroke-width': node.style.borderSides && !mask ? 0 : sw,
+                'stroke-dasharray': dash,
+              })
             ) : (
               <>
                 {fills.map((paint, index) => {
                   const resolved = resolveFillAttribute(paint, node.id, index, maskPrefix);
-                  return (
-                    <rect
-                      key={`${node.id}-fill-${index}`}
-                      x={node.x}
-                      y={node.y}
-                      width={node.width}
-                      height={node.height}
-                      rx={rx}
-                      fill={resolved.fill}
-                      fill-opacity={resolved.fillOpacity}
-                      stroke="none"
-                    />
-                  );
+                  return renderBox(`${node.id}-fill-${index}`, node.x, node.y, node.width, node.height, rx, cornerRadii, {
+                    fill: resolved.fill,
+                    'fill-opacity': resolved.fillOpacity,
+                    stroke: 'none',
+                  });
                 })}
-                {hasStroke && !node.style.borderSides && (
-                  <rect
-                    x={node.x + strokeDelta}
-                    y={node.y + strokeDelta}
-                    width={Math.max(0, node.width - strokeDelta * 2)}
-                    height={Math.max(0, node.height - strokeDelta * 2)}
-                    rx={rx > 0 ? Math.max(0, rx - strokeDelta) : 0}
-                    fill="none"
-                    stroke={node.style.stroke}
-                    stroke-width={sw}
-                    stroke-dasharray={dash}
-                  />
-                )}
+                {hasStroke && !node.style.borderSides &&
+                  renderBox(
+                    undefined,
+                    node.x + strokeDelta,
+                    node.y + strokeDelta,
+                    Math.max(0, node.width - strokeDelta * 2),
+                    Math.max(0, node.height - strokeDelta * 2),
+                    rx > 0 ? Math.max(0, rx - strokeDelta) : 0,
+                    strokeRadii,
+                    {
+                      fill: 'none',
+                      stroke: node.style.stroke,
+                      'stroke-width': sw,
+                      'stroke-dasharray': dash,
+                    },
+                  )}
               </>
             )}
             {renderPerSideBorders(node, node.style.borderSides, mask)}
@@ -564,65 +591,77 @@ export function NodeShape({
       {node.type === 'rect' && (() => {
         const fills = getVisibleFillPaints(node);
         const rx = node.style.radius ?? 0;
+        const cornerRadii = node.style.cornerRadii;
         const dash = !mask ? (node.style.strokeDasharray || undefined) : undefined;
         const sw = node.style.strokeWidth;
         const strokeAlign = node.style.strokeAlign ?? 'center';
         const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
         const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
         const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
+        const renderBox = (
+          key: string | undefined,
+          x: number,
+          y: number,
+          w: number,
+          h: number,
+          r: number,
+          cr: CornerRadiiConfig | undefined,
+          props: Record<string, unknown>,
+        ) =>
+          cr ? (
+            <path key={key} d={buildRoundedRectSvgPath(x, y, w, h, cr)} {...props} />
+          ) : (
+            <rect key={key} x={x} y={y} width={w} height={h} rx={r} {...props} />
+          );
+        const strokeRadii: CornerRadiiConfig | undefined = cornerRadii
+          ? {
+              topLeft: cornerRadii.topLeft > 0 ? Math.max(0, cornerRadii.topLeft - strokeDelta) : 0,
+              topRight: cornerRadii.topRight > 0 ? Math.max(0, cornerRadii.topRight - strokeDelta) : 0,
+              bottomRight: cornerRadii.bottomRight > 0 ? Math.max(0, cornerRadii.bottomRight - strokeDelta) : 0,
+              bottomLeft: cornerRadii.bottomLeft > 0 ? Math.max(0, cornerRadii.bottomLeft - strokeDelta) : 0,
+            }
+          : undefined;
         return (
           <>
-            {renderBackdropBlurOverlay(node, mask, rx, false, node.style.cornerRadii)}
+            {renderBackdropBlurOverlay(node, mask, rx, false, cornerRadii)}
             {mask || (fills.length <= 1 && !needsSeparateStroke) ? (
-              <rect
-                x={node.x}
-                y={node.y}
-                width={node.width}
-                height={node.height}
-                rx={rx}
-                fill={
-                  mask
-                    ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
-                    : fills.length === 1
-                      ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
-                      : 'none'
-                }
-                fill-opacity={!mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined}
-                stroke={node.style.borderSides && !mask ? 'none' : (mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke)}
-                stroke-width={node.style.borderSides && !mask ? 0 : sw}
-                stroke-dasharray={dash}
-              />
+              renderBox(undefined, node.x, node.y, node.width, node.height, rx, cornerRadii, {
+                fill: mask
+                  ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
+                  : fills.length === 1
+                    ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
+                    : 'none',
+                'fill-opacity': !mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined,
+                stroke: node.style.borderSides && !mask ? 'none' : (mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke),
+                'stroke-width': node.style.borderSides && !mask ? 0 : sw,
+                'stroke-dasharray': dash,
+              })
             ) : (
               <>
                 {fills.map((paint, index) => {
                   const resolved = resolveFillAttribute(paint, node.id, index, maskPrefix);
-                  return (
-                    <rect
-                      key={`${node.id}-fill-${index}`}
-                      x={node.x}
-                      y={node.y}
-                      width={node.width}
-                      height={node.height}
-                      rx={rx}
-                      fill={resolved.fill}
-                      fill-opacity={resolved.fillOpacity}
-                      stroke="none"
-                    />
-                  );
+                  return renderBox(`${node.id}-fill-${index}`, node.x, node.y, node.width, node.height, rx, cornerRadii, {
+                    fill: resolved.fill,
+                    'fill-opacity': resolved.fillOpacity,
+                    stroke: 'none',
+                  });
                 })}
-                {hasStroke && !node.style.borderSides && (
-                  <rect
-                    x={node.x + strokeDelta}
-                    y={node.y + strokeDelta}
-                    width={Math.max(0, node.width - strokeDelta * 2)}
-                    height={Math.max(0, node.height - strokeDelta * 2)}
-                    rx={rx > 0 ? Math.max(0, rx - strokeDelta) : 0}
-                    fill="none"
-                    stroke={node.style.stroke}
-                    stroke-width={sw}
-                    stroke-dasharray={dash}
-                  />
-                )}
+                {hasStroke && !node.style.borderSides &&
+                  renderBox(
+                    undefined,
+                    node.x + strokeDelta,
+                    node.y + strokeDelta,
+                    Math.max(0, node.width - strokeDelta * 2),
+                    Math.max(0, node.height - strokeDelta * 2),
+                    rx > 0 ? Math.max(0, rx - strokeDelta) : 0,
+                    strokeRadii,
+                    {
+                      fill: 'none',
+                      stroke: node.style.stroke,
+                      'stroke-width': sw,
+                      'stroke-dasharray': dash,
+                    },
+                  )}
               </>
             )}
             {renderPerSideBorders(node, node.style.borderSides, mask)}
@@ -829,8 +868,12 @@ export function NodeShape({
       {node.type === 'image' && (() => {
         const imgNode = node as ImageNode;
         const rx = imgNode.style.radius ?? 0;
+        const cr = imgNode.style.cornerRadii;
+        const hasRadius = rx > 0 || Boolean(cr && (cr.topLeft > 0 || cr.topRight > 0 || cr.bottomRight > 0 || cr.bottomLeft > 0));
         if (mask) {
-          return (
+          return cr ? (
+            <path d={buildRoundedRectSvgPath(imgNode.x, imgNode.y, imgNode.width, imgNode.height, cr)} fill={maskFill} />
+          ) : (
             <rect
               x={imgNode.x}
               y={imgNode.y}
@@ -843,7 +886,7 @@ export function NodeShape({
         }
         const asset = assetById?.get(imgNode.assetId);
         const href = resolveAssetDisplayUrl(asset);
-        const clipAttr = rx > 0 ? `url(#${buildImageClipElementId(maskPrefix, imgNode.id)})` : undefined;
+        const clipAttr = hasRadius ? `url(#${buildImageClipElementId(maskPrefix, imgNode.id)})` : undefined;
         const strokeColor = imgNode.style.stroke && imgNode.style.stroke !== 'none' ? imgNode.style.stroke : undefined;
         const strokeWidth = imgNode.style.strokeWidth ?? 0;
         return (
@@ -860,17 +903,27 @@ export function NodeShape({
               />
             ) : (
               <g>
-                <rect
-                  x={imgNode.x}
-                  y={imgNode.y}
-                  width={imgNode.width}
-                  height={imgNode.height}
-                  rx={rx}
-                  fill="#1E2534"
-                  stroke="#4B5A78"
-                  stroke-width="1.5"
-                  stroke-dasharray="6 4"
-                />
+                {cr ? (
+                  <path
+                    d={buildRoundedRectSvgPath(imgNode.x, imgNode.y, imgNode.width, imgNode.height, cr)}
+                    fill="#1E2534"
+                    stroke="#4B5A78"
+                    stroke-width="1.5"
+                    stroke-dasharray="6 4"
+                  />
+                ) : (
+                  <rect
+                    x={imgNode.x}
+                    y={imgNode.y}
+                    width={imgNode.width}
+                    height={imgNode.height}
+                    rx={rx}
+                    fill="#1E2534"
+                    stroke="#4B5A78"
+                    stroke-width="1.5"
+                    stroke-dasharray="6 4"
+                  />
+                )}
                 <text
                   x={imgNode.x + imgNode.width / 2}
                   y={imgNode.y + imgNode.height / 2}
@@ -885,17 +938,27 @@ export function NodeShape({
               </g>
             )}
             {strokeColor && strokeWidth > 0 && (
-              <rect
-                x={imgNode.x}
-                y={imgNode.y}
-                width={imgNode.width}
-                height={imgNode.height}
-                rx={rx}
-                fill="none"
-                stroke={strokeColor}
-                stroke-width={strokeWidth}
-                pointer-events="none"
-              />
+              cr ? (
+                <path
+                  d={buildRoundedRectSvgPath(imgNode.x, imgNode.y, imgNode.width, imgNode.height, cr)}
+                  fill="none"
+                  stroke={strokeColor}
+                  stroke-width={strokeWidth}
+                  pointer-events="none"
+                />
+              ) : (
+                <rect
+                  x={imgNode.x}
+                  y={imgNode.y}
+                  width={imgNode.width}
+                  height={imgNode.height}
+                  rx={rx}
+                  fill="none"
+                  stroke={strokeColor}
+                  stroke-width={strokeWidth}
+                  pointer-events="none"
+                />
+              )
             )}
           </g>
         );
@@ -917,6 +980,7 @@ export function ClipMaskArtwork({
   tokens,
   visitedComponentIds,
   depth = 0,
+  animationTimeMs,
 }: {
   node: DesignNode;
   nodes: DesignNode[];
@@ -929,6 +993,7 @@ export function ClipMaskArtwork({
   tokens?: DesignTokenCollection;
   visitedComponentIds?: ReadonlySet<string>;
   depth?: number;
+  animationTimeMs?: number;
 }) {
   if (node.type === 'group') {
     const resolvedNodeById = nodeById ?? new Map(nodes.map((item) => [item.id, item]));
@@ -955,6 +1020,7 @@ export function ClipMaskArtwork({
             tokens={tokens}
             visitedComponentIds={visitedComponentIds}
             depth={depth}
+            animationTimeMs={animationTimeMs}
           />
         ))}
       </g>
@@ -978,7 +1044,11 @@ export function ClipMaskArtwork({
     const transform = node.rotation
       ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
       : undefined;
-    const resolvedRaw = resolveComponentInstanceNodes(node, component, tokens);
+    const resolvedBase = resolveComponentInstanceNodes(node, component, tokens);
+    const animatedDoc = animationTimeMs !== undefined && component.animations && component.animations.length > 0
+      ? evaluateComponentDocumentAtTime({ ...component.document, nodes: resolvedBase }, component.animations, animationTimeMs)
+      : null;
+    const resolvedRaw = animatedDoc ? animatedDoc.nodes : resolvedBase;
     const resolved = resolvedRaw.some((child) => child.layout && child.layout.mode !== 'none')
       ? computeAutoLayoutNodes(resolvedRaw, { breakpoint: 'desktop', tokens, canvasWidth: component.document.width })
       : resolvedRaw;
@@ -1006,6 +1076,7 @@ export function ClipMaskArtwork({
               tokens={tokens}
               visitedComponentIds={nextVisited}
               depth={depth + 1}
+              animationTimeMs={animationTimeMs}
             />
           </defs>
           {getLayerRenderOrder(visibleChildren)
@@ -1032,6 +1103,7 @@ export function ClipMaskArtwork({
                     tokens={tokens}
                     visitedComponentIds={nextVisited}
                     depth={depth + 1}
+                    animationTimeMs={animationTimeMs}
                   />
                 )
                 : <NodeShape key={child.id} node={child as PrimitiveNode} mask maskFill={maskFill} maskPrefix={instanceMaskPrefix} assetById={assetById} />;
@@ -1066,6 +1138,7 @@ export function DocumentMaskDefs({
   tokens,
   visitedComponentIds,
   depth = 0,
+  animationTimeMs,
 }: {
   nodes: DesignNode[];
   width: number;
@@ -1080,6 +1153,7 @@ export function DocumentMaskDefs({
   tokens?: DesignTokenCollection;
   visitedComponentIds?: ReadonlySet<string>;
   depth?: number;
+  animationTimeMs?: number;
 }) {
   const resolvedNodeById = nodeById ?? new Map(nodes.map((node) => [node.id, node]));
   const resolvedClipMaskMap = clipMaskMap ?? buildLayerClipMaskMap(nodes, resolvedNodeById);
@@ -1134,6 +1208,7 @@ export function DocumentMaskDefs({
               tokens={tokens}
               visitedComponentIds={visitedComponentIds}
               depth={depth}
+              animationTimeMs={animationTimeMs}
             />
           </mask>
         );
@@ -1165,6 +1240,7 @@ export function DocumentMaskDefs({
               tokens={tokens}
               visitedComponentIds={visitedComponentIds}
               depth={depth}
+              animationTimeMs={animationTimeMs}
             />
           </mask>
         );
@@ -1208,6 +1284,7 @@ export function NodeArtwork({
   tokens,
   visitedComponentIds,
   depth = 0,
+  animationTimeMs,
 }: {
   node: DesignNode;
   components?: ComponentDefinition[];
@@ -1219,6 +1296,7 @@ export function NodeArtwork({
   tokens?: DesignTokenCollection;
   visitedComponentIds?: ReadonlySet<string>;
   depth?: number;
+  animationTimeMs?: number;
 }) {
   const resolvedAssets = getAssetById(assets, assetById);
 
@@ -1242,7 +1320,11 @@ export function NodeArtwork({
     nextVisited.add(node.componentId);
     const resolvedChildren = component && !blockedByCycle
       ? (() => {
-          const resolvedRaw = resolveComponentInstanceNodes(node, component, tokens);
+          const resolvedBase = resolveComponentInstanceNodes(node, component, tokens);
+          const animatedDoc = animationTimeMs !== undefined && component.animations && component.animations.length > 0
+            ? evaluateComponentDocumentAtTime({ ...component.document, nodes: resolvedBase }, component.animations, animationTimeMs)
+            : null;
+          const resolvedRaw = animatedDoc ? animatedDoc.nodes : resolvedBase;
           const laidOut = resolvedRaw.some((child) => child.layout && child.layout.mode !== 'none')
             ? computeAutoLayoutNodes(resolvedRaw, { breakpoint: 'desktop', tokens, canvasWidth: component.document.width })
             : resolvedRaw;
@@ -1257,6 +1339,7 @@ export function NodeArtwork({
     return (
       <g
         data-node-id={emitNodeId ? node.id : undefined}
+        data-animated-component={component?.animations?.length ? 'true' : undefined}
         transform={transform}
         opacity={node.opacity}
         filter={filterAttr}
@@ -1280,6 +1363,7 @@ export function NodeArtwork({
                 tokens={tokens}
                 visitedComponentIds={nextVisited}
                 depth={depth + 1}
+                animationTimeMs={animationTimeMs}
               />
             </defs>
             <rect
@@ -1312,6 +1396,7 @@ export function NodeArtwork({
                   tokens={tokens}
                   visitedComponentIds={nextVisited}
                   depth={depth + 1}
+                  animationTimeMs={animationTimeMs}
                 />
               ))}
           </g>
@@ -1353,6 +1438,7 @@ export function MaskedNodeArtwork({
   tokens,
   visitedComponentIds,
   depth = 0,
+  animationTimeMs,
 }: {
   node: DesignNode;
   nodes: DesignNode[];
@@ -1367,6 +1453,7 @@ export function MaskedNodeArtwork({
   tokens?: DesignTokenCollection;
   visitedComponentIds?: ReadonlySet<string>;
   depth?: number;
+  animationTimeMs?: number;
 }) {
   const maskIds = clipMaskMap ? (clipMaskMap.get(node.id) ?? []) : getLayerClipMaskBaseIds(nodes, node.id);
   const frameIds = frameClipMap ? (frameClipMap.get(node.id) ?? []) : getLayerFrameClipAncestorIds(nodes, node.id);
@@ -1382,6 +1469,7 @@ export function MaskedNodeArtwork({
       tokens={tokens}
       visitedComponentIds={visitedComponentIds}
       depth={depth}
+      animationTimeMs={animationTimeMs}
     />
   );
   const frameClipped = frameIds.reduceRight(

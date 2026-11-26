@@ -126,9 +126,14 @@ export interface ComponentCreatePayload {
 export interface ComponentSyncDocumentPayload {
   componentId: string;
   document: FolioDocument;
+  animations?: AnimationClip[];
   updatedAt: string;
   expectedUpdatedAt: string;
   expectedMasterDocument: FolioDocument;
+}
+
+export interface DocumentSetBackgroundPayload {
+  background: string;
 }
 
 export interface ComponentRenamePayload {
@@ -309,6 +314,7 @@ export type ProjectRenameCommand = NativeCommandEnvelope<'project.rename', Proje
 export type ProjectReplaceCommand = NativeCommandEnvelope<'project.replace', ProjectReplacePayload>;
 export type PageCreateCommand = NativeCommandEnvelope<'page.create', PageCreatePayload>;
 export type PageSetActiveCommand = NativeCommandEnvelope<'page.set-active', PageSetActivePayload>;
+export type DocumentSetBackgroundCommand = NativeCommandEnvelope<'document.set-background', DocumentSetBackgroundPayload>;
 export type ComponentCreateCommand = NativeCommandEnvelope<'component.create', ComponentCreatePayload>;
 export type ComponentSyncDocumentCommand = NativeCommandEnvelope<'component.sync-document', ComponentSyncDocumentPayload>;
 export type ComponentRenameCommand = NativeCommandEnvelope<'component.rename', ComponentRenamePayload>;
@@ -369,6 +375,7 @@ export type ExtendedNativeCommand =
   | ProjectReplaceCommand
   | PageCreateCommand
   | PageSetActiveCommand
+  | DocumentSetBackgroundCommand
   | ComponentCreateCommand
   | ComponentSyncDocumentCommand
   | ComponentRenameCommand
@@ -401,6 +408,7 @@ export type NativeCommandPayload =
   | ProjectReplacePayload
   | PageCreatePayload
   | PageSetActivePayload
+  | DocumentSetBackgroundPayload
   | ComponentCreatePayload
   | ComponentSyncDocumentPayload
   | ComponentRenamePayload

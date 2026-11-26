@@ -10,6 +10,7 @@ import type {
   DesignNode,
   FolioPage,
 } from '../../core/document/types';
+import { parsePathMorphSnapshot } from '../../core/document/pathMorph';
 import {
   ANIMATABLE_PROPERTIES,
   ANIMATABLE_PROPERTY_META,
@@ -35,6 +36,7 @@ import { EasingCurveMiniSvg, MotionGraphEditor } from './MotionGraphEditor';
 import { StudioIcon } from './StudioIcon';
 
 export interface MotionTimelinePanelProps {
+  workspaceScope?: 'main' | 'component';
   activePage: FolioPage;
   pageClips: readonly AnimationClip[];
   activeClip: AnimationClip | null;
@@ -55,6 +57,7 @@ export interface MotionTimelinePanelProps {
   onStop: () => void;
   onSeek: (ms: number) => void;
   onKeyframeSelected: () => void;
+  onKeyframePathMorph?: () => void;
   onOpenLivePreview: (pageId?: string) => void;
   onOpenMotionExport?: () => void;
   onSelectCanvasNode: (nodeId: string) => void;
@@ -72,6 +75,10 @@ function formatSeconds(ms: number): string {
 
 function formatTrackValue(property: AnimatableProperty, value: number | string | undefined): string {
   if (value === undefined) return '—';
+  if (property === 'pathMorph' && typeof value === 'string') {
+    const snap = parsePathMorphSnapshot(value);
+    return snap ? `${snap.points.length} pts` : 'Shape';
+  }
   if (typeof value === 'string') return value;
   const meta = ANIMATABLE_PROPERTY_META[property];
   const rounded = property === 'opacity' || property === 'shadowOpacity' || property === 'scale'
@@ -81,6 +88,7 @@ function formatTrackValue(property: AnimatableProperty, value: number | string |
 }
 
 export function MotionTimelinePanel({
+  workspaceScope = 'main',
   activePage,
   pageClips,
   activeClip,
@@ -101,6 +109,7 @@ export function MotionTimelinePanel({
   onStop,
   onSeek,
   onKeyframeSelected,
+  onKeyframePathMorph,
   onOpenLivePreview,
   onOpenMotionExport,
   onSelectCanvasNode,
@@ -109,6 +118,10 @@ export function MotionTimelinePanel({
 }: MotionTimelinePanelProps) {
   const nodes = activePage.document.nodes;
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const hasSelectedPathNode = useMemo(
+    () => selectedNodeIds.some((id) => nodeById.get(id)?.type === 'path'),
+    [selectedNodeIds, nodeById],
+  );
 
   const [selection, setSelection] = useState<TimelineSelection | null>(null);
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
@@ -523,6 +536,11 @@ export function MotionTimelinePanel({
           <span class="mt-brand-label">
             <StudioIcon name="motion" />
             <span>Motion</span>
+            {workspaceScope === 'component' && (
+              <span class="mt-scope-badge" data-testid="motion-component-badge">
+                COMPONENT MOTION
+              </span>
+            )}
           </span>
 
           <select
@@ -673,6 +691,22 @@ export function MotionTimelinePanel({
         </div>
 
         <div class="mt-header-group mt-header-actions">
+          {onKeyframePathMorph && (
+            <button
+              type="button"
+              class="mt-btn"
+              data-testid="timeline-keyframe-morph-btn"
+              disabled={!hasSelectedPathNode}
+              title={
+                hasSelectedPathNode
+                  ? 'Keyframe vector anchor points, Bezier curve handles, and corner radii at the current playhead'
+                  : 'Select a vector path or shape (triangle, polygon, star, pen path) to animate points & curves'
+              }
+              onClick={onKeyframePathMorph}
+            >
+              + Shape Points
+            </button>
+          )}
           <button
             type="button"
             class="mt-btn"
@@ -1043,7 +1077,35 @@ export function MotionTimelinePanel({
               <span>ms</span>
             </label>
 
-            {ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].kind === 'color' ? (
+            {ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].kind === 'morph' ? (() => {
+              const snap = typeof activeTrackSelection.keyframe.value === 'string'
+                ? parsePathMorphSnapshot(activeTrackSelection.keyframe.value)
+                : null;
+              const targetPathNode = nodeById.get(activeTrackSelection.track.targetNodeId);
+              return (
+                <div class="mt-inspector-field">
+                  <span>Shape</span>
+                  <span class="mt-morph-summary">
+                    {snap ? `${snap.points.length} pts` : 'Vector Path'}
+                  </span>
+                  {targetPathNode?.type === 'path' && (
+                    <button
+                      type="button"
+                      class="mt-btn"
+                      title="Recapture the selected layer's current vertices and Bezier curves into this keyframe"
+                      onClick={() => {
+                        const freshValue = getDefaultNodePropertyValue(targetPathNode, 'pathMorph');
+                        if (typeof freshValue === 'string') {
+                          handleInspectorPatch({ value: freshValue });
+                        }
+                      }}
+                    >
+                      Recapture Shape
+                    </button>
+                  )}
+                </div>
+              );
+            })() : ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].kind === 'color' ? (
               <label class="mt-inspector-field">
                 <span>{ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].label}</span>
                 <input

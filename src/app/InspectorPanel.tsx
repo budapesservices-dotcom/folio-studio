@@ -388,6 +388,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
           defaultFillColor={defaultFillColor}
           onUpdateSelected={onUpdateSelected}
           onUpdateSelectedStyle={handleUpdateExtendedStyle}
+          onConvertToPath={() => onConvertToPath(activeEditorId)}
           onCommitEdit={onCommitEdit}
         />
       </InspectorAccordionSection>

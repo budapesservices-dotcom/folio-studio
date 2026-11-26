@@ -16,6 +16,7 @@ import {
   createLinePathPoints,
   createPolygonPathPoints,
   createStarPathPoints,
+  createTrianglePathPoints,
   normalizePathNode,
 } from './vector';
 import { createDefaultDesignTokens } from './tokens';
@@ -66,6 +67,27 @@ export function createFrameNode(
       ? { fill: 'rgba(139, 124, 246, 0.08)', stroke: '#8B7CF6', strokeWidth: 1.5, radius: 12 }
       : { fill: '#FFFFFF', stroke: '#D4CFC7', strokeWidth: 1, radius: 0 },
   };
+}
+
+export function createTriangleNode(x: number, y: number, width: number, height: number): PathNode {
+  const w = Math.max(8, width);
+  const h = Math.max(8, height);
+  return normalizePathNode({
+    ...baseNode('Triangle', x, y, w, h),
+    type: 'path',
+    points: createTrianglePathPoints(w, h),
+    closed: true,
+    pathKind: 'triangle',
+    shapeMeta: { kind: 'triangle' },
+    style: {
+      fill: '#5AC4A8',
+      stroke: '#00000000',
+      strokeWidth: 0,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+    },
+  });
 }
 
 export function createPolygonNode(x: number, y: number, width: number, height: number, sides = 6): PathNode {
@@ -272,8 +294,6 @@ export function createNodeForDocument(
   if (node.type === 'text') {
     const scale = Math.min(1, width / 840, height / 180);
     const fontSize = Math.max(16, Math.min(20, Math.round(node.style.fontSize * scale)));
-    const isTransparentArtboard =
-      document.background === '#00000000' || document.background === 'transparent';
     return {
       ...node,
       x,
@@ -282,7 +302,6 @@ export function createNodeForDocument(
       height,
       style: {
         ...node.style,
-        fill: isTransparentArtboard ? '#F3F5FA' : node.style.fill,
         fontSize,
         letterSpacing: Number((node.style.letterSpacing * scale).toFixed(2)),
       },
@@ -312,7 +331,7 @@ export function createEmptyDocument(name = 'Main Page', width = 1440, height = 9
     name,
     width,
     height,
-    background: '#F5F2EC',
+    background: '#00000000',
     nodes: [],
   };
 }
@@ -413,7 +432,7 @@ export function createInitialProject(name = 'Untitled project'): FolioProject {
         name: 'Main Page',
         width: 1440,
         height: 900,
-        background: '#F5F2EC',
+        background: '#00000000',
         nodes: [visualCard, orbit, sun, eyebrow, title, description, cardCaption],
       },
     }],

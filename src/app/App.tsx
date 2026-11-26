@@ -577,28 +577,75 @@ export function App() {
     onDeleteSelected: deleteLayersSafely,
     onNotice: setNotice,
   });
-  const motion = useMotionPlayback({ project: state.project, activePage, selectedNodeIds: state.selectedNodeIds, mainCommandClient, onNotice: setNotice });
-  const isMainMotionPoseActive = activeEditorId === 'main' && motion.motionOpen && (motion.previewActive || motion.isPlaying);
-  const animatedMainNodesById = useMemo(
+  const activeMotionProject = activeEditorId === 'component' ? componentState.project : state.project;
+  const activeMotionPage = getActivePage(activeMotionProject);
+  const activeMotionSelectedNodeIds = focusedEditor.state.selectedNodeIds;
+  const motion = useMotionPlayback({
+    workspaceScope: activeEditorId,
+    project: activeMotionProject,
+    activePage: activeMotionPage,
+    selectedNodeIds: activeMotionSelectedNodeIds,
+    commandClient: focusedCommandClient,
+    onNotice: setNotice,
+  });
+  const isActiveMotionPose = motion.motionOpen && (motion.previewActive || motion.isPlaying);
+  const animatedActiveNodesById = useMemo(
     () => new Map(motion.animatedMainDocument.nodes.map((node) => [node.id, node])),
     [motion.animatedMainDocument.nodes],
   );
-  const inspectorSelectedNode = isMainMotionPoseActive && selectedNode
-    ? (animatedMainNodesById.get(selectedNode.id) ?? selectedNode)
+  const inspectorSelectedNode = isActiveMotionPose && selectedNode
+    ? (animatedActiveNodesById.get(selectedNode.id) ?? selectedNode)
     : selectedNode;
-  const inspectorSelectedNodes = isMainMotionPoseActive
-    ? focusedEditor.selectedNodes.map((node) => animatedMainNodesById.get(node.id) ?? node)
+  const inspectorSelectedNodes = isActiveMotionPose
+    ? focusedEditor.selectedNodes.map((node) => animatedActiveNodesById.get(node.id) ?? node)
     : focusedEditor.selectedNodes;
   const motionAutoKeyBridge = createMotionAutoKeyBridge({
     activeEditorId,
     motion,
     inspectorSelectedNode,
     mainToolOperationExecutor,
+    componentToolOperationExecutor,
     onUpdateSelectedFallback: selectionActions.updateSelected,
     onUpdateSelectedStyleFallback: selectionActions.updateSelectedStyle,
     onSampledColorOption: applySampledColorOption,
     onCanvasInteraction: () => { selectionSourceRef.current = 'canvas'; },
   });
+
+  // Live animation clock for saved animated Component Instances placed on the Main Page
+  const hasAnimatedComponentsOnMain = useMemo(() => {
+    const componentsById = new Map(state.project.components.map((component) => [component.id, component]));
+    return activeDocument.nodes.some((node) => {
+      if (node.type !== 'component-instance' || node.onCanvas === false) return false;
+      const master = componentsById.get(node.componentId);
+      return Boolean(master?.animations?.some((clip) => clip.tracks.length > 0));
+    });
+  }, [activeDocument.nodes, state.project.components]);
+
+  const [componentAnimPlaying, setComponentAnimPlaying] = useState(true);
+  const [componentAnimTimeMs, setComponentAnimTimeMs] = useState(0);
+
+  useEffect(() => {
+    if (!hasAnimatedComponentsOnMain || !componentAnimPlaying) return;
+    if (typeof requestAnimationFrame !== 'function') return;
+    let rafId = 0;
+    let lastStamp = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(100, Math.max(0, now - lastStamp));
+      lastStamp = now;
+      setComponentAnimTimeMs((prev) => prev + dt);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [hasAnimatedComponentsOnMain, componentAnimPlaying]);
+
+  const mainCanvasDocument = activeEditorId === 'main' ? motion.animatedMainDocument : activeDocument;
+  const componentCanvasDocument = activeEditorId === 'component' ? motion.animatedMainDocument : componentDocument;
+  const effectiveMainAnimationTimeMs = hasAnimatedComponentsOnMain
+    ? (activeEditorId === 'main' && motion.motionOpen && (motion.isPlaying || motion.previewActive)
+      ? motion.playheadMs
+      : componentAnimTimeMs)
+    : undefined;
 
   const openLivePreviewForPage = useCallback((pageId?: string) => {
     setActiveEditorId('main');
@@ -716,7 +763,7 @@ export function App() {
           else { windows.setNodeLogicClosed(true); windows.setNodeLogicMinimized(false); }
         }}
         onToggleCodeWorkspace={() => setCodeWorkspaceOpen((open) => { if (!open) setActiveEditorId('main'); return !open; })}
-        onToggleMotionTimeline={() => { if (!motion.motionOpen) setActiveEditorId('main'); motion.toggleMotionOpen(); }}
+        onToggleMotionTimeline={() => motion.toggleMotionOpen()}
         onEnterFullscreen={enterFullscreen}
         onUpdateToolbarHint={updateToolbarHint}
       />
@@ -796,6 +843,8 @@ export function App() {
         onFinishRename={layers.finishLayerRename}
         onToggleColorPicker={layers.toggleLayerColorPicker}
         onToggleLayerProperty={layers.toggleLayerPropertyFromRow}
+        components={state.project.components}
+        onUnpackComponentInstance={(nodeId) => selectionActions.unpackComponentInstance(activeEditorId, nodeId)}
       />
 
       <MainCanvasWindow
@@ -806,7 +855,7 @@ export function App() {
         position={windows.canvasPosition}
         size={windows.canvasSize}
         zIndex={getWindowZIndex(windows.windowOrder, 'main-canvas')}
-        document={motion.animatedMainDocument}
+        document={mainCanvasDocument}
         components={state.project.components}
         designTokens={designSystem.designTokens}
         assets={state.project.assets}
@@ -847,6 +896,11 @@ export function App() {
         onToolOperationBatch={(operations) => motionAutoKeyBridge.executeMainToolOperations(operations)}
         onLayerDrop={(nodeIds) => layers.dropLayersOnCanvas(nodeIds, 'main')}
         onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'main', point); }}
+        onChangeBackground={(background) => { mainCommandClient.setDocumentBackground(background); }}
+        animationTimeMs={effectiveMainAnimationTimeMs}
+        hasAnimatedComponents={hasAnimatedComponentsOnMain}
+        componentAnimPlaying={componentAnimPlaying}
+        onToggleComponentAnimPlaying={() => setComponentAnimPlaying((playing) => !playing)}
         studioActions={selectionActions.createStudioActionsForTarget('main')}
       />
 
@@ -858,7 +912,7 @@ export function App() {
         position={windows.componentCanvasPosition}
         size={windows.componentCanvasSize}
         zIndex={getWindowZIndex(windows.windowOrder, 'component-canvas')}
-        document={componentDocument}
+        document={componentCanvasDocument}
         components={state.project.components}
         designTokens={designSystem.designTokens}
         assets={state.project.assets}
@@ -908,10 +962,11 @@ export function App() {
         onSimplifyPath={() => selectionActions.handleSimplifyPath('component')}
         onTogglePathClosed={() => selectionActions.handleTogglePathClosed('component')}
         onSelectTool={(nextTool) => chooseCanvasTool(nextTool, 'component')}
-        onToolOperation={(operation) => componentToolOperationExecutor.execute(operation)}
-        onToolOperationBatch={(operations) => componentToolOperationExecutor.executeBatch(operations)}
+        onToolOperation={(operation) => motionAutoKeyBridge.executeComponentToolOperations([operation])}
+        onToolOperationBatch={(operations) => motionAutoKeyBridge.executeComponentToolOperations(operations)}
         onLayerDrop={(nodeIds) => layers.dropLayersOnCanvas(nodeIds, 'component')}
         onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'component', point); }}
+        onChangeBackground={(background) => { componentCommandClient.setDocumentBackground(background); }}
         studioActions={selectionActions.createStudioActionsForTarget('component')}
       />
 
@@ -981,8 +1036,8 @@ export function App() {
         }}
         onUpdateSelected={motionAutoKeyBridge.handleInspectorUpdateSelected}
         onUpdateSelectedStyle={motionAutoKeyBridge.handleInspectorUpdateSelectedStyle}
-        onTogglePropertyKeyframe={activeEditorId === 'main' ? motion.togglePropertyKeyframe : undefined}
-        isPropertyKeyedAtPlayhead={activeEditorId === 'main' ? motion.isPropertyKeyedAtPlayhead : undefined}
+        onTogglePropertyKeyframe={motion.togglePropertyKeyframe}
+        isPropertyKeyedAtPlayhead={motion.isPropertyKeyedAtPlayhead}
         onApplyAutoLayout={designSystem.applyAutoLayout}
         onConvertFrameLayoutMode={designSystem.convertFrameLayoutMode}
         onSwitchBreakpoint={designSystem.setActiveBreakpoint}
@@ -1131,17 +1186,19 @@ export function App() {
         onUngroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).ungroupLayers(rootIds); }}
         onCreateClippingMask={(editorId, rootId) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).createClippingMask(rootId); }}
         onRemoveClippingMask={(editorId, rootId) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).removeClippingMask(rootId); }}
+        onUnpackComponent={(editorId, nodeId) => { layers.setLayerContextMenu(null); selectionActions.unpackComponentInstance(editorId, nodeId); }}
         onDelete={(editorId, nodeIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; deleteLayersSafely(editorId, nodeIds); }}
       />
 
       {motion.motionOpen && (
         <Suspense fallback={null}>
           <LazyMotionTimelinePanel
-            activePage={activePage}
+            workspaceScope={activeEditorId}
+            activePage={activeMotionPage}
             pageClips={motion.pageClips}
             activeClip={motion.activeClip}
-            customEasings={state.project.customEasings ?? []}
-            selectedNodeIds={state.selectedNodeIds}
+            customEasings={activeMotionProject.customEasings ?? []}
+            selectedNodeIds={activeMotionSelectedNodeIds}
             playheadMs={motion.playheadMs}
             isPlaying={motion.isPlaying}
             previewActive={motion.previewActive}
@@ -1157,10 +1214,10 @@ export function App() {
             onStop={motion.stop}
             onSeek={motion.seek}
             onKeyframeSelected={() => motion.keyframeSelectedLayers()}
+            onKeyframePathMorph={() => motion.keyframeSelectedLayers(['pathMorph'])}
             onOpenLivePreview={openLivePreviewForPage}
             onOpenMotionExport={() => setMotionExportOpen(true)}
-            onSelectCanvasNode={(nodeId) => { setActiveEditorId('main'); mainCommandClient.selectNodes([nodeId], 'Select animated layer'); }}
-            onFocusStudio={() => setActiveEditorId('main')}
+            onSelectCanvasNode={(nodeId) => { focusedCommandClient.selectNodes([nodeId], 'Select animated layer'); }}
             onClose={motion.closeMotion}
           />
         </Suspense>

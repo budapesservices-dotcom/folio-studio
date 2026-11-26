@@ -4,6 +4,8 @@ import type { DesignNode, FrameNode, PathNode, RectNode } from '../../../core/do
 import {
   deleteAnchorPoint,
   normalizePathNode,
+  setAllPathCornerRadii,
+  setAnchorCornerRadius,
   toggleAnchorPointType,
   updateParametricPathNode,
   worldDeltaToNodeLocalDelta,
@@ -158,6 +160,36 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
                 start: event.point,
                 node: target,
                 hudLabel: `R: ${Math.round(target.style.radius ?? 0)}px`,
+                hudPoint: event.point,
+              },
+              capturePointer: true,
+              preventDefault: true,
+            };
+          }
+        }
+
+        if (event.smartHandleHit.kind === 'path-corner-radius') {
+          const targetId = event.smartHandleHit.nodeId;
+          const ptIdx = event.smartHandleHit.pointIndex;
+          const target = context.selectableNodes.find(
+            (node): node is PathNode => node.id === targetId && node.type === 'path',
+          );
+          if (target && target.points[ptIdx]) {
+            if ((event.detail ?? 0) >= 2) {
+              const resetNode = event.shiftKey
+                ? setAllPathCornerRadii(target, 0)
+                : setAnchorCornerRadius(target, ptIdx, 0);
+              return { commitNodes: [resetNode], selection: [target.id], preventDefault: true };
+            }
+            return {
+              selection: [target.id],
+              session: {
+                kind: 'smart-handle',
+                pointerId: event.pointerId,
+                handle: event.smartHandleHit,
+                start: event.point,
+                node: target,
+                hudLabel: `P${ptIdx + 1} R: ${Math.round(target.points[ptIdx].cornerRadius ?? 0)}px`,
                 hudPoint: event.point,
               },
               capturePointer: true,
@@ -512,6 +544,35 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             previewNodes: [previewNode],
             preventDefault: true,
           };
+        }
+
+        if (session.handle.kind === 'path-corner-radius' && session.node?.type === 'path') {
+          const ptIdx = session.handle.pointIndex;
+          const pt = session.node.points[ptIdx];
+          if (pt) {
+            const localPt = worldPointToNodeLocal(session.node, event.point);
+            const n = session.node.points.length;
+            const prev = session.node.points[(ptIdx - 1 + n) % n];
+            const next = session.node.points[(ptIdx + 1) % n];
+            const lenPrev = Math.hypot(prev.x - pt.x, prev.y - pt.y);
+            const lenNext = Math.hypot(next.x - pt.x, next.y - pt.y);
+            const maxR = Math.max(0, Math.floor(Math.min(lenPrev, lenNext) * 0.48));
+            const rawDist = Math.hypot(localPt.x - pt.x, localPt.y - pt.y);
+            const nextRadius = Math.max(0, Math.min(maxR, Math.round(rawDist)));
+            const previewNode = event.shiftKey
+              ? setAllPathCornerRadii(session.node, nextRadius)
+              : setAnchorCornerRadius(session.node, ptIdx, nextRadius);
+            return {
+              session: {
+                ...session,
+                previewNode,
+                hudLabel: event.shiftKey ? `All R: ${nextRadius}px` : `P${ptIdx + 1} R: ${nextRadius}px`,
+                hudPoint: { x: event.point.x, y: event.point.y - 20 * unitsPerPx },
+              },
+              previewNodes: [previewNode],
+              preventDefault: true,
+            };
+          }
         }
 
         if (session.handle.kind === 'star-inner' && session.node?.type === 'path' && session.node.shapeMeta?.kind === 'star') {
@@ -1012,13 +1073,15 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             const updated = updateParametricPathNode(single, { kind: 'polygon', sides: nextSides });
             return { commitNodes: [updated], notice: `Polygon sides: ${nextSides}`, preventDefault: true };
           }
-          const nextSpikes = Math.max(3, Math.min(24, single.shapeMeta.spikes + step));
-          const updated = updateParametricPathNode(single, {
-            kind: 'star',
-            spikes: nextSpikes,
-            innerRatio: single.shapeMeta.innerRatio,
-          });
-          return { commitNodes: [updated], notice: `Star points: ${nextSpikes}`, preventDefault: true };
+          if (single.shapeMeta.kind === 'star') {
+            const nextSpikes = Math.max(3, Math.min(24, single.shapeMeta.spikes + step));
+            const updated = updateParametricPathNode(single, {
+              kind: 'star',
+              spikes: nextSpikes,
+              innerRatio: single.shapeMeta.innerRatio,
+            });
+            return { commitNodes: [updated], notice: `Star points: ${nextSpikes}`, preventDefault: true };
+          }
         }
       }
       // Precision Arrow-Key Nudge (1px, or 10px with Shift) for selected layers or active Bezier anchor!

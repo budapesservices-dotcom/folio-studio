@@ -34,6 +34,7 @@ export type StudioCanvasToolId =
   | 'section'
   | 'draw-rect'
   | 'draw-ellipse'
+  | 'draw-triangle'
   | 'draw-line'
   | 'draw-arrow'
   | 'draw-polygon'
@@ -77,6 +78,7 @@ export const CANVAS_TOOL_IDS: readonly CanvasToolId[] = Object.freeze([
   'section',
   'draw-rect',
   'draw-ellipse',
+  'draw-triangle',
   'draw-line',
   'draw-arrow',
   'draw-polygon',
@@ -406,7 +408,7 @@ const INSTANCE_NODE_KEYS = [
   'slotAssignments',
 ] as const;
 
-const SHAPE_STYLE_KEYS = ['fill', 'fills', 'stroke', 'strokeWidth', 'strokeDasharray', 'strokeAlign', 'radius'] as const;
+const SHAPE_STYLE_KEYS = ['fill', 'fills', 'stroke', 'strokeWidth', 'strokeDasharray', 'strokeAlign', 'radius', 'cornerRadii'] as const;
 const PATH_STYLE_KEYS = [
   'fill',
   'fills',
@@ -433,8 +435,9 @@ const TEXT_STYLE_KEYS = [
   'textTransform',
   'textDecoration',
 ] as const;
-const IMAGE_STYLE_KEYS = ['fit', 'radius', 'stroke', 'strokeWidth'] as const;
-const ANCHOR_POINT_KEYS = ['id', 'x', 'y', 'handleIn', 'handleOut', 'pointType'] as const;
+const IMAGE_STYLE_KEYS = ['fit', 'radius', 'cornerRadii', 'stroke', 'strokeWidth'] as const;
+const ANCHOR_POINT_KEYS = ['id', 'x', 'y', 'handleIn', 'handleOut', 'pointType', 'cornerRadius'] as const;
+const CORNER_RADII_KEYS = ['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as const;
 const POINT_2D_KEYS = ['x', 'y'] as const;
 const SUBPATH_KEYS = ['points', 'closed'] as const;
 const INSTANCE_OVERRIDE_KEYS = ['fill', 'text'] as const;
@@ -446,6 +449,7 @@ const VALID_PATH_KINDS = new Set([
   'pencil',
   'line',
   'arrow',
+  'triangle',
   'polygon',
   'star',
   'boolean',
@@ -598,6 +602,28 @@ function validateAnchorPoint(
     const err = validateVectorHandle(value.handleOut, `${path}.handleOut`);
     if (err) return err;
   }
+  if (value.cornerRadius !== undefined && (!isFiniteNumber(value.cornerRadius) || value.cornerRadius < 0)) {
+    return fail('INVALID_GEOMETRY', `${path}.cornerRadius must be a finite number >= 0.`, `${path}.cornerRadius`);
+  }
+  return null;
+}
+
+function validateCornerRadii(
+  value: unknown,
+  path: string,
+): ToolOperationEnvelopeValidationResult | null {
+  if (!isPlainRecord(value)) {
+    return fail('INVALID_NODE', `${path} must be a plain cornerRadii object.`, path);
+  }
+  const extra = findUnexpectedKey(value, CORNER_RADII_KEYS);
+  if (extra) {
+    return fail('INVALID_NODE', `Unexpected property "${extra}" on ${path}.`, `${path}.${extra}`);
+  }
+  for (const key of CORNER_RADII_KEYS) {
+    if (!isFiniteNumber(value[key]) || value[key] < 0) {
+      return fail('INVALID_GEOMETRY', `${path}.${key} must be a finite number >= 0.`, `${path}.${key}`);
+    }
+  }
   return null;
 }
 
@@ -640,6 +666,10 @@ function validateShapeStyle(
   }
   if (value.radius !== undefined && (!isFiniteNumber(value.radius) || value.radius < 0)) {
     return fail('INVALID_GEOMETRY', `${path}.radius must be a finite number >= 0.`, `${path}.radius`);
+  }
+  if (value.cornerRadii !== undefined) {
+    const err = validateCornerRadii(value.cornerRadii, `${path}.cornerRadii`);
+    if (err) return err;
   }
   return null;
 }
@@ -913,6 +943,10 @@ export function validateDesignNodePayload(
       if (style.radius !== undefined && (!isFiniteNumber(style.radius) || style.radius < 0)) {
         return fail('INVALID_GEOMETRY', `${path}.style.radius must be a finite number >= 0.`, `${path}.style.radius`);
       }
+      if (style.cornerRadii !== undefined) {
+        const err = validateCornerRadii(style.cornerRadii, `${path}.style.cornerRadii`);
+        if (err) return err;
+      }
       if (style.stroke !== undefined && (typeof style.stroke !== 'string' || style.stroke.length > TOOL_OPERATION_LIMITS.maxColorLength)) {
         return fail('INVALID_NODE', `${path}.style.stroke must be a string.`, `${path}.style.stroke`);
       }
@@ -984,7 +1018,16 @@ export function validateDesignNodePayload(
         if (!isPlainRecord(value.shapeMeta)) {
           return fail('INVALID_NODE', `${path}.shapeMeta must be a plain object.`, `${path}.shapeMeta`);
         }
-        if (value.shapeMeta.kind === 'polygon') {
+        if (value.shapeMeta.kind === 'triangle') {
+          const metaExtra = findUnexpectedKey(value.shapeMeta, ['kind']);
+          if (metaExtra) {
+            return fail(
+              'INVALID_NODE',
+              `Unexpected property "${metaExtra}" on ${path}.shapeMeta.`,
+              `${path}.shapeMeta.${metaExtra}`,
+            );
+          }
+        } else if (value.shapeMeta.kind === 'polygon') {
           const metaExtra = findUnexpectedKey(value.shapeMeta, ['kind', 'sides']);
           if (metaExtra) {
             return fail(
@@ -1040,7 +1083,7 @@ export function validateDesignNodePayload(
         } else {
           return fail(
             'INVALID_NODE',
-            `${path}.shapeMeta.kind must be "polygon" or "star".`,
+            `${path}.shapeMeta.kind must be "triangle", "polygon", or "star".`,
             `${path}.shapeMeta.kind`,
           );
         }

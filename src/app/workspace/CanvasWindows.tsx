@@ -12,8 +12,68 @@ import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
 import { ToolOptionsBar } from '../ToolOptionsBar';
 import { stepCanvasZoom } from './canvasViewState';
 import { StudioIcon } from './StudioIcon';
+import { isTransparentColor, parseColorWithAlpha } from '../../core/document/styling';
 import type { StudioVectorActions } from './inspectorVectorHelpers';
 import type { ComponentRecoveryStatus } from './useComponentMasterLifecycle';
+
+const CANVAS_BG_PRESETS = ['#FFFFFF', '#111827'] as const;
+
+interface CanvasBackgroundControlProps {
+  background: string;
+  onChangeBackground: (background: string) => void;
+  scope: 'main' | 'component';
+}
+
+function CanvasBackgroundControl({ background, onChangeBackground, scope }: CanvasBackgroundControlProps) {
+  const isTransparent = isTransparentColor(background);
+  const parsed = parseColorWithAlpha(background, '#FFFFFF');
+  return (
+    <div
+      class="canvas-bg-control"
+      role="group"
+      aria-label={`${scope === 'component' ? 'Component canvas' : 'Canvas'} background`}
+      data-testid="canvas-bg-control"
+      data-canvas-bg-scope={scope}
+    >
+      <button
+        type="button"
+        class={`canvas-bg-checker-btn${isTransparent ? ' is-active' : ''}`}
+        data-testid="canvas-bg-transparent"
+        title="Transparent checkerboard background"
+        aria-label="Transparent canvas background"
+        aria-pressed={isTransparent}
+        onClick={() => onChangeBackground('#00000000')}
+      />
+      <label class="canvas-bg-color-wrap" title={isTransparent ? 'Pick solid background color' : `Background color (${background})`}>
+        <input
+          type="color"
+          class="canvas-bg-color-input"
+          data-testid="canvas-bg-color"
+          aria-label="Canvas background color"
+          value={parsed.hex}
+          onInput={(event) => onChangeBackground(event.currentTarget.value)}
+        />
+      </label>
+      <div class="canvas-bg-presets" aria-label="Quick background colors">
+        {CANVAS_BG_PRESETS.map((hex) => {
+          const active = !isTransparent && parsed.hex.toUpperCase() === hex;
+          return (
+            <button
+              key={hex}
+              type="button"
+              class={`canvas-bg-preset-dot${active ? ' is-active' : ''}`}
+              style={{ backgroundColor: hex }}
+              title={`Set canvas background to ${hex}`}
+              aria-label={`Set canvas background to ${hex}`}
+              aria-pressed={active}
+              onClick={() => onChangeBackground(hex)}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 const LazyNodeLogicWorkspace = lazy(() => import('./NodeLogicWorkspace'));
 
@@ -88,6 +148,11 @@ export interface MainCanvasWindowProps {
   onToolOperationBatch: (operations: readonly ValidatedToolOperation[]) => void;
   onLayerDrop: (nodeIds: string[]) => void;
   onDropImageFiles?: (files: readonly File[], point: { x: number; y: number }) => void;
+  onChangeBackground?: (background: string) => void;
+  animationTimeMs?: number;
+  hasAnimatedComponents?: boolean;
+  componentAnimPlaying?: boolean;
+  onToggleComponentAnimPlaying?: () => void;
   studioActions?: StudioVectorActions;
 }
 
@@ -140,6 +205,11 @@ export function MainCanvasWindow({
   onToolOperationBatch,
   onLayerDrop,
   onDropImageFiles,
+  onChangeBackground,
+  animationTimeMs,
+  hasAnimatedComponents = false,
+  componentAnimPlaying = true,
+  onToggleComponentAnimPlaying,
   studioActions,
 }: MainCanvasWindowProps) {
   const [rendererMode, setRendererMode] = useState<ViewportRendererMode>('auto');
@@ -219,6 +289,26 @@ export function MainCanvasWindow({
                 onAlign={onAlign}
                 onDistribute={onDistribute}
               />
+              {hasAnimatedComponents && onToggleComponentAnimPlaying && (
+                <button
+                  type="button"
+                  class={`canvas-anim-toggle-btn${componentAnimPlaying ? ' is-playing' : ''}`}
+                  data-testid="canvas-component-anim-toggle"
+                  title={componentAnimPlaying ? 'Pause animated components on page' : 'Play animated components on page'}
+                  aria-label={componentAnimPlaying ? 'Pause animated components on page' : 'Play animated components on page'}
+                  aria-pressed={componentAnimPlaying}
+                  onClick={onToggleComponentAnimPlaying}
+                >
+                  <StudioIcon name={componentAnimPlaying ? 'pause' : 'play'} />
+                </button>
+              )}
+              {onChangeBackground && (
+                <CanvasBackgroundControl
+                  background={document.background}
+                  onChangeBackground={onChangeBackground}
+                  scope="main"
+                />
+              )}
               <div class="workspace-tools">
                 <button class="history-button" title="Undo" disabled={!canUndo} onClick={onUndo}>
                   <StudioIcon name="undo" />
@@ -288,6 +378,7 @@ export function MainCanvasWindow({
               onDropImageFiles={onDropImageFiles}
               rendererMode={rendererMode}
               onGpuMetrics={setGpuMetrics}
+              animationTimeMs={animationTimeMs}
               contextMenuActions={studioActions}
             />
           </div>
@@ -384,6 +475,7 @@ export interface ComponentCanvasWindowProps {
   onToolOperationBatch: (operations: readonly ValidatedToolOperation[]) => void;
   onLayerDrop: (nodeIds: string[]) => void;
   onDropImageFiles?: (files: readonly File[], point: { x: number; y: number }) => void;
+  onChangeBackground?: (background: string) => void;
   studioActions?: StudioVectorActions;
 }
 
@@ -445,6 +537,7 @@ export function ComponentCanvasWindow({
   onToolOperationBatch,
   onLayerDrop,
   onDropImageFiles,
+  onChangeBackground,
   studioActions,
 }: ComponentCanvasWindowProps) {
   const safeDocument = normalizeCanvasDocument(document);
@@ -535,6 +628,13 @@ export function ComponentCanvasWindow({
                 onAlign={onAlign}
                 onDistribute={onDistribute}
               />
+              {safeDocument && onChangeBackground && (
+                <CanvasBackgroundControl
+                  background={safeDocument.background}
+                  onChangeBackground={onChangeBackground}
+                  scope="component"
+                />
+              )}
               <div class="workspace-tools">
                 <button class="history-button" title="Undo" disabled={!canUndo} onClick={onUndo}>
                   <StudioIcon name="undo" />

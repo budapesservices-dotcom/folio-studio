@@ -413,6 +413,8 @@ export interface VectorAnchorPoint {
   /** Outgoing cubic Bezier control handle in local coordinates. */
   handleOut?: VectorPointHandle;
   pointType: VectorPointType;
+  /** Optional per-vertex corner rounding radius (px) applied non-destructively to corner vertices. */
+  cornerRadius?: number;
 }
 
 export interface VectorSubpath {
@@ -441,6 +443,7 @@ export type VectorPathKind =
   | 'pencil'
   | 'line'
   | 'arrow'
+  | 'triangle'
   | 'polygon'
   | 'star'
   | 'boolean'
@@ -468,6 +471,7 @@ export interface EllipseNode extends NodeBase {
 }
 
 export type VectorShapeMeta =
+  | { kind: 'triangle' }
   | { kind: 'polygon'; sides: number }
   | { kind: 'star'; spikes: number; innerRatio: number };
 
@@ -633,6 +637,8 @@ export interface ComponentDefinition {
   slots?: ComponentSlotDefinition[];
   /** Optional opt-in flag exposing this component inside Node Logic Component nodes. */
   nodeLogicEnabled?: boolean;
+  /** Optional Motion Timeline clips authored in Component Canvas so saved instances animate as 1 unified object. */
+  animations?: AnimationClip[];
 }
 
 export type DesignTokenLayer = 'primitive' | 'semantic';
@@ -940,6 +946,7 @@ export type AnimatableProperty =
   | 'fill'
   | 'stroke'
   | 'strokeWidth'
+  | 'pathMorph'
   | 'layerBlur'
   | 'backdropBlur'
   | 'shadowOffsetX'
@@ -956,7 +963,7 @@ export interface AnimationKeyframe {
   id: string;
   /** Time offset in milliseconds within [0, clip.durationMs]. */
   timeMs: number;
-  /** Numeric value for geometry/opacity/scale/rotation/radius/strokeWidth/effects, or CSS color string for fill/stroke. */
+  /** Numeric value for geometry/opacity/scale/rotation/radius/strokeWidth/effects, CSS color string for fill/stroke, or serialized PathMorphSnapshot JSON for pathMorph. */
   value: number | string;
   easing: AnimationEasing;
 }

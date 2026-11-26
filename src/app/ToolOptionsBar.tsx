@@ -38,6 +38,7 @@ const OPTION_TOOLS = new Set<CanvasToolId>([
   'section',
   'draw-rect',
   'draw-ellipse',
+  'draw-triangle',
   'draw-line',
   'draw-arrow',
   'draw-polygon',
@@ -276,12 +277,14 @@ export function ToolOptionsBar({
     toolId === 'pencil' ||
     toolId === 'draw-rect' ||
     toolId === 'draw-ellipse' ||
+    toolId === 'draw-triangle' ||
     toolId === 'draw-polygon' ||
     toolId === 'draw-star';
 
   const showFillSwatch =
     toolId === 'draw-rect' ||
     toolId === 'draw-ellipse' ||
+    toolId === 'draw-triangle' ||
     toolId === 'draw-polygon' ||
     toolId === 'draw-star' ||
     toolId === 'pen' ||

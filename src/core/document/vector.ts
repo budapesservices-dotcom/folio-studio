@@ -4,6 +4,7 @@
  */
 
 import type {
+  CornerRadiiConfig,
   DesignNode,
   EllipseNode,
   FrameNode,
@@ -55,7 +56,147 @@ function roundCoord(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function serializeSubpathD(points: readonly VectorAnchorPoint[], closed: boolean): string {
+/**
+ * Expands sharp corner vertices that carry `cornerRadius > 0` into tangent
+ * cubic Bezier fillet arcs so ANY vector shape (triangle, polygon, star, pen,
+ * boolean path, combined path) can be rounded non-destructively per corner point.
+ */
+export function applyCornerRoundingToAnchors(
+  points: readonly VectorAnchorPoint[],
+  closed: boolean,
+): VectorAnchorPoint[] {
+  const n = points.length;
+  if (n < 3) return points as VectorAnchorPoint[];
+  const hasAnyRounding = points.some(
+    (pt) => typeof pt.cornerRadius === 'number' && Number.isFinite(pt.cornerRadius) && pt.cornerRadius > 0.01,
+  );
+  if (!hasAnyRounding) return points as VectorAnchorPoint[];
+
+  const expanded: VectorAnchorPoint[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const curr = points[i];
+    const r = typeof curr.cornerRadius === 'number' && Number.isFinite(curr.cornerRadius) ? curr.cornerRadius : 0;
+    const isEndpointOfOpen = !closed && (i === 0 || i === n - 1);
+    const hasExplicitHandles = Boolean(curr.handleIn || curr.handleOut);
+
+    if (r <= 0.01 || isEndpointOfOpen || hasExplicitHandles || curr.pointType !== 'corner') {
+      expanded.push(curr);
+      continue;
+    }
+
+    const prev = points[(i - 1 + n) % n];
+    const next = points[(i + 1) % n];
+    const vPrevX = prev.x - curr.x;
+    const vPrevY = prev.y - curr.y;
+    const vNextX = next.x - curr.x;
+    const vNextY = next.y - curr.y;
+    const lenPrev = Math.hypot(vPrevX, vPrevY);
+    const lenNext = Math.hypot(vNextX, vNextY);
+
+    if (lenPrev < 0.1 || lenNext < 0.1) {
+      expanded.push(curr);
+      continue;
+    }
+
+    const d = Math.min(r, lenPrev * 0.48, lenNext * 0.48);
+    if (d <= 0.05) {
+      expanded.push(curr);
+      continue;
+    }
+
+    const entryX = curr.x + (vPrevX / lenPrev) * d;
+    const entryY = curr.y + (vPrevY / lenPrev) * d;
+    const exitX = curr.x + (vNextX / lenNext) * d;
+    const exitY = curr.y + (vNextY / lenNext) * d;
+
+    const c1X = entryX + (curr.x - entryX) * KAPPA;
+    const c1Y = entryY + (curr.y - entryY) * KAPPA;
+    const c2X = exitX + (curr.x - exitX) * KAPPA;
+    const c2Y = exitY + (curr.y - exitY) * KAPPA;
+
+    expanded.push({
+      id: `${curr.id}-r0`,
+      x: roundCoord(entryX),
+      y: roundCoord(entryY),
+      handleOut: { x: roundCoord(c1X), y: roundCoord(c1Y) },
+      pointType: 'corner',
+    });
+    expanded.push({
+      id: `${curr.id}-r1`,
+      x: roundCoord(exitX),
+      y: roundCoord(exitY),
+      handleIn: { x: roundCoord(c2X), y: roundCoord(c2Y) },
+      pointType: 'corner',
+    });
+  }
+  return expanded;
+}
+
+/**
+ * Builds an exact SVG path string for a rectangle with independent per-corner radii
+ * `[topLeft, topRight, bottomRight, bottomLeft]`, clamping per CSS/SVG spec so
+ * adjacent corner arcs never overlap.
+ */
+export function buildRoundedRectSvgPath(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radii: CornerRadiiConfig | readonly [number, number, number, number],
+): string {
+  const w = Math.max(0, width);
+  const h = Math.max(0, height);
+  const isTuple = Array.isArray(radii);
+  let tl = isTuple ? radii[0] : (radii as CornerRadiiConfig).topLeft;
+  let tr = isTuple ? radii[1] : (radii as CornerRadiiConfig).topRight;
+  let br = isTuple ? radii[2] : (radii as CornerRadiiConfig).bottomRight;
+  let bl = isTuple ? radii[3] : (radii as CornerRadiiConfig).bottomLeft;
+  tl = Math.max(0, Number.isFinite(tl) ? tl : 0);
+  tr = Math.max(0, Number.isFinite(tr) ? tr : 0);
+  br = Math.max(0, Number.isFinite(br) ? br : 0);
+  bl = Math.max(0, Number.isFinite(bl) ? bl : 0);
+
+  const scale = Math.min(
+    1,
+    tl + tr > 0 ? w / (tl + tr) : 1,
+    bl + br > 0 ? w / (bl + br) : 1,
+    tl + bl > 0 ? h / (tl + bl) : 1,
+    tr + br > 0 ? h / (tr + br) : 1,
+  );
+  tl *= scale;
+  tr *= scale;
+  br *= scale;
+  bl *= scale;
+
+  const r = roundCoord;
+  const x0 = x;
+  const y0 = y;
+  const x1 = x + w;
+  const y1 = y + h;
+
+  const parts: string[] = [`M ${r(x0 + tl)} ${r(y0)}`];
+  parts.push(`L ${r(x1 - tr)} ${r(y0)}`);
+  if (tr > 0.01) {
+    parts.push(`A ${r(tr)} ${r(tr)} 0 0 1 ${r(x1)} ${r(y0 + tr)}`);
+  }
+  parts.push(`L ${r(x1)} ${r(y1 - br)}`);
+  if (br > 0.01) {
+    parts.push(`A ${r(br)} ${r(br)} 0 0 1 ${r(x1 - br)} ${r(y1)}`);
+  }
+  parts.push(`L ${r(x0 + bl)} ${r(y1)}`);
+  if (bl > 0.01) {
+    parts.push(`A ${r(bl)} ${r(bl)} 0 0 1 ${r(x0)} ${r(y1 - bl)}`);
+  }
+  parts.push(`L ${r(x0)} ${r(y0 + tl)}`);
+  if (tl > 0.01) {
+    parts.push(`A ${r(tl)} ${r(tl)} 0 0 1 ${r(x0 + tl)} ${r(y0)}`);
+  }
+  parts.push('Z');
+  return parts.join(' ');
+}
+
+function serializeSubpathD(rawPoints: readonly VectorAnchorPoint[], closed: boolean): string {
+  const points = applyCornerRoundingToAnchors(rawPoints, closed);
   if (points.length === 0) return '';
   const parts: string[] = [`M ${roundCoord(points[0].x)} ${roundCoord(points[0].y)}`];
   const segmentCount = closed ? points.length : points.length - 1;
@@ -114,10 +255,11 @@ export function evaluateCubicBezier(
 }
 
 export function sampleSubpathToPolygon(
-  points: readonly VectorAnchorPoint[],
+  rawPoints: readonly VectorAnchorPoint[],
   closed: boolean,
   stepsPerCurve = 12,
 ): Point2D[] {
+  const points = applyCornerRoundingToAnchors(rawPoints, closed);
   if (points.length === 0) return [];
   const out: Point2D[] = [];
   const segmentCount = closed ? points.length : points.length - 1;
@@ -180,6 +322,9 @@ function shiftAnchorPoint(pt: VectorAnchorPoint, dx: number, dy: number): Vector
   if (pt.handleOut) {
     next.handleOut = { x: roundCoord(pt.handleOut.x + dx), y: roundCoord(pt.handleOut.y + dy) };
   }
+  if (typeof pt.cornerRadius === 'number' && pt.cornerRadius > 0) {
+    next.cornerRadius = roundCoord(pt.cornerRadius);
+  }
   return next;
 }
 
@@ -195,6 +340,10 @@ function scaleAnchorPoint(pt: VectorAnchorPoint, scaleX: number, scaleY: number)
   }
   if (pt.handleOut) {
     next.handleOut = { x: roundCoord(pt.handleOut.x * scaleX), y: roundCoord(pt.handleOut.y * scaleY) };
+  }
+  if (typeof pt.cornerRadius === 'number' && pt.cornerRadius > 0) {
+    const rScale = Math.min(Math.abs(scaleX), Math.abs(scaleY));
+    next.cornerRadius = roundCoord(pt.cornerRadius * rScale);
   }
   return next;
 }
@@ -324,6 +473,64 @@ export function scalePathNodeGeometry(
     }));
   }
   return next;
+}
+
+export function createTrianglePathPoints(width: number, height: number): VectorAnchorPoint[] {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  return [
+    { id: createAnchorId('tri'), x: roundCoord(w / 2), y: 0, pointType: 'corner' },
+    { id: createAnchorId('tri'), x: roundCoord(w), y: roundCoord(h), pointType: 'corner' },
+    { id: createAnchorId('tri'), x: 0, y: roundCoord(h), pointType: 'corner' },
+  ];
+}
+
+export function setAnchorCornerRadius(node: PathNode, pointIndex: number, radius: number): PathNode {
+  if (pointIndex < 0 || pointIndex >= node.points.length) return node;
+  const clamped = Math.max(0, Math.min(2000, roundCoord(radius)));
+  const nextPoints = node.points.map((pt, idx) => {
+    if (idx !== pointIndex) return pt;
+    const copy: VectorAnchorPoint = { ...pt };
+    if (clamped > 0) {
+      copy.cornerRadius = clamped;
+      copy.pointType = 'corner';
+      delete copy.handleIn;
+      delete copy.handleOut;
+    } else {
+      delete copy.cornerRadius;
+    }
+    return copy;
+  });
+  return { ...node, points: nextPoints };
+}
+
+export function setAllPathCornerRadii(node: PathNode, radius: number): PathNode {
+  const clamped = Math.max(0, Math.min(2000, roundCoord(radius)));
+  const updateList = (pts: readonly VectorAnchorPoint[], closed: boolean): VectorAnchorPoint[] =>
+    pts.map((pt, idx) => {
+      if (!closed && (idx === 0 || idx === pts.length - 1)) return pt;
+      if (pt.pointType !== 'corner' || pt.handleIn || pt.handleOut) return pt;
+      const copy: VectorAnchorPoint = { ...pt };
+      if (clamped > 0) {
+        copy.cornerRadius = clamped;
+      } else {
+        delete copy.cornerRadius;
+      }
+      return copy;
+    });
+
+  return {
+    ...node,
+    points: updateList(node.points, node.closed),
+    ...(node.subpaths
+      ? {
+          subpaths: node.subpaths.map((sp) => ({
+            closed: sp.closed,
+            points: updateList(sp.points, sp.closed),
+          })),
+        }
+      : {}),
+  };
 }
 
 export function createPolygonPathPoints(width: number, height: number, sides = 6): VectorAnchorPoint[] {
@@ -548,6 +755,15 @@ export function deleteAnchorPoint(node: PathNode, anchorIndex: number): PathNode
 export function updateParametricPathNode(node: PathNode, meta: VectorShapeMeta): PathNode {
   const w = Math.max(8, node.width);
   const h = Math.max(8, node.height);
+  if (meta.kind === 'triangle') {
+    return {
+      ...node,
+      points: createTrianglePathPoints(w, h),
+      closed: true,
+      pathKind: 'triangle',
+      shapeMeta: { kind: 'triangle' },
+    };
+  }
   if (meta.kind === 'polygon') {
     const sides = Math.max(3, Math.min(24, Math.round(meta.sides)));
     return {
@@ -902,6 +1118,7 @@ export function flipPathNode(node: PathNode, axis: 'horizontal' | 'vertical'): P
     const hOut = flipHandle(pt.handleOut);
     if (hIn) next.handleIn = hIn;
     if (hOut) next.handleOut = hOut;
+    if (typeof pt.cornerRadius === 'number' && pt.cornerRadius > 0) next.cornerRadius = pt.cornerRadius;
     return next;
   };
   return {
@@ -928,6 +1145,7 @@ export function reversePathNode(node: PathNode): PathNode {
       };
       if (pt.handleOut) next.handleIn = { ...pt.handleOut };
       if (pt.handleIn) next.handleOut = { ...pt.handleIn };
+      if (typeof pt.cornerRadius === 'number' && pt.cornerRadius > 0) next.cornerRadius = pt.cornerRadius;
       return next;
     });
 
@@ -1166,6 +1384,9 @@ function toWorldPath(node: DesignNode): { points: VectorAnchorPoint[]; closed: b
     if (pt.handleOut) {
       const hOut = rotatePointAround({ x: pathNode!.x + pt.handleOut.x, y: pathNode!.y + pt.handleOut.y }, center, pathNode!.rotation);
       next.handleOut = { x: roundCoord(hOut.x), y: roundCoord(hOut.y) };
+    }
+    if (typeof pt.cornerRadius === 'number' && pt.cornerRadius > 0) {
+      next.cornerRadius = pt.cornerRadius;
     }
     return next;
   };

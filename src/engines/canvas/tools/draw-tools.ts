@@ -6,6 +6,7 @@ import {
   createRectNode,
   createStarNode,
   createTextNode,
+  createTriangleNode,
 } from '../../../core/document/factory';
 import type { DesignNode } from '../../../core/document/types';
 import { getBounds, snapPointToTargets, type Bounds } from '../geometry';
@@ -96,9 +97,8 @@ function buildDrawnNode(
 ): DesignNode {
   const opts = context.toolOptions ?? DEFAULT_CANVAS_TOOL_OPTIONS;
   const isCompact = context.document.width < 700 || context.document.height < 500;
-  const isTransparent = context.document.background === '#00000000' || context.document.background === 'transparent';
   const defaultSize = isCompact ? 110 : 180;
-  const strokeColor = isTransparent && opts.strokeColor === '#20212A' ? '#E6EAF2' : opts.strokeColor;
+  const strokeColor = opts.strokeColor;
   const hasVisibleStroke = Number.isFinite(opts.strokeWidth) && opts.strokeWidth > 0;
   const shapeStrokeStyle = hasVisibleStroke
     ? { stroke: strokeColor, strokeWidth: opts.strokeWidth }
@@ -156,6 +156,10 @@ function buildDrawnNode(
         style: { ...base.style, fill: opts.fillColor, ...shapeStrokeStyle },
       };
     }
+    case 'draw-triangle': {
+      const node = createTriangleNode(box.x, box.y, box.width, box.height);
+      return { ...node, style: { ...node.style, fill: opts.fillColor, ...shapeStrokeStyle } };
+    }
     case 'draw-polygon': {
       const sides = session.sidesOverride ?? opts.polygonSides;
       const node = createPolygonNode(box.x, box.y, box.width, box.height, sides);
@@ -179,7 +183,7 @@ function buildDrawnNode(
         text: isClickFallback ? 'Type something' : 'Heading text',
         style: {
           ...base.style,
-          fill: isTransparent ? '#F3F5FA' : '#20212A',
+          fill: '#20212A',
           fontSize,
           letterSpacing: -0.5,
         },
@@ -403,6 +407,15 @@ export const drawArrowTool = createDrawTool({
   group: 'shapes',
   icon: 'arrow',
   description: 'Drag to draw a directional vector arrow. Hold Shift to snap to 15° angles.',
+});
+
+export const drawTriangleTool = createDrawTool({
+  id: 'draw-triangle',
+  label: 'Triangle',
+  shortcut: 'Shift+T',
+  group: 'shapes',
+  icon: 'triangle',
+  description: 'Click or drag to draw a Triangle. Hold Shift for equilateral proportions.',
 });
 
 export const drawPolygonTool = createDrawTool({

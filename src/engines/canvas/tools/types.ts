@@ -36,6 +36,7 @@ export interface VectorAnchorHit {
 
 export type SmartHandleHit =
   | { kind: 'corner-radius'; nodeId: string; corner: 'nw' | 'ne' | 'se' | 'sw' }
+  | { kind: 'path-corner-radius'; nodeId: string; pointIndex: number }
   | { kind: 'star-inner'; nodeId: string }
   | { kind: 'pivot' }
   | { kind: 'autolayout-padding'; nodeId: string; edge: PaddingEdge }

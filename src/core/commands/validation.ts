@@ -48,6 +48,7 @@ import type {
   ComponentRenamePayload,
   ComponentSyncDocumentPayload,
   ComponentUpdateContractPayload,
+  DocumentSetBackgroundPayload,
   HistoryCommitEditPayload,
   HistoryRedoPayload,
   HistoryUndoPayload,
@@ -510,13 +511,14 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       isRecord(h) && hasOnlyKeys(h, ['x', 'y']) && isFiniteNumber(h.x) && isFiniteNumber(h.y);
     const isAnchor = (pt: unknown): boolean =>
       isRecord(pt) &&
-      hasOnlyKeys(pt, ['id', 'x', 'y', 'handleIn', 'handleOut', 'pointType']) &&
+      hasOnlyKeys(pt, ['id', 'x', 'y', 'handleIn', 'handleOut', 'pointType', 'cornerRadius']) &&
       isNonEmptyString(pt.id) &&
       isFiniteNumber(pt.x) &&
       isFiniteNumber(pt.y) &&
       (pt.handleIn === undefined || isHandle(pt.handleIn)) &&
       (pt.handleOut === undefined || isHandle(pt.handleOut)) &&
-      (pt.pointType === 'corner' || pt.pointType === 'smooth' || pt.pointType === 'symmetric');
+      (pt.pointType === 'corner' || pt.pointType === 'smooth' || pt.pointType === 'symmetric') &&
+      (pt.cornerRadius === undefined || (isFiniteNumber(pt.cornerRadius) && pt.cornerRadius >= 0));
 
     if (!value.points.every(isAnchor)) return false;
     if (value.subpaths !== undefined) {
@@ -531,12 +533,16 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       if (!validSubpaths) return false;
     }
     if (value.pathKind !== undefined &&
-      !['pen', 'curvature', 'pencil', 'line', 'arrow', 'polygon', 'star', 'boolean', 'outline'].includes(String(value.pathKind))) {
+      !['pen', 'curvature', 'pencil', 'line', 'arrow', 'triangle', 'polygon', 'star', 'boolean', 'outline'].includes(String(value.pathKind))) {
       return false;
     }
     if (value.shapeMeta !== undefined) {
       if (!isRecord(value.shapeMeta)) return false;
-      if (value.shapeMeta.kind === 'polygon') {
+      if (value.shapeMeta.kind === 'triangle') {
+        if (!hasOnlyKeys(value.shapeMeta, ['kind'])) {
+          return false;
+        }
+      } else if (value.shapeMeta.kind === 'polygon') {
         if (
           !hasOnlyKeys(value.shapeMeta, ['kind', 'sides']) ||
           !isFiniteNumber(value.shapeMeta.sides) ||
@@ -976,7 +982,7 @@ function isFolioPageData(value: unknown): value is FolioPage {
 }
 
 function isComponentDefinitionData(value: unknown): value is ComponentDefinition {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'document', 'createdAt', 'updatedAt', 'variants', 'slots', 'nodeLogicEnabled'])) {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'document', 'createdAt', 'updatedAt', 'variants', 'slots', 'nodeLogicEnabled', 'animations'])) {
     return false;
   }
   if (
@@ -992,6 +998,7 @@ function isComponentDefinitionData(value: unknown): value is ComponentDefinition
   if (value.variants !== undefined && !isComponentVariantsList(value.variants, masterNodesById)) return false;
   if (value.slots !== undefined && !isComponentSlotsList(value.slots, masterNodesById)) return false;
   if (value.nodeLogicEnabled !== undefined && typeof value.nodeLogicEnabled !== 'boolean') return false;
+  if (value.animations !== undefined && (!Array.isArray(value.animations) || value.animations.length > 100 || !value.animations.every(isAnimationClip))) return false;
   return true;
 }
 
@@ -1043,6 +1050,23 @@ export function validateComponentCreatePayload(
   return { ok: true, value: { component: data.component } };
 }
 
+export function validateDocumentSetBackgroundPayload(
+  value: unknown,
+): ValidationOutcome<DocumentSetBackgroundPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['background']) ||
+    typeof data.background !== 'string' ||
+    data.background.length > 128
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Document background update requires a valid background color string.');
+  }
+  return { ok: true, value: { background: data.background } };
+}
+
 export function validateComponentSyncDocumentPayload(
   value: unknown,
 ): ValidationOutcome<ComponentSyncDocumentPayload> {
@@ -1051,12 +1075,13 @@ export function validateComponentSyncDocumentPayload(
   const data = normalized.value;
   if (
     !isRecord(data) ||
-    !hasOnlyKeys(data, ['componentId', 'document', 'updatedAt', 'expectedUpdatedAt', 'expectedMasterDocument']) ||
+    !hasOnlyKeys(data, ['componentId', 'document', 'animations', 'updatedAt', 'expectedUpdatedAt', 'expectedMasterDocument']) ||
     !isNonEmptyString(data.componentId) ||
     !isFolioDocumentData(data.document) ||
     !isIsoTimestamp(data.updatedAt) ||
     !isIsoTimestamp(data.expectedUpdatedAt) ||
-    !isFolioDocumentData(data.expectedMasterDocument)
+    !isFolioDocumentData(data.expectedMasterDocument) ||
+    (data.animations !== undefined && (!Array.isArray(data.animations) || data.animations.length > 100 || !data.animations.every(isAnimationClip)))
   ) {
     return invalid('INVALID_PAYLOAD', 'Component sync requires a valid component ID, document, and optimistic concurrency guard.');
   }
@@ -1065,6 +1090,7 @@ export function validateComponentSyncDocumentPayload(
     value: {
       componentId: data.componentId,
       document: data.document,
+      ...(data.animations !== undefined ? { animations: data.animations } : {}),
       updatedAt: data.updatedAt,
       expectedUpdatedAt: data.expectedUpdatedAt,
       expectedMasterDocument: data.expectedMasterDocument,

@@ -281,6 +281,7 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'project.replace':
     case 'page.create':
     case 'page.set-active':
+    case 'document.set-background':
     case 'component.create':
     case 'component.sync-document':
     case 'component.rename':
@@ -341,6 +342,7 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'project.replace':
     case 'page.create':
     case 'page.set-active':
+    case 'document.set-background':
     case 'component.create':
     case 'component.sync-document':
     case 'component.rename':
@@ -506,7 +508,8 @@ function computeProjectChangeDraft(
       ? computeDocumentNodeDiff(beforePage.document, afterPage.document)
       : { added: afterPage.document.nodes.map((node) => node.id), updated: [], removed: [] };
 
-    const hasChanges = diff.added.length > 0 || diff.updated.length > 0 || diff.removed.length > 0 || !beforePage;
+    const backgroundChanged = Boolean(beforePage && beforePage.document.background !== afterPage.document.background);
+    const hasChanges = diff.added.length > 0 || diff.updated.length > 0 || diff.removed.length > 0 || !beforePage || backgroundChanged;
     if (hasChanges || isPrimary) {
       const key = `${address.owner.id}:${address.documentId}`;
       seenDocumentKeys.add(key);
@@ -556,7 +559,9 @@ function computeProjectChangeDraft(
           (beforeComponent.variants !== afterComponent.variants &&
             JSON.stringify(beforeComponent.variants ?? []) !== JSON.stringify(afterComponent.variants ?? [])) ||
           (beforeComponent.slots !== afterComponent.slots &&
-            JSON.stringify(beforeComponent.slots ?? []) !== JSON.stringify(afterComponent.slots ?? []));
+            JSON.stringify(beforeComponent.slots ?? []) !== JSON.stringify(afterComponent.slots ?? [])) ||
+          (beforeComponent.animations !== afterComponent.animations &&
+            JSON.stringify(beforeComponent.animations ?? []) !== JSON.stringify(afterComponent.animations ?? []));
         const documentContentChanged =
           beforeComponent.document !== afterComponent.document &&
           !areDocumentsStructurallyEqual(beforeComponent.document, afterComponent.document);

@@ -212,6 +212,13 @@ export function buildCanvasPointerInput(
       const nodeId = smartEl.getAttribute('data-smart-node-id');
       const corner = smartEl.getAttribute('data-smart-corner') as 'nw' | 'ne' | 'se' | 'sw' | null;
       if (nodeId && corner) smartHandleHit = { kind: 'corner-radius', nodeId, corner };
+    } else if (kind === 'path-corner-radius') {
+      const nodeId = smartEl.getAttribute('data-smart-node-id');
+      const idxRaw = smartEl.getAttribute('data-smart-point-index');
+      const pointIndex = idxRaw !== null ? Number(idxRaw) : -1;
+      if (nodeId && Number.isInteger(pointIndex) && pointIndex >= 0) {
+        smartHandleHit = { kind: 'path-corner-radius', nodeId, pointIndex };
+      }
     } else if (kind === 'star-inner') {
       const nodeId = smartEl.getAttribute('data-smart-node-id');
       if (nodeId) smartHandleHit = { kind: 'star-inner', nodeId };

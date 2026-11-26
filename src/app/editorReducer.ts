@@ -69,8 +69,9 @@ export type EditorAction =
   | { type: 'rename-project'; name: string }
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }
+  | { type: 'set-document-background'; background: string }
   | { type: 'add-component'; component: ComponentDefinition }
-  | { type: 'sync-component-document'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; document: FolioDocument; updatedAt: string }
+  | { type: 'sync-component-document'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; document: FolioDocument; animations?: AnimationClip[]; updatedAt: string }
   | { type: 'rename-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; name: string }
   | { type: 'delete-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string }
   | { type: 'update-component-contract'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[]; nodeLogicEnabled?: boolean }
@@ -532,6 +533,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return withSnapshot(state, next, null, []);
     }
 
+    case 'set-document-background': {
+      const currentDoc = getActiveDocument(state.project);
+      if (currentDoc.background === action.background) return state;
+      const next = updateActiveDocument(state.project, {
+        ...currentDoc,
+        background: action.background,
+      });
+      return withSnapshot(state, next);
+    }
+
     case 'add-component': {
       if (state.project.components.some((component) => component.id === action.component.id)) return state;
       return withSnapshot(state, touch({
@@ -543,8 +554,13 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'sync-component-document': {
       const currentComponent = state.project.components.find((component) => component.id === action.componentId);
       if (!currentComponent || currentComponent.document !== action.expectedMasterDocument ||
-          currentComponent.updatedAt !== action.expectedUpdatedAt ||
-          areDocumentsStructurallyEqual(currentComponent.document, action.document)) return state;
+          currentComponent.updatedAt !== action.expectedUpdatedAt) return state;
+      const docsEqual = areDocumentsStructurallyEqual(currentComponent.document, action.document);
+      const nextAnimations = action.animations !== undefined
+        ? (action.animations.length > 0 ? action.animations : undefined)
+        : currentComponent.animations;
+      const animationsEqual = JSON.stringify(currentComponent.animations ?? []) === JSON.stringify(nextAnimations ?? []);
+      if (docsEqual && animationsEqual) return state;
       const nextNodeIds = new Set(action.document.nodes.map((node) => node.id));
       const removedMasterNodeIds = new Set<string>();
       for (const prevNode of currentComponent.document.nodes) {
@@ -552,11 +568,17 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           removedMasterNodeIds.add(prevNode.id);
         }
       }
+      const prunedBase = pruneComponentContractForDocument(currentComponent, action.document);
       const prunedComponent: ComponentDefinition = {
-        ...pruneComponentContractForDocument(currentComponent, action.document),
+        ...prunedBase,
         document: action.document,
         updatedAt: action.updatedAt,
       };
+      if (nextAnimations && nextAnimations.length > 0) {
+        prunedComponent.animations = nextAnimations;
+      } else {
+        delete prunedComponent.animations;
+      }
       const components = state.project.components.map((component) => {
         if (component.id === action.componentId) return prunedComponent;
         const nextDoc = pruneComponentInstanceContractsInDocument(component.document, prunedComponent);

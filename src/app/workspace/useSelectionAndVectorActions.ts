@@ -156,16 +156,34 @@ export function useSelectionAndVectorActions({
     );
   };
 
-  const detachSelectedInstance = () => {
-    if (!selectedNode || selectedNode.type !== 'component-instance') return;
-    const master = state.project.components.find((component) => component.id === selectedNode.componentId);
+  const unpackComponentInstance = (target: EditorTarget, nodeId: string) => {
+    if (isHydrating) return;
+    const editor = target === 'main' ? state : componentState;
+    const doc = getActiveDocument(editor.project);
+    const targetNode = doc.nodes.find((node) => node.id === nodeId);
+    if (!targetNode || targetNode.type !== 'component-instance') return;
+    const master = state.project.components.find((component) => component.id === targetNode.componentId);
     if (!master) {
       setNotice('The linked master component could not be found.');
       return;
     }
-    const detached = detachComponentInstance(selectedNode, master, getProjectDesignTokens(state.project));
-    focusedCommandClient.replaceNodeWithNodes(selectedNode.id, detached, 'Detach component instance');
-    setNotice('Instance detached. Its nodes can now be edited independently.');
+    const detached = detachComponentInstance(targetNode, master, getProjectDesignTokens(state.project));
+    if (detached.length === 0) {
+      setNotice('This component has no internal layers to unpack.');
+      return;
+    }
+    selectionSourceRef.current = 'layers';
+    getCommandClient(target).replaceNodeWithNodes(
+      targetNode.id,
+      detached,
+      `Unpack component “${targetNode.name}” to layers`,
+    );
+    setNotice(`Unpacked “${targetNode.name}” back into ${detached.length} editable layer${detached.length === 1 ? '' : 's'}.`);
+  };
+
+  const detachSelectedInstance = () => {
+    if (!selectedNode || selectedNode.type !== 'component-instance') return;
+    unpackComponentInstance(activeEditorId, selectedNode.id);
   };
 
   const alignSelection = (alignment: Alignment, target: EditorTarget = activeEditorId) => {
@@ -956,6 +974,7 @@ export function useSelectionAndVectorActions({
     updateInstanceOverride,
     resetInstanceOverrides,
     detachSelectedInstance,
+    unpackComponentInstance,
     alignSelection,
     distributeSelection,
     handlePathfinder,

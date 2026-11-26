@@ -87,6 +87,7 @@ export interface LayerContextMenuProps {
   onUngroup: (editorId: EditorTarget, rootIds: string[]) => void;
   onCreateClippingMask: (editorId: EditorTarget, rootId: string) => void;
   onRemoveClippingMask: (editorId: EditorTarget, rootId: string) => void;
+  onUnpackComponent?: (editorId: EditorTarget, nodeId: string) => void;
   onDelete: (editorId: EditorTarget, nodeIds: string[]) => void;
 }
 
@@ -106,6 +107,7 @@ export function LayerContextMenu({
   onUngroup,
   onCreateClippingMask,
   onRemoveClippingMask,
+  onUnpackComponent,
   onDelete,
 }: LayerContextMenuProps) {
   if (!menu) return null;
@@ -158,6 +160,16 @@ export function LayerContextMenu({
       {capabilities.canUnmask && (
         <button type="button" role="menuitem" onClick={() => onRemoveClippingMask(menu.editorId, capabilities.rootIds[0])}>
           Release Clipping Mask
+        </button>
+      )}
+      {capabilities.canUnpackComponent && onUnpackComponent && (
+        <button
+          type="button"
+          role="menuitem"
+          data-testid="layer-context-unpack-btn"
+          onClick={() => onUnpackComponent(menu.editorId, capabilities.rootIds[0])}
+        >
+          Unpack Component to Layers
         </button>
       )}
       <div class="layer-context-menu-separator" role="separator" />

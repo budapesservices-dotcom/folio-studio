@@ -10,6 +10,7 @@ export const STUDIO_ICON_PATHS: Record<string, string> = {
   shapes: 'M4 5h8v8H4zM15 6a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 17h16',
   rect: 'M4 5h16v14H4z',
   ellipse: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z',
+  triangle: 'M12 4 21 19H3L12 4z',
   text: 'M4 5h16M12 5v14M8 19h8',
   layers: 'M12 3 3 8l9 5 9-5-9-5zM3 12l9 5 9-5M3 16l9 5 9-5',
   export: 'M12 3v12m0-12 4 4m-4-4-4 4M5 14v6h14v-6',

@@ -19,6 +19,7 @@ import {
   isSafeHtmlId,
 } from './cssUnits';
 import { isBlendMode, isFillPaint, isVisualEffect } from './styling';
+import { isValidPathMorphSnapshot } from './pathMorph';
 import { validateDesignTokenCollection, validateNodeTokenBindings } from './tokens';
 
 export interface ValidationResult {
@@ -539,7 +540,8 @@ function isVectorAnchorPoint(value: unknown): boolean {
     isFiniteNumber(value.y) &&
     (value.handleIn === undefined || isVectorHandle(value.handleIn)) &&
     (value.handleOut === undefined || isVectorHandle(value.handleOut)) &&
-    (value.pointType === 'corner' || value.pointType === 'smooth' || value.pointType === 'symmetric')
+    (value.pointType === 'corner' || value.pointType === 'smooth' || value.pointType === 'symmetric') &&
+    (value.cornerRadius === undefined || (isFiniteNumber(value.cornerRadius) && value.cornerRadius >= 0 && value.cornerRadius <= 2000))
   );
 }
 
@@ -591,10 +593,11 @@ function isDesignNode(value: unknown): value is DesignNode {
     const validShapeMeta =
       value.shapeMeta === undefined ||
       (isRecord(value.shapeMeta) &&
-        ((value.shapeMeta.kind === 'polygon' &&
-          isFiniteNumber(value.shapeMeta.sides) &&
-          value.shapeMeta.sides >= 3 &&
-          value.shapeMeta.sides <= 32) ||
+        (value.shapeMeta.kind === 'triangle' ||
+          (value.shapeMeta.kind === 'polygon' &&
+            isFiniteNumber(value.shapeMeta.sides) &&
+            value.shapeMeta.sides >= 3 &&
+            value.shapeMeta.sides <= 32) ||
           (value.shapeMeta.kind === 'star' &&
             isFiniteNumber(value.shapeMeta.spikes) &&
             value.shapeMeta.spikes >= 3 &&
@@ -609,7 +612,7 @@ function isDesignNode(value: unknown): value is DesignNode {
       typeof value.closed === 'boolean' &&
       isPathStyle(value.style) &&
       (value.pathKind === undefined ||
-        ['pen', 'curvature', 'pencil', 'line', 'arrow', 'polygon', 'star', 'boolean', 'outline'].includes(String(value.pathKind))) &&
+        ['pen', 'curvature', 'pencil', 'line', 'arrow', 'triangle', 'polygon', 'star', 'boolean', 'outline'].includes(String(value.pathKind))) &&
       (value.subpaths === undefined || (Array.isArray(value.subpaths) && value.subpaths.every(isVectorSubpath))) &&
       validShapeMeta
     );
@@ -1322,6 +1325,7 @@ const ANIMATABLE_PROPERTIES_SET = new Set([
   'fill',
   'stroke',
   'strokeWidth',
+  'pathMorph',
   'layerBlur',
   'backdropBlur',
   'shadowOffsetX',
@@ -1453,6 +1457,8 @@ export function isAnimationClip(value: unknown): value is import('./types').Anim
 
       if (track.property === 'fill' || track.property === 'stroke') {
         if (!isSafeAnimationColorValue(kf.value)) return false;
+      } else if (track.property === 'pathMorph') {
+        if (!isValidPathMorphSnapshot(kf.value)) return false;
       } else {
         if (!isFiniteNumber(kf.value)) return false;
         if ((track.property === 'opacity' || track.property === 'shadowOpacity') && (kf.value < 0 || kf.value > 1)) return false;
@@ -1776,6 +1782,9 @@ export function validateProject(input: unknown): ValidationResult {
       }
       if (component.nodeLogicEnabled !== undefined && typeof component.nodeLogicEnabled !== 'boolean') {
         return { ok: false, error: `Component "${component.name}" contains an invalid nodeLogicEnabled flag.` };
+      }
+      if (component.animations !== undefined && !isAnimationClipList(component.animations)) {
+        return { ok: false, error: `Component "${component.name}" contains invalid animation clips.` };
       }
     }
     componentIds.add(component.id);

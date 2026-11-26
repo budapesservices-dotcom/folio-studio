@@ -829,7 +829,7 @@ export function InspectorVectorShapingSection({
                 }}
               />
             </label>
-          ) : (
+          ) : selectedNode.shapeMeta.kind === 'star' ? (
             <div class="field-grid single-row">
               <label class="field-label">
                 Spikes
@@ -870,7 +870,7 @@ export function InspectorVectorShapingSection({
                 />
               </label>
             </div>
-          )}
+          ) : null}
         </div>
       )}
 

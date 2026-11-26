@@ -11,6 +11,7 @@ import {
   drawRectTool,
   drawStarTool,
   drawTextTool,
+  drawTriangleTool,
   frameTool,
   sectionTool,
 } from './draw-tools';
@@ -55,6 +56,7 @@ const ALL_STUDIO_TOOLS: CanvasToolHandler[] = [
   // Shapes (Figma + Illustrator)
   drawRectTool,
   drawEllipseTool,
+  drawTriangleTool,
   drawLineTool,
   drawArrowTool,
   drawPolygonTool,
@@ -111,9 +113,9 @@ export const MAIN_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
     id: 'shapes',
     label: 'Shape',
-    description: 'Draw Rectangles, Ellipses, Lines, Arrows, Polygons, and Stars directly on Canvas.',
+    description: 'Draw Rectangles, Ellipses, Triangles, Lines, Arrows, Polygons, and Stars directly on Canvas.',
     icon: 'rect',
-    tools: ['draw-rect', 'draw-ellipse', 'draw-line', 'draw-arrow', 'draw-polygon', 'draw-star'],
+    tools: ['draw-rect', 'draw-ellipse', 'draw-triangle', 'draw-line', 'draw-arrow', 'draw-polygon', 'draw-star'],
     workspaces: ['main'],
   },
   {
@@ -175,9 +177,9 @@ export const COMPONENT_CANVAS_TOOL_GROUPS: readonly StudioToolGroup[] = [
   {
     id: 'shapes',
     label: 'Shape',
-    description: 'Vector primitives: Rectangle (R), Ellipse (O), Polygon (G), Star (Shift+G), Line (L), Arrow, Frame (F).',
+    description: 'Vector primitives: Rectangle (R), Ellipse (O), Triangle (Shift+T), Polygon (G), Star (Shift+G), Line (L), Arrow, Frame (F).',
     icon: 'polygon',
-    tools: ['draw-rect', 'draw-ellipse', 'draw-polygon', 'draw-star', 'draw-line', 'draw-arrow', 'frame'],
+    tools: ['draw-rect', 'draw-ellipse', 'draw-triangle', 'draw-polygon', 'draw-star', 'draw-line', 'draw-arrow', 'frame'],
     workspaces: ['component'],
   },
   {
@@ -234,6 +236,7 @@ export function findStudioToolByShortcut(
 
   const shiftMap: Record<string, CanvasToolId> = {
     s: 'section',
+    t: 'draw-triangle',
     l: 'draw-arrow',
     g: 'draw-star',
     c: 'anchor-point',

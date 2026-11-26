@@ -6,6 +6,7 @@ import type {
   PathNode,
 } from '../../core/document/types';
 import {
+  buildRoundedRectSvgPath,
   nodeLocalPointToWorld,
   serializePathPointsToSvgD,
   type PlanarArrangement,
@@ -35,12 +36,14 @@ export function SelectionOverlay({
   canResize,
   canRotate,
   isScaleTool,
+  hideBoundingRect = false,
   invZoom,
 }: {
   bounds: Bounds;
   canResize: boolean;
   canRotate: boolean;
   isScaleTool: boolean;
+  hideBoundingRect?: boolean;
   invZoom: number;
 }) {
   const left = bounds.x;
@@ -85,13 +88,15 @@ export function SelectionOverlay({
           pointer-events="all"
         />
       ))}
-      <rect
-        class={'canvas-selection-outline' + (isScaleTool ? ' is-scale' : '')}
-        x={left}
-        y={top}
-        width={Math.max(1, bounds.width)}
-        height={Math.max(1, bounds.height)}
-      />
+      {!hideBoundingRect && (
+        <rect
+          class={'canvas-selection-outline' + (isScaleTool ? ' is-scale' : '')}
+          x={left}
+          y={top}
+          width={Math.max(1, bounds.width)}
+          height={Math.max(1, bounds.height)}
+        />
+      )}
       {canResize && handles.map((handle) => (
         <rect
           key={handle.id}
@@ -146,14 +151,27 @@ export function ShapeContourOverlay({
               />
             )}
             {(node.type === 'rect' || node.type === 'frame' || node.type === 'image') && (
-              <rect
-                class={`canvas-selection-contour${drawModeClass}`}
-                x={node.x}
-                y={node.y}
-                width={Math.max(1, node.width)}
-                height={Math.max(1, node.height)}
-                rx={node.style.radius ?? 0}
-              />
+              node.style.cornerRadii ? (
+                <path
+                  class={`canvas-selection-contour${drawModeClass}`}
+                  d={buildRoundedRectSvgPath(
+                    node.x,
+                    node.y,
+                    Math.max(1, node.width),
+                    Math.max(1, node.height),
+                    node.style.cornerRadii,
+                  )}
+                />
+              ) : (
+                <rect
+                  class={`canvas-selection-contour${drawModeClass}`}
+                  x={node.x}
+                  y={node.y}
+                  width={Math.max(1, node.width)}
+                  height={Math.max(1, node.height)}
+                  rx={node.style.radius ?? 0}
+                />
+              )
             )}
             {node.type === 'path' && (
               <g transform={`translate(${node.x} ${node.y})`}>
@@ -858,15 +876,34 @@ export function CanvasInteractiveOverlays({
         <ShapeContourOverlay nodes={selectedNodes} invZoom={invZoom} />
       )}
 
-      {!isAutoLayoutDirectActive && showSelectionBox && selectionBounds && (
-        <SelectionOverlay
-          bounds={selectionBounds}
-          canResize={canResize && (toolId === 'select' || toolId === 'direct-selection' || toolId === 'scale')}
-          canRotate={canResize && toolId === 'select'}
-          isScaleTool={toolId === 'scale'}
-          invZoom={invZoom}
-        />
-      )}
+      {!isAutoLayoutDirectActive && showSelectionBox && selectionBounds && (() => {
+        const single = selectedNodes.length === 1 ? selectedNodes[0] : null;
+        const usesShapeContourOnly = Boolean(
+          single && (
+            single.type === 'ellipse' ||
+            single.type === 'path' ||
+            ((single.type === 'rect' || single.type === 'frame' || single.type === 'image') &&
+              Boolean(
+                (single.style.radius ?? 0) > 0 ||
+                (single.style.cornerRadii &&
+                  (single.style.cornerRadii.topLeft > 0 ||
+                    single.style.cornerRadii.topRight > 0 ||
+                    single.style.cornerRadii.bottomRight > 0 ||
+                    single.style.cornerRadii.bottomLeft > 0)),
+              ))
+          ),
+        );
+        return (
+          <SelectionOverlay
+            bounds={selectionBounds}
+            canResize={canResize && (toolId === 'select' || toolId === 'direct-selection' || toolId === 'scale')}
+            canRotate={canResize && toolId === 'select'}
+            isScaleTool={toolId === 'scale'}
+            hideBoundingRect={usesShapeContourOnly}
+            invZoom={invZoom}
+          />
+        );
+      })()}
 
       {/* On-Canvas Smart Handles: Corner Radius Knobs (Rect/Frame) */}
       {!isAutoLayoutDirectActive &&
@@ -900,6 +937,65 @@ export function CanvasInteractiveOverlays({
                   <circle class="canvas-smart-handle-hit" cx={corner.x} cy={corner.y} r={9 * invZoom} />
                   <circle class="canvas-smart-handle-ring" cx={corner.x} cy={corner.y} r={4.2 * invZoom} />
                   <circle class="canvas-smart-handle-dot" cx={corner.x} cy={corner.y} r={1.4 * invZoom} />
+                </g>
+              ))}
+            </g>
+          );
+        })()}
+
+      {/* On-Canvas Smart Handles: Per-Vertex Corner Radius Knobs for ALL Vector Paths (Triangle, Polygon, Star, Pen, Boolean) */}
+      {!isAutoLayoutDirectActive &&
+        smartHandleNode &&
+        smartHandleNode.type === 'path' &&
+        smartHandleNode.points.length >= 3 &&
+        smartHandleNode.points.length <= 16 &&
+        smartHandleNode.width >= 24 &&
+        smartHandleNode.height >= 24 && (() => {
+          const pts = smartHandleNode.points;
+          const n = pts.length;
+          const knobs: Array<{ index: number; worldX: number; worldY: number; radius: number }> = [];
+          for (let i = 0; i < n; i += 1) {
+            if (!smartHandleNode.closed && (i === 0 || i === n - 1)) continue;
+            const curr = pts[i];
+            if (curr.pointType !== 'corner' || curr.handleIn || curr.handleOut) continue;
+            const prev = pts[(i - 1 + n) % n];
+            const next = pts[(i + 1) % n];
+            const v1x = prev.x - curr.x;
+            const v1y = prev.y - curr.y;
+            const v2x = next.x - curr.x;
+            const v2y = next.y - curr.y;
+            const l1 = Math.hypot(v1x, v1y);
+            const l2 = Math.hypot(v2x, v2y);
+            if (l1 < 8 || l2 < 8) continue;
+            const bx = v1x / l1 + v2x / l2;
+            const by = v1y / l1 + v2y / l2;
+            const bLen = Math.hypot(bx, by);
+            if (bLen < 0.05) continue;
+            const r = curr.cornerRadius ?? 0;
+            const inset = Math.min(Math.min(l1, l2) * 0.42, Math.max(12 * invZoom, r * 0.72 + 10 * invZoom));
+            const localKnob = {
+              x: curr.x + (bx / bLen) * inset,
+              y: curr.y + (by / bLen) * inset,
+            };
+            const worldKnob = nodeLocalPointToWorld(smartHandleNode, localKnob);
+            knobs.push({ index: i, worldX: worldKnob.x, worldY: worldKnob.y, radius: r });
+          }
+          if (knobs.length === 0) return null;
+          return (
+            <g class="canvas-smart-handles">
+              {knobs.map((knob) => (
+                <g
+                  key={`pcr-${knob.index}`}
+                  class="canvas-smart-handle"
+                  data-smart-handle="path-corner-radius"
+                  data-smart-node-id={smartHandleNode.id}
+                  data-smart-point-index={String(knob.index)}
+                  pointer-events="all"
+                >
+                  <title>{`Corner P${knob.index + 1}: ${Math.round(knob.radius)}px (Drag to round corner · Shift rounds all · Double-click resets)`}</title>
+                  <circle class="canvas-smart-handle-hit" cx={knob.worldX} cy={knob.worldY} r={9 * invZoom} />
+                  <circle class="canvas-smart-handle-ring" cx={knob.worldX} cy={knob.worldY} r={4.2 * invZoom} />
+                  <circle class="canvas-smart-handle-dot" cx={knob.worldX} cy={knob.worldY} r={1.4 * invZoom} />
                 </g>
               ))}
             </g>

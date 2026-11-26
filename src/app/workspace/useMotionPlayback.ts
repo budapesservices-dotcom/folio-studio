@@ -19,13 +19,16 @@ import {
   togglePropertyKeyframeInClip,
   type MotionPresetDefinition,
 } from '../../engines/animation';
-import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
+import type { WorkspaceCommandClient } from '../mainCanvasCommandClient';
 
 export interface UseMotionPlaybackOptions {
+  workspaceScope?: 'main' | 'component';
   project: FolioProjectV2;
   activePage: FolioPage;
   selectedNodeIds: readonly string[];
-  mainCommandClient: MainCanvasCommandClient;
+  commandClient?: WorkspaceCommandClient;
+  /** @deprecated Use `commandClient`. Kept for backward compatibility with older call sites. */
+  mainCommandClient?: WorkspaceCommandClient;
   onNotice: (message: string) => void;
 }
 
@@ -68,12 +71,15 @@ export interface MotionPlaybackController {
 }
 
 export function useMotionPlayback({
+  workspaceScope = 'main',
   project,
   activePage,
   selectedNodeIds,
+  commandClient: explicitCommandClient,
   mainCommandClient,
   onNotice,
 }: UseMotionPlaybackOptions): MotionPlaybackController {
+  const commandClient = explicitCommandClient ?? mainCommandClient!;
   const [motionOpen, setMotionOpen] = useState(false);
   const [autoKeyEnabled, setAutoKeyEnabled] = useState(true);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
@@ -97,16 +103,18 @@ export function useMotionPlayback({
     return pageClips[0];
   }, [pageClips, activeClipId]);
 
-  // Keep activeClipId aligned with page clips & reset playback cleanly on page switch.
-  const prevPageIdRef = useRef(activePage.id);
+  // Keep activeClipId aligned with page clips & reset playback cleanly on page or workspace switch.
+  const prevScopePageRef = useRef(`${workspaceScope}:${activePage.id}`);
   useEffect(() => {
-    if (prevPageIdRef.current !== activePage.id) {
-      prevPageIdRef.current = activePage.id;
+    const key = `${workspaceScope}:${activePage.id}`;
+    if (prevScopePageRef.current !== key) {
+      prevScopePageRef.current = key;
       setIsPlaying(false);
       setPreviewActive(false);
       setPlayheadMs(0);
+      playheadRef.current = 0;
     }
-  }, [activePage.id]);
+  }, [workspaceScope, activePage.id]);
 
   useEffect(() => {
     if (!activeClip) {
@@ -250,7 +258,7 @@ export function useMotionPlayback({
   const createNewClip = useCallback(() => {
     const name = `Clip ${pageClips.length + 1}`;
     const clip = createAnimationClip({ pageId: activePage.id, name, durationMs: 1200, autoplay: true });
-    const result = mainCommandClient.createAnimationClip(clip, `Create animation clip "${name}"`);
+    const result = commandClient.createAnimationClip(clip, `Create animation clip "${name}"`);
     if (result.status === 'applied') {
       setActiveClipId(clip.id);
       setPlayheadMs(0);
@@ -258,7 +266,7 @@ export function useMotionPlayback({
       setPreviewActive(false);
       onNotice(`Created animation clip "${name}".`);
     }
-  }, [activePage.id, pageClips.length, mainCommandClient, onNotice]);
+  }, [activePage.id, pageClips.length, commandClient, onNotice]);
 
   const applyPreset = useCallback((presetId: MotionPresetDefinition['id']) => {
     const presetClip = { ...buildPresetClipForPage(activePage, presetId, selectedNodeIds), autoplay: true };
@@ -267,7 +275,7 @@ export function useMotionPlayback({
       ? { ...presetClip, name: `${presetClip.name} ${existingCount + 1}` }
       : presetClip;
 
-    const result = mainCommandClient.createAnimationClip(namedClip, `Apply ${namedClip.name} preset`);
+    const result = commandClient.createAnimationClip(namedClip, `Apply ${namedClip.name} preset`);
     if (result.status === 'applied') {
       setActiveClipId(namedClip.id);
       setPlayheadMs(0);
@@ -275,32 +283,32 @@ export function useMotionPlayback({
       setIsPlaying(true);
       onNotice(`Applied "${namedClip.name}" motion preset.`);
     }
-  }, [activePage, selectedNodeIds, pageClips, mainCommandClient, onNotice]);
+  }, [activePage, selectedNodeIds, pageClips, commandClient, onNotice]);
 
   const deleteActiveClip = useCallback(() => {
     if (!activeClip) return;
     const removedName = activeClip.name;
-    const result = mainCommandClient.deleteAnimationClip(activeClip.id, `Delete animation clip "${removedName}"`);
+    const result = commandClient.deleteAnimationClip(activeClip.id, `Delete animation clip "${removedName}"`);
     if (result.status === 'applied') {
       setIsPlaying(false);
       setPlayheadMs(0);
       setPreviewActive(false);
       onNotice(`Deleted animation clip "${removedName}".`);
     }
-  }, [activeClip, mainCommandClient, onNotice]);
+  }, [activeClip, commandClient, onNotice]);
 
   const updateClip = useCallback(
     (nextClip: AnimationClip, description = 'Update animation clip', coalesceKey?: string) => {
-      mainCommandClient.updateAnimationClip(nextClip, description, coalesceKey);
+      commandClient.updateAnimationClip(nextClip, description, coalesceKey);
     },
-    [mainCommandClient],
+    [commandClient],
   );
 
   const updateCustomEasings = useCallback(
     (customEasings: readonly CustomEasingPreset[], description = 'Update custom easing presets') => {
-      mainCommandClient.updateCustomEasings(customEasings, description);
+      commandClient.updateCustomEasings(customEasings, description);
     },
-    [mainCommandClient],
+    [commandClient],
   );
 
   const isPropertyKeyedAtPlayhead = useCallback(
@@ -340,8 +348,8 @@ export function useMotionPlayback({
         : `Remove ${property} keyframe at ${(playheadMs / 1000).toFixed(2)}s`;
 
       const result = isNewClip
-        ? mainCommandClient.createAnimationClip(toggled.clip, actionLabel)
-        : mainCommandClient.updateAnimationClip(toggled.clip, actionLabel);
+        ? commandClient.createAnimationClip(toggled.clip, actionLabel)
+        : commandClient.updateAnimationClip(toggled.clip, actionLabel);
 
       if (result.status === 'applied') {
         if (isNewClip) setActiveClipId(toggled.clip.id);
@@ -350,7 +358,7 @@ export function useMotionPlayback({
         onNotice(`${toggled.action === 'added' ? 'Keyframed' : 'Removed keyframe for'} ${property} at ${(playheadMs / 1000).toFixed(2)}s.`);
       }
     },
-    [animatedMainDocument.nodes, activePage, activeClip, pageClips.length, playheadMs, mainCommandClient, onNotice],
+    [animatedMainDocument.nodes, activePage, activeClip, pageClips.length, playheadMs, commandClient, onNotice],
   );
 
   const keyframeSelectedLayers = useCallback((properties?: readonly AnimatableProperty[]) => {
@@ -386,8 +394,8 @@ export function useMotionPlayback({
     }
 
     const result = isNewClip
-      ? mainCommandClient.createAnimationClip(nextClip, 'Create clip & keyframe selection')
-      : mainCommandClient.updateAnimationClip(nextClip, 'Keyframe all properties for selection');
+      ? commandClient.createAnimationClip(nextClip, 'Create clip & keyframe selection')
+      : commandClient.updateAnimationClip(nextClip, 'Keyframe all properties for selection');
 
     if (result.status === 'applied') {
       if (isNewClip) setActiveClipId(nextClip.id);
@@ -396,7 +404,7 @@ export function useMotionPlayback({
         `Keyframed ${targetNodes.length} layer${targetNodes.length === 1 ? '' : 's'} (${totalCaptured} properties) at ${(playheadMs / 1000).toFixed(2)}s.`,
       );
     }
-  }, [selectedNodeIds, animatedMainDocument.nodes, activePage, activeClip, pageClips.length, playheadMs, mainCommandClient, onNotice]);
+  }, [selectedNodeIds, animatedMainDocument.nodes, activePage, activeClip, pageClips.length, playheadMs, commandClient, onNotice]);
 
   const recordAutoKeyNodes = useCallback((
     afterNodes: readonly DesignNode[],
@@ -433,7 +441,7 @@ export function useMotionPlayback({
         }
       }
       if (anyUpdated) {
-        mainCommandClient.updateAnimationClip(nextClip, `${description} (0.00s)`, coalesceKey);
+        commandClient.updateAnimationClip(nextClip, `${description} (0.00s)`, coalesceKey);
       }
       return { captured: anyUpdated, keepCanonicalUnchanged: false };
     }
@@ -475,8 +483,8 @@ export function useMotionPlayback({
     }
 
     const result = isNewClip
-      ? mainCommandClient.createAnimationClip(nextClip, description)
-      : mainCommandClient.updateAnimationClip(nextClip, description, coalesceKey);
+      ? commandClient.createAnimationClip(nextClip, description)
+      : commandClient.updateAnimationClip(nextClip, description, coalesceKey);
 
     if (result.status === 'applied') {
       if (isNewClip) setActiveClipId(nextClip.id);
@@ -500,7 +508,7 @@ export function useMotionPlayback({
     activePage.id,
     activeClip,
     pageClips.length,
-    mainCommandClient,
+    commandClient,
     onNotice,
   ]);
 

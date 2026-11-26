@@ -16,6 +16,11 @@ import {
   parseCssColorRgba,
 } from '../../core/document/styling';
 import { scalePathNodeGeometry } from '../../core/document/vector';
+import {
+  applyPathMorphSnapshotToNode,
+  interpolatePathMorph,
+  serializePathMorphSnapshot,
+} from '../../core/document/pathMorph';
 import { evaluateEasing } from './easing';
 
 export const MODERN_EFFECT_ANIMATABLE_PROPERTIES: readonly AnimatableProperty[] = Object.freeze([
@@ -44,6 +49,7 @@ export const ANIMATABLE_PROPERTIES: readonly AnimatableProperty[] = Object.freez
   'fill',
   'stroke',
   'strokeWidth',
+  'pathMorph',
   ...MODERN_EFFECT_ANIMATABLE_PROPERTIES,
 ]);
 
@@ -53,7 +59,7 @@ export const ANIMATABLE_PROPERTY_META: Readonly<Record<AnimatableProperty, {
   step: number;
   min?: number;
   max?: number;
-  kind: 'number' | 'color';
+  kind: 'number' | 'color' | 'morph';
 }>> = Object.freeze({
   x: { label: 'X', unit: 'px', step: 1, kind: 'number' },
   y: { label: 'Y', unit: 'px', step: 1, kind: 'number' },
@@ -66,6 +72,7 @@ export const ANIMATABLE_PROPERTY_META: Readonly<Record<AnimatableProperty, {
   fill: { label: 'Fill', unit: '', step: 0, kind: 'color' },
   stroke: { label: 'Stroke', unit: '', step: 0, kind: 'color' },
   strokeWidth: { label: 'Stroke W', unit: 'px', step: 0.5, min: 0, max: 200, kind: 'number' },
+  pathMorph: { label: 'Shape Points & Curves', unit: '', step: 0, kind: 'morph' },
   layerBlur: { label: 'Layer Blur', unit: 'px', step: 1, min: 0, max: 200, kind: 'number' },
   backdropBlur: { label: 'Backdrop Blur', unit: 'px', step: 1, min: 0, max: 200, kind: 'number' },
   shadowOffsetX: { label: 'Shadow X', unit: 'px', step: 1, min: -500, max: 500, kind: 'number' },
@@ -91,6 +98,7 @@ export interface AnimatedNodePose {
   fill?: string;
   stroke?: string;
   strokeWidth?: number;
+  pathMorph?: string;
   layerBlur?: number;
   backdropBlur?: number;
   shadowOffsetX?: number;
@@ -249,6 +257,9 @@ export function evaluateTrackAtTime(
       if (track.property === 'fill' || track.property === 'stroke') {
         return interpolateColor(String(start.value), String(end.value), easedT);
       }
+      if (track.property === 'pathMorph') {
+        return interpolatePathMorph(String(start.value), String(end.value), easedT);
+      }
 
       const startNum = Number(start.value);
       const endNum = Number(end.value);
@@ -302,6 +313,8 @@ export function evaluateClipAtTime(
       pose.fill = String(value);
     } else if (track.property === 'stroke') {
       pose.stroke = String(value);
+    } else if (track.property === 'pathMorph') {
+      pose.pathMorph = String(value);
     } else {
       pose[track.property] = Number(value);
     }
@@ -422,14 +435,29 @@ export function applyAnimatedPosesToDocument(
       opacity: effectiveOpacity,
     };
 
-    let nextNode: DesignNode =
-      node.type === 'path' && (scaledWidth !== node.width || scaledHeight !== node.height)
-        ? {
-            ...scalePathNodeGeometry(node, centeredX, centeredY, scaledWidth, scaledHeight),
-            rotation: basePatch.rotation,
-            opacity: basePatch.opacity,
-          }
-        : ({ ...node, ...basePatch } as DesignNode);
+    let nextNode: DesignNode;
+    if (node.type === 'path' && pose?.pathMorph) {
+      const morphed = applyPathMorphSnapshotToNode(node, pose.pathMorph);
+      nextNode =
+        scale !== 1
+          ? {
+              ...scalePathNodeGeometry(morphed, centeredX, centeredY, scaledWidth, scaledHeight),
+              rotation: basePatch.rotation,
+              opacity: basePatch.opacity,
+            }
+          : {
+              ...morphed,
+              ...basePatch,
+            };
+    } else if (node.type === 'path' && (scaledWidth !== node.width || scaledHeight !== node.height)) {
+      nextNode = {
+        ...scalePathNodeGeometry(node, centeredX, centeredY, scaledWidth, scaledHeight),
+        rotation: basePatch.rotation,
+        opacity: basePatch.opacity,
+      };
+    } else {
+      nextNode = { ...node, ...basePatch } as DesignNode;
+    }
 
     const hasStyleAnim = Boolean(
       pose && (
@@ -601,8 +629,9 @@ export function getCoreAnimatablePropertiesForNode(node: DesignNode): Animatable
     case 'frame':
       return [...base, 'radius', 'fill', 'stroke', 'strokeWidth'];
     case 'ellipse':
-    case 'path':
       return [...base, 'fill', 'stroke', 'strokeWidth'];
+    case 'path':
+      return [...base, 'fill', 'stroke', 'strokeWidth', 'pathMorph'];
     case 'text':
       return [...base, 'fill'];
     case 'image':
@@ -678,6 +707,8 @@ export function getDefaultNodePropertyValue(node: DesignNode, property: Animatab
       return 'style' in node && 'strokeWidth' in node.style && typeof node.style.strokeWidth === 'number'
         ? Math.max(0, roundTo2(node.style.strokeWidth))
         : 0;
+    case 'pathMorph':
+      return node.type === 'path' ? serializePathMorphSnapshot(node) : '';
     case 'layerBlur': {
       const fx = (node.effects ?? []).find(
         (item): item is Extract<VisualEffect, { type: 'layer-blur' }> =>
@@ -1432,3 +1463,22 @@ export function createStarterHeroEntranceClip(page: FolioPage): AnimationClip {
     'clip-hero-entrance',
   );
 }
+
+/**
+ * Evaluates a saved ComponentDefinition's embedded animation clip at `timeMs`
+ * (wrapping seamlessly for looping playback so animated components play as
+ * 1 unified animated object when placed on any page).
+ */
+export function evaluateComponentDocumentAtTime(
+  document: FolioDocument,
+  animations: readonly AnimationClip[] | undefined,
+  timeMs: number,
+): FolioDocument {
+  if (!animations || animations.length === 0) return document;
+  const clip = animations.find((c) => c.tracks.length > 0) ?? animations[0];
+  if (!clip || clip.tracks.length === 0 || clip.durationMs <= 0) return document;
+  const effectiveTime = clip.loop ? timeMs % clip.durationMs : timeMs % clip.durationMs;
+  const poses = evaluateClipAtTime(clip, effectiveTime);
+  return applyAnimatedPosesToDocument(document, poses);
+}
+

@@ -132,6 +132,7 @@ export interface MainCanvasCommandClient {
   replaceProject(project: FolioProject, description?: string): NativeCommandResult;
   createPage(page: FolioPage, description?: string): NativeCommandResult;
   setActivePage(pageId: string, description?: string): NativeCommandResult;
+  setDocumentBackground(background: string, description?: string): NativeCommandResult;
   createComponent(
     component: ComponentDefinition,
     description?: string,
@@ -146,6 +147,7 @@ export interface MainCanvasCommandClient {
     args: {
       componentId: string;
       document: FolioDocument;
+      animations?: AnimationClip[];
       updatedAt: string;
       expectedUpdatedAt: string;
       expectedMasterDocument: FolioDocument;
@@ -432,18 +434,29 @@ export function createWorkspaceCommandClient(
       return result;
     },
 
+    setDocumentBackground(background, description = 'Update canvas background') {
+      const astView = getActiveAstView();
+      return submit(
+        'document.set-background',
+        { kind: 'document', address: astView.address },
+        { background },
+        description,
+      );
+    },
+
     syncComponentDocument(args, description = 'Sync component master document') {
       const projectId = store.getSnapshot().editorState.project.metadata.id;
       return submit(
         'component.sync-document',
         { kind: 'project', projectId },
-        {
+        stripUndefinedEntries({
           componentId: args.componentId,
           document: stripUndefinedEntries(args.document),
+          ...(args.animations !== undefined ? { animations: args.animations } : {}),
           updatedAt: args.updatedAt,
           expectedUpdatedAt: args.expectedUpdatedAt,
           expectedMasterDocument: stripUndefinedEntries(args.expectedMasterDocument),
-        },
+        }),
         description,
       );
     },

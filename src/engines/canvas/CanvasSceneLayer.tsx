@@ -1,4 +1,5 @@
 import { memo } from 'preact/compat';
+import { isTransparentColor } from '../../core/document/styling';
 import type {
   AssetReference,
   ComponentDefinition,
@@ -37,6 +38,8 @@ export interface CanvasSceneLayerProps {
   readonly liveEraserPreview?: LiveEraserPreview | null;
   /** Monotonic revision from assetStore so async IndexedDB hydration invalidates React.memo cleanly. */
   readonly assetCacheRevision?: number;
+  /** Active animation playback clock (ms) for live embedded ComponentInstance animations. */
+  readonly animationTimeMs?: number;
 }
 
 /**
@@ -63,8 +66,11 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
   tokens,
   hiddenNodeIds,
   liveEraserPreview,
+  animationTimeMs,
 }: CanvasSceneLayerProps) {
   const artboardClipId = `${maskPrefix}--artboard-clip`;
+  const checkerboardId = `${maskPrefix}--checkerboard`;
+  const isTransparentBg = isTransparentColor(background);
   const liveEraserMaskId = `${maskPrefix}--live-eraser-mask`;
   const hasLiveSliceMask = Boolean(
     liveEraserPreview &&
@@ -83,6 +89,18 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
         <clipPath id={artboardClipId}>
           <rect x="0" y="0" width={width} height={height} />
         </clipPath>
+        {isTransparentBg && (
+          <pattern
+            id={checkerboardId}
+            width="24"
+            height="24"
+            patternUnits="userSpaceOnUse"
+          >
+            <rect width="24" height="24" fill="#FFFFFF" />
+            <rect x="0" y="0" width="12" height="12" fill="#D9DEE8" />
+            <rect x="12" y="12" width="12" height="12" fill="#D9DEE8" />
+          </pattern>
+        )}
         {hasLiveSliceMask && liveEraserPreview && (
           <mask
             id={liveEraserMaskId}
@@ -124,9 +142,17 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
           componentById={componentById as Map<string, ComponentDefinition>}
           assetById={assetById}
           tokens={tokens}
+          animationTimeMs={animationTimeMs}
         />
       </defs>
-      <rect x="0" y="0" width={width} height={height} fill={background} />
+      <rect
+        x="0"
+        y="0"
+        width={width}
+        height={height}
+        fill={isTransparentBg ? `url(#${checkerboardId})` : background}
+        data-artboard-background={isTransparentBg ? 'transparent' : background}
+      />
       <g clip-path={`url(#${artboardClipId})`}>
         {renderNodes.map((node) => {
           if (inlineEditNodeId === node.id || hiddenNodeIds?.has(node.id)) return null;
@@ -144,6 +170,7 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
               componentById={componentById as Map<string, ComponentDefinition>}
               assetById={assetById}
               tokens={tokens}
+              animationTimeMs={animationTimeMs}
             />
           );
           if (hasLiveSliceMask && isEraserTarget) {
@@ -166,3 +193,4 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
     </>
   );
 });
+

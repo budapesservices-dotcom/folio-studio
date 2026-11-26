@@ -113,6 +113,7 @@ interface CanvasProps {
   rendererMode?: ViewportRendererMode;
   onGpuMetrics?: (metrics: GpuSceneMetrics | null) => void;
   contextMenuActions?: CanvasContextMenuActions;
+  animationTimeMs?: number;
 }
 
 interface PanSession {
@@ -167,6 +168,7 @@ export function Canvas({
   rendererMode = 'auto',
   onGpuMetrics,
   contextMenuActions,
+  animationTimeMs,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -622,9 +624,21 @@ export function Canvas({
     ],
   );
 
+  const hasAnimatedComponentInstance = useMemo(
+    () =>
+      animationTimeMs !== undefined &&
+      sceneCanvasNodes.some((node) => {
+        if (node.type !== 'component-instance') return false;
+        const master = components.find((component) => component.id === node.componentId);
+        return Boolean(master?.animations?.some((clip) => clip.tracks.length > 0));
+      }),
+    [animationTimeMs, sceneCanvasNodes, components],
+  );
+
   const gpuHybridActive =
-    rendererMode === 'gpu-hybrid' ||
-    (rendererMode === 'auto' && sceneCanvasNodes.length >= GPU_HYBRID_AUTO_THRESHOLD);
+    !hasAnimatedComponentInstance &&
+    (rendererMode === 'gpu-hybrid' ||
+      (rendererMode === 'auto' && sceneCanvasNodes.length >= GPU_HYBRID_AUTO_THRESHOLD));
 
   useEffect(() => {
     if (!gpuHybridActive) {
@@ -1683,6 +1697,7 @@ export function Canvas({
                 hiddenNodeIds={isolatedPreviewIdSet}
                 liveEraserPreview={liveEraserPreview}
                 assetCacheRevision={assetCacheRevision}
+                animationTimeMs={animationTimeMs}
               />
             )}
 

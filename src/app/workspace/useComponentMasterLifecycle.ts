@@ -165,7 +165,12 @@ export function useComponentMasterLifecycle({
         setNotice('Resolve the active Component Canvas recovery state before updating this master.');
         return;
       }
-      const syncAction = createComponentCanvasSyncAction(editingComponent, bufferDocument, session);
+      const syncAction = createComponentCanvasSyncAction(
+        editingComponent,
+        bufferDocument,
+        session,
+        componentState.project.animations,
+      );
       if (!syncAction) {
         void componentAutosave.flush(componentState.project);
         setNotice(`“${editingComponent.name}” master is up to date.`);
@@ -175,6 +180,7 @@ export function useComponentMasterLifecycle({
         {
           componentId: syncAction.componentId,
           document: syncAction.document,
+          ...(syncAction.animations !== undefined ? { animations: syncAction.animations } : {}),
           updatedAt: syncAction.updatedAt,
           expectedUpdatedAt: syncAction.expectedUpdatedAt,
           expectedMasterDocument: syncAction.expectedMasterDocument,
@@ -206,15 +212,50 @@ export function useComponentMasterLifecycle({
       `Component ${ownedComponents.length + 1}`,
     );
     if (!component) return;
-    mainCommandClient.createComponent(component, 'Create master component');
+    const includedIds = new Set(component.document.nodes.map((node) => node.id));
+    const includedSourceNodes = bufferDocument.nodes.filter((node) => includedIds.has(node.id));
+    const offsetX = includedSourceNodes.length > 0 ? Math.min(...includedSourceNodes.map((n) => n.x)) : 0;
+    const offsetY = includedSourceNodes.length > 0 ? Math.min(...includedSourceNodes.map((n) => n.y)) : 0;
+    const componentAnimations = (componentState.project.animations ?? [])
+      .map((clip) => ({
+        ...clip,
+        pageId: 'component-master',
+        tracks: clip.tracks
+          .filter((track) => includedIds.has(track.targetNodeId))
+          .map((track) => ({
+            ...track,
+            keyframes: track.keyframes.map((kf) => ({
+              ...kf,
+              value:
+                track.property === 'x' && typeof kf.value === 'number'
+                  ? Math.round((kf.value - offsetX) * 100) / 100
+                  : track.property === 'y' && typeof kf.value === 'number'
+                    ? Math.round((kf.value - offsetY) * 100) / 100
+                    : kf.value,
+            })),
+          })),
+      }))
+      .filter((clip) => clip.tracks.length > 0);
+    const componentToCreate: ComponentDefinition = componentAnimations.length > 0
+      ? { ...component, animations: componentAnimations }
+      : component;
+    mainCommandClient.createComponent(componentToCreate, 'Create master component');
     const committedMaster = canonicalStore.getSnapshot().editorState.project.components
-      .find((item) => item.id === component.id) ?? component;
+      .find((item) => item.id === componentToCreate.id) ?? componentToCreate;
     componentSyncSessionRef.current = createComponentCanvasSyncSession(committedMaster);
+    componentCommandClient.replaceProject(
+      createComponentCanvasBufferProject(committedMaster, state.project.designTokens),
+      'Align Component Canvas buffer with saved master',
+    );
     setEditingComponentId(committedMaster.id);
     setComponentRecoveryStatus('none');
     closePagesRack();
     setComponentRackOpen(true);
-    setNotice(`Created master “${component.name}” in Component Rack.`);
+    setNotice(
+      componentAnimations.length > 0
+        ? `Created animated master “${componentToCreate.name}” in Component Rack.`
+        : `Created master “${componentToCreate.name}” in Component Rack.`,
+    );
   };
 
   const loadMasterComponent = (component: ComponentDefinition) => {
@@ -249,7 +290,7 @@ export function useComponentMasterLifecycle({
     const bufferDocument = getActiveDocument(componentState.project);
     const hasActiveBuffer = editingComponentId !== null;
     const mustProtectBuffer = hasActiveBuffer && (
-      !session || shouldProtectComponentCanvasBuffer(session, bufferDocument)
+      !session || shouldProtectComponentCanvasBuffer(session, bufferDocument, componentState.project.animations)
     );
     if (mustProtectBuffer) {
       setPendingComponentOpenId(component.id);
@@ -668,7 +709,12 @@ export function useComponentMasterLifecycle({
       return;
     }
 
-    const reconciliation = reconcileComponentCanvasSyncSession(session, master, editedDocument);
+    const reconciliation = reconcileComponentCanvasSyncSession(
+      session,
+      master,
+      editedDocument,
+      componentState.project.animations,
+    );
     if (reconciliation.status === 'orphaned-master-returned') {
       componentSyncSessionRef.current = reconciliation.session;
       setComponentRecoveryStatus('returned');
@@ -702,13 +748,19 @@ export function useComponentMasterLifecycle({
     if (reconciliation.status === 'master-mismatch') return;
 
     componentSyncSessionRef.current = reconciliation.session;
-    const syncAction = createComponentCanvasSyncAction(master, editedDocument, session);
+    const syncAction = createComponentCanvasSyncAction(
+      master,
+      editedDocument,
+      session,
+      componentState.project.animations,
+    );
     if (!syncAction) return;
 
     const syncResult = mainCommandClient.syncComponentDocument(
       {
         componentId: syncAction.componentId,
         document: syncAction.document,
+        ...(syncAction.animations !== undefined ? { animations: syncAction.animations } : {}),
         updatedAt: syncAction.updatedAt,
         expectedUpdatedAt: syncAction.expectedUpdatedAt,
         expectedMasterDocument: syncAction.expectedMasterDocument,
@@ -731,6 +783,7 @@ export function useComponentMasterLifecycle({
     }
   }, [
     componentState.project.pages,
+    componentState.project.animations,
     editingComponentId,
     componentReady,
     state.project.components,

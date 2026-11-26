@@ -32,6 +32,7 @@ export {
   deleteKeyframeFromClip,
   deleteLayerKeyframesAtTimeInClip,
   evaluateClipAtTime,
+  evaluateComponentDocumentAtTime,
   evaluateTrackAtTime,
   getAnimatablePropertiesForNode,
   getCoreAnimatablePropertiesForNode,

@@ -41,6 +41,7 @@ export interface LayerContextMenuCapabilities {
   canUngroup: boolean;
   canMask: boolean;
   canUnmask: boolean;
+  canUnpackComponent: boolean;
 }
 
 export interface LayerSelectionResult {
@@ -137,6 +138,8 @@ export function getLayerContextMenuCapabilities(
     && Boolean(getClippingMaskBaseId(nodes, rootIds[0]));
   const canUnmask = rootIds.length === 1
     && Boolean(rootNodes[0]?.clipMaskBaseId);
+  const canUnpackComponent = rootIds.length === 1
+    && rootNodes[0]?.type === 'component-instance';
 
   return {
     rootIds,
@@ -145,6 +148,7 @@ export function getLayerContextMenuCapabilities(
     canUngroup,
     canMask,
     canUnmask,
+    canUnpackComponent,
   };
 }
 

@@ -29,6 +29,10 @@ import type {
   PseudoStateKey,
   StrokeAlign,
 } from '../../core/document/types';
+import {
+  setAllPathCornerRadii,
+  setAnchorCornerRadius,
+} from '../../core/document/vector';
 import { NumericUnitInput } from './NumericUnitInput';
 
 export interface InspectorAppearanceSectionProps {
@@ -38,6 +42,7 @@ export interface InspectorAppearanceSectionProps {
   defaultFillColor: string;
   onUpdateSelected: (patch: Partial<DesignNode>) => void;
   onUpdateSelectedStyle: (patch: Record<string, unknown>) => void;
+  onConvertToPath?: () => void;
   onCommitEdit: () => void;
 }
 
@@ -76,6 +81,7 @@ export function InspectorAppearanceSection({
   defaultFillColor,
   onUpdateSelected,
   onUpdateSelectedStyle,
+  onConvertToPath,
   onCommitEdit,
 }: InspectorAppearanceSectionProps) {
   const isShape = selectedNode.type === 'rect' || selectedNode.type === 'frame' || selectedNode.type === 'ellipse';
@@ -835,62 +841,65 @@ export function InspectorAppearanceSection({
             <div class="folio-two-col">
               {(
                 [
-                  ['topLeft', 'TL'],
-                  ['topRight', 'TR'],
-                  ['bottomRight', 'BR'],
-                  ['bottomLeft', 'BL'],
+                  ['topLeft', 'TL', 'tl'],
+                  ['topRight', 'TR', 'tr'],
+                  ['bottomRight', 'BR', 'br'],
+                  ['bottomLeft', 'BL', 'bl'],
                 ] as const
-              ).map(([cornerKey, shortLabel]) => (
-                <NumericUnitInput
-                  key={cornerKey}
-                  label={shortLabel}
-                  ariaLabel={`Corner radius ${shortLabel}`}
-                  value={currentCornerRadii[cornerKey]}
-                  unit={currentRadiusUnit}
-                  units={['px', '%', 'rem']}
-                  min={0}
-                  max={9999}
-                  step={2}
-                  onChange={(res) => {
-                    const nextCorners: CornerRadiiConfig = {
-                      ...currentCornerRadii,
-                      [cornerKey]: res.value,
-                    };
-                    onUpdateSelectedStyle({
-                      cornerRadii: nextCorners,
-                      radius: nextCorners.topLeft,
-                      radiusUnit: res.unit as CssLengthUnit,
-                    });
-                    onCommitEdit();
-                  }}
-                />
+              ).map(([cornerKey, shortLabel, testKey]) => (
+                <div key={cornerKey} data-testid={`corner-radius-${testKey}`}>
+                  <NumericUnitInput
+                    label={shortLabel}
+                    ariaLabel={`Corner radius ${shortLabel}`}
+                    value={currentCornerRadii[cornerKey]}
+                    unit={currentRadiusUnit}
+                    units={['px', '%', 'rem']}
+                    min={0}
+                    max={9999}
+                    step={2}
+                    onChange={(res) => {
+                      const nextCorners: CornerRadiiConfig = {
+                        ...currentCornerRadii,
+                        [cornerKey]: res.value,
+                      };
+                      onUpdateSelectedStyle({
+                        cornerRadii: nextCorners,
+                        radius: nextCorners.topLeft,
+                        radiusUnit: res.unit as CssLengthUnit,
+                      });
+                      onCommitEdit();
+                    }}
+                  />
+                </div>
               ))}
             </div>
           ) : (
-            <NumericUnitInput
-              label="R"
-              ariaLabel="Corner radius"
-              value={currentRadius}
-              unit={currentRadiusUnit}
-              units={['px', '%', 'rem']}
-              presets={RADIUS_PRESETS}
-              min={0}
-              max={9999}
-              step={2}
-              hasOverrideDot={isPseudoState && activeStateOverride?.radius !== undefined}
-              onChange={(res) => {
-                if (isPseudoState) {
-                  updatePseudoOverride({ radius: res.value });
-                } else {
-                  onUpdateSelectedStyle({
-                    radius: res.value,
-                    radiusUnit: res.unit as CssLengthUnit,
-                    cornerRadii: undefined,
-                  });
-                  onCommitEdit();
-                }
-              }}
-            />
+            <div data-testid="corner-radius-all">
+              <NumericUnitInput
+                label="R"
+                ariaLabel="Corner radius"
+                value={currentRadius}
+                unit={currentRadiusUnit}
+                units={['px', '%', 'rem']}
+                presets={RADIUS_PRESETS}
+                min={0}
+                max={9999}
+                step={2}
+                hasOverrideDot={isPseudoState && activeStateOverride?.radius !== undefined}
+                onChange={(res) => {
+                  if (isPseudoState) {
+                    updatePseudoOverride({ radius: res.value });
+                  } else {
+                    onUpdateSelectedStyle({
+                      radius: res.value,
+                      radiusUnit: res.unit as CssLengthUnit,
+                      cornerRadii: undefined,
+                    });
+                    onCommitEdit();
+                  }
+                }}
+              />
+            </div>
           )}
 
           {!isPseudoState && radiusTokens.length > 0 && (
@@ -917,6 +926,97 @@ export function InspectorAppearanceSection({
               ))}
             </select>
           )}
+        </div>
+      )}
+
+      {/* PER-CORNER POINT ROUNDING FOR ALL VECTOR / POLYGON / TRIANGLE / STAR / BOOLEAN SHAPES */}
+      {isPath && !isPseudoState && selectedNode.points.length >= 2 && (() => {
+        const editablePoints = selectedNode.points.slice(0, 12);
+        const cornerValues = selectedNode.points.map((pt) => pt.cornerRadius ?? 0);
+        const avgCorner = cornerValues.length > 0
+          ? Math.round((cornerValues.reduce((sum, v) => sum + v, 0) / cornerValues.length) * 10) / 10
+          : 0;
+        const maxCorner = Math.max(0, ...cornerValues);
+        return (
+          <div class="folio-prop-group" data-testid="path-corner-rounding-section">
+            <div class="folio-prop-header-row">
+              <span class="folio-prop-label">Corner Points</span>
+              {maxCorner > 0 && (
+                <button
+                  type="button"
+                  class="folio-chip-btn"
+                  title="Reset all corner point radii to 0"
+                  onClick={() => {
+                    const next = setAllPathCornerRadii(selectedNode, 0);
+                    onUpdateSelected({ points: next.points, subpaths: next.subpaths });
+                    onCommitEdit();
+                  }}
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+            <div data-testid="path-corner-radius-all">
+              <NumericUnitInput
+                label="All"
+                ariaLabel="All corner points radius"
+                value={avgCorner}
+                unit="px"
+                units={['px']}
+                presets={[
+                  { label: 'Sharp (0)', value: 0, unit: 'px' },
+                  { label: 'Soft (8)', value: 8, unit: 'px' },
+                  { label: 'Round (18)', value: 18, unit: 'px' },
+                  { label: 'Smooth (32)', value: 32, unit: 'px' },
+                ]}
+                min={0}
+                max={400}
+                step={2}
+                onChange={(res) => {
+                  const next = setAllPathCornerRadii(selectedNode, res.value);
+                  onUpdateSelected({ points: next.points, subpaths: next.subpaths });
+                  onCommitEdit();
+                }}
+              />
+            </div>
+            <div class="folio-path-corners-grid">
+              {editablePoints.map((pt, idx) => (
+                <div key={`corner-pt-${idx}`} data-testid={`corner-point-radius-${idx}`}>
+                  <NumericUnitInput
+                    label={`P${idx + 1}`}
+                    ariaLabel={`Corner point ${idx + 1} radius`}
+                    value={Math.round((pt.cornerRadius ?? 0) * 10) / 10}
+                    unit="px"
+                    units={['px']}
+                    min={0}
+                    max={400}
+                    step={2}
+                    onChange={(res) => {
+                      const next = setAnchorCornerRadius(selectedNode, idx, res.value);
+                      onUpdateSelected({ points: next.points, subpaths: next.subpaths });
+                      onCommitEdit();
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ELLIPSE CORNER ROUNDING CONVERSION */}
+      {selectedNode.type === 'ellipse' && !isPseudoState && onConvertToPath && (
+        <div class="folio-prop-group" data-testid="ellipse-corner-rounding-section">
+          <span class="folio-prop-label">Corner Points</span>
+          <button
+            type="button"
+            class="folio-chip-btn"
+            data-testid="ellipse-edit-corners-btn"
+            title="Convert ellipse into editable vector corner points to round or reshape vertices"
+            onClick={onConvertToPath}
+          >
+            Edit / Round Corner Points
+          </button>
         </div>
       )}
     </div>
