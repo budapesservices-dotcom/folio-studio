@@ -1,6 +1,6 @@
 # Folio Studio
 
-Folio is a lightweight-first visual development studio for interface design, interactive prototypes, and visual-to-code workflows. Its long-term direction connects visual design, behavior, code, and runtime around one native project models.
+FOLIO Studio is a lightweight-first, unified creative development environment. It brings visual design, vector creation, interactive prototypes, code workflows, and motion animation into one native project model, with a long-term direction toward non-destructive video and media editing. The all-in-one vision is delivered through specialized workspaces and modular engines—not a monolithic application core.
 
 ## Local development
 
@@ -44,7 +44,7 @@ npm run build
 - Local persistence: IndexedDB
 - Initial code-generation target: HTML, CSS, and JavaScript
 
-The project blueprint records product intent; [Architecture](docs/ARCHITECTURE.md), source code, tests, and [Acceptance Tests](docs/ACCEPTANCE_TESTS.md) describe current implementation and verification. The [Native AST v1 specification](docs/specs/NATIVE_AST_V1.md), [AST compatibility and migration plan](docs/specs/NATIVE_AST_COMPATIBILITY_MIGRATION.md), and [Native AST compatibility API](docs/specs/NATIVE_AST_COMPATIBILITY_API.md) document the relevant project contracts.
+The [FOLIO Vision](docs/FOLIO_VISION.md), [Mission](docs/FOLIO_MISSION.md), and [Product Goals](docs/FOLIO_PRODUCT_GOALS.md) record product intent. [FOLIO Creative Studio Direction](docs/FOLIO_CREATIVE_STUDIO_DIRECTION.md) explains how design, code, motion, and future video/media workflows fit together. [Architecture](docs/ARCHITECTURE.md), source code, tests, and [Acceptance Tests](docs/ACCEPTANCE_TESTS.md) describe current implementation and verification. The [Native AST v1 specification](docs/specs/NATIVE_AST_V1.md), [AST compatibility and migration plan](docs/specs/NATIVE_AST_COMPATIBILITY_MIGRATION.md), and [Native AST compatibility API](docs/specs/NATIVE_AST_COMPATIBILITY_API.md) document the relevant project contracts.
 
 See also [Folio Architecture Blueprint](docs/FOLIO_ARCHITECTURE_BLUEPRINT.md), [Stage 1 acceptance](docs/ACCEPTANCE_TESTS.md), and [Stage 2 canvas acceptance](docs/STAGE_2_ACCEPTANCE.md).
 
