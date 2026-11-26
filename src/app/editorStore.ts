@@ -351,7 +351,9 @@ class WorkspaceCanonicalEditorStore implements CanonicalEditorStore {
     try {
       const candidateState = editorReducer(before.editorState, action);
       const componentSyncGuard = action.type === 'sync-component-document' ||
-        action.type === 'rename-component' || action.type === 'delete-component'
+        action.type === 'rename-component' ||
+        action.type === 'delete-component' ||
+        action.type === 'update-component-contract'
         ? {
             componentId: action.componentId,
             expectedMasterDocument: action.expectedMasterDocument,

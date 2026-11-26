@@ -14,6 +14,7 @@ import type {
 } from '../core/document/types';
 import { resolveComponentInstanceNodes } from '../core/document/components';
 import {
+  buildCssFilterString,
   buildSvgFilterId,
   buildSvgPaintId,
   getBackdropBlurRadius,
@@ -64,12 +65,69 @@ function maskId(prefix: string, baseId: string): string {
   return `${prefix}--mask--${sanitizeIdSegment(baseId)}`;
 }
 
+function outsideMaskId(prefix: string, baseId: string): string {
+  return `${prefix}--outsidemask--${sanitizeIdSegment(baseId)}`;
+}
+
 function frameClipId(prefix: string, frameId: string): string {
   return `${prefix}--clip--${sanitizeIdSegment(frameId)}`;
 }
 
 function imageClipId(prefix: string, imageId: string): string {
   return `${prefix}--imgclip--${sanitizeIdSegment(imageId)}`;
+}
+
+function hasDistinctCornerRadii(radii?: { topLeft: number; topRight: number; bottomRight: number; bottomLeft: number }): boolean {
+  if (!radii) return false;
+  return !(
+    radii.topLeft === radii.topRight &&
+    radii.topRight === radii.bottomRight &&
+    radii.bottomRight === radii.bottomLeft
+  );
+}
+
+function buildRoundedRectPathD(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  tlRaw: number,
+  trRaw: number,
+  brRaw: number,
+  blRaw: number,
+): string {
+  const maxR = Math.max(0, Math.min(w, h) / 2);
+  const tl = Math.max(0, Math.min(maxR, tlRaw));
+  const tr = Math.max(0, Math.min(maxR, trRaw));
+  const br = Math.max(0, Math.min(maxR, brRaw));
+  const bl = Math.max(0, Math.min(maxR, blRaw));
+  const x2 = x + w;
+  const y2 = y + h;
+  return [
+    `M ${x + tl} ${y}`,
+    `H ${x2 - tr}`,
+    tr > 0 ? `A ${tr} ${tr} 0 0 1 ${x2} ${y + tr}` : `L ${x2} ${y}`,
+    `V ${y2 - br}`,
+    br > 0 ? `A ${br} ${br} 0 0 1 ${x2 - br} ${y2}` : `L ${x2} ${y2}`,
+    `H ${x + bl}`,
+    bl > 0 ? `A ${bl} ${bl} 0 0 1 ${x} ${y2 - bl}` : `L ${x} ${y2}`,
+    `V ${y + tl}`,
+    tl > 0 ? `A ${tl} ${tl} 0 0 1 ${x + tl} ${y}` : `L ${x} ${y}`,
+    'Z',
+  ].join(' ');
+}
+
+function buildGroupStyleAttr(node: DesignNode, mask: boolean): string {
+  if (mask) return '';
+  const parts: string[] = [];
+  if (node.blendMode && node.blendMode !== 'normal') {
+    parts.push(`mix-blend-mode:${node.blendMode}`);
+  }
+  const cssFilterStr = buildCssFilterString(node.cssFilters);
+  if (cssFilterStr) {
+    parts.push(`filter:${cssFilterStr}`);
+  }
+  return parts.length > 0 ? ` style="${escapeXml(parts.join(';'))}"` : '';
 }
 
 function imageFitToPreserveAspectRatio(fit: ImageFitMode): string {
@@ -104,11 +162,11 @@ function buildArrowheadPolygon(
   return `${tip.x},${tip.y} ${backX + px * wing},${backY + py * wing} ${backX - px * wing},${backY - py * wing}`;
 }
 
-function serializeArrowheads(node: PathNode, mask: boolean): string {
+function serializeArrowheads(node: PathNode, mask: boolean, maskFill = '#fff'): string {
   if (node.closed || node.points.length < 2) return '';
   if (!node.style.arrowStart && !node.style.arrowEnd) return '';
   const color = mask
-    ? '#fff'
+    ? maskFill
     : (node.style.stroke !== 'none' && node.style.stroke !== '#00000000' ? node.style.stroke : node.style.fill);
   if (!color || color === 'none') return '';
   const size = Math.max(10, Math.min(28, (node.style.strokeWidth || 2) * 3.8));
@@ -162,6 +220,7 @@ function serializePrimitiveNode(
   prefix: string,
   assetById: ReadonlyMap<string, AssetReference>,
   rasterizeSafe = false,
+  maskFill = '#fff',
 ): string {
   if (node.type === 'group') return '';
   const transformAttr = formatRotationTransform(node);
@@ -169,53 +228,112 @@ function serializePrimitiveNode(
   const filterAttr = !mask && hasSvgFilterEffects(node)
     ? ` filter="url(#${buildSvgFilterId(prefix, node.id)})"`
     : '';
-  const blendAttr = !mask && node.blendMode && node.blendMode !== 'normal'
-    ? ` style="mix-blend-mode:${node.blendMode}"`
-    : '';
+  const styleAttr = buildGroupStyleAttr(node, mask);
 
   let inner = '';
   if (node.type === 'frame' || node.type === 'rect') {
     const fills = getVisibleFillPaints(node);
-    const rx = node.style.radius ?? 0;
-    const rxAttr = rx ? ` rx="${rx}"` : '';
+    const radii = node.style.cornerRadii;
+    const usePerCornerPath = hasDistinctCornerRadii(radii);
+    const rx = radii && !usePerCornerPath ? radii.topLeft : (node.style.radius ?? 0);
     const dashAttr = node.type === 'frame' && node.isSection && !mask ? ' stroke-dasharray="6 4"' : '';
+    const sw = node.style.strokeWidth;
+    const strokeAlign = node.style.strokeAlign ?? 'center';
+    const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
+    const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
+    const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
     const backdrop = serializeBackdropBlur(node, mask, rx, false, rasterizeSafe);
-    if (mask || fills.length <= 1) {
+
+    const renderBoxShape = (
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      delta: number,
+      attrs: string,
+    ): string => {
+      if (usePerCornerPath && radii) {
+        const d = buildRoundedRectPathD(
+          x,
+          y,
+          w,
+          h,
+          radii.topLeft > 0 ? Math.max(0, radii.topLeft - delta) : 0,
+          radii.topRight > 0 ? Math.max(0, radii.topRight - delta) : 0,
+          radii.bottomRight > 0 ? Math.max(0, radii.bottomRight - delta) : 0,
+          radii.bottomLeft > 0 ? Math.max(0, radii.bottomLeft - delta) : 0,
+        );
+        return `<path d="${escapeXml(d)}"${attrs} />`;
+      }
+      const adjRx = rx > 0 ? Math.max(0, rx - delta) : 0;
+      const adjRxAttr = adjRx > 0 ? ` rx="${adjRx}"` : '';
+      return `<rect x="${x}" y="${y}" width="${w}" height="${h}"${adjRxAttr}${attrs} />`;
+    };
+
+    if (mask || (fills.length <= 1 && !needsSeparateStroke)) {
       const fillAttr = mask
-        ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff'}"`
+        ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill}"`
         : fills.length === 1
           ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
           : ' fill="none"';
-      const stroke = mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke;
-      inner = `${backdrop}<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"${rxAttr}${fillAttr} stroke="${escapeXml(stroke)}" stroke-width="${node.style.strokeWidth}"${dashAttr} />`;
+      const stroke = mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke;
+      inner = `${backdrop}${renderBoxShape(
+        node.x,
+        node.y,
+        node.width,
+        node.height,
+        0,
+        `${fillAttr} stroke="${escapeXml(stroke)}" stroke-width="${sw}"${dashAttr}`,
+      )}`;
     } else {
-      const fillRects = fills
-        .map((paint, idx) => `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"${rxAttr}${serializePaintFillAttr(paint, node.id, idx, prefix)} stroke="none" />`)
+      const fillShapes = fills
+        .map((paint, idx) =>
+          renderBoxShape(
+            node.x,
+            node.y,
+            node.width,
+            node.height,
+            0,
+            `${serializePaintFillAttr(paint, node.id, idx, prefix)} stroke="none"`,
+          ),
+        )
         .join('');
-      const strokeRect = node.style.strokeWidth > 0 && node.style.stroke !== 'none'
-        ? `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"${rxAttr} fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${node.style.strokeWidth}"${dashAttr} />`
+      const strokeShape = hasStroke
+        ? renderBoxShape(
+            node.x + strokeDelta,
+            node.y + strokeDelta,
+            Math.max(0, node.width - strokeDelta * 2),
+            Math.max(0, node.height - strokeDelta * 2),
+            strokeDelta,
+            ` fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${sw}"${dashAttr}`,
+          )
         : '';
-      inner = `${backdrop}${fillRects}${strokeRect}`;
+      inner = `${backdrop}${fillShapes}${strokeShape}`;
     }
   } else if (node.type === 'ellipse') {
     const fills = getVisibleFillPaints(node);
     const cx = node.x + node.width / 2;
     const cy = node.y + node.height / 2;
+    const sw = node.style.strokeWidth;
+    const strokeAlign = node.style.strokeAlign ?? 'center';
+    const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
+    const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
+    const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
     const backdrop = serializeBackdropBlur(node, mask, 0, true, rasterizeSafe);
-    if (mask || fills.length <= 1) {
+    if (mask || (fills.length <= 1 && !needsSeparateStroke)) {
       const fillAttr = mask
-        ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff'}"`
+        ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill}"`
         : fills.length === 1
           ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
           : ' fill="none"';
-      const stroke = mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke;
-      inner = `${backdrop}<ellipse cx="${cx}" cy="${cy}" rx="${node.width / 2}" ry="${node.height / 2}"${fillAttr} stroke="${escapeXml(stroke)}" stroke-width="${node.style.strokeWidth}" />`;
+      const stroke = mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke;
+      inner = `${backdrop}<ellipse cx="${cx}" cy="${cy}" rx="${node.width / 2}" ry="${node.height / 2}"${fillAttr} stroke="${escapeXml(stroke)}" stroke-width="${sw}" />`;
     } else {
       const fillEllipses = fills
         .map((paint, idx) => `<ellipse cx="${cx}" cy="${cy}" rx="${node.width / 2}" ry="${node.height / 2}"${serializePaintFillAttr(paint, node.id, idx, prefix)} stroke="none" />`)
         .join('');
-      const strokeEllipse = node.style.strokeWidth > 0 && node.style.stroke !== 'none'
-        ? `<ellipse cx="${cx}" cy="${cy}" rx="${node.width / 2}" ry="${node.height / 2}" fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${node.style.strokeWidth}" />`
+      const strokeEllipse = hasStroke
+        ? `<ellipse cx="${cx}" cy="${cy}" rx="${Math.max(0, node.width / 2 - strokeDelta)}" ry="${Math.max(0, node.height / 2 - strokeDelta)}" fill="none" stroke="${escapeXml(node.style.stroke)}" stroke-width="${sw}" />`
         : '';
       inner = `${backdrop}${fillEllipses}${strokeEllipse}`;
     }
@@ -226,14 +344,14 @@ function serializePrimitiveNode(
     const linecap = node.style.strokeLinecap ?? 'round';
     const linejoin = node.style.strokeLinejoin ?? 'round';
     const dashAttr = node.style.strokeDasharray ? ` stroke-dasharray="${escapeXml(node.style.strokeDasharray)}"` : '';
-    const arrows = serializeArrowheads(node, mask);
+    const arrows = serializeArrowheads(node, mask, maskFill);
     if (mask || fills.length <= 1) {
       const fillAttr = mask
-        ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : '#fff'}"`
+        ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill}"`
         : fills.length === 1
           ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
           : ' fill="none"';
-      const stroke = mask ? (node.style.stroke === 'none' ? 'none' : '#fff') : node.style.stroke;
+      const stroke = mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke;
       inner = `<g transform="translate(${node.x} ${node.y})"><path d="${escapeXml(pathD)}"${fillAttr} fill-rule="${fillRule}" stroke="${escapeXml(stroke)}" stroke-width="${node.style.strokeWidth}" stroke-linecap="${linecap}" stroke-linejoin="${linejoin}"${dashAttr} />${arrows}</g>`;
     } else {
       const fillPaths = fills
@@ -245,7 +363,7 @@ function serializePrimitiveNode(
       inner = `<g transform="translate(${node.x} ${node.y})">${fillPaths}${strokePath}${arrows}</g>`;
     }
   } else if (node.type === 'text') {
-    const fill = mask ? '#fff' : node.style.fill;
+    const fill = mask ? maskFill : node.style.fill;
     const lines = wrapTextLines(node.text, {
       maxWidth: node.width,
       fontSize: node.style.fontSize,
@@ -268,25 +386,32 @@ function serializePrimitiveNode(
     inner = `<text x="${xPos}" y="${node.y}" fill="${escapeXml(fill)}" font-size="${node.style.fontSize}" font-family="${escapeXml(node.style.fontFamily)}" font-weight="${node.style.fontWeight}" letter-spacing="${node.style.letterSpacing}" text-anchor="${anchor}"${decorationAttr} dominant-baseline="hanging">${tspans}</text>`;
   } else if (node.type === 'image') {
     const imgNode = node as ImageNode;
-    const rx = imgNode.style.radius ?? 0;
+    const radii = imgNode.style.cornerRadii;
+    const usePerCornerPath = hasDistinctCornerRadii(radii);
+    const rx = radii && !usePerCornerPath ? radii.topLeft : (imgNode.style.radius ?? 0);
     const rxAttr = rx ? ` rx="${rx}"` : '';
+    const hasRadiusClip = usePerCornerPath || rx > 0;
     if (mask) {
-      inner = `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="#fff" />`;
+      inner = usePerCornerPath && radii
+        ? `<path d="${escapeXml(buildRoundedRectPathD(imgNode.x, imgNode.y, imgNode.width, imgNode.height, radii.topLeft, radii.topRight, radii.bottomRight, radii.bottomLeft))}" fill="${maskFill}" />`
+        : `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="${maskFill}" />`;
     } else {
       const asset = assetById.get(imgNode.assetId);
       const href = resolvePortableAssetUrl(asset);
-      const clipAttr = rx > 0 ? ` clip-path="url(#${imageClipId(prefix, imgNode.id)})"` : '';
+      const clipAttr = hasRadiusClip ? ` clip-path="url(#${imageClipId(prefix, imgNode.id)})"` : '';
       const imgMarkup = href
         ? `<image href="${escapeXml(href)}" x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}" preserveAspectRatio="${imageFitToPreserveAspectRatio(imgNode.style.fit)}"${clipAttr} />`
         : `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="#1E2534" stroke="#4B5A78" stroke-width="1.5" stroke-dasharray="6 4" />`;
       const strokeMarkup = imgNode.style.stroke && imgNode.style.stroke !== 'none' && (imgNode.style.strokeWidth ?? 0) > 0
-        ? `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="none" stroke="${escapeXml(imgNode.style.stroke)}" stroke-width="${imgNode.style.strokeWidth}" />`
+        ? usePerCornerPath && radii
+          ? `<path d="${escapeXml(buildRoundedRectPathD(imgNode.x, imgNode.y, imgNode.width, imgNode.height, radii.topLeft, radii.topRight, radii.bottomRight, radii.bottomLeft))}" fill="none" stroke="${escapeXml(imgNode.style.stroke)}" stroke-width="${imgNode.style.strokeWidth}" />`
+          : `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="none" stroke="${escapeXml(imgNode.style.stroke)}" stroke-width="${imgNode.style.strokeWidth}" />`
         : '';
       inner = `${imgMarkup}${strokeMarkup}`;
     }
   }
 
-  return `<g${transformAttr}${opacityAttr}${filterAttr}${blendAttr}>${inner}</g>`;
+  return `<g${transformAttr}${opacityAttr}${filterAttr}${styleAttr}>${inner}</g>`;
 }
 
 function serializeClipMaskArtwork(
@@ -299,6 +424,7 @@ function serializeClipMaskArtwork(
   tokens: DesignTokenCollection | undefined,
   visitedComponentIds: ReadonlySet<string>,
   depth: number,
+  maskFill = '#fff',
 ): string {
   if (node.type === 'group') {
     const states = getEffectiveLayerStates(nodes);
@@ -306,15 +432,15 @@ function serializeClipMaskArtwork(
       .map((id) => nodeById.get(id))
       .filter((item): item is DesignNode => item !== undefined && item.type !== 'group' && Boolean(states.get(item.id)?.visible));
     if (descendants.length === 0) {
-      return `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="#fff" opacity="${node.opacity}" />`;
+      return `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="${maskFill}" opacity="${node.opacity}" />`;
     }
-    return `<g>${descendants.map((child) => serializeClipMaskArtwork(child, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth)).join('')}</g>`;
+    return `<g>${descendants.map((child) => serializeClipMaskArtwork(child, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, maskFill)).join('')}</g>`;
   }
 
   if (node.type === 'component-instance') {
     const component = componentById.get(node.componentId);
     if (!component || visitedComponentIds.has(node.componentId) || depth >= MAX_COMPONENT_RECURSION_DEPTH) {
-      return `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="#fff" opacity="${node.opacity}"${formatRotationTransform(node)} />`;
+      return `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="${maskFill}" opacity="${node.opacity}"${formatRotationTransform(node)} />`;
     }
     const scaleX = node.width / Math.max(1, component.document.width);
     const scaleY = node.height / Math.max(1, component.document.height);
@@ -339,11 +465,13 @@ function serializeClipMaskArtwork(
       tokens,
       nextVisited,
       depth + 1,
+      false,
+      maskFill,
     );
     return `<g${formatRotationTransform(node)} opacity="${node.opacity}"><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${content}</g></g>`;
   }
 
-  return serializePrimitiveNode(node, true, prefix, assetById);
+  return serializePrimitiveNode(node, true, prefix, assetById, false, maskFill);
 }
 
 function serializeDefs(
@@ -362,20 +490,41 @@ function serializeDefs(
   depth: number,
 ): string {
   const referencedMasks = new Set<string>();
+  const referencedOutsideMasks = new Set<string>();
   const referencedFrames = new Set<string>();
   const defsParts: string[] = [];
 
   for (const node of nodes) {
     for (const baseId of clipMaskMap.get(node.id) ?? []) referencedMasks.add(baseId);
+    if (node.clipMaskBaseId && node.clipMaskMode === 'outside') {
+      referencedOutsideMasks.add(node.clipMaskBaseId);
+    }
     for (const fId of frameClipMap.get(node.id) ?? []) referencedFrames.add(fId);
 
     if (!mask) {
       const styleDefs = serializeNodeSvgStyleDefs(node, prefix);
       if (styleDefs) defsParts.push(styleDefs);
-      if (node.type === 'image' && (node.style.radius ?? 0) > 0) {
-        defsParts.push(
-          `<clipPath id="${imageClipId(prefix, node.id)}" clipPathUnits="userSpaceOnUse"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="${node.style.radius ?? 0}" /></clipPath>`,
-        );
+      if (node.type === 'image') {
+        const radii = node.style.cornerRadii;
+        if (hasDistinctCornerRadii(radii) && radii) {
+          const d = buildRoundedRectPathD(
+            node.x,
+            node.y,
+            node.width,
+            node.height,
+            radii.topLeft,
+            radii.topRight,
+            radii.bottomRight,
+            radii.bottomLeft,
+          );
+          defsParts.push(
+            `<clipPath id="${imageClipId(prefix, node.id)}" clipPathUnits="userSpaceOnUse"><path d="${escapeXml(d)}" /></clipPath>`,
+          );
+        } else if ((node.style.radius ?? 0) > 0) {
+          defsParts.push(
+            `<clipPath id="${imageClipId(prefix, node.id)}" clipPathUnits="userSpaceOnUse"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="${node.style.radius ?? 0}" /></clipPath>`,
+          );
+        }
       }
     }
   }
@@ -383,9 +532,18 @@ function serializeDefs(
   for (const baseId of referencedMasks) {
     const base = nodeById.get(baseId);
     if (!base) continue;
-    const artwork = serializeClipMaskArtwork(base, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth);
+    const artwork = serializeClipMaskArtwork(base, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, '#fff');
     defsParts.push(
       `<mask id="${maskId(prefix, baseId)}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}"><rect x="0" y="0" width="${width}" height="${height}" fill="#000" />${artwork}</mask>`,
+    );
+  }
+
+  for (const baseId of referencedOutsideMasks) {
+    const base = nodeById.get(baseId);
+    if (!base) continue;
+    const artwork = serializeClipMaskArtwork(base, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, '#000');
+    defsParts.push(
+      `<mask id="${outsideMaskId(prefix, baseId)}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}"><rect x="0" y="0" width="${width}" height="${height}" fill="#fff" />${artwork}</mask>`,
     );
   }
 
@@ -393,11 +551,28 @@ function serializeDefs(
     const frame = nodeById.get(fId);
     if (!frame || frame.type !== 'frame') continue;
     const frameNode = frame as FrameNode;
-    const rxAttr = frameNode.style.radius ? ` rx="${frameNode.style.radius}"` : '';
     const transformAttr = formatRotationTransform(frameNode);
-    defsParts.push(
-      `<clipPath id="${frameClipId(prefix, fId)}" clipPathUnits="userSpaceOnUse"><rect x="${frameNode.x}" y="${frameNode.y}" width="${frameNode.width}" height="${frameNode.height}"${rxAttr}${transformAttr} /></clipPath>`,
-    );
+    const radii = frameNode.style.cornerRadii;
+    if (hasDistinctCornerRadii(radii) && radii) {
+      const d = buildRoundedRectPathD(
+        frameNode.x,
+        frameNode.y,
+        frameNode.width,
+        frameNode.height,
+        radii.topLeft,
+        radii.topRight,
+        radii.bottomRight,
+        radii.bottomLeft,
+      );
+      defsParts.push(
+        `<clipPath id="${frameClipId(prefix, fId)}" clipPathUnits="userSpaceOnUse"><path d="${escapeXml(d)}"${transformAttr} /></clipPath>`,
+      );
+    } else {
+      const rxAttr = frameNode.style.radius ? ` rx="${frameNode.style.radius}"` : '';
+      defsParts.push(
+        `<clipPath id="${frameClipId(prefix, fId)}" clipPathUnits="userSpaceOnUse"><rect x="${frameNode.x}" y="${frameNode.y}" width="${frameNode.width}" height="${frameNode.height}"${rxAttr}${transformAttr} /></clipPath>`,
+      );
+    }
   }
 
   return defsParts.length > 0 ? `<defs>${defsParts.join('')}</defs>` : '';
@@ -415,6 +590,7 @@ function serializeNodesBlock(
   visitedComponentIds: ReadonlySet<string>,
   depth: number,
   rasterizeSafe = false,
+  maskFill = '#fff',
 ): string {
   const nodeById = new Map(canvasNodes.map((node) => [node.id, node]));
   const clipMaskMap = buildLayerClipMaskMap(canvasNodes, nodeById);
@@ -452,7 +628,7 @@ function serializeNodesBlock(
         const blockedByCycle = visitedComponentIds.has(node.componentId) || depth >= MAX_COMPONENT_RECURSION_DEPTH;
         if (!component || blockedByCycle) {
           markup = mask
-            ? `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="#fff" opacity="${node.opacity}"${formatRotationTransform(node)} />`
+            ? `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="${maskFill}" opacity="${node.opacity}"${formatRotationTransform(node)} />`
             : `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" fill="none" stroke="#D45B5B" stroke-dasharray="6 4" stroke-width="2"${formatRotationTransform(node)} />`;
         } else {
           const scaleX = node.width / Math.max(1, component.document.width);
@@ -479,18 +655,17 @@ function serializeNodesBlock(
             nextVisited,
             depth + 1,
             rasterizeSafe,
+            maskFill,
           );
           const opacityAttr = node.opacity < 1 ? ` opacity="${node.opacity}"` : '';
           const filterAttr = !mask && hasSvgFilterEffects(node)
             ? ` filter="url(#${buildSvgFilterId(prefix, node.id)})"`
             : '';
-          const blendAttr = !mask && node.blendMode && node.blendMode !== 'normal'
-            ? ` style="mix-blend-mode:${node.blendMode}"`
-            : '';
-          markup = `<g${formatRotationTransform(node)}${opacityAttr}${filterAttr}${blendAttr}><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${inner}</g></g>`;
+          const styleAttr = buildGroupStyleAttr(node, mask);
+          markup = `<g${formatRotationTransform(node)}${opacityAttr}${filterAttr}${styleAttr}><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${inner}</g></g>`;
         }
       } else {
-        markup = serializePrimitiveNode(node, mask, prefix, assetById, rasterizeSafe);
+        markup = serializePrimitiveNode(node, mask, prefix, assetById, rasterizeSafe, maskFill);
       }
 
       if (!markup) return '';
@@ -502,7 +677,11 @@ function serializeNodesBlock(
 
       const maskIds = clipMaskMap.get(node.id) ?? [];
       for (let i = maskIds.length - 1; i >= 0; i -= 1) {
-        markup = `<g mask="url(#${maskId(prefix, maskIds[i])})">${markup}</g>`;
+        const targetMaskId =
+          node.clipMaskMode === 'outside' && maskIds[i] === node.clipMaskBaseId
+            ? outsideMaskId(prefix, maskIds[i])
+            : maskId(prefix, maskIds[i]);
+        markup = `<g mask="url(#${targetMaskId})">${markup}</g>`;
       }
 
       return markup;

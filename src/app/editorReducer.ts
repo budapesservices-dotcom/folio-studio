@@ -543,6 +543,13 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (!currentComponent || currentComponent.document !== action.expectedMasterDocument ||
           currentComponent.updatedAt !== action.expectedUpdatedAt ||
           areDocumentsStructurallyEqual(currentComponent.document, action.document)) return state;
+      const nextNodeIds = new Set(action.document.nodes.map((node) => node.id));
+      const removedMasterNodeIds = new Set<string>();
+      for (const prevNode of currentComponent.document.nodes) {
+        if (!nextNodeIds.has(prevNode.id)) {
+          removedMasterNodeIds.add(prevNode.id);
+        }
+      }
       const prunedComponent: ComponentDefinition = {
         ...pruneComponentContractForDocument(currentComponent, action.document),
         document: action.document,
@@ -557,7 +564,35 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         const document = pruneComponentInstanceContractsInDocument(page.document, prunedComponent);
         return document === page.document ? page : { ...page, document };
       });
-      return withSnapshot(state, touch({ ...state.project, pages, components }));
+      let logicGraphs = state.project.logicGraphs;
+      if (removedMasterNodeIds.size > 0 && logicGraphs && logicGraphs.length > 0) {
+        let graphsChanged = false;
+        const nextGraphs = logicGraphs.map((graph) => {
+          if (graph.scope !== 'component' || graph.targetId !== action.componentId) return graph;
+          let modified = false;
+          const nextNodes = graph.nodes.map((logicNode) => {
+            const targetRef = logicNode.data?.targetNodeId;
+            if (typeof targetRef === 'string' && targetRef.length > 0 && removedMasterNodeIds.has(targetRef)) {
+              modified = true;
+              return { ...logicNode, data: { ...logicNode.data, targetNodeId: '' } };
+            }
+            return logicNode;
+          });
+          if (!modified) return graph;
+          graphsChanged = true;
+          return { ...graph, nodes: nextNodes, updatedAt: action.updatedAt };
+        });
+        if (graphsChanged) logicGraphs = nextGraphs;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          pages,
+          components,
+          ...(logicGraphs !== state.project.logicGraphs ? { logicGraphs } : {}),
+        }),
+      );
     }
 
     case 'rename-component': {

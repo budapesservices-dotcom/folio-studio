@@ -573,24 +573,43 @@ export function resolveNodeWithTokens<T extends DesignNode>(
 
   if (next.type === 'rect' || next.type === 'ellipse' || next.type === 'frame') {
     if (fillColor !== undefined || strokeColor !== undefined || radiusNum !== undefined) {
+      const nextStyle = {
+        ...next.style,
+        ...(fillColor !== undefined ? { fill: fillColor } : {}),
+        ...(strokeColor !== undefined ? { stroke: strokeColor } : {}),
+        ...(radiusNum !== undefined && next.type !== 'ellipse' ? { radius: Math.max(0, radiusNum) } : {}),
+      };
+      if (fillColor !== undefined) {
+        delete nextStyle.fills;
+      }
       next = {
         ...next,
-        style: {
-          ...next.style,
-          ...(fillColor !== undefined ? { fill: fillColor } : {}),
-          ...(strokeColor !== undefined ? { stroke: strokeColor } : {}),
-          ...(radiusNum !== undefined && next.type !== 'ellipse' ? { radius: Math.max(0, radiusNum) } : {}),
-        },
+        style: nextStyle,
       };
     }
   } else if (next.type === 'path') {
     if (fillColor !== undefined || strokeColor !== undefined) {
+      const nextStyle = {
+        ...next.style,
+        ...(fillColor !== undefined ? { fill: fillColor } : {}),
+        ...(strokeColor !== undefined ? { stroke: strokeColor } : {}),
+      };
+      if (fillColor !== undefined) {
+        delete nextStyle.fills;
+      }
+      next = {
+        ...next,
+        style: nextStyle,
+      };
+    }
+  } else if (next.type === 'image') {
+    if (strokeColor !== undefined || radiusNum !== undefined) {
       next = {
         ...next,
         style: {
           ...next.style,
-          ...(fillColor !== undefined ? { fill: fillColor } : {}),
           ...(strokeColor !== undefined ? { stroke: strokeColor } : {}),
+          ...(radiusNum !== undefined ? { radius: Math.max(0, radiusNum) } : {}),
         },
       };
     }

@@ -936,11 +936,20 @@ function buildPageReactFile(
   }
   lines.push('  return (');
   lines.push(`    <main className=${escapeTsString(`folio-page-${slug}`)} data-folio-page=${escapeTsString(page.id)}>`);
-  const solvedPageNodes = applyAutoLayoutToNodes(page.document.nodes);
+  const solvedPageNodes = applyAutoLayoutToNodes(page.document.nodes, undefined, tokens);
   const pageMaskDefs = buildVectorMaskDefsLines(solvedPageNodes, slug, true, '      ');
   if (pageMaskDefs.length > 0) {
     lines.push(...pageMaskDefs);
   }
+  const pushMultilineJsx = (value: string) => {
+    if (!value.includes('\n')) {
+      lines.push(value);
+      return;
+    }
+    for (const part of value.split('\n')) {
+      lines.push(part);
+    }
+  };
 
   const { roots, childrenByParent } = buildChildrenMap(solvedPageNodes);
   const mappings: CodeMappingEntry[] = [];
@@ -1187,17 +1196,17 @@ function buildPageReactFile(
         const valueProp = logicPlan.hasDynamicText(node.id)
           ? `defaultValue={logicOverrides[${escapeTsString(node.id)}]?.text ?? ${escapeTsString(node.text)}}`
           : `defaultValue=${escapeTsString(node.text)}`;
-        lines.push(`${indent}<input ${attrs.join(' ')} type="text" ${valueProp} />`);
+        pushMultilineJsx(`${indent}<input ${attrs.join(' ')} type="text" ${valueProp} />`);
       } else if (tag === 'img') {
         const altProp = logicPlan.hasDynamicText(node.id)
           ? `alt={logicOverrides[${escapeTsString(node.id)}]?.text ?? ${escapeTsString(node.text || node.ariaLabel || node.name)}}`
           : `alt=${escapeTsString(node.text || node.ariaLabel || node.name)}`;
-        lines.push(`${indent}<img ${attrs.join(' ')} src="" ${altProp} />`);
+        pushMultilineJsx(`${indent}<img ${attrs.join(' ')} src="" ${altProp} />`);
       } else {
         const textBody = logicPlan.hasDynamicText(node.id)
           ? `{logicOverrides[${escapeTsString(node.id)}]?.text ?? ${escapeTsString(node.text)}}`
           : escapeJsxText(node.text);
-        lines.push(`${indent}<${tag} ${attrs.join(' ')}>${textBody}</${tag}>`);
+        pushMultilineJsx(`${indent}<${tag} ${attrs.join(' ')}>${textBody}</${tag}>`);
       }
     } else if (node.type === 'image') {
       const asset = assetsById.get(node.assetId);

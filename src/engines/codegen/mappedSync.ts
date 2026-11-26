@@ -1,4 +1,5 @@
 import type { DesignNode, SemanticHtmlTag } from '../../core/document/types';
+import { isSafeCssColorValue } from '../../core/document/tokens';
 import { SEMANTIC_HTML_TAGS } from '../../core/document/validation';
 import { sanitizeHref } from './sanitize';
 import type { MappedEditResult, MappedNodeEditPatch } from './types';
@@ -106,7 +107,21 @@ export function applyMappedNodeEdit(
     if (!cleanFill) {
       return { status: 'unsupported', reason: 'Fill color cannot be empty.' };
     }
-    if (next.type === 'rect' || next.type === 'ellipse' || next.type === 'frame' || next.type === 'path' || next.type === 'text') {
+    if (!isSafeCssColorValue(cleanFill)) {
+      return {
+        status: 'unsupported',
+        reason: 'Unsafe or invalid CSS fill color. Use a valid hex, rgb(), hsl(), or named CSS color.',
+      };
+    }
+    if (next.type === 'rect' || next.type === 'ellipse' || next.type === 'frame' || next.type === 'path') {
+      const hasMultiFills = Array.isArray(next.style.fills) && next.style.fills.length > 0;
+      if (next.style.fill !== cleanFill || hasMultiFills) {
+        const nextStyle = { ...next.style, fill: cleanFill };
+        delete nextStyle.fills;
+        next = { ...next, style: nextStyle } as DesignNode;
+        changedFields.push('fill');
+      }
+    } else if (next.type === 'text') {
       if (next.style.fill !== cleanFill) {
         next = { ...next, style: { ...next.style, fill: cleanFill } } as DesignNode;
         changedFields.push('fill');

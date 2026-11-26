@@ -1101,6 +1101,19 @@ function decodeSvgEntitiesSafe(value: string): string {
     .replace(/&newline;/gi, '\n');
 }
 
+const SAFE_SVG_HREF_DATA_PATTERN = /^data:image\/(?:png|jpeg|jpg|webp|gif);base64,/i;
+const SAFE_ASSET_BLOB_URL_PATTERN = /^blob:(?:https?:\/\/[a-zA-Z0-9.:\[\]-]+|null)\/[a-zA-Z0-9._-]+$/i;
+const SAFE_FOLIO_ASSET_URI_PATTERN = /^(?:folio-)?asset:\/\/[a-zA-Z0-9._-]+$/i;
+
+function isSafeSvgAttributeHref(rawValue: string): boolean {
+  const decoded = decodeSvgEntitiesSafe(rawValue)
+    .replace(/[\u0000-\u0020\u007f-\u009f]+/g, '')
+    .toLowerCase();
+  if (!decoded || decoded.startsWith('#')) return true;
+  if (SAFE_SVG_HREF_DATA_PATTERN.test(decoded)) return true;
+  return false;
+}
+
 function isSafeSvgDataUri(trimmed: string): boolean {
   const commaIdx = trimmed.indexOf(',');
   if (commaIdx < 0) return false;
@@ -1120,8 +1133,8 @@ function isSafeSvgDataUri(trimmed: string): boolean {
 
   const entityDecoded = decodeSvgEntitiesSafe(decoded);
   const disallowedTagPattern =
-    /<\s*(?:script|foreignobject|iframe|object|embed|applet|meta|link|style|animate|animatetransform|animatemotion|set|handler|listener)\b/i;
-  const eventHandlerPattern = /(?:[\s/]+)on[a-z0-9_-]+\s*=/i;
+    /<\s*\/?\s*(?:[a-z_][a-z0-9_.-]*:)?(?:script|foreignobject|iframe|object|embed|applet|meta|link|style|animate|animatetransform|animatemotion|set|handler|listener)\b/i;
+  const eventHandlerPattern = /(?:[\s/]+)(?:[a-z_][a-z0-9_.-]*:)?on[a-z0-9_-]+\s*=/i;
 
   if (
     disallowedTagPattern.test(decoded) ||
@@ -1132,11 +1145,24 @@ function isSafeSvgDataUri(trimmed: string): boolean {
     return false;
   }
 
+  const hrefAttrPattern = /(?:[\s/]+)(?:[a-z_][a-z0-9_.-]*:)?(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gi;
+  for (const sourceText of [decoded, entityDecoded]) {
+    hrefAttrPattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = hrefAttrPattern.exec(sourceText)) !== null) {
+      const val = match[1] ?? match[2] ?? match[3] ?? '';
+      if (!isSafeSvgAttributeHref(val)) {
+        return false;
+      }
+    }
+  }
+
   const collapsed = entityDecoded.replace(/[\u0000-\u0020\u007f-\u009f]+/g, '');
   if (
     /(?:javascript|vbscript):/i.test(collapsed) ||
     /data:(?:text\/html|application\/xhtml\+xml|text\/javascript|application\/javascript|image\/svg\+xml)/i.test(collapsed) ||
-    /(?:expression\s*\(|@import|behavior\s*:)/i.test(collapsed)
+    /(?:expression\s*\(|@import|behavior\s*:)/i.test(collapsed) ||
+    /url\s*\(\s*['"]?(?!#)/i.test(collapsed)
   ) {
     return false;
   }
@@ -1160,7 +1186,6 @@ function isSafeAssetSource(source: string, kind: string, declaredMimeType: strin
   const trimmed = source.replace(/[\u0000-\u001F\u007F]/g, '').trim();
   if (!trimmed) return true;
   if (trimmed.startsWith('//')) return false;
-  if (/^(?:javascript|vbscript):/i.test(trimmed)) return false;
 
   if (/^data:/i.test(trimmed)) {
     const dataMatch = /^data:\s*([^;,]*)(?:;[^,]*)?,/i.exec(trimmed);
@@ -1180,8 +1205,27 @@ function isSafeAssetSource(source: string, kind: string, declaredMimeType: strin
     if (dataMime === 'image/svg+xml' || declaredMime === 'image/svg+xml') {
       return isSafeSvgDataUri(trimmed);
     }
+    return true;
   }
 
+  if (/^https?:\/\//i.test(trimmed)) {
+    return !/\s/.test(trimmed);
+  }
+  if (SAFE_FOLIO_ASSET_URI_PATTERN.test(trimmed)) {
+    return true;
+  }
+  if (SAFE_ASSET_BLOB_URL_PATTERN.test(trimmed)) {
+    return true;
+  }
+
+  // Reject any non-allowlisted URI scheme (e.g., javascript:, vbscript:, file:, ftp:, filesystem:, blob:javascript:)
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+    return false;
+  }
+  // Allow only clean relative paths without path traversal or backslashes
+  if (trimmed.includes('..') || trimmed.includes('\\') || /\s/.test(trimmed)) {
+    return false;
+  }
   return true;
 }
 

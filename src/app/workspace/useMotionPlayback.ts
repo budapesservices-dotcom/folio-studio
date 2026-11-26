@@ -70,6 +70,8 @@ export function useMotionPlayback({
   const [playheadMs, setPlayheadMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [previewActive, setPreviewActive] = useState(false);
+  const playheadRef = useRef(0);
+  playheadRef.current = playheadMs;
 
   const pageClips = useMemo(
     () => (project.animations ?? []).filter((clip) => clip.pageId === activePage.id),
@@ -113,11 +115,18 @@ export function useMotionPlayback({
   useEffect(() => {
     if (!motionOpen || !isPlaying || !activeClip) return;
     let rafId = 0;
+    let cancelled = false;
     let lastTs: number | null = null;
     const duration = Math.max(100, activeClip.durationMs);
     const loop = activeClip.loop;
+    let currentMs = playheadRef.current >= duration ? 0 : playheadRef.current;
+    if (currentMs !== playheadRef.current) {
+      playheadRef.current = currentMs;
+      setPlayheadMs(currentMs);
+    }
 
     const tick = (ts: number) => {
+      if (cancelled) return;
       if (lastTs === null) {
         lastTs = ts;
         rafId = window.requestAnimationFrame(tick);
@@ -126,26 +135,33 @@ export function useMotionPlayback({
       const delta = Math.max(0, Math.min(100, ts - lastTs));
       lastTs = ts;
 
-      let shouldContinue = true;
-      setPlayheadMs((prev) => {
-        const next = prev + delta;
-        if (next >= duration) {
-          if (loop) return Math.round(next % duration);
-          shouldContinue = false;
-          return duration;
+      const next = currentMs + delta;
+      if (next >= duration) {
+        if (loop) {
+          currentMs = Math.round(next % duration);
+          playheadRef.current = currentMs;
+          setPlayheadMs(currentMs);
+          rafId = window.requestAnimationFrame(tick);
+        } else {
+          currentMs = duration;
+          playheadRef.current = duration;
+          setPlayheadMs(duration);
+          setIsPlaying(false);
         }
-        return Math.round(next);
-      });
-
-      if (shouldContinue) {
-        rafId = window.requestAnimationFrame(tick);
-      } else {
-        setIsPlaying(false);
+        return;
       }
+
+      currentMs = Math.round(next);
+      playheadRef.current = currentMs;
+      setPlayheadMs(currentMs);
+      rafId = window.requestAnimationFrame(tick);
     };
 
     rafId = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(rafId);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(rafId);
+    };
   }, [motionOpen, isPlaying, activeClip?.id, activeClip?.durationMs, activeClip?.loop]);
 
   const animatedMainDocument = useMemo(() => {
@@ -181,6 +197,7 @@ export function useMotionPlayback({
   const selectClip = useCallback((clipId: string) => {
     setActiveClipId(clipId);
     setIsPlaying(false);
+    playheadRef.current = 0;
     setPlayheadMs(0);
     setPreviewActive(false);
   }, []);
@@ -188,7 +205,10 @@ export function useMotionPlayback({
   const play = useCallback(() => {
     if (!activeClip) return;
     setPreviewActive(true);
-    setPlayheadMs((current) => (current >= activeClip.durationMs ? 0 : current));
+    if (playheadRef.current >= activeClip.durationMs) {
+      playheadRef.current = 0;
+      setPlayheadMs(0);
+    }
     setIsPlaying(true);
   }, [activeClip]);
 
@@ -203,6 +223,7 @@ export function useMotionPlayback({
 
   const stop = useCallback(() => {
     setIsPlaying(false);
+    playheadRef.current = 0;
     setPlayheadMs(0);
     setPreviewActive(false);
   }, []);
@@ -211,6 +232,7 @@ export function useMotionPlayback({
     const duration = activeClip?.durationMs ?? 1200;
     const clamped = Math.max(0, Math.min(duration, Math.round(ms)));
     setIsPlaying(false);
+    playheadRef.current = clamped;
     setPlayheadMs(clamped);
     setPreviewActive(true);
   }, [activeClip?.durationMs]);

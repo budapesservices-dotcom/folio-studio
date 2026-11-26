@@ -1207,6 +1207,16 @@ export function compilePageHtmlCss(
     'overflow-x: clip;',
   ]);
 
+  const pushMultilineHtml = (value: string) => {
+    if (!value.includes('\n')) {
+      htmlBodyLines.push(value);
+      return;
+    }
+    for (const part of value.split('\n')) {
+      htmlBodyLines.push(part);
+    }
+  };
+
   const emitNodeCss = (
     node: DesignNode,
     className: string,
@@ -1214,6 +1224,8 @@ export function compilePageHtmlCss(
     isChildOfAutoLayout: boolean,
     isInstanceChild: boolean,
     originOffset: { x: number; y: number },
+    activeNodeById: ReadonlyMap<string, DesignNode>,
+    maskPrefix: string,
   ) => {
     const selector = `.${className}`;
     const declarations = buildNodeCssDeclarations(node, tokens, {
@@ -1222,8 +1234,8 @@ export function compilePageHtmlCss(
       isInstanceChild,
       hasRootAutoLayout,
       originOffset,
-      nodeById,
-      maskPrefix: slug,
+      nodeById: activeNodeById,
+      maskPrefix,
     });
 
     pushCssRule(
@@ -1313,6 +1325,7 @@ export function compilePageHtmlCss(
     originOffset: { x: number; y: number },
     htmlLineOffset: number,
     activeChildrenByParent: Map<string, DesignNode[]>,
+    activeNodeById: ReadonlyMap<string, DesignNode>,
     idPrefix: string,
     visitedComponentIds: ReadonlySet<string>,
     componentDepth: number,
@@ -1320,7 +1333,17 @@ export function compilePageHtmlCss(
     const indent = '  '.repeat(depth);
     const emittedId = idPrefix ? `${idPrefix}${node.id}` : node.id;
     const className = toCssClassName('f', node.name, emittedId);
-    emitNodeCss(node, className, parent, isChildOfAutoLayout, isInstanceChild, originOffset);
+    const maskPrefix = idPrefix ? `${slug}-${idPrefix}` : slug;
+    emitNodeCss(
+      node,
+      className,
+      parent,
+      isChildOfAutoLayout,
+      isInstanceChild,
+      originOffset,
+      activeNodeById,
+      maskPrefix,
+    );
 
     const tag = resolveSemanticTag(node);
     const extraClass = node.className?.trim() && isSafeHtmlClassName(node.className.trim())
@@ -1356,15 +1379,15 @@ export function compilePageHtmlCss(
 
     if (node.type === 'text') {
       if (tag === 'input') {
-        htmlBodyLines.push(
+        pushMultilineHtml(
           `${indent}<input ${attrs.join(' ')} type="text" value="${escapeAttr(node.text)}" readonly />`,
         );
       } else if (tag === 'img') {
-        htmlBodyLines.push(
+        pushMultilineHtml(
           `${indent}<img ${attrs.join(' ')} src="" alt="${escapeAttr(node.text || node.ariaLabel || node.name)}" />`,
         );
       } else {
-        htmlBodyLines.push(`${indent}<${tag} ${attrs.join(' ')}>${escapeHtml(node.text)}</${tag}>`);
+        pushMultilineHtml(`${indent}<${tag} ${attrs.join(' ')}>${escapeHtml(node.text)}</${tag}>`);
       }
     } else if (node.type === 'image') {
       const asset = assetsById.get(node.assetId);
@@ -1401,6 +1424,12 @@ export function compilePageHtmlCss(
         const scaleY = node.height / masterH;
         const needsScale = Math.abs(scaleX - 1) > 0.001 || Math.abs(scaleY - 1) > 0.001;
         const childPrefix = `${emittedId}__`;
+        const childMaskDefs = buildVectorMaskDefsLines(
+          resolvedChildren,
+          `${slug}-${childPrefix}`,
+          false,
+          needsScale ? `${indent}    ` : `${indent}  `,
+        );
         htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
         if (needsScale) {
           const innerClass = `${className}__inner`;
@@ -1412,6 +1441,9 @@ export function compilePageHtmlCss(
             `transform: scale(${roundCss(scaleX)}, ${roundCss(scaleY)});`,
           ]);
           htmlBodyLines.push(`${indent}  <div class="${escapeAttr(innerClass)}">`);
+          if (childMaskDefs.length > 0) {
+            htmlBodyLines.push(...childMaskDefs);
+          }
           for (const child of childMap.roots) {
             emitNodeHtml(
               child,
@@ -1422,6 +1454,7 @@ export function compilePageHtmlCss(
               { x: 0, y: 0 },
               htmlLineOffset,
               childMap.childrenByParent,
+              childMap.nodeById,
               childPrefix,
               nextVisited,
               componentDepth + 1,
@@ -1429,6 +1462,9 @@ export function compilePageHtmlCss(
           }
           htmlBodyLines.push(`${indent}  </div>`);
         } else {
+          if (childMaskDefs.length > 0) {
+            htmlBodyLines.push(...childMaskDefs);
+          }
           for (const child of childMap.roots) {
             emitNodeHtml(
               child,
@@ -1439,6 +1475,7 @@ export function compilePageHtmlCss(
               { x: 0, y: 0 },
               htmlLineOffset,
               childMap.childrenByParent,
+              childMap.nodeById,
               childPrefix,
               nextVisited,
               componentDepth + 1,
@@ -1477,6 +1514,7 @@ export function compilePageHtmlCss(
             nextOrigin,
             htmlLineOffset,
             activeChildrenByParent,
+            activeNodeById,
             idPrefix,
             visitedComponentIds,
             componentDepth,
@@ -1551,6 +1589,7 @@ export function compilePageHtmlCss(
       { x: 0, y: 0 },
       htmlLineOffset,
       childrenByParent,
+      nodeById,
       '',
       emptyVisited,
       0,

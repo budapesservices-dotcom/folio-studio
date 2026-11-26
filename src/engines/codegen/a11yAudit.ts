@@ -1,4 +1,5 @@
 import { getProjectDesignTokens, resolveNodeWithTokens } from '../../core/document/tokens';
+import { getVisibleFillPaints } from '../../core/document/styling';
 import type {
   DesignNode,
   DesignTokenCollection,
@@ -6,6 +7,7 @@ import type {
   FolioProject,
   SemanticHtmlTag,
 } from '../../core/document/types';
+import { applyAutoLayoutToNodes } from '../layout/autoLayout';
 import { resolveSemanticTag } from './htmlCssCompiler';
 import { sanitizeHref } from './sanitize';
 
@@ -278,8 +280,20 @@ function nodeContainsCenter(container: DesignNode, target: DesignNode): boolean 
 
 function getOpaqueFill(node: DesignNode): string | null {
   if (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') {
-    const parsed = parseCssColorToRgba(node.style.fill);
-    if (parsed && parsed.a > 0.05) return node.style.fill;
+    const fills = getVisibleFillPaints(node);
+    for (let i = fills.length - 1; i >= 0; i -= 1) {
+      const paint = fills[i];
+      if (paint.type !== 'solid') continue;
+      const parsed = parseCssColorToRgba(paint.color);
+      if (!parsed) continue;
+      const effectiveAlpha = parsed.a * (paint.opacity ?? 1);
+      if (effectiveAlpha > 0.05) {
+        if (paint.opacity !== undefined && paint.opacity < 1) {
+          return `rgba(${parsed.r}, ${parsed.g}, ${parsed.b}, ${Math.round(effectiveAlpha * 1000) / 1000})`;
+        }
+        return paint.color;
+      }
+    }
   }
   return null;
 }
@@ -354,7 +368,10 @@ export function auditPageAccessibility(
     ? { ...baseTokens, activeThemeId: themeId }
     : baseTokens;
 
-  const resolvedNodes = page.document.nodes.map((node) => resolveNodeWithTokens(node, tokens));
+  const laidOutNodes = page.document.nodes.some((node) => node.layout && node.layout.mode !== 'none')
+    ? applyAutoLayoutToNodes(page.document.nodes, undefined, tokens)
+    : page.document.nodes;
+  const resolvedNodes = laidOutNodes.map((node) => resolveNodeWithTokens(node, tokens));
   const nodeById = new Map(resolvedNodes.map((node) => [node.id, node]));
   const pageBg = page.document.background || '#FFFFFF';
 

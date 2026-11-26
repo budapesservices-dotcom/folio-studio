@@ -136,12 +136,28 @@ function applyNodeOverrideFields(node: DesignNode, override: ComponentVariantOve
   }
   if (next.type === 'rect' || next.type === 'ellipse' || next.type === 'frame' || next.type === 'path') {
     if (override.fill !== undefined || override.stroke !== undefined) {
+      const nextStyle = {
+        ...next.style,
+        ...(override.fill !== undefined ? { fill: override.fill } : {}),
+        ...(override.stroke !== undefined ? { stroke: override.stroke } : {}),
+      };
+      if (override.fill !== undefined) {
+        delete nextStyle.fills;
+      }
+      next = {
+        ...next,
+        style: nextStyle,
+      };
+    }
+    return next;
+  }
+  if (next.type === 'image') {
+    if (override.stroke !== undefined) {
       next = {
         ...next,
         style: {
           ...next.style,
-          ...(override.fill !== undefined ? { fill: override.fill } : {}),
-          ...(override.stroke !== undefined ? { stroke: override.stroke } : {}),
+          stroke: override.stroke,
         },
       };
     }

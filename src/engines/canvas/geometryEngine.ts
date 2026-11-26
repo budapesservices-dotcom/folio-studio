@@ -510,7 +510,13 @@ export function evaluateToolOperation(
         if (layerStates.get(node.id)?.locked) continue;
 
         if (colorTarget === 'stroke') {
-          if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame' || node.type === 'path') {
+          if (
+            node.type === 'rect' ||
+            node.type === 'ellipse' ||
+            node.type === 'frame' ||
+            node.type === 'path' ||
+            node.type === 'image'
+          ) {
             updatedNodes.push({
               ...node,
               style: {
@@ -600,6 +606,9 @@ export function evaluateToolOperation(
       }
       if (layerStates.get(nodeId)?.locked) {
         return { status: 'rejected', code: 'LOCKED_TARGET', reason: `Layer "${nodeId}" is locked.` };
+      }
+      if (position === 'inside' && layerStates.get(targetId)?.locked) {
+        return { status: 'rejected', code: 'LOCKED_TARGET', reason: `Target container "${targetId}" is locked.` };
       }
       const descendants = getLayerDescendantIds(nodes, nodeId);
       if (descendants.has(targetId)) {

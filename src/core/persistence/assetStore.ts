@@ -317,11 +317,16 @@ function isSafeSvgHref(rawValue: string): boolean {
   return false;
 }
 
+function isSafeSvgStyleValue(rawStyle: string): boolean {
+  const normalized = decodeBasicHtmlEntities(rawStyle).replace(/[\u0000-\u0020\u007f-\u009f]+/g, '');
+  return !/(?:javascript|vbscript|expression\s*\(|@import|behavior\s*:|url\s*\(\s*['"]?(?!#))/i.test(normalized);
+}
+
 /**
  * Strictly sanitizes uploaded SVG markup so embedded scripts, foreignObject HTML,
  * SMIL animation attribute overrides, style injection, inline event handlers
- * (including slash-separated `<svg/onload=...>`), and dangerous/entity-encoded URIs
- * cannot execute.
+ * (including slash-separated `<svg/onload=...>`), XML namespace-prefixed active tags,
+ * and dangerous/entity-encoded URIs cannot execute.
  */
 export function sanitizeSvgMarkup(rawSvg: string): string {
   if (typeof DOMParser !== 'undefined' && typeof XMLSerializer !== 'undefined') {
@@ -354,8 +359,7 @@ export function sanitizeSvgMarkup(rawSvg: string): string {
               continue;
             }
             if (localName === 'style') {
-              const normalizedStyle = decodeBasicHtmlEntities(attr.value).replace(/[\u0000-\u0020]+/g, '');
-              if (/(?:javascript|vbscript|expression|@import|url\s*\(\s*['"]?\s*(?:javascript|vbscript|data:text\/html))/i.test(normalizedStyle)) {
+              if (!isSafeSvgStyleValue(attr.value)) {
                 el.removeAttribute(attr.name);
               }
             }
@@ -399,20 +403,30 @@ export function sanitizeSvgMarkup(rawSvg: string): string {
         break;
       }
 
-      // Check if `<` starts a disallowed opening or closing tag
-      const isClosing = source[openIdx + 1] === '/';
-      let nameStart = openIdx + (isClosing ? 2 : 1);
+      // Check if `<` starts a disallowed opening or closing tag (including XML namespace prefixes)
+      let nameStart = openIdx + 1;
+      while (nameStart < source.length && /\s/.test(source[nameStart])) {
+        nameStart += 1;
+      }
+      const isClosing = source[nameStart] === '/';
+      if (isClosing) {
+        nameStart += 1;
+        while (nameStart < source.length && /\s/.test(source[nameStart])) {
+          nameStart += 1;
+        }
+      }
       let nameEnd = nameStart;
-      while (nameEnd < source.length && /[a-zA-Z0-9_-]/.test(source[nameEnd])) {
+      while (nameEnd < source.length && /[a-zA-Z0-9_.:-]/.test(source[nameEnd])) {
         nameEnd += 1;
       }
       const tagName = lower.slice(nameStart, nameEnd);
+      const localTagName = tagName.includes(':') ? tagName.slice(tagName.lastIndexOf(':') + 1) : tagName;
       const boundaryChar = source[nameEnd] ?? '';
       const isTagBoundary =
         nameEnd > nameStart &&
         (boundaryChar === '' || /[\s/>]/.test(boundaryChar));
 
-      if (!isTagBoundary || !blockedTags.has(tagName)) {
+      if (!isTagBoundary || !blockedTags.has(localTagName)) {
         out.push(source.slice(cursor, openIdx + 1));
         cursor = openIdx + 1;
         continue;
@@ -477,10 +491,10 @@ export function sanitizeSvgMarkup(rawSvg: string): string {
 
   let clean = stripDisallowedSvgBlocks(rawSvg)
     // Strip inline on* event handlers separated by whitespace OR slash (`<svg/onload=...>`)
-    .replace(/(?:[\s/]+)on[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s/>]+)/gi, '')
-    // Neutralize dangerous href/xlink:href/src (quoted OR unquoted, including HTML entities)
+    .replace(/(?:[\s/]+)(?:[a-z_][a-z0-9_.-]*:)?on[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s/>]+)/gi, '')
+    // Neutralize dangerous href/xlink:href/src (quoted OR unquoted, including namespace prefixes and HTML entities)
     .replace(
-      /(?:[\s/]+)(xlink:href|href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gi,
+      /(?:[\s/]+)((?:[a-z_][a-z0-9_.-]*:)?(?:href|src))\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gi,
       (_match, attr: string, dq?: string, sq?: string, uq?: string) => {
         const val = dq ?? sq ?? uq ?? '';
         if (!isSafeSvgHref(val)) {
@@ -489,12 +503,11 @@ export function sanitizeSvgMarkup(rawSvg: string): string {
         return ` ${attr}="${val.replace(/"/g, '&quot;')}"`;
       },
     )
-    // Strip dangerous CSS expressions / javascript url() inside inline style attributes
+    // Strip dangerous CSS expressions / external url() inside inline style attributes
     .replace(
       /(?:[\s/]+)style\s*=\s*(?:"([^"]*)"|'([^']*)')/gi,
       (full, dq?: string, sq?: string) => {
-        const val = decodeBasicHtmlEntities(dq ?? sq ?? '').replace(/[\u0000-\u0020]+/g, '');
-        if (/(?:javascript|vbscript|expression|@import|url\s*\(\s*['"]?\s*(?:javascript|vbscript|data:text\/html))/i.test(val)) {
+        if (!isSafeSvgStyleValue(dq ?? sq ?? '')) {
           return '';
         }
         return full;
@@ -654,12 +667,58 @@ export async function getAssetBytesByHash(sha256: string): Promise<{ bytes: Uint
   return entry;
 }
 
-function isSafeInlineAssetDataUrl(src: string, kind: AssetReference['kind']): boolean {
-  if (src.startsWith('data:image/')) return true;
-  if (kind === 'font') {
-    return /^data:(?:font\/(?:woff2|woff|ttf|otf|sfnt)|application\/(?:font-woff2|font-woff|x-font-ttf|x-font-opentype|font-sfnt|octet-stream));base64,/i.test(src);
+const SAFE_INLINE_IMAGE_DATA_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+  'image/svg+xml',
+]);
+const SAFE_DISPLAY_BLOB_URL_PATTERN = /^blob:(?:https?:\/\/[a-zA-Z0-9.:\[\]-]+|null)\/[a-zA-Z0-9._-]+$/i;
+
+function sanitizeSvgBytesIfNeeded(bytes: Uint8Array, mimeType: string): Uint8Array | null {
+  if (mimeType.trim().toLowerCase() !== 'image/svg+xml') {
+    return bytes;
   }
-  return false;
+  const sanitized = sanitizeSvgMarkup(new TextDecoder().decode(bytes));
+  if (!/<svg\b/i.test(sanitized)) return null;
+  return new TextEncoder().encode(sanitized);
+}
+
+function resolveSafeInlineAssetDataUrl(
+  src: string,
+  kind: AssetReference['kind'],
+  declaredMime?: string,
+): string | null {
+  if (!/^data:/i.test(src)) return null;
+  const decoded = dataUrlToBytes(src);
+  if (!decoded) return null;
+  const dataMime = decoded.mimeType.trim().toLowerCase();
+  const normalizedDeclared = (declaredMime ?? '').trim().toLowerCase();
+
+  if (kind === 'font') {
+    if (
+      /^data:(?:font\/(?:woff2|woff|ttf|otf|sfnt)|application\/(?:font-woff2|font-woff|x-font-ttf|x-font-opentype|font-sfnt|octet-stream));base64,/i.test(
+        src,
+      )
+    ) {
+      return src;
+    }
+    return null;
+  }
+
+  if (!SAFE_INLINE_IMAGE_DATA_MIMES.has(dataMime)) {
+    return null;
+  }
+  if (dataMime === 'image/svg+xml' || normalizedDeclared === 'image/svg+xml') {
+    if (dataMime !== 'image/svg+xml') return null;
+    const safeBytes = sanitizeSvgBytesIfNeeded(decoded.bytes, 'image/svg+xml');
+    if (!safeBytes) return null;
+    return bytesToDataUrl(safeBytes, 'image/svg+xml');
+  }
+  return src;
 }
 
 /** Synchronously resolves an AssetReference into a safe displayable URL for in-tab Canvas/Preview rendering. */
@@ -670,9 +729,11 @@ export function resolveAssetDisplayUrl(asset: AssetReference | undefined): strin
     if (cached) return cached;
   }
   const src = asset.source.trim();
+  if (/^data:/i.test(src)) {
+    return resolveSafeInlineAssetDataUrl(src, asset.kind, asset.mimeType);
+  }
   if (
-    isSafeInlineAssetDataUrl(src, asset.kind) ||
-    src.startsWith('blob:') ||
+    SAFE_DISPLAY_BLOB_URL_PATTERN.test(src) ||
     src.startsWith('https://') ||
     src.startsWith('http://')
   ) {
@@ -692,7 +753,10 @@ export function resolveAssetDisplayUrl(asset: AssetReference | undefined): strin
 export function resolvePortableAssetUrl(asset: AssetReference | undefined): string | null {
   if (!asset) return null;
   const src = asset.source.trim();
-  if (isSafeInlineAssetDataUrl(src, asset.kind) || src.startsWith('https://') || src.startsWith('http://')) {
+  if (/^data:/i.test(src)) {
+    return resolveSafeInlineAssetDataUrl(src, asset.kind, asset.mimeType);
+  }
+  if (src.startsWith('https://') || src.startsWith('http://')) {
     return src;
   }
   const hash = (
@@ -703,7 +767,9 @@ export function resolvePortableAssetUrl(asset: AssetReference | undefined): stri
     const cached = memoryBytesByHash.get(hash);
     if (cached) {
       const safeMime = normalizeSafeBlobMimeType(asset.mimeType || cached.mimeType);
-      return bytesToDataUrl(cached.bytes, safeMime);
+      const safeBytes = sanitizeSvgBytesIfNeeded(cached.bytes, safeMime);
+      if (!safeBytes) return null;
+      return bytesToDataUrl(safeBytes, safeMime);
     }
   }
   return null;
@@ -924,19 +990,27 @@ export function getAssetBundlePath(asset: AssetReference): string {
   return `assets/${base}-${suffix}.${ext}`;
 }
 
-/** Extracts raw binary bytes from an AssetReference (inline data URL or in-memory hash cache). */
+/** Extracts raw binary bytes from an AssetReference (inline data URL or in-memory hash cache), sanitizing SVGs. */
 export function extractAssetBinaryBytesSync(asset: AssetReference): Uint8Array | null {
   const src = asset.source.trim();
+  const declaredMime = (asset.mimeType ?? '').trim().toLowerCase();
   const hash = (
     asset.sha256 ??
     (src.startsWith(INTERNAL_ASSET_URI_PREFIX) ? src.slice(INTERNAL_ASSET_URI_PREFIX.length) : '')
   ).trim();
   if (hash) {
     const cached = memoryBytesByHash.get(hash);
-    if (cached) return cached.bytes;
+    if (cached) {
+      const effectiveMime = declaredMime || cached.mimeType;
+      return sanitizeSvgBytesIfNeeded(cached.bytes, effectiveMime);
+    }
   }
   const decoded = dataUrlToBytes(src);
-  return decoded ? decoded.bytes : null;
+  if (!decoded) return null;
+  const effectiveMime = declaredMime === 'image/svg+xml' || decoded.mimeType === 'image/svg+xml'
+    ? 'image/svg+xml'
+    : (declaredMime || decoded.mimeType);
+  return sanitizeSvgBytesIfNeeded(decoded.bytes, effectiveMime);
 }
 
 /**
@@ -1047,6 +1121,27 @@ export async function materializeProjectAssetsForExport(project: FolioProject): 
           kind: asset.kind,
         });
         continue;
+      }
+    }
+
+    if (/^data:/i.test(trimmedSource)) {
+      const decoded = dataUrlToBytes(trimmedSource);
+      const declaredMime = (asset.mimeType || '').trim().toLowerCase();
+      if (decoded && (declaredMime === 'image/svg+xml' || decoded.mimeType === 'image/svg+xml')) {
+        const safeBytes = sanitizeSvgBytesIfNeeded(decoded.bytes, 'image/svg+xml');
+        if (safeBytes) {
+          const sanitizedUrl = bytesToDataUrl(safeBytes, 'image/svg+xml');
+          if (sanitizedUrl !== asset.source) {
+            changed = true;
+            nextAssets.push({
+              ...asset,
+              mimeType: 'image/svg+xml',
+              byteLength: safeBytes.byteLength,
+              source: sanitizedUrl,
+            });
+            continue;
+          }
+        }
       }
     }
 

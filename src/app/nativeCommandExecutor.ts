@@ -550,6 +550,7 @@ function computeProjectChangeDraft(
       } else if (beforeComponent !== afterComponent) {
         const metadataChanged =
           beforeComponent.name !== afterComponent.name ||
+          Boolean(beforeComponent.nodeLogicEnabled) !== Boolean(afterComponent.nodeLogicEnabled) ||
           (beforeComponent.variants !== afterComponent.variants &&
             JSON.stringify(beforeComponent.variants ?? []) !== JSON.stringify(afterComponent.variants ?? [])) ||
           (beforeComponent.slots !== afterComponent.slots &&
@@ -588,6 +589,10 @@ function computeProjectChangeDraft(
       JSON.stringify(beforeProject.designTokens ?? null) !== JSON.stringify(afterProject.designTokens ?? null)) ||
     (beforeProject.codeModules !== afterProject.codeModules &&
       JSON.stringify(beforeProject.codeModules ?? []) !== JSON.stringify(afterProject.codeModules ?? [])) ||
+    (beforeProject.logicGraphs !== afterProject.logicGraphs &&
+      JSON.stringify(beforeProject.logicGraphs ?? []) !== JSON.stringify(afterProject.logicGraphs ?? [])) ||
+    (beforeProject.animations !== afterProject.animations &&
+      JSON.stringify(beforeProject.animations ?? []) !== JSON.stringify(afterProject.animations ?? [])) ||
     (beforeProject.assets !== afterProject.assets &&
       JSON.stringify(beforeProject.assets) !== JSON.stringify(afterProject.assets));
 
