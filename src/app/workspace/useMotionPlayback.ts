@@ -310,8 +310,11 @@ export function useMotionPlayback({
     afterNodes: readonly DesignNode[],
     description = 'Auto-keyframe layer change',
   ): AutoKeyCaptureResult => {
-    if (!motionOpen || !autoKeyEnabled || isPlaying || afterNodes.length === 0) {
+    if (!motionOpen || !autoKeyEnabled || afterNodes.length === 0) {
       return { captured: false, keepCanonicalUnchanged: false };
+    }
+    if (isPlaying) {
+      setIsPlaying(false);
     }
 
     const animatedById = new Map(animatedMainDocument.nodes.map((node) => [node.id, node]));

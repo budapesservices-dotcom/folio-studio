@@ -546,8 +546,12 @@ async function launchChromiumAttempt(targetUrl, options, attemptNumber) {
     }
 
     if (options.waitForComplete) {
+      const expectedPrefix = options.matchUrlPrefix ?? '';
       for (let attempt = 0; attempt < 50; attempt += 1) {
-        if (await evaluate('document.readyState === "complete"')) break;
+        const ready = await evaluate(
+          `document.readyState === "complete" && (${JSON.stringify(expectedPrefix)} === "" || location.href.startsWith(${JSON.stringify(expectedPrefix)}))`,
+        );
+        if (ready) break;
         await delay(100);
       }
     }
@@ -621,6 +625,7 @@ export async function launchChromiumHtml(html, options = {}) {
   try {
     session = await launchChromiumSession(url, {
       ...options,
+      matchUrlPrefix: options.matchUrlPrefix ?? url,
       waitForComplete: true,
     });
   } catch (error) {

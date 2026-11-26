@@ -31,6 +31,7 @@ import {
   sanitizeCommentLabel,
   sanitizeCssValue,
   sanitizeHref,
+  sanitizeRelativeModulePath,
   toCamelCase,
   toCssClassName,
   toKebabCase,
@@ -907,9 +908,21 @@ function buildPageReactFile(
 
   lines.push(`import '../styles/${slug}.css';`);
 
+  const animatedNodeIds = new Set<string>();
+  for (const clip of project.animations ?? []) {
+    if (clip.pageId !== page.id) continue;
+    for (const track of clip.tracks) {
+      if (track.keyframes.length > 0) {
+        animatedNodeIds.add(track.targetNodeId);
+      }
+    }
+  }
+
   for (const mod of project.codeModules ?? []) {
     if (mod.language === 'css' && (!mod.targetPageId || mod.targetPageId === page.id)) {
-      lines.push(`import '../../${mod.path}';`);
+      const safePath = sanitizeRelativeModulePath(mod.path);
+      if (!safePath) continue;
+      lines.push(`import '../../${safePath}';`);
     }
   }
 
@@ -923,12 +936,13 @@ function buildPageReactFile(
   }
   lines.push('  return (');
   lines.push(`    <main className=${escapeTsString(`folio-page-${slug}`)} data-folio-page=${escapeTsString(page.id)}>`);
-  const pageMaskDefs = buildVectorMaskDefsLines(page.document.nodes, slug, true, '      ');
+  const solvedPageNodes = applyAutoLayoutToNodes(page.document.nodes);
+  const pageMaskDefs = buildVectorMaskDefsLines(solvedPageNodes, slug, true, '      ');
   if (pageMaskDefs.length > 0) {
     lines.push(...pageMaskDefs);
   }
 
-  const { roots, childrenByParent } = buildChildrenMap(page.document.nodes);
+  const { roots, childrenByParent } = buildChildrenMap(solvedPageNodes);
   const mappings: CodeMappingEntry[] = [];
 
   const emitJsx = (node: DesignNode, depth: number) => {
@@ -1023,6 +1037,7 @@ function buildPageReactFile(
         const instanceDynamicTransition = logicPlan.hasDynamicTransition(node.id);
         const needsInteractiveWrapper =
           needsScale
+          || animatedNodeIds.has(node.id)
           || instanceEventAttrs.length > 0
           || instanceDynamicVisible
           || instanceDynamicOpacity

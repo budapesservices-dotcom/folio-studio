@@ -52,6 +52,7 @@ import {
   sanitizeCssValue,
   sanitizeHref,
   sanitizeJsText,
+  sanitizeRelativeModulePath,
   toCssClassName,
   toPageFileSlug,
 } from './sanitize';
@@ -278,6 +279,7 @@ export function needsSvgMaskForClip(node: DesignNode, base: DesignNode): boolean
   if (node.clipMaskMode === 'outside') return true;
   if (base.type === 'path') return true;
   if (Math.abs(base.rotation) > 0.01) return true;
+  if (Math.abs(node.rotation) > 0.01) return true;
   return false;
 }
 
@@ -342,10 +344,15 @@ export function buildVectorMaskDefsLines(
       shapeEl = `<rect x="${dx}" y="${dy}" width="${w}" height="${h}"${rxAttr} fill="${baseFill}"${transformAttr} />`;
     }
 
+    const nodeRot = node.type === 'group' ? 0 : (node.rotation || 0);
+    const wrappedShapeEl = Math.abs(nodeRot) > 0.01
+      ? `<g transform="${escapeAttr(`rotate(${roundCss(-nodeRot)} ${roundCss(node.width / 2)} ${roundCss(node.height / 2)})`)}">${shapeEl}</g>`
+      : shapeEl;
+
     maskBlocks.push(
       `${indent}    <mask id="${escapeAttr(maskId)}" maskUnits="userSpaceOnUse" x="-10000" y="-10000" width="20000" height="20000">`,
       `${indent}      <rect x="-10000" y="-10000" width="20000" height="20000" fill="${bgFill}" />`,
-      `${indent}      ${shapeEl}`,
+      `${indent}      ${wrappedShapeEl}`,
       `${indent}    </mask>`,
     );
   }
@@ -1517,7 +1524,9 @@ export function compilePageHtmlCss(
     (mod) => mod.language === 'css' && (!mod.targetPageId || mod.targetPageId === page.id),
   );
   for (const mod of customCssModules) {
-    htmlPreambleLines.push(`  <link rel="stylesheet" href="../${escapeAttr(mod.path)}" />`);
+    const safePath = sanitizeRelativeModulePath(mod.path);
+    if (!safePath) continue;
+    htmlPreambleLines.push(`  <link rel="stylesheet" href="../${escapeAttr(safePath)}" />`);
   }
 
   htmlPreambleLines.push(

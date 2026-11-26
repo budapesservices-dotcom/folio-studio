@@ -1091,3 +1091,29 @@ export function toPageFileSlug(route: string, name: string): string {
   if (!normalizedRoute) return 'index';
   return toKebabCase(normalizedRoute.replace(/\//g, '-'), toKebabCase(name, 'page'));
 }
+
+/**
+ * Validates and normalizes a project-relative code module path (e.g. `styles/custom.css`)
+ * before emitting HTML `<link>` or React `import` statements. Rejects absolute paths,
+ * path traversal (`..`), protocol schemes, control characters, quotes, and injection chars.
+ */
+export function sanitizeRelativeModulePath(rawPath: string): string | null {
+  if (typeof rawPath !== 'string') return null;
+  const trimmed = rawPath.trim();
+  if (!trimmed || trimmed.length > 256) return null;
+  if (
+    trimmed.startsWith('/') ||
+    trimmed.includes('\\') ||
+    trimmed.includes(':') ||
+    /[\u0000-\u001F\u007F'"`;<>?#]/.test(trimmed)
+  ) {
+    return null;
+  }
+  const segments = trimmed.split('/');
+  for (const segment of segments) {
+    if (!segment || segment === '.' || segment === '..') {
+      return null;
+    }
+  }
+  return segments.join('/');
+}

@@ -584,4 +584,201 @@ describe('Canvas ↔ Live Preview & Codegen Layout Fidelity', () => {
     const evalKeyed = evaluatedDoc.nodes.find((n) => n.id === 'child-keyed');
     expect(evalKeyed?.x).toBe(240); // Keeps its own explicit keyframe world coordinate, NOT 340!
   });
+
+  it('composes multiple autoplay clips on the same node, propagates Frame rotation/opacity on Canvas, and blocks CSS/path injection', async () => {
+    const { applyAnimatedPosesToDocument, evaluateClipAtTime } = await import('../src/engines/animation/evaluator');
+    const { buildCompiledProjectBundle } = await import('../src/engines/codegen/projectBundle');
+
+    const project = createInitialProject('Crucial Hardening & Composition');
+    const page = getActivePage(project);
+
+    const hostFrame: FrameNode = {
+      ...createFrameNode(0),
+      id: 'host-frame',
+      name: 'Host Frame',
+      x: 100,
+      y: 100,
+      width: 200,
+      height: 200,
+      rotation: 0,
+      opacity: 1,
+    };
+    const childBox = {
+      ...createRectNode(1),
+      id: 'child-box',
+      name: 'Child Box',
+      parentId: 'host-frame',
+      // Center of hostFrame is (200, 200). Put childBox center at (250, 200) -> 50px right of center
+      x: 230,
+      y: 180,
+      width: 40,
+      height: 40,
+      rotation: 0,
+      opacity: 0.8,
+    };
+    const maskBase = {
+      ...createRectNode(2),
+      id: 'mask-base',
+      name: 'Mask Base',
+      x: 400,
+      y: 100,
+      width: 120,
+      height: 120,
+      rotation: 0,
+    };
+    const rotatedMasked = {
+      ...createRectNode(3),
+      id: 'rot-masked',
+      name: 'Rotated Masked',
+      x: 410,
+      y: 110,
+      width: 100,
+      height: 100,
+      rotation: 45,
+      clipMaskBaseId: 'mask-base',
+    };
+
+    const master = buildComponentDefinitionFromNodes(
+      [{ ...createRectNode(4), id: 'm-rect', name: 'M Rect', x: 0, y: 0, width: 100, height: 60 }],
+      ['m-rect'],
+      'AnimCard',
+      { id: 'comp-anim', now: '2026-01-01T00:00:00.000Z' },
+    );
+    if (!master) throw new Error('Expected master component');
+    project.components = [master];
+    const animInst = createComponentInstance(master, 600, 120, 'inst-anim');
+
+    page.document.nodes = [hostFrame, childBox, maskBase, rotatedMasked, animInst];
+    project.codeModules = [
+      {
+        id: 'mod-bad-quote',
+        path: "styles/evil.css'; alert(1); //",
+        language: 'css',
+        mapping: 'custom',
+        content: 'body { color: red; }',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'mod-bad-traversal',
+        path: '../../etc/passwd',
+        language: 'css',
+        mapping: 'custom',
+        content: 'body { color: blue; }',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'mod-good',
+        path: 'styles/custom.css',
+        language: 'css',
+        mapping: 'custom',
+        content: '.ok { color: green; }',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ];
+
+    const clipA = {
+      id: 'clip-a',
+      name: 'Rotate & Fade Frame',
+      pageId: page.id,
+      durationMs: 1000,
+      loop: false,
+      autoplay: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      tracks: [
+        {
+          id: 't-rot',
+          targetNodeId: 'host-frame',
+          property: 'rotation' as const,
+          keyframes: [
+            { id: 'kr0', timeMs: 0, value: 0, easing: 'linear' as const },
+            { id: 'kr1', timeMs: 1000, value: 90, easing: 'linear' as const },
+          ],
+        },
+        {
+          id: 't-op',
+          targetNodeId: 'host-frame',
+          property: 'opacity' as const,
+          keyframes: [
+            { id: 'ko0', timeMs: 0, value: 1, easing: 'linear' as const },
+            { id: 'ko1', timeMs: 1000, value: 0.5, easing: 'linear' as const },
+          ],
+        },
+        {
+          id: 't-inst',
+          targetNodeId: 'inst-anim',
+          property: 'y' as const,
+          keyframes: [
+            { id: 'ki0', timeMs: 0, value: 120, easing: 'linear' as const },
+            { id: 'ki1', timeMs: 1000, value: 160, easing: 'linear' as const },
+          ],
+        },
+      ],
+    };
+    const clipB = {
+      id: 'clip-b',
+      name: 'Second Autoplay Clip',
+      pageId: page.id,
+      durationMs: 2000,
+      loop: true,
+      autoplay: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      tracks: [
+        {
+          id: 't-fill-xss',
+          targetNodeId: 'host-frame',
+          property: 'fill' as const,
+          keyframes: [
+            { id: 'kf0', timeMs: 0, value: '#ffffff', easing: 'linear' as const },
+            { id: 'kf1', timeMs: 2000, value: 'red; } body { background: url(https://evil.test) } /*', easing: 'linear' as const },
+          ],
+        },
+      ],
+    };
+    project.animations = [clipA, clipB];
+
+    const compiled = compilePageHtmlCss(project, page);
+    const css = compiled.cssFile.content;
+    const html = compiled.htmlFile.content;
+
+    // 1. Multiple autoplay clips on host-frame compose into ONE comma-separated animation rule
+    expect(css).toMatch(/\[data-folio-id="host-frame"\] \{ animation: folio-kf-clip-a-host-frame [^;]+, folio-kf-clip-b-host-frame [^;]+;/);
+
+    // 2. Malicious CSS injection in keyframe fill is neutralized
+    expect(css).not.toContain('https://evil.test');
+    expect(css).not.toContain('body { background:');
+
+    // 3. Unsafe codeModule paths are rejected in HTML <link> and React imports
+    expect(html).not.toContain('alert(1)');
+    expect(html).not.toContain('etc/passwd');
+    expect(html).toContain('href="../styles/custom.css"');
+
+    // 4. Rotated clipped node gets inverse-rotated SVG mask (<g transform="rotate(-45 50 50)">)
+    expect(html).toContain('rotate(-45 50 50)');
+
+    // 5. React compiler sanitizes module imports and emits data-folio-id wrapper for animated Component Instances
+    const reactFiles = compileReactProjectFiles(project);
+    const reactPage = reactFiles.find((f) => f.path.startsWith('src/pages/') && f.path.endsWith('.tsx'))?.content ?? '';
+    expect(reactPage).not.toContain('alert(1)');
+    expect(reactPage).not.toContain('etc/passwd');
+    expect(reactPage).toContain("import '../../styles/custom.css';");
+    expect(reactPage).toContain('data-folio-id="inst-anim"');
+
+    // 6. Exported React ZIP index.html includes clean margin:0 body reset
+    const cleanForZip = { ...project, codeModules: [project.codeModules![2]] };
+    const reactBundle = buildCompiledProjectBundle(cleanForZip, { target: 'react' });
+    const indexEntry = reactBundle.entries.find((e) => e.path === 'index.html');
+    expect(typeof indexEntry?.content === 'string' && indexEntry.content).toContain('html, body { margin: 0; padding: 0;');
+
+    // 7. Canvas Motion playback propagates Frame 90deg rotation orbit + 0.5x opacity to un-keyed childBox
+    const endPoses = evaluateClipAtTime(clipA, 1000);
+    const evalDoc = applyAnimatedPosesToDocument(page.document, endPoses);
+    const evalChild = evalDoc.nodes.find((n) => n.id === 'child-box')!;
+    // Rotating (250, 200) by +90deg around (200, 200) lands center at (200, 250) -> x=180, y=230
+    expect(evalChild.x).toBe(180);
+    expect(evalChild.y).toBe(230);
+    expect(evalChild.rotation).toBe(90);
+    expect(evalChild.opacity).toBe(0.4); // 0.8 * 0.5
+  });
 });

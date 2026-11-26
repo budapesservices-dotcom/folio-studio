@@ -237,51 +237,105 @@ export function applyAnimatedPosesToDocument(
   if (poseKeys.length === 0) return document;
 
   const nodeById = new Map<string, DesignNode>(document.nodes.map((n) => [n.id, n]));
-  const getAncestorDelta = (node: DesignNode): { dx: number; dy: number } => {
+  const getAncestorChain = (node: DesignNode): DesignNode[] => {
+    const chain: DesignNode[] = [];
     let curParentId = node.parentId;
     const visited = new Set<string>([node.id]);
     while (curParentId && !visited.has(curParentId)) {
       visited.add(curParentId);
       const anc = nodeById.get(curParentId);
       if (!anc) break;
-      const ancPose = poses[anc.id];
-      if (ancPose && (ancPose.x !== undefined || ancPose.y !== undefined)) {
-        return {
-          dx: ancPose.x !== undefined ? ancPose.x - anc.x : 0,
-          dy: ancPose.y !== undefined ? ancPose.y - anc.y : 0,
-        };
-      }
+      chain.push(anc);
       curParentId = anc.parentId;
     }
-    return { dx: 0, dy: 0 };
+    return chain;
   };
 
   let changed = false;
   const nextNodes = document.nodes.map((node) => {
     const pose = poses[node.id];
-    const ancDelta = !pose || pose.x === undefined || pose.y === undefined
-      ? getAncestorDelta(node)
-      : { dx: 0, dy: 0 };
-    if (!pose && ancDelta.dx === 0 && ancDelta.dy === 0) return node;
+    const ancestors = getAncestorChain(node);
+
+    // Nearest animated ancestor provides inherited world displacement & frame rotation/opacity
+    let inheritedDx = 0;
+    let inheritedDy = 0;
+    let inheritedRotDelta = 0;
+    let inheritedOpacityMul = 1;
+    let orbitOriginX = 0;
+    let orbitOriginY = 0;
+    let hasOrbit = false;
+
+    for (const anc of ancestors) {
+      const ancPose = poses[anc.id];
+      if (!ancPose) continue;
+      if (inheritedDx === 0 && ancPose.x !== undefined) {
+        inheritedDx = ancPose.x - anc.x;
+      }
+      if (inheritedDy === 0 && ancPose.y !== undefined) {
+        inheritedDy = ancPose.y - anc.y;
+      }
+      if (!hasOrbit && anc.type !== 'group' && ancPose.rotation !== undefined) {
+        const dRot = ancPose.rotation - (anc.rotation || 0);
+        if (Math.abs(dRot) > 0.001) {
+          inheritedRotDelta = dRot;
+          orbitOriginX = (ancPose.x ?? anc.x) + anc.width / 2;
+          orbitOriginY = (ancPose.y ?? anc.y) + anc.height / 2;
+          hasOrbit = true;
+        }
+      }
+      if (ancPose.opacity !== undefined) {
+        const baseAncOp = anc.opacity > 0.001 ? anc.opacity : 1;
+        inheritedOpacityMul *= clamp(ancPose.opacity, 0, 1) / baseAncOp;
+      }
+    }
+
+    const hasInheritedTransform =
+      inheritedDx !== 0 || inheritedDy !== 0 || hasOrbit || Math.abs(inheritedOpacityMul - 1) > 0.001;
+    if (!pose && !hasInheritedTransform) return node;
     changed = true;
 
-    const baseX = pose?.x !== undefined ? pose.x : roundTo2(node.x + ancDelta.dx);
-    const baseY = pose?.y !== undefined ? pose.y : roundTo2(node.y + ancDelta.dy);
+    let baseX = pose?.x !== undefined ? pose.x : roundTo2(node.x + inheritedDx);
+    let baseY = pose?.y !== undefined ? pose.y : roundTo2(node.y + inheritedDy);
     const baseWidth = pose?.width !== undefined ? Math.max(1, roundTo2(pose.width)) : node.width;
     const baseHeight = pose?.height !== undefined ? Math.max(1, roundTo2(pose.height)) : node.height;
+
+    // Orbit un-keyed child center around animated rotated Frame parent's center to match CSS DOM nesting
+    if (hasOrbit && pose?.x === undefined && pose?.y === undefined) {
+      const childCx = baseX + baseWidth / 2;
+      const childCy = baseY + baseHeight / 2;
+      const rad = (inheritedRotDelta * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const relX = childCx - orbitOriginX;
+      const relY = childCy - orbitOriginY;
+      const rotatedCx = orbitOriginX + relX * cos - relY * sin;
+      const rotatedCy = orbitOriginY + relX * sin + relY * cos;
+      baseX = roundTo2(rotatedCx - baseWidth / 2);
+      baseY = roundTo2(rotatedCy - baseHeight / 2);
+    }
+
     const scale = pose?.scale ?? 1;
     const scaledWidth = scale !== 1 ? Math.max(1, roundTo2(baseWidth * scale)) : baseWidth;
     const scaledHeight = scale !== 1 ? Math.max(1, roundTo2(baseHeight * scale)) : baseHeight;
     const centeredX = scale !== 1 ? roundTo2(baseX + (baseWidth - scaledWidth) / 2) : baseX;
     const centeredY = scale !== 1 ? roundTo2(baseY + (baseHeight - scaledHeight) / 2) : baseY;
 
+    const effectiveRotation =
+      pose?.rotation !== undefined
+        ? pose.rotation
+        : roundTo2((node.rotation || 0) + (hasOrbit ? inheritedRotDelta : 0));
+    const effectiveOpacity =
+      pose?.opacity !== undefined
+        ? clamp(pose.opacity, 0, 1)
+        : roundTo2(clamp(node.opacity * inheritedOpacityMul, 0, 1));
+
     const basePatch = {
       x: centeredX,
       y: centeredY,
       width: scaledWidth,
       height: scaledHeight,
-      rotation: pose?.rotation ?? node.rotation,
-      opacity: pose?.opacity !== undefined ? clamp(pose.opacity, 0, 1) : node.opacity,
+      rotation: effectiveRotation,
+      opacity: effectiveOpacity,
     };
 
     let nextNode: DesignNode =

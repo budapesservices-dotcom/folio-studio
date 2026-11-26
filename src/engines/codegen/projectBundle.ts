@@ -95,6 +95,7 @@ function buildReactScaffoldEntries(project: FolioProject, packageSlug: string): 
           `    <link rel="stylesheet" href="${escapeAttr(googleFontsUrl)}" />`,
         ]
       : []),
+    '    <style>*, *::before, *::after { box-sizing: border-box; } html, body { margin: 0; padding: 0; min-height: 100%; overflow-x: hidden; }</style>',
     '  </head>',
     '  <body>',
     '    <div id="root"></div>',

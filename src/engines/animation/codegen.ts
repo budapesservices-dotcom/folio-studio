@@ -8,6 +8,7 @@ import type {
 } from '../../core/document/types';
 import { evaluateTrackAtTime, sortKeyframes } from './evaluator';
 import { toCssTimingFunction } from './easing';
+import { sanitizeCssValue } from '../codegen/sanitize';
 
 function slugifyMotionId(input: string): string {
   const slug = input
@@ -102,6 +103,12 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
     const p = nodesById.get(node.parentId);
     return p && p.onCanvas !== false ? p : null;
   };
+
+  // Aggregate autoplay animations per node so multiple autoplay clips targeting the
+  // same node compose via comma-separated CSS `animation:` instead of overwriting each other.
+  const autoplayWrapperSpecs = new Map<string, string[]>();
+  const autoplaySvgPathSpecs = new Map<string, string[]>();
+  const autoplaySvgPolySpecs = new Map<string, string[]>();
 
   for (const clip of clips) {
     const tracksByNode = new Map<string, AnimationTrack[]>();
@@ -313,24 +320,26 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
           } else if (track.property === 'radius' && node.type !== 'ellipse' && !isPathNode) {
             declarations.push(`border-radius: ${Math.max(0, roundCssNum(Number(val)))}px;`);
           } else if (track.property === 'fill') {
+            const safeColor = sanitizeCssValue(String(val), 'transparent');
             if (isPathNode) {
-              svgPathDecls.push(`fill: ${String(val)};`);
+              svgPathDecls.push(`fill: ${safeColor};`);
             } else if (node.type === 'text') {
-              declarations.push(`color: ${String(val)};`);
+              declarations.push(`color: ${safeColor};`);
             } else {
               if (hasStaticMultiFill && trackValuesVary(track)) {
                 declarations.push('background-image: none;');
               }
-              declarations.push(`background-color: ${String(val)};`);
+              declarations.push(`background-color: ${safeColor};`);
             }
           } else if (track.property === 'stroke') {
+            const safeStroke = sanitizeCssValue(String(val), 'transparent');
             if (isPathNode) {
-              svgPathDecls.push(`stroke: ${String(val)};`);
+              svgPathDecls.push(`stroke: ${safeStroke};`);
               if (pathHasArrows) {
-                svgPolyDecls.push(`fill: ${String(val)};`);
+                svgPolyDecls.push(`fill: ${safeStroke};`);
               }
             } else {
-              declarations.push(`border-color: ${String(val)};`);
+              declarations.push(`border-color: ${safeStroke};`);
             }
           } else if (track.property === 'strokeWidth') {
             const sw = Math.max(0, roundCssNum(Number(val)));
@@ -431,11 +440,14 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       lines.push('}');
 
       const attrSelector = `[data-folio-id="${escapeAttrValue(nodeId)}"]`;
-      const selectors = clip.autoplay
-        ? [`${attrSelector}`, `.${playClass} ${attrSelector}`, `${attrSelector}.${playClass}`]
-        : [`.${playClass} ${attrSelector}`, `${attrSelector}.${playClass}`];
+      const animSpec = `${kfName} ${clip.durationMs}ms ${dominantEasing} ${iteration} ${fillMode}`;
+      if (clip.autoplay) {
+        const list = autoplayWrapperSpecs.get(nodeId) ?? [];
+        list.push(animSpec);
+        autoplayWrapperSpecs.set(nodeId, list);
+      }
       lines.push(
-        `${selectors.join(', ')} { animation: ${kfName} ${clip.durationMs}ms ${dominantEasing} ${iteration} ${fillMode}; will-change: transform, opacity; }`,
+        `.${playClass} ${attrSelector}, ${attrSelector}.${playClass} { animation: ${animSpec}; will-change: transform, opacity; }`,
       );
       lines.push(
         `.${playClass}--reverse ${attrSelector}, ${attrSelector}.${playClass}--reverse { animation-direction: reverse; }`,
@@ -450,14 +462,17 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       if (svgPathKeyframeLines.length > 0) {
         const svgKfName = `${kfName}--svg`;
         const pathSel = `${attrSelector} > svg path`;
-        const svgSelectors = clip.autoplay
-          ? [pathSel, `.${playClass} ${pathSel}`, `${attrSelector}.${playClass} > svg path`]
-          : [`.${playClass} ${pathSel}`, `${attrSelector}.${playClass} > svg path`];
+        const svgAnimSpec = `${svgKfName} ${clip.durationMs}ms ${dominantEasing} ${iteration} ${fillMode}`;
+        if (clip.autoplay) {
+          const list = autoplaySvgPathSpecs.get(nodeId) ?? [];
+          list.push(svgAnimSpec);
+          autoplaySvgPathSpecs.set(nodeId, list);
+        }
         lines.push(`@keyframes ${svgKfName} {`);
         lines.push(...svgPathKeyframeLines);
         lines.push('}');
         lines.push(
-          `${svgSelectors.join(', ')} { animation: ${svgKfName} ${clip.durationMs}ms ${dominantEasing} ${iteration} ${fillMode}; }`,
+          `.${playClass} ${pathSel}, ${attrSelector}.${playClass} > svg path { animation: ${svgAnimSpec}; }`,
         );
         lines.push(
           `.${playClass}--reverse ${pathSel}, ${attrSelector}.${playClass}--reverse > svg path { animation-direction: reverse; }`,
@@ -473,14 +488,17 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       if (svgPolygonKeyframeLines.length > 0) {
         const polyKfName = `${kfName}--poly`;
         const polySel = `${attrSelector} > svg polygon`;
-        const polySelectors = clip.autoplay
-          ? [polySel, `.${playClass} ${polySel}`, `${attrSelector}.${playClass} > svg polygon`]
-          : [`.${playClass} ${polySel}`, `${attrSelector}.${playClass} > svg polygon`];
+        const polyAnimSpec = `${polyKfName} ${clip.durationMs}ms ${dominantEasing} ${iteration} ${fillMode}`;
+        if (clip.autoplay) {
+          const list = autoplaySvgPolySpecs.get(nodeId) ?? [];
+          list.push(polyAnimSpec);
+          autoplaySvgPolySpecs.set(nodeId, list);
+        }
         lines.push(`@keyframes ${polyKfName} {`);
         lines.push(...svgPolygonKeyframeLines);
         lines.push('}');
         lines.push(
-          `${polySelectors.join(', ')} { animation: ${polyKfName} ${clip.durationMs}ms ${dominantEasing} ${iteration} ${fillMode}; }`,
+          `.${playClass} ${polySel}, ${attrSelector}.${playClass} > svg polygon { animation: ${polyAnimSpec}; }`,
         );
         lines.push(
           `.${playClass}--reverse ${polySel}, ${attrSelector}.${playClass}--reverse > svg polygon { animation-direction: reverse; }`,
@@ -493,6 +511,21 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
         );
       }
     }
+  }
+
+  // Emit composed autoplay rules before media queries so explicit `.folio-anim-play-*`
+  // trigger classes (higher specificity) still override cleanly when triggered by Node Logic.
+  for (const [nodeId, specs] of autoplayWrapperSpecs.entries()) {
+    const attrSelector = `[data-folio-id="${escapeAttrValue(nodeId)}"]`;
+    lines.push(`${attrSelector} { animation: ${specs.join(', ')}; will-change: transform, opacity; }`);
+  }
+  for (const [nodeId, specs] of autoplaySvgPathSpecs.entries()) {
+    const attrSelector = `[data-folio-id="${escapeAttrValue(nodeId)}"]`;
+    lines.push(`${attrSelector} > svg path { animation: ${specs.join(', ')}; }`);
+  }
+  for (const [nodeId, specs] of autoplaySvgPolySpecs.entries()) {
+    const attrSelector = `[data-folio-id="${escapeAttrValue(nodeId)}"]`;
+    lines.push(`${attrSelector} > svg polygon { animation: ${specs.join(', ')}; }`);
   }
 
   lines.push('@media (prefers-reduced-motion: reduce) {');

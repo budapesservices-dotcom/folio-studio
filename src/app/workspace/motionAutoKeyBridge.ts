@@ -27,8 +27,15 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
   } = options;
 
   const executeMainToolOperations = (operations: readonly ValidatedToolOperation[]) => {
-    if (!motion.motionOpen || !motion.autoKeyEnabled || motion.isPlaying) {
+    if (!motion.motionOpen || !motion.autoKeyEnabled) {
+      if (motion.motionOpen && motion.isPlaying) {
+        motion.pause();
+      }
       return mainToolOperationExecutor.executeBatch(operations);
+    }
+
+    if (motion.isPlaying) {
+      motion.pause();
     }
 
     if (motion.playheadMs > 0) {
@@ -78,9 +85,11 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
       activeEditorId === 'main'
       && motion.motionOpen
       && motion.autoKeyEnabled
-      && !motion.isPlaying
       && inspectorSelectedNode
     ) {
+      if (motion.isPlaying) {
+        motion.pause();
+      }
       const safePatch = { ...patch };
       if ('width' in patch) {
         const nextW = Number(patch.width);
@@ -114,11 +123,13 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
       activeEditorId === 'main'
       && motion.motionOpen
       && motion.autoKeyEnabled
-      && !motion.isPlaying
       && inspectorSelectedNode
       && inspectorSelectedNode.type !== 'component-instance'
       && inspectorSelectedNode.type !== 'group'
     ) {
+      if (motion.isPlaying) {
+        motion.pause();
+      }
       const candidate = {
         ...inspectorSelectedNode,
         style: { ...inspectorSelectedNode.style, ...patch },
