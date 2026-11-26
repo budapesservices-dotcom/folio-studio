@@ -20,7 +20,7 @@ import type {
 } from '../core/document/types';
 import { PANEL_RESIZE_CONSTRAINTS, type ResizablePanelId } from './panelResize';
 import type { EditorTarget } from './editorContext';
-import type { CanvasToolId } from '../core/tools/operationContract';
+import type { CanvasToolId, ShapeColorBlendMode } from '../core/tools/operationContract';
 import type { StudioVectorActions } from './workspace/inspectorVectorHelpers';
 import {
   InspectorAccordionSection,
@@ -128,6 +128,8 @@ export interface InspectorPanelProps {
   ) => void;
   onDeleteQuickInteraction?: (entry: QuickInteractionEntry) => void;
   onOpenInteractionInNodeGraph?: (graphId: string, nodeIds: readonly string[]) => void;
+  colorBlendMode?: ShapeColorBlendMode;
+  onChangeColorBlendMode?: (mode: ShapeColorBlendMode) => void;
   studioActions?: StudioVectorActions;
 }
 
@@ -616,6 +618,8 @@ export function InspectorPanel(props: InspectorPanelProps) {
           activeEditorId,
           selectedNodes: safeSelectedNodes,
           effectiveSelectedCount,
+          colorBlendMode: props.colorBlendMode,
+          onChangeColorBlendMode: props.onChangeColorBlendMode,
           onDuplicateSelection,
           onCopySelection,
           onConvertToPath,

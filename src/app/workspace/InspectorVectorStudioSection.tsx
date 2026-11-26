@@ -792,6 +792,18 @@ export function InspectorVectorShapingSection({
             <ShapingGlyph op="builder" />
             <span>Interactive Shape Builder (Shift+M)</span>
           </button>
+          {studioActions.onCombineSelection && (
+            <button
+              type="button"
+              class="inspector-studio-secondary-btn"
+              disabled={selectedNodes.length < 2}
+              title="Combine into 1 Object — unify all selected objects into a single object"
+              onClick={studioActions.onCombineSelection}
+            >
+              <ShapingGlyph op="unite" />
+              <span>Combine into 1 Object</span>
+            </button>
+          )}
         </>
       )}
 

@@ -1,5 +1,6 @@
 import type { JSX } from 'preact';
 import type { ComponentDefinition, DesignNode } from '../../core/document/types';
+import type { ShapeColorBlendMode } from '../../core/document/colorBlend';
 import type { EditorTarget } from '../editorContext';
 import type { StudioVectorActions } from './inspectorVectorHelpers';
 import {
@@ -11,6 +12,8 @@ export interface InspectorMultiSelectionViewProps {
   activeEditorId: EditorTarget;
   selectedNodes: readonly DesignNode[];
   effectiveSelectedCount: number;
+  colorBlendMode?: ShapeColorBlendMode;
+  onChangeColorBlendMode?: (mode: ShapeColorBlendMode) => void;
   onDuplicateSelection: () => void;
   onCopySelection: () => void;
   onConvertToPath: (target: EditorTarget) => void;
@@ -22,6 +25,8 @@ export function InspectorMultiSelectionView({
   activeEditorId,
   selectedNodes,
   effectiveSelectedCount,
+  colorBlendMode = 'linear',
+  onChangeColorBlendMode,
   onDuplicateSelection,
   onCopySelection,
   onConvertToPath,
@@ -58,6 +63,17 @@ export function InspectorMultiSelectionView({
             </>
           )}
         </div>
+        {studioActions?.onCombineSelection && (
+          <button
+            type="button"
+            class="inspector-combine-btn"
+            data-testid="inspector-combine-btn"
+            onClick={studioActions.onCombineSelection}
+            title="Unify all selected objects into 1 single object"
+          >
+            Combine into 1 Object ({effectiveSelectedCount})
+          </button>
+        )}
         {(hasConvertibleInMulti || hasPathsInMulti) && (
           <div class="inspector-quick-row cols-2">
             {hasConvertibleInMulti && (
@@ -82,6 +98,29 @@ export function InspectorMultiSelectionView({
           />
           <section class="property-section">
             <div class="section-title">Pathfinder &amp; Arrange</div>
+            {onChangeColorBlendMode && (
+              <div class="folio-prop-header-row" style={{ marginBottom: '6px' }}>
+                <span class="folio-mini-label">Color Blend</span>
+                <div class="folio-mini-seg" role="group" aria-label="Color blend mode for merge">
+                  {([
+                    { id: 'linear', label: 'Linear' },
+                    { id: 'hard', label: 'Sharp' },
+                    { id: 'single', label: 'Solid' },
+                  ] as const).map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      data-testid={`inspector-color-blend-${mode.id}`}
+                      class={`folio-mini-seg-btn${colorBlendMode === mode.id ? ' is-active' : ''}`}
+                      aria-pressed={colorBlendMode === mode.id}
+                      onClick={() => onChangeColorBlendMode(mode.id)}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div class="inspector-quick-row cols-4">
               <button type="button" class="inspector-mini-btn" onClick={() => studioActions.onBooleanOp('unite')}>
                 Unite

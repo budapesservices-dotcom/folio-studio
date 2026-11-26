@@ -19,6 +19,7 @@ export interface GlobalToolbarMenuActions {
   canMask: boolean;
   canUnmask: boolean;
   canPathfinder: boolean;
+  canCombine?: boolean;
   canConvertToPath: boolean;
   activeToolId: CanvasToolId;
   activeThemeId: string;
@@ -32,6 +33,7 @@ export interface GlobalToolbarMenuActions {
   onSelectAll: () => void;
   onGroup: () => void;
   onUngroup: () => void;
+  onCombine?: () => void;
   onCreateMask: () => void;
   onRemoveMask: () => void;
   onDelete: () => void;
@@ -358,6 +360,17 @@ export function GlobalToolbar({
                     <span>Group Layers</span>
                     <kbd class="global-menu-shortcut">Ctrl+G</kbd>
                   </button>
+                  {menuActions.onCombine && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="edit-combine-objects-btn"
+                      disabled={isHydrating || !menuActions.canCombine}
+                      onClick={() => runMenuAction(menuActions.onCombine!)}
+                    >
+                      Combine into 1 Object
+                    </button>
+                  )}
                   <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.canUngroup} onClick={() => runMenuAction(menuActions.onUngroup)}>
                     <span>Ungroup Layers</span>
                     <kbd class="global-menu-shortcut">Ctrl+Shift+G</kbd>
@@ -462,6 +475,17 @@ export function GlobalToolbar({
                     </button>
                   ))}
                   <div class="global-menu-divider" role="separator" />
+                  {menuActions.onCombine && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="tools-combine-objects-btn"
+                      disabled={isHydrating || !menuActions.canCombine}
+                      onClick={() => runMenuAction(menuActions.onCombine!)}
+                    >
+                      Combine into 1 Object
+                    </button>
+                  )}
                   <button type="button" role="menuitem" disabled={isHydrating || !menuActions.canPathfinder} onClick={() => runMenuAction(() => menuActions.onPathfinder('unite'))}>
                     Pathfinder: Unite
                   </button>

@@ -6,7 +6,12 @@ import type {
   FolioProject,
   PathNode,
 } from '../document/types';
-import type { PathfinderOperation, PlanarArrangement, PlanarFace } from '../document/vector';
+import type {
+  PathfinderOperation,
+  PathfinderOperationOptions,
+  PlanarArrangement,
+  PlanarFace,
+} from '../document/vector';
 import type { A11yAuditReport } from '../../engines/codegen/a11yAudit';
 
 export type ComputeKernelBackend = 'ts-default' | 'wasm' | 'worker';
@@ -54,11 +59,13 @@ export interface VectorGeometryKernel {
     nodes: readonly DesignNode[],
     operation: PathfinderOperation,
     resultId: string,
+    options?: PathfinderOperationOptions,
   ): PathNode | null;
   booleanOp(
     nodes: readonly DesignNode[],
     operation: PathfinderOperation,
     resultId?: string,
+    options?: PathfinderOperationOptions,
   ): PathNode | null;
   decomposeForShapeBuilder(nodes: readonly DesignNode[]): PlanarArrangement;
   hitTestFace(arrangement: PlanarArrangement, x: number, y: number): PlanarFace | null;

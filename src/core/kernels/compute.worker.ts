@@ -23,6 +23,7 @@ import {
   decomposeNodesForShapeBuilder,
   type PathfinderOperation,
   type PlanarArrangement,
+  type ShapeColorBlendMode,
 } from '../document/vector';
 import { computeAutoLayoutNodes } from '../../engines/layout/autoLayout';
 import { auditPageAccessibility, type A11yAuditReport } from '../../engines/codegen/a11yAudit';
@@ -59,6 +60,7 @@ export type ComputeWorkerRequest =
       readonly nodes: readonly DesignNode[];
       readonly operation: PathfinderOperation;
       readonly resultId: string;
+      readonly colorBlendMode?: ShapeColorBlendMode;
     }
   | {
       readonly id: number;
@@ -152,7 +154,12 @@ export function handleComputeWorkerMessage(request: ComputeWorkerRequest): Compu
         };
       }
       case 'vector.pathfinder': {
-        const node = applyPathfinderOperation(request.nodes, request.operation, request.resultId);
+        const node = applyPathfinderOperation(
+          request.nodes,
+          request.operation,
+          request.resultId,
+          request.colorBlendMode ? { colorBlendMode: request.colorBlendMode } : undefined,
+        );
         return {
           id: request.id,
           ok: true,

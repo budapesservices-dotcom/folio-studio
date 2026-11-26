@@ -7,6 +7,7 @@ import type {
   CanvasToolOptions,
   PaintBucketGapTolerance,
   PaintBucketTarget,
+  ShapeColorBlendMode,
   ToolWorkspaceScope,
   VectorBrushCap,
   VectorBrushPreset,
@@ -248,6 +249,7 @@ export function ToolOptionsBar({
 }: ToolOptionsBarProps) {
   const booleanCandidates = selectedNodes.filter(isBooleanCandidate);
   const canPathfinder = booleanCandidates.length >= 2;
+  const canCombine = selectedNodes.length >= 2;
   const convertibleNodes = selectedNodes.filter(
     (node) => node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame',
   );
@@ -255,11 +257,13 @@ export function ToolOptionsBar({
   const firstPath = pathNodes[0] ?? null;
   const hasSelection = selectedNodes.length > 0;
   const hasToolControls = OPTION_TOOLS.has(toolId);
+  const activeColorBlendMode: ShapeColorBlendMode = toolOptions.colorBlendMode ?? 'linear';
 
   const showBar =
     workspace === 'component' ||
     hasToolControls ||
     canPathfinder ||
+    canCombine ||
     pathNodes.length > 0;
 
   if (!showBar) return null;
@@ -371,6 +375,62 @@ export function ToolOptionsBar({
               <span>Builder</span>
             </button>
           )}
+        </div>
+      )}
+
+      {(workspace === 'component' || canPathfinder) && (
+        <div class="studio-options-group" role="group" aria-label="Combine and color blend options">
+          {studioActions?.onCombineSelection && (
+            <button
+              type="button"
+              class="studio-opt-btn is-combine-btn"
+              data-testid="toolbar-combine-btn"
+              disabled={!canCombine}
+              onClick={studioActions.onCombineSelection}
+              title="Combine into 1 Object — unify all selected objects into one single object"
+            >
+              <PathfinderIcon op="unite" />
+              <span>Combine</span>
+            </button>
+          )}
+          {toolId !== 'shape-builder' && (
+            <div class="studio-opt-color-blend-group" role="group" aria-label="Color blend mode when merging different-colored shapes">
+              <span class="studio-options-label">Color</span>
+              {([
+                { id: 'linear', label: 'Linear', tip: 'Smooth linear color gradient across merged shapes' },
+                { id: 'hard', label: 'Sharp', tip: 'Crisp hard-edge split between source colors' },
+                { id: 'single', label: 'Solid', tip: 'Single solid fill from base shape' },
+              ] as const).map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  data-testid={`toolbar-color-blend-${mode.id}`}
+                  class={'studio-opt-btn' + (activeColorBlendMode === mode.id ? ' is-active' : '')}
+                  aria-pressed={activeColorBlendMode === mode.id}
+                  title={mode.tip}
+                  onClick={() => onChangeOptions({ colorBlendMode: mode.id })}
+                >
+                  <span>{mode.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!canPathfinder && workspace !== 'component' && canCombine && studioActions?.onCombineSelection && (
+        <div class="studio-options-group" role="group" aria-label="Combine selected objects">
+          <span class="studio-options-label">Selection</span>
+          <button
+            type="button"
+            class="studio-opt-btn is-combine-btn"
+            data-testid="toolbar-combine-btn"
+            onClick={studioActions.onCombineSelection}
+            title="Combine into 1 Object — unify all selected objects into one single object"
+          >
+            <PathfinderIcon op="unite" />
+            <span>Combine into 1 Object</span>
+          </button>
         </div>
       )}
 
@@ -823,7 +883,29 @@ export function ToolOptionsBar({
           )}
 
           {toolId === 'shape-builder' && (
-            <span class="studio-opt-hint">Drag across regions to merge · Hold Alt to punch out regions</span>
+            <div class="studio-opt-drawing-row" data-testid="shape-builder-options">
+              <span class="studio-options-label">Color Blend</span>
+              <div class="studio-opt-color-blend-group" role="group" aria-label="Shape Builder color blend mode">
+                {([
+                  { id: 'linear', label: 'Linear Blend', tip: 'Smooth linear gradient blending source colors together' },
+                  { id: 'hard', label: 'Sharp Split', tip: 'Hard-edge color split keeping both colors crisp without gradient fade' },
+                  { id: 'single', label: 'Single Fill', tip: 'Flatten merged shape to one solid color' },
+                ] as const).map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    data-testid={`shape-builder-blend-${mode.id}`}
+                    class={'studio-opt-btn' + (activeColorBlendMode === mode.id ? ' is-active' : '')}
+                    aria-pressed={activeColorBlendMode === mode.id}
+                    title={mode.tip}
+                    onClick={() => onChangeOptions({ colorBlendMode: mode.id })}
+                  >
+                    <span>{mode.label}</span>
+                  </button>
+                ))}
+              </div>
+              <span class="studio-opt-hint">Drag across regions to merge · Hold Alt to punch out</span>
+            </div>
           )}
           {toolId === 'eyedropper' && (() => {
             const activeColor = toolOptions.brushColor;

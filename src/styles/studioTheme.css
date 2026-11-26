@@ -4278,7 +4278,56 @@ textarea:focus-visible {
   cursor: wait;
 }
 
+/* ─── Multi-Color Blend & Combine Objects Controls ─── */
+.studio-opt-color-blend-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding-left: 6px;
+  margin-left: 2px;
+  border-left: 1px solid var(--border-subtle);
+}
 
+.studio-opt-btn.is-combine-btn {
+  border-color: rgba(139, 124, 246, 0.45);
+  background: rgba(139, 124, 246, 0.14);
+  color: var(--text-primary);
+  font-weight: 600;
+}
 
+.studio-opt-btn.is-combine-btn:hover:not(:disabled) {
+  border-color: var(--accent-bright);
+  background: rgba(139, 124, 246, 0.24);
+}
 
+.inspector-combine-btn {
+  width: 100%;
+  margin-top: 6px;
+  margin-bottom: 6px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(139, 124, 246, 0.5);
+  background: rgba(139, 124, 246, 0.18);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
 
+.inspector-combine-btn:hover {
+  border-color: var(--accent-bright);
+  background: rgba(139, 124, 246, 0.3);
+}
+
+:root[data-studio-theme="light"] .studio-opt-btn.is-combine-btn,
+:root[data-studio-theme="light"] .inspector-combine-btn {
+  background: rgba(109, 93, 211, 0.12);
+  border-color: rgba(109, 93, 211, 0.4);
+  color: #312e81;
+}
+
+:root[data-studio-theme="light"] .studio-opt-btn.is-combine-btn:hover:not(:disabled),
+:root[data-studio-theme="light"] .inspector-combine-btn:hover {
+  background: rgba(109, 93, 211, 0.22);
+}

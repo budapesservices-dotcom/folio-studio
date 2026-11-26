@@ -23,11 +23,11 @@ import type {
 
 export const defaultVectorGeometryKernel: VectorGeometryKernel = {
   backend: 'ts-default',
-  applyPathfinder(nodes, operation, resultId) {
-    return applyPathfinderOperation(nodes, operation, resultId);
+  applyPathfinder(nodes, operation, resultId, options) {
+    return applyPathfinderOperation(nodes, operation, resultId, options);
   },
-  booleanOp(nodes, operation, resultId = 'pathfinder-result') {
-    return applyPathfinderOperation(nodes, operation, resultId);
+  booleanOp(nodes, operation, resultId = 'pathfinder-result', options) {
+    return applyPathfinderOperation(nodes, operation, resultId, options);
   },
   decomposeForShapeBuilder(nodes) {
     return decomposeNodesForShapeBuilder(nodes).arrangement;

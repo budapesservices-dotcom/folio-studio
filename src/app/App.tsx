@@ -570,6 +570,7 @@ export function App() {
     onDuplicate: selectionActions.duplicateSelection,
     onSelectTool: chooseCanvasTool,
     onPathfinder: selectionActions.handlePathfinder,
+    onCombineSelection: selectionActions.handleCombineSelection,
     onConvertToPath: selectionActions.handleConvertToPath,
     onRotate90: selectionActions.handleRotate90,
     onUpdateDesignTokens: designSystem.updateDesignTokens,
@@ -1007,6 +1008,8 @@ export function App() {
         onUpdateQuickInteraction={quickInteractions.updateQuickInteraction}
         onDeleteQuickInteraction={quickInteractions.deleteQuickInteraction}
         onOpenInteractionInNodeGraph={quickInteractions.openInteractionInNodeGraph}
+        colorBlendMode={toolOptions.colorBlendMode}
+        onChangeColorBlendMode={(colorBlendMode) => updateToolOptions({ colorBlendMode })}
         studioActions={activeStudioActions}
       />
 

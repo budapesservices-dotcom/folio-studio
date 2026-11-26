@@ -25,6 +25,7 @@ export interface BuildGlobalToolbarMenuActionsArgs {
   onDuplicate: (target: EditorTarget) => void;
   onSelectTool: (toolId: CanvasToolId, target: EditorTarget) => void;
   onPathfinder: (target: EditorTarget, operation: PathfinderOperation) => void;
+  onCombineSelection?: (target: EditorTarget) => void;
   onConvertToPath: (target: EditorTarget) => void;
   onRotate90: (target: EditorTarget) => void;
   onUpdateDesignTokens: (next: DesignTokenCollection, unbindTokenIds?: string[], description?: string) => void;
@@ -50,6 +51,7 @@ export function buildGlobalToolbarMenuActions({
   onDuplicate,
   onSelectTool,
   onPathfinder,
+  onCombineSelection,
   onConvertToPath,
   onRotate90,
   onUpdateDesignTokens,
@@ -74,6 +76,7 @@ export function buildGlobalToolbarMenuActions({
     canMask: layerCapabilities.canMask,
     canUnmask: layerCapabilities.canUnmask,
     canPathfinder: pathfinderEligibleCount >= 2,
+    canCombine: focusedSelectedNodeIds.length >= 2,
     canConvertToPath: convertibleShapeCount > 0,
     activeToolId,
     activeThemeId: designTokens.activeThemeId,
@@ -92,6 +95,7 @@ export function buildGlobalToolbarMenuActions({
     },
     onGroup: () => focusedCommandClient.groupLayers(layerCapabilities.rootIds),
     onUngroup: () => focusedCommandClient.ungroupLayers(layerCapabilities.rootIds),
+    ...(onCombineSelection ? { onCombine: () => onCombineSelection(activeEditorId) } : {}),
     onCreateMask: () => {
       if (layerCapabilities.rootIds[0]) focusedCommandClient.createClippingMask(layerCapabilities.rootIds[0]);
     },

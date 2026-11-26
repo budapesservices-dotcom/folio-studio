@@ -26,6 +26,7 @@ export interface StudioVectorActions {
   readonly onPathfinder: (operation: PathfinderOperation) => void;
   readonly onBooleanOp: (operation: PathfinderOperation) => void;
   readonly onDividePathfinder: () => void;
+  readonly onCombineSelection?: () => void;
   readonly onOffsetPath: (distancePx: number, keepOriginal: boolean) => void;
   readonly onReversePath: () => void;
   readonly onConvertAllAnchors: (mode: 'smooth' | 'corner') => void;

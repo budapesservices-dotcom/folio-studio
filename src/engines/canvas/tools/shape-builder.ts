@@ -110,17 +110,26 @@ export const shapeBuilderTool: CanvasToolHandler = {
     }
 
     // For merge mode, require at least 1 face (if 2+ faces touched, merges them; if 1 face clicked in merge mode, extracts it cleanly)
+    const colorBlendMode = context.toolOptions?.colorBlendMode ?? 'linear';
     const resultNodes = applyShapeBuilderAction(
       session.candidates,
       session.arrangement,
       touchedFaceIds,
       session.mode,
       createBuilderId,
+      { colorBlendMode },
     );
 
     if (!resultNodes) {
       return { session: null, preventDefault: true };
     }
+
+    const blendLabel =
+      colorBlendMode === 'linear'
+        ? 'Linear color blend'
+        : colorBlendMode === 'hard'
+          ? 'Sharp Split colors'
+          : 'Single fill';
 
     return {
       replaceNodes: {
@@ -132,7 +141,7 @@ export const shapeBuilderTool: CanvasToolHandler = {
       notice:
         session.mode === 'punch'
           ? `Shape Builder punched ${touchedFaceIds.length} region${touchedFaceIds.length === 1 ? '' : 's'}.`
-          : `Shape Builder merged ${touchedFaceIds.length} region${touchedFaceIds.length === 1 ? '' : 's'}.`,
+          : `Shape Builder merged ${touchedFaceIds.length} region${touchedFaceIds.length === 1 ? '' : 's'} (${blendLabel}).`,
       preventDefault: true,
     };
   },

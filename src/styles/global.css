@@ -1542,6 +1542,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 .studio-options-group {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   padding-right: 8px;

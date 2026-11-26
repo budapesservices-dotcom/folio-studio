@@ -6,7 +6,11 @@ import type {
   FolioProject,
   PathNode,
 } from '../document/types';
-import type { PathfinderOperation, PlanarArrangement } from '../document/vector';
+import type {
+  PathfinderOperation,
+  PathfinderOperationOptions,
+  PlanarArrangement,
+} from '../document/vector';
 import type { A11yAuditReport } from '../../engines/codegen/a11yAudit';
 import type { SpatialBoundsEntry, SpatialQueryRect } from './types';
 import type { ComputeWorkerRequest, ComputeWorkerResponse } from './compute.worker';
@@ -164,8 +168,15 @@ export class ComputeWorkerClient {
     nodes: readonly DesignNode[],
     operation: PathfinderOperation,
     resultId: string,
+    options?: PathfinderOperationOptions,
   ): Promise<PathNode | null> {
-    const res = await this.dispatch({ type: 'vector.pathfinder', nodes, operation, resultId });
+    const res = await this.dispatch({
+      type: 'vector.pathfinder',
+      nodes,
+      operation,
+      resultId,
+      ...(options?.colorBlendMode ? { colorBlendMode: options.colorBlendMode } : {}),
+    });
     if (!res.ok) throw new Error(res.error);
     return (res.payload as { node: PathNode | null }).node;
   }

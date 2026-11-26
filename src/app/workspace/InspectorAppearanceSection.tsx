@@ -4,6 +4,10 @@ import {
   type CssLengthUnit,
 } from '../../core/document/cssUnits';
 import {
+  convertLinearGradientTransitionStyle,
+  detectLinearGradientTransitionStyle,
+} from '../../core/document/colorBlend';
+import {
   createDefaultLinearGradientFill,
   createDefaultRadialGradientFill,
   formatColorWithAlpha,
@@ -415,31 +419,71 @@ export function InspectorAppearanceSection({
             </>
           ) : activeGradient ? (
             <div class="folio-gradient-box">
-              {activeGradient.type === 'linear-gradient' && (
-                <NumericUnitInput
-                  label="Angle"
-                  ariaLabel="Gradient angle"
-                  value={Math.round(activeGradient.angle)}
-                  unit="deg"
-                  units={['deg']}
-                  min={0}
-                  max={360}
-                  step={15}
-                  presets={[
-                    { label: '0 deg', value: 0, unit: 'deg' },
-                    { label: '90 deg', value: 90, unit: 'deg' },
-                    { label: '135 deg', value: 135, unit: 'deg' },
-                    { label: '180 deg', value: 180, unit: 'deg' },
-                  ]}
-                  onChange={(res) => {
-                    updateGradient((g) =>
-                      g.type === 'linear-gradient'
-                        ? { ...g, angle: ((res.value % 360) + 360) % 360 }
-                        : g,
-                    );
-                  }}
-                />
-              )}
+              {activeGradient.type === 'linear-gradient' && (() => {
+                const transitionStyle = detectLinearGradientTransitionStyle(activeGradient.stops);
+                return (
+                  <>
+                    <div class="folio-prop-header-row">
+                      <span class="folio-mini-label">Color Transition</span>
+                      <div class="folio-mini-seg" role="group" aria-label="Gradient transition style">
+                        <button
+                          type="button"
+                          data-testid="gradient-transition-linear"
+                          class={`folio-mini-seg-btn${transitionStyle === 'linear' ? ' is-active' : ''}`}
+                          aria-pressed={transitionStyle === 'linear'}
+                          onClick={() => {
+                            updateGradient((g) =>
+                              g.type === 'linear-gradient'
+                                ? convertLinearGradientTransitionStyle(g, 'linear')
+                                : g,
+                            );
+                          }}
+                        >
+                          Linear
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="gradient-transition-hard"
+                          class={`folio-mini-seg-btn${transitionStyle === 'hard' ? ' is-active' : ''}`}
+                          aria-pressed={transitionStyle === 'hard'}
+                          onClick={() => {
+                            updateGradient((g) =>
+                              g.type === 'linear-gradient'
+                                ? convertLinearGradientTransitionStyle(g, 'hard')
+                                : g,
+                            );
+                          }}
+                        >
+                          Sharp Split
+                        </button>
+                      </div>
+                    </div>
+                    <NumericUnitInput
+                      label="Angle"
+                      ariaLabel="Gradient angle"
+                      value={Math.round(activeGradient.angle)}
+                      unit="deg"
+                      units={['deg']}
+                      min={0}
+                      max={360}
+                      step={15}
+                      presets={[
+                        { label: '0 deg', value: 0, unit: 'deg' },
+                        { label: '90 deg', value: 90, unit: 'deg' },
+                        { label: '135 deg', value: 135, unit: 'deg' },
+                        { label: '180 deg', value: 180, unit: 'deg' },
+                      ]}
+                      onChange={(res) => {
+                        updateGradient((g) =>
+                          g.type === 'linear-gradient'
+                            ? { ...g, angle: ((res.value % 360) + 360) % 360 }
+                            : g,
+                        );
+                      }}
+                    />
+                  </>
+                );
+              })()}
               <div class="folio-gradient-stops">
                 {activeGradient.stops.map((stop, idx) => (
                   <div key={`stop-${idx}`} class="folio-gradient-stop-row">

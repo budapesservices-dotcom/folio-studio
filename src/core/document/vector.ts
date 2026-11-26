@@ -15,17 +15,22 @@ import type {
   VectorSubpath,
 } from './types';
 import {
+  applyMergedColorBlendToPathNode,
+  type ShapeColorBlendMode,
+} from './colorBlend';
+import {
   assembleFacesToContours,
   buildPlanarArrangement,
   hitTestPlanarFace,
   hitTestPlanarFacesAlongStroke,
+  type AssembledContour,
   type PlanarArrangement,
   type PlanarFace,
   type PlanarPoint,
   type PlanarShapeInput,
 } from './planarBoolean';
 
-export type { PlanarArrangement, PlanarFace, PlanarPoint };
+export type { PlanarArrangement, PlanarFace, PlanarPoint, ShapeColorBlendMode };
 export { hitTestPlanarFace, hitTestPlanarFacesAlongStroke };
 
 export interface Point2D {
@@ -1205,6 +1210,7 @@ function getBaseStyle(node: DesignNode): PathNode['style'] {
   if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame') {
     return {
       fill: node.style.fill,
+      ...(node.style.fills ? { fills: node.style.fills } : {}),
       stroke: node.style.stroke,
       strokeWidth: node.style.strokeWidth,
       strokeLinecap: 'round',
@@ -1222,6 +1228,66 @@ function getBaseStyle(node: DesignNode): PathNode['style'] {
   };
 }
 
+function isPointInsidePolygonRing(pt: PlanarPoint, ring: readonly PlanarPoint[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i].x;
+    const yi = ring[i].y;
+    const xj = ring[j].x;
+    const yj = ring[j].y;
+    const intersects = (yi > pt.y) !== (yj > pt.y)
+      && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi + EPS) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function polygonAbsArea(ring: readonly PlanarPoint[]): number {
+  if (ring.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < ring.length; i += 1) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(sum) * 0.5;
+}
+
+/**
+ * Removes redundant non-hole contours that lie completely inside a strictly larger non-hole
+ * contour (unless separated by a real hole contour), so uniting/combining nested shapes never
+ * punches unintended evenodd holes or leaves phantom internal seams.
+ */
+function pruneAbsorbedNestedOuterContours(contours: readonly AssembledContour[]): AssembledContour[] {
+  if (contours.length <= 1) return [...contours];
+  const outerEntries = contours
+    .filter((c) => !c.isHole && c.points.length >= 3)
+    .map((contour) => ({ contour, area: polygonAbsArea(contour.points) }));
+  const holeContours = contours.filter((c) => c.isHole && c.points.length >= 3);
+  if (outerEntries.length <= 1) return [...contours];
+
+  const areaByContour = new Map<AssembledContour, number>();
+  for (const entry of outerEntries) areaByContour.set(entry.contour, entry.area);
+
+  return contours.filter((contour) => {
+    if (contour.isHole || contour.points.length < 3) return true;
+    const selfArea = areaByContour.get(contour) ?? 0;
+    const sample = contour.points[0];
+    const containingOuters = outerEntries.filter(
+      (other) =>
+        other.contour !== contour
+        && other.area > selfArea + EPS
+        && isPointInsidePolygonRing(sample, other.contour.points),
+    );
+    if (containingOuters.length === 0) return true;
+    const containingHoles = holeContours.filter(
+      (hole) => isPointInsidePolygonRing(sample, hole.points),
+    );
+    // Keep only if this island lives inside a genuine hole (donut island); otherwise it's absorbed!
+    return containingHoles.length >= containingOuters.length;
+  });
+}
+
 function buildPathNodeFromFaces(
   faces: readonly PlanarFace[],
   templateNode: DesignNode,
@@ -1229,8 +1295,12 @@ function buildPathNodeFromFaces(
   name: string,
   fillRule: 'nonzero' | 'evenodd' = 'evenodd',
 ): PathNode | null {
-  const contours = assembleFacesToContours(faces);
+  const rawContours = assembleFacesToContours(faces);
+  const contours = fillRule === 'nonzero'
+    ? pruneAbsorbedNestedOuterContours(rawContours)
+    : rawContours;
   if (contours.length === 0) return null;
+  const hasRealHole = contours.some((contour) => contour.isHole);
   const anchorLoops = contours
     .map((contour) => polygonToAnchors(contour.points))
     .filter((pts) => pts.length >= 3);
@@ -1260,7 +1330,7 @@ function buildPathNodeFromFaces(
     pathKind: 'boolean',
     style: {
       ...baseStyle,
-      fillRule: subpaths.length > 0 ? 'evenodd' : fillRule,
+      fillRule: hasRealHole ? 'evenodd' : fillRule,
     },
   });
 }
@@ -1272,10 +1342,15 @@ function buildPathNodeFromFaces(
  * - `intersect`: computes the exact overlapping geometric region (works on Stars & concave paths!).
  * - `exclude`: computes the crisp symmetric XOR region (`odd` parity faces).
  */
+export interface PathfinderOperationOptions {
+  readonly colorBlendMode?: ShapeColorBlendMode;
+}
+
 export function applyPathfinderOperation(
   nodes: readonly DesignNode[],
   operation: PathfinderOperation,
   newId: string,
+  options?: PathfinderOperationOptions,
 ): PathNode | null {
   const vectorNodes = nodes
     .map((node) => ({ node, world: toWorldPath(node) }))
@@ -1317,13 +1392,135 @@ export function applyPathfinderOperation(
     selectedFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length % 2 === 1);
   }
 
-  return buildPathNodeFromFaces(
+  const built = buildPathNodeFromFaces(
     selectedFaces,
     styleTemplate,
     newId,
     opLabels[operation],
     operation === 'unite' ? 'nonzero' : 'evenodd',
   );
+  if (!built) return null;
+
+  const colorBlendMode = options?.colorBlendMode ?? 'linear';
+  if (operation === 'unite' && colorBlendMode !== 'single') {
+    return applyMergedColorBlendToPathNode(
+      built,
+      vectorNodes.map((item) => item.node),
+      colorBlendMode,
+    );
+  }
+  return built;
+}
+
+export interface CombineNodesOptions {
+  readonly colorBlendMode?: ShapeColorBlendMode;
+  readonly name?: string;
+}
+
+/**
+ * Combines 2+ vector/shape nodes (overlapping AND/OR separated, closed OR open)
+ * into a single unified PathNode with optional multi-color blending (Linear or Sharp Split).
+ */
+export function combineNodesIntoSingleObject(
+  nodes: readonly DesignNode[],
+  newId: string,
+  options?: CombineNodesOptions,
+): PathNode | null {
+  const vectorItems = nodes
+    .map((node) => ({ node, world: toWorldPath(node) }))
+    .filter((item): item is { node: DesignNode; world: NonNullable<ReturnType<typeof toWorldPath>> } => item.world !== null);
+
+  if (vectorItems.length < 2) return null;
+
+  const closedItems = vectorItems.filter((item) => item.world.closed);
+  const openItems = vectorItems.filter((item) => !item.world.closed);
+
+  const subpaths: VectorSubpath[] = [];
+  let hasRealHole = false;
+
+  if (closedItems.length >= 2) {
+    const arrangement = buildPlanarArrangement(closedItems.map((item) => worldPathToPlanarShape(item.world)));
+    const allFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length >= 1);
+    const contours = pruneAbsorbedNestedOuterContours(assembleFacesToContours(allFaces));
+    hasRealHole = contours.some((contour) => contour.isHole);
+    for (const contour of contours) {
+      const anchors = polygonToAnchors(contour.points);
+      if (anchors.length >= 3) {
+        subpaths.push({ points: anchors, closed: true });
+      }
+    }
+  } else if (closedItems.length === 1) {
+    const single = closedItems[0].world;
+    if (single.points.length >= 2) {
+      subpaths.push({ points: single.points, closed: true });
+    }
+    if (single.subpaths) {
+      for (const sp of single.subpaths) {
+        if (sp.points.length >= 2) {
+          subpaths.push({ points: sp.points, closed: sp.closed });
+        }
+      }
+    }
+  }
+
+  for (const openItem of openItems) {
+    if (openItem.world.points.length >= 2) {
+      subpaths.push({ points: openItem.world.points, closed: false });
+    }
+    if (openItem.world.subpaths) {
+      for (const sp of openItem.world.subpaths) {
+        if (sp.points.length >= 2) {
+          subpaths.push({ points: sp.points, closed: sp.closed });
+        }
+      }
+    }
+  }
+
+  if (subpaths.length === 0) return null;
+
+  const templateNode = vectorItems[0].node;
+  const baseStyle = getBaseStyle(templateNode);
+  const [firstSubpath, ...restSubpaths] = subpaths;
+
+  const sharedParentId = vectorItems.every(
+    (item) => (item.node.parentId ?? null) === (templateNode.parentId ?? null),
+  )
+    ? templateNode.parentId
+    : undefined;
+
+  const normalized = normalizePathNode({
+    id: newId,
+    name: options?.name ?? 'Combined Object',
+    type: 'path',
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    rotation: 0,
+    opacity: templateNode.opacity,
+    visible: true,
+    locked: false,
+    onCanvas: true,
+    ...(sharedParentId !== undefined ? { parentId: sharedParentId } : {}),
+    points: firstSubpath.points,
+    closed: firstSubpath.closed,
+    ...(restSubpaths.length > 0 ? { subpaths: restSubpaths } : {}),
+    pathKind: 'boolean',
+    style: {
+      ...baseStyle,
+      fillRule: hasRealHole ? 'evenodd' : 'nonzero',
+    },
+  });
+
+  const colorBlendMode = options?.colorBlendMode ?? 'linear';
+  if (colorBlendMode !== 'single' && closedItems.length >= 2) {
+    return applyMergedColorBlendToPathNode(
+      normalized,
+      closedItems.map((item) => item.node),
+      colorBlendMode,
+    );
+  }
+  return normalized;
 }
 
 /**
@@ -1382,12 +1579,17 @@ export function decomposeNodesForShapeBuilder(nodes: readonly DesignNode[]): {
  * Resolves an interactive Shape Builder gesture (merge touched faces OR Alt-punch
  * touched faces) into the resulting replacement PathNodes for a single atomic undo step.
  */
+export interface ShapeBuilderActionOptions {
+  readonly colorBlendMode?: ShapeColorBlendMode;
+}
+
 export function applyShapeBuilderAction(
   candidates: readonly DesignNode[],
   arrangement: PlanarArrangement,
   touchedFaceIds: readonly number[],
   mode: 'merge' | 'punch',
   createNewId: () => string,
+  options?: ShapeBuilderActionOptions,
 ): PathNode[] | null {
   if (candidates.length === 0 || arrangement.faces.length === 0 || touchedFaceIds.length === 0) {
     return null;
@@ -1399,12 +1601,31 @@ export function applyShapeBuilderAction(
   const resultNodes: PathNode[] = [];
 
   if (mode === 'merge') {
-    // 1. Merge all touched faces into a single unified PathNode styled after the first touched face's top source shape
+    // 1. Merge all touched faces into a single unified PathNode styled after the contributing source shapes
     const firstFace = touchedFaces[0];
     const styleSourceIdx = firstFace.memberShapeIndices[firstFace.memberShapeIndices.length - 1] ?? 0;
     const styleTemplate = candidates[styleSourceIdx] ?? candidates[0];
-    const merged = buildPathNodeFromFaces(touchedFaces, styleTemplate, createNewId(), 'Built Shape', 'nonzero');
-    if (!merged) return null;
+    const builtMerged = buildPathNodeFromFaces(touchedFaces, styleTemplate, createNewId(), 'Built Shape', 'nonzero');
+    if (!builtMerged) return null;
+
+    // Collect every distinct source shape that contributed to the merged regions
+    const contributingIndices = new Set<number>();
+    for (const face of touchedFaces) {
+      for (const idx of face.memberShapeIndices) {
+        if (idx >= 0 && idx < candidates.length) {
+          contributingIndices.add(idx);
+        }
+      }
+    }
+    const contributingSources = [...contributingIndices]
+      .sort((a, b) => a - b)
+      .map((idx) => candidates[idx]);
+
+    const colorBlendMode = options?.colorBlendMode ?? 'linear';
+    const merged =
+      colorBlendMode !== 'single' && contributingSources.length >= 2
+        ? applyMergedColorBlendToPathNode(builtMerged, contributingSources, colorBlendMode)
+        : builtMerged;
 
     // 2. Preserve untouched remaining faces grouped by their top contributing shape
     const remainingByTopShape = new Map<number, PlanarFace[]>();

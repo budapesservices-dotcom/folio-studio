@@ -77,6 +77,7 @@ export interface CanvasContextMenuActions {
   readonly onSelectSimilar: (criterion: SelectSimilarCriterion) => void;
   readonly onSetDrawMode: (mode: DrawMaskMode) => void;
   readonly onPermanentSubtractOutside: () => void;
+  readonly onCombineSelection?: () => void;
 }
 
 interface CanvasProps {
@@ -1832,6 +1833,22 @@ export function Canvas({
               </span>
               <kbd>Ctrl+Shift+I</kbd>
             </button>
+            {contextMenuActions.onCombineSelection && selectedNodeIds.length >= 2 && (
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="canvas-context-combine-btn"
+                class="canvas-context-menu-item is-accent"
+                onClick={() => runMenuAction(contextMenuActions.onCombineSelection!)}
+              >
+                <span class="canvas-context-menu-item-main">
+                  <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M2.5 2.5h6.5v3h4.5v8H7v-3H2.5v-8z" fill="currentColor" fill-opacity="0.24" />
+                  </svg>
+                  <span class="canvas-context-menu-label">Combine into 1 Object</span>
+                </span>
+              </button>
+            )}
             <div class="canvas-context-menu-divider" role="separator" />
             <div class="canvas-context-menu-header">
               <span>Select Similar</span>

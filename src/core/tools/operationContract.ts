@@ -1,3 +1,4 @@
+import type { ShapeColorBlendMode } from '../document/colorBlend';
 import { isBlendMode, isFillPaint, isVisualEffect } from '../document/styling';
 import type { DesignNode } from '../document/types';
 import {
@@ -7,6 +8,8 @@ import {
   isResponsiveOverrides,
   SEMANTIC_HTML_TAGS,
 } from '../document/validation';
+
+export type { ShapeColorBlendMode };
 
 export const TOOL_OPERATION_PROTOCOL = 'folio.tool-operation' as const;
 export const TOOL_OPERATION_VERSION = 1 as const;
@@ -116,6 +119,8 @@ export interface CanvasToolOptions {
   fillColor: string;
   keepToolActive: boolean;
   smoothRadius: number;
+  /** Color blending mode when merging different-colored shapes (Shape Builder, Pathfinder Unite, Combine) */
+  colorBlendMode: ShapeColorBlendMode;
   /** Vector Brush settings (Zero-Typing) */
   brushPreset: VectorBrushPreset;
   brushSize: number;
@@ -143,6 +148,7 @@ export const DEFAULT_CANVAS_TOOL_OPTIONS: CanvasToolOptions = {
   fillColor: '#8B7CF6',
   keepToolActive: false,
   smoothRadius: 34,
+  colorBlendMode: 'linear',
   brushPreset: 'round',
   brushSize: 10,
   brushStabilizer: 45,
