@@ -127,7 +127,27 @@ export function CodeWorkspacePanel({
   const [ariaDraft, setAriaDraft] = useState('');
   const [hrefDraft, setHrefDraft] = useState('');
   const [auditOpen, setAuditOpen] = useState(false);
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (viewMode === 'code' && previewFullscreen) {
+      setPreviewFullscreen(false);
+    }
+  }, [viewMode, previewFullscreen]);
+
+  useEffect(() => {
+    if (!previewFullscreen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setPreviewFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [previewFullscreen]);
 
   // Sync mapped form fields whenever targeted AST node updates
   useEffect(() => {
@@ -174,9 +194,11 @@ export function CodeWorkspacePanel({
     onApplyMappedPatch(mappedTargetNode.id, patch);
   };
 
+  const effectiveViewMode = previewFullscreen ? 'preview' : viewMode;
+
   return (
     <section
-      class="code-studio-overlay"
+      class={`code-studio-overlay${previewFullscreen ? ' is-preview-fullscreen' : ''}`}
       role="region"
       aria-label="FOLIO Code and Live Preview Studio"
       onContextMenu={(event) => {
@@ -186,7 +208,8 @@ export function CodeWorkspacePanel({
         setContextMenu({ x: event.clientX, y: event.clientY });
       }}
     >
-      <header class="code-studio-header">
+      {!previewFullscreen && (
+        <header class="code-studio-header">
         <div class="code-studio-title-group">
           <span class="code-studio-title">
             <StudioIcon name="code" />
@@ -278,8 +301,9 @@ export function CodeWorkspacePanel({
           </button>
         </div>
       </header>
+      )}
 
-      {auditOpen && a11yReport && (
+      {!previewFullscreen && auditOpen && a11yReport && (
         <section class="code-a11y-drawer" aria-label="Accessibility Audit">
           <div class="code-a11y-header">
             <div class="code-a11y-title-group">
@@ -354,8 +378,8 @@ export function CodeWorkspacePanel({
         </section>
       )}
 
-      <div class={`code-studio-body is-mode-${viewMode}`}>
-        {viewMode !== 'preview' && (
+      <div class={`code-studio-body is-mode-${effectiveViewMode}`}>
+        {effectiveViewMode !== 'preview' && (
           <aside class="code-file-sidebar" aria-label="Compiled and custom code files">
             <div class="code-sidebar-section">
               <div class="code-sidebar-heading">Compiled Project</div>
@@ -464,7 +488,7 @@ export function CodeWorkspacePanel({
           </aside>
         )}
 
-        {viewMode !== 'preview' && (
+        {effectiveViewMode !== 'preview' && (
           <section class="code-editor-pane" aria-label="Code editor">
             {selectedFile ? (
               <>
@@ -640,7 +664,7 @@ export function CodeWorkspacePanel({
           </section>
         )}
 
-        {viewMode !== 'code' && (
+        {effectiveViewMode !== 'code' && (
           <LivePreviewPane
             pages={pages}
             activePageId={previewPageId}
@@ -649,6 +673,9 @@ export function CodeWorkspacePanel({
             breakpoint={previewBreakpoint}
             previewHtml={previewHtml}
             refreshNonce={refreshNonce}
+            isPreviewOnly={effectiveViewMode === 'preview'}
+            isFullscreen={previewFullscreen}
+            onToggleFullscreen={() => setPreviewFullscreen((prev) => !prev)}
             onSelectPage={onSelectPreviewPage}
             onSelectTheme={onSelectPreviewTheme}
             onSelectBreakpoint={onSelectPreviewBreakpoint}

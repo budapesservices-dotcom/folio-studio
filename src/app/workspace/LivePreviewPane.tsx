@@ -19,6 +19,9 @@ export interface LivePreviewPaneProps {
   onSelectBreakpoint: (breakpoint: BreakpointId) => void;
   onRefresh: () => void;
   onDownloadHtml: () => void;
+  isPreviewOnly?: boolean;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }
 
 const PREVIEW_BREAKPOINTS: readonly {
@@ -46,6 +49,9 @@ export function LivePreviewPane({
   onSelectBreakpoint,
   onRefresh,
   onDownloadHtml,
+  isPreviewOnly = false,
+  isFullscreen = false,
+  onToggleFullscreen,
 }: LivePreviewPaneProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageSize, setStageSize] = useState({ width: 560, height: 520 });
@@ -115,19 +121,29 @@ export function LivePreviewPane({
   const currentPreset =
     PREVIEW_BREAKPOINTS.find((preset) => preset.id === breakpoint) ?? PREVIEW_BREAKPOINTS[0];
 
+  const isDesktop = breakpoint === 'desktop';
+  const isDesktopFullBleed = isDesktop && (isPreviewOnly || isFullscreen);
+
   const docWidth = Math.max(320, Math.round(currentPage?.document.width ?? 1440));
   const docHeight = Math.max(400, Math.round(currentPage?.document.height ?? 900));
   const targetViewportWidth = currentPreset.widthPx ?? docWidth;
   const targetViewportHeight = currentPreset.heightPx ?? docHeight;
-  const availableWidth = Math.max(260, stageSize.width - 28);
-  const availableHeight = Math.max(260, stageSize.height - 64);
-  const scale = Math.min(1, availableWidth / targetViewportWidth, availableHeight / targetViewportHeight);
+  const availableWidth = Math.max(260, stageSize.width - (isDesktop ? 24 : 28));
+  const availableHeight = Math.max(260, stageSize.height - (isDesktop ? 56 : 64));
+  const scale = isDesktop
+    ? Math.min(1, availableWidth / targetViewportWidth)
+    : Math.min(1, availableWidth / targetViewportWidth, availableHeight / targetViewportHeight);
   const scaledWidth = Math.round(targetViewportWidth * scale);
-  const scaledHeight = Math.round(targetViewportHeight * scale);
+  const scaledHeight = isDesktop
+    ? availableHeight
+    : Math.round(targetViewportHeight * scale);
+  const iframeRenderHeight = isDesktop
+    ? Math.max(targetViewportHeight, Math.round(availableHeight / Math.max(0.1, scale)))
+    : targetViewportHeight;
   const zoomPercent = Math.round(scale * 100);
 
   return (
-    <section class="live-preview-pane" aria-label="Live Preview">
+    <section class={`live-preview-pane${isFullscreen ? ' is-fullscreen' : ''}`} aria-label="Live Preview">
       <div class="live-preview-toolbar">
         <div class="live-preview-toolbar-left">
           <label class="live-preview-route-picker">
@@ -189,6 +205,18 @@ export function LivePreviewPane({
           >
             <StudioIcon name="rotate" />
           </button>
+          {onToggleFullscreen && (
+            <button
+              type="button"
+              class={`code-text-action live-preview-fullscreen-btn${isFullscreen ? ' is-active' : ''}`}
+              aria-pressed={isFullscreen}
+              title={isFullscreen ? 'Exit fullscreen preview (Esc)' : 'Expand live preview to full screen'}
+              onClick={onToggleFullscreen}
+            >
+              <StudioIcon name="fullscreen" />
+              <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
+            </button>
+          )}
           <button
             type="button"
             class="code-text-action"
@@ -200,40 +228,50 @@ export function LivePreviewPane({
         </div>
       </div>
 
-      <div class="live-preview-stage" ref={stageRef}>
-        <div
-          class="live-preview-device"
-          style={{ width: `${scaledWidth}px` }}
-        >
-          <div class="live-preview-chrome">
-            <span class="live-preview-url">{currentPage?.route ?? '/'}</span>
-            <span class="live-preview-meta">
-              {currentPreset.label}
-              {' · '}
-              {targetViewportWidth}×{targetViewportHeight}px
-              {' · '}
-              {zoomPercent}%
-              {currentTheme ? ` · ${currentTheme.name}` : ''}
-            </span>
-          </div>
+      <div class={`live-preview-stage${isDesktopFullBleed ? ' is-full-bleed' : ''}`} ref={stageRef}>
+        {isDesktopFullBleed ? (
+          <iframe
+            key={refreshNonce}
+            class="live-preview-iframe is-full-bleed"
+            title="FOLIO Live Preview"
+            sandbox="allow-scripts"
+            srcDoc={previewHtml}
+          />
+        ) : (
           <div
-            class="live-preview-viewport"
-            style={{ width: `${scaledWidth}px`, height: `${scaledHeight}px` }}
+            class="live-preview-device"
+            style={{ width: `${scaledWidth}px` }}
           >
-            <iframe
-              key={refreshNonce}
-              class="live-preview-iframe"
-              title="FOLIO Live Preview"
-              sandbox="allow-scripts"
-              srcDoc={previewHtml}
-              style={{
-                width: `${targetViewportWidth}px`,
-                height: `${targetViewportHeight}px`,
-                transform: `scale(${scale})`,
-              }}
-            />
+            <div class="live-preview-chrome">
+              <span class="live-preview-url">{currentPage?.route ?? '/'}</span>
+              <span class="live-preview-meta">
+                {currentPreset.label}
+                {' · '}
+                {targetViewportWidth}×{targetViewportHeight}px
+                {' · '}
+                {zoomPercent}%
+                {currentTheme ? ` · ${currentTheme.name}` : ''}
+              </span>
+            </div>
+            <div
+              class="live-preview-viewport"
+              style={{ width: `${scaledWidth}px`, height: `${scaledHeight}px` }}
+            >
+              <iframe
+                key={refreshNonce}
+                class="live-preview-iframe"
+                title="FOLIO Live Preview"
+                sandbox="allow-scripts"
+                srcDoc={previewHtml}
+                style={{
+                  width: `${targetViewportWidth}px`,
+                  height: `${iframeRenderHeight}px`,
+                  transform: `scale(${scale})`,
+                }}
+              />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </section>
   );
