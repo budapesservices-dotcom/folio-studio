@@ -63,3 +63,13 @@ export {
   getClipCssClassName,
   type LivePreviewAnimationClipDescriptor,
 } from './codegen';
+
+export {
+  extractMorphSequenceFromComponent,
+  inspectComponentMorphSource,
+  type ComponentMorphImportResult,
+  type ComponentMorphInspection,
+  type ComponentMorphSourceKind,
+  type ImportedMorphKeyframe,
+} from './componentMorphImport';
+

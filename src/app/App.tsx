@@ -1324,6 +1324,8 @@ export function App() {
             activePage={activeMotionPage}
             pageClips={motion.pageClips}
             activeClip={motion.activeClip}
+            components={state.project.components}
+            designTokens={designSystem.designTokens}
             customEasings={activeMotionProject.customEasings ?? []}
             selectedNodeIds={activeMotionSelectedNodeIds}
             playheadMs={motion.playheadMs}
@@ -1342,6 +1344,9 @@ export function App() {
             onSeek={motion.seek}
             onKeyframeSelected={() => motion.keyframeSelectedLayers()}
             onKeyframePathMorph={() => motion.keyframeShapeMorph()}
+            onImportMorphFromComponent={(component, options) =>
+              motion.importShapeMorphFromComponent(component, designSystem.designTokens, options)
+            }
             onEditMorphPoints={(nodeId) => {
               focusedCommandClient.selectNodes([nodeId], 'Select morph layer for point editing');
               chooseCanvasTool('direct-selection', activeEditorId);

@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type {
   AnimatableProperty,
   AnimationClip,
+  ComponentDefinition,
   CustomEasingPreset,
   DesignNode,
+  DesignTokenCollection,
   FolioDocument,
   FolioPage,
   FolioProjectV2,
@@ -15,6 +17,7 @@ import {
   captureNodeKeyframeSnapshot,
   createAnimationClip,
   evaluateClipAtTime,
+  extractMorphSequenceFromComponent,
   hasKeyframeAtTime,
   togglePropertyKeyframeInClip,
   upsertKeyframeInClip,
@@ -69,6 +72,11 @@ export interface MotionPlaybackController {
   updateCustomEasings: (customEasings: readonly CustomEasingPreset[], description?: string) => void;
   keyframeSelectedLayers: (properties?: readonly AnimatableProperty[]) => void;
   keyframeShapeMorph: (presetId?: MorphShapePresetId) => void;
+  importShapeMorphFromComponent: (
+    component: ComponentDefinition,
+    designTokens?: DesignTokenCollection,
+    options?: { targetNodeId?: string; atTimeMs?: number },
+  ) => void;
   togglePropertyKeyframe: (nodeId: string, property: AnimatableProperty) => void;
   isPropertyKeyedAtPlayhead: (nodeId: string, property: AnimatableProperty) => boolean;
   recordAutoKeyNodes: (
@@ -545,6 +553,153 @@ export function useMotionPlayback({
     onNotice,
   ]);
 
+  const importShapeMorphFromComponent = useCallback((
+    component: ComponentDefinition,
+    designTokens?: DesignTokenCollection,
+    options?: { targetNodeId?: string; atTimeMs?: number },
+  ) => {
+    const animatedById = new Map(animatedMainDocument.nodes.map((node) => [node.id, node]));
+    const canonicalById = new Map(activePage.document.nodes.map((node) => [node.id, node]));
+    const targetIds = options?.targetNodeId ? [options.targetNodeId] : selectedNodeIds;
+    const candidateNodes = targetIds
+      .map((id) => animatedById.get(id) ?? canonicalById.get(id))
+      .filter((node): node is DesignNode => Boolean(node));
+
+    if (candidateNodes.length === 0) {
+      onNotice('Select a closed vector shape (Circle, Rectangle, Frame, or closed Path) to morph from a component.');
+      return;
+    }
+
+    const supportedNodes: DesignNode[] = [];
+    let firstUnsupportedReason: string | null = null;
+    for (const node of candidateNodes) {
+      const check = checkNodeMorphSupport(node);
+      if (check.supported) {
+        supportedNodes.push(node);
+      } else if (!firstUnsupportedReason) {
+        firstUnsupportedReason = check.message;
+      }
+    }
+
+    if (supportedNodes.length === 0) {
+      onNotice(firstUnsupportedReason ?? 'Selected layer does not support Shape Morph.');
+      return;
+    }
+
+    const startTimeMs = Math.max(0, Math.round(options?.atTimeMs ?? playheadMs));
+    const extractions = supportedNodes.map((node) => ({
+      node,
+      canonicalNode: canonicalById.get(node.id) ?? node,
+      result: extractMorphSequenceFromComponent(component, node.width, node.height, designTokens),
+    }));
+
+    const firstSuccess = extractions.find((entry) => entry.result.ok);
+    if (!firstSuccess || !firstSuccess.result.ok) {
+      const firstError = extractions.find((entry) => !entry.result.ok);
+      onNotice(
+        firstError && !firstError.result.ok
+          ? firstError.result.message
+          : `Component “${component.name}” has no supported closed vector shape to morph into.`,
+      );
+      return;
+    }
+
+    const importedSpanMs = firstSuccess.result.durationMs;
+    const requiredDurationMs = Math.min(60000, Math.max(1200, startTimeMs + importedSpanMs));
+
+    let clip = activeClip;
+    let isNewClip = false;
+    if (!clip) {
+      clip = createAnimationClip({
+        pageId: activePage.id,
+        name: `Clip ${pageClips.length + 1}`,
+        durationMs: requiredDurationMs,
+        autoplay: true,
+        loop: workspaceScope === 'component',
+      });
+      isNewClip = true;
+    }
+
+    let nextClip: AnimationClip =
+      requiredDurationMs > clip.durationMs
+        ? { ...clip, durationMs: requiredDurationMs, updatedAt: new Date().toISOString() }
+        : clip;
+
+    let importedKeyframeCount = 0;
+    let importedKind = firstSuccess.result.sourceKind;
+    let appliedNodeCount = 0;
+
+    for (const { node, canonicalNode, result } of extractions) {
+      if (!result.ok || result.keyframes.length === 0) continue;
+      appliedNodeCount += 1;
+      importedKeyframeCount = result.keyframes.length;
+      importedKind = result.sourceKind;
+
+      let track = nextClip.tracks.find(
+        (candidate) => candidate.targetNodeId === node.id && candidate.property === 'pathMorph',
+      );
+      if (!track) {
+        const baselineSnap = extractMorphSnapshotFromNode(canonicalNode) ?? result.keyframes[0].value;
+        const seeded = captureNodeKeyframeSnapshot(nextClip, node, startTimeMs, {
+          baselineNode: canonicalNode,
+          properties: ['pathMorph'],
+          easing: 'ease-out',
+        });
+        nextClip = seeded.clip;
+        track = nextClip.tracks.find(
+          (candidate) => candidate.targetNodeId === node.id && candidate.property === 'pathMorph',
+        );
+        if (track && startTimeMs > 0) {
+          nextClip = upsertKeyframeInClip(nextClip, track.id, 0, baselineSnap, 'linear').clip;
+        }
+      }
+      if (!track) continue;
+
+      for (let idx = 0; idx < result.keyframes.length; idx += 1) {
+        const kf = result.keyframes[idx];
+        const targetTime = Math.min(nextClip.durationMs, startTimeMs + kf.offsetMs);
+        const easing =
+          idx === 0 && startTimeMs > 0
+            ? 'ease-out'
+            : targetTime === 0
+              ? 'linear'
+              : kf.easing;
+        nextClip = upsertKeyframeInClip(nextClip, track.id, targetTime, kf.value, easing).clip;
+      }
+    }
+
+    if (appliedNodeCount === 0) return;
+
+    const isAnimatedImport = importedKind !== 'static' && importedKeyframeCount > 1;
+    const description = isAnimatedImport
+      ? `Import animated SVG morph from component “${component.name}” (${importedKeyframeCount} keyframes)`
+      : `Morph shape from component “${component.name}” at ${(startTimeMs / 1000).toFixed(2)}s`;
+
+    const commitResult = isNewClip
+      ? commandClient.createAnimationClip(nextClip, description)
+      : commandClient.updateAnimationClip(nextClip, description);
+
+    if (commitResult.status === 'applied') {
+      if (isNewClip) setActiveClipId(nextClip.id);
+      setPreviewActive(true);
+      onNotice(
+        isAnimatedImport
+          ? `Imported animated SVG morph from “${component.name}” (${importedKeyframeCount} keyframes) at ${(startTimeMs / 1000).toFixed(2)}s (same node ID preserved).`
+          : `Imported shape from component “${component.name}” at ${(startTimeMs / 1000).toFixed(2)}s (same node ID preserved).`,
+      );
+    }
+  }, [
+    selectedNodeIds,
+    animatedMainDocument.nodes,
+    activePage,
+    activeClip,
+    pageClips.length,
+    playheadMs,
+    workspaceScope,
+    commandClient,
+    onNotice,
+  ]);
+
   const recordAutoKeyNodes = useCallback((
     afterNodes: readonly DesignNode[],
     description = 'Auto-keyframe layer change',
@@ -683,6 +838,7 @@ export function useMotionPlayback({
     updateCustomEasings,
     keyframeSelectedLayers,
     keyframeShapeMorph,
+    importShapeMorphFromComponent,
     togglePropertyKeyframe,
     isPropertyKeyedAtPlayhead,
     recordAutoKeyNodes,

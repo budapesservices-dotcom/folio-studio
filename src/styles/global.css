@@ -7904,8 +7904,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 
 .mt-morph-preset-select {
   height: 22px;
-  max-width: 126px;
+  max-width: 152px;
   font-size: 10.5px;
+}
+
+.mt-morph-component-select {
+  height: 24px;
+  max-width: 118px;
+  font-size: 11px;
+  border-color: rgba(164, 148, 255, 0.42);
+  color: #dcd5ff;
+}
+
+.mt-morph-component-select:disabled {
+  opacity: 0.45;
+  border-color: rgba(130, 145, 175, 0.25);
+  color: #8894ac;
 }
 
 .mt-morph-shift-controls {

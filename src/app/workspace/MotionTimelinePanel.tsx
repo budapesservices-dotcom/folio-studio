@@ -6,8 +6,10 @@ import type {
   AnimationEasing,
   AnimationKeyframe,
   AnimationTrack,
+  ComponentDefinition,
   CustomEasingPreset,
   DesignNode,
+  DesignTokenCollection,
   FolioPage,
 } from '../../core/document/types';
 import {
@@ -31,6 +33,7 @@ import {
   formatEasingLabel,
   getDefaultNodePropertyValue,
   groupClipTracksByNode,
+  inspectComponentMorphSource,
   moveLayerKeyframesInClip,
   removeLayerTracksFromClip,
   removeTrackFromClip,
@@ -49,6 +52,8 @@ export interface MotionTimelinePanelProps {
   activePage: FolioPage;
   pageClips: readonly AnimationClip[];
   activeClip: AnimationClip | null;
+  components?: readonly ComponentDefinition[];
+  designTokens?: DesignTokenCollection;
   customEasings?: readonly CustomEasingPreset[];
   selectedNodeIds: readonly string[];
   playheadMs: number;
@@ -67,6 +72,10 @@ export interface MotionTimelinePanelProps {
   onSeek: (ms: number) => void;
   onKeyframeSelected: () => void;
   onKeyframePathMorph?: () => void;
+  onImportMorphFromComponent?: (
+    component: ComponentDefinition,
+    options?: { targetNodeId?: string; atTimeMs?: number },
+  ) => void;
   onEditMorphPoints?: (nodeId: string) => void;
   onOpenLivePreview: (pageId?: string) => void;
   onOpenMotionExport?: () => void;
@@ -103,6 +112,8 @@ export function MotionTimelinePanel({
   activePage,
   pageClips,
   activeClip,
+  components = [],
+  designTokens,
   customEasings = [],
   selectedNodeIds,
   playheadMs,
@@ -121,6 +132,7 @@ export function MotionTimelinePanel({
   onSeek,
   onKeyframeSelected,
   onKeyframePathMorph,
+  onImportMorphFromComponent,
   onEditMorphPoints,
   onOpenLivePreview,
   onOpenMotionExport,
@@ -130,6 +142,18 @@ export function MotionTimelinePanel({
 }: MotionTimelinePanelProps) {
   const nodes = activePage.document.nodes;
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const componentMorphOptions = useMemo(
+    () =>
+      components.map((component) => ({
+        component,
+        info: inspectComponentMorphSource(component, designTokens),
+      })),
+    [components, designTokens],
+  );
+  const componentById = useMemo(
+    () => new Map(components.map((component) => [component.id, component])),
+    [components],
+  );
   const selectedMorphInfo = useMemo(() => {
     const selectedNodes = selectedNodeIds
       .map((id) => nodeById.get(id))
@@ -1020,6 +1044,45 @@ export function MotionTimelinePanel({
               + Morph
             </button>
           )}
+          {onImportMorphFromComponent && componentMorphOptions.length > 0 && (
+            <select
+              class="mt-select mt-morph-component-select"
+              aria-label="Add Shape Morph from Component"
+              data-testid="timeline-morph-from-component-select"
+              value=""
+              disabled={!selectedMorphInfo.supported}
+              title={
+                selectedMorphInfo.supported
+                  ? 'Import a static shape or animated SVG morph sequence from a saved component into the selected object (same node ID preserved)'
+                  : selectedMorphInfo.message
+              }
+              onChange={(event) => {
+                const componentId = event.currentTarget.value;
+                event.currentTarget.value = '';
+                if (!componentId) return;
+                const component = componentById.get(componentId);
+                if (!component) return;
+                pendingMorphAutoSelectRef.current = { nodeIds: selectedNodeIds, timeMs: playheadMs };
+                onImportMorphFromComponent(component);
+              }}
+            >
+              <option value="">From Comp…</option>
+              {componentMorphOptions.map(({ component, info }) => (
+                <option
+                  key={component.id}
+                  value={component.id}
+                  disabled={!info.supported}
+                  title={info.reason}
+                >
+                  {!info.supported
+                    ? `${component.name} (no closed vector)`
+                    : info.isAnimated
+                      ? `✦ ${component.name} (Anim SVG · ${info.keyframeCount} kf)`
+                      : `◇ ${component.name}`}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="button"
             class="mt-btn"
@@ -1522,26 +1585,57 @@ export function MotionTimelinePanel({
                   </span>
                   <select
                     class="mt-select mt-morph-preset-select"
-                    aria-label="Morph shape preset"
+                    aria-label="Morph shape preset or component"
                     data-testid="morph-preset-select"
                     value=""
-                    title="Transform this keyframe into a built-in closed shape while keeping the same object ID"
+                    title="Transform this keyframe into a built-in closed shape or import a static/animated SVG from a saved component while keeping the same object ID"
                     onChange={(event) => {
-                      const preset = event.currentTarget.value as MorphShapePresetId | '';
-                      if (!preset) return;
+                      const rawChoice = event.currentTarget.value;
+                      event.currentTarget.value = '';
+                      if (!rawChoice) return;
+                      if (rawChoice.startsWith('component:')) {
+                        const componentId = rawChoice.slice('component:'.length);
+                        const component = componentById.get(componentId);
+                        if (component && onImportMorphFromComponent) {
+                          onImportMorphFromComponent(component, {
+                            targetNodeId: activeTrackSelection.track.targetNodeId,
+                            atTimeMs: activeTrackSelection.keyframe.timeMs,
+                          });
+                        }
+                        return;
+                      }
+                      const preset = rawChoice as MorphShapePresetId;
                       const w = targetNode?.width ?? snap?.w ?? 120;
                       const h = targetNode?.height ?? snap?.h ?? 120;
                       const nextSnap = createMorphPresetSnapshot(preset, w, h, snap?.morph);
                       handleInspectorPatch({ value: nextSnap });
-                      event.currentTarget.value = '';
                     }}
                   >
                     <option value="">Morph into…</option>
-                    {MORPH_SHAPE_PRESETS.map((preset) => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.label}
-                      </option>
-                    ))}
+                    <optgroup label="Built-in Shapes">
+                      {MORPH_SHAPE_PRESETS.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                    {onImportMorphFromComponent && componentMorphOptions.length > 0 && (
+                      <optgroup label="From Component (Shape / Animated SVG)">
+                        {componentMorphOptions.map(({ component, info }) => (
+                          <option
+                            key={component.id}
+                            value={`component:${component.id}`}
+                            disabled={!info.supported}
+                          >
+                            {!info.supported
+                              ? `${component.name} (unsupported)`
+                              : info.isAnimated
+                                ? `✦ ${component.name} (Anim SVG · ${info.keyframeCount} kf)`
+                                : `◇ ${component.name}`}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                   {onEditMorphPoints && targetNode && (
                     <button
