@@ -6,7 +6,12 @@
  */
 
 import type { ComponentDefinition, DesignNode, EllipseNode, FrameNode, RectNode } from '../../../core/document/types';
-import { getVisibleEffects, getVisibleFillPaints } from '../../../core/document/styling';
+import {
+  buildCssFilterString,
+  computeNodeFilterBleedMargins,
+  getVisibleEffects,
+  getVisibleFillPaints,
+} from '../../../core/document/styling';
 import {
   DEFAULT_TILE_SIZE,
   GPU_INSTANCE_STRIDE_FLOATS,
@@ -138,6 +143,9 @@ export function isGpuInstancedPrimitive(
   if (node.effects && node.effects.length > 0 && getVisibleEffects(node).length > 0) {
     return false;
   }
+  if (buildCssFilterString(node.cssFilters)) {
+    return false;
+  }
   if (node.style.fills && node.style.fills.length > 0) {
     const visibleFills = getVisibleFillPaints(node);
     if (visibleFills.length > 1) return false;
@@ -160,18 +168,19 @@ function resolveFastPrimitiveFill(node: FastPrimitiveNode): RgbaTuple {
   return parseCssColorToRgba(node.style.fill, opacity);
 }
 
-function getNodeExpandedBounds(node: DesignNode): {
+export function getNodeExpandedBounds(node: DesignNode): {
   minX: number;
   minY: number;
   maxX: number;
   maxY: number;
 } {
-  const pad = node.rotation !== 0 ? Math.max(node.width, node.height) * 0.45 : 8;
+  const rotPad = node.rotation !== 0 ? Math.max(node.width, node.height) * 0.45 : 8;
+  const bleed = computeNodeFilterBleedMargins(node);
   return {
-    minX: node.x - pad,
-    minY: node.y - pad,
-    maxX: node.x + node.width + pad,
-    maxY: node.y + node.height + pad,
+    minX: node.x - Math.max(rotPad, bleed.left),
+    minY: node.y - Math.max(rotPad, bleed.top),
+    maxX: node.x + node.width + Math.max(rotPad, bleed.right),
+    maxY: node.y + node.height + Math.max(rotPad, bleed.bottom),
   };
 }
 
@@ -547,27 +556,49 @@ export function computeTileSignature(
         }
       }
     }
+    if (node.cssFilters) {
+      mixInt(Math.round((node.cssFilters.brightness ?? 100) * 10));
+      mixInt(Math.round((node.cssFilters.contrast ?? 100) * 10));
+      mixInt(Math.round((node.cssFilters.saturate ?? 100) * 10));
+      mixInt(Math.round((node.cssFilters.grayscale ?? 0) * 10));
+    }
   }
 
   return `${tile.key}@${Math.round(scaleBucket * 100)}#${hash.toString(16)}`;
 }
 
 /**
- * Filters `richNodes` to those intersecting a given tile (with shadow/blur bleed padding).
+ * Computes the world-space bleed margin (in canvas px) required when rasterizing
+ * a tile so blur & drop-shadow kernels never clip at 512px tile boundaries.
+ * Capped at 300px world units to stay lightweight on low-spec hardware.
+ */
+export function computeTileBleedMargin(tileNodes: readonly DesignNode[]): number {
+  let maxBleed = 0;
+  for (let i = 0; i < tileNodes.length; i += 1) {
+    const bleed = computeNodeFilterBleedMargins(tileNodes[i]).maxBleed;
+    if (bleed > maxBleed) maxBleed = bleed;
+  }
+  return Math.min(300, Math.ceil(maxBleed));
+}
+
+/**
+ * Filters `richNodes` to those intersecting a given tile (using each node's
+ * full `3 * blurRadius` + shadow bleed expanded bounds so large blurs render
+ * seamlessly across neighboring tiles).
  */
 export function filterNodesForTile(
   richNodes: readonly DesignNode[],
   tile: TileCoord,
   pad = 48,
 ): DesignNode[] {
-  const minX = tile.x - pad;
-  const minY = tile.y - pad;
-  const maxX = tile.x + tile.width + pad;
-  const maxY = tile.y + tile.height + pad;
   const out: DesignNode[] = [];
   for (let i = 0; i < richNodes.length; i += 1) {
     const node = richNodes[i];
     const b = getNodeExpandedBounds(node);
+    const minX = tile.x - pad;
+    const minY = tile.y - pad;
+    const maxX = tile.x + tile.width + pad;
+    const maxY = tile.y + tile.height + pad;
     if (b.maxX >= minX && b.minX <= maxX && b.maxY >= minY && b.minY <= maxY) {
       out.push(node);
     }

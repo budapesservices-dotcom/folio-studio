@@ -343,7 +343,7 @@ describe('Part B — Styling Helpers & Zero-Typing Accordion Inspector', () => {
     expect(parsed.hex).toBe('#00E5FF');
     expect(parsed.alpha).toBeCloseTo(0.5, 2);
     expect(formatColorWithAlpha('#00E5FF', 0.5)).toBe('rgba(0, 229, 255, 0.5)');
-    expect(formatColorWithAlpha('#00E5FF', 0)).toBe('transparent');
+    expect(formatColorWithAlpha('#00E5FF', 0)).toBe('rgba(0, 229, 255, 0)');
     expect(formatColorWithAlpha('#00E5FF', 1)).toBe('#00E5FF');
 
     const neonEffects = applyShadowPresetToEffects([], 'neon-glow');

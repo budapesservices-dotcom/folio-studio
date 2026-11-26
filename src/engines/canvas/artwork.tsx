@@ -4,6 +4,7 @@ import type {
   BorderSidesConfig,
   ComponentDefinition,
   ComponentInstanceNode,
+  CornerRadiiConfig,
   DesignNode,
   DesignTokenCollection,
   FillPaint,
@@ -18,6 +19,7 @@ import {
   buildCssFilterString,
   buildSvgFilterId,
   buildSvgPaintId,
+  computeSvgFilterRegion,
   computeSvgLinearGradientCoords,
   getBackdropBlurRadius,
   getVisibleEffects,
@@ -232,6 +234,7 @@ function NodeStyleDefs({
 
     if (hasSvgFilterEffects(node)) {
       const filterId = buildSvgFilterId(maskPrefix, node.id);
+      const region = computeSvgFilterRegion(node);
       const effects = getVisibleEffects(node);
       const primitives: JSX.Element[] = [];
       let currentSource = 'SourceGraphic';
@@ -239,17 +242,64 @@ function NodeStyleDefs({
       effects.forEach((effect, idx) => {
         if (effect.type === 'drop-shadow') {
           const out = `ds_${idx}`;
-          primitives.push(
-            <feDropShadow
-              key={out}
-              in={currentSource}
-              dx={effect.x}
-              dy={effect.y}
-              stdDeviation={Math.max(0, effect.blur / 2)}
-              flood-color={sanitizeStyleColor(effect.color)}
-              result={out}
-            />,
-          );
+          const spread = effect.spread ?? 0;
+          if (Math.abs(spread) > 0.01) {
+            const morphOut = `ds_morph_${idx}`;
+            const blurOut = `ds_blur_${idx}`;
+            const offOut = `ds_off_${idx}`;
+            const floodOut = `ds_flood_${idx}`;
+            const compOut = `ds_comp_${idx}`;
+            primitives.push(
+              <feMorphology
+                key={morphOut}
+                in="SourceAlpha"
+                operator={spread > 0 ? 'dilate' : 'erode'}
+                radius={Math.abs(spread)}
+                result={morphOut}
+              />,
+              <feGaussianBlur
+                key={blurOut}
+                in={morphOut}
+                stdDeviation={Math.max(0, effect.blur / 2)}
+                result={blurOut}
+              />,
+              <feOffset
+                key={offOut}
+                in={blurOut}
+                dx={effect.x}
+                dy={effect.y}
+                result={offOut}
+              />,
+              <feFlood
+                key={floodOut}
+                flood-color={sanitizeStyleColor(effect.color)}
+                result={floodOut}
+              />,
+              <feComposite
+                key={compOut}
+                in={floodOut}
+                in2={offOut}
+                operator="in"
+                result={compOut}
+              />,
+              <feMerge key={out} result={out}>
+                <feMergeNode in={compOut} />
+                <feMergeNode in={currentSource} />
+              </feMerge>,
+            );
+          } else {
+            primitives.push(
+              <feDropShadow
+                key={out}
+                in={currentSource}
+                dx={effect.x}
+                dy={effect.y}
+                stdDeviation={Math.max(0, effect.blur / 2)}
+                flood-color={sanitizeStyleColor(effect.color)}
+                result={out}
+              />,
+            );
+          }
           currentSource = out;
         } else if (effect.type === 'layer-blur') {
           const out = `lb_${idx}`;
@@ -286,10 +336,11 @@ function NodeStyleDefs({
           <filter
             key={filterId}
             id={filterId}
-            x="-45%"
-            y="-45%"
-            width="190%"
-            height="190%"
+            filterUnits="userSpaceOnUse"
+            x={region.x}
+            y={region.y}
+            width={region.width}
+            height={region.height}
             color-interpolation-filters="sRGB"
           >
             {primitives}
@@ -307,18 +358,23 @@ function renderBackdropBlurOverlay(
   mask: boolean,
   radius: number,
   isEllipse = false,
+  cornerRadii?: CornerRadiiConfig,
 ) {
   if (mask) return null;
   const blurRadius = getBackdropBlurRadius(node);
   if (blurRadius <= 0 || node.width <= 0 || node.height <= 0) return null;
-  const borderRadius = isEllipse ? '50%' : `${radius}px`;
+  const borderRadius = isEllipse
+    ? '50%'
+    : cornerRadii
+      ? `${cornerRadii.topLeft}px ${cornerRadii.topRight}px ${cornerRadii.bottomRight}px ${cornerRadii.bottomLeft}px`
+      : `${radius}px`;
   return (
     <foreignObject
       x={node.x}
       y={node.y}
       width={node.width}
       height={node.height}
-      style={{ pointerEvents: 'none', overflow: 'hidden' }}
+      style={{ pointerEvents: 'none', overflow: 'visible' }}
     >
       <div
         style={{
@@ -385,11 +441,14 @@ export function NodeShape({
     : undefined;
   const cssFilterStr = !mask ? buildCssFilterString(node.cssFilters) : '';
   const hasBlend = !mask && node.blendMode && node.blendMode !== 'normal';
+  const combinedCssFilter = filterAttr && cssFilterStr
+    ? `${filterAttr} ${cssFilterStr}`
+    : cssFilterStr || undefined;
   const groupStyle: JSX.CSSProperties | undefined =
-    hasBlend || cssFilterStr
+    hasBlend || combinedCssFilter
       ? {
           ...(hasBlend ? { mixBlendMode: node.blendMode } : {}),
-          ...(cssFilterStr ? { filter: cssFilterStr } : {}),
+          ...(combinedCssFilter ? { filter: combinedCssFilter } : {}),
         }
       : undefined;
 
@@ -397,7 +456,7 @@ export function NodeShape({
     <g
       transform={transform}
       opacity={node.opacity}
-      filter={filterAttr}
+      filter={combinedCssFilter ? undefined : filterAttr}
       style={groupStyle}
       class="canvas-node"
     >
@@ -445,7 +504,7 @@ export function NodeShape({
                   : ''}
               </text>
             )}
-            {renderBackdropBlurOverlay(node, mask, rx)}
+            {renderBackdropBlurOverlay(node, mask, rx, false, node.style.cornerRadii)}
             {mask || (fills.length <= 1 && !needsSeparateStroke) ? (
               <rect
                 x={node.x}
@@ -513,7 +572,7 @@ export function NodeShape({
         const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
         return (
           <>
-            {renderBackdropBlurOverlay(node, mask, rx)}
+            {renderBackdropBlurOverlay(node, mask, rx, false, node.style.cornerRadii)}
             {mask || (fills.length <= 1 && !needsSeparateStroke) ? (
               <rect
                 x={node.x}

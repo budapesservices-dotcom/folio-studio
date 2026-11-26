@@ -5,7 +5,13 @@ import type {
   DesignNode,
   FolioPage,
   FolioProject,
+  VisualEffect,
 } from '../../core/document/types';
+import {
+  formatColorWithAlpha,
+  getVisibleEffects,
+  parseColorWithAlpha,
+} from '../../core/document/styling';
 import { evaluateTrackAtTime, sortKeyframes } from './evaluator';
 import { toCssTimingFunction } from './easing';
 import { sanitizeCssValue } from '../codegen/sanitize';
@@ -265,7 +271,47 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       const svgPathKeyframeLines: string[] = [];
       const svgPolygonKeyframeLines: string[] = [];
       const isPathNode = node.type === 'path';
+      const isBoxShadowNode =
+        node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse' || node.type === 'image';
       const pathHasArrows = isPathNode && !node.closed && node.points.length >= 2 && Boolean(node.style.arrowStart || node.style.arrowEnd);
+
+      const trackedProps = new Set(nodeTracks.map((t) => t.property));
+      const hasShadowTracks =
+        trackedProps.has('shadowOffsetX') ||
+        trackedProps.has('shadowOffsetY') ||
+        trackedProps.has('shadowBlur') ||
+        trackedProps.has('shadowSpread') ||
+        trackedProps.has('shadowOpacity');
+      const hasFilterTracks =
+        trackedProps.has('layerBlur') ||
+        trackedProps.has('brightness') ||
+        trackedProps.has('contrast') ||
+        trackedProps.has('saturate') ||
+        trackedProps.has('grayscale') ||
+        (!isBoxShadowNode && hasShadowTracks);
+      const hasBackdropBlurTrack = trackedProps.has('backdropBlur');
+
+      const staticEffects = getVisibleEffects(node);
+      const staticLayerBlur = staticEffects.find(
+        (fx): fx is Extract<VisualEffect, { type: 'layer-blur' }> => fx.type === 'layer-blur',
+      );
+      const staticDropShadow = staticEffects.find(
+        (fx): fx is Extract<VisualEffect, { type: 'drop-shadow' }> => fx.type === 'drop-shadow',
+      );
+      const staticShadowColor = staticDropShadow?.color ?? 'rgba(15, 23, 42, 0.32)';
+      const parsedStaticShadow = parseColorWithAlpha(staticShadowColor, '#0F172A');
+      const otherStaticBoxShadows = staticEffects
+        .filter((fx) => fx !== staticDropShadow && (fx.type === 'drop-shadow' || fx.type === 'inner-shadow'))
+        .map((fx) => {
+          if (fx.type === 'inner-shadow') {
+            return `inset ${roundCssNum(fx.x)}px ${roundCssNum(fx.y)}px ${Math.max(0, roundCssNum(fx.blur))}px ${roundCssNum(fx.spread ?? 0)}px ${sanitizeCssValue(fx.color, 'rgba(0,0,0,0.22)')}`;
+          }
+          if (fx.type === 'drop-shadow') {
+            return `${roundCssNum(fx.x)}px ${roundCssNum(fx.y)}px ${Math.max(0, roundCssNum(fx.blur))}px ${roundCssNum(fx.spread ?? 0)}px ${sanitizeCssValue(fx.color, 'rgba(0,0,0,0.24)')}`;
+          }
+          return '';
+        })
+        .filter(Boolean);
 
       lines.push(`@keyframes ${kfName} {`);
       for (let stopIdx = 0; stopIdx < stops.length; stopIdx += 1) {
@@ -280,6 +326,17 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
         let rotationVal: number | undefined;
         let scale: number | undefined;
         let hasTransform = false;
+        let stopLayerBlur: number | undefined;
+        let stopBackdropBlur: number | undefined;
+        let stopShadowX: number | undefined;
+        let stopShadowY: number | undefined;
+        let stopShadowBlur: number | undefined;
+        let stopShadowSpread: number | undefined;
+        let stopShadowOpacity: number | undefined;
+        let stopBrightness: number | undefined;
+        let stopContrast: number | undefined;
+        let stopSaturate: number | undefined;
+        let stopGrayscale: number | undefined;
 
         for (const track of nodeTracks) {
           const val = evaluateTrackAtTime(track, stopMs);
@@ -320,7 +377,7 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
           } else if (track.property === 'radius' && node.type !== 'ellipse' && !isPathNode) {
             declarations.push(`border-radius: ${Math.max(0, roundCssNum(Number(val)))}px;`);
           } else if (track.property === 'fill') {
-            const safeColor = sanitizeCssValue(String(val), 'transparent');
+            const safeColor = sanitizeCssValue(String(val), 'rgba(0, 0, 0, 0)');
             if (isPathNode) {
               svgPathDecls.push(`fill: ${safeColor};`);
             } else if (node.type === 'text') {
@@ -332,7 +389,7 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
               declarations.push(`background-color: ${safeColor};`);
             }
           } else if (track.property === 'stroke') {
-            const safeStroke = sanitizeCssValue(String(val), 'transparent');
+            const safeStroke = sanitizeCssValue(String(val), 'rgba(0, 0, 0, 0)');
             if (isPathNode) {
               svgPathDecls.push(`stroke: ${safeStroke};`);
               if (pathHasArrows) {
@@ -351,7 +408,81 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
               }
               declarations.push(`border-width: ${sw}px;`);
             }
+          } else if (track.property === 'layerBlur') {
+            stopLayerBlur = Math.max(0, roundCssNum(Number(val)));
+          } else if (track.property === 'backdropBlur') {
+            stopBackdropBlur = Math.max(0, roundCssNum(Number(val)));
+          } else if (track.property === 'shadowOffsetX') {
+            stopShadowX = roundCssNum(Number(val));
+          } else if (track.property === 'shadowOffsetY') {
+            stopShadowY = roundCssNum(Number(val));
+          } else if (track.property === 'shadowBlur') {
+            stopShadowBlur = Math.max(0, roundCssNum(Number(val)));
+          } else if (track.property === 'shadowSpread') {
+            stopShadowSpread = roundCssNum(Number(val));
+          } else if (track.property === 'shadowOpacity') {
+            stopShadowOpacity = Math.max(0, Math.min(1, Math.round(Number(val) * 1000) / 1000));
+          } else if (track.property === 'brightness') {
+            stopBrightness = Math.max(0, roundCssNum(Number(val)));
+          } else if (track.property === 'contrast') {
+            stopContrast = Math.max(0, roundCssNum(Number(val)));
+          } else if (track.property === 'saturate') {
+            stopSaturate = Math.max(0, roundCssNum(Number(val)));
+          } else if (track.property === 'grayscale') {
+            stopGrayscale = Math.max(0, roundCssNum(Number(val)));
           }
+        }
+
+        if (hasFilterTracks) {
+          const filterTokens: string[] = [];
+          const effBlur = stopLayerBlur !== undefined ? stopLayerBlur : (staticLayerBlur?.radius ?? 0);
+          if (trackedProps.has('layerBlur') || effBlur > 0) {
+            filterTokens.push(`blur(${Math.max(0, roundCssNum(effBlur))}px)`);
+          }
+          if (!isBoxShadowNode && hasShadowTracks) {
+            const sx = stopShadowX ?? staticDropShadow?.x ?? 0;
+            const sy = stopShadowY ?? staticDropShadow?.y ?? 12;
+            const sb = stopShadowBlur ?? staticDropShadow?.blur ?? 24;
+            const sa = stopShadowOpacity !== undefined ? stopShadowOpacity : parsedStaticShadow.alpha;
+            const scolor = sanitizeCssValue(formatColorWithAlpha(parsedStaticShadow.hex, sa), 'rgba(15, 23, 42, 0)');
+            filterTokens.push(`drop-shadow(${roundCssNum(sx)}px ${roundCssNum(sy)}px ${Math.max(0, roundCssNum(sb))}px ${scolor})`);
+          }
+          const effBrightness = stopBrightness !== undefined ? stopBrightness : (node.cssFilters?.brightness ?? 100);
+          if (trackedProps.has('brightness') || Math.abs(effBrightness - 100) > 0.01) {
+            filterTokens.push(`brightness(${roundCssNum(effBrightness)}%)`);
+          }
+          const effContrast = stopContrast !== undefined ? stopContrast : (node.cssFilters?.contrast ?? 100);
+          if (trackedProps.has('contrast') || Math.abs(effContrast - 100) > 0.01) {
+            filterTokens.push(`contrast(${roundCssNum(effContrast)}%)`);
+          }
+          const effSaturate = stopSaturate !== undefined ? stopSaturate : (node.cssFilters?.saturate ?? 100);
+          if (trackedProps.has('saturate') || Math.abs(effSaturate - 100) > 0.01) {
+            filterTokens.push(`saturate(${roundCssNum(effSaturate)}%)`);
+          }
+          const effGrayscale = stopGrayscale !== undefined ? stopGrayscale : (node.cssFilters?.grayscale ?? 0);
+          if (trackedProps.has('grayscale') || effGrayscale > 0.01) {
+            filterTokens.push(`grayscale(${roundCssNum(effGrayscale)}%)`);
+          }
+          declarations.push(`filter: ${filterTokens.length > 0 ? filterTokens.join(' ') : 'none'};`);
+        }
+
+        if (hasBackdropBlurTrack) {
+          const effBackdrop = Math.max(0, roundCssNum(stopBackdropBlur ?? 0));
+          const valStr = `blur(${effBackdrop}px)`;
+          declarations.push(`backdrop-filter: ${valStr};`);
+          declarations.push(`-webkit-backdrop-filter: ${valStr};`);
+        }
+
+        if (isBoxShadowNode && hasShadowTracks) {
+          const sx = stopShadowX ?? staticDropShadow?.x ?? 0;
+          const sy = stopShadowY ?? staticDropShadow?.y ?? 12;
+          const sb = stopShadowBlur ?? staticDropShadow?.blur ?? 24;
+          const ss = stopShadowSpread ?? staticDropShadow?.spread ?? 0;
+          const sa = stopShadowOpacity !== undefined ? stopShadowOpacity : parsedStaticShadow.alpha;
+          const scolor = sanitizeCssValue(formatColorWithAlpha(parsedStaticShadow.hex, sa), 'rgba(15, 23, 42, 0)');
+          const primaryShadow = `${roundCssNum(sx)}px ${roundCssNum(sy)}px ${Math.max(0, roundCssNum(sb))}px ${roundCssNum(ss)}px ${scolor}`;
+          const allShadows = [primaryShadow, ...otherStaticBoxShadows];
+          declarations.push(`box-shadow: ${allShadows.join(', ')};`);
         }
 
         // Subtract nearest animated ancestor's world translation so nested children never double-translate
@@ -446,8 +577,11 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
         list.push(animSpec);
         autoplayWrapperSpecs.set(nodeId, list);
       }
+      const willChangeParts = ['transform', 'opacity'];
+      if (hasFilterTracks) willChangeParts.push('filter');
+      if (hasBackdropBlurTrack) willChangeParts.push('backdrop-filter');
       lines.push(
-        `.${playClass} ${attrSelector}, ${attrSelector}.${playClass} { animation: ${animSpec}; will-change: transform, opacity; }`,
+        `.${playClass} ${attrSelector}, ${attrSelector}.${playClass} { animation: ${animSpec}; will-change: ${willChangeParts.join(', ')}; }`,
       );
       lines.push(
         `.${playClass}--reverse ${attrSelector}, ${attrSelector}.${playClass}--reverse { animation-direction: reverse; }`,

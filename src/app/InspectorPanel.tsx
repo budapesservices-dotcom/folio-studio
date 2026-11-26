@@ -1,6 +1,7 @@
 import type { JSX, RefObject } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import type {
+  AnimatableProperty,
   AssetReference,
   BreakpointId,
   ComponentDefinition,
@@ -84,8 +85,10 @@ export interface InspectorPanelProps {
   onCommitEdit: () => void;
   onHoverHint: () => void;
   onRemoveFromCanvas: (nodeId: string) => void;
-  onUpdateSelected: (patch: Partial<DesignNode>) => void;
-  onUpdateSelectedStyle: (patch: Record<string, string | number>) => void;
+  onUpdateSelected: (patch: Partial<DesignNode>, coalesceKey?: string) => void;
+  onUpdateSelectedStyle: (patch: Record<string, string | number>, coalesceKey?: string) => void;
+  onTogglePropertyKeyframe?: (nodeId: string, property: AnimatableProperty) => void;
+  isPropertyKeyedAtPlayhead?: (nodeId: string, property: AnimatableProperty) => boolean;
   onApplyAutoLayout: (containerId: string) => void;
   onConvertFrameLayoutMode?: (containerId: string, mode: LayoutMode) => void;
   onSwitchBreakpoint?: (bp: BreakpointId) => void;
@@ -166,6 +169,8 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
     onCommitEdit,
     onUpdateSelected,
     onUpdateSelectedStyle,
+    onTogglePropertyKeyframe,
+    isPropertyKeyedAtPlayhead,
     onApplyAutoLayout,
     onConvertFrameLayoutMode,
     onSwitchBreakpoint,
@@ -420,6 +425,8 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
           activeState={activeState}
           onUpdateSelected={onUpdateSelected}
           onCommitEdit={onCommitEdit}
+          onTogglePropertyKeyframe={onTogglePropertyKeyframe}
+          isPropertyKeyedAtPlayhead={isPropertyKeyedAtPlayhead}
         />
         <InspectorVectorMaskingControl
           selectedNode={selectedNode}

@@ -81,6 +81,7 @@ export interface GlobalToolbarProps {
   onExportCurrentProject: () => void;
   onExportActiveCanvasSvg: () => void;
   onExportActiveCanvasPng: () => void;
+  onOpenMotionExport?: () => void;
   onResetWindowLayout: () => void;
   onOpenShortcutsModal: () => void;
   onOpenDiagnosticsModal?: () => void;
@@ -151,6 +152,7 @@ export function GlobalToolbar({
   onExportCurrentProject,
   onExportActiveCanvasSvg,
   onExportActiveCanvasPng,
+  onOpenMotionExport,
   onResetWindowLayout,
   onOpenShortcutsModal,
   onOpenDiagnosticsModal,
@@ -265,6 +267,20 @@ export function GlobalToolbar({
                   <button type="button" role="menuitem" onClick={() => runMenuAction(onExportActiveCanvasPng)} disabled={isHydrating}>
                     Export PNG (2×)
                   </button>
+                  {onOpenMotionExport && (
+                    <>
+                      <div class="global-menu-divider" role="separator" />
+                      <button
+                        type="button"
+                        role="menuitem"
+                        data-testid="file-export-animation-btn"
+                        onClick={() => runMenuAction(onOpenMotionExport)}
+                        disabled={isHydrating}
+                      >
+                        Export Animation (MP4, MOV, GIF)…
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
               <input

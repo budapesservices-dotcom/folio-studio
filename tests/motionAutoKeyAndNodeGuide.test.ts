@@ -27,9 +27,15 @@ describe('Full-Snapshot Motion Auto-Key & Node Logic Connection Guide', () => {
 
     expect(getAnimatablePropertiesForNode(sun)).toEqual([
       'x', 'y', 'width', 'height', 'rotation', 'opacity', 'fill', 'stroke', 'strokeWidth',
+      'layerBlur', 'backdropBlur',
+      'shadowOffsetX', 'shadowOffsetY', 'shadowBlur', 'shadowSpread', 'shadowOpacity',
+      'brightness', 'contrast', 'saturate', 'grayscale',
     ]);
     expect(getAnimatablePropertiesForNode(card)).toEqual([
       'x', 'y', 'width', 'height', 'rotation', 'opacity', 'radius', 'fill', 'stroke', 'strokeWidth',
+      'layerBlur', 'backdropBlur',
+      'shadowOffsetX', 'shadowOffsetY', 'shadowBlur', 'shadowSpread', 'shadowOpacity',
+      'brightness', 'contrast', 'saturate', 'grayscale',
     ]);
 
     const emptyClip = createAnimationClip({ pageId: page.id, name: 'Circle Motion', durationMs: 1000 });

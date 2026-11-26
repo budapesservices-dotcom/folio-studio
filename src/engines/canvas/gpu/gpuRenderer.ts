@@ -20,6 +20,7 @@ import {
   type ViewportRect,
 } from './types';
 import {
+  computeTileBleedMargin,
   computeTileSignature,
   computeVisibleTileGrid,
   filterNodesForTile,
@@ -978,23 +979,28 @@ export class HybridGpuViewportEngine {
           const tileNodes = filterNodesForTile(packed.richNodes, tile);
           if (tileNodes.length === 0) continue;
 
-          const signature = computeTileSignature(tileNodes, tile, tileScale, richContext.componentById);
+          const bleedWorld = computeTileBleedMargin(tileNodes);
+          const bleedPix = bleedWorld > 0 ? Math.min(384, Math.ceil(bleedWorld * tileScale)) : 0;
+          const bleedWorldEff = bleedPix > 0 ? bleedPix / tileScale : 0;
+          const signature = `${computeTileSignature(tileNodes, tile, tileScale, richContext.componentById)}:b${bleedPix}`;
           const tilePixW = Math.max(1, Math.ceil(tile.width * tileScale));
           const tilePixH = Math.max(1, Math.ceil(tile.height * tileScale));
+          const surfPixW = tilePixW + bleedPix * 2;
+          const surfPixH = tilePixH + bleedPix * 2;
 
           const surface = this.tileCache.getOrRenderTile(
             tile,
             signature,
-            tilePixW,
-            tilePixH,
+            surfPixW,
+            surfPixH,
             (targetSurface) => {
               const sCtx = targetSurface.getContext2D();
               if (!sCtx) return;
               sCtx.setTransform(1, 0, 0, 1, 0, 0);
-              sCtx.clearRect(0, 0, tilePixW, tilePixH);
+              sCtx.clearRect(0, 0, surfPixW, surfPixH);
               sCtx.save();
               sCtx.scale(tileScale, tileScale);
-              sCtx.translate(-tile.x, -tile.y);
+              sCtx.translate(-(tile.x - bleedWorldEff), -(tile.y - bleedWorldEff));
               for (let n = 0; n < tileNodes.length; n += 1) {
                 renderRichNodeToContext2D(sCtx, tileNodes[n], richContext);
               }
@@ -1005,8 +1011,8 @@ export class HybridGpuViewportEngine {
           if (surface.drawable) {
             tileCtx.drawImage(
               surface.drawable,
-              0,
-              0,
+              bleedPix,
+              bleedPix,
               tilePixW,
               tilePixH,
               (tile.x - proj.viewX) * scaleX,

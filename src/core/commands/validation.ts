@@ -24,6 +24,7 @@ import {
   isComponentSlotsList,
   isComponentVariantsList,
   isCornerRadiiConfig,
+  isCustomEasingPresetList,
   isDesignTokenCollection,
   isLogicGraph,
   isNodeCssFilters,
@@ -39,6 +40,7 @@ import type {
   AnimationCreateClipPayload,
   AnimationDeleteClipPayload,
   AnimationUpdateClipPayload,
+  AnimationUpdateCustomEasingsPayload,
   AssetUpsertPayload,
   CodeUpdateModulesPayload,
   ComponentCreatePayload,
@@ -1466,13 +1468,17 @@ export function validateAnimationUpdateClipPayload(
   const normalized = cloneRuntimeData(value);
   if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
   const data = normalized.value;
-  if (!isRecord(data) || !hasOnlyKeys(data, ['clip']) || !isAnimationClip(data.clip)) {
+  if (!isRecord(data) || !hasOnlyKeys(data, ['clip', 'coalesceKey']) || !isAnimationClip(data.clip)) {
     return invalid('INVALID_PAYLOAD', 'Updating an animation clip requires a valid Folio AnimationClip object.');
+  }
+  if (data.coalesceKey !== undefined && !isNonEmptyString(data.coalesceKey, 256)) {
+    return invalid('INVALID_PAYLOAD', 'Animation clip coalesceKey must be a non-empty string when provided.');
   }
   return {
     ok: true,
     value: {
       clip: data.clip,
+      ...(data.coalesceKey !== undefined ? { coalesceKey: data.coalesceKey } : {}),
     },
   };
 }
@@ -1490,6 +1496,23 @@ export function validateAnimationDeleteClipPayload(
     ok: true,
     value: {
       clipId: data.clipId,
+    },
+  };
+}
+
+export function validateAnimationUpdateCustomEasingsPayload(
+  value: unknown,
+): ValidationOutcome<AnimationUpdateCustomEasingsPayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['customEasings']) || !isCustomEasingPresetList(data.customEasings)) {
+    return invalid('INVALID_PAYLOAD', 'Updating custom easing presets requires a valid list of custom curves.');
+  }
+  return {
+    ok: true,
+    value: {
+      customEasings: data.customEasings,
     },
   };
 }

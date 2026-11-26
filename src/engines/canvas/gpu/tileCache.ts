@@ -22,6 +22,7 @@ import type {
 } from '../../../core/document/types';
 import { resolveComponentInstanceNodes } from '../../../core/document/components';
 import {
+  buildCssFilterString,
   getVisibleEffects,
   getVisibleFillPaints,
   sanitizeStyleColor,
@@ -272,7 +273,8 @@ function applyNodeEffectsAndBlend(ctx: CanvasRenderingContext2D, node: DesignNod
     ctx.globalCompositeOperation = node.blendMode as GlobalCompositeOperation;
   }
   const effects = getVisibleEffects(node);
-  if (effects.length === 0) return;
+  const cssFilterStr = buildCssFilterString(node.cssFilters);
+  if (effects.length === 0 && !cssFilterStr) return;
 
   const filters: string[] = [];
   const dropShadows: Array<{ x: number; y: number; blur: number; color: string }> = [];
@@ -300,6 +302,10 @@ function applyNodeEffectsAndBlend(ctx: CanvasRenderingContext2D, node: DesignNod
     for (const ds of dropShadows) {
       filters.push(`drop-shadow(${ds.x}px ${ds.y}px ${ds.blur}px ${ds.color})`);
     }
+  }
+
+  if (cssFilterStr) {
+    filters.push(cssFilterStr);
   }
 
   if (filters.length > 0 && 'filter' in ctx) {

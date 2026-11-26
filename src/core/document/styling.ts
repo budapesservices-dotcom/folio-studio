@@ -410,6 +410,96 @@ export function hasSvgFilterEffects(node: DesignNode): boolean {
   );
 }
 
+export interface NodeFilterBleedMargins {
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+  readonly left: number;
+  readonly maxBlurRadius: number;
+  readonly maxBleed: number;
+}
+
+export interface SvgFilterRegion {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Computes conservative outward bleed margins (in canvas px) required so
+ * Gaussian blurs, drop shadows, and thick strokes never clip against an
+ * element's bounding box or GPU tile border. Guarantees at least `3 * blurRadius`
+ * on all 4 sides.
+ */
+export function computeNodeFilterBleedMargins(node: DesignNode): NodeFilterBleedMargins {
+  const effects = getVisibleEffects(node);
+  let top = 0;
+  let right = 0;
+  let bottom = 0;
+  let left = 0;
+  let maxBlurRadius = 0;
+
+  // Account for stroke overhang on shapes/paths/frames.
+  if ('style' in node && node.style && typeof node.style === 'object' && 'strokeWidth' in node.style) {
+    const sw = typeof node.style.strokeWidth === 'number' && Number.isFinite(node.style.strokeWidth)
+      ? Math.max(0, node.style.strokeWidth)
+      : 0;
+    if (sw > 0) {
+      const strokeBleed = Math.ceil(sw * 1.5);
+      top = Math.max(top, strokeBleed);
+      right = Math.max(right, strokeBleed);
+      bottom = Math.max(bottom, strokeBleed);
+      left = Math.max(left, strokeBleed);
+    }
+  }
+
+  for (const fx of effects) {
+    if (fx.type === 'layer-blur' && fx.radius > 0) {
+      maxBlurRadius = Math.max(maxBlurRadius, fx.radius);
+      const pad = Math.ceil(fx.radius * 3);
+      top += pad;
+      right += pad;
+      bottom += pad;
+      left += pad;
+    } else if (fx.type === 'drop-shadow') {
+      const blur = Math.max(0, fx.blur);
+      maxBlurRadius = Math.max(maxBlurRadius, blur);
+      const spread = Math.max(0, fx.spread ?? 0);
+      const blurPad = Math.ceil(blur * 3) + Math.ceil(spread);
+      left = Math.max(left, Math.ceil(Math.max(0, -fx.x)) + blurPad);
+      right = Math.max(right, Math.ceil(Math.max(0, fx.x)) + blurPad);
+      top = Math.max(top, Math.ceil(Math.max(0, -fx.y)) + blurPad);
+      bottom = Math.max(bottom, Math.ceil(Math.max(0, fx.y)) + blurPad);
+    }
+  }
+
+  const maxBleed = Math.max(top, right, bottom, left);
+  return { top, right, bottom, left, maxBlurRadius, maxBleed };
+}
+
+/**
+ * Computes an explicit `filterUnits="userSpaceOnUse"` region around a node's
+ * local geometry padded by `>= 3 * blurRadius` (minimum 24px safety margin)
+ * so SVG Gaussian blurs & drop shadows spread smoothly without ever clipping.
+ */
+export function computeSvgFilterRegion(node: DesignNode): SvgFilterRegion {
+  const bleed = computeNodeFilterBleedMargins(node);
+  const minSafety = 24;
+  const padLeft = Math.max(minSafety, bleed.left);
+  const padRight = Math.max(minSafety, bleed.right);
+  const padTop = Math.max(minSafety, bleed.top);
+  const padBottom = Math.max(minSafety, bleed.bottom);
+  const baseW = Math.max(1, node.width);
+  const baseH = Math.max(1, node.height);
+  return {
+    x: roundStyleNum(node.x - padLeft),
+    y: roundStyleNum(node.y - padTop),
+    width: roundStyleNum(baseW + padLeft + padRight),
+    height: roundStyleNum(baseH + padTop + padBottom),
+  };
+}
+
 /**
  * Serializes SVG `<linearGradient>`, `<radialGradient>`, and `<filter>` `<defs>`
  * XML strings for a single node — used by standalone SVG/PNG visual export.
@@ -453,6 +543,7 @@ export function serializeNodeSvgStyleDefs(node: DesignNode, prefix: string): str
   );
   if (effects.length > 0) {
     const filterId = buildSvgFilterId(prefix, node.id);
+    const region = computeSvgFilterRegion(node);
     const primitives: string[] = [];
     let currentResult = 'SourceGraphic';
     let step = 0;
@@ -462,10 +553,28 @@ export function serializeNodeSvgStyleDefs(node: DesignNode, prefix: string): str
       if (fx.type === 'drop-shadow') {
         const color = sanitizeStyleColor(fx.color, 'rgba(0,0,0,0.25)');
         const stdDev = roundStyleNum(Math.max(0, fx.blur) / 2);
+        const spread = roundStyleNum(fx.spread ?? 0);
         const out = `fx_ds_${step}`;
-        primitives.push(
-          `<feDropShadow in="${currentResult}" dx="${roundStyleNum(fx.x)}" dy="${roundStyleNum(fx.y)}" stdDeviation="${stdDev}" flood-color="${escapeXmlAttr(color)}" result="${out}" />`,
-        );
+        if (Math.abs(spread) > 0.01) {
+          const morphOut = `fx_ds_morph_${step}`;
+          const blurOut = `fx_ds_blur_${step}`;
+          const offOut = `fx_ds_off_${step}`;
+          const floodOut = `fx_ds_flood_${step}`;
+          const compOut = `fx_ds_comp_${step}`;
+          const op = spread > 0 ? 'dilate' : 'erode';
+          primitives.push(
+            `<feMorphology in="SourceAlpha" operator="${op}" radius="${roundStyleNum(Math.abs(spread))}" result="${morphOut}" />`,
+            `<feGaussianBlur in="${morphOut}" stdDeviation="${stdDev}" result="${blurOut}" />`,
+            `<feOffset in="${blurOut}" dx="${roundStyleNum(fx.x)}" dy="${roundStyleNum(fx.y)}" result="${offOut}" />`,
+            `<feFlood flood-color="${escapeXmlAttr(color)}" result="${floodOut}" />`,
+            `<feComposite in="${floodOut}" in2="${offOut}" operator="in" result="${compOut}" />`,
+            `<feMerge result="${out}"><feMergeNode in="${compOut}" /><feMergeNode in="${currentResult}" /></feMerge>`,
+          );
+        } else {
+          primitives.push(
+            `<feDropShadow in="${currentResult}" dx="${roundStyleNum(fx.x)}" dy="${roundStyleNum(fx.y)}" stdDeviation="${stdDev}" flood-color="${escapeXmlAttr(color)}" result="${out}" />`,
+          );
+        }
         currentResult = out;
       } else if (fx.type === 'inner-shadow') {
         const color = sanitizeStyleColor(fx.color, 'rgba(0,0,0,0.25)');
@@ -495,7 +604,7 @@ export function serializeNodeSvgStyleDefs(node: DesignNode, prefix: string): str
     }
 
     parts.push(
-      `<filter id="${escapeXmlAttr(filterId)}" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">${primitives.join('')}</filter>`,
+      `<filter id="${escapeXmlAttr(filterId)}" filterUnits="userSpaceOnUse" x="${region.x}" y="${region.y}" width="${region.width}" height="${region.height}" color-interpolation-filters="sRGB">${primitives.join('')}</filter>`,
     );
   }
 
@@ -638,15 +747,98 @@ export function parseColorWithAlpha(raw: string | undefined, fallbackHex = '#8B7
   return { hex: safeFallback, alpha: 1, isTransparent: false };
 }
 
+export interface RgbaColorChannels {
+  readonly r: number;
+  readonly g: number;
+  readonly b: number;
+  readonly a: number;
+}
+
+/**
+ * Parses CSS color strings (#RGB, #RGBA, #RRGGBB, #RRGGBBAA, rgb(), rgba())
+ * into numeric RGBA channels. Returns `null` for keywords like `'transparent'`
+ * or `'none'` so callers (such as the Motion interpolator) can adopt the
+ * paired keyframe's RGB channels with alpha 0.
+ */
+export function parseCssColorRgba(raw: string | undefined): RgbaColorChannels | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+  if (!trimmed || lower === 'none' || lower === 'transparent') return null;
+
+  const hex3 = /^#([0-9a-f]{3})$/i.exec(trimmed);
+  if (hex3) {
+    const [r, g, b] = hex3[1];
+    return {
+      r: parseInt(r + r, 16),
+      g: parseInt(g + g, 16),
+      b: parseInt(b + b, 16),
+      a: 1,
+    };
+  }
+
+  const hex4 = /^#([0-9a-f]{4})$/i.exec(trimmed);
+  if (hex4) {
+    const [r, g, b, a] = hex4[1];
+    return {
+      r: parseInt(r + r, 16),
+      g: parseInt(g + g, 16),
+      b: parseInt(b + b, 16),
+      a: clamp01(parseInt(a + a, 16) / 255),
+    };
+  }
+
+  const hex6 = /^#([0-9a-f]{6})$/i.exec(trimmed);
+  if (hex6) {
+    return {
+      r: parseInt(hex6[1].slice(0, 2), 16),
+      g: parseInt(hex6[1].slice(2, 4), 16),
+      b: parseInt(hex6[1].slice(4, 6), 16),
+      a: 1,
+    };
+  }
+
+  const hex8 = /^#([0-9a-f]{6})([0-9a-f]{2})$/i.exec(trimmed);
+  if (hex8) {
+    return {
+      r: parseInt(hex8[1].slice(0, 2), 16),
+      g: parseInt(hex8[1].slice(2, 4), 16),
+      b: parseInt(hex8[1].slice(4, 6), 16),
+      a: clamp01(parseInt(hex8[2], 16) / 255),
+    };
+  }
+
+  const rgbMatch = /^rgba?\(\s*([\d.]+)\s*[,\s]\s*([\d.]+)\s*[,\s]\s*([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i.exec(trimmed);
+  if (rgbMatch) {
+    const r = Math.max(0, Math.min(255, Math.round(Number(rgbMatch[1]))));
+    const g = Math.max(0, Math.min(255, Math.round(Number(rgbMatch[2]))));
+    const b = Math.max(0, Math.min(255, Math.round(Number(rgbMatch[3]))));
+    let a = 1;
+    if (rgbMatch[4] !== undefined) {
+      a = rgbMatch[4].endsWith('%')
+        ? clamp01(parseFloat(rgbMatch[4]) / 100)
+        : clamp01(Number(rgbMatch[4]));
+    }
+    return { r, g, b, a };
+  }
+
+  return null;
+}
+
+/**
+ * Formats a color with explicit alpha. Always preserves original RGB channels
+ * as `rgba(r, g, b, 0)` when alpha reaches 0 (never degrades to `'transparent'`)
+ * so Alpha keyframe interpolation stays smooth with zero color snapping or darkening.
+ */
 export function formatColorWithAlpha(hex: string, alpha: number): string {
-  const clamped = roundStyleNum(clamp01(alpha));
-  if (clamped <= 0) return 'transparent';
+  const clamped = Math.round(clamp01(alpha) * 1000) / 1000;
   const parsed = parseColorWithAlpha(hex, '#8B7CF6');
   if (clamped >= 0.999) return parsed.hex;
   const r = parseInt(parsed.hex.slice(1, 3), 16);
   const g = parseInt(parsed.hex.slice(3, 5), 16);
   const b = parseInt(parsed.hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${clamped})`;
+  const safeAlpha = clamped <= 0 ? 0 : clamped;
+  return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
 }
 
 export type ShadowPresetId = 'none' | 'soft' | 'medium' | 'deep' | 'neon-glow';

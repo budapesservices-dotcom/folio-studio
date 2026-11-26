@@ -117,17 +117,19 @@ function buildRoundedRectPathD(
   ].join(' ');
 }
 
-function buildGroupStyleAttr(node: DesignNode, mask: boolean): string {
+function buildBlendStyleAttr(node: DesignNode, mask: boolean): string {
   if (mask) return '';
-  const parts: string[] = [];
   if (node.blendMode && node.blendMode !== 'normal') {
-    parts.push(`mix-blend-mode:${node.blendMode}`);
+    return ` style="${escapeXml(`mix-blend-mode:${node.blendMode}`)}"`;
   }
+  return '';
+}
+
+function buildCssFilterStyleAttr(node: DesignNode, mask: boolean): string {
+  if (mask) return '';
   const cssFilterStr = buildCssFilterString(node.cssFilters);
-  if (cssFilterStr) {
-    parts.push(`filter:${cssFilterStr}`);
-  }
-  return parts.length > 0 ? ` style="${escapeXml(parts.join(';'))}"` : '';
+  if (!cssFilterStr) return '';
+  return ` style="${escapeXml(`filter:${cssFilterStr}`)}"`;
 }
 
 function imageFitToPreserveAspectRatio(fit: ImageFitMode): string {
@@ -228,7 +230,8 @@ function serializePrimitiveNode(
   const filterAttr = !mask && hasSvgFilterEffects(node)
     ? ` filter="url(#${buildSvgFilterId(prefix, node.id)})"`
     : '';
-  const styleAttr = buildGroupStyleAttr(node, mask);
+  const blendStyleAttr = buildBlendStyleAttr(node, mask);
+  const cssFilterStyleAttr = buildCssFilterStyleAttr(node, mask);
 
   let inner = '';
   if (node.type === 'frame' || node.type === 'rect') {
@@ -411,7 +414,8 @@ function serializePrimitiveNode(
     }
   }
 
-  return `<g${transformAttr}${opacityAttr}${filterAttr}${styleAttr}>${inner}</g>`;
+  const wrappedInner = cssFilterStyleAttr ? `<g${cssFilterStyleAttr}>${inner}</g>` : inner;
+  return `<g${transformAttr}${opacityAttr}${filterAttr}${blendStyleAttr}>${wrappedInner}</g>`;
 }
 
 function serializeClipMaskArtwork(
@@ -661,8 +665,10 @@ function serializeNodesBlock(
           const filterAttr = !mask && hasSvgFilterEffects(node)
             ? ` filter="url(#${buildSvgFilterId(prefix, node.id)})"`
             : '';
-          const styleAttr = buildGroupStyleAttr(node, mask);
-          markup = `<g${formatRotationTransform(node)}${opacityAttr}${filterAttr}${styleAttr}><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${inner}</g></g>`;
+          const blendStyleAttr = buildBlendStyleAttr(node, mask);
+          const cssFilterStyleAttr = buildCssFilterStyleAttr(node, mask);
+          const innerWithCss = cssFilterStyleAttr ? `<g${cssFilterStyleAttr}>${inner}</g>` : inner;
+          markup = `<g${formatRotationTransform(node)}${opacityAttr}${filterAttr}${blendStyleAttr}><g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${innerWithCss}</g></g>`;
         }
       } else {
         markup = serializePrimitiveNode(node, mask, prefix, assetById, rasterizeSafe, maskFill);

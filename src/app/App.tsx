@@ -24,7 +24,6 @@ import { createToolOperationExecutor } from './toolOperationExecutor';
 import { getActiveEditorContext, type EditorTarget } from './editorContext';
 import { getWindowZIndex } from './windowManager';
 import { createToolbarHintStore, DEFAULT_TOOLBAR_HINT } from './ToolbarHintBar';
-import type { KeyboardShortcutsModalProps } from './KeyboardShortcutsModal';
 import { StudioIcon } from './workspace/StudioIcon';
 import { useWorkspaceWindows } from './workspace/useWorkspaceWindows';
 import { useWorkspaceChromeEffects } from './workspace/useWorkspaceChromeEffects';
@@ -52,24 +51,12 @@ import { StatusBar } from './workspace/StatusBar';
 import { ComponentDeletionDialog, ProjectHydrationOverlay } from './workspace/ComponentDeletionDialog';
 import { createMotionAutoKeyBridge } from './workspace/motionAutoKeyBridge';
 import { useQuickInteractionActions } from './workspace/useQuickInteractionActions';
+import { WorkspaceModals } from './workspace/WorkspaceModals';
 
 // Lazy-loaded feature bundles kept outside Folio's critical startup chunk.
 const LazyCodeWorkspace = lazy(() => import('./workspace/LazyCodeWorkspace'));
 const LazyTokensPanel = lazy(() => import('./workspace/TokensPanel').then((m) => ({ default: m.TokensPanel })));
 const LazyMotionTimelinePanel = lazy(() => import('./workspace/MotionTimelinePanel').then((m) => ({ default: m.MotionTimelinePanel })));
-const LazyDiagnosticsModal = lazy(() => import('./workspace/DiagnosticsModal'));
-const LazyKeyboardShortcutsModal = lazy(async () => {
-  const module = await import('./KeyboardShortcutsModal');
-  return {
-    default: function ShortcutsModalBridge(props: KeyboardShortcutsModalProps & { onReady: () => void }) {
-      const { onReady, ...modalProps } = props;
-      useEffect(() => {
-        onReady();
-      }, [onReady]);
-      return <module.KeyboardShortcutsModal {...modalProps} />;
-    },
-  };
-});
 
 export function App() {
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
@@ -156,6 +143,7 @@ export function App() {
   const [openMenu, setOpenMenu] = useState<TopMenuId | null>(null);
   const [toolRackOpen, setToolRackOpen] = useState<string | null>(null);
   const [codeWorkspaceOpen, setCodeWorkspaceOpen] = useState(false);
+  const [motionExportOpen, setMotionExportOpen] = useState(false);
   const [codeWorkspaceLaunch, setCodeWorkspaceLaunch] = useState<{ viewMode: CodeWorkspaceViewMode; pageId?: string; nonce: number }>({ viewMode: 'code', nonce: 0 });
   const [workspaceTools, setWorkspaceTools] = useState<Record<EditorTarget, CanvasToolId>>({ main: 'select', component: 'select' });
   const [toolOptions, setToolOptions] = useState<CanvasToolOptions>(DEFAULT_CANVAS_TOOL_OPTIONS);
@@ -621,6 +609,7 @@ export function App() {
         onExportCurrentProject={() => { void fileLifecycle.exportCurrentProject(isHydrating); }}
         onExportActiveCanvasSvg={() => { void fileLifecycle.exportActiveCanvasSvg(isHydrating); }}
         onExportActiveCanvasPng={() => { void fileLifecycle.exportActiveCanvasPng(isHydrating); }}
+        onOpenMotionExport={() => setMotionExportOpen(true)}
         onResetWindowLayout={resetWindowLayout}
         onOpenShortcutsModal={openShortcutsModal}
         onOpenDiagnosticsModal={() => setDiagnosticsModalOpen(true)}
@@ -938,6 +927,8 @@ export function App() {
         }}
         onUpdateSelected={motionAutoKeyBridge.handleInspectorUpdateSelected}
         onUpdateSelectedStyle={motionAutoKeyBridge.handleInspectorUpdateSelectedStyle}
+        onTogglePropertyKeyframe={activeEditorId === 'main' ? motion.togglePropertyKeyframe : undefined}
+        isPropertyKeyedAtPlayhead={activeEditorId === 'main' ? motion.isPropertyKeyedAtPlayhead : undefined}
         onApplyAutoLayout={designSystem.applyAutoLayout}
         onConvertFrameLayoutMode={designSystem.convertFrameLayoutMode}
         onSwitchBreakpoint={designSystem.setActiveBreakpoint}
@@ -1093,6 +1084,7 @@ export function App() {
             activePage={activePage}
             pageClips={motion.pageClips}
             activeClip={motion.activeClip}
+            customEasings={state.project.customEasings ?? []}
             selectedNodeIds={state.selectedNodeIds}
             playheadMs={motion.playheadMs}
             isPlaying={motion.isPlaying}
@@ -1104,11 +1096,13 @@ export function App() {
             onApplyPreset={motion.applyPreset}
             onDeleteClip={motion.deleteActiveClip}
             onUpdateClip={motion.updateClip}
+            onUpdateCustomEasings={motion.updateCustomEasings}
             onTogglePlay={motion.togglePlay}
             onStop={motion.stop}
             onSeek={motion.seek}
             onKeyframeSelected={() => motion.keyframeSelectedLayers()}
             onOpenLivePreview={openLivePreviewForPage}
+            onOpenMotionExport={() => setMotionExportOpen(true)}
             onSelectCanvasNode={(nodeId) => { setActiveEditorId('main'); mainCommandClient.selectNodes([nodeId], 'Select animated layer'); }}
             onFocusStudio={() => setActiveEditorId('main')}
             onClose={motion.closeMotion}
@@ -1146,35 +1140,28 @@ export function App() {
         onRetryComponentSave={componentMaster.retryComponentCanvasSave}
       />
 
-      {shortcutsModalOpen && !componentMaster.componentDeletionDialogOpen && (
-        <Suspense fallback={null}>
-          <LazyKeyboardShortcutsModal
-            open
-            activeWorkspace={activeEditorId}
-            onClose={closeShortcutsModal}
-            hostRef={shortcutsModalHostRef}
-            dialogRef={shortcutsDialogRef}
-            onReady={handleShortcutsModalReady}
-          />
-        </Suspense>
-      )}
-
-      {diagnosticsModalOpen && !componentMaster.componentDeletionDialogOpen && (
-        <Suspense fallback={null}>
-          <LazyDiagnosticsModal
-            open
-            project={state.project}
-            activePageId={activePage.id}
-            historyUndoCount={state.past.length}
-            historyRedoCount={state.future.length}
-            onOpenCodeStudio={() => {
-              setActiveEditorId('main');
-              setCodeWorkspaceOpen(true);
-            }}
-            onClose={() => setDiagnosticsModalOpen(false)}
-          />
-        </Suspense>
-      )}
+      <WorkspaceModals
+        project={state.project}
+        activePage={activePage}
+        pageClips={motion.pageClips}
+        activeClip={motion.activeClip}
+        breakpoint={designSystem.activeBreakpoint}
+        activeWorkspace={activeEditorId}
+        componentDeletionDialogOpen={componentMaster.componentDeletionDialogOpen}
+        motionExportOpen={motionExportOpen}
+        shortcutsModalOpen={shortcutsModalOpen}
+        diagnosticsModalOpen={diagnosticsModalOpen}
+        historyUndoCount={state.past.length}
+        historyRedoCount={state.future.length}
+        shortcutsModalHostRef={shortcutsModalHostRef}
+        shortcutsDialogRef={shortcutsDialogRef}
+        onNotice={setNotice}
+        onCloseMotionExport={() => setMotionExportOpen(false)}
+        onCloseShortcuts={closeShortcutsModal}
+        onShortcutsReady={handleShortcutsModalReady}
+        onOpenCodeStudio={() => { setActiveEditorId('main'); setCodeWorkspaceOpen(true); }}
+        onCloseDiagnostics={() => setDiagnosticsModalOpen(false)}
+      />
 
       <ProjectHydrationOverlay visible={isHydrating} />
       {notice && <div class="toast" role="status">{notice}</div>}

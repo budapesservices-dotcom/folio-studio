@@ -294,6 +294,7 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'animation.create-clip':
     case 'animation.update-clip':
     case 'animation.delete-clip':
+    case 'animation.update-custom-easings':
     case 'asset.upsert':
     case 'node.create':
     case 'node.replace-many':
@@ -353,6 +354,7 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'animation.create-clip':
     case 'animation.update-clip':
     case 'animation.delete-clip':
+    case 'animation.update-custom-easings':
     case 'asset.upsert':
     case 'node.create':
     case 'node.set-properties':

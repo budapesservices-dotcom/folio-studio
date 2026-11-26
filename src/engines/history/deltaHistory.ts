@@ -3,6 +3,7 @@ import type {
   AssetReference,
   CodeModuleRecord,
   ComponentDefinition,
+  CustomEasingPreset,
   DesignNode,
   DesignTokenCollection,
   FolioPage,
@@ -77,6 +78,9 @@ export interface ProjectDelta {
   readonly animationsChanged?: boolean;
   readonly animationsBefore?: readonly AnimationClip[];
   readonly animationsAfter?: readonly AnimationClip[];
+  readonly customEasingsChanged?: boolean;
+  readonly customEasingsBefore?: readonly CustomEasingPreset[];
+  readonly customEasingsAfter?: readonly CustomEasingPreset[];
   readonly logicFramePresetsChanged?: boolean;
   readonly logicFramePresetsBefore?: readonly LogicFramePreset[];
   readonly logicFramePresetsAfter?: readonly LogicFramePreset[];
@@ -244,6 +248,7 @@ export function isProjectDeltaEmpty(delta: ProjectDelta): boolean {
     !delta.logicGraphsChanged &&
     !delta.assetsChanged &&
     !delta.animationsChanged &&
+    !delta.customEasingsChanged &&
     !delta.logicFramePresetsChanged
   );
 }
@@ -331,6 +336,9 @@ export function computeProjectDelta(
   const logicGraphsChanged = before.logicGraphs !== after.logicGraphs && !areValuesDeepEqual(before.logicGraphs, after.logicGraphs);
   const assetsChanged = before.assets !== after.assets && !areValuesDeepEqual(before.assets, after.assets);
   const animationsChanged = before.animations !== after.animations && !areValuesDeepEqual(before.animations, after.animations);
+  const customEasingsChanged =
+    before.customEasings !== after.customEasings &&
+    !areValuesDeepEqual(before.customEasings, after.customEasings);
   const logicFramePresetsChanged =
     before.logicFramePresets !== after.logicFramePresets &&
     !areValuesDeepEqual(before.logicFramePresets, after.logicFramePresets);
@@ -346,6 +354,7 @@ export function computeProjectDelta(
     logicGraphsChanged ||
     assetsChanged ||
     animationsChanged ||
+    customEasingsChanged ||
     logicFramePresetsChanged;
 
   const metadataCoreChanged =
@@ -402,6 +411,13 @@ export function computeProjectDelta(
           animationsChanged: true,
           animationsBefore: before.animations,
           animationsAfter: after.animations,
+        }
+      : {}),
+    ...(customEasingsChanged
+      ? {
+          customEasingsChanged: true,
+          customEasingsBefore: before.customEasings,
+          customEasingsAfter: after.customEasings,
         }
       : {}),
     ...(logicFramePresetsChanged
@@ -532,6 +548,13 @@ export function applyProjectDelta(
     const nextAnimations = direction === 'forward' ? delta.animationsAfter : delta.animationsBefore;
     if (nextAnimations === undefined) delete nextProject.animations;
     else nextProject.animations = [...nextAnimations];
+  }
+
+  if (delta.customEasingsChanged) {
+    const nextCustomEasings =
+      direction === 'forward' ? delta.customEasingsAfter : delta.customEasingsBefore;
+    if (nextCustomEasings === undefined) delete nextProject.customEasings;
+    else nextProject.customEasings = [...nextCustomEasings];
   }
 
   if (delta.logicFramePresetsChanged) {

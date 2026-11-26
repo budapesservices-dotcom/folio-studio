@@ -7,9 +7,30 @@ import type {
   DesignNode,
   FolioDocument,
   FolioPage,
+  NodeCssFilters,
+  VisualEffect,
 } from '../../core/document/types';
+import {
+  formatColorWithAlpha,
+  parseColorWithAlpha,
+  parseCssColorRgba,
+} from '../../core/document/styling';
 import { scalePathNodeGeometry } from '../../core/document/vector';
 import { evaluateEasing } from './easing';
+
+export const MODERN_EFFECT_ANIMATABLE_PROPERTIES: readonly AnimatableProperty[] = Object.freeze([
+  'layerBlur',
+  'backdropBlur',
+  'shadowOffsetX',
+  'shadowOffsetY',
+  'shadowBlur',
+  'shadowSpread',
+  'shadowOpacity',
+  'brightness',
+  'contrast',
+  'saturate',
+  'grayscale',
+]);
 
 export const ANIMATABLE_PROPERTIES: readonly AnimatableProperty[] = Object.freeze([
   'x',
@@ -23,6 +44,7 @@ export const ANIMATABLE_PROPERTIES: readonly AnimatableProperty[] = Object.freez
   'fill',
   'stroke',
   'strokeWidth',
+  ...MODERN_EFFECT_ANIMATABLE_PROPERTIES,
 ]);
 
 export const ANIMATABLE_PROPERTY_META: Readonly<Record<AnimatableProperty, {
@@ -44,6 +66,17 @@ export const ANIMATABLE_PROPERTY_META: Readonly<Record<AnimatableProperty, {
   fill: { label: 'Fill', unit: '', step: 0, kind: 'color' },
   stroke: { label: 'Stroke', unit: '', step: 0, kind: 'color' },
   strokeWidth: { label: 'Stroke W', unit: 'px', step: 0.5, min: 0, max: 200, kind: 'number' },
+  layerBlur: { label: 'Layer Blur', unit: 'px', step: 1, min: 0, max: 200, kind: 'number' },
+  backdropBlur: { label: 'Backdrop Blur', unit: 'px', step: 1, min: 0, max: 200, kind: 'number' },
+  shadowOffsetX: { label: 'Shadow X', unit: 'px', step: 1, min: -500, max: 500, kind: 'number' },
+  shadowOffsetY: { label: 'Shadow Y', unit: 'px', step: 1, min: -500, max: 500, kind: 'number' },
+  shadowBlur: { label: 'Shadow Blur', unit: 'px', step: 1, min: 0, max: 200, kind: 'number' },
+  shadowSpread: { label: 'Shadow Spread', unit: 'px', step: 1, min: -100, max: 100, kind: 'number' },
+  shadowOpacity: { label: 'Shadow Opacity', unit: '', step: 0.05, min: 0, max: 1, kind: 'number' },
+  brightness: { label: 'Brightness', unit: '%', step: 1, min: 0, max: 300, kind: 'number' },
+  contrast: { label: 'Contrast', unit: '%', step: 1, min: 0, max: 300, kind: 'number' },
+  saturate: { label: 'Saturate', unit: '%', step: 1, min: 0, max: 300, kind: 'number' },
+  grayscale: { label: 'Grayscale', unit: '%', step: 1, min: 0, max: 100, kind: 'number' },
 });
 
 export interface AnimatedNodePose {
@@ -58,6 +91,17 @@ export interface AnimatedNodePose {
   fill?: string;
   stroke?: string;
   strokeWidth?: number;
+  layerBlur?: number;
+  backdropBlur?: number;
+  shadowOffsetX?: number;
+  shadowOffsetY?: number;
+  shadowBlur?: number;
+  shadowSpread?: number;
+  shadowOpacity?: number;
+  brightness?: number;
+  contrast?: number;
+  saturate?: number;
+  grayscale?: number;
 }
 
 export interface MotionPresetDefinition {
@@ -103,49 +147,64 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function roundTo2(value: number): number {
-  return Math.round(value * 100) / 100;
+  const r = Math.round(value * 100) / 100;
+  return Object.is(r, -0) ? 0 : r;
 }
 
-function parseHexToRgba(hex: string): [number, number, number, number] | null {
-  const clean = hex.trim();
-  if (!clean.startsWith('#')) return null;
-  const raw = clean.slice(1);
-  if (raw.length === 3 || raw.length === 4) {
-    const r = Number.parseInt(raw[0] + raw[0], 16);
-    const g = Number.parseInt(raw[1] + raw[1], 16);
-    const b = Number.parseInt(raw[2] + raw[2], 16);
-    const a = raw.length === 4 ? Number.parseInt(raw[3] + raw[3], 16) / 255 : 1;
-    if ([r, g, b].some(Number.isNaN)) return null;
-    return [r, g, b, a];
-  }
-  if (raw.length === 6 || raw.length === 8) {
-    const r = Number.parseInt(raw.slice(0, 2), 16);
-    const g = Number.parseInt(raw.slice(2, 4), 16);
-    const b = Number.parseInt(raw.slice(4, 6), 16);
-    const a = raw.length === 8 ? Number.parseInt(raw.slice(6, 8), 16) / 255 : 1;
-    if ([r, g, b].some(Number.isNaN)) return null;
-    return [r, g, b, a];
-  }
-  return null;
+function roundTo3(value: number): number {
+  const r = Math.round(value * 1000) / 1000;
+  return Object.is(r, -0) ? 0 : r;
 }
 
 function channelToHex(channel: number): string {
   return clamp(Math.round(channel), 0, 255).toString(16).padStart(2, '0');
 }
 
-export function interpolateHexColor(from: string, to: string, t: number): string {
-  const a = parseHexToRgba(from);
-  const b = parseHexToRgba(to);
+function isKeywordTransparent(raw: string): boolean {
+  const lower = raw.trim().toLowerCase();
+  return !lower || lower === 'transparent' || lower === 'none';
+}
+
+/**
+ * Smoothly interpolates any CSS color (`#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`,
+ * `rgb()`, `rgba()`, and legacy `'transparent'`/`'none'`).
+ * When one endpoint is legacy `'transparent'`/`'none'`, automatically adopts the
+ * paired keyframe's RGB channels with alpha 0 so fading stays smooth without
+ * binary snapping or muddy mid-transition darkening.
+ */
+export function interpolateColor(from: string, to: string, t: number): string {
+  let a = parseCssColorRgba(from);
+  let b = parseCssColorRgba(to);
+
+  if (!a && !b) {
+    if (isKeywordTransparent(from) && isKeywordTransparent(to)) {
+      return 'rgba(0, 0, 0, 0)';
+    }
+    return t < 0.5 ? from : to;
+  }
+
+  if (!a && b && isKeywordTransparent(from)) {
+    a = { r: b.r, g: b.g, b: b.b, a: 0 };
+  } else if (!b && a && isKeywordTransparent(to)) {
+    b = { r: a.r, g: a.g, b: a.b, a: 0 };
+  }
+
   if (!a || !b) return t < 0.5 ? from : to;
+
   const clampedT = clamp(t, 0, 1);
-  const r = a[0] + (b[0] - a[0]) * clampedT;
-  const g = a[1] + (b[1] - a[1]) * clampedT;
-  const bl = a[2] + (b[2] - a[2]) * clampedT;
-  const alpha = a[3] + (b[3] - a[3]) * clampedT;
+  const r = clamp(Math.round(a.r + (b.r - a.r) * clampedT), 0, 255);
+  const g = clamp(Math.round(a.g + (b.g - a.g) * clampedT), 0, 255);
+  const bl = clamp(Math.round(a.b + (b.b - a.b) * clampedT), 0, 255);
+  const alpha = roundTo3(clamp(a.a + (b.a - a.a) * clampedT, 0, 1));
   if (alpha < 0.999) {
-    return `#${channelToHex(r)}${channelToHex(g)}${channelToHex(bl)}${channelToHex(alpha * 255)}`;
+    return `rgba(${r}, ${g}, ${bl}, ${alpha <= 0 ? 0 : alpha})`;
   }
   return `#${channelToHex(r)}${channelToHex(g)}${channelToHex(bl)}`;
+}
+
+/** Backward-compatible alias for `interpolateColor`. */
+export function interpolateHexColor(from: string, to: string, t: number): string {
+  return interpolateColor(from, to, t);
 }
 
 export function sortKeyframes(keyframes: readonly AnimationKeyframe[]): AnimationKeyframe[] {
@@ -163,11 +222,19 @@ export function evaluateTrackAtTime(
   if (track.keyframes.length === 0) return undefined;
   const sorted = sortKeyframes(track.keyframes);
   if (sorted.length === 1 || timeMs <= sorted[0].timeMs) {
-    return sorted[0].value;
+    const val = sorted[0].value;
+    if (track.property === 'opacity' || track.property === 'shadowOpacity') {
+      return roundTo3(clamp(Number(val), 0, 1));
+    }
+    return val;
   }
   const last = sorted[sorted.length - 1];
   if (timeMs >= last.timeMs) {
-    return last.value;
+    const val = last.value;
+    if (track.property === 'opacity' || track.property === 'shadowOpacity') {
+      return roundTo3(clamp(Number(val), 0, 1));
+    }
+    return val;
   }
 
   for (let i = 0; i < sorted.length - 1; i += 1) {
@@ -180,16 +247,33 @@ export function evaluateTrackAtTime(
       const easedT = evaluateEasing(end.easing, rawT);
 
       if (track.property === 'fill' || track.property === 'stroke') {
-        return interpolateHexColor(String(start.value), String(end.value), easedT);
+        return interpolateColor(String(start.value), String(end.value), easedT);
       }
 
       const startNum = Number(start.value);
       const endNum = Number(end.value);
       const interpolated = startNum + (endNum - startNum) * easedT;
-      if (track.property === 'opacity') return roundTo2(clamp(interpolated, 0, 1));
-      if (track.property === 'scale') return roundTo2(clamp(interpolated, 0.05, 10));
+      if (track.property === 'opacity' || track.property === 'shadowOpacity') {
+        return roundTo3(clamp(interpolated, 0, 1));
+      }
+      if (track.property === 'scale') return roundTo3(clamp(interpolated, 0.05, 10));
       if (track.property === 'width' || track.property === 'height') return roundTo2(clamp(interpolated, 1, 20000));
       if (track.property === 'radius' || track.property === 'strokeWidth') return roundTo2(clamp(interpolated, 0, 2000));
+      if (track.property === 'layerBlur' || track.property === 'backdropBlur' || track.property === 'shadowBlur') {
+        return roundTo2(clamp(interpolated, 0, 200));
+      }
+      if (track.property === 'shadowOffsetX' || track.property === 'shadowOffsetY') {
+        return roundTo2(clamp(interpolated, -500, 500));
+      }
+      if (track.property === 'shadowSpread') {
+        return roundTo2(clamp(interpolated, -100, 100));
+      }
+      if (track.property === 'brightness' || track.property === 'contrast' || track.property === 'saturate') {
+        return roundTo2(clamp(interpolated, 0, 300));
+      }
+      if (track.property === 'grayscale') {
+        return roundTo2(clamp(interpolated, 0, 100));
+      }
       return roundTo2(interpolated);
     }
   }
@@ -326,8 +410,8 @@ export function applyAnimatedPosesToDocument(
         : roundTo2((node.rotation || 0) + (hasOrbit ? inheritedRotDelta : 0));
     const effectiveOpacity =
       pose?.opacity !== undefined
-        ? clamp(pose.opacity, 0, 1)
-        : roundTo2(clamp(node.opacity * inheritedOpacityMul, 0, 1));
+        ? roundTo3(clamp(pose.opacity, 0, 1))
+        : roundTo3(clamp(node.opacity * inheritedOpacityMul, 0, 1));
 
     const basePatch = {
       x: centeredX,
@@ -382,6 +466,111 @@ export function applyAnimatedPosesToDocument(
       } as DesignNode;
     }
 
+    // Apply animated Modern Effects (layerBlur, backdropBlur, drop-shadow)
+    const hasShadowAnim = Boolean(
+      pose && (
+        pose.shadowOffsetX !== undefined ||
+        pose.shadowOffsetY !== undefined ||
+        pose.shadowBlur !== undefined ||
+        pose.shadowSpread !== undefined ||
+        pose.shadowOpacity !== undefined
+      ),
+    );
+    const hasEffectAnim = Boolean(
+      pose && (pose.layerBlur !== undefined || pose.backdropBlur !== undefined || hasShadowAnim),
+    );
+
+    if (hasEffectAnim && pose) {
+      let nextEffects: VisualEffect[] = [...(nextNode.effects ?? [])];
+
+      if (pose.layerBlur !== undefined) {
+        const radius = Math.max(0, roundTo2(pose.layerBlur));
+        const withoutLayerBlur = nextEffects.filter((fx) => fx.type !== 'layer-blur');
+        if (radius > 0) {
+          const existing = nextEffects.find((fx) => fx.type === 'layer-blur');
+          nextEffects = [
+            ...withoutLayerBlur,
+            { id: existing?.id ?? 'fx-anim-layer-blur', type: 'layer-blur', radius, visible: true },
+          ];
+        } else {
+          nextEffects = withoutLayerBlur;
+        }
+      }
+
+      if (pose.backdropBlur !== undefined) {
+        const radius = Math.max(0, roundTo2(pose.backdropBlur));
+        const withoutBackdrop = nextEffects.filter((fx) => fx.type !== 'backdrop-blur');
+        if (radius > 0) {
+          const existing = nextEffects.find((fx) => fx.type === 'backdrop-blur');
+          nextEffects = [
+            ...withoutBackdrop,
+            { id: existing?.id ?? 'fx-anim-backdrop-blur', type: 'backdrop-blur', radius, visible: true },
+          ];
+        } else {
+          nextEffects = withoutBackdrop;
+        }
+      }
+
+      if (hasShadowAnim) {
+        const existingShadow = nextEffects.find(
+          (fx): fx is Extract<VisualEffect, { type: 'drop-shadow' }> => fx.type === 'drop-shadow',
+        );
+        const withoutDropShadow = nextEffects.filter((fx) => fx.type !== 'drop-shadow');
+        const baseColor = existingShadow?.color ?? 'rgba(15, 23, 42, 0.32)';
+        const parsedBase = parseColorWithAlpha(baseColor, '#0F172A');
+        const nextAlpha = pose.shadowOpacity !== undefined
+          ? roundTo3(clamp(pose.shadowOpacity, 0, 1))
+          : parsedBase.alpha;
+        const nextShadowColor = formatColorWithAlpha(parsedBase.hex, nextAlpha);
+        const nextX = pose.shadowOffsetX !== undefined ? roundTo2(pose.shadowOffsetX) : (existingShadow?.x ?? 0);
+        const nextY = pose.shadowOffsetY !== undefined ? roundTo2(pose.shadowOffsetY) : (existingShadow?.y ?? 12);
+        const nextBlur = pose.shadowBlur !== undefined ? Math.max(0, roundTo2(pose.shadowBlur)) : (existingShadow?.blur ?? 24);
+        const nextSpread = pose.shadowSpread !== undefined ? roundTo2(pose.shadowSpread) : (existingShadow?.spread ?? 0);
+        nextEffects = [
+          {
+            id: existingShadow?.id ?? 'fx-anim-drop-shadow',
+            type: 'drop-shadow',
+            x: nextX,
+            y: nextY,
+            blur: nextBlur,
+            spread: nextSpread,
+            color: nextShadowColor,
+            visible: true,
+          },
+          ...withoutDropShadow,
+        ];
+      }
+
+      nextNode = {
+        ...nextNode,
+        effects: nextEffects.length > 0 ? nextEffects : undefined,
+      } as DesignNode;
+    }
+
+    // Apply animated CSS Filters (brightness, contrast, saturate, grayscale)
+    const hasCssFilterAnim = Boolean(
+      pose && (
+        pose.brightness !== undefined ||
+        pose.contrast !== undefined ||
+        pose.saturate !== undefined ||
+        pose.grayscale !== undefined
+      ),
+    );
+
+    if (hasCssFilterAnim && pose) {
+      const nextFilters: NodeCssFilters = {
+        ...(nextNode.cssFilters ?? {}),
+        ...(pose.brightness !== undefined ? { brightness: Math.max(0, roundTo2(pose.brightness)) } : {}),
+        ...(pose.contrast !== undefined ? { contrast: Math.max(0, roundTo2(pose.contrast)) } : {}),
+        ...(pose.saturate !== undefined ? { saturate: Math.max(0, roundTo2(pose.saturate)) } : {}),
+        ...(pose.grayscale !== undefined ? { grayscale: Math.max(0, roundTo2(pose.grayscale)) } : {}),
+      };
+      nextNode = {
+        ...nextNode,
+        cssFilters: nextFilters,
+      } as DesignNode;
+    }
+
     return nextNode;
   });
 
@@ -394,7 +583,7 @@ export function applyAnimatedPosesToDocument(
 
 function normalizeAnimatableColor(raw: string | undefined, fallback: string): string {
   const trimmed = raw?.trim() ?? '';
-  if (!trimmed || trimmed.toLowerCase() === 'none') return 'transparent';
+  if (!trimmed || trimmed.toLowerCase() === 'none') return 'rgba(0, 0, 0, 0)';
   if (trimmed.toLowerCase() === 'transparent') return 'transparent';
   if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(trimmed)) return trimmed;
   if (/^(?:rgba?|hsla?)\(\s*[0-9.%\s,/+-]+\s*\)$/i.test(trimmed)) return trimmed;
@@ -402,11 +591,10 @@ function normalizeAnimatableColor(raw: string | undefined, fallback: string): st
 }
 
 /**
- * Returns the complete list of animatable properties supported by a given DesignNode
- * so keyframing an object captures its full visual state (position, size, rotation,
- * opacity, radius, fill, stroke, stroke width) in one action.
+ * Returns the core transform/appearance properties captured by one-click full-object
+ * keyframing (without cluttering timelines with untouched Modern Effects).
  */
-export function getAnimatablePropertiesForNode(node: DesignNode): AnimatableProperty[] {
+export function getCoreAnimatablePropertiesForNode(node: DesignNode): AnimatableProperty[] {
   const base: AnimatableProperty[] = ['x', 'y', 'width', 'height', 'rotation', 'opacity'];
   switch (node.type) {
     case 'rect':
@@ -426,6 +614,14 @@ export function getAnimatablePropertiesForNode(node: DesignNode): AnimatableProp
   }
 }
 
+/**
+ * Returns the complete list of animatable properties supported by a given DesignNode
+ * including all Modern Effects (Blur, Backdrop Blur, Drop Shadow, CSS Filters).
+ */
+export function getAnimatablePropertiesForNode(node: DesignNode): AnimatableProperty[] {
+  return [...getCoreAnimatablePropertiesForNode(node), ...MODERN_EFFECT_ANIMATABLE_PROPERTIES];
+}
+
 export function getDefaultNodePropertyValue(node: DesignNode, property: AnimatableProperty): number | string {
   switch (property) {
     case 'x':
@@ -437,7 +633,7 @@ export function getDefaultNodePropertyValue(node: DesignNode, property: Animatab
     case 'height':
       return Math.max(1, roundTo2(node.height));
     case 'opacity':
-      return roundTo2(clamp(node.opacity ?? 1, 0, 1));
+      return roundTo3(clamp(node.opacity ?? 1, 0, 1));
     case 'rotation':
       return roundTo2(node.rotation ?? 0);
     case 'scale':
@@ -459,29 +655,87 @@ export function getDefaultNodePropertyValue(node: DesignNode, property: Animatab
             return normalizeAnimatableColor(firstSolid.color, '#4f8cff');
           }
         }
-        return 'transparent';
+        return 'rgba(0, 0, 0, 0)';
       }
       return '#4f8cff';
     }
     case 'stroke': {
       if ('style' in node && 'stroke' in node.style) {
         if (typeof node.style.stroke === 'string' && node.style.stroke.trim().length > 0) {
-          return normalizeAnimatableColor(node.style.stroke, 'transparent');
+          return normalizeAnimatableColor(node.style.stroke, 'rgba(0, 0, 0, 0)');
         }
         if ('strokes' in node.style && Array.isArray(node.style.strokes)) {
           const firstStroke = node.style.strokes.find((item) => item.visible !== false && typeof item.color === 'string');
           if (firstStroke && firstStroke.color) {
-            return normalizeAnimatableColor(firstStroke.color, 'transparent');
+            return normalizeAnimatableColor(firstStroke.color, 'rgba(0, 0, 0, 0)');
           }
         }
-        return 'transparent';
+        return 'rgba(0, 0, 0, 0)';
       }
-      return 'transparent';
+      return 'rgba(0, 0, 0, 0)';
     }
     case 'strokeWidth':
       return 'style' in node && 'strokeWidth' in node.style && typeof node.style.strokeWidth === 'number'
         ? Math.max(0, roundTo2(node.style.strokeWidth))
         : 0;
+    case 'layerBlur': {
+      const fx = (node.effects ?? []).find(
+        (item): item is Extract<VisualEffect, { type: 'layer-blur' }> =>
+          item.type === 'layer-blur' && item.visible !== false,
+      );
+      return fx ? Math.max(0, roundTo2(fx.radius)) : 0;
+    }
+    case 'backdropBlur': {
+      const fx = (node.effects ?? []).find(
+        (item): item is Extract<VisualEffect, { type: 'backdrop-blur' }> =>
+          item.type === 'backdrop-blur' && item.visible !== false,
+      );
+      return fx ? Math.max(0, roundTo2(fx.radius)) : 0;
+    }
+    case 'shadowOffsetX': {
+      const fx = (node.effects ?? []).find(
+        (item): item is Extract<VisualEffect, { type: 'drop-shadow' }> =>
+          item.type === 'drop-shadow' && item.visible !== false,
+      );
+      return fx ? roundTo2(fx.x) : 0;
+    }
+    case 'shadowOffsetY': {
+      const fx = (node.effects ?? []).find(
+        (item): item is Extract<VisualEffect, { type: 'drop-shadow' }> =>
+          item.type === 'drop-shadow' && item.visible !== false,
+      );
+      return fx ? roundTo2(fx.y) : 0;
+    }
+    case 'shadowBlur': {
+      const fx = (node.effects ?? []).find(
+        (item): item is Extract<VisualEffect, { type: 'drop-shadow' }> =>
+          item.type === 'drop-shadow' && item.visible !== false,
+      );
+      return fx ? Math.max(0, roundTo2(fx.blur)) : 0;
+    }
+    case 'shadowSpread': {
+      const fx = (node.effects ?? []).find(
+        (item): item is Extract<VisualEffect, { type: 'drop-shadow' }> =>
+          item.type === 'drop-shadow' && item.visible !== false,
+      );
+      return fx ? roundTo2(fx.spread ?? 0) : 0;
+    }
+    case 'shadowOpacity': {
+      const fx = (node.effects ?? []).find(
+        (item): item is Extract<VisualEffect, { type: 'drop-shadow' }> =>
+          item.type === 'drop-shadow' && item.visible !== false,
+      );
+      if (!fx) return 0;
+      return roundTo3(parseColorWithAlpha(fx.color, '#0F172A').alpha);
+    }
+    case 'brightness':
+      return Math.max(0, roundTo2(node.cssFilters?.brightness ?? 100));
+    case 'contrast':
+      return Math.max(0, roundTo2(node.cssFilters?.contrast ?? 100));
+    case 'saturate':
+      return Math.max(0, roundTo2(node.cssFilters?.saturate ?? 100));
+    case 'grayscale':
+      return Math.max(0, roundTo2(node.cssFilters?.grayscale ?? 0));
   }
 }
 
@@ -705,7 +959,7 @@ export function captureNodeKeyframeSnapshot(
 ): { clip: AnimationClip; capturedProperties: readonly AnimatableProperty[] } {
   const properties = options?.properties && options.properties.length > 0
     ? [...options.properties]
-    : getAnimatablePropertiesForNode(node);
+    : getCoreAnimatablePropertiesForNode(node);
   const clampedTime = clamp(Math.round(timeMs), 0, clip.durationMs);
   const easing = options?.easing ?? 'ease-out';
   const baselineNode = options?.baselineNode;
@@ -771,9 +1025,69 @@ export function captureNodeKeyframeSnapshot(
 }
 
 /**
+ * Checks whether a specific node property has a keyframe within 15ms of `timeMs`.
+ */
+export function hasKeyframeAtTime(
+  clip: AnimationClip | null | undefined,
+  nodeId: string,
+  property: AnimatableProperty,
+  timeMs: number,
+): boolean {
+  if (!clip) return false;
+  const track = clip.tracks.find((t) => t.targetNodeId === nodeId && t.property === property);
+  if (!track) return false;
+  const clampedTime = clamp(Math.round(timeMs), 0, clip.durationMs);
+  return track.keyframes.some((kf) => Math.abs(kf.timeMs - clampedTime) <= 15);
+}
+
+/**
+ * Toggles a single property keyframe at `timeMs` (used by Inspector diamond icons).
+ * - If a keyframe already exists within 15ms of `timeMs`, removes it (and prunes the track if empty).
+ * - Otherwise inserts/upserts a keyframe with the node's current property value (auto-seeding
+ *   a 0ms baseline from `baselineNode` if creating a new track at `timeMs > 0`).
+ */
+export function togglePropertyKeyframeInClip(
+  clip: AnimationClip,
+  node: DesignNode,
+  property: AnimatableProperty,
+  timeMs: number,
+  options?: { baselineNode?: DesignNode; easing?: AnimationEasing },
+): { clip: AnimationClip; action: 'added' | 'removed' } {
+  const clampedTime = clamp(Math.round(timeMs), 0, clip.durationMs);
+  const existingTrack = clip.tracks.find((t) => t.targetNodeId === node.id && t.property === property);
+  const nearKf = existingTrack?.keyframes.find((kf) => Math.abs(kf.timeMs - clampedTime) <= 15);
+
+  if (existingTrack && nearKf) {
+    const remaining = existingTrack.keyframes.filter((kf) => kf.id !== nearKf.id);
+    const nextTracks = remaining.length > 0
+      ? clip.tracks.map((t) => (t.id === existingTrack.id ? { ...t, keyframes: remaining } : t))
+      : clip.tracks.filter((t) => t.id !== existingTrack.id);
+    return {
+      action: 'removed',
+      clip: {
+        ...clip,
+        tracks: nextTracks,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  const { clip: nextClip } = captureNodeKeyframeSnapshot(clip, node, clampedTime, {
+    baselineNode: options?.baselineNode,
+    properties: [property],
+    easing: options?.easing ?? 'ease-out',
+  });
+  return {
+    action: 'added',
+    clip: nextClip,
+  };
+}
+
+/**
  * Inspects an edit from `beforeNode` -> `afterNode` during Motion Auto-Key mode.
- * If any animatable property changed, captures a full-object keyframe snapshot
- * at `timeMs` (auto-seeding `0ms` from `baselineNode ?? beforeNode` for new tracks).
+ * Supports both core properties AND all 11 Modern Effects properties.
+ * Captures changed properties plus existing tracked properties (and core properties
+ * when core attributes changed) without polluting the timeline with untouched effects.
  */
 export function applyAutoKeyFromNodeChange(
   clip: AnimationClip,
@@ -789,9 +1103,10 @@ export function applyAutoKeyFromNodeChange(
   recorded: boolean;
   changedProperties: AnimatableProperty[];
 } {
-  const properties = getAnimatablePropertiesForNode(afterNode);
+  const allProperties = getAnimatablePropertiesForNode(afterNode);
+  const corePropertySet = new Set(getCoreAnimatablePropertiesForNode(afterNode));
   const changedProperties: AnimatableProperty[] = [];
-  for (const property of properties) {
+  for (const property of allProperties) {
     const beforeValue = getDefaultNodePropertyValue(beforeNode, property);
     const afterValue = getDefaultNodePropertyValue(afterNode, property);
     if (!areAnimatableValuesEqual(beforeValue, afterValue)) {
@@ -803,9 +1118,22 @@ export function applyAutoKeyFromNodeChange(
     return { clip, recorded: false, changedProperties: [] };
   }
 
+  const targetPropertySet = new Set<AnimatableProperty>(changedProperties);
+  const hasCoreChange = changedProperties.some((p) => corePropertySet.has(p));
+  if (hasCoreChange) {
+    for (const coreProp of corePropertySet) {
+      targetPropertySet.add(coreProp);
+    }
+  }
+  for (const track of clip.tracks) {
+    if (track.targetNodeId === afterNode.id) {
+      targetPropertySet.add(track.property);
+    }
+  }
+
   const { clip: nextClip } = captureNodeKeyframeSnapshot(clip, afterNode, timeMs, {
     baselineNode: options?.baselineNode ?? beforeNode,
-    properties,
+    properties: [...targetPropertySet],
     easing: options?.easing ?? 'ease-out',
   });
 

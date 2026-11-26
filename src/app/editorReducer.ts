@@ -5,6 +5,7 @@ import type {
   ComponentDefinition,
   ComponentSlotDefinition,
   ComponentVariantAxis,
+  CustomEasingPreset,
   DesignNode,
   DesignTokenCollection,
   FolioDocument,
@@ -79,8 +80,9 @@ export type EditorAction =
   | { type: 'update-logic-graph'; graph: LogicGraph }
   | { type: 'delete-logic-graph'; graphId: string }
   | { type: 'create-animation-clip'; clip: AnimationClip }
-  | { type: 'update-animation-clip'; clip: AnimationClip }
+  | { type: 'update-animation-clip'; clip: AnimationClip; coalesceKey?: string }
   | { type: 'delete-animation-clip'; clipId: string }
+  | { type: 'update-custom-easings'; customEasings: CustomEasingPreset[] }
   | { type: 'upsert-asset'; asset: AssetReference }
   | { type: 'replace-project'; project: FolioProject }
   | { type: 'undo' }
@@ -836,13 +838,25 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (JSON.stringify(existing) === JSON.stringify(action.clip)) {
         return state;
       }
-      return withSnapshot(
-        state,
-        touch({
-          ...state.project,
-          animations: currentClips.map((clip) => (clip.id === action.clip.id ? action.clip : clip)),
-        }),
-      );
+      const touched = touch({
+        ...state.project,
+        animations: currentClips.map((clip) => (clip.id === action.clip.id ? action.clip : clip)),
+      });
+      if (action.coalesceKey) {
+        const past = pushDeltaToPast(state, touched, action.coalesceKey);
+        const nextHistoryGroup =
+          past.length > 0 && past[past.length - 1].coalesceKey === action.coalesceKey
+            ? action.coalesceKey
+            : null;
+        return {
+          ...state,
+          project: touched,
+          past,
+          future: [],
+          historyGroup: nextHistoryGroup,
+        };
+      }
+      return withSnapshot(state, touched);
     }
 
     case 'delete-animation-clip': {
@@ -856,6 +870,20 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         nextProject.animations = remaining;
       } else {
         delete nextProject.animations;
+      }
+      return withSnapshot(state, touch(nextProject));
+    }
+
+    case 'update-custom-easings': {
+      const currentEasings = state.project.customEasings ?? [];
+      if (JSON.stringify(currentEasings) === JSON.stringify(action.customEasings)) {
+        return state;
+      }
+      const nextProject: FolioProject = { ...state.project };
+      if (action.customEasings.length > 0) {
+        nextProject.customEasings = action.customEasings;
+      } else {
+        delete nextProject.customEasings;
       }
       return withSnapshot(state, touch(nextProject));
     }

@@ -981,7 +981,7 @@ export function buildNodeCssDeclarations(
     const frameClipsChildren =
       node.type === 'frame'
       && !node.layout?.overflow
-      && (node.clipContent !== undefined ? node.clipContent : !node.isSection);
+      && node.clipContent === true;
     if (frameClipsChildren) {
       declarations.push('overflow: hidden;');
     }

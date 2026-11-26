@@ -1287,7 +1287,29 @@ export function isCodeModuleList(value: unknown): value is import('./types').Cod
   return true;
 }
 
-const ANIMATION_EASINGS_SET = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'spring']);
+const ANIMATION_EASINGS_SET = new Set([
+  'linear',
+  'ease',
+  'ease-in',
+  'ease-out',
+  'ease-in-out',
+  'spring',
+  'ease-in-quad',
+  'ease-out-quad',
+  'ease-in-out-quad',
+  'ease-in-cubic',
+  'ease-out-cubic',
+  'ease-in-out-cubic',
+  'ease-in-expo',
+  'ease-out-expo',
+  'ease-in-out-expo',
+  'fast-slow-fast',
+  'slow-fast-slow',
+  'overshoot-out',
+  'back-in-out',
+  'bounce-out',
+  'elastic-out',
+]);
 const ANIMATABLE_PROPERTIES_SET = new Set([
   'x',
   'y',
@@ -1300,9 +1322,80 @@ const ANIMATABLE_PROPERTIES_SET = new Set([
   'fill',
   'stroke',
   'strokeWidth',
+  'layerBlur',
+  'backdropBlur',
+  'shadowOffsetX',
+  'shadowOffsetY',
+  'shadowBlur',
+  'shadowSpread',
+  'shadowOpacity',
+  'brightness',
+  'contrast',
+  'saturate',
+  'grayscale',
 ]);
 const SAFE_HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 const SAFE_FUNC_COLOR_PATTERN = /^(?:rgba?|hsla?)\(\s*[0-9.%\s,/+-]+\s*\)$/i;
+
+export function isAnimationEasing(value: unknown): value is import('./types').AnimationEasing {
+  if (isString(value)) {
+    return ANIMATION_EASINGS_SET.has(value);
+  }
+  if (!isRecord(value)) return false;
+  if (value.type === 'cubic-bezier') {
+    const p1 = value.p1;
+    const p2 = value.p2;
+    if (!Array.isArray(p1) || p1.length !== 2 || !Array.isArray(p2) || p2.length !== 2) {
+      return false;
+    }
+    const [x1, y1] = p1;
+    const [x2, y2] = p2;
+    return (
+      isFiniteNumber(x1) && x1 >= 0 && x1 <= 1 &&
+      isFiniteNumber(x2) && x2 >= 0 && x2 <= 1 &&
+      isFiniteNumber(y1) && y1 >= -2 && y1 <= 3 &&
+      isFiniteNumber(y2) && y2 >= -2 && y2 <= 3
+    );
+  }
+  if (value.type === 'multi-point') {
+    const points = value.points;
+    if (!Array.isArray(points) || points.length < 2 || points.length > 16) return false;
+    let prevX = -1;
+    for (const pt of points) {
+      if (
+        !isRecord(pt) ||
+        !isFiniteNumber(pt.x) || pt.x < 0 || pt.x > 1 ||
+        !isFiniteNumber(pt.y) || pt.y < -2 || pt.y > 3 ||
+        pt.x < prevX
+      ) {
+        return false;
+      }
+      prevX = pt.x;
+    }
+    return true;
+  }
+  return false;
+}
+
+export function isCustomEasingPresetList(
+  value: unknown,
+): value is import('./types').CustomEasingPreset[] {
+  if (!Array.isArray(value) || value.length > 64) return false;
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      !isString(item.id) || item.id.trim().length === 0 || item.id.length > 128 ||
+      !isString(item.name) || item.name.trim().length === 0 || item.name.length > 64 ||
+      !isAnimationEasing(item.easing)
+    ) {
+      return false;
+    }
+    if (ids.has(item.id)) return false;
+    ids.add(item.id);
+  }
+  return true;
+}
 
 export function isSafeAnimationColorValue(value: unknown): value is string {
   if (!isString(value)) return false;
@@ -1351,7 +1444,7 @@ export function isAnimationClip(value: unknown): value is import('./types').Anim
         !isRecord(kf) ||
         !isString(kf.id) || kf.id.trim().length === 0 || kf.id.length > 128 ||
         !isFiniteNumber(kf.timeMs) || kf.timeMs < 0 || kf.timeMs > value.durationMs ||
-        !isString(kf.easing) || !ANIMATION_EASINGS_SET.has(kf.easing)
+        !isAnimationEasing(kf.easing)
       ) {
         return false;
       }
@@ -1362,10 +1455,15 @@ export function isAnimationClip(value: unknown): value is import('./types').Anim
         if (!isSafeAnimationColorValue(kf.value)) return false;
       } else {
         if (!isFiniteNumber(kf.value)) return false;
-        if (track.property === 'opacity' && (kf.value < 0 || kf.value > 1)) return false;
+        if ((track.property === 'opacity' || track.property === 'shadowOpacity') && (kf.value < 0 || kf.value > 1)) return false;
         if (track.property === 'scale' && (kf.value < 0.05 || kf.value > 10)) return false;
         if ((track.property === 'width' || track.property === 'height') && (kf.value < 1 || kf.value > 20000)) return false;
         if ((track.property === 'radius' || track.property === 'strokeWidth') && (kf.value < 0 || kf.value > 2000)) return false;
+        if ((track.property === 'layerBlur' || track.property === 'backdropBlur' || track.property === 'shadowBlur') && (kf.value < 0 || kf.value > 200)) return false;
+        if ((track.property === 'shadowOffsetX' || track.property === 'shadowOffsetY') && (kf.value < -500 || kf.value > 500)) return false;
+        if (track.property === 'shadowSpread' && (kf.value < -100 || kf.value > 100)) return false;
+        if ((track.property === 'brightness' || track.property === 'contrast' || track.property === 'saturate') && (kf.value < 0 || kf.value > 300)) return false;
+        if (track.property === 'grayscale' && (kf.value < 0 || kf.value > 100)) return false;
       }
     }
   }
@@ -1768,6 +1866,12 @@ export function validateProject(input: unknown): ValidationResult {
       if (animFrozen && pagesFrozen) {
         validatedFrozenAnimationsContext.set(input.animations as object, input.pages);
       }
+    }
+  }
+
+  if (input.customEasings !== undefined) {
+    if (!isCustomEasingPresetList(input.customEasings)) {
+      return { ok: false, error: 'Project custom easing presets contain invalid curve definitions or duplicate IDs.' };
     }
   }
 

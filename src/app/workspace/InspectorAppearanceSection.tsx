@@ -126,7 +126,6 @@ export function InspectorAppearanceSection({
     ? activeStateOverride.fill
     : (isImage ? 'transparent' : selectedNode.style.fill);
   const parsedFill = parseColorWithAlpha(rawFill, defaultFillColor || '#00E5FF');
-  const fillTransparent = isTransparentColor(rawFill);
 
   const currentFills: FillPaint[] = isShape || isPath
     ? (Array.isArray(selectedNode.style.fills) ? selectedNode.style.fills : getVisibleFillPaints(selectedNode))
@@ -137,7 +136,7 @@ export function InspectorAppearanceSection({
   );
   const fillKind: 'solid' | 'linear-gradient' | 'radial-gradient' = activeGradient?.type ?? 'solid';
 
-  const commitFillColor = (nextColor: string) => {
+  const commitFillColor = (nextColor: string, commit = true) => {
     if (isPseudoState) {
       updatePseudoOverride({ fill: nextColor });
       return;
@@ -145,14 +144,12 @@ export function InspectorAppearanceSection({
     if (isShape || isPath) {
       onUpdateSelectedStyle({
         fill: nextColor,
-        fills: nextColor === 'transparent' || nextColor === 'none'
-          ? undefined
-          : [{ id: 'fill-base', type: 'solid', color: nextColor, opacity: 1, visible: true }],
+        fills: [{ id: 'fill-base', type: 'solid', color: nextColor, opacity: 1, visible: true }],
       });
     } else if (isText) {
       onUpdateSelectedStyle({ fill: nextColor });
     }
-    onCommitEdit();
+    if (commit) onCommitEdit();
   };
 
   const switchFillKind = (kind: 'solid' | 'linear-gradient' | 'radial-gradient') => {
@@ -199,7 +196,20 @@ export function InspectorAppearanceSection({
         ? (selectedNode.style.strokeDasharray.startsWith('2') ? 'dotted' : 'dashed')
         : 'solid';
   const parsedStroke = parseColorWithAlpha(rawStroke, '#4A5568');
-  const strokeTransparent = isTransparentColor(rawStroke) || rawStrokeWidth <= 0;
+  const strokeAlphaPct = Math.round(parsedStroke.alpha * 100);
+  const strokeIsLegacyKeyword = rawStroke.trim().toLowerCase() === 'none' || rawStroke.trim().toLowerCase() === 'transparent';
+
+  const commitStrokeColor = (nextColor: string, commit = true) => {
+    if (isPseudoState) {
+      updatePseudoOverride({ stroke: nextColor });
+      return;
+    }
+    onUpdateSelectedStyle({
+      stroke: nextColor,
+      strokeWidth: rawStrokeWidth <= 0 ? 1 : rawStrokeWidth,
+    });
+    if (commit) onCommitEdit();
+  };
 
   const currentBorderSides: BorderSidesConfig = (isShape || isImage) ? (selectedNode.style.borderSides ?? {}) : {};
   const activeSideCfg: BorderSideStyle = currentBorderSides[activeSide] ?? {
@@ -307,14 +317,6 @@ export function InspectorAppearanceSection({
                   </button>
                 </div>
               )}
-              <button
-                type="button"
-                class={`folio-chip-btn${fillTransparent ? ' is-active' : ''}`}
-                title="Set fill transparent"
-                onClick={() => commitFillColor('transparent')}
-              >
-                Transparent
-              </button>
             </div>
           </div>
 
@@ -327,23 +329,26 @@ export function InspectorAppearanceSection({
                   aria-label="Fill color picker"
                   value={parsedFill.hex}
                   onInput={(event) => {
-                    const alpha = fillTransparent ? 1 : parsedFill.alpha;
-                    commitFillColor(formatColorWithAlpha(event.currentTarget.value, alpha));
+                    const isLegacyNone = rawFill.trim().toLowerCase() === 'transparent' || rawFill.trim().toLowerCase() === 'none';
+                    const alpha = isLegacyNone ? 1 : parsedFill.alpha;
+                    commitFillColor(formatColorWithAlpha(event.currentTarget.value, alpha), false);
                   }}
+                  onPointerUp={onCommitEdit}
+                  onBlur={onCommitEdit}
                 />
                 <input
                   class="folio-color-paste-input"
                   type="text"
                   aria-label="Fill hex or CSS color"
                   placeholder="#00E5FF / rgba(...) / var(--...)"
-                  value={fillPasteDraft ?? (fillTransparent ? 'transparent' : rawFill)}
+                  value={fillPasteDraft ?? rawFill}
                   onFocus={(e) => setFillPasteDraft(e.currentTarget.value)}
                   onInput={(e) => setFillPasteDraft(e.currentTarget.value)}
                   onBlur={(e) => {
                     const val = e.currentTarget.value.trim();
                     setFillPasteDraft(null);
                     if (val && isSafeCssColorString(val)) {
-                      commitFillColor(val);
+                      commitFillColor(val, true);
                     }
                   }}
                   onKeyDown={(e) => {
@@ -351,7 +356,7 @@ export function InspectorAppearanceSection({
                       const val = e.currentTarget.value.trim();
                       setFillPasteDraft(null);
                       if (val && isSafeCssColorString(val)) {
-                        commitFillColor(val);
+                        commitFillColor(val, true);
                       }
                       e.currentTarget.blur();
                     } else if (e.key === 'Escape') {
@@ -371,13 +376,16 @@ export function InspectorAppearanceSection({
                   max="100"
                   step="1"
                   aria-label="Fill opacity slider"
-                  value={fillTransparent ? 0 : Math.round(parsedFill.alpha * 100)}
+                  value={Math.round(parsedFill.alpha * 100)}
                   onInput={(event) => {
-                    const pct = Number(event.currentTarget.value) / 100;
-                    commitFillColor(formatColorWithAlpha(parsedFill.hex, pct));
+                    const pct = Math.min(100, Math.max(0, Number(event.currentTarget.value))) / 100;
+                    commitFillColor(formatColorWithAlpha(parsedFill.hex, pct), false);
                   }}
+                  onPointerUp={onCommitEdit}
+                  onKeyUp={onCommitEdit}
+                  onBlur={onCommitEdit}
                 />
-                <span class="folio-slider-readout">{fillTransparent ? '0%' : `${Math.round(parsedFill.alpha * 100)}%`}</span>
+                <span class="folio-slider-readout">{`${Math.round(parsedFill.alpha * 100)}%`}</span>
               </div>
 
               {!isPseudoState && colorTokens.length > 0 && (
@@ -599,24 +607,18 @@ export function InspectorAppearanceSection({
                   aria-label="Border color picker"
                   value={parsedStroke.hex}
                   onInput={(event) => {
-                    const nextColor = event.currentTarget.value;
-                    if (isPseudoState) {
-                      updatePseudoOverride({ stroke: nextColor });
-                    } else {
-                      onUpdateSelectedStyle({
-                        stroke: nextColor,
-                        strokeWidth: rawStrokeWidth <= 0 ? 1 : rawStrokeWidth,
-                      });
-                      onCommitEdit();
-                    }
+                    const alpha = strokeIsLegacyKeyword ? 1 : parsedStroke.alpha;
+                    commitStrokeColor(formatColorWithAlpha(event.currentTarget.value, alpha), false);
                   }}
+                  onPointerUp={onCommitEdit}
+                  onBlur={onCommitEdit}
                 />
                 <input
                   class="folio-color-paste-input"
                   type="text"
                   aria-label="Border hex or CSS color"
-                  placeholder="#4A5568 / transparent"
-                  value={strokePasteDraft ?? (strokeTransparent ? 'transparent' : rawStroke)}
+                  placeholder="#4A5568 / rgba(...)"
+                  value={strokePasteDraft ?? (strokeIsLegacyKeyword ? formatColorWithAlpha(parsedStroke.hex, 0) : rawStroke)}
                   onFocus={(e) => setStrokePasteDraft(e.currentTarget.value)}
                   onInput={(e) => setStrokePasteDraft(e.currentTarget.value)}
                   onBlur={(e) => {
@@ -625,7 +627,10 @@ export function InspectorAppearanceSection({
                     if (val && isSafeCssColorString(val)) {
                       if (isPseudoState) updatePseudoOverride({ stroke: val });
                       else {
-                        onUpdateSelectedStyle({ stroke: val, strokeWidth: val === 'transparent' || val === 'none' ? 0 : Math.max(1, rawStrokeWidth) });
+                        onUpdateSelectedStyle({
+                          stroke: val,
+                          strokeWidth: Math.max(1, rawStrokeWidth),
+                        });
                         onCommitEdit();
                       }
                     }
@@ -639,20 +644,27 @@ export function InspectorAppearanceSection({
                     }
                   }}
                 />
-                <button
-                  type="button"
-                  class={`folio-chip-btn${strokeTransparent ? ' is-active' : ''}`}
-                  onClick={() => {
-                    if (isPseudoState) {
-                      updatePseudoOverride({ stroke: 'transparent', strokeWidth: 0 });
-                    } else {
-                      onUpdateSelectedStyle({ stroke: 'none', strokeWidth: 0 });
-                      onCommitEdit();
-                    }
+              </div>
+
+              <div class="folio-slider-inline-row">
+                <span class="folio-mini-label">Stroke Opacity</span>
+                <input
+                  class="folio-range-slider"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  aria-label="Stroke opacity slider"
+                  value={strokeAlphaPct}
+                  onInput={(event) => {
+                    const pct = Math.min(100, Math.max(0, Number(event.currentTarget.value))) / 100;
+                    commitStrokeColor(formatColorWithAlpha(parsedStroke.hex, pct), false);
                   }}
-                >
-                  None
-                </button>
+                  onPointerUp={onCommitEdit}
+                  onKeyUp={onCommitEdit}
+                  onBlur={onCommitEdit}
+                />
+                <span class="folio-slider-readout">{`${strokeAlphaPct}%`}</span>
               </div>
 
               <div class="folio-two-col">

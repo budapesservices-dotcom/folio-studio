@@ -6,20 +6,20 @@ import type {
   AnimationEasing,
   AnimationKeyframe,
   AnimationTrack,
+  CustomEasingPreset,
   DesignNode,
   FolioPage,
 } from '../../core/document/types';
 import {
   ANIMATABLE_PROPERTIES,
   ANIMATABLE_PROPERTY_META,
-  ANIMATION_EASINGS,
-  ANIMATION_EASING_LABELS,
   MOTION_PRESETS,
   addTrackToClip,
   captureNodeKeyframeSnapshot,
   deleteKeyframeFromClip,
   deleteLayerKeyframesAtTimeInClip,
   evaluateTrackAtTime,
+  formatEasingLabel,
   getDefaultNodePropertyValue,
   groupClipTracksByNode,
   moveLayerKeyframesInClip,
@@ -31,12 +31,14 @@ import {
   upsertKeyframeInClip,
   type MotionPresetDefinition,
 } from '../../engines/animation';
+import { EasingCurveMiniSvg, MotionGraphEditor } from './MotionGraphEditor';
 import { StudioIcon } from './StudioIcon';
 
 export interface MotionTimelinePanelProps {
   activePage: FolioPage;
   pageClips: readonly AnimationClip[];
   activeClip: AnimationClip | null;
+  customEasings?: readonly CustomEasingPreset[];
   selectedNodeIds: readonly string[];
   playheadMs: number;
   isPlaying: boolean;
@@ -47,12 +49,14 @@ export interface MotionTimelinePanelProps {
   onCreateClip: () => void;
   onApplyPreset: (presetId: MotionPresetDefinition['id']) => void;
   onDeleteClip: () => void;
-  onUpdateClip: (nextClip: AnimationClip, description?: string) => void;
+  onUpdateClip: (nextClip: AnimationClip, description?: string, coalesceKey?: string) => void;
+  onUpdateCustomEasings?: (nextCustomEasings: readonly CustomEasingPreset[], description?: string) => void;
   onTogglePlay: () => void;
   onStop: () => void;
   onSeek: (ms: number) => void;
   onKeyframeSelected: () => void;
   onOpenLivePreview: (pageId?: string) => void;
+  onOpenMotionExport?: () => void;
   onSelectCanvasNode: (nodeId: string) => void;
   onFocusStudio?: () => void;
   onClose: () => void;
@@ -70,7 +74,7 @@ function formatTrackValue(property: AnimatableProperty, value: number | string |
   if (value === undefined) return '—';
   if (typeof value === 'string') return value;
   const meta = ANIMATABLE_PROPERTY_META[property];
-  const rounded = property === 'opacity' || property === 'scale'
+  const rounded = property === 'opacity' || property === 'shadowOpacity' || property === 'scale'
     ? value.toFixed(2)
     : Math.round(value).toString();
   return meta.unit ? `${rounded}${meta.unit}` : rounded;
@@ -80,6 +84,7 @@ export function MotionTimelinePanel({
   activePage,
   pageClips,
   activeClip,
+  customEasings = [],
   selectedNodeIds,
   playheadMs,
   isPlaying,
@@ -91,11 +96,13 @@ export function MotionTimelinePanel({
   onApplyPreset,
   onDeleteClip,
   onUpdateClip,
+  onUpdateCustomEasings,
   onTogglePlay,
   onStop,
   onSeek,
   onKeyframeSelected,
   onOpenLivePreview,
+  onOpenMotionExport,
   onSelectCanvasNode,
   onFocusStudio,
   onClose,
@@ -104,6 +111,7 @@ export function MotionTimelinePanel({
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
 
   const [selection, setSelection] = useState<TimelineSelection | null>(null);
+  const [graphEditorOpen, setGraphEditorOpen] = useState(false);
   const [expandedOverrides, setExpandedOverrides] = useState<Readonly<Record<string, boolean>>>(() => ({}));
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [newTrackNodeId, setNewTrackNodeId] = useState<string>('');
@@ -438,7 +446,10 @@ export function MotionTimelinePanel({
     onUpdateClip(updateClipSettings(activeClip, { autoplay: !activeClip.autoplay }), 'Toggle clip autoplay');
   };
 
-  const handleInspectorPatch = (patch: Partial<Pick<AnimationKeyframe, 'timeMs' | 'value' | 'easing'>>) => {
+  const handleInspectorPatch = (
+    patch: Partial<Pick<AnimationKeyframe, 'timeMs' | 'value' | 'easing'>>,
+    coalesceKey?: string,
+  ) => {
     if (!activeClip || !activeTrackSelection) return;
     const nextClip = updateKeyframeInClip(
       activeClip,
@@ -446,9 +457,33 @@ export function MotionTimelinePanel({
       activeTrackSelection.keyframe.id,
       patch,
     );
-    onUpdateClip(nextClip, 'Update keyframe');
+    onUpdateClip(nextClip, 'Update keyframe', coalesceKey);
     if (patch.timeMs !== undefined) {
       onSeek(patch.timeMs);
+    }
+  };
+
+  const handleGraphEasingChange = (nextEasing: AnimationEasing, coalesceKey?: string) => {
+    if (!activeClip) return;
+    if (activeTrackSelection) {
+      handleInspectorPatch(
+        { easing: nextEasing },
+        coalesceKey ? `easing:${activeTrackSelection.keyframe.id}:${coalesceKey}` : undefined,
+      );
+      return;
+    }
+    if (activeLayerSelection) {
+      const nextClip = updateLayerKeyframesEasingInClip(
+        activeClip,
+        activeLayerSelection.targetNodeId,
+        activeLayerSelection.timeMs,
+        nextEasing,
+      );
+      onUpdateClip(
+        nextClip,
+        'Update layer keyframe easing',
+        coalesceKey ? `easing-layer:${activeLayerSelection.targetNodeId}:${activeLayerSelection.timeMs}:${coalesceKey}` : undefined,
+      );
     }
   };
 
@@ -651,6 +686,17 @@ export function MotionTimelinePanel({
           >
             + Keyframe All
           </button>
+          {onOpenMotionExport && (
+            <button
+              type="button"
+              class="mt-btn mt-export-btn"
+              data-testid="motion-export-btn"
+              onClick={onOpenMotionExport}
+              title="Export animation as MP4, MOV (H.264 / Alpha), WebM, GIF, PNG Sequence ZIP, HTML5, CSS, or JSON"
+            >
+              Export Video…
+            </button>
+          )}
           <button
             type="button"
             class="mt-btn mt-cta-btn"
@@ -770,8 +816,6 @@ export function MotionTimelinePanel({
                 const isLayerSelected =
                   activeLayerSelection?.targetNodeId === group.targetNodeId
                   || selectedNodeIds.includes(group.targetNodeId);
-                const firstTime = group.keyframeTimes[0];
-                const lastTime = group.keyframeTimes[group.keyframeTimes.length - 1];
 
                 return (
                   <div key={group.targetNodeId} class="mt-layer-group">
@@ -827,15 +871,31 @@ export function MotionTimelinePanel({
                         title="Double-click to insert a full object keyframe"
                       >
                         <div class="mt-lane-track">
-                          {group.keyframeTimes.length >= 2 && (
-                            <div
-                              class="mt-lane-span mt-lane-span-master"
-                              style={{
-                                left: `${(firstTime / Math.max(1, durationMs)) * 100}%`,
-                                width: `${((lastTime - firstTime) / Math.max(1, durationMs)) * 100}%`,
-                              }}
-                            />
-                          )}
+                          {group.keyframeTimes.length >= 2 &&
+                            group.keyframeTimes.slice(0, -1).map((startMs, segIdx) => {
+                              const endMs = group.keyframeTimes[segIdx + 1];
+                              const segLeft = (startMs / Math.max(1, durationMs)) * 100;
+                              const segWidth = ((endMs - startMs) / Math.max(1, durationMs)) * 100;
+                              const isSegSelected =
+                                graphEditorOpen &&
+                                activeLayerSelection?.targetNodeId === group.targetNodeId &&
+                                Math.abs(activeLayerSelection.timeMs - endMs) <= 1;
+                              return (
+                                <button
+                                  key={`mseg-${startMs}-${endMs}`}
+                                  type="button"
+                                  class={`mt-lane-segment mt-lane-segment-master${isSegSelected ? ' is-active' : ''}`}
+                                  style={{ left: `${segLeft}%`, width: `${segWidth}%` }}
+                                  aria-label={`Edit easing curve for ${targetNode?.name ?? group.targetNodeId} segment ${startMs}ms to ${endMs}ms`}
+                                  title={`Click to open Easing Graph Editor (${startMs}ms → ${endMs}ms)`}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelection({ kind: 'layer', targetNodeId: group.targetNodeId, timeMs: endMs });
+                                    setGraphEditorOpen(true);
+                                  }}
+                                />
+                              );
+                            })}
                           {group.keyframeTimes.map((timeMs) => {
                             const leftPct = (timeMs / Math.max(1, durationMs)) * 100;
                             const isSelected =
@@ -904,15 +964,31 @@ export function MotionTimelinePanel({
                             title="Double-click to insert a keyframe"
                           >
                             <div class="mt-lane-track">
-                              {track.keyframes.length >= 2 && (
-                                <div
-                                  class="mt-lane-span"
-                                  style={{
-                                    left: `${(track.keyframes[0].timeMs / Math.max(1, durationMs)) * 100}%`,
-                                    width: `${((track.keyframes[track.keyframes.length - 1].timeMs - track.keyframes[0].timeMs) / Math.max(1, durationMs)) * 100}%`,
-                                  }}
-                                />
-                              )}
+                              {track.keyframes.length >= 2 &&
+                                track.keyframes.slice(0, -1).map((startKf, segIdx) => {
+                                  const endKf = track.keyframes[segIdx + 1];
+                                  const segLeft = (startKf.timeMs / Math.max(1, durationMs)) * 100;
+                                  const segWidth = ((endKf.timeMs - startKf.timeMs) / Math.max(1, durationMs)) * 100;
+                                  const isSegSelected =
+                                    graphEditorOpen &&
+                                    activeTrackSelection?.track.id === track.id &&
+                                    activeTrackSelection.keyframe.id === endKf.id;
+                                  return (
+                                    <button
+                                      key={`seg-${startKf.id}-${endKf.id}`}
+                                      type="button"
+                                      class={`mt-lane-segment${isSegSelected ? ' is-active' : ''}`}
+                                      style={{ left: `${segLeft}%`, width: `${segWidth}%` }}
+                                      aria-label={`Edit ${track.property} easing curve from ${startKf.timeMs}ms to ${endKf.timeMs}ms (${formatEasingLabel(endKf.easing)})`}
+                                      title={`${track.property} easing: ${formatEasingLabel(endKf.easing)} — click to open Graph Editor`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setSelection({ kind: 'track', trackId: track.id, keyframeId: endKf.id });
+                                        setGraphEditorOpen(true);
+                                      }}
+                                    />
+                                  );
+                                })}
                               {track.keyframes.map((kf) => {
                                 const leftPct = (kf.timeMs / Math.max(1, durationMs)) * 100;
                                 const isSelected = activeTrackSelection?.track.id === track.id
@@ -924,7 +1000,7 @@ export function MotionTimelinePanel({
                                     class={`mt-keyframe ${isSelected ? 'selected' : ''}`}
                                     style={{ left: `${leftPct}%` }}
                                     aria-label={`Keyframe ${targetNode?.name ?? track.targetNodeId} ${track.property} at ${kf.timeMs}ms (${kf.value})`}
-                                    title={`${track.property}: ${kf.value} @ ${kf.timeMs}ms (${ANIMATION_EASING_LABELS[kf.easing]}) — drag to re-time`}
+                                    title={`${track.property}: ${kf.value} @ ${kf.timeMs}ms (${formatEasingLabel(kf.easing)}) — drag to re-time`}
                                     onPointerDown={(event) => handleKeyframePointerDown(event, track, kf)}
                                   />
                                 );
@@ -1007,21 +1083,21 @@ export function MotionTimelinePanel({
               </label>
             )}
 
-            <label class="mt-inspector-field">
+            <div class="mt-inspector-field">
               <span>Easing</span>
-              <select
-                class="mt-select"
+              <button
+                type="button"
+                class={`mt-easing-curve-btn${graphEditorOpen ? ' is-active' : ''}`}
                 aria-label="Keyframe easing curve"
-                value={activeTrackSelection.keyframe.easing}
-                onChange={(event) => handleInspectorPatch({ easing: event.currentTarget.value as AnimationEasing })}
+                title="Open Easing Graph Editor (Bezier & Multi-Point)"
+                aria-expanded={graphEditorOpen}
+                data-testid="motion-easing-curve-btn"
+                onClick={() => setGraphEditorOpen((open) => !open)}
               >
-                {ANIMATION_EASINGS.map((easing) => (
-                  <option key={easing} value={easing}>
-                    {ANIMATION_EASING_LABELS[easing]}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <EasingCurveMiniSvg easing={activeTrackSelection.keyframe.easing} width={28} height={18} />
+                <span>{formatEasingLabel(activeTrackSelection.keyframe.easing)}</span>
+              </button>
+            </div>
 
             <button
               type="button"
@@ -1064,30 +1140,21 @@ export function MotionTimelinePanel({
               <span>ms</span>
             </label>
 
-            <label class="mt-inspector-field">
+            <div class="mt-inspector-field">
               <span>Easing</span>
-              <select
-                class="mt-select"
+              <button
+                type="button"
+                class={`mt-easing-curve-btn${graphEditorOpen ? ' is-active' : ''}`}
                 aria-label="Keyframe easing curve"
-                value={activeLayerSelection.easing}
-                onChange={(event) => {
-                  const easing = event.currentTarget.value as AnimationEasing;
-                  const nextClip = updateLayerKeyframesEasingInClip(
-                    activeClip,
-                    activeLayerSelection.targetNodeId,
-                    activeLayerSelection.timeMs,
-                    easing,
-                  );
-                  onUpdateClip(nextClip, 'Update layer keyframe easing');
-                }}
+                title="Open Easing Graph Editor (Bezier & Multi-Point)"
+                aria-expanded={graphEditorOpen}
+                data-testid="motion-easing-curve-btn"
+                onClick={() => setGraphEditorOpen((open) => !open)}
               >
-                {ANIMATION_EASINGS.map((easing) => (
-                  <option key={easing} value={easing}>
-                    {ANIMATION_EASING_LABELS[easing]}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <EasingCurveMiniSvg easing={activeLayerSelection.easing} width={28} height={18} />
+                <span>{formatEasingLabel(activeLayerSelection.easing)}</span>
+              </button>
+            </div>
 
             <button
               type="button"
@@ -1100,11 +1167,30 @@ export function MotionTimelinePanel({
         ) : (
           <span class="mt-inspector-hint">
             {autoKeyEnabled
-              ? 'Auto-Key ON · Scrub the ruler, then move, resize, rotate, or recolor any object on Canvas or Inspector to auto-keyframe everything!'
-              : 'Scrub the ruler to preview poses · Click ◆ to edit timing & easing · Click ▸ on a layer to expand individual properties'}
+              ? 'Auto-Key ON · Scrub the ruler, edit any object or Modern Effect, or click a segment bar between keyframes to shape its Easing Curve.'
+              : 'Scrub the ruler to preview · Click ◆ or any segment bar between keyframes to open the Easing Graph Editor'}
           </span>
         )}
       </footer>
+
+      {graphEditorOpen && (activeTrackSelection || activeLayerSelection) && (
+        <MotionGraphEditor
+          value={
+            activeTrackSelection
+              ? activeTrackSelection.keyframe.easing
+              : (activeLayerSelection?.easing ?? 'ease-out')
+          }
+          title={
+            activeTrackSelection
+              ? `${nodeById.get(activeTrackSelection.track.targetNodeId)?.name ?? 'Layer'} · ${ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].label}`
+              : `${nodeById.get(activeLayerSelection?.targetNodeId ?? '')?.name ?? 'Layer'} · Pose @ ${activeLayerSelection?.timeMs ?? 0}ms`
+          }
+          customEasings={customEasings}
+          onChange={handleGraphEasingChange}
+          onUpdateCustomEasings={(next, desc) => onUpdateCustomEasings?.(next, desc)}
+          onClose={() => setGraphEditorOpen(false)}
+        />
+      )}
     </section>
   );
 }

@@ -5,6 +5,7 @@ import {
   validateAnimationCreateClipPayload,
   validateAnimationDeleteClipPayload,
   validateAnimationUpdateClipPayload,
+  validateAnimationUpdateCustomEasingsPayload,
   validateAssetUpsertPayload,
   validateCodeUpdateModulesPayload,
   validateComponentCreatePayload,
@@ -485,6 +486,7 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
       return [{
         type: 'update-animation-clip',
         clip: command.payload.clip,
+        ...(command.payload.coalesceKey !== undefined ? { coalesceKey: command.payload.coalesceKey } : {}),
       }];
     },
   }),
@@ -499,6 +501,20 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
       return [{
         type: 'delete-animation-clip',
         clipId: command.payload.clipId,
+      }];
+    },
+  }),
+  'animation.update-custom-easings': Object.freeze({
+    type: 'animation.update-custom-easings' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'animation.update',
+    validatePayload: validateAnimationUpdateCustomEasingsPayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'animation.update-custom-easings') return [];
+      return [{
+        type: 'update-custom-easings',
+        customEasings: [...command.payload.customEasings],
       }];
     },
   }),

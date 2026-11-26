@@ -153,18 +153,15 @@ export function VisualColorAlphaControl({
   const parsed = parseColorWithAlpha(value, fallbackHex);
   const alphaPercent = Math.round(parsed.alpha * 100);
   const colorTokens = designTokens.tokens.filter((token) => token.category === 'color');
+  const isLegacyKeywordTransparent = value.trim().toLowerCase() === 'transparent' || value.trim().toLowerCase() === 'none';
 
   const handleHexChange = (nextHex: string) => {
-    const nextAlpha = transparent ? 1 : parsed.alpha;
+    const nextAlpha = isLegacyKeywordTransparent ? 1 : parsed.alpha;
     onChangeColor(formatColorWithAlpha(nextHex, nextAlpha));
   };
 
   const handleAlphaChange = (percent: number) => {
     const clamped = Math.min(100, Math.max(0, Math.round(percent)));
-    if (clamped === 0) {
-      onChangeColor('transparent');
-      return;
-    }
     const baseHex = parsed.hex || fallbackHex;
     onChangeColor(formatColorWithAlpha(baseHex, clamped / 100));
   };
@@ -191,20 +188,8 @@ export function VisualColorAlphaControl({
             />
           </label>
           <span class="zt-color-badge" title={value}>
-            {transparent ? 'NONE' : `${parsed.hex.toUpperCase()} · ${alphaPercent}%`}
+            {`${parsed.hex.toUpperCase()} · ${alphaPercent}%`}
           </span>
-          <button
-            type="button"
-            class={`zt-none-btn${transparent ? ' is-active' : ''}`}
-            aria-pressed={transparent}
-            title={`Set ${label.toLowerCase()} to Transparent / None`}
-            onClick={() => {
-              onChangeColor(transparent ? fallbackHex : 'transparent');
-              onCommit?.();
-            }}
-          >
-            {transparent ? 'Restore' : 'None'}
-          </button>
         </div>
       </div>
 

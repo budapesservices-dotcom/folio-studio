@@ -11,6 +11,7 @@ import type {
   ComponentInstanceNode,
   ComponentSlotDefinition,
   ComponentVariantAxis,
+  CustomEasingPreset,
   DesignNode,
   DesignTokenCollection,
   FolioDocument,
@@ -194,8 +195,16 @@ export interface MainCanvasCommandClient {
   updateLogicGraph(graph: LogicGraph, description?: string): NativeCommandResult;
   deleteLogicGraph(graphId: string, description?: string): NativeCommandResult;
   createAnimationClip(clip: AnimationClip, description?: string): NativeCommandResult;
-  updateAnimationClip(clip: AnimationClip, description?: string): NativeCommandResult;
+  updateAnimationClip(
+    clip: AnimationClip,
+    description?: string,
+    coalesceKey?: string,
+  ): NativeCommandResult;
   deleteAnimationClip(clipId: string, description?: string): NativeCommandResult;
+  updateCustomEasings(
+    customEasings: readonly CustomEasingPreset[],
+    description?: string,
+  ): NativeCommandResult;
   upsertAsset(asset: AssetReference, description?: string): NativeCommandResult;
   insertImageWithAsset(
     asset: AssetReference,
@@ -552,12 +561,15 @@ export function createWorkspaceCommandClient(
       );
     },
 
-    updateAnimationClip(clip, description = 'Update animation clip') {
+    updateAnimationClip(clip, description = 'Update animation clip', coalesceKey) {
       const projectId = store.getSnapshot().editorState.project.metadata.id;
       return submit(
         'animation.update-clip',
         { kind: 'project', projectId },
-        stripUndefinedEntries({ clip }),
+        stripUndefinedEntries({
+          clip,
+          ...(coalesceKey ? { coalesceKey } : {}),
+        }),
         description,
       );
     },
@@ -568,6 +580,16 @@ export function createWorkspaceCommandClient(
         'animation.delete-clip',
         { kind: 'project', projectId },
         { clipId },
+        description,
+      );
+    },
+
+    updateCustomEasings(customEasings, description = 'Update custom easing curves') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'animation.update-custom-easings',
+        { kind: 'project', projectId },
+        stripUndefinedEntries({ customEasings: [...customEasings] }),
         description,
       );
     },

@@ -8,6 +8,7 @@ import type {
   ComponentDefinition,
   ComponentSlotDefinition,
   ComponentVariantAxis,
+  CustomEasingPreset,
   DesignNode,
   DesignTokenCollection,
   FolioDocument,
@@ -180,10 +181,16 @@ export interface AnimationCreateClipPayload {
 
 export interface AnimationUpdateClipPayload {
   clip: AnimationClip;
+  /** Optional coalesce key so continuous slider Auto-Key drags merge into a single Undo/Redo step. */
+  coalesceKey?: string;
 }
 
 export interface AnimationDeleteClipPayload {
   clipId: string;
+}
+
+export interface AnimationUpdateCustomEasingsPayload {
+  customEasings: CustomEasingPreset[];
 }
 
 export interface AssetUpsertPayload {
@@ -315,6 +322,7 @@ export type LogicDeleteGraphCommand = NativeCommandEnvelope<'logic.delete-graph'
 export type AnimationCreateClipCommand = NativeCommandEnvelope<'animation.create-clip', AnimationCreateClipPayload>;
 export type AnimationUpdateClipCommand = NativeCommandEnvelope<'animation.update-clip', AnimationUpdateClipPayload>;
 export type AnimationDeleteClipCommand = NativeCommandEnvelope<'animation.delete-clip', AnimationDeleteClipPayload>;
+export type AnimationUpdateCustomEasingsCommand = NativeCommandEnvelope<'animation.update-custom-easings', AnimationUpdateCustomEasingsPayload>;
 export type AssetUpsertCommand = NativeCommandEnvelope<'asset.upsert', AssetUpsertPayload>;
 export type NodeCreateCommand = NativeCommandEnvelope<'node.create', NodeCreatePayload>;
 export type NodeReplaceCommand = NativeCommandEnvelope<'node.replace', NodeReplacePayload>;
@@ -374,6 +382,7 @@ export type ExtendedNativeCommand =
   | AnimationCreateClipCommand
   | AnimationUpdateClipCommand
   | AnimationDeleteClipCommand
+  | AnimationUpdateCustomEasingsCommand
   | AssetUpsertCommand
   | NodeReplaceManyCommand
   | NodeSplitCommand
@@ -405,6 +414,7 @@ export type NativeCommandPayload =
   | AnimationCreateClipPayload
   | AnimationUpdateClipPayload
   | AnimationDeleteClipPayload
+  | AnimationUpdateCustomEasingsPayload
   | AssetUpsertPayload
   | NodeCreatePayload
   | NodeReplacePayload

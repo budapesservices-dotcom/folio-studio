@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type {
   AnimatableProperty,
   AnimationClip,
+  CustomEasingPreset,
   DesignNode,
   FolioDocument,
   FolioPage,
@@ -14,6 +15,8 @@ import {
   captureNodeKeyframeSnapshot,
   createAnimationClip,
   evaluateClipAtTime,
+  hasKeyframeAtTime,
+  togglePropertyKeyframeInClip,
   type MotionPresetDefinition,
 } from '../../engines/animation';
 import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
@@ -52,9 +55,16 @@ export interface MotionPlaybackController {
   createNewClip: () => void;
   applyPreset: (presetId: MotionPresetDefinition['id']) => void;
   deleteActiveClip: () => void;
-  updateClip: (nextClip: AnimationClip, description?: string) => void;
+  updateClip: (nextClip: AnimationClip, description?: string, coalesceKey?: string) => void;
+  updateCustomEasings: (customEasings: readonly CustomEasingPreset[], description?: string) => void;
   keyframeSelectedLayers: (properties?: readonly AnimatableProperty[]) => void;
-  recordAutoKeyNodes: (afterNodes: readonly DesignNode[], description?: string) => AutoKeyCaptureResult;
+  togglePropertyKeyframe: (nodeId: string, property: AnimatableProperty) => void;
+  isPropertyKeyedAtPlayhead: (nodeId: string, property: AnimatableProperty) => boolean;
+  recordAutoKeyNodes: (
+    afterNodes: readonly DesignNode[],
+    description?: string,
+    coalesceKey?: string,
+  ) => AutoKeyCaptureResult;
 }
 
 export function useMotionPlayback({
@@ -279,9 +289,69 @@ export function useMotionPlayback({
     }
   }, [activeClip, mainCommandClient, onNotice]);
 
-  const updateClip = useCallback((nextClip: AnimationClip, description = 'Update animation clip') => {
-    mainCommandClient.updateAnimationClip(nextClip, description);
-  }, [mainCommandClient]);
+  const updateClip = useCallback(
+    (nextClip: AnimationClip, description = 'Update animation clip', coalesceKey?: string) => {
+      mainCommandClient.updateAnimationClip(nextClip, description, coalesceKey);
+    },
+    [mainCommandClient],
+  );
+
+  const updateCustomEasings = useCallback(
+    (customEasings: readonly CustomEasingPreset[], description = 'Update custom easing presets') => {
+      mainCommandClient.updateCustomEasings(customEasings, description);
+    },
+    [mainCommandClient],
+  );
+
+  const isPropertyKeyedAtPlayhead = useCallback(
+    (nodeId: string, property: AnimatableProperty): boolean => {
+      if (!activeClip) return false;
+      return hasKeyframeAtTime(activeClip, nodeId, property, playheadMs);
+    },
+    [activeClip, playheadMs],
+  );
+
+  const togglePropertyKeyframe = useCallback(
+    (nodeId: string, property: AnimatableProperty) => {
+      const animatedNode = animatedMainDocument.nodes.find((n) => n.id === nodeId);
+      const canonicalNode = activePage.document.nodes.find((n) => n.id === nodeId);
+      const targetNode = animatedNode ?? canonicalNode;
+      if (!targetNode) return;
+
+      let clip = activeClip;
+      let isNewClip = false;
+      if (!clip) {
+        clip = createAnimationClip({
+          pageId: activePage.id,
+          name: `Clip ${pageClips.length + 1}`,
+          durationMs: Math.max(1200, playheadMs),
+          autoplay: true,
+        });
+        isNewClip = true;
+      }
+
+      const toggled = togglePropertyKeyframeInClip(clip, targetNode, property, playheadMs, {
+        baselineNode: canonicalNode ?? targetNode,
+        easing: 'ease-out',
+      });
+
+      const actionLabel = toggled.action === 'added'
+        ? `Add ${property} keyframe at ${(playheadMs / 1000).toFixed(2)}s`
+        : `Remove ${property} keyframe at ${(playheadMs / 1000).toFixed(2)}s`;
+
+      const result = isNewClip
+        ? mainCommandClient.createAnimationClip(toggled.clip, actionLabel)
+        : mainCommandClient.updateAnimationClip(toggled.clip, actionLabel);
+
+      if (result.status === 'applied') {
+        if (isNewClip) setActiveClipId(toggled.clip.id);
+        setMotionOpen(true);
+        setPreviewActive(true);
+        onNotice(`${toggled.action === 'added' ? 'Keyframed' : 'Removed keyframe for'} ${property} at ${(playheadMs / 1000).toFixed(2)}s.`);
+      }
+    },
+    [animatedMainDocument.nodes, activePage, activeClip, pageClips.length, playheadMs, mainCommandClient, onNotice],
+  );
 
   const keyframeSelectedLayers = useCallback((properties?: readonly AnimatableProperty[]) => {
     const animatedById = new Map(animatedMainDocument.nodes.map((node) => [node.id, node]));
@@ -331,6 +401,7 @@ export function useMotionPlayback({
   const recordAutoKeyNodes = useCallback((
     afterNodes: readonly DesignNode[],
     description = 'Auto-keyframe layer change',
+    coalesceKey?: string,
   ): AutoKeyCaptureResult => {
     if (!motionOpen || !autoKeyEnabled || afterNodes.length === 0) {
       return { captured: false, keepCanonicalUnchanged: false };
@@ -362,7 +433,7 @@ export function useMotionPlayback({
         }
       }
       if (anyUpdated) {
-        mainCommandClient.updateAnimationClip(nextClip, `${description} (0.00s)`);
+        mainCommandClient.updateAnimationClip(nextClip, `${description} (0.00s)`, coalesceKey);
       }
       return { captured: anyUpdated, keepCanonicalUnchanged: false };
     }
@@ -405,14 +476,16 @@ export function useMotionPlayback({
 
     const result = isNewClip
       ? mainCommandClient.createAnimationClip(nextClip, description)
-      : mainCommandClient.updateAnimationClip(nextClip, description);
+      : mainCommandClient.updateAnimationClip(nextClip, description, coalesceKey);
 
     if (result.status === 'applied') {
       if (isNewClip) setActiveClipId(nextClip.id);
       setPreviewActive(true);
-      onNotice(
-        `Auto-keyed at ${(playheadMs / 1000).toFixed(2)}s (${lastChangedCount} changed · full object state saved).`,
-      );
+      if (!coalesceKey) {
+        onNotice(
+          `Auto-keyed at ${(playheadMs / 1000).toFixed(2)}s (${lastChangedCount} changed · full object state saved).`,
+        );
+      }
       return { captured: true, keepCanonicalUnchanged: true };
     }
 
@@ -453,7 +526,10 @@ export function useMotionPlayback({
     applyPreset,
     deleteActiveClip,
     updateClip,
+    updateCustomEasings,
     keyframeSelectedLayers,
+    togglePropertyKeyframe,
+    isPropertyKeyedAtPlayhead,
     recordAutoKeyNodes,
   };
 }

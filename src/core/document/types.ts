@@ -870,13 +870,63 @@ export interface CodeModuleRecord {
   updatedAt: string;
 }
 
-export type AnimationEasing =
+export type LegacyAnimationEasing =
   | 'linear'
   | 'ease'
   | 'ease-in'
   | 'ease-out'
   | 'ease-in-out'
   | 'spring';
+
+export type AnimationEasingPreset =
+  | LegacyAnimationEasing
+  | 'ease-in-quad'
+  | 'ease-out-quad'
+  | 'ease-in-out-quad'
+  | 'ease-in-cubic'
+  | 'ease-out-cubic'
+  | 'ease-in-out-cubic'
+  | 'ease-in-expo'
+  | 'ease-out-expo'
+  | 'ease-in-out-expo'
+  | 'fast-slow-fast'
+  | 'slow-fast-slow'
+  | 'overshoot-out'
+  | 'back-in-out'
+  | 'bounce-out'
+  | 'elastic-out';
+
+export interface CubicBezierEasing {
+  type: 'cubic-bezier';
+  /** First control point [x1, y1] with x1 in [0, 1] and y1 allowing overshoot. */
+  p1: [number, number];
+  /** Second control point [x2, y2] with x2 in [0, 1] and y2 allowing overshoot. */
+  p2: [number, number];
+}
+
+export interface MultiPointEasingStop {
+  /** Normalized progress time in [0, 1]. */
+  x: number;
+  /** Normalized output progress (may overshoot outside [0, 1]). */
+  y: number;
+}
+
+export interface MultiPointEasing {
+  type: 'multi-point';
+  /** Monotonic stops sorted by x, starting at x=0 and ending at x=1. */
+  points: MultiPointEasingStop[];
+}
+
+export type AnimationEasing =
+  | AnimationEasingPreset
+  | CubicBezierEasing
+  | MultiPointEasing;
+
+export interface CustomEasingPreset {
+  id: string;
+  name: string;
+  easing: AnimationEasing;
+}
 
 export type AnimatableProperty =
   | 'x'
@@ -889,13 +939,24 @@ export type AnimatableProperty =
   | 'radius'
   | 'fill'
   | 'stroke'
-  | 'strokeWidth';
+  | 'strokeWidth'
+  | 'layerBlur'
+  | 'backdropBlur'
+  | 'shadowOffsetX'
+  | 'shadowOffsetY'
+  | 'shadowBlur'
+  | 'shadowSpread'
+  | 'shadowOpacity'
+  | 'brightness'
+  | 'contrast'
+  | 'saturate'
+  | 'grayscale';
 
 export interface AnimationKeyframe {
   id: string;
   /** Time offset in milliseconds within [0, clip.durationMs]. */
   timeMs: number;
-  /** Numeric value for geometry/opacity/scale/rotation/radius/strokeWidth, or CSS color string for fill/stroke. */
+  /** Numeric value for geometry/opacity/scale/rotation/radius/strokeWidth/effects, or CSS color string for fill/stroke. */
   value: number | string;
   easing: AnimationEasing;
 }
@@ -936,6 +997,8 @@ export interface FolioProjectV2 {
   codeModules?: CodeModuleRecord[];
   /** Optional Motion & Animation timeline clips anchored to pages & stable node IDs. */
   animations?: AnimationClip[];
+  /** Optional reusable custom easing curves saved from the Motion Graph Editor. */
+  customEasings?: CustomEasingPreset[];
   /** Optional reusable Smart Logic Frame presets saved by the user. */
   logicFramePresets?: LogicFramePreset[];
 }
