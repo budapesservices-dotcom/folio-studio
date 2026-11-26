@@ -17,8 +17,15 @@ import {
   evaluateClipAtTime,
   hasKeyframeAtTime,
   togglePropertyKeyframeInClip,
+  upsertKeyframeInClip,
   type MotionPresetDefinition,
 } from '../../engines/animation';
+import {
+  checkNodeMorphSupport,
+  createMorphPresetSnapshot,
+  extractMorphSnapshotFromNode,
+  type MorphShapePresetId,
+} from '../../core/document/pathMorph';
 import type { WorkspaceCommandClient } from '../mainCanvasCommandClient';
 
 export interface UseMotionPlaybackOptions {
@@ -61,6 +68,7 @@ export interface MotionPlaybackController {
   updateClip: (nextClip: AnimationClip, description?: string, coalesceKey?: string) => void;
   updateCustomEasings: (customEasings: readonly CustomEasingPreset[], description?: string) => void;
   keyframeSelectedLayers: (properties?: readonly AnimatableProperty[]) => void;
+  keyframeShapeMorph: (presetId?: MorphShapePresetId) => void;
   togglePropertyKeyframe: (nodeId: string, property: AnimatableProperty) => void;
   isPropertyKeyedAtPlayhead: (nodeId: string, property: AnimatableProperty) => boolean;
   recordAutoKeyNodes: (
@@ -406,6 +414,123 @@ export function useMotionPlayback({
     }
   }, [selectedNodeIds, animatedMainDocument.nodes, activePage, activeClip, pageClips.length, playheadMs, commandClient, onNotice]);
 
+  const keyframeShapeMorph = useCallback((presetId?: MorphShapePresetId) => {
+    const animatedById = new Map(animatedMainDocument.nodes.map((node) => [node.id, node]));
+    const canonicalById = new Map(activePage.document.nodes.map((node) => [node.id, node]));
+    const selectedNodes = selectedNodeIds
+      .map((id) => animatedById.get(id) ?? canonicalById.get(id))
+      .filter((node): node is DesignNode => Boolean(node));
+
+    if (selectedNodes.length === 0) {
+      onNotice('Select a closed vector shape (Circle, Rectangle, Frame, or closed Path) to enable Shape Morph.');
+      return;
+    }
+
+    const supportedNodes: DesignNode[] = [];
+    let firstUnsupportedReason: string | null = null;
+    for (const node of selectedNodes) {
+      const check = checkNodeMorphSupport(node);
+      if (check.supported) {
+        supportedNodes.push(node);
+      } else if (!firstUnsupportedReason) {
+        firstUnsupportedReason = check.message;
+      }
+    }
+
+    if (supportedNodes.length === 0) {
+      onNotice(firstUnsupportedReason ?? 'Selected layer does not support Shape Morph.');
+      return;
+    }
+
+    let clip = activeClip;
+    let isNewClip = false;
+    if (!clip) {
+      clip = createAnimationClip({
+        pageId: activePage.id,
+        name: `Clip ${pageClips.length + 1}`,
+        durationMs: Math.max(1200, playheadMs),
+        autoplay: true,
+      });
+      isNewClip = true;
+    }
+
+    let nextClip = clip;
+    for (const node of supportedNodes) {
+      const canonicalNode = canonicalById.get(node.id) ?? node;
+      const snapshotValue = presetId
+        ? createMorphPresetSnapshot(presetId, node.width, node.height)
+        : extractMorphSnapshotFromNode(node);
+      if (!snapshotValue) continue;
+
+      const existingTrack = nextClip.tracks.find(
+        (track) => track.targetNodeId === node.id && track.property === 'pathMorph',
+      );
+      if (!existingTrack) {
+        const baselineSnap = extractMorphSnapshotFromNode(canonicalNode) ?? snapshotValue;
+        const seeded = captureNodeKeyframeSnapshot(nextClip, node, playheadMs, {
+          baselineNode: canonicalNode,
+          properties: ['pathMorph'],
+          easing: 'ease-out',
+        });
+        nextClip = seeded.clip;
+        const createdTrack = nextClip.tracks.find(
+          (track) => track.targetNodeId === node.id && track.property === 'pathMorph',
+        );
+        if (createdTrack && presetId) {
+          nextClip = upsertKeyframeInClip(
+            nextClip,
+            createdTrack.id,
+            playheadMs,
+            snapshotValue,
+            playheadMs === 0 ? 'linear' : 'ease-out',
+          ).clip;
+          if (playheadMs > 0) {
+            nextClip = upsertKeyframeInClip(
+              nextClip,
+              createdTrack.id,
+              0,
+              baselineSnap,
+              'linear',
+            ).clip;
+          }
+        }
+      } else {
+        nextClip = upsertKeyframeInClip(
+          nextClip,
+          existingTrack.id,
+          playheadMs,
+          snapshotValue,
+          playheadMs === 0 ? 'linear' : 'ease-out',
+        ).clip;
+      }
+    }
+
+    const description = presetId
+      ? `Morph shape to ${presetId} at ${(playheadMs / 1000).toFixed(2)}s`
+      : `Add Shape Morph keyframe at ${(playheadMs / 1000).toFixed(2)}s`;
+
+    const result = isNewClip
+      ? commandClient.createAnimationClip(nextClip, description)
+      : commandClient.updateAnimationClip(nextClip, description);
+
+    if (result.status === 'applied') {
+      if (isNewClip) setActiveClipId(nextClip.id);
+      setPreviewActive(true);
+      onNotice(
+        `Shape Morph keyframed on ${supportedNodes.length} shape${supportedNodes.length === 1 ? '' : 's'} at ${(playheadMs / 1000).toFixed(2)}s (same node ID preserved).`,
+      );
+    }
+  }, [
+    selectedNodeIds,
+    animatedMainDocument.nodes,
+    activePage,
+    activeClip,
+    pageClips.length,
+    playheadMs,
+    commandClient,
+    onNotice,
+  ]);
+
   const recordAutoKeyNodes = useCallback((
     afterNodes: readonly DesignNode[],
     description = 'Auto-keyframe layer change',
@@ -422,17 +547,23 @@ export function useMotionPlayback({
     const canonicalById = new Map(activePage.document.nodes.map((node) => [node.id, node]));
 
     // At 0ms: keep normal editing friction-free; only sync 0ms keyframes for layers that already have tracks.
+    // Protect canonical primitive nodes (ellipse/rect/frame) from being overwritten by transient projected PathNodes.
     if (playheadMs <= 0) {
       if (!activeClip) return { captured: false, keepCanonicalUnchanged: false };
       let nextClip = activeClip;
       let anyUpdated = false;
+      let protectCanonicalType = false;
       for (const afterNode of afterNodes) {
         const hasTracks = nextClip.tracks.some((track) => track.targetNodeId === afterNode.id);
         if (!hasTracks) continue;
-        const beforeNode = animatedById.get(afterNode.id) ?? canonicalById.get(afterNode.id);
+        const canonicalNode = canonicalById.get(afterNode.id);
+        const beforeNode = animatedById.get(afterNode.id) ?? canonicalNode;
         if (!beforeNode) continue;
+        if (canonicalNode && canonicalNode.type !== afterNode.type) {
+          protectCanonicalType = true;
+        }
         const auto = applyAutoKeyFromNodeChange(nextClip, beforeNode, afterNode, 0, {
-          baselineNode: canonicalById.get(afterNode.id) ?? beforeNode,
+          baselineNode: canonicalNode ?? beforeNode,
           easing: 'linear',
         });
         if (auto.recorded) {
@@ -443,7 +574,7 @@ export function useMotionPlayback({
       if (anyUpdated) {
         commandClient.updateAnimationClip(nextClip, `${description} (0.00s)`, coalesceKey);
       }
-      return { captured: anyUpdated, keepCanonicalUnchanged: false };
+      return { captured: anyUpdated, keepCanonicalUnchanged: anyUpdated && protectCanonicalType };
     }
 
     // At playheadMs > 0: Auto-Key captures full object state at playheadMs and preserves 0ms canonical pose!
@@ -536,6 +667,7 @@ export function useMotionPlayback({
     updateClip,
     updateCustomEasings,
     keyframeSelectedLayers,
+    keyframeShapeMorph,
     togglePropertyKeyframe,
     isPropertyKeyedAtPlayhead,
     recordAutoKeyNodes,

@@ -9,6 +9,7 @@ import type {
   FolioPage,
   NodeCssFilters,
   VisualEffect,
+  VectorAnchorPoint,
 } from '../../core/document/types';
 import {
   formatColorWithAlpha,
@@ -17,9 +18,10 @@ import {
 } from '../../core/document/styling';
 import { scalePathNodeGeometry } from '../../core/document/vector';
 import {
-  applyPathMorphSnapshotToNode,
+  applyMorphGeometryToDesignNode,
+  evaluateMorphSnapshotsToAnchors,
+  extractMorphSnapshotFromNode,
   interpolatePathMorph,
-  serializePathMorphSnapshot,
 } from '../../core/document/pathMorph';
 import { evaluateEasing } from './easing';
 
@@ -99,6 +101,8 @@ export interface AnimatedNodePose {
   stroke?: string;
   strokeWidth?: number;
   pathMorph?: string;
+  /** Pre-evaluated morph geometry produced directly from cached PreparedMorphPair (zero JSON overhead). */
+  pathMorphGeometry?: { points: VectorAnchorPoint[]; closed: boolean };
   layerBlur?: number;
   backdropBlur?: number;
   shadowOffsetX?: number;
@@ -292,6 +296,50 @@ export function evaluateTrackAtTime(
 }
 
 /**
+ * Hot-path evaluator for `pathMorph` tracks that reads directly from cached
+ * `PreparedMorphPair` Float64Array buffers without per-frame JSON.stringify/parse.
+ */
+function evaluateMorphTrackToGeometry(
+  track: AnimationTrack,
+  timeMs: number,
+): { points: VectorAnchorPoint[]; closed: boolean } | null {
+  if (track.keyframes.length === 0) return null;
+  const sorted = sortKeyframes(track.keyframes);
+  const idPrefix = `${track.targetNodeId}-pt`;
+  if (sorted.length === 1 || timeMs <= sorted[0].timeMs) {
+    const snapStr = String(sorted[0].value);
+    return evaluateMorphSnapshotsToAnchors(snapStr, snapStr, 0, undefined, idPrefix);
+  }
+  const last = sorted[sorted.length - 1];
+  if (timeMs >= last.timeMs) {
+    const snapStr = String(last.value);
+    return evaluateMorphSnapshotsToAnchors(snapStr, snapStr, 1, undefined, idPrefix);
+  }
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const start = sorted[i];
+    const end = sorted[i + 1];
+    if (timeMs >= start.timeMs && timeMs <= end.timeMs) {
+      const span = end.timeMs - start.timeMs;
+      if (span <= 0) {
+        const endStr = String(end.value);
+        return evaluateMorphSnapshotsToAnchors(endStr, endStr, 1, undefined, idPrefix);
+      }
+      const rawT = (timeMs - start.timeMs) / span;
+      const easedT = evaluateEasing(end.easing, rawT);
+      return evaluateMorphSnapshotsToAnchors(
+        String(start.value),
+        String(end.value),
+        easedT,
+        undefined,
+        idPrefix,
+      );
+    }
+  }
+  const endStr = String(last.value);
+  return evaluateMorphSnapshotsToAnchors(endStr, endStr, 1, undefined, idPrefix);
+}
+
+/**
  * Evaluates all tracks in an AnimationClip at `timeMs` (automatically wrapping if `clip.loop` is true).
  */
 export function evaluateClipAtTime(
@@ -306,6 +354,14 @@ export function evaluateClipAtTime(
 
   const poses: Record<string, AnimatedNodePose> = {};
   for (const track of clip.tracks) {
+    if (track.property === 'pathMorph') {
+      const morphGeom = evaluateMorphTrackToGeometry(track, effectiveTime);
+      if (morphGeom) {
+        const pose = poses[track.targetNodeId] ?? (poses[track.targetNodeId] = {});
+        pose.pathMorphGeometry = morphGeom;
+      }
+      continue;
+    }
     const value = evaluateTrackAtTime(track, effectiveTime);
     if (value === undefined) continue;
     const pose = poses[track.targetNodeId] ?? (poses[track.targetNodeId] = {});
@@ -313,8 +369,6 @@ export function evaluateClipAtTime(
       pose.fill = String(value);
     } else if (track.property === 'stroke') {
       pose.stroke = String(value);
-    } else if (track.property === 'pathMorph') {
-      pose.pathMorph = String(value);
     } else {
       pose[track.property] = Number(value);
     }
@@ -436,19 +490,27 @@ export function applyAnimatedPosesToDocument(
     };
 
     let nextNode: DesignNode;
-    if (node.type === 'path' && pose?.pathMorph) {
-      const morphed = applyPathMorphSnapshotToNode(node, pose.pathMorph);
-      nextNode =
-        scale !== 1
-          ? {
-              ...scalePathNodeGeometry(morphed, centeredX, centeredY, scaledWidth, scaledHeight),
-              rotation: basePatch.rotation,
-              opacity: basePatch.opacity,
-            }
-          : {
-              ...morphed,
-              ...basePatch,
-            };
+    const morphPayload = pose?.pathMorphGeometry ?? pose?.pathMorph;
+    if (
+      morphPayload &&
+      (node.type === 'path' ||
+        node.type === 'ellipse' ||
+        node.type === 'rect' ||
+        node.type === 'frame')
+    ) {
+      const morphed = applyMorphGeometryToDesignNode(node, morphPayload);
+      if (morphed.type === 'path' && (scaledWidth !== morphed.width || scaledHeight !== morphed.height)) {
+        nextNode = {
+          ...scalePathNodeGeometry(morphed, centeredX, centeredY, scaledWidth, scaledHeight),
+          rotation: basePatch.rotation,
+          opacity: basePatch.opacity,
+        };
+      } else {
+        nextNode = {
+          ...morphed,
+          ...basePatch,
+        };
+      }
     } else if (node.type === 'path' && (scaledWidth !== node.width || scaledHeight !== node.height)) {
       nextNode = {
         ...scalePathNodeGeometry(node, centeredX, centeredY, scaledWidth, scaledHeight),
@@ -708,7 +770,7 @@ export function getDefaultNodePropertyValue(node: DesignNode, property: Animatab
         ? Math.max(0, roundTo2(node.style.strokeWidth))
         : 0;
     case 'pathMorph':
-      return node.type === 'path' ? serializePathMorphSnapshot(node) : '';
+      return extractMorphSnapshotFromNode(node) ?? '';
     case 'layerBlur': {
       const fx = (node.effects ?? []).find(
         (item): item is Extract<VisualEffect, { type: 'layer-blur' }> =>
@@ -1134,10 +1196,19 @@ export function applyAutoKeyFromNodeChange(
   recorded: boolean;
   changedProperties: AnimatableProperty[];
 } {
+  const hasExistingMorphTrack = clip.tracks.some(
+    (t) => t.targetNodeId === afterNode.id && t.property === 'pathMorph',
+  );
   const allProperties = getAnimatablePropertiesForNode(afterNode);
+  if (hasExistingMorphTrack && !allProperties.includes('pathMorph')) {
+    allProperties.push('pathMorph');
+  }
   const corePropertySet = new Set(getCoreAnimatablePropertiesForNode(afterNode));
   const changedProperties: AnimatableProperty[] = [];
   for (const property of allProperties) {
+    if (property === 'pathMorph' && !hasExistingMorphTrack && afterNode.type !== 'path') {
+      continue;
+    }
     const beforeValue = getDefaultNodePropertyValue(beforeNode, property);
     const afterValue = getDefaultNodePropertyValue(afterNode, property);
     if (!areAnimatableValuesEqual(beforeValue, afterValue)) {
@@ -1153,6 +1224,10 @@ export function applyAutoKeyFromNodeChange(
   const hasCoreChange = changedProperties.some((p) => corePropertySet.has(p));
   if (hasCoreChange) {
     for (const coreProp of corePropertySet) {
+      // Do not attach pathMorph automatically when editing non-path core properties unless already tracked
+      if (coreProp === 'pathMorph' && !hasExistingMorphTrack && !changedProperties.includes('pathMorph')) {
+        continue;
+      }
       targetPropertySet.add(coreProp);
     }
   }

@@ -53,7 +53,8 @@ export interface RuntimeFeatureParityEntry {
     | 'frame.baked'
     | 'legacy.v1-migration'
     | 'variable.persist'
-    | 'variable.computed';
+    | 'variable.computed'
+    | 'motion.shape-morph';
   readonly headless: ParitySupportLevel;
   readonly livePreview: ParitySupportLevel;
   readonly reactCodegen: ParitySupportLevel;
@@ -107,6 +108,13 @@ export const RUNTIME_FEATURE_PARITY_MATRIX: readonly RuntimeFeatureParityEntry[]
     livePreview: 'unsupported',
     reactCodegen: 'unsupported',
     notes: 'Stored as .flop v2 metadata only; computed expression evaluation is not active at runtime under FOLIO zero-eval security policy',
+  },
+  {
+    feature: 'motion.shape-morph',
+    headless: 'full',
+    livePreview: 'full',
+    reactCodegen: 'unsupported',
+    notes: 'Single-contour closed shape morphing runs natively in Canvas/Headless Motion Evaluator, Video/GIF/PNG Sequence export, and CSP-safe Live Preview/HTML5 runtime; React TSX export preserves base geometry + CSS tracks only and emits an explicit limitation notice',
   },
 ] as const;
 

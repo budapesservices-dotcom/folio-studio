@@ -57,6 +57,8 @@ export {
 
 export {
   buildLivePreviewAnimationPayload,
+  buildLivePreviewMorphScript,
+  collectPageMorphNodeIds,
   compilePageAnimationsCss,
   getClipCssClassName,
   type LivePreviewAnimationClipDescriptor,

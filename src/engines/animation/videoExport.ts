@@ -704,6 +704,9 @@ export function buildMotionClipJson(
   page: FolioPage,
   clip: AnimationClip | null,
 ): string {
+  const morphTracks = (clip?.tracks ?? []).filter(
+    (track) => track.property === 'pathMorph' && track.keyframes.length > 0,
+  );
   const payload = {
     schema: 'folio.motion.v1',
     exportedAt: new Date().toISOString(),
@@ -717,6 +720,10 @@ export function buildMotionClipJson(
       background: page.document.background,
     },
     clip: clip ?? null,
+    morphSummary: {
+      trackCount: morphTracks.length,
+      targetNodeIds: [...new Set(morphTracks.map((t) => t.targetNodeId))],
+    },
     customEasings: project.customEasings ?? [],
   };
   return JSON.stringify(payload, null, 2);

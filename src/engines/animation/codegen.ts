@@ -13,8 +13,12 @@ import {
   parseColorWithAlpha,
 } from '../../core/document/styling';
 import { evaluateTrackAtTime, sortKeyframes } from './evaluator';
-import { toCssTimingFunction } from './easing';
+import { easingToCubicBezier, toCssTimingFunction } from './easing';
 import { sanitizeCssValue } from '../codegen/sanitize';
+import {
+  parsePathMorphSnapshot,
+  prepareMorphPair,
+} from '../../core/document/pathMorph';
 
 function slugifyMotionId(input: string): string {
   const slug = input
@@ -97,12 +101,37 @@ function trackValuesVary(track: AnimationTrack): boolean {
  * - Vector `path` nodes (animating SVG `<path>` fill/stroke/stroke-width instead of wrapper box)
  * - Per-segment keyframe easing curves & border-style activation
  */
+/**
+ * Returns the set of `nodeId`s on `page` that have an active `pathMorph` track.
+ */
+export function collectPageMorphNodeIds(
+  project: FolioProject,
+  page: FolioPage,
+): Set<string> {
+  const result = new Set<string>();
+  const clips = (project.animations ?? []).filter((clip) => clip.pageId === page.id);
+  for (const clip of clips) {
+    for (const track of clip.tracks) {
+      if (track.property === 'pathMorph' && track.keyframes.length > 0) {
+        result.add(track.targetNodeId);
+      }
+    }
+  }
+  return result;
+}
+
 export function compilePageAnimationsCss(project: FolioProject, page: FolioPage): string {
   const clips = (project.animations ?? []).filter((clip) => clip.pageId === page.id && clip.tracks.length > 0);
   if (clips.length === 0) return '';
 
   const nodesById = new Map<string, DesignNode>(page.document.nodes.map((node) => [node.id, node]));
+  const morphNodeIds = collectPageMorphNodeIds(project, page);
   const lines: string[] = ['/* Folio Motion Engine — Compiled @keyframes */'];
+  if (morphNodeIds.size > 0) {
+    lines.push(
+      '/* Note: Shape Morph (`pathMorph`) tracks require geometry interpolation and are rendered via the Folio Motion Runtime (Live Preview, HTML5 export, Video MP4/MOV/WebM, GIF, PNG Sequence). Pure CSS @keyframes preserves transform/style tracks only. */',
+    );
+  }
 
   const getValidParent = (node: DesignNode): DesignNode | null => {
     if (!node.parentId || node.parentId === node.id) return null;
@@ -270,10 +299,16 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
 
       const svgPathKeyframeLines: string[] = [];
       const svgPolygonKeyframeLines: string[] = [];
-      const isPathNode = node.type === 'path';
+      const isMorphSvgNode = morphNodeIds.has(node.id);
+      const isPathNode = node.type === 'path' || isMorphSvgNode;
       const isBoxShadowNode =
-        node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse' || node.type === 'image';
-      const pathHasArrows = isPathNode && !node.closed && node.points.length >= 2 && Boolean(node.style.arrowStart || node.style.arrowEnd);
+        !isMorphSvgNode &&
+        (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse' || node.type === 'image');
+      const pathHasArrows =
+        node.type === 'path' &&
+        !node.closed &&
+        node.points.length >= 2 &&
+        Boolean(node.style.arrowStart || node.style.arrowEnd);
 
       const trackedProps = new Set(nodeTracks.map((t) => t.property));
       const hasShadowTracks =
@@ -694,4 +729,245 @@ export function buildLivePreviewAnimationPayload(
       autoplay: clip.autoplay,
       targetNodeIds: [...new Set(clip.tracks.map((track) => track.targetNodeId))],
     }));
+}
+
+interface CompiledMorphSegment {
+  t0: number;
+  t1: number;
+  bezier: readonly [number, number, number, number];
+  n: number;
+  closed: boolean;
+  /** Interleaved [x, y, hiX, hiY, hoX, hoY] * n (6 numbers per anchor) */
+  from: number[];
+  to: number[];
+}
+
+interface CompiledMorphTrack {
+  nodeId: string;
+  segments: CompiledMorphSegment[];
+}
+
+interface CompiledMorphClip {
+  id: string;
+  className: string;
+  durationMs: number;
+  loop: boolean;
+  autoplay: boolean;
+  tracks: CompiledMorphTrack[];
+}
+
+function packBuffer6(buf: Float64Array, flags: Uint8Array, count: number): number[] {
+  const out: number[] = new Array(count * 6);
+  for (let i = 0; i < count; i += 1) {
+    const src = i * 7;
+    const dst = i * 6;
+    const x = Math.round(buf[src] * 100) / 100;
+    const y = Math.round(buf[src + 1] * 100) / 100;
+    const f = flags[i];
+    out[dst] = x;
+    out[dst + 1] = y;
+    out[dst + 2] = f & 1 ? Math.round(buf[src + 2] * 100) / 100 : x;
+    out[dst + 3] = f & 1 ? Math.round(buf[src + 3] * 100) / 100 : y;
+    out[dst + 4] = f & 2 ? Math.round(buf[src + 4] * 100) / 100 : x;
+    out[dst + 5] = f & 2 ? Math.round(buf[src + 5] * 100) / 100 : y;
+  }
+  return out;
+}
+
+/**
+ * Generates a compact, zero-`eval`, CSP-safe inline `<script>` that drives real
+ * cubic Bezier Native Shape Morph animations inside Live Preview and HTML5 exports.
+ * Returns `''` when the page has no `pathMorph` tracks.
+ */
+export function buildLivePreviewMorphScript(
+  project: FolioProject,
+  page: FolioPage,
+): string {
+  const clips = (project.animations ?? []).filter((clip) => clip.pageId === page.id);
+  const compiledClips: CompiledMorphClip[] = [];
+
+  for (const clip of clips) {
+    const morphTracks: CompiledMorphTrack[] = [];
+    for (const track of clip.tracks) {
+      if (track.property !== 'pathMorph' || track.keyframes.length === 0) continue;
+      const sorted = sortKeyframes(track.keyframes);
+      const segments: CompiledMorphSegment[] = [];
+
+      if (sorted.length === 1) {
+        const snapStr = String(sorted[0].value);
+        const pair = prepareMorphPair(snapStr, snapStr);
+        if (pair && pair.compatible && pair.pointCount >= 3) {
+          const packed = packBuffer6(pair.fromBuf, pair.flags, pair.pointCount);
+          segments.push({
+            t0: 0,
+            t1: Math.max(1, clip.durationMs),
+            bezier: [0, 0, 1, 1],
+            n: pair.pointCount,
+            closed: pair.closed,
+            from: packed,
+            to: packed,
+          });
+        }
+      } else {
+        for (let i = 0; i < sorted.length - 1; i += 1) {
+          const a = sorted[i];
+          const b = sorted[i + 1];
+          const fromStr = String(a.value);
+          const toStr = String(b.value);
+          const pair = prepareMorphPair(fromStr, toStr);
+          if (!pair || !pair.compatible || pair.pointCount < 3) {
+            const parsedA = parsePathMorphSnapshot(fromStr);
+            if (!parsedA) continue;
+            continue;
+          }
+          segments.push({
+            t0: Math.round(a.timeMs),
+            t1: Math.round(b.timeMs),
+            bezier: easingToCubicBezier(b.easing),
+            n: pair.pointCount,
+            closed: pair.closed,
+            from: packBuffer6(pair.fromBuf, pair.flags, pair.pointCount),
+            to: packBuffer6(pair.toBuf, pair.flags, pair.pointCount),
+          });
+        }
+      }
+
+      if (segments.length > 0) {
+        morphTracks.push({
+          nodeId: track.targetNodeId,
+          segments,
+        });
+      }
+    }
+
+    if (morphTracks.length > 0) {
+      compiledClips.push({
+        id: clip.id,
+        className: getClipCssClassName(clip),
+        durationMs: Math.max(1, clip.durationMs),
+        loop: clip.loop,
+        autoplay: clip.autoplay,
+        tracks: morphTracks,
+      });
+    }
+  }
+
+  if (compiledClips.length === 0) return '';
+
+  const serialized = JSON.stringify(compiledClips).replace(/</g, '\\u003c');
+  return [
+    '(function(){',
+    `  var CLIPS=${serialized};`,
+    '  var reduced=typeof window!=="undefined"&&window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;',
+    '  function solveBezier(b,x){',
+    '    if(x<=0)return 0;if(x>=1)return 1;',
+    '    var x1=b[0],y1=b[1],x2=b[2],y2=b[3];',
+    '    if(x1===y1&&x2===y2)return x;',
+    '    var t=x;',
+    '    for(var i=0;i<6;i++){',
+    '      var mt=1-t;',
+    '      var cx=3*mt*mt*t*x1+3*mt*t*t*x2+t*t*t-x;',
+    '      var dx=3*mt*mt*x1+6*mt*t*(x2-x1)+3*t*t*(1-x2);',
+    '      if(Math.abs(dx)<1e-5)break;',
+    '      t-=cx/dx;if(t<0)t=0;if(t>1)t=1;',
+    '    }',
+    '    var m=1-t;return 3*m*m*t*y1+3*m*t*t*y2+t*t*t;',
+    '  }',
+    '  function buildPathD(seg,t){',
+    '    var n=seg.n,a=seg.from,b=seg.to,parts=[];',
+    '    var x0=a[0]+(b[0]-a[0])*t,y0=a[1]+(b[1]-a[1])*t;',
+    '    parts.push("M "+x0.toFixed(2)+" "+y0.toFixed(2));',
+    '    for(var i=0;i<n;i++){',
+    '      var j=(i+1)%n;if(!seg.closed&&j===0)break;',
+    '      var bi=i*6,bj=j*6;',
+    '      var c1x=a[bi+4]+(b[bi+4]-a[bi+4])*t,c1y=a[bi+5]+(b[bi+5]-a[bi+5])*t;',
+    '      var c2x=a[bj+2]+(b[bj+2]-a[bj+2])*t,c2y=a[bj+3]+(b[bj+3]-a[bj+3])*t;',
+    '      var ex=a[bj]+(b[bj]-a[bj])*t,ey=a[bj+1]+(b[bj+1]-a[bj+1])*t;',
+    '      parts.push("C "+c1x.toFixed(2)+" "+c1y.toFixed(2)+" "+c2x.toFixed(2)+" "+c2y.toFixed(2)+" "+ex.toFixed(2)+" "+ey.toFixed(2));',
+    '    }',
+    '    if(seg.closed)parts.push("Z");',
+    '    return parts.join(" ");',
+    '  }',
+    '  function evalTrack(tr,timeMs){',
+    '    var segs=tr.segments;if(!segs.length)return null;',
+    '    if(timeMs<=segs[0].t0)return buildPathD(segs[0],0);',
+    '    var last=segs[segs.length-1];',
+    '    if(timeMs>=last.t1)return buildPathD(last,1);',
+    '    for(var i=0;i<segs.length;i++){',
+    '      var s=segs[i];',
+    '      if(timeMs>=s.t0&&timeMs<=s.t1){',
+    '        var span=s.t1-s.t0;',
+    '        var raw=span>0?(timeMs-s.t0)/span:1;',
+    '        return buildPathD(s,solveBezier(s.bezier,raw));',
+    '      }',
+    '    }',
+    '    return buildPathD(last,1);',
+    '  }',
+    '  function findPathEl(nodeId){',
+    '    var esc=nodeId.replace(/"/g,"\\\\\\"");',
+    '    var wrap=document.querySelector("[data-folio-id=\\""+esc+"\\"]");',
+    '    if(!wrap)return null;',
+    '    return wrap.querySelector("svg path[data-folio-morph-path]")||wrap.querySelector("svg path");',
+    '  }',
+    '  var states=CLIPS.map(function(clip){',
+    '    return{clip:clip,playing:Boolean(clip.autoplay)&&!reduced,startAt:0,elapsed:0,reverse:false};',
+    '  });',
+    '  function renderAt(st,timeMs){',
+    '    var t=st.reverse?(st.clip.durationMs-timeMs):timeMs;',
+    '    if(t<0)t=0;if(t>st.clip.durationMs)t=st.clip.durationMs;',
+    '    for(var i=0;i<st.clip.tracks.length;i++){',
+    '      var tr=st.clip.tracks[i];',
+    '      var el=findPathEl(tr.nodeId);',
+    '      if(!el)continue;',
+    '      var d=evalTrack(tr,t);',
+    '      if(d)el.setAttribute("d",d);',
+    '    }',
+    '  }',
+    '  function syncClassState(){',
+    '    var root=document.documentElement;',
+    '    if(!root)return;',
+    '    for(var i=0;i<states.length;i++){',
+    '      var st=states[i],cls=st.clip.className;',
+    '      var hasPlay=root.classList.contains(cls);',
+    '      var hasRev=root.classList.contains(cls+"--reverse");',
+    '      var hasPause=root.classList.contains(cls+"--paused");',
+    '      var hasStop=root.classList.contains(cls+"--stopped");',
+    '      st.reverse=hasRev;',
+    '      if(hasStop){st.playing=false;st.elapsed=0;renderAt(st,0);continue;}',
+    '      if(hasPause){st.playing=false;continue;}',
+    '      if((hasPlay||st.clip.autoplay)&&!reduced){',
+    '        if(!st.playing){st.playing=true;st.startAt=performance.now()-st.elapsed;}',
+    '      }',
+    '    }',
+    '  }',
+    '  function tick(now){',
+    '    var anyActive=false;',
+    '    for(var i=0;i<states.length;i++){',
+    '      var st=states[i];',
+    '      if(!st.playing)continue;',
+    '      if(!st.startAt)st.startAt=now;',
+    '      var elapsed=now-st.startAt;',
+    '      if(st.clip.loop){elapsed=elapsed%st.clip.durationMs;anyActive=true;}',
+    '      else if(elapsed>=st.clip.durationMs){elapsed=st.clip.durationMs;st.playing=false;}',
+    '      else{anyActive=true;}',
+    '      st.elapsed=elapsed;',
+    '      renderAt(st,elapsed);',
+    '    }',
+    '    if(anyActive)requestAnimationFrame(tick);',
+    '  }',
+    '  function start(){',
+    '    for(var i=0;i<states.length;i++)renderAt(states[i],0);',
+    '    syncClassState();',
+    '    if(!reduced&&states.some(function(s){return s.playing;})){requestAnimationFrame(tick);}',
+    '    if(typeof MutationObserver!=="undefined"&&document.documentElement){',
+    '      new MutationObserver(function(){',
+    '        var wasPlaying=states.some(function(s){return s.playing;});',
+    '        syncClassState();',
+    '        if(!wasPlaying&&!reduced&&states.some(function(s){return s.playing;})){requestAnimationFrame(tick);}',
+    '      }).observe(document.documentElement,{attributes:true,attributeFilter:["class"]});',
+    '    }',
+    '  }',
+    '  if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",start);}else{start();}',
+    '})();',
+  ].join('\n');
 }

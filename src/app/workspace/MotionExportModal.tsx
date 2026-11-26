@@ -77,6 +77,10 @@ export function MotionExportModal({
     () => MOTION_EXPORT_FORMATS.find((f) => f.id === format) ?? MOTION_EXPORT_FORMATS[0],
     [format],
   );
+  const clipHasMorphTracks = useMemo(
+    () => Boolean(selectedClip?.tracks.some((t) => t.property === 'pathMorph' && t.keyframes.length > 0)),
+    [selectedClip],
+  );
 
   useEffect(() => {
     setStartMs(0);
@@ -539,6 +543,13 @@ export function MotionExportModal({
                   </small>
                 </span>
               </label>
+            )}
+
+            {clipHasMorphTracks && format === 'css' && (
+              <div class="mex-error-box" role="note" data-testid="motion-export-morph-css-warning">
+                Shape Morph tracks require Bezier geometry interpolation and are not animated in pure CSS @keyframes.
+                Use HTML5, MP4, MOV, WebM, GIF, PNG Sequence, or Motion JSON for full Shape Morph output.
+              </div>
             )}
 
             {/* Progress & Status Area */}

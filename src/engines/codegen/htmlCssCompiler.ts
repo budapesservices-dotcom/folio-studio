@@ -43,6 +43,10 @@ import type {
   SemanticHtmlTag,
 } from '../../core/document/types';
 import { serializePathPointsToSvgD } from '../../core/document/vector';
+import {
+  applyMorphGeometryToDesignNode,
+  extractMorphSnapshotFromNode,
+} from '../../core/document/pathMorph';
 import { getAssetBundlePath, resolveAssetDisplayUrl, resolvePortableAssetUrl } from '../../core/persistence/assetStore';
 import {
   escapeAttr,
@@ -58,7 +62,11 @@ import {
 } from './sanitize';
 import type { CodeMappingEntry, CompiledCodeFile } from './types';
 import { buildLivePreviewLogicScript } from '../prototype/codegen';
-import { compilePageAnimationsCss } from '../animation/codegen';
+import {
+  buildLivePreviewMorphScript,
+  collectPageMorphNodeIds,
+  compilePageAnimationsCss,
+} from '../animation/codegen';
 import { applyAutoLayoutToNodes } from '../layout/autoLayout';
 
 export function roundCss(value: number): number {
@@ -220,6 +228,7 @@ function buildInlineSvgMarkup(
   node: PathNode,
   tokens: DesignTokenCollection,
   indent: string,
+  isMorphTarget = false,
 ): string[] {
   const d = serializePathPointsToSvgD(node.points, node.closed, node.subpaths);
   const w = Math.max(1, roundCss(node.width));
@@ -235,10 +244,11 @@ function buildInlineSvgMarkup(
   const dash = node.style.strokeDasharray
     ? ` stroke-dasharray="${escapeAttr(node.style.strokeDasharray)}"`
     : '';
+  const morphAttr = isMorphTarget ? ' data-folio-morph-path="true"' : '';
 
   const svgLines: string[] = [
     `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style="display:block;width:100%;height:100%" aria-hidden="true">`,
-    `${indent}  <path d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${fillRule}${linecap}${linejoin}${dash} />`,
+    `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${fillRule}${linecap}${linejoin}${dash} />`,
   ];
 
   if (!node.closed && node.points.length >= 2 && (node.style.arrowStart || node.style.arrowEnd)) {
@@ -599,9 +609,19 @@ export function buildNodeCssDeclarations(
     originOffset: { x: number; y: number };
     nodeById?: ReadonlyMap<string, DesignNode>;
     maskPrefix?: string;
+    morphNodeIds?: ReadonlySet<string>;
   },
 ): string[] {
-  const { parent, isChildOfAutoLayout, isInstanceChild, hasRootAutoLayout, originOffset, nodeById, maskPrefix } = options;
+  const {
+    parent,
+    isChildOfAutoLayout,
+    isInstanceChild,
+    hasRootAutoLayout,
+    originOffset,
+    nodeById,
+    maskPrefix,
+    morphNodeIds,
+  } = options;
   const declarations: string[] = [];
 
   if (!node.visible) {
@@ -938,7 +958,12 @@ export function buildNodeCssDeclarations(
     declarations.push(`transition: ${transitionCss};`);
   }
 
-  if (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') {
+  const isMorphRenderedAsSvg =
+    !isInstanceChild &&
+    (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') &&
+    Boolean(morphNodeIds?.has(node.id));
+
+  if ((node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') && !isMorphRenderedAsSvg) {
     const fillVar = resolveTokenCssVar(tokens, node.tokenBindings?.fill);
     const strokeVar = resolveTokenCssVar(tokens, node.tokenBindings?.stroke);
     const radiusVar = resolveTokenCssVar(tokens, node.tokenBindings?.radius);
@@ -1146,6 +1171,7 @@ export function compilePageHtmlCss(
   const project = sanitizeProjectNetworkSecrets(inputProject);
   const assetMode = options.assetMode ?? 'bundle';
   const tokens = getProjectDesignTokens(project);
+  const morphNodeIds = collectPageMorphNodeIds(project, page);
   const slug = toPageFileSlug(page.route, page.name);
   const componentsById = new Map<string, ComponentDefinition>(
     project.components.map((component) => [component.id, component]),
@@ -1236,6 +1262,7 @@ export function compilePageHtmlCss(
       originOffset,
       nodeById: activeNodeById,
       maskPrefix,
+      morphNodeIds,
     });
 
     pushCssRule(
@@ -1405,7 +1432,20 @@ export function compilePageHtmlCss(
     } else if (node.type === 'path') {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
       htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
-      htmlBodyLines.push(...buildInlineSvgMarkup(node, tokens, `${indent}  `));
+      htmlBodyLines.push(...buildInlineSvgMarkup(node, tokens, `${indent}  `, !isInstanceChild && morphNodeIds.has(node.id)));
+      htmlBodyLines.push(`${indent}</${wrapperTag}>`);
+    } else if (
+      !isInstanceChild &&
+      (node.type === 'ellipse' || node.type === 'rect' || node.type === 'frame') &&
+      morphNodeIds.has(node.id)
+    ) {
+      const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+      const snap = extractMorphSnapshotFromNode(node);
+      const projected = snap ? applyMorphGeometryToDesignNode(node, snap) : null;
+      htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
+      if (projected && projected.type === 'path') {
+        htmlBodyLines.push(...buildInlineSvgMarkup(projected, tokens, `${indent}  `, true));
+      }
       htmlBodyLines.push(`${indent}</${wrapperTag}>`);
     } else if (node.type === 'component-instance') {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
@@ -1734,6 +1774,7 @@ export function buildLivePreviewHtml(
     options.includeLogicRuntime !== false
       ? buildLivePreviewLogicScript(project, page)
       : null;
+  const morphScript = buildLivePreviewMorphScript(project, page);
 
   const customJsBlocks = options.includeCustomScripts
     ? modules
@@ -1742,6 +1783,7 @@ export function buildLivePreviewHtml(
     : [];
 
   const allScriptBlocks = [
+    ...(morphScript ? [morphScript] : []),
     ...(logicScript ? [logicScript] : []),
     ...customJsBlocks,
   ];

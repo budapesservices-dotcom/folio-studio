@@ -10,7 +10,15 @@ import type {
   DesignNode,
   FolioPage,
 } from '../../core/document/types';
-import { parsePathMorphSnapshot } from '../../core/document/pathMorph';
+import {
+  MORPH_SHAPE_PRESETS,
+  checkNodeMorphSupport,
+  createMorphPresetSnapshot,
+  extractMorphSnapshotFromNode,
+  parsePathMorphSnapshot,
+  updateMorphSnapshotOptions,
+  type MorphShapePresetId,
+} from '../../core/document/pathMorph';
 import {
   ANIMATABLE_PROPERTIES,
   ANIMATABLE_PROPERTY_META,
@@ -59,6 +67,7 @@ export interface MotionTimelinePanelProps {
   onSeek: (ms: number) => void;
   onKeyframeSelected: () => void;
   onKeyframePathMorph?: () => void;
+  onEditMorphPoints?: (nodeId: string) => void;
   onOpenLivePreview: (pageId?: string) => void;
   onOpenMotionExport?: () => void;
   onSelectCanvasNode: (nodeId: string) => void;
@@ -78,7 +87,8 @@ function formatTrackValue(property: AnimatableProperty, value: number | string |
   if (value === undefined) return '—';
   if (property === 'pathMorph' && typeof value === 'string') {
     const snap = parsePathMorphSnapshot(value);
-    return snap ? `${snap.points.length} pts` : 'Shape';
+    if (!snap) return 'Shape';
+    return snap.label ? `${snap.label} (${snap.points.length})` : `${snap.points.length} pts`;
   }
   if (typeof value === 'string') return value;
   const meta = ANIMATABLE_PROPERTY_META[property];
@@ -111,6 +121,7 @@ export function MotionTimelinePanel({
   onSeek,
   onKeyframeSelected,
   onKeyframePathMorph,
+  onEditMorphPoints,
   onOpenLivePreview,
   onOpenMotionExport,
   onSelectCanvasNode,
@@ -119,10 +130,29 @@ export function MotionTimelinePanel({
 }: MotionTimelinePanelProps) {
   const nodes = activePage.document.nodes;
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
-  const hasSelectedPathNode = useMemo(
-    () => selectedNodeIds.some((id) => nodeById.get(id)?.type === 'path'),
-    [selectedNodeIds, nodeById],
-  );
+  const selectedMorphInfo = useMemo(() => {
+    const selectedNodes = selectedNodeIds
+      .map((id) => nodeById.get(id))
+      .filter((n): n is DesignNode => Boolean(n));
+    if (selectedNodes.length === 0) {
+      return {
+        supported: false,
+        message: 'Select a closed vector shape (Circle, Rectangle, Frame, or closed Path) to enable Shape Morph.',
+      };
+    }
+    const supportedNode = selectedNodes.find((n) => checkNodeMorphSupport(n).supported);
+    if (supportedNode) {
+      return {
+        supported: true,
+        message: 'Enable Shape Morph or add a geometry keyframe at the current playhead (preserves exact object ID)',
+      };
+    }
+    const firstCheck = checkNodeMorphSupport(selectedNodes[0]);
+    return {
+      supported: false,
+      message: firstCheck.message,
+    };
+  }, [selectedNodeIds, nodeById]);
 
   const [selection, setSelection] = useState<TimelineSelection | null>(null);
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
@@ -145,8 +175,25 @@ export function MotionTimelinePanel({
   const rulerRef = useRef<HTMLDivElement | null>(null);
   const lanesContainerRef = useRef<HTMLDivElement | null>(null);
   const moreRef = useRef<HTMLDivElement | null>(null);
+  const pendingMorphAutoSelectRef = useRef<{ nodeIds: readonly string[]; timeMs: number } | null>(null);
   const activeClipRef = useRef<AnimationClip | null>(activeClip);
   activeClipRef.current = activeClip;
+
+  useEffect(() => {
+    const pending = pendingMorphAutoSelectRef.current;
+    if (!pending || !activeClip) return;
+    const morphTrack = activeClip.tracks.find(
+      (t) => t.property === 'pathMorph' && pending.nodeIds.includes(t.targetNodeId),
+    );
+    if (!morphTrack || morphTrack.keyframes.length === 0) return;
+    const targetKf =
+      morphTrack.keyframes.find((kf) => Math.abs(kf.timeMs - pending.timeMs) <= 20) ??
+      morphTrack.keyframes[morphTrack.keyframes.length - 1];
+    if (targetKf) {
+      pendingMorphAutoSelectRef.current = null;
+      setSelection({ kind: 'track', trackId: morphTrack.id, keyframeId: targetKf.id });
+    }
+  }, [activeClip]);
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -758,6 +805,17 @@ export function MotionTimelinePanel({
         disabled: selectedNodeIds.length === 0,
         onSelect: onKeyframeSelected,
       },
+      ...(onKeyframePathMorph
+        ? [
+            {
+              kind: 'item' as const,
+              id: 'stg-morph',
+              label: 'Enable / Add Shape Morph Keyframe',
+              disabled: !selectedMorphInfo.supported,
+              onSelect: onKeyframePathMorph,
+            },
+          ]
+        : []),
       {
         kind: 'item',
         id: 'stg-new',
@@ -950,17 +1008,16 @@ export function MotionTimelinePanel({
           {onKeyframePathMorph && (
             <button
               type="button"
-              class="mt-btn"
+              class="mt-btn mt-morph-btn"
               data-testid="timeline-keyframe-morph-btn"
-              disabled={!hasSelectedPathNode}
-              title={
-                hasSelectedPathNode
-                  ? 'Keyframe vector anchor points, Bezier curve handles, and corner radii at the current playhead'
-                  : 'Select a vector path or shape (triangle, polygon, star, pen path) to animate points & curves'
-              }
-              onClick={onKeyframePathMorph}
+              disabled={!selectedMorphInfo.supported}
+              title={selectedMorphInfo.message}
+              onClick={() => {
+                pendingMorphAutoSelectRef.current = { nodeIds: selectedNodeIds, timeMs: playheadMs };
+                onKeyframePathMorph();
+              }}
             >
-              + Points
+              + Morph
             </button>
           )}
           <button
@@ -1436,31 +1493,120 @@ export function MotionTimelinePanel({
             </label>
 
             {ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].kind === 'morph' ? (() => {
-              const snap = typeof activeTrackSelection.keyframe.value === 'string'
-                ? parsePathMorphSnapshot(activeTrackSelection.keyframe.value)
-                : null;
-              const targetPathNode = nodeById.get(activeTrackSelection.track.targetNodeId);
+              const rawVal = typeof activeTrackSelection.keyframe.value === 'string'
+                ? activeTrackSelection.keyframe.value
+                : '';
+              const snap = rawVal ? parsePathMorphSnapshot(rawVal) : null;
+              const targetNode = nodeById.get(activeTrackSelection.track.targetNodeId);
+              const targetSupport = checkNodeMorphSupport(targetNode);
+              const matchMode = snap?.morph?.matchMode ?? 'auto';
+              const isReversed = Boolean(snap?.morph?.reverse);
+              const startOffset = snap?.morph?.startOffset ?? 0;
+
+              const applyMorphOptionPatch = (patch: {
+                matchMode?: 'auto' | 'index';
+                reverse?: boolean;
+                startOffset?: number;
+              }) => {
+                if (!rawVal) return;
+                const updated = updateMorphSnapshotOptions(rawVal, patch);
+                if (updated) {
+                  handleInspectorPatch({ value: updated });
+                }
+              };
+
               return (
-                <div class="mt-inspector-field">
-                  <span>Shape</span>
-                  <span class="mt-morph-summary">
-                    {snap ? `${snap.points.length} pts` : 'Vector Path'}
+                <div class="mt-inspector-field mt-morph-inspector-group" data-testid="morph-keyframe-inspector">
+                  <span class="mt-morph-summary" data-testid="morph-shape-summary">
+                    {snap ? `${snap.label ?? 'Shape'} · ${snap.points.length} pts` : 'Shape Morph'}
                   </span>
-                  {targetPathNode?.type === 'path' && (
+                  <select
+                    class="mt-select mt-morph-preset-select"
+                    aria-label="Morph shape preset"
+                    data-testid="morph-preset-select"
+                    value=""
+                    title="Transform this keyframe into a built-in closed shape while keeping the same object ID"
+                    onChange={(event) => {
+                      const preset = event.currentTarget.value as MorphShapePresetId | '';
+                      if (!preset) return;
+                      const w = targetNode?.width ?? snap?.w ?? 120;
+                      const h = targetNode?.height ?? snap?.h ?? 120;
+                      const nextSnap = createMorphPresetSnapshot(preset, w, h, snap?.morph);
+                      handleInspectorPatch({ value: nextSnap });
+                      event.currentTarget.value = '';
+                    }}
+                  >
+                    <option value="">Morph into…</option>
+                    {MORPH_SHAPE_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                  {onEditMorphPoints && targetNode && (
                     <button
                       type="button"
                       class="mt-btn"
-                      title="Recapture the selected layer's current vertices and Bezier curves into this keyframe"
+                      data-testid="morph-edit-points-btn"
+                      title="Edit this keyframe's Bezier anchors and curve handles directly on the canvas (Direct Selection A)"
+                      onClick={() => onEditMorphPoints(targetNode.id)}
+                    >
+                      Edit Points
+                    </button>
+                  )}
+                  {targetNode && targetSupport.supported && (
+                    <button
+                      type="button"
+                      class="mt-btn"
+                      title="Recapture the selected layer's current geometry into this keyframe"
                       onClick={() => {
-                        const freshValue = getDefaultNodePropertyValue(targetPathNode, 'pathMorph');
-                        if (typeof freshValue === 'string') {
+                        const freshValue = extractMorphSnapshotFromNode(targetNode);
+                        if (freshValue) {
                           handleInspectorPatch({ value: freshValue });
                         }
                       }}
                     >
-                      Recapture Shape
+                      Recapture
                     </button>
                   )}
+                  <button
+                    type="button"
+                    class={`mt-btn${matchMode === 'index' ? ' active' : ''}`}
+                    data-testid="morph-match-mode-btn"
+                    title="Toggle between automatic start/winding alignment (Auto) and strict vertex index correspondence (Index)"
+                    onClick={() => applyMorphOptionPatch({ matchMode: matchMode === 'auto' ? 'index' : 'auto' })}
+                  >
+                    {matchMode === 'auto' ? 'Auto Match' : 'Index Match'}
+                  </button>
+                  <button
+                    type="button"
+                    class={`mt-btn${isReversed ? ' active' : ''}`}
+                    data-testid="morph-reverse-btn"
+                    title="Reverse contour traversal direction to fix twisting or fold-overs"
+                    onClick={() => applyMorphOptionPatch({ reverse: !isReversed })}
+                  >
+                    Reverse
+                  </button>
+                  <span class="mt-morph-shift-controls" title="Shift start-anchor correspondence around the contour">
+                    <button
+                      type="button"
+                      class="mt-btn"
+                      data-testid="morph-shift-prev-btn"
+                      aria-label="Shift morph start point backward"
+                      onClick={() => applyMorphOptionPatch({ startOffset: startOffset - 1 })}
+                    >
+                      Start −
+                    </button>
+                    <button
+                      type="button"
+                      class="mt-btn"
+                      data-testid="morph-shift-next-btn"
+                      aria-label="Shift morph start point forward"
+                      onClick={() => applyMorphOptionPatch({ startOffset: startOffset + 1 })}
+                    >
+                      Start +{startOffset !== 0 ? ` (${startOffset > 0 ? `+${startOffset}` : startOffset})` : ''}
+                    </button>
+                  </span>
                 </div>
               );
             })() : ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].kind === 'color' ? (

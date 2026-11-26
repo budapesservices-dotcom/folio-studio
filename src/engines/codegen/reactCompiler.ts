@@ -909,13 +909,22 @@ function buildPageReactFile(
   lines.push(`import '../styles/${slug}.css';`);
 
   const animatedNodeIds = new Set<string>();
+  let hasShapeMorphTracks = false;
   for (const clip of project.animations ?? []) {
     if (clip.pageId !== page.id) continue;
     for (const track of clip.tracks) {
       if (track.keyframes.length > 0) {
         animatedNodeIds.add(track.targetNodeId);
+        if (track.property === 'pathMorph') {
+          hasShapeMorphTracks = true;
+        }
       }
     }
+  }
+  if (hasShapeMorphTracks) {
+    lines.push(
+      '// Note: This page contains FOLIO Shape Morph (`pathMorph`) animation tracks. React TSX export currently preserves static base geometry and CSS transform/style animations; use Live Preview, HTML5 export, Video (MP4/MOV/WebM), GIF, PNG Sequence, or Motion JSON for full Shape Morph playback.',
+    );
   }
 
   for (const mod of project.codeModules ?? []) {

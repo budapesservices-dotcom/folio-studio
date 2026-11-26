@@ -1341,7 +1341,11 @@ export function App() {
             onStop={motion.stop}
             onSeek={motion.seek}
             onKeyframeSelected={() => motion.keyframeSelectedLayers()}
-            onKeyframePathMorph={() => motion.keyframeSelectedLayers(['pathMorph'])}
+            onKeyframePathMorph={() => motion.keyframeShapeMorph()}
+            onEditMorphPoints={(nodeId) => {
+              focusedCommandClient.selectNodes([nodeId], 'Select morph layer for point editing');
+              chooseCanvasTool('direct-selection', activeEditorId);
+            }}
             onOpenLivePreview={openLivePreviewForPage}
             onOpenMotionExport={() => setMotionExportOpen(true)}
             onSelectCanvasNode={(nodeId) => { focusedCommandClient.selectNodes([nodeId], 'Select animated layer'); }}
@@ -1412,7 +1416,11 @@ export function App() {
       />
 
       <ProjectHydrationOverlay visible={isHydrating} />
-      {notice && <div class="toast" role="status">{notice}</div>}
+      {notice && (
+        <div class={`toast${motion.motionOpen ? ' is-above-timeline' : ''}`} role="status">
+          {notice}
+        </div>
+      )}
     </div>
   );
 }
