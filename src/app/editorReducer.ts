@@ -19,6 +19,7 @@ import { getActiveDocument, updateActiveDocument } from '../core/document/projec
 import { areDocumentsStructurallyEqual } from '../core/document/equality';
 import { classifyNodeChange } from '../core/document/nodeChanges';
 import {
+  detachComponentInstanceWithAnimations,
   pruneComponentContractForDocument,
   pruneComponentInstanceContractsInDocument,
   replaceComponentInstancesInDocument,
@@ -659,7 +660,24 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           removedInstanceIdsByComponent.set(component.id, compRemovedIds);
         }
       }
-      // Detach all page AND nested component instances so deleting a master never leaves broken references.
+      // Detach all page AND nested component instances so deleting a master never leaves broken references,
+      // while preserving any embedded component animations onto the detached page layers.
+      const unpackedAnimations: AnimationClip[] = [];
+      if (target.animations && target.animations.length > 0) {
+        for (const page of state.project.pages) {
+          for (const node of page.document.nodes) {
+            if (node.type === 'component-instance' && node.componentId === action.componentId) {
+              const { animations: detachedClips } = detachComponentInstanceWithAnimations(
+                node,
+                target,
+                page.id,
+                state.project.designTokens,
+              );
+              unpackedAnimations.push(...detachedClips);
+            }
+          }
+        }
+      }
       const pages = state.project.pages.map((page) => ({
         ...page, document: replaceComponentInstancesInDocument(page.document, target, state.project.designTokens),
       }));
@@ -688,7 +706,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           return modified ? { ...graph, nodes: nextNodes, updatedAt: now } : graph;
         });
       }
-      let cleanedProject: FolioProject = { ...state.project, pages, components, logicGraphs };
+      let cleanedProject: FolioProject = {
+        ...state.project,
+        pages,
+        components,
+        logicGraphs,
+        ...(unpackedAnimations.length > 0
+          ? { animations: [...(state.project.animations ?? []), ...unpackedAnimations] }
+          : {}),
+      };
       for (const [pageId, removedIds] of removedInstanceIdsByPage) {
         cleanedProject = cleanupDeletedNodeReferences(cleanedProject, removedIds, pageId).project;
       }

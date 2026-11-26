@@ -265,7 +265,13 @@ export function useMotionPlayback({
 
   const createNewClip = useCallback(() => {
     const name = `Clip ${pageClips.length + 1}`;
-    const clip = createAnimationClip({ pageId: activePage.id, name, durationMs: 1200, autoplay: true });
+    const clip = createAnimationClip({
+      pageId: activePage.id,
+      name,
+      durationMs: 1200,
+      autoplay: true,
+      loop: workspaceScope === 'component',
+    });
     const result = commandClient.createAnimationClip(clip, `Create animation clip "${name}"`);
     if (result.status === 'applied') {
       setActiveClipId(clip.id);
@@ -274,7 +280,7 @@ export function useMotionPlayback({
       setPreviewActive(false);
       onNotice(`Created animation clip "${name}".`);
     }
-  }, [activePage.id, pageClips.length, commandClient, onNotice]);
+  }, [activePage.id, pageClips.length, workspaceScope, commandClient, onNotice]);
 
   const applyPreset = useCallback((presetId: MotionPresetDefinition['id']) => {
     const presetClip = { ...buildPresetClipForPage(activePage, presetId, selectedNodeIds), autoplay: true };
@@ -342,6 +348,7 @@ export function useMotionPlayback({
           name: `Clip ${pageClips.length + 1}`,
           durationMs: Math.max(1200, playheadMs),
           autoplay: true,
+          loop: workspaceScope === 'component',
         });
         isNewClip = true;
       }
@@ -384,7 +391,13 @@ export function useMotionPlayback({
     let clip = activeClip;
     let isNewClip = false;
     if (!clip) {
-      clip = createAnimationClip({ pageId: activePage.id, name: `Clip ${pageClips.length + 1}`, durationMs: 1200, autoplay: true });
+      clip = createAnimationClip({
+        pageId: activePage.id,
+        name: `Clip ${pageClips.length + 1}`,
+        durationMs: 1200,
+        autoplay: true,
+        loop: workspaceScope === 'component',
+      });
       isNewClip = true;
     }
 
@@ -450,6 +463,7 @@ export function useMotionPlayback({
         name: `Clip ${pageClips.length + 1}`,
         durationMs: Math.max(1200, playheadMs),
         autoplay: true,
+        loop: workspaceScope === 'component',
       });
       isNewClip = true;
     }
@@ -586,6 +600,7 @@ export function useMotionPlayback({
         name: `Clip ${pageClips.length + 1}`,
         durationMs: Math.max(1200, playheadMs),
         autoplay: true,
+        loop: workspaceScope === 'component',
       });
       isNewClip = true;
     }

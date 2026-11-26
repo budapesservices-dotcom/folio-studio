@@ -2,16 +2,20 @@ import type {
   AnimationClip,
   AnimationEasing,
   AnimationTrack,
+  ComponentDefinition,
   DesignNode,
   FolioPage,
   FolioProject,
   VisualEffect,
 } from '../../core/document/types';
+import { resolveComponentInstanceNodes } from '../../core/document/components';
+import { getProjectDesignTokens } from '../../core/document/tokens';
 import {
   formatColorWithAlpha,
   getVisibleEffects,
   parseColorWithAlpha,
 } from '../../core/document/styling';
+import { applyAutoLayoutToNodes } from '../layout/autoLayout';
 import { evaluateTrackAtTime, sortKeyframes } from './evaluator';
 import { easingToCubicBezier, toCssTimingFunction } from './easing';
 import { sanitizeCssValue } from '../codegen/sanitize';
@@ -101,16 +105,108 @@ function trackValuesVary(track: AnimationTrack): boolean {
  * - Vector `path` nodes (animating SVG `<path>` fill/stroke/stroke-width instead of wrapper box)
  * - Per-segment keyframe easing curves & border-style activation
  */
+const MAX_COMPONENT_ANIM_DEPTH = 8;
+
 /**
- * Returns the set of `nodeId`s on `page` that have an active `pathMorph` track.
+ * Recursively collects all embedded `ComponentDefinition.animations` for every
+ * `component-instance` placed on `page` (including nested instances), rewriting
+ * each child's `targetNodeId` to the exact `data-folio-id` emitted by `htmlCssCompiler`
+ * (`${instanceId}__${childNodeId}`).
+ */
+function collectPageComponentInstanceAnimations(
+  project: FolioProject,
+  page: FolioPage,
+): { scopedClips: AnimationClip[]; scopedNodesById: Map<string, DesignNode> } {
+  const scopedClips: AnimationClip[] = [];
+  const scopedNodesById = new Map<string, DesignNode>();
+  if (!project.components || project.components.length === 0) {
+    return { scopedClips, scopedNodesById };
+  }
+
+  const componentsById = new Map<string, ComponentDefinition>(
+    project.components.map((component) => [component.id, component]),
+  );
+  const tokens = getProjectDesignTokens(project);
+
+  const visitNodes = (
+    nodes: readonly DesignNode[],
+    idPrefix: string,
+    visitedComponentIds: ReadonlySet<string>,
+    depth: number,
+  ) => {
+    if (depth >= MAX_COMPONENT_ANIM_DEPTH) return;
+    for (const node of nodes) {
+      if (node.type !== 'component-instance' || node.onCanvas === false) continue;
+      const master = componentsById.get(node.componentId);
+      if (!master || visitedComponentIds.has(master.id)) continue;
+
+      const emittedInstanceId = idPrefix ? `${idPrefix}${node.id}` : node.id;
+      const childPrefix = `${emittedInstanceId}__`;
+      const resolvedRaw = resolveComponentInstanceNodes(node, master, tokens);
+      const resolvedChildren = resolvedRaw.some((child) => child.layout && child.layout.mode !== 'none')
+        ? applyAutoLayoutToNodes(resolvedRaw, undefined, tokens)
+        : resolvedRaw;
+
+      const childIdSet = new Set(resolvedChildren.map((child) => child.id));
+      for (const child of resolvedChildren) {
+        const scopedId = `${childPrefix}${child.id}`;
+        const scopedParentId =
+          child.parentId && childIdSet.has(child.parentId)
+            ? `${childPrefix}${child.parentId}`
+            : undefined;
+        scopedNodesById.set(scopedId, {
+          ...child,
+          id: scopedId,
+          ...(scopedParentId ? { parentId: scopedParentId } : { parentId: undefined }),
+        });
+      }
+
+      if (master.animations && master.animations.length > 0) {
+        for (const clip of master.animations) {
+          const mappedTracks = clip.tracks
+            .filter((track) => track.keyframes.length > 0 && childIdSet.has(track.targetNodeId))
+            .map((track) => ({
+              ...track,
+              id: `${childPrefix}${track.id}`,
+              targetNodeId: `${childPrefix}${track.targetNodeId}`,
+            }));
+          if (mappedTracks.length > 0) {
+            scopedClips.push({
+              ...clip,
+              id: `${emittedInstanceId}__${clip.id}`,
+              pageId: page.id,
+              // Embedded component animations play continuously in Live Preview / HTML5 export,
+              // matching `evaluateComponentDocumentAtTime` on the Studio Canvas.
+              autoplay: true,
+              loop: true,
+              tracks: mappedTracks,
+            });
+          }
+        }
+      }
+
+      const nextVisited = new Set(visitedComponentIds);
+      nextVisited.add(master.id);
+      visitNodes(resolvedChildren, childPrefix, nextVisited, depth + 1);
+    }
+  };
+
+  visitNodes(page.document.nodes, '', new Set<string>(), 0);
+  return { scopedClips, scopedNodesById };
+}
+
+/**
+ * Returns the set of emitted `data-folio-id`s on `page` (including children inside
+ * animated component instances) that have an active `pathMorph` track.
  */
 export function collectPageMorphNodeIds(
   project: FolioProject,
   page: FolioPage,
 ): Set<string> {
   const result = new Set<string>();
-  const clips = (project.animations ?? []).filter((clip) => clip.pageId === page.id);
-  for (const clip of clips) {
+  const pageClips = (project.animations ?? []).filter((clip) => clip.pageId === page.id);
+  const { scopedClips } = collectPageComponentInstanceAnimations(project, page);
+  for (const clip of [...pageClips, ...scopedClips]) {
     for (const track of clip.tracks) {
       if (track.property === 'pathMorph' && track.keyframes.length > 0) {
         result.add(track.targetNodeId);
@@ -121,10 +217,15 @@ export function collectPageMorphNodeIds(
 }
 
 export function compilePageAnimationsCss(project: FolioProject, page: FolioPage): string {
-  const clips = (project.animations ?? []).filter((clip) => clip.pageId === page.id && clip.tracks.length > 0);
+  const pageClips = (project.animations ?? []).filter((clip) => clip.pageId === page.id && clip.tracks.length > 0);
+  const { scopedClips, scopedNodesById } = collectPageComponentInstanceAnimations(project, page);
+  const clips = [...pageClips, ...scopedClips];
   if (clips.length === 0) return '';
 
   const nodesById = new Map<string, DesignNode>(page.document.nodes.map((node) => [node.id, node]));
+  for (const [scopedId, scopedNode] of scopedNodesById.entries()) {
+    nodesById.set(scopedId, scopedNode);
+  }
   const morphNodeIds = collectPageMorphNodeIds(project, page);
   const lines: string[] = ['/* Folio Motion Engine — Compiled @keyframes */'];
   if (morphNodeIds.size > 0) {
@@ -783,7 +884,9 @@ export function buildLivePreviewMorphScript(
   project: FolioProject,
   page: FolioPage,
 ): string {
-  const clips = (project.animations ?? []).filter((clip) => clip.pageId === page.id);
+  const pageClips = (project.animations ?? []).filter((clip) => clip.pageId === page.id);
+  const { scopedClips } = collectPageComponentInstanceAnimations(project, page);
+  const clips = [...pageClips, ...scopedClips];
   const compiledClips: CompiledMorphClip[] = [];
 
   for (const clip of clips) {

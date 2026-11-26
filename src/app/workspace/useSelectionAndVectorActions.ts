@@ -1,7 +1,7 @@
 import type { ComponentInstanceNode, DesignNode, DrawMaskMode, VectorShapeMeta } from '../../core/document/types';
 import { expandSelectedLayerIds, getEffectiveLayerStates } from '../../core/document/layers';
 import type { SelectSimilarCriterion } from '../../core/document/selectionQueries';
-import { detachComponentInstance } from '../../core/document/components';
+import { detachComponentInstanceWithAnimations } from '../../core/document/components';
 import { getActiveDocument } from '../../core/document/project';
 import { getProjectDesignTokens } from '../../core/document/tokens';
 import {
@@ -167,7 +167,12 @@ export function useSelectionAndVectorActions({
       setNotice('The linked master component could not be found.');
       return;
     }
-    const detached = detachComponentInstance(targetNode, master, getProjectDesignTokens(state.project));
+    const { nodes: detached, animations: detachedAnimations } = detachComponentInstanceWithAnimations(
+      targetNode,
+      master,
+      editor.project.activePageId,
+      getProjectDesignTokens(state.project),
+    );
     if (detached.length === 0) {
       setNotice('This component has no internal layers to unpack.');
       return;
@@ -177,8 +182,14 @@ export function useSelectionAndVectorActions({
       targetNode.id,
       detached,
       `Unpack component “${targetNode.name}” to layers`,
+      detachedAnimations,
     );
-    setNotice(`Unpacked “${targetNode.name}” back into ${detached.length} editable layer${detached.length === 1 ? '' : 's'}.`);
+    const animSuffix = detachedAnimations.length > 0
+      ? ` with ${detachedAnimations.length} animation clip${detachedAnimations.length === 1 ? '' : 's'} preserved`
+      : '';
+    setNotice(
+      `Unpacked “${targetNode.name}” back into ${detached.length} editable layer${detached.length === 1 ? '' : 's'}${animSuffix}.`,
+    );
   };
 
   const detachSelectedInstance = () => {

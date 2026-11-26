@@ -221,7 +221,12 @@ export interface MainCanvasCommandClient {
     description?: string,
     selectIds?: readonly string[],
   ): NativeCommandResult;
-  replaceNodeWithNodes(nodeId: string, nodes: readonly DesignNode[], description?: string): NativeCommandResult;
+  replaceNodeWithNodes(
+    nodeId: string,
+    nodes: readonly DesignNode[],
+    description?: string,
+    animationClips?: readonly AnimationClip[],
+  ): NativeCommandResult | NativeCommandTransactionResult;
   transformNodes(nodes: readonly DesignNode[], description?: string): NativeCommandResult;
   editNode(node: DesignNode, coalesceKey: string, description?: string): NativeCommandResult;
   setNodesProperties(
@@ -685,12 +690,40 @@ export function createWorkspaceCommandClient(
       );
     },
 
-    replaceNodeWithNodes(nodeId, nodes, description = 'Replace node with nodes') {
+    replaceNodeWithNodes(nodeId, nodes, description = 'Replace node with nodes', animationClips) {
       const astView = getActiveAstView();
       if (nodes.length === 0) {
         return makeNoOpResult('No replacement nodes were supplied.', astView.address);
       }
       const cleanNodes = nodes.map((node) => stripUndefinedEntries(node));
+      if (animationClips && animationClips.length > 0) {
+        const projectId = store.getSnapshot().editorState.project.metadata.id;
+        const transactionId = createCommandId();
+        const commands: NativeCommandEnvelope<string, unknown>[] = [
+          createEnvelope(
+            'node.split',
+            { kind: 'document', address: astView.address },
+            { nodeId, nodes: cleanNodes },
+            description,
+            transactionId,
+          ),
+          ...animationClips.map((clip) =>
+            createEnvelope(
+              'animation.create-clip',
+              { kind: 'project', projectId },
+              stripUndefinedEntries({ clip }),
+              description,
+              transactionId,
+            ),
+          ),
+        ];
+        const result = executeNativeCommandTransaction(store, commands, buildContext());
+        if (result.status === 'rejected' && result.commandResults.length > 0) {
+          const failed = result.commandResults[result.failedCommandIndex ?? result.commandResults.length - 1];
+          if (failed) options.onRejected?.(failed);
+        }
+        return result;
+      }
       return submit(
         'node.split',
         { kind: 'document', address: astView.address },

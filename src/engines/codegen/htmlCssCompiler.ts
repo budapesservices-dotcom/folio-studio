@@ -610,6 +610,7 @@ export function buildNodeCssDeclarations(
     nodeById?: ReadonlyMap<string, DesignNode>;
     maskPrefix?: string;
     morphNodeIds?: ReadonlySet<string>;
+    emittedId?: string;
   },
 ): string[] {
   const {
@@ -621,6 +622,7 @@ export function buildNodeCssDeclarations(
     nodeById,
     maskPrefix,
     morphNodeIds,
+    emittedId,
   } = options;
   const declarations: string[] = [];
 
@@ -959,9 +961,8 @@ export function buildNodeCssDeclarations(
   }
 
   const isMorphRenderedAsSvg =
-    !isInstanceChild &&
     (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') &&
-    Boolean(morphNodeIds?.has(node.id));
+    Boolean(morphNodeIds?.has(emittedId ?? node.id));
 
   if ((node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') && !isMorphRenderedAsSvg) {
     const fillVar = resolveTokenCssVar(tokens, node.tokenBindings?.fill);
@@ -1252,6 +1253,7 @@ export function compilePageHtmlCss(
     originOffset: { x: number; y: number },
     activeNodeById: ReadonlyMap<string, DesignNode>,
     maskPrefix: string,
+    emittedId: string,
   ) => {
     const selector = `.${className}`;
     const declarations = buildNodeCssDeclarations(node, tokens, {
@@ -1263,6 +1265,7 @@ export function compilePageHtmlCss(
       nodeById: activeNodeById,
       maskPrefix,
       morphNodeIds,
+      emittedId,
     });
 
     pushCssRule(
@@ -1370,6 +1373,7 @@ export function compilePageHtmlCss(
       originOffset,
       activeNodeById,
       maskPrefix,
+      emittedId,
     );
 
     const tag = resolveSemanticTag(node);
@@ -1432,12 +1436,11 @@ export function compilePageHtmlCss(
     } else if (node.type === 'path') {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
       htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
-      htmlBodyLines.push(...buildInlineSvgMarkup(node, tokens, `${indent}  `, !isInstanceChild && morphNodeIds.has(node.id)));
+      htmlBodyLines.push(...buildInlineSvgMarkup(node, tokens, `${indent}  `, morphNodeIds.has(emittedId)));
       htmlBodyLines.push(`${indent}</${wrapperTag}>`);
     } else if (
-      !isInstanceChild &&
       (node.type === 'ellipse' || node.type === 'rect' || node.type === 'frame') &&
-      morphNodeIds.has(node.id)
+      morphNodeIds.has(emittedId)
     ) {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
       const snap = extractMorphSnapshotFromNode(node);

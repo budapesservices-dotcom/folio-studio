@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { RefObject } from 'preact';
 import { createEmptyDocument } from '../../core/document/factory';
-import { buildComponentDefinitionFromNodes } from '../../core/document/components';
+import {
+  buildComponentDefinitionFromNodes,
+  extractComponentAnimationsFromClips,
+} from '../../core/document/components';
 import { getActiveDocument } from '../../core/document/project';
 import type { ComponentDefinition, DesignNode, FolioDocument, FolioProject } from '../../core/document/types';
 import { loadProjectById, saveProject, withProjectWriteLock } from '../../core/persistence/indexedDb';
@@ -149,10 +152,24 @@ export function useComponentMasterLifecycle({
       `Component ${ownedComponents.length + 1}`,
     );
     if (!component) return;
-    mainCommandClient.createComponent(component, 'Save selection as component');
+    const includedIds = new Set(component.document.nodes.map((node) => node.id));
+    const componentAnimations = extractComponentAnimationsFromClips(
+      state.project.animations,
+      state.project.activePageId,
+      sourceNodes,
+      includedIds,
+    );
+    const componentToCreate: ComponentDefinition = componentAnimations.length > 0
+      ? { ...component, animations: componentAnimations }
+      : component;
+    mainCommandClient.createComponent(componentToCreate, 'Save selection as component');
     closePagesRack();
     setComponentRackOpen(true);
-    setNotice(`“${component.name}” saved to this project’s Component Rack.`);
+    setNotice(
+      componentAnimations.length > 0
+        ? `“${componentToCreate.name}” (with ${componentAnimations.length} animation clip${componentAnimations.length === 1 ? '' : 's'}) saved to this project’s Component Rack.`
+        : `“${componentToCreate.name}” saved to this project’s Component Rack.`,
+    );
   };
 
   const saveComponentCanvasMaster = () => {
@@ -213,29 +230,12 @@ export function useComponentMasterLifecycle({
     );
     if (!component) return;
     const includedIds = new Set(component.document.nodes.map((node) => node.id));
-    const includedSourceNodes = bufferDocument.nodes.filter((node) => includedIds.has(node.id));
-    const offsetX = includedSourceNodes.length > 0 ? Math.min(...includedSourceNodes.map((n) => n.x)) : 0;
-    const offsetY = includedSourceNodes.length > 0 ? Math.min(...includedSourceNodes.map((n) => n.y)) : 0;
-    const componentAnimations = (componentState.project.animations ?? [])
-      .map((clip) => ({
-        ...clip,
-        pageId: 'component-master',
-        tracks: clip.tracks
-          .filter((track) => includedIds.has(track.targetNodeId))
-          .map((track) => ({
-            ...track,
-            keyframes: track.keyframes.map((kf) => ({
-              ...kf,
-              value:
-                track.property === 'x' && typeof kf.value === 'number'
-                  ? Math.round((kf.value - offsetX) * 100) / 100
-                  : track.property === 'y' && typeof kf.value === 'number'
-                    ? Math.round((kf.value - offsetY) * 100) / 100
-                    : kf.value,
-            })),
-          })),
-      }))
-      .filter((clip) => clip.tracks.length > 0);
+    const componentAnimations = extractComponentAnimationsFromClips(
+      componentState.project.animations,
+      undefined,
+      bufferDocument.nodes,
+      includedIds,
+    );
     const componentToCreate: ComponentDefinition = componentAnimations.length > 0
       ? { ...component, animations: componentAnimations }
       : component;

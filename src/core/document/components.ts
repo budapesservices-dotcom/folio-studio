@@ -1,4 +1,6 @@
 import type {
+  AnimationClip,
+  AnimationTrack,
   ComponentDefinition,
   ComponentInstanceNode,
   ComponentSlotDefinition,
@@ -11,6 +13,7 @@ import type {
 } from './types';
 import { createEmptyDocument } from './factory';
 import { expandSelectedLayerIds } from './layers';
+import { parsePathMorphSnapshot } from './pathMorph';
 import { resolveNodeWithTokens } from './tokens';
 import { scalePathNodeGeometry } from './vector';
 
@@ -264,18 +267,96 @@ export function getComponentOverrideTargets(component: ComponentDefinition): {
   };
 }
 
-/** Converts a linked instance into ordinary page nodes, baking effective variants, slots, and overrides. */
-export function detachComponentInstance(
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function scaleSerializedPathMorph(raw: string, scaleX: number, scaleY: number): string {
+  if (Math.abs(scaleX - 1) < 1e-4 && Math.abs(scaleY - 1) < 1e-4) return raw;
+  const parsed = parsePathMorphSnapshot(raw);
+  if (!parsed) return raw;
+  const scalePoint = (pt: (typeof parsed.points)[number]) => ({
+    ...pt,
+    x: round2(pt.x * scaleX),
+    y: round2(pt.y * scaleY),
+    ...(pt.hi ? { hi: [round2(pt.hi[0] * scaleX), round2(pt.hi[1] * scaleY)] as [number, number] } : {}),
+    ...(pt.ho ? { ho: [round2(pt.ho[0] * scaleX), round2(pt.ho[1] * scaleY)] as [number, number] } : {}),
+    ...(pt.cr !== undefined ? { cr: round2(pt.cr * Math.sqrt(Math.max(1e-4, scaleX * scaleY))) } : {}),
+  });
+  return JSON.stringify({
+    ...parsed,
+    ...(parsed.w !== undefined ? { w: round2(parsed.w * scaleX) } : {}),
+    ...(parsed.h !== undefined ? { h: round2(parsed.h * scaleY) } : {}),
+    points: parsed.points.map(scalePoint),
+    ...(parsed.subpaths
+      ? {
+          subpaths: parsed.subpaths.map((sp) => ({
+            ...sp,
+            points: sp.points.map(scalePoint),
+          })),
+        }
+      : {}),
+  });
+}
+
+/**
+ * Extracts and localizes animation clips targeting `includedIds` so they can be
+ * embedded inside a `ComponentDefinition` in local `[0..width, 0..height]` coordinates.
+ */
+export function extractComponentAnimationsFromClips(
+  sourceAnimations: readonly AnimationClip[] | undefined,
+  sourcePageId: string | undefined,
+  sourceNodes: readonly DesignNode[],
+  includedIds: ReadonlySet<string>,
+): AnimationClip[] {
+  if (!sourceAnimations || sourceAnimations.length === 0 || includedIds.size === 0) {
+    return [];
+  }
+  const includedSourceNodes = sourceNodes.filter((node) => includedIds.has(node.id));
+  const offsetX = includedSourceNodes.length > 0 ? Math.min(...includedSourceNodes.map((n) => n.x)) : 0;
+  const offsetY = includedSourceNodes.length > 0 ? Math.min(...includedSourceNodes.map((n) => n.y)) : 0;
+
+  return sourceAnimations
+    .filter((clip) => !sourcePageId || clip.pageId === sourcePageId)
+    .map((clip) => ({
+      ...clip,
+      pageId: 'component-master',
+      tracks: clip.tracks
+        .filter((track) => includedIds.has(track.targetNodeId))
+        .map((track) => ({
+          ...track,
+          keyframes: track.keyframes.map((kf) => ({
+            ...kf,
+            value:
+              track.property === 'x' && typeof kf.value === 'number'
+                ? round2(kf.value - offsetX)
+                : track.property === 'y' && typeof kf.value === 'number'
+                  ? round2(kf.value - offsetY)
+                  : kf.value,
+          })),
+        })),
+    }))
+    .filter((clip) => clip.tracks.length > 0);
+}
+
+/**
+ * Converts a linked instance into ordinary page nodes AND remaps all embedded
+ * master component animations onto the detached node IDs in the target page's
+ * coordinate space (preserving transform, scale, rotation, opacity, and Shape Morph).
+ */
+export function detachComponentInstanceWithAnimations(
   instance: ComponentInstanceNode,
   component: ComponentDefinition,
+  targetPageId: string,
   tokens?: DesignTokenCollection,
-): DesignNode[] {
+): { nodes: DesignNode[]; animations: AnimationClip[] } {
   const source = component.document;
   const scaleX = instance.width / Math.max(1, source.width);
   const scaleY = instance.height / Math.max(1, source.height);
+  const uniformScale = Math.sqrt(Math.max(1e-4, scaleX * scaleY));
   const centerX = instance.x + instance.width / 2;
   const centerY = instance.y + instance.height / 2;
-  const radians = instance.rotation * Math.PI / 180;
+  const radians = (instance.rotation * Math.PI) / 180;
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
 
@@ -283,7 +364,24 @@ export function detachComponentInstance(
   const resolvedById = new Map(resolvedNodes.map((node) => [node.id, node]));
   const detachedIds = new Map(source.nodes.map((node) => [node.id, createNodeId(instance.id, node.id)]));
 
-  return source.nodes.map((sourceNode) => {
+  const transformRectToPage = (localX: number, localY: number, localW: number, localH: number) => {
+    const width = localW * scaleX;
+    const height = localH * scaleY;
+    const localCenterX = instance.x + localX * scaleX + width / 2;
+    const localCenterY = instance.y + localY * scaleY + height / 2;
+    const dx = localCenterX - centerX;
+    const dy = localCenterY - centerY;
+    const rotatedX = centerX + dx * cos - dy * sin;
+    const rotatedY = centerY + dx * sin + dy * cos;
+    return {
+      x: round2(rotatedX - width / 2),
+      y: round2(rotatedY - height / 2),
+      width: round2(width),
+      height: round2(height),
+    };
+  };
+
+  const nodes: DesignNode[] = source.nodes.map((sourceNode) => {
     const effective = resolvedById.get(sourceNode.id) ?? applyComponentOverrides(sourceNode, instance.overrides);
     const width = effective.width * scaleX;
     const height = effective.height * scaleY;
@@ -332,6 +430,82 @@ export function detachComponentInstance(
     }
     return baseDetached as DesignNode;
   });
+
+  const now = new Date().toISOString();
+  const animations: AnimationClip[] = [];
+
+  for (const clip of component.animations ?? []) {
+    const mappedTracks: AnimationTrack[] = [];
+    for (const track of clip.tracks) {
+      const nextTargetId = detachedIds.get(track.targetNodeId);
+      if (!nextTargetId || track.keyframes.length === 0) continue;
+      const sourceNode = resolvedById.get(track.targetNodeId)
+        ?? source.nodes.find((n) => n.id === track.targetNodeId);
+      const baseLocalX = sourceNode?.x ?? 0;
+      const baseLocalY = sourceNode?.y ?? 0;
+      const baseLocalW = sourceNode?.width ?? 100;
+      const baseLocalH = sourceNode?.height ?? 100;
+
+      const mappedKeyframes = track.keyframes.map((kf) => {
+        let value = kf.value;
+        if (track.property === 'x' && typeof kf.value === 'number') {
+          value = transformRectToPage(kf.value, baseLocalY, baseLocalW, baseLocalH).x;
+        } else if (track.property === 'y' && typeof kf.value === 'number') {
+          value = transformRectToPage(baseLocalX, kf.value, baseLocalW, baseLocalH).y;
+        } else if (track.property === 'width' && typeof kf.value === 'number') {
+          value = Math.max(1, round2(kf.value * scaleX));
+        } else if (track.property === 'height' && typeof kf.value === 'number') {
+          value = Math.max(1, round2(kf.value * scaleY));
+        } else if (track.property === 'rotation' && typeof kf.value === 'number') {
+          value = round2(kf.value + instance.rotation);
+        } else if (track.property === 'opacity' && typeof kf.value === 'number') {
+          value = Math.max(0, Math.min(1, Math.round(kf.value * instance.opacity * 1000) / 1000));
+        } else if ((track.property === 'radius' || track.property === 'strokeWidth') && typeof kf.value === 'number') {
+          value = Math.max(0, round2(kf.value * uniformScale));
+        } else if (track.property === 'pathMorph' && typeof kf.value === 'string') {
+          value = scaleSerializedPathMorph(kf.value, scaleX, scaleY);
+        }
+        return {
+          ...kf,
+          id: createNodeId(instance.id, kf.id),
+          value,
+        };
+      });
+
+      mappedTracks.push({
+        ...track,
+        id: createNodeId(instance.id, track.id),
+        targetNodeId: nextTargetId,
+        keyframes: mappedKeyframes,
+      });
+    }
+
+    if (mappedTracks.length > 0) {
+      const clipName = clip.name.toLowerCase().includes(instance.name.toLowerCase())
+        ? clip.name
+        : `${instance.name} — ${clip.name}`;
+      animations.push({
+        ...clip,
+        id: createNodeId(instance.id, clip.id),
+        name: clipName,
+        pageId: targetPageId,
+        tracks: mappedTracks,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+
+  return { nodes, animations };
+}
+
+/** Converts a linked instance into ordinary page nodes, baking effective variants, slots, and overrides. */
+export function detachComponentInstance(
+  instance: ComponentInstanceNode,
+  component: ComponentDefinition,
+  tokens?: DesignTokenCollection,
+): DesignNode[] {
+  return detachComponentInstanceWithAnimations(instance, component, '__detached__', tokens).nodes;
 }
 
 /**
