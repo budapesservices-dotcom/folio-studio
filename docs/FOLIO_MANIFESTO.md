@@ -31,7 +31,7 @@ Folio should feel exploratory and expressive without becoming careless about dat
 
 ### 4. One project, many ways to create
 
-Design, code, behavior, backend work, preview, and future collaboration should be connected parts of one project. Different workspaces may have different workflows, but they must respect shared project contracts.
+Design, vector creation, code, behavior, motion, video and media editing, backend work, preview, and future collaboration should become connected parts of one project. Different workspaces may have specialized workflows, but they must respect shared project contracts and one coherent project truth.
 
 ## The promise we must preserve
 
