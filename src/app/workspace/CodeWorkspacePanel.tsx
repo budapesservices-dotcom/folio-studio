@@ -18,6 +18,7 @@ import type {
 } from '../../engines/codegen';
 import { LivePreviewPane } from './LivePreviewPane';
 import { StudioIcon } from './StudioIcon';
+import { StudioContextMenu, type StudioContextMenuItem } from './StudioContextMenu';
 import type { CodeWorkspaceViewMode, MappedSyncFeedback } from './useCodeWorkspace';
 
 export interface CodeWorkspacePanelProps {
@@ -126,6 +127,7 @@ export function CodeWorkspacePanel({
   const [ariaDraft, setAriaDraft] = useState('');
   const [hrefDraft, setHrefDraft] = useState('');
   const [auditOpen, setAuditOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Sync mapped form fields whenever targeted AST node updates
   useEffect(() => {
@@ -177,6 +179,12 @@ export function CodeWorkspacePanel({
       class="code-studio-overlay"
       role="region"
       aria-label="FOLIO Code and Live Preview Studio"
+      onContextMenu={(event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('textarea, input, select')) return;
+        event.preventDefault();
+        setContextMenu({ x: event.clientX, y: event.clientY });
+      }}
     >
       <header class="code-studio-header">
         <div class="code-studio-title-group">
@@ -649,6 +657,43 @@ export function CodeWorkspacePanel({
           />
         )}
       </div>
+      {contextMenu && (
+        <StudioContextMenu
+          open={true}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          ariaLabel="Code and Preview Studio actions"
+          testId="code-workspace-context-menu"
+          onClose={() => setContextMenu(null)}
+          items={(() => {
+            const items: StudioContextMenuItem[] = [
+              { kind: 'header', id: 'hdr', label: selectedFile ? selectedFile.path : 'Code & Preview' },
+              {
+                kind: 'item',
+                id: 'copy-file',
+                label: 'Copy Active File',
+                disabled: !selectedFile,
+                onSelect: onCopySelectedFile,
+              },
+              { kind: 'item', id: 'refresh', label: 'Refresh Live Preview', onSelect: onRefreshPreview },
+              { kind: 'divider', id: 'div-view' },
+              { kind: 'item', id: 'view-split', label: 'Split View', active: viewMode === 'split', onSelect: () => onChangeViewMode('split') },
+              { kind: 'item', id: 'view-code', label: 'Code Only', active: viewMode === 'code', onSelect: () => onChangeViewMode('code') },
+              { kind: 'item', id: 'view-preview', label: 'Preview Only', active: viewMode === 'preview', onSelect: () => onChangeViewMode('preview') },
+              { kind: 'divider', id: 'div-add' },
+              { kind: 'item', id: 'add-css', label: 'Add Custom CSS Module', onSelect: () => onAddCustomModule('css') },
+              { kind: 'item', id: 'add-js', label: 'Add Custom JS Module', onSelect: () => onAddCustomModule('js') },
+            ];
+            if (onDownloadProjectZip) {
+              items.push({ kind: 'divider', id: 'div-export' });
+              items.push({ kind: 'item', id: 'export-zip', label: 'Export Project ZIP', accent: true, onSelect: onDownloadProjectZip });
+            }
+            items.push({ kind: 'divider', id: 'div-back' });
+            items.push({ kind: 'item', id: 'close', label: 'Back to Canvas', shortcut: ['Esc'], onSelect: onClose });
+            return items;
+          })()}
+        />
+      )}
     </section>
   );
 }

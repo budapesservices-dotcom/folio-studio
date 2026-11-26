@@ -1,7 +1,9 @@
 import type { RefObject } from 'preact';
+import { useState } from 'preact/hooks';
 import type { AssetReference, ComponentDefinition, DesignTokenCollection } from '../../core/document/types';
 import { ComponentThumbnail } from '../ComponentThumbnail';
 import { StudioIcon } from './StudioIcon';
+import { StudioContextMenu, type StudioContextMenuItem } from './StudioContextMenu';
 
 export interface ComponentRackPanelProps {
   panelRef: RefObject<HTMLElement>;
@@ -52,6 +54,11 @@ export function ComponentRackPanel({
   onDeleteComponent,
   onToggleNodeLogic,
 }: ComponentRackPanelProps) {
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    component: ComponentDefinition | null;
+  } | null>(null);
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const filteredComponents = normalizedQuery
     ? components.filter((component) => component.name.toLowerCase().includes(normalizedQuery))
@@ -121,9 +128,26 @@ export function ComponentRackPanel({
           </button>
         </div>
       </div>
-      <div class="component-rack-list">
+      <div
+        class="component-rack-list"
+        onContextMenu={(event) => {
+          const target = event.target as HTMLElement | null;
+          if (target?.closest('.component-rack-card') || target?.closest('input')) return;
+          event.preventDefault();
+          setContextMenu({ x: event.clientX, y: event.clientY, component: null });
+        }}
+      >
         {filteredComponents.map((component) => (
-          <article class="component-rack-card" key={component.id}>
+          <article
+            class="component-rack-card"
+            key={component.id}
+            onContextMenu={(event) => {
+              if ((event.target as HTMLElement | null)?.closest('input')) return;
+              event.preventDefault();
+              event.stopPropagation();
+              setContextMenu({ x: event.clientX, y: event.clientY, component });
+            }}
+          >
             <button
               type="button"
               class="component-rack-preview"
@@ -206,6 +230,59 @@ export function ComponentRackPanel({
           </div>
         )}
       </div>
+      {contextMenu && (
+        <StudioContextMenu
+          open={true}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          ariaLabel={contextMenu.component ? `Actions for ${contextMenu.component.name}` : 'Component Rack actions'}
+          testId="component-rack-context-menu"
+          onClose={() => setContextMenu(null)}
+          items={(() => {
+            const comp = contextMenu.component;
+            if (!comp) {
+              const items: StudioContextMenuItem[] = [
+                { kind: 'header', id: 'hdr', label: 'Component Library', meta: `${components.length}` },
+                { kind: 'item', id: 'new-master', label: 'New Master Component', accent: true, onSelect: onCreateNewMaster },
+                {
+                  kind: 'item',
+                  id: 'save-sel',
+                  label: 'Save Selection as Component',
+                  disabled: !canSaveSelection,
+                  onSelect: onSaveSelection,
+                },
+              ];
+              return items;
+            }
+            const items: StudioContextMenuItem[] = [
+              { kind: 'header', id: 'hdr', label: comp.name, meta: `${comp.document.nodes.length} layers` },
+              { kind: 'item', id: 'insert', label: 'Insert Linked Instance', accent: true, onSelect: () => onInsertComponent(comp) },
+              { kind: 'item', id: 'edit', label: 'Edit Master', onSelect: () => onEditMaster(comp) },
+              { kind: 'divider', id: 'div-1' },
+              { kind: 'item', id: 'rename', label: 'Rename', onSelect: () => onStartRename(comp) },
+              { kind: 'item', id: 'duplicate', label: 'Duplicate Component', onSelect: () => onDuplicateComponent(comp) },
+            ];
+            if (onToggleNodeLogic) {
+              items.push({
+                kind: 'item',
+                id: 'toggle-node',
+                label: comp.nodeLogicEnabled ? 'Disable in Node Logic' : 'Send to Node Logic',
+                active: Boolean(comp.nodeLogicEnabled),
+                onSelect: () => onToggleNodeLogic(comp),
+              });
+            }
+            items.push({ kind: 'divider', id: 'div-del' });
+            items.push({
+              kind: 'item',
+              id: 'delete',
+              label: 'Delete Component',
+              danger: true,
+              onSelect: () => onDeleteComponent(comp),
+            });
+            return items;
+          })()}
+        />
+      )}
     </section>
   );
 }

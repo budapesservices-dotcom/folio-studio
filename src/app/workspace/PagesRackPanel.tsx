@@ -1,6 +1,8 @@
 import type { RefObject } from 'preact';
+import { useRef, useState } from 'preact/hooks';
 import type { FolioPage } from '../../core/document/types';
 import { StudioIcon } from './StudioIcon';
+import { StudioContextMenu, type StudioContextMenuItem } from './StudioContextMenu';
 
 export interface PagesRackPanelProps {
   panelRef: RefObject<HTMLElement>;
@@ -13,6 +15,7 @@ export interface PagesRackPanelProps {
   onAddPage: () => void;
   onSwitchPage: (page: FolioPage) => void;
   onClose: () => void;
+  onNotice?: (message: string) => void;
 }
 
 export function PagesRackPanel({
@@ -26,7 +29,16 @@ export function PagesRackPanel({
   onAddPage,
   onSwitchPage,
   onClose,
+  onNotice,
 }: PagesRackPanelProps) {
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; page: FolioPage | null } | null>(null);
+
+  const copyRoute = (route: string) => {
+    void navigator.clipboard?.writeText(route).catch(() => {});
+    onNotice?.(`Copied route "${route}".`);
+  };
+
   return (
     <section
       ref={panelRef}
@@ -44,6 +56,7 @@ export function PagesRackPanel({
         </div>
         <div class="pages-rack-actions">
           <input
+            ref={nameInputRef}
             class="pages-rack-name-input"
             type="text"
             placeholder="New page name..."
@@ -62,13 +75,26 @@ export function PagesRackPanel({
           </button>
         </div>
       </div>
-      <div class="pages-rack-list">
+      <div
+        class="pages-rack-list"
+        onContextMenu={(event) => {
+          const target = event.target as HTMLElement | null;
+          if (target?.closest('.pages-rack-card')) return;
+          event.preventDefault();
+          setContextMenu({ x: event.clientX, y: event.clientY, page: null });
+        }}
+      >
         {pages.map((page) => (
           <button
             type="button"
             key={page.id}
             class={`pages-rack-card ${activePageId === page.id ? 'is-active' : ''}`}
             onClick={() => onSwitchPage(page)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setContextMenu({ x: event.clientX, y: event.clientY, page });
+            }}
             aria-current={activePageId === page.id ? 'page' : undefined}
           >
             <span class="pages-rack-card-icon"><StudioIcon name="pages" /></span>
@@ -82,6 +108,48 @@ export function PagesRackPanel({
           </button>
         ))}
       </div>
+      {contextMenu && (
+        <StudioContextMenu
+          open={true}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          ariaLabel={contextMenu.page ? `Actions for page ${contextMenu.page.name}` : 'Pages Rack actions'}
+          testId="pages-rack-context-menu"
+          onClose={() => setContextMenu(null)}
+          items={(() => {
+            const page = contextMenu.page;
+            const items: StudioContextMenuItem[] = [];
+            if (page) {
+              items.push({ kind: 'header', id: 'hdr', label: page.name, meta: page.route });
+              items.push({
+                kind: 'item',
+                id: 'switch',
+                label: activePageId === page.id ? 'Current Active Page' : `Switch to ${page.name}`,
+                active: activePageId === page.id,
+                onSelect: () => onSwitchPage(page),
+              });
+              items.push({
+                kind: 'item',
+                id: 'copy-route',
+                label: `Copy Route (${page.route})`,
+                onSelect: () => copyRoute(page.route),
+              });
+              items.push({ kind: 'divider', id: 'div-new' });
+            } else {
+              items.push({ kind: 'header', id: 'hdr', label: 'Pages', meta: `${pages.length}` });
+            }
+            items.push({
+              kind: 'item',
+              id: 'new-page',
+              label: 'Create New Page…',
+              accent: true,
+              onSelect: () => nameInputRef.current?.focus(),
+            });
+            return items;
+          })()}
+        />
+      )}
     </section>
   );
 }
+

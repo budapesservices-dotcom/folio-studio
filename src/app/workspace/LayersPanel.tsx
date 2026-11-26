@@ -11,6 +11,7 @@ import {
 } from './layerListVirtualization';
 import { tokenizeLayerSearchQuery, type LayerRenameSession } from './layerOperations';
 import { LayerTypeIcon, StudioIcon } from './StudioIcon';
+import { StudioContextMenu, type StudioContextMenuItem } from './StudioContextMenu';
 
 export interface LayersPanelProps {
   visible: boolean;
@@ -53,6 +54,10 @@ export interface LayersPanelProps {
   onToggleLayerProperty: (nodeId: string, property: 'visible' | 'locked') => void;
   components?: readonly ComponentDefinition[];
   onUnpackComponentInstance?: (nodeId: string) => void;
+  canPaste?: boolean;
+  onPasteLayers?: () => void;
+  onSelectAllLayers?: () => void;
+  onQuickAddLayer?: (kind: 'rect' | 'ellipse' | 'triangle' | 'text' | 'frame') => void;
 }
 
 export function LayersPanel({
@@ -96,6 +101,10 @@ export function LayersPanel({
   onToggleLayerProperty,
   components = [],
   onUnpackComponentInstance,
+  canPaste = false,
+  onPasteLayers,
+  onSelectAllLayers,
+  onQuickAddLayer,
 }: LayersPanelProps) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const layerListRef = useRef<HTMLDivElement | null>(null);
@@ -103,6 +112,7 @@ export function LayersPanel({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(LAYER_VIEWPORT_FALLBACK_HEIGHT);
   const [expandedComponentIds, setExpandedComponentIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [emptyMenu, setEmptyMenu] = useState<{ x: number; y: number } | null>(null);
 
   const componentById = useMemo(
     () => new Map(components.map((component) => [component.id, component])),
@@ -345,6 +355,12 @@ export function LayersPanel({
         aria-label="Document layers"
         data-virtualized={virtualWindow.isVirtualized ? 'true' : 'false'}
         onScroll={handleLayerListScroll}
+        onContextMenu={(event) => {
+          const target = event.target as HTMLElement | null;
+          if (target?.closest('.layer-row')) return;
+          event.preventDefault();
+          setEmptyMenu({ x: event.clientX, y: event.clientY });
+        }}
       >
         {virtualWindow.isVirtualized && virtualWindow.topSpacerPx > 0 && (
           <div
@@ -632,6 +648,50 @@ export function LayersPanel({
           </div>
         )}
       </div>
+      {emptyMenu && (
+        <StudioContextMenu
+          open={true}
+          x={emptyMenu.x}
+          y={emptyMenu.y}
+          ariaLabel="Layers panel actions"
+          testId="layers-empty-context-menu"
+          onClose={() => setEmptyMenu(null)}
+          items={(() => {
+            const entries: StudioContextMenuItem[] = [
+              { kind: 'header', id: 'hdr', label: 'Layers', meta: `${layerSourceNodes.length} total` },
+            ];
+            if (onPasteLayers) {
+              entries.push({
+                kind: 'item',
+                id: 'paste',
+                label: 'Paste',
+                shortcut: ['Mod', 'V'],
+                disabled: !canPaste,
+                onSelect: onPasteLayers,
+              });
+            }
+            if (onSelectAllLayers) {
+              entries.push({
+                kind: 'item',
+                id: 'select-all',
+                label: 'Select All Layers',
+                shortcut: ['Mod', 'A'],
+                disabled: layerSourceNodes.length === 0,
+                onSelect: onSelectAllLayers,
+              });
+            }
+            if (onQuickAddLayer) {
+              entries.push({ kind: 'divider', id: 'div-add' });
+              entries.push({ kind: 'item', id: 'add-rect', label: 'Add Rectangle', shortcut: ['R'], onSelect: () => onQuickAddLayer('rect') });
+              entries.push({ kind: 'item', id: 'add-ellipse', label: 'Add Circle / Ellipse', shortcut: ['O'], onSelect: () => onQuickAddLayer('ellipse') });
+              entries.push({ kind: 'item', id: 'add-triangle', label: 'Add Triangle', shortcut: ['Shift', 'T'], onSelect: () => onQuickAddLayer('triangle') });
+              entries.push({ kind: 'item', id: 'add-text', label: 'Add Text', shortcut: ['T'], onSelect: () => onQuickAddLayer('text') });
+              entries.push({ kind: 'item', id: 'add-frame', label: 'Add Frame', shortcut: ['F'], onSelect: () => onQuickAddLayer('frame') });
+            }
+            return entries;
+          })()}
+        />
+      )}
     </aside>
   );
 }

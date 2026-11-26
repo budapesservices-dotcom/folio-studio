@@ -1,3 +1,5 @@
+import { createPortal } from 'preact/compat';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { DesignNode, DesignTokenCollection, PathNode } from '../core/document/types';
 import { formatColorWithAlpha, isTransparentColor, parseColorWithAlpha } from '../core/document/styling';
 import { resolveDesignTokenValue } from '../core/document/tokens';
@@ -15,6 +17,7 @@ import type {
   VectorEraserTarget,
 } from '../core/tools/operationContract';
 import type { StudioVectorActions } from './workspace/inspectorVectorHelpers';
+import { clampContextMenuPosition } from './workspace/StudioContextMenu';
 
 export interface ToolOptionsBarProps {
   workspace: ToolWorkspaceScope;
@@ -248,6 +251,52 @@ export function ToolOptionsBar({
   onSelectTool,
   studioActions,
 }: ToolOptionsBarProps) {
+  const [openMenu, setOpenMenu] = useState<'pathfinder' | 'vector' | null>(null);
+  const [popoverCoords, setPopoverCoords] = useState<{ x: number; y: number }>({ x: 16, y: 80 });
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const pathfinderBtnRef = useRef<HTMLButtonElement | null>(null);
+  const vectorBtnRef = useRef<HTMLButtonElement | null>(null);
+  const popoverMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!openMenu) return;
+    const anchor = openMenu === 'pathfinder' ? pathfinderBtnRef.current : vectorBtnRef.current;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1440;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 900;
+    const menuEl = popoverMenuRef.current;
+    const menuWidth = menuEl ? menuEl.offsetWidth || 228 : 228;
+    const menuHeight = menuEl ? menuEl.offsetHeight || 290 : 290;
+    setPopoverCoords(clampContextMenuPosition(rect.left, rect.bottom + 6, menuWidth, menuHeight, vw, vh));
+  }, [openMenu]);
+
+  useEffect(() => {
+    if (!openMenu) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node) {
+        if (barRef.current?.contains(event.target)) return;
+        if (popoverMenuRef.current?.contains(event.target)) return;
+      }
+      setOpenMenu(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpenMenu(null);
+      }
+    };
+    const onWindowChange = () => setOpenMenu(null);
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('resize', onWindowChange);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('resize', onWindowChange);
+    };
+  }, [openMenu]);
+
   const booleanCandidates = selectedNodes.filter(isBooleanCandidate);
   const canPathfinder = booleanCandidates.length >= 2;
   const canCombine = selectedNodes.length >= 2;
@@ -259,6 +308,8 @@ export function ToolOptionsBar({
   const hasSelection = selectedNodes.length > 0;
   const hasToolControls = OPTION_TOOLS.has(toolId);
   const activeColorBlendMode: ShapeColorBlendMode = toolOptions.colorBlendMode ?? 'linear';
+  const colorBlendLabel =
+    activeColorBlendMode === 'linear' ? 'Linear' : activeColorBlendMode === 'hard' ? 'Sharp' : 'Solid';
 
   const showBar =
     workspace === 'component' ||
@@ -296,93 +347,107 @@ export function ToolOptionsBar({
     toolId === 'section' ||
     toolId.startsWith('draw-');
 
+  const runAndClose = (fn: () => void) => {
+    setOpenMenu(null);
+    fn();
+  };
+
   return (
     <div
+      ref={barRef}
       class={'studio-options-bar' + (workspace === 'component' ? ' is-component-bar' : '')}
       role="toolbar"
       aria-label={workspace === 'component' ? 'Vector craft and Pathfinder tools' : 'Active tool options'}
     >
       {(workspace === 'component' || canPathfinder) && (
-        <div class="studio-options-group" role="group" aria-label="Pathfinder boolean operations">
-          <span class="studio-options-label">Pathfinder</span>
-          <button
-            type="button"
-            class="studio-opt-btn"
-            disabled={!canPathfinder}
-            onClick={() => onPathfinder('unite')}
-            title="Pathfinder Unite — merge selected shapes into one vector path"
-          >
-            <PathfinderIcon op="unite" />
-            <span>Unite</span>
-          </button>
-          <button
-            type="button"
-            class="studio-opt-btn"
-            disabled={!canPathfinder}
-            onClick={() => onPathfinder('subtract')}
-            title="Pathfinder Minus Front — subtract top shape from base shape"
-          >
-            <PathfinderIcon op="subtract" />
-            <span>Subtract</span>
-          </button>
-          <button
-            type="button"
-            class="studio-opt-btn"
-            disabled={!canPathfinder}
-            onClick={() => onPathfinder('minus-back')}
-            title="Pathfinder Minus Back — subtract back shape from top shape"
-          >
-            <PathfinderIcon op="minus-back" />
-            <span>Minus Back</span>
-          </button>
-          <button
-            type="button"
-            class="studio-opt-btn"
-            disabled={!canPathfinder}
-            onClick={() => onPathfinder('intersect')}
-            title="Pathfinder Intersect — keep overlapping area of selected shapes"
-          >
-            <PathfinderIcon op="intersect" />
-            <span>Intersect</span>
-          </button>
-          <button
-            type="button"
-            class="studio-opt-btn"
-            disabled={!canPathfinder}
-            onClick={() => onPathfinder('exclude')}
-            title="Pathfinder Exclude — punch out overlapping regions"
-          >
-            <PathfinderIcon op="exclude" />
-            <span>Exclude</span>
-          </button>
-          {studioActions && (
+        <div class="studio-options-group" role="group" aria-label="Boolean and combine tools">
+          <div class="studio-opt-popover-anchor">
             <button
+              ref={pathfinderBtnRef}
               type="button"
-              class="studio-opt-btn"
-              disabled={!canPathfinder}
-              onClick={studioActions.onDividePathfinder}
-              title="Pathfinder Divide — break overlapping shapes into individual editable regions"
+              class={'studio-opt-btn' + (openMenu === 'pathfinder' ? ' is-active' : '')}
+              data-testid="toolbar-pathfinder-menu-btn"
+              aria-haspopup="menu"
+              aria-expanded={openMenu === 'pathfinder'}
+              onClick={() => setOpenMenu((cur) => (cur === 'pathfinder' ? null : 'pathfinder'))}
+              title="Boolean Pathfinder operations & color blend mode (Unite, Subtract, Intersect, Exclude, Divide, Builder)"
             >
-              <span>Divide</span>
+              <PathfinderIcon op="unite" />
+              <span>Pathfinder ▾</span>
             </button>
-          )}
-          {onSelectTool && (
-            <button
-              type="button"
-              class={'studio-opt-btn' + (toolId === 'shape-builder' ? ' is-active' : '')}
-              disabled={!canPathfinder}
-              aria-pressed={toolId === 'shape-builder'}
-              onClick={() => onSelectTool('shape-builder')}
-              title="Shape Builder (Shift+M) — drag across overlapping regions to merge, hold Alt to punch"
-            >
-              <span>Builder</span>
-            </button>
-          )}
-        </div>
-      )}
+            {openMenu === 'pathfinder' && (() => {
+              const menuContent = (
+                <div
+                  ref={popoverMenuRef}
+                  class="studio-opt-popover-menu"
+                  role="menu"
+                  aria-label="Pathfinder operations"
+                  data-testid="toolbar-pathfinder-popover"
+                  style={{ position: 'fixed', left: `${popoverCoords.x}px`, top: `${popoverCoords.y}px` }}
+                >
+                  <div class="studio-opt-popover-title">Boolean Shapes {canPathfinder ? '' : '(Select 2+ shapes)'}</div>
+                  <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!canPathfinder} onClick={() => runAndClose(() => onPathfinder('unite'))}>
+                    <PathfinderIcon op="unite" /><span>Unite (Merge)</span>
+                  </button>
+                  <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!canPathfinder} onClick={() => runAndClose(() => onPathfinder('subtract'))}>
+                    <PathfinderIcon op="subtract" /><span>Subtract Front</span>
+                  </button>
+                  <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!canPathfinder} onClick={() => runAndClose(() => onPathfinder('minus-back'))}>
+                    <PathfinderIcon op="minus-back" /><span>Minus Back</span>
+                  </button>
+                  <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!canPathfinder} onClick={() => runAndClose(() => onPathfinder('intersect'))}>
+                    <PathfinderIcon op="intersect" /><span>Intersect</span>
+                  </button>
+                  <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!canPathfinder} onClick={() => runAndClose(() => onPathfinder('exclude'))}>
+                    <PathfinderIcon op="exclude" /><span>Exclude</span>
+                  </button>
+                  {studioActions && (
+                    <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!canPathfinder} onClick={() => runAndClose(studioActions.onDividePathfinder)}>
+                      <PathfinderIcon op="exclude" /><span>Divide into Regions</span>
+                    </button>
+                  )}
+                  {onSelectTool && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class={'studio-opt-popover-item' + (toolId === 'shape-builder' ? ' is-active' : '')}
+                      disabled={!canPathfinder}
+                      onClick={() => runAndClose(() => onSelectTool('shape-builder'))}
+                    >
+                      <PathfinderIcon op="unite" /><span>Shape Builder</span><kbd>Shift+M</kbd>
+                    </button>
+                  )}
+                  {toolId !== 'shape-builder' && (
+                    <>
+                      <div class="studio-opt-popover-divider" role="separator" />
+                      <div class="studio-opt-popover-title">Multi-Color Blend</div>
+                      <div class="studio-opt-popover-seg" role="group" aria-label="Color blend mode when merging different-colored shapes">
+                        {([
+                          { id: 'linear', label: 'Linear', tip: 'Smooth linear color gradient across merged shapes' },
+                          { id: 'hard', label: 'Sharp', tip: 'Crisp hard-edge split between source colors' },
+                          { id: 'single', label: 'Solid', tip: 'Single solid fill from base shape' },
+                        ] as const).map((mode) => (
+                          <button
+                            key={mode.id}
+                            type="button"
+                            data-testid={`toolbar-color-blend-${mode.id}`}
+                            class={'studio-opt-btn' + (activeColorBlendMode === mode.id ? ' is-active' : '')}
+                            aria-pressed={activeColorBlendMode === mode.id}
+                            title={mode.tip}
+                            onClick={() => onChangeOptions({ colorBlendMode: mode.id })}
+                          >
+                            <span>{mode.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+              return typeof document !== 'undefined' && document.body ? createPortal(menuContent, document.body) : menuContent;
+            })()}
+          </div>
 
-      {(workspace === 'component' || canPathfinder) && (
-        <div class="studio-options-group" role="group" aria-label="Combine and color blend options">
           {studioActions?.onCombineSelection && (
             <button
               type="button"
@@ -396,34 +461,26 @@ export function ToolOptionsBar({
               <span>Combine</span>
             </button>
           )}
-          {toolId !== 'shape-builder' && (
-            <div class="studio-opt-color-blend-group" role="group" aria-label="Color blend mode when merging different-colored shapes">
-              <span class="studio-options-label">Color</span>
-              {([
-                { id: 'linear', label: 'Linear', tip: 'Smooth linear color gradient across merged shapes' },
-                { id: 'hard', label: 'Sharp', tip: 'Crisp hard-edge split between source colors' },
-                { id: 'single', label: 'Solid', tip: 'Single solid fill from base shape' },
-              ] as const).map((mode) => (
-                <button
-                  key={mode.id}
-                  type="button"
-                  data-testid={`toolbar-color-blend-${mode.id}`}
-                  class={'studio-opt-btn' + (activeColorBlendMode === mode.id ? ' is-active' : '')}
-                  aria-pressed={activeColorBlendMode === mode.id}
-                  title={mode.tip}
-                  onClick={() => onChangeOptions({ colorBlendMode: mode.id })}
-                >
-                  <span>{mode.label}</span>
-                </button>
-              ))}
-            </div>
+
+          {canPathfinder && toolId !== 'shape-builder' && (
+            <button
+              type="button"
+              class="studio-opt-btn"
+              onClick={() => {
+                const order: ShapeColorBlendMode[] = ['linear', 'hard', 'single'];
+                const next = order[(order.indexOf(activeColorBlendMode) + 1) % order.length];
+                onChangeOptions({ colorBlendMode: next });
+              }}
+              title="Cycle multi-color blend mode (Linear → Sharp → Solid)"
+            >
+              <span>Blend: {colorBlendLabel}</span>
+            </button>
           )}
         </div>
       )}
 
       {!canPathfinder && workspace !== 'component' && canCombine && studioActions?.onCombineSelection && (
         <div class="studio-options-group" role="group" aria-label="Combine selected objects">
-          <span class="studio-options-label">Selection</span>
           <button
             type="button"
             class="studio-opt-btn is-combine-btn"
@@ -437,81 +494,8 @@ export function ToolOptionsBar({
         </div>
       )}
 
-      {(workspace === 'component' || pathNodes.length > 0) && (
-        <div class="studio-options-group" role="group" aria-label="Vector path actions">
-          {workspace === 'component' && (
-            <>
-              <button
-                type="button"
-                class="studio-opt-btn"
-                disabled={convertibleNodes.length === 0}
-                onClick={onConvertToPath}
-                title="Convert selected Rectangle, Ellipse, or Frame into editable cubic Bezier anchors"
-              >
-                <span>To Path</span>
-              </button>
-              {studioActions && (
-                <button
-                  type="button"
-                  class="studio-opt-btn"
-                  disabled={booleanCandidates.length === 0}
-                  onClick={() => studioActions.onOffsetPath(8, true)}
-                  title="Offset / Contour Path (+8px outward copy)"
-                >
-                  <span>Offset +8</span>
-                </button>
-              )}
-              <button
-                type="button"
-                class="studio-opt-btn"
-                disabled={!hasSelection}
-                onClick={() => onFlip('horizontal')}
-                title="Flip selected artwork horizontally"
-              >
-                <span>Flip H</span>
-              </button>
-              <button
-                type="button"
-                class="studio-opt-btn"
-                disabled={!hasSelection}
-                onClick={() => onFlip('vertical')}
-                title="Flip selected artwork vertically"
-              >
-                <span>Flip V</span>
-              </button>
-              <button
-                type="button"
-                class="studio-opt-btn"
-                disabled={!hasSelection}
-                onClick={onRotate90}
-                title="Rotate selected artwork 90 degrees clockwise"
-              >
-                <span>+90°</span>
-              </button>
-              {studioActions && (
-                <>
-                  <button
-                    type="button"
-                    class="studio-opt-btn"
-                    disabled={!hasSelection}
-                    onClick={() => studioActions.onArrange('front')}
-                    title="Bring selected layer to Front"
-                  >
-                    <span>Front</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="studio-opt-btn"
-                    disabled={!hasSelection}
-                    onClick={() => studioActions.onArrange('back')}
-                    title="Send selected layer to Back"
-                  >
-                    <span>Back</span>
-                  </button>
-                </>
-              )}
-            </>
-          )}
+      {(workspace === 'component' || firstPath !== null) && (
+        <div class="studio-options-group" role="group" aria-label="Vector path and transform actions">
           {firstPath && (
             <>
               <button
@@ -522,26 +506,6 @@ export function ToolOptionsBar({
               >
                 <span>Simplify</span>
               </button>
-              {studioActions && (
-                <>
-                  <button
-                    type="button"
-                    class="studio-opt-btn"
-                    onClick={() => studioActions.onConvertAllAnchors('smooth')}
-                    title="Convert all anchors to smooth Bezier curves"
-                  >
-                    <span>Smooth</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="studio-opt-btn"
-                    onClick={studioActions.onReversePath}
-                    title="Reverse path anchor order and arrowhead direction"
-                  >
-                    <span>Reverse</span>
-                  </button>
-                </>
-              )}
               <button
                 type="button"
                 class="studio-opt-btn"
@@ -552,6 +516,86 @@ export function ToolOptionsBar({
               </button>
             </>
           )}
+
+          {workspace === 'component' && convertibleNodes.length > 0 && (
+            <button
+              type="button"
+              class="studio-opt-btn"
+              onClick={onConvertToPath}
+              title="Convert selected Rectangle, Ellipse, or Frame into editable cubic Bezier anchors"
+            >
+              <span>To Path</span>
+            </button>
+          )}
+
+          <div class="studio-opt-popover-anchor">
+            <button
+              ref={vectorBtnRef}
+              type="button"
+              class={'studio-opt-btn' + (openMenu === 'vector' ? ' is-active' : '')}
+              data-testid="toolbar-vector-menu-btn"
+              aria-haspopup="menu"
+              aria-expanded={openMenu === 'vector'}
+              onClick={() => setOpenMenu((cur) => (cur === 'vector' ? null : 'vector'))}
+              title="More path craft, flip, rotate, offset, and arrange tools"
+            >
+              <span>Transform &amp; Path ▾</span>
+            </button>
+            {openMenu === 'vector' && (() => {
+              const menuContent = (
+                <div
+                  ref={popoverMenuRef}
+                  class="studio-opt-popover-menu"
+                  role="menu"
+                  aria-label="Transform and path tools"
+                  data-testid="toolbar-vector-popover"
+                  style={{ position: 'fixed', left: `${popoverCoords.x}px`, top: `${popoverCoords.y}px` }}
+                >
+                  <div class="studio-opt-popover-title">Vector Craft</div>
+                  <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={convertibleNodes.length === 0} onClick={() => runAndClose(onConvertToPath)}>
+                    <span>Convert to Editable Path</span>
+                  </button>
+                  {studioActions && (
+                    <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={booleanCandidates.length === 0} onClick={() => runAndClose(() => studioActions.onOffsetPath(8, true))}>
+                      <span>Offset Contour (+8px)</span>
+                    </button>
+                  )}
+                  {firstPath && studioActions && (
+                    <>
+                      <button type="button" role="menuitem" class="studio-opt-popover-item" onClick={() => runAndClose(() => studioActions.onConvertAllAnchors('smooth'))}>
+                        <span>Smooth All Curves</span>
+                      </button>
+                      <button type="button" role="menuitem" class="studio-opt-popover-item" onClick={() => runAndClose(studioActions.onReversePath)}>
+                        <span>Reverse Path Direction</span>
+                      </button>
+                    </>
+                  )}
+                  <div class="studio-opt-popover-divider" role="separator" />
+                  <div class="studio-opt-popover-title">Transform &amp; Arrange</div>
+                  <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!hasSelection} onClick={() => runAndClose(() => onFlip('horizontal'))}>
+                    <span>Flip Horizontal</span>
+                  </button>
+                  <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!hasSelection} onClick={() => runAndClose(() => onFlip('vertical'))}>
+                    <span>Flip Vertical</span>
+                  </button>
+                  <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!hasSelection} onClick={() => runAndClose(onRotate90)}>
+                    <span>Rotate +90°</span>
+                  </button>
+                  {studioActions && (
+                    <>
+                      <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!hasSelection} onClick={() => runAndClose(() => studioActions.onArrange('front'))}>
+                        <span>Bring to Front</span><kbd>Ctrl+]</kbd>
+                      </button>
+                      <button type="button" role="menuitem" class="studio-opt-popover-item" disabled={!hasSelection} onClick={() => runAndClose(() => studioActions.onArrange('back'))}>
+                        <span>Send to Back</span><kbd>Ctrl+[</kbd>
+                      </button>
+                    </>
+                  )}
+                </div>
+              );
+              return typeof document !== 'undefined' && document.body ? createPortal(menuContent, document.body) : menuContent;
+            })()}
+          </div>
         </div>
       )}
 

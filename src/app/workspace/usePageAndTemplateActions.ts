@@ -1,5 +1,5 @@
 import { useRef, useState } from 'preact/hooks';
-import { createEmptyDocument, createNodeForDocument } from '../../core/document/factory';
+import { createEmptyDocument, createFrameNode, createNodeForDocument, createTriangleNode } from '../../core/document/factory';
 import { createComponentInstance, wouldCreateComponentCycle } from '../../core/document/components';
 import type { ComponentDefinition, FolioDocument, FolioPage, FolioProject } from '../../core/document/types';
 import type { StudioTemplateDefinition, TemplateInsertMode } from '../../core/document/templates';
@@ -48,9 +48,26 @@ export function usePageAndTemplateActions({
   const templateInsertCountRef = useRef(0);
   const [pageNameDraft, setPageNameDraft] = useState('');
 
-  const addNode = (type: 'rect' | 'ellipse' | 'text') => {
+  const addNode = (type: 'rect' | 'ellipse' | 'triangle' | 'text' | 'frame') => {
     if (isHydrating || !focusedDocument) return;
-    const node = createNodeForDocument(type, focusedDocument);
+    const idx = focusedDocument.nodes.length;
+    const stagger = (idx % 5) * 18;
+    const node =
+      type === 'triangle'
+        ? createTriangleNode(
+            Math.max(24, Math.round(focusedDocument.width / 2 - 90) + stagger),
+            Math.max(24, Math.round(focusedDocument.height / 2 - 80) + stagger),
+            Math.min(180, Math.max(64, Math.round(focusedDocument.width * 0.4))),
+            Math.min(160, Math.max(64, Math.round(focusedDocument.height * 0.4))),
+          )
+        : type === 'frame'
+          ? createFrameNode(
+              Math.max(24, Math.round(focusedDocument.width / 2 - 160) + stagger),
+              Math.max(24, Math.round(focusedDocument.height / 2 - 110) + stagger),
+              Math.min(320, Math.max(80, Math.round(focusedDocument.width * 0.6))),
+              Math.min(220, Math.max(80, Math.round(focusedDocument.height * 0.5))),
+            )
+          : createNodeForDocument(type, focusedDocument);
     focusedCommandClient.createNodes([node], `Create ${type} node`);
     setInspectorVisible(true);
   };

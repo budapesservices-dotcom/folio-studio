@@ -9833,3 +9833,510 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   gap: 6px;
   margin-top: 6px;
 }
+
+/* ==========================================================================
+   Unified Studio Context Menus & Smart Progressive Disclosure Popovers
+   ========================================================================== */
+
+.studio-context-menu {
+  z-index: 2600;
+  min-width: 212px;
+  max-width: 280px;
+  max-height: min(72vh, 520px);
+  overflow-y: auto;
+  padding: 5px;
+  border-radius: 9px;
+  background: var(--folio-surface-elevated, #181c24);
+  border: 1px solid var(--folio-border-strong, rgba(148, 163, 184, 0.24));
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.48), 0 2px 8px rgba(0, 0, 0, 0.28);
+  color: var(--folio-text-primary, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  backdrop-filter: blur(12px);
+}
+
+.layer-context-menu.studio-context-menu {
+  padding: 5px;
+  gap: 1px;
+}
+
+.studio-context-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--folio-text-muted, #94a3b8);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  margin-bottom: 3px;
+}
+
+.studio-context-menu-header > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-context-menu-meta {
+  font-weight: 600;
+  font-size: 9.5px;
+  color: var(--folio-text-subtle, #64748b);
+  flex-shrink: 0;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.studio-context-menu-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.studio-context-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--folio-text-primary, #e2e8f0);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  line-height: 1.25;
+  transition: background-color 110ms ease, color 110ms ease;
+}
+
+.studio-context-menu-item:hover:not(:disabled),
+.studio-context-menu-item:focus-visible:not(:disabled) {
+  background: rgba(99, 102, 241, 0.18);
+  color: #ffffff;
+  outline: none;
+}
+
+.studio-context-menu-item:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.studio-context-menu-item.is-active {
+  color: #67e8f9;
+}
+
+.studio-context-menu-item.is-accent {
+  color: #67e8f9;
+  font-weight: 600;
+}
+
+.studio-context-menu-item.is-accent:hover:not(:disabled),
+.studio-context-menu-item.is-accent:focus-visible:not(:disabled) {
+  background: rgba(0, 229, 255, 0.18);
+  color: #a5f3fc;
+}
+
+.studio-context-menu-item.is-danger {
+  color: #fca5a5;
+}
+
+.studio-context-menu-item.is-danger:hover:not(:disabled),
+.studio-context-menu-item.is-danger:focus-visible:not(:disabled) {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fee2e2;
+}
+
+.studio-context-menu-item-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+}
+
+.studio-context-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.studio-context-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-context-menu-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--folio-text-muted, #cbd5e1);
+}
+
+.studio-context-menu-kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--folio-text-muted, #94a3b8);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  flex-shrink: 0;
+}
+
+.studio-context-menu-check {
+  font-size: 11px;
+  font-weight: 700;
+  color: #67e8f9;
+  flex-shrink: 0;
+}
+
+/* ToolOptionsBar Progressive Disclosure Popovers */
+.studio-opt-popover-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.studio-opt-popover-menu {
+  position: fixed;
+  z-index: 2600;
+  min-width: 220px;
+  max-width: 272px;
+  padding: 6px;
+  border-radius: 9px;
+  background: var(--folio-surface-elevated, #181c24);
+  border: 1px solid var(--folio-border-strong, rgba(148, 163, 184, 0.26));
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.48), 0 2px 8px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.studio-opt-popover-title {
+  padding: 4px 8px 3px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--folio-text-muted, #94a3b8);
+}
+
+.studio-opt-popover-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--folio-text-primary, #e2e8f0);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.studio-opt-popover-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.studio-opt-popover-item kbd {
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--folio-text-muted, #94a3b8);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  flex-shrink: 0;
+}
+
+.studio-opt-popover-item:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.2);
+  color: #ffffff;
+}
+
+.studio-opt-popover-item:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.studio-opt-popover-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.studio-opt-popover-seg {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px 4px;
+}
+
+.studio-opt-popover-seg .studio-opt-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.studio-opt-popover-seg-btn {
+  padding: 4px 6px;
+  border-radius: 5px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.35);
+  color: var(--folio-text-secondary, #cbd5e1);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.studio-opt-popover-seg-btn.is-active {
+  border-color: #00e5ff;
+  background: rgba(0, 229, 255, 0.16);
+  color: #67e8f9;
+}
+
+/* Inspector Smart Disclosures & Compact Header More Menu */
+.inspector-more-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.inspector-more-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  z-index: 2200;
+  min-width: 196px;
+  padding: 5px;
+  border-radius: 8px;
+  background: var(--folio-surface-elevated, #181c24);
+  border: 1px solid var(--folio-border-strong, rgba(148, 163, 184, 0.26));
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.inspector-states-disclosure {
+  margin-top: 6px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  padding-top: 6px;
+}
+
+.inspector-states-disclosure-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.06);
+  color: var(--folio-text-secondary, #cbd5e1);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.inspector-states-disclosure-toggle:hover {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--folio-text-primary, #f8fafc);
+}
+
+.inspector-states-disclosure-toggle.is-open {
+  border-color: rgba(99, 102, 241, 0.28);
+  margin-bottom: 6px;
+}
+
+.inspector-states-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 229, 255, 0.14);
+  color: #67e8f9;
+}
+
+/* Compact Canvas Renderer Mode Popover */
+.canvas-renderer-popover {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.renderer-mode-compact-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.42);
+  color: var(--folio-text-secondary, #cbd5e1);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.renderer-mode-compact-btn:hover,
+.renderer-mode-compact-btn.is-open {
+  border-color: rgba(0, 229, 255, 0.45);
+  color: #f8fafc;
+}
+
+.renderer-mode-compact-btn.is-gpu-active {
+  border-color: rgba(0, 229, 255, 0.35);
+  color: #67e8f9;
+}
+
+.canvas-renderer-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2300;
+  min-width: 224px;
+  padding: 6px;
+  border-radius: 9px;
+  background: var(--folio-surface-elevated, #181c24);
+  border: 1px solid var(--folio-border-strong, rgba(148, 163, 184, 0.26));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.48);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.renderer-menu-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.renderer-menu-copy > small {
+  font-size: 10px;
+  color: var(--folio-text-muted, #94a3b8);
+}
+
+.renderer-menu-metrics {
+  margin-top: 4px;
+  padding: 5px 8px 2px;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  font-size: 10px;
+  color: var(--folio-text-muted, #94a3b8);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Motion Timeline Compact Header & More Menu */
+.mt-clip-select {
+  max-width: 152px;
+}
+
+.mt-more-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.mt-more-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 2400;
+  min-width: 210px;
+  padding: 5px;
+  border-radius: 8px;
+  background: var(--folio-surface-elevated, #181c24);
+  border: 1px solid var(--folio-border-strong, rgba(148, 163, 184, 0.26));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.48);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Light Studio Theme Overrides */
+[data-studio-theme="light"] .studio-context-menu,
+[data-studio-theme="light"] .studio-opt-popover-menu,
+[data-studio-theme="light"] .inspector-more-menu,
+[data-studio-theme="light"] .canvas-renderer-menu,
+[data-studio-theme="light"] .mt-more-menu {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.16);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+}
+
+[data-studio-theme="light"] .studio-context-menu-item,
+[data-studio-theme="light"] .studio-opt-popover-item {
+  color: #1e293b;
+}
+
+[data-studio-theme="light"] .studio-context-menu-item:hover:not(:disabled),
+[data-studio-theme="light"] .studio-context-menu-item:focus-visible:not(:disabled),
+[data-studio-theme="light"] .studio-opt-popover-item:hover:not(:disabled) {
+  background: rgba(79, 70, 229, 0.1);
+  color: #1e1b4b;
+}
+
+[data-studio-theme="light"] .studio-context-menu-item.is-accent,
+[data-studio-theme="light"] .studio-context-menu-item.is-active {
+  color: #0369a1;
+}
+
+[data-studio-theme="light"] .studio-context-menu-item.is-danger {
+  color: #dc2626;
+}
+
+[data-studio-theme="light"] .studio-context-menu-item.is-danger:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.1);
+  color: #b91c1c;
+}
+
+[data-studio-theme="light"] .studio-context-menu-kbd {
+  background: rgba(15, 23, 42, 0.06);
+  border-color: rgba(15, 23, 42, 0.12);
+  color: #475569;
+}
+
+[data-studio-theme="light"] .renderer-mode-compact-btn {
+  background: #f1f5f9;
+  border-color: rgba(15, 23, 42, 0.16);
+  color: #334155;
+}
+
+[data-studio-theme="light"] .inspector-states-disclosure-toggle {
+  background: rgba(15, 23, 42, 0.04);
+  color: #334155;
+}
+
+[data-studio-theme="light"] .inspector-states-badge {
+  background: rgba(2, 132, 199, 0.12);
+  color: #0369a1;
+}
+

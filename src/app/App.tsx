@@ -503,6 +503,53 @@ export function App() {
     duplicateSelection: selectionActions.duplicateSelection,
     chooseCanvasTool,
     setNotice,
+    onZoomStep: (target, action) => {
+      const currentZoom = target === 'main' ? windows.zoom : windows.componentCanvasZoom;
+      const setTargetZoom = target === 'main' ? windows.setZoom : windows.setComponentCanvasZoom;
+      if (action === 'reset') {
+        setTargetZoom(1);
+        setNotice('Zoom reset to 100%.');
+        return;
+      }
+      const next = action === 'in'
+        ? Math.min(4, Math.round(currentZoom * 1.15 * 100) / 100)
+        : Math.max(0.2, Math.round((currentZoom / 1.15) * 100) / 100);
+      setTargetZoom(next);
+    },
+    onArrangeOrder: (target, action) => selectionActions.handleArrangeOrder(target, action),
+    onToggleSelectedProperty: (target, property) => {
+      const editor = target === 'main' ? state : componentState;
+      const primaryId = editor.selectedNodeIds[0];
+      if (!primaryId) return;
+      layers.toggleLayerPropertyFromRow(primaryId, property);
+    },
+    onBeginLayerRename: (nodeId) => {
+      if (!windows.layersVisible) windows.setLayersVisible(true);
+      layers.beginLayerRename(nodeId, false);
+    },
+    onToggleFocusCanvas: () => {
+      const anySidebarOpen = windows.layersVisible || windows.inspectorVisible;
+      windows.setLayersVisible(!anySidebarOpen);
+      windows.setInspectorVisible(!anySidebarOpen);
+      setNotice(anySidebarOpen ? 'Focus Canvas enabled (Ctrl+\\ to restore panels).' : 'Studio sidebars restored.');
+    },
+    onToggleStudioPanel: (panel) => {
+      if (panel === 'layers') {
+        windows.setLayersVisible(!windows.layersVisible);
+      } else if (panel === 'inspector') {
+        windows.setInspectorVisible(!windows.inspectorVisible);
+      } else if (panel === 'pages') {
+        if (windows.pagesRackOpen) closePagesRack();
+        else windows.setPagesRackOpen(true);
+      } else if (panel === 'components') {
+        if (windows.componentRackOpen) closeComponentRack();
+        else windows.setComponentRackOpen(true);
+      } else if (panel === 'motion') {
+        motion.toggleMotionOpen();
+      } else if (panel === 'code') {
+        setCodeWorkspaceOpen((prev) => !prev);
+      }
+    },
   });
 
   const designSystem = useDesignSystemActions({
@@ -845,6 +892,10 @@ export function App() {
         onToggleLayerProperty={layers.toggleLayerPropertyFromRow}
         components={state.project.components}
         onUnpackComponentInstance={(nodeId) => selectionActions.unpackComponentInstance(activeEditorId, nodeId)}
+        canPaste={clipboardRef.current !== null}
+        onPasteLayers={() => selectionActions.pasteSelection(activeEditorId)}
+        onSelectAllLayers={() => focusedCommandClient.selectNodes(focusedDocument.nodes.map((node) => node.id), 'Select all layers')}
+        onQuickAddLayer={(kind) => pageActions.addNode(kind)}
       />
 
       <MainCanvasWindow
@@ -902,6 +953,33 @@ export function App() {
         componentAnimPlaying={componentAnimPlaying}
         onToggleComponentAnimPlaying={() => setComponentAnimPlaying((playing) => !playing)}
         studioActions={selectionActions.createStudioActionsForTarget('main')}
+        canvasContextMenuExtras={{
+          onCopy: () => selectionActions.copySelection('main'),
+          onCut: () => selectionActions.cutSelection('main'),
+          onPaste: () => selectionActions.pasteSelection('main'),
+          canPaste: clipboardRef.current !== null,
+          onDuplicate: () => selectionActions.duplicateSelection('main'),
+          onSelectAll: () => mainCommandClient.selectNodes(activeDocument.nodes.map((n) => n.id), 'Select all layers'),
+          onToggleVisible: () => {
+            const firstId = state.selectedNodeIds[0];
+            if (firstId) layers.toggleLayerPropertyFromRow(firstId, 'visible');
+          },
+          onToggleLock: () => {
+            const firstId = state.selectedNodeIds[0];
+            if (firstId) layers.toggleLayerPropertyFromRow(firstId, 'locked');
+          },
+          onRemoveFromCanvas: () => {
+            if (state.selectedNodeIds.length > 0) {
+              mainCommandClient.setNodesCanvasState(state.selectedNodeIds, false, 'Remove from canvas');
+            }
+          },
+          onSaveAsComponent: () => componentMaster.saveNodesAsComponent(
+            activeDocument.nodes.filter((n) => state.selectedNodeIds.includes(n.id)),
+            activeDocument.nodes,
+          ),
+          onUnpackComponent: (nodeId) => selectionActions.unpackComponentInstance('main', nodeId),
+          onQuickAdd: (kind) => pageActions.addNode(kind),
+        }}
       />
 
       <ComponentCanvasWindow
@@ -968,6 +1046,29 @@ export function App() {
         onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'component', point); }}
         onChangeBackground={(background) => { componentCommandClient.setDocumentBackground(background); }}
         studioActions={selectionActions.createStudioActionsForTarget('component')}
+        canvasContextMenuExtras={{
+          onCopy: () => selectionActions.copySelection('component'),
+          onCut: () => selectionActions.cutSelection('component'),
+          onPaste: () => selectionActions.pasteSelection('component'),
+          canPaste: clipboardRef.current !== null,
+          onDuplicate: () => selectionActions.duplicateSelection('component'),
+          onSelectAll: () => componentCommandClient.selectNodes((componentDocument?.nodes ?? []).map((n) => n.id), 'Select all layers'),
+          onToggleVisible: () => {
+            const firstId = componentState.selectedNodeIds[0];
+            if (firstId) layers.toggleLayerPropertyFromRow(firstId, 'visible');
+          },
+          onToggleLock: () => {
+            const firstId = componentState.selectedNodeIds[0];
+            if (firstId) layers.toggleLayerPropertyFromRow(firstId, 'locked');
+          },
+          onRemoveFromCanvas: () => {
+            if (componentState.selectedNodeIds.length > 0) {
+              componentCommandClient.setNodesCanvasState(componentState.selectedNodeIds, false, 'Remove from canvas');
+            }
+          },
+          onUnpackComponent: (nodeId) => selectionActions.unpackComponentInstance('component', nodeId),
+          onQuickAdd: (kind) => pageActions.addNode(kind),
+        }}
       />
 
       <NodeLogicWindow
@@ -1079,6 +1180,7 @@ export function App() {
         onAddPage={pageActions.addPage}
         onSwitchPage={pageActions.switchPage}
         onClose={closePagesRack}
+        onNotice={setNotice}
       />
 
       <ComponentRackPanel
@@ -1174,6 +1276,17 @@ export function App() {
             ? (layers.contextMenuNodes.find((node) => node.id === layers.layerContextMenu?.nodeId)?.name ?? 'layer')
             : 'layer'
         }
+        targetNodeVisible={
+          layers.layerContextMenu
+            ? (layers.contextMenuNodes.find((node) => node.id === layers.layerContextMenu?.nodeId)?.visible ?? true)
+            : true
+        }
+        targetNodeLocked={
+          layers.layerContextMenu
+            ? (layers.contextMenuNodes.find((node) => node.id === layers.layerContextMenu?.nodeId)?.locked ?? false)
+            : false
+        }
+        canPaste={clipboardRef.current !== null}
         capabilities={layers.contextMenuCapabilities}
         referenceWarning={layers.layerContextMenu?.editorId === 'main' ? (() => {
           const refs = findCrossStudioNodeReferences(state.project, layers.layerContextMenu.nodeIds, activePage.id);
@@ -1182,6 +1295,20 @@ export function App() {
             : null;
         })() : null}
         onRename={(nodeId) => { layers.setLayerContextMenu(null); layers.beginLayerRename(nodeId, false); }}
+        onCopy={(editorId) => { layers.setLayerContextMenu(null); selectionActions.copySelection(editorId); }}
+        onCut={(editorId) => { layers.setLayerContextMenu(null); selectionActions.cutSelection(editorId); }}
+        onPaste={(editorId) => { layers.setLayerContextMenu(null); selectionActions.pasteSelection(editorId); }}
+        onDuplicate={(editorId) => { layers.setLayerContextMenu(null); selectionActions.duplicateSelection(editorId); }}
+        onToggleVisible={(nodeId) => { layers.setLayerContextMenu(null); layers.toggleLayerPropertyFromRow(nodeId, 'visible'); }}
+        onToggleLock={(nodeId) => { layers.setLayerContextMenu(null); layers.toggleLayerPropertyFromRow(nodeId, 'locked'); }}
+        onArrange={(editorId, direction) => { layers.setLayerContextMenu(null); selectionActions.handleArrangeOrder(editorId, direction); }}
+        onCombineSelection={(editorId) => { layers.setLayerContextMenu(null); selectionActions.handleCombineSelection(editorId); }}
+        onSaveAsComponent={(editorId) => {
+          layers.setLayerContextMenu(null);
+          const docNodes = editorId === 'main' ? activeDocument.nodes : (componentDocument?.nodes ?? []);
+          const selectedIds = editorId === 'main' ? state.selectedNodeIds : componentState.selectedNodeIds;
+          componentMaster.saveNodesAsComponent(docNodes.filter((n) => selectedIds.includes(n.id)), docNodes);
+        }}
         onGroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).groupLayers(rootIds); }}
         onUngroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).ungroupLayers(rootIds); }}
         onCreateClippingMask={(editorId, rootId) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).createClippingMask(rootId); }}

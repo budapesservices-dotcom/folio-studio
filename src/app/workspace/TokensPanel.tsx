@@ -15,6 +15,7 @@ import {
   toCssVariableName,
 } from '../../core/document/tokens';
 import { StudioIcon } from './StudioIcon';
+import { StudioContextMenu, type StudioContextMenuItem } from './StudioContextMenu';
 
 export interface TokensPanelProps {
   panelRef: RefObject<HTMLElement>;
@@ -66,6 +67,11 @@ export function TokensPanel({
   const [newCategory, setNewCategory] = useState<DesignTokenCategory>('color');
   const [newLayer, setNewLayer] = useState<DesignTokenLayer>('semantic');
   const [newValue, setNewValue] = useState('#7C6FF6');
+  const [tokenContextMenu, setTokenContextMenu] = useState<{
+    x: number;
+    y: number;
+    token: DesignTokenDefinition | null;
+  } | null>(null);
 
   const usagesById = useMemo(() => {
     const map = new Map<string, number>();
@@ -384,14 +390,33 @@ export function TokensPanel({
           <pre class="tokens-css-code">{cssOutput}</pre>
         </div>
       ) : (
-        <div class="tokens-list" role="list">
+        <div
+          class="tokens-list"
+          role="list"
+          onContextMenu={(event) => {
+            const target = event.target as HTMLElement | null;
+            if (target?.closest('.token-row') || target?.closest('input')) return;
+            event.preventDefault();
+            setTokenContextMenu({ x: event.clientX, y: event.clientY, token: null });
+          }}
+        >
           {filteredTokens.map((token) => {
             const resolved = resolveDesignTokenValue(tokens, token.id, activeThemeId);
             const resolvedVal = resolved.ok ? resolved.rawValue : '';
             const usageCount = usagesById.get(token.id) ?? 0;
             const cssVar = toCssVariableName(token.name);
             return (
-              <div class="token-row" role="listitem" key={token.id}>
+              <div
+                class="token-row"
+                role="listitem"
+                key={token.id}
+                onContextMenu={(event) => {
+                  if ((event.target as HTMLElement | null)?.closest('input')) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setTokenContextMenu({ x: event.clientX, y: event.clientY, token });
+                }}
+              >
                 <div class="token-row-identity">
                   {token.category === 'color' ? (
                     <span
@@ -466,6 +491,69 @@ export function TokensPanel({
             </div>
           )}
         </div>
+      )}
+      {tokenContextMenu && (
+        <StudioContextMenu
+          open={true}
+          x={tokenContextMenu.x}
+          y={tokenContextMenu.y}
+          ariaLabel={tokenContextMenu.token ? `Actions for token ${tokenContextMenu.token.name}` : 'Design Tokens actions'}
+          testId="tokens-context-menu"
+          onClose={() => setTokenContextMenu(null)}
+          items={(() => {
+            const tok = tokenContextMenu.token;
+            if (!tok) {
+              const items: StudioContextMenuItem[] = [
+                { kind: 'header', id: 'hdr', label: 'Design Tokens', meta: `${tokens.tokens.length}` },
+                { kind: 'item', id: 'new-tok', label: 'New Design Token', accent: true, onSelect: () => setCreating(true) },
+                { kind: 'item', id: 'copy-all-css', label: 'Copy All CSS Variables', onSelect: () => void handleCopyCss() },
+                {
+                  kind: 'item',
+                  id: 'toggle-css',
+                  label: showCss ? 'Show Token List' : 'View Generated CSS',
+                  onSelect: () => setShowCss((prev) => !prev),
+                },
+              ];
+              return items;
+            }
+            const cssVar = toCssVariableName(tok.name);
+            const resolved = resolveDesignTokenValue(tokens, tok.id, activeThemeId);
+            const resolvedText = resolved.ok
+              ? (tok.category === 'color' ? String(resolved.rawValue) : `${resolved.rawValue}px`)
+              : '';
+            const items: StudioContextMenuItem[] = [
+              { kind: 'header', id: 'hdr', label: tok.name, meta: tok.layer },
+              {
+                kind: 'item',
+                id: 'copy-var',
+                label: `Copy var(${cssVar})`,
+                onSelect: () => {
+                  void navigator.clipboard?.writeText(`var(${cssVar})`).catch(() => {});
+                  onCopyNotice(`Copied var(${cssVar})`);
+                },
+              },
+              {
+                kind: 'item',
+                id: 'copy-val',
+                label: `Copy Value (${resolvedText || '—'})`,
+                disabled: !resolvedText,
+                onSelect: () => {
+                  void navigator.clipboard?.writeText(resolvedText).catch(() => {});
+                  onCopyNotice(`Copied ${resolvedText}`);
+                },
+              },
+              { kind: 'divider', id: 'div-del' },
+              {
+                kind: 'item',
+                id: 'del-tok',
+                label: 'Delete Token',
+                danger: true,
+                onSelect: () => handleDeleteToken(tok),
+              },
+            ];
+            return items;
+          })()}
+        />
       )}
     </section>
   );

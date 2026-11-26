@@ -13,6 +13,15 @@ import type { EditorState } from '../editorReducer';
 import type { MainCanvasCommandClient, WorkspaceCommandClient } from '../mainCanvasCommandClient';
 import type { StudioClipboardPayload } from '../nodeClipboard';
 import { isShortcutHelpTrigger } from '../keyboardShortcuts';
+import type { ArrangeOrderAction } from './inspectorVectorHelpers';
+
+export type StudioPanelShortcutTarget =
+  | 'layers'
+  | 'inspector'
+  | 'pages'
+  | 'components'
+  | 'motion'
+  | 'code';
 
 export interface UseWorkspaceShortcutsOptions {
   activeEditorId: EditorTarget;
@@ -33,6 +42,12 @@ export interface UseWorkspaceShortcutsOptions {
   duplicateSelection: (target: EditorTarget) => void;
   chooseCanvasTool: (toolId: CanvasToolId, target: EditorTarget) => void;
   setNotice: (message: string) => void;
+  onZoomStep?: (target: EditorTarget, action: 'in' | 'out' | 'reset') => void;
+  onArrangeOrder?: (target: EditorTarget, action: ArrangeOrderAction) => void;
+  onToggleSelectedProperty?: (target: EditorTarget, property: 'visible' | 'locked') => void;
+  onBeginLayerRename?: (nodeId: string) => void;
+  onToggleFocusCanvas?: () => void;
+  onToggleStudioPanel?: (panel: StudioPanelShortcutTarget) => void;
 }
 
 export function useWorkspaceShortcuts({
@@ -54,6 +69,12 @@ export function useWorkspaceShortcuts({
   duplicateSelection,
   chooseCanvasTool,
   setNotice,
+  onZoomStep,
+  onArrangeOrder,
+  onToggleSelectedProperty,
+  onBeginLayerRename,
+  onToggleFocusCanvas,
+  onToggleStudioPanel,
 }: UseWorkspaceShortcutsOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -86,24 +107,55 @@ export function useWorkspaceShortcuts({
       const ids = context.state.selectedNodeIds;
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
-      const inSecondaryStudioSurface = Boolean(
-        target?.closest('.node-logic-window, .code-workspace-overlay, .motion-timeline-dock'),
+      const inMainOnlyOverlay = Boolean(
+        target?.closest('.node-logic-window, .code-workspace-overlay, .code-studio-overlay'),
       );
+      const inMotionTimeline = Boolean(target?.closest('.motion-timeline-dock'));
+      const inSecondaryStudioSurface = inMainOnlyOverlay || inMotionTimeline;
 
       // Undo / Redo always work across every studio window (Main Canvas, Component Canvas,
       // Node Logic, Motion Timeline, and Code & Preview Studio).
+      // Motion Timeline uses the active editor (Main or Component) so Component Motion undo works cleanly.
       if (modifier && key === 'z') {
         event.preventDefault();
-        const historyClient = inSecondaryStudioSurface ? getCommandClient('main') : activeClient;
+        const historyClient = inMainOnlyOverlay ? getCommandClient('main') : activeClient;
         if (event.shiftKey) historyClient.redo();
         else historyClient.undo();
         return;
       }
       if (modifier && key === 'y') {
         event.preventDefault();
-        const historyClient = inSecondaryStudioSurface ? getCommandClient('main') : activeClient;
+        const historyClient = inMainOnlyOverlay ? getCommandClient('main') : activeClient;
         historyClient.redo();
         return;
+      }
+
+      // Consistent global workspace chrome toggles:
+      // Mod+\ toggles Zen/Focus Canvas (hide/show Layers + Inspector sidebars)
+      if (modifier && !event.shiftKey && !event.altKey && (event.key === '\\' || event.code === 'Backslash')) {
+        if (onToggleFocusCanvas) {
+          event.preventDefault();
+          onToggleFocusCanvas();
+          return;
+        }
+      }
+
+      // Alt+1..6 toggles primary studio panels consistently across tabs
+      if (event.altKey && !modifier && !event.shiftKey && onToggleStudioPanel) {
+        const panelByDigit: Record<string, StudioPanelShortcutTarget> = {
+          '1': 'layers',
+          '2': 'inspector',
+          '3': 'pages',
+          '4': 'components',
+          '5': 'motion',
+          '6': 'code',
+        };
+        const targetPanel = panelByDigit[event.key];
+        if (targetPanel) {
+          event.preventDefault();
+          onToggleStudioPanel(targetPanel);
+          return;
+        }
       }
 
       // Do not bleed canvas-only shortcuts (Select All, Group, Mask, Delete layer,
@@ -112,9 +164,65 @@ export function useWorkspaceShortcuts({
         return;
       }
 
+      // Viewport zoom shortcuts: Ctrl/Cmd + =/+ (zoom in), - (zoom out), 0 (reset 100%)
+      if (modifier && !event.altKey && onZoomStep) {
+        if (event.key === '=' || event.key === '+') {
+          event.preventDefault();
+          onZoomStep(activeEditorId, 'in');
+          return;
+        }
+        if (event.key === '-' || event.key === '_') {
+          event.preventDefault();
+          onZoomStep(activeEditorId, 'out');
+          return;
+        }
+        if (event.key === '0' && !event.shiftKey) {
+          event.preventDefault();
+          onZoomStep(activeEditorId, 'reset');
+          return;
+        }
+      }
+
+      // F2 renames the currently selected layer cleanly across Canvas & Layers
+      if (event.key === 'F2' && !modifier && !event.altKey && ids.length > 0 && onBeginLayerRename) {
+        event.preventDefault();
+        onBeginLayerRename(ids[0]);
+        return;
+      }
+
+      // Toggle Hide / Lock selected layers (industry standard Ctrl/Cmd+Shift+H & Ctrl/Cmd+Shift+L)
+      if (modifier && event.shiftKey && !event.altKey && key === 'h' && ids.length > 0 && onToggleSelectedProperty) {
+        event.preventDefault();
+        onToggleSelectedProperty(activeEditorId, 'visible');
+        return;
+      }
+      if (modifier && event.shiftKey && !event.altKey && key === 'l' && ids.length > 0 && onToggleSelectedProperty) {
+        event.preventDefault();
+        onToggleSelectedProperty(activeEditorId, 'locked');
+        return;
+      }
+
+      // Layer Z-order arrange shortcuts: ] Forward, [ Backward, Mod+] Front, Mod+[ Back
+      if ((event.key === ']' || event.key === '[') && !event.altKey && ids.length > 0 && onArrangeOrder) {
+        event.preventDefault();
+        if (modifier) {
+          onArrangeOrder(activeEditorId, event.key === ']' ? 'front' : 'back');
+        } else {
+          onArrangeOrder(activeEditorId, event.key === ']' ? 'forward' : 'backward');
+        }
+        return;
+      }
+
       if (modifier && !event.shiftKey && key === 'a') {
         event.preventDefault();
         activeClient.selectNodes(context.document.nodes.map((node) => node.id), 'Select all layers');
+        return;
+      }
+      if (modifier && event.shiftKey && key === 'a') {
+        event.preventDefault();
+        if (ids.length > 0) {
+          activeClient.deselectAll('Deselect layers');
+        }
         return;
       }
       if (modifier && event.shiftKey && key === 'g') {
@@ -181,16 +289,13 @@ export function useWorkspaceShortcuts({
         activeClient.deselectAll('Deselect layers');
         return;
       }
-      if (modifier && !event.shiftKey && key === 'd') {
+      // Industry-standard Ctrl/Cmd+D = Duplicate (matches keyboardShortcuts.ts & Figma/Illustrator)
+      // Keep Ctrl/Cmd+Shift+D as a backward-compatible alias.
+      if (modifier && key === 'd') {
         event.preventDefault();
         if (ids.length > 0) {
-          activeClient.deselectAll('Deselect layers');
+          duplicateSelection(activeEditorId);
         }
-        return;
-      }
-      if (modifier && event.shiftKey && key === 'd' && ids.length > 0) {
-        event.preventDefault();
-        duplicateSelection(activeEditorId);
         return;
       }
       if (modifier && event.shiftKey && key === 'i') {
@@ -256,5 +361,12 @@ export function useWorkspaceShortcuts({
     setNotice,
     selectionSourceRef,
     clipboardRef,
+    onZoomStep,
+    onArrangeOrder,
+    onToggleSelectedProperty,
+    onBeginLayerRename,
+    onToggleFocusCanvas,
+    onToggleStudioPanel,
   ]);
 }
+

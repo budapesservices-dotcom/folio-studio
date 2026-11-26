@@ -70,6 +70,7 @@ import './canvas.css';
 
 import type { DrawMaskMode } from '../../core/document/types';
 import type { SelectSimilarCriterion } from '../../core/document/selectionQueries';
+import { StudioContextMenu, type StudioContextMenuEntry } from '../../app/workspace/StudioContextMenu';
 
 export interface CanvasContextMenuActions {
   readonly onDeselect: () => void;
@@ -78,6 +79,25 @@ export interface CanvasContextMenuActions {
   readonly onSetDrawMode: (mode: DrawMaskMode) => void;
   readonly onPermanentSubtractOutside: () => void;
   readonly onCombineSelection?: () => void;
+  readonly onCopy?: () => void;
+  readonly onCut?: () => void;
+  readonly onPaste?: () => void;
+  readonly canPaste?: boolean;
+  readonly onDuplicate?: () => void;
+  readonly onSelectAll?: () => void;
+  readonly onGroupSelection?: () => void;
+  readonly onUngroupSelection?: () => void;
+  readonly onArrange?: (action: 'front' | 'forward' | 'backward' | 'back') => void;
+  readonly onFlip?: (axis: 'horizontal' | 'vertical') => void;
+  readonly onConvertToPath?: () => void;
+  readonly onToggleVisible?: () => void;
+  readonly onToggleLock?: () => void;
+  readonly onRemoveFromCanvas?: () => void;
+  readonly onSaveAsComponent?: () => void;
+  readonly onUnpackComponent?: (nodeId: string) => void;
+  readonly onResetView?: () => void;
+  readonly onChangeBackground?: (background: string) => void;
+  readonly onQuickAdd?: (kind: 'rect' | 'ellipse' | 'triangle' | 'text' | 'frame') => void;
 }
 
 interface CanvasProps {
@@ -173,13 +193,12 @@ export function Canvas({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   const inlineTextInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<DesignNode[] | null>(null);
   const [previewNodes, setPreviewNodes] = useState<DesignNode[] | null>(null);
   const [previewCreateNodes, setPreviewCreateNodes] = useState<DesignNode[] | null>(null);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const [isImageFileDragOver, setIsImageFileDragOver] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; hasObjectContext: boolean } | null>(null);
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
   const panRef = useRef<PanSession | null>(null);
   const toolSessionRef = useRef<CanvasToolSession | null>(null);
@@ -1066,38 +1085,6 @@ export function Canvas({
     }
   };
 
-  useEffect(() => {
-    if (!contextMenu) return;
-    const handlePointerDownOutside = (event: PointerEvent) => {
-      if (contextMenuRef.current && event.target instanceof Node && contextMenuRef.current.contains(event.target)) {
-        return;
-      }
-      setContextMenu(null);
-    };
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setContextMenu(null);
-      }
-    };
-    window.addEventListener('pointerdown', handlePointerDownOutside, true);
-    window.addEventListener('keydown', handleEscape);
-    // Clamp rendered menu cleanly within viewport bounds after mount
-    const el = contextMenuRef.current;
-    if (el && typeof window !== 'undefined') {
-      const rect = el.getBoundingClientRect();
-      const pad = 10;
-      const clampedX = Math.max(pad, Math.min(contextMenu.x, window.innerWidth - rect.width - pad));
-      const clampedY = Math.max(pad, Math.min(contextMenu.y, window.innerHeight - rect.height - pad));
-      if (Math.abs(clampedX - contextMenu.x) > 1 || Math.abs(clampedY - contextMenu.y) > 1) {
-        setContextMenu({ x: clampedX, y: clampedY });
-      }
-    }
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDownOutside, true);
-      window.removeEventListener('keydown', handleEscape);
-    };
-  }, [contextMenu]);
-
   const resolveShapeAwareHitNodeId = (point: { x: number; y: number }): string | null => {
     const tol = 4 * invZoom;
     const spatialHits = spatialIndex.queryPoint(point.x, point.y, Math.max(8, tol * 2));
@@ -1137,6 +1124,14 @@ export function Canvas({
     event.stopPropagation();
     const point = toCanvasPoint(event.currentTarget, event.clientX, event.clientY);
     const hitId = resolveShapeAwareHitNodeId(point);
+    const insideSelectionBounds = Boolean(
+      selectionBounds &&
+      selectedNodeIds.length > 0 &&
+      point.x >= selectionBounds.x &&
+      point.x <= selectionBounds.x + selectionBounds.width &&
+      point.y >= selectionBounds.y &&
+      point.y <= selectionBounds.y + selectionBounds.height,
+    );
     if (hitId && !selectedNodeIds.includes(hitId)) {
       evaluateAndDispatchOperation(
         createToolOperation(
@@ -1147,11 +1142,20 @@ export function Canvas({
         ),
       );
     }
-    const maxW = typeof window !== 'undefined' ? window.innerWidth : 1280;
-    const maxH = typeof window !== 'undefined' ? window.innerHeight : 720;
     setContextMenu({
-      x: Math.max(10, Math.min(event.clientX, maxW - 260)),
-      y: Math.max(10, Math.min(event.clientY, maxH - 360)),
+      x: event.clientX,
+      y: event.clientY,
+      hasObjectContext: Boolean(hitId) || insideSelectionBounds,
+    });
+  };
+
+  const handlePasteboardContextMenu = (event: JSX.TargetedMouseEvent<HTMLDivElement>) => {
+    if (!contextMenuActions) return;
+    event.preventDefault();
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      hasObjectContext: false,
     });
   };
 
@@ -1613,6 +1617,7 @@ export function Canvas({
       onPointerMove={handlePanPointerMove}
       onPointerUp={finishPan}
       onPointerCancel={cancelPan}
+      onContextMenu={handlePasteboardContextMenu}
     >
       <div
         class="canvas-stage"
@@ -1788,6 +1793,8 @@ export function Canvas({
 
       {contextMenu && contextMenuActions && (() => {
         const primarySelected = selectedNodes.length === 1 ? selectedNodes[0] : null;
+        const hasSelection = selectedNodeIds.length > 0;
+        const showObjectMenu = contextMenu.hasObjectContext && hasSelection;
         const activeDrawMode = primarySelected?.drawMode ?? 'normal';
         const hasOutsideTargets = Boolean(
           primarySelected && (
@@ -1795,197 +1802,240 @@ export function Canvas({
             canvasNodes.some((n) => n.clipMaskBaseId === primarySelected.id && n.clipMaskMode === 'outside')
           ),
         );
-        const runMenuAction = (fn: () => void) => {
-          setContextMenu(null);
-          fn();
-        };
+        const canConvertToPath = selectedNodes.some(
+          (n) => n.type === 'rect' || n.type === 'ellipse' || n.type === 'frame',
+        );
+        const hasGroupSelected = selectedNodes.some((n) => n.type === 'group');
+        const isComponentInstance = primarySelected?.type === 'component-instance';
+
+        const entries: StudioContextMenuEntry[] = [];
+
+        if (showObjectMenu) {
+          entries.push({
+            kind: 'header',
+            id: 'hdr-selection',
+            label: primarySelected ? primarySelected.name : 'Selection',
+            meta: `${selectedNodeIds.length} ${selectedNodeIds.length === 1 ? 'layer' : 'layers'}`,
+          });
+          if (contextMenuActions.onCut) {
+            entries.push({ kind: 'item', id: 'cut', label: 'Cut', shortcut: ['Mod', 'X'], onSelect: contextMenuActions.onCut });
+          }
+          if (contextMenuActions.onCopy) {
+            entries.push({ kind: 'item', id: 'copy', label: 'Copy', shortcut: ['Mod', 'C'], onSelect: contextMenuActions.onCopy });
+          }
+          if (contextMenuActions.onPaste) {
+            entries.push({
+              kind: 'item',
+              id: 'paste',
+              label: 'Paste',
+              shortcut: ['Mod', 'V'],
+              disabled: contextMenuActions.canPaste === false,
+              onSelect: contextMenuActions.onPaste,
+            });
+          }
+          if (contextMenuActions.onDuplicate) {
+            entries.push({ kind: 'item', id: 'duplicate', label: 'Duplicate', shortcut: ['Mod', 'D'], onSelect: contextMenuActions.onDuplicate });
+          }
+
+          entries.push({ kind: 'divider', id: 'div-ops' });
+
+          if (contextMenuActions.onCombineSelection && selectedNodeIds.length >= 2) {
+            entries.push({
+              kind: 'item',
+              id: 'combine',
+              label: 'Combine into 1 Object',
+              tone: 'accent',
+              testId: 'canvas-context-combine-btn',
+              onSelect: contextMenuActions.onCombineSelection,
+            });
+          }
+          if (contextMenuActions.onGroupSelection && selectedNodeIds.length >= 2) {
+            entries.push({ kind: 'item', id: 'group', label: 'Group Selection', shortcut: ['Mod', 'G'], onSelect: contextMenuActions.onGroupSelection });
+          }
+          if (contextMenuActions.onUngroupSelection && hasGroupSelected) {
+            entries.push({ kind: 'item', id: 'ungroup', label: 'Ungroup', shortcut: ['Mod', 'Shift', 'G'], onSelect: contextMenuActions.onUngroupSelection });
+          }
+          if (isComponentInstance && primarySelected && contextMenuActions.onUnpackComponent) {
+            entries.push({
+              kind: 'item',
+              id: 'unpack',
+              label: 'Unpack Component to Layers',
+              tone: 'accent',
+              onSelect: () => contextMenuActions.onUnpackComponent!(primarySelected.id),
+            });
+          }
+          if (contextMenuActions.onSaveAsComponent) {
+            entries.push({
+              kind: 'item',
+              id: 'save-comp',
+              label: 'Save Selection as Component',
+              onSelect: contextMenuActions.onSaveAsComponent,
+            });
+          }
+
+          if (contextMenuActions.onArrange) {
+            entries.push({ kind: 'divider', id: 'div-arrange' });
+            entries.push({ kind: 'header', id: 'hdr-arrange', label: 'Arrange & Transform' });
+            entries.push({ kind: 'item', id: 'arr-front', label: 'Bring to Front', shortcut: ['Mod', ']'], onSelect: () => contextMenuActions.onArrange!('front') });
+            entries.push({ kind: 'item', id: 'arr-fwd', label: 'Bring Forward', shortcut: [']'], onSelect: () => contextMenuActions.onArrange!('forward') });
+            entries.push({ kind: 'item', id: 'arr-bwd', label: 'Send Backward', shortcut: ['['], onSelect: () => contextMenuActions.onArrange!('backward') });
+            entries.push({ kind: 'item', id: 'arr-back', label: 'Send to Back', shortcut: ['Mod', '['], onSelect: () => contextMenuActions.onArrange!('back') });
+          }
+          if (contextMenuActions.onFlip) {
+            entries.push({ kind: 'item', id: 'flip-h', label: 'Flip Horizontal', onSelect: () => contextMenuActions.onFlip!('horizontal') });
+            entries.push({ kind: 'item', id: 'flip-v', label: 'Flip Vertical', onSelect: () => contextMenuActions.onFlip!('vertical') });
+          }
+          if (canConvertToPath && contextMenuActions.onConvertToPath) {
+            entries.push({ kind: 'item', id: 'to-path', label: 'Convert to Editable Path', onSelect: contextMenuActions.onConvertToPath });
+          }
+
+          entries.push({ kind: 'divider', id: 'div-select' });
+          entries.push({ kind: 'header', id: 'hdr-select', label: 'Select & Draw Mode' });
+          entries.push({ kind: 'item', id: 'sim-fill', label: 'Select Same Fill', onSelect: () => contextMenuActions.onSelectSimilar('fill') });
+          entries.push({ kind: 'item', id: 'sim-stroke', label: 'Select Same Stroke', onSelect: () => contextMenuActions.onSelectSimilar('stroke') });
+          entries.push({ kind: 'item', id: 'sim-type', label: 'Select Same Type', onSelect: () => contextMenuActions.onSelectSimilar('type') });
+          entries.push({ kind: 'item', id: 'invert', label: 'Invert Selection', shortcut: ['Mod', 'Shift', 'I'], onSelect: contextMenuActions.onInvertSelection });
+          entries.push({ kind: 'item', id: 'deselect', label: 'Deselect', shortcut: ['Esc'], onSelect: contextMenuActions.onDeselect });
+
+          if (primarySelected) {
+            entries.push({ kind: 'divider', id: 'div-drawmode' });
+            for (const item of [
+              { id: 'normal', label: 'Draw Normal' },
+              { id: 'inside', label: 'Draw Inside' },
+              { id: 'outside', label: 'Draw Outside' },
+            ] as const) {
+              entries.push({
+                kind: 'item',
+                id: `draw-${item.id}`,
+                label: item.label,
+                active: activeDrawMode === item.id,
+                onSelect: () => contextMenuActions.onSetDrawMode(item.id),
+              });
+            }
+            if (hasOutsideTargets) {
+              entries.push({
+                kind: 'item',
+                id: 'perm-sub',
+                label: 'Permanent Subtract (Pathfinder)',
+                tone: 'accent',
+                onSelect: contextMenuActions.onPermanentSubtractOutside,
+              });
+            }
+          }
+
+          entries.push({ kind: 'divider', id: 'div-state' });
+          if (contextMenuActions.onToggleVisible) {
+            entries.push({ kind: 'item', id: 'toggle-vis', label: primarySelected?.visible === false ? 'Show Layer' : 'Hide Layer', shortcut: ['Mod', 'Shift', 'H'], onSelect: contextMenuActions.onToggleVisible });
+          }
+          if (contextMenuActions.onToggleLock) {
+            entries.push({ kind: 'item', id: 'toggle-lock', label: primarySelected?.locked ? 'Unlock Layer' : 'Lock Layer', shortcut: ['Mod', 'Shift', 'L'], onSelect: contextMenuActions.onToggleLock });
+          }
+          if (contextMenuActions.onRemoveFromCanvas) {
+            entries.push({
+              kind: 'item',
+              id: 'remove-canvas',
+              label: 'Remove from Canvas',
+              shortcut: ['Delete'],
+              tone: 'danger',
+              onSelect: contextMenuActions.onRemoveFromCanvas,
+            });
+          }
+        } else {
+          // Empty canvas / pasteboard right-click menu
+          entries.push({
+            kind: 'header',
+            id: 'hdr-canvas',
+            label: workspace === 'component' ? 'Component Canvas' : 'Canvas',
+            meta: `${Math.round(zoom * 100)}%`,
+          });
+          if (contextMenuActions.onPaste) {
+            entries.push({
+              kind: 'item',
+              id: 'paste',
+              label: 'Paste Here',
+              shortcut: ['Mod', 'V'],
+              disabled: contextMenuActions.canPaste === false,
+              onSelect: contextMenuActions.onPaste,
+            });
+          }
+          if (contextMenuActions.onSelectAll) {
+            entries.push({
+              kind: 'item',
+              id: 'select-all',
+              label: 'Select All Layers',
+              shortcut: ['Mod', 'A'],
+              disabled: canvasNodes.length === 0,
+              onSelect: contextMenuActions.onSelectAll,
+            });
+          }
+          if (hasSelection) {
+            entries.push({
+              kind: 'item',
+              id: 'deselect',
+              label: 'Deselect All',
+              shortcut: ['Esc'],
+              onSelect: contextMenuActions.onDeselect,
+            });
+          }
+
+          if (contextMenuActions.onQuickAdd) {
+            entries.push({ kind: 'divider', id: 'div-add' });
+            entries.push({ kind: 'header', id: 'hdr-add', label: 'Quick Add' });
+            entries.push({ kind: 'item', id: 'add-rect', label: 'Add Rectangle', shortcut: ['R'], onSelect: () => contextMenuActions.onQuickAdd!('rect') });
+            entries.push({ kind: 'item', id: 'add-ellipse', label: 'Add Circle / Ellipse', shortcut: ['O'], onSelect: () => contextMenuActions.onQuickAdd!('ellipse') });
+            entries.push({ kind: 'item', id: 'add-tri', label: 'Add Triangle', shortcut: ['Shift', 'T'], onSelect: () => contextMenuActions.onQuickAdd!('triangle') });
+            entries.push({ kind: 'item', id: 'add-text', label: 'Add Text', shortcut: ['T'], onSelect: () => contextMenuActions.onQuickAdd!('text') });
+            if (workspace === 'main') {
+              entries.push({ kind: 'item', id: 'add-frame', label: 'Add Frame', shortcut: ['F'], onSelect: () => contextMenuActions.onQuickAdd!('frame') });
+            }
+          }
+
+          if (contextMenuActions.onChangeBackground) {
+            entries.push({ kind: 'divider', id: 'div-bg' });
+            entries.push({ kind: 'header', id: 'hdr-bg', label: 'Canvas Background' });
+            entries.push({
+              kind: 'item',
+              id: 'bg-trans',
+              label: 'Transparent Checkerboard',
+              active: document.background === '#00000000' || document.background === 'transparent',
+              onSelect: () => contextMenuActions.onChangeBackground!('#00000000'),
+            });
+            entries.push({
+              kind: 'item',
+              id: 'bg-white',
+              label: 'Clean White (#FFFFFF)',
+              active: document.background.toUpperCase() === '#FFFFFF',
+              onSelect: () => contextMenuActions.onChangeBackground!('#FFFFFF'),
+            });
+            entries.push({
+              kind: 'item',
+              id: 'bg-dark',
+              label: 'Studio Dark (#111827)',
+              active: document.background.toUpperCase() === '#111827',
+              onSelect: () => contextMenuActions.onChangeBackground!('#111827'),
+            });
+          }
+
+          if (contextMenuActions.onResetView) {
+            entries.push({ kind: 'divider', id: 'div-view' });
+            entries.push({
+              kind: 'item',
+              id: 'reset-zoom',
+              label: 'Reset Zoom to 100%',
+              shortcut: ['Mod', '0'],
+              onSelect: contextMenuActions.onResetView,
+            });
+          }
+        }
+
         return (
-          <div
-            ref={contextMenuRef}
-            class="canvas-context-menu"
-            role="menu"
-            aria-label="Canvas selection and draw mode menu"
-            style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
-            onContextMenu={(event) => event.preventDefault()}
-          >
-            <div class="canvas-context-menu-header">
-              <span>Selection</span>
-              {selectedNodeIds.length > 0 && (
-                <span class="canvas-context-menu-meta">
-                  {selectedNodeIds.length} {selectedNodeIds.length === 1 ? 'layer' : 'layers'}
-                </span>
-              )}
-            </div>
-            <button
-              type="button"
-              role="menuitem"
-              class="canvas-context-menu-item"
-              disabled={selectedNodeIds.length === 0}
-              onClick={() => runMenuAction(contextMenuActions.onDeselect)}
-            >
-              <span class="canvas-context-menu-item-main">
-                <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke-dasharray="2.5 2.5" />
-                  <path d="M5.75 5.75l4.5 4.5M10.25 5.75l-4.5 4.5" />
-                </svg>
-                <span class="canvas-context-menu-label">Deselect</span>
-              </span>
-              <kbd>Ctrl+D</kbd>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              class="canvas-context-menu-item"
-              onClick={() => runMenuAction(contextMenuActions.onInvertSelection)}
-            >
-              <span class="canvas-context-menu-item-main">
-                <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
-                  <path d="M8 2.5v11" />
-                  <path d="M8 2.5h3.5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H8V2.5z" fill="currentColor" fill-opacity="0.22" stroke="none" />
-                </svg>
-                <span class="canvas-context-menu-label">Invert Selection</span>
-              </span>
-              <kbd>Ctrl+Shift+I</kbd>
-            </button>
-            {contextMenuActions.onCombineSelection && selectedNodeIds.length >= 2 && (
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="canvas-context-combine-btn"
-                class="canvas-context-menu-item is-accent"
-                onClick={() => runMenuAction(contextMenuActions.onCombineSelection!)}
-              >
-                <span class="canvas-context-menu-item-main">
-                  <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M2.5 2.5h6.5v3h4.5v8H7v-3H2.5v-8z" fill="currentColor" fill-opacity="0.24" />
-                  </svg>
-                  <span class="canvas-context-menu-label">Combine into 1 Object</span>
-                </span>
-              </button>
-            )}
-            <div class="canvas-context-menu-divider" role="separator" />
-            <div class="canvas-context-menu-header">
-              <span>Select Similar</span>
-            </div>
-            <button
-              type="button"
-              role="menuitem"
-              class="canvas-context-menu-item"
-              disabled={selectedNodeIds.length === 0}
-              onClick={() => runMenuAction(() => contextMenuActions.onSelectSimilar('fill'))}
-            >
-              <span class="canvas-context-menu-item-main">
-                <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <circle cx="8" cy="8" r="5" fill="currentColor" fill-opacity="0.24" />
-                </svg>
-                <span class="canvas-context-menu-label">Same Fill</span>
-              </span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              class="canvas-context-menu-item"
-              disabled={selectedNodeIds.length === 0}
-              onClick={() => runMenuAction(() => contextMenuActions.onSelectSimilar('stroke'))}
-            >
-              <span class="canvas-context-menu-item-main">
-                <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <circle cx="8" cy="8" r="5" />
-                </svg>
-                <span class="canvas-context-menu-label">Same Stroke</span>
-              </span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              class="canvas-context-menu-item"
-              disabled={selectedNodeIds.length === 0}
-              onClick={() => runMenuAction(() => contextMenuActions.onSelectSimilar('type'))}
-            >
-              <span class="canvas-context-menu-item-main">
-                <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="2.25" y="2.25" width="4.75" height="4.75" rx="1" />
-                  <rect x="9" y="2.25" width="4.75" height="4.75" rx="1" />
-                  <rect x="2.25" y="9" width="4.75" height="4.75" rx="1" />
-                  <rect x="9" y="9" width="4.75" height="4.75" rx="1" />
-                </svg>
-                <span class="canvas-context-menu-label">Same Node Type</span>
-              </span>
-            </button>
-            {selectedNodes.length > 0 && (
-              <>
-                <div class="canvas-context-menu-divider" role="separator" />
-                <div class="canvas-context-menu-header">
-                  <span>Draw Mode</span>
-                </div>
-                {([
-                  { id: 'normal', label: 'Draw Normal' },
-                  { id: 'inside', label: 'Draw Inside' },
-                  { id: 'outside', label: 'Draw Outside' },
-                ] as const).map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={activeDrawMode === item.id}
-                    class={`canvas-context-menu-item${activeDrawMode === item.id ? ' is-active' : ''}`}
-                    onClick={() => runMenuAction(() => contextMenuActions.onSetDrawMode(item.id))}
-                  >
-                    <span class="canvas-context-menu-item-main">
-                      <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        {item.id === 'normal' && (
-                          <>
-                            <rect x="2.25" y="4.75" width="7" height="7" rx="1.25" />
-                            <rect x="6.75" y="2.25" width="7" height="7" rx="1.25" fill="var(--panel-elevated, #171c27)" />
-                          </>
-                        )}
-                        {item.id === 'inside' && (
-                          <>
-                            <rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke-dasharray="2.5 2" />
-                            <circle cx="8" cy="8" r="2.75" fill="currentColor" fill-opacity="0.28" />
-                          </>
-                        )}
-                        {item.id === 'outside' && (
-                          <>
-                            <rect x="4.5" y="4.5" width="7" height="7" rx="1.5" fill="currentColor" fill-opacity="0.22" />
-                            <path d="M2.5 6V3.5A1 1 0 0 1 3.5 2.5H6M10 2.5h2.5a1 1 0 0 1 1 1V6M13.5 10v2.5a1 1 0 0 1-1 1H10M6 13.5H3.5a1 1 0 0 1-1-1V10" />
-                          </>
-                        )}
-                      </svg>
-                      <span class="canvas-context-menu-label">{item.label}</span>
-                    </span>
-                    {activeDrawMode === item.id && (
-                      <span class="canvas-context-menu-check" aria-hidden="true">
-                        <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M2.8 7.3l2.9 2.9 5.5-6" />
-                        </svg>
-                      </span>
-                    )}
-                  </button>
-                ))}
-                {hasOutsideTargets && (
-                  <>
-                    <div class="canvas-context-menu-divider" role="separator" />
-                    <button
-                      type="button"
-                      role="menuitem"
-                      class="canvas-context-menu-item is-accent"
-                      onClick={() => runMenuAction(contextMenuActions.onPermanentSubtractOutside)}
-                    >
-                      <span class="canvas-context-menu-item-main">
-                        <svg class="canvas-context-menu-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                          <rect x="2.5" y="2.5" width="7.5" height="7.5" rx="1.25" />
-                          <rect x="6" y="6" width="7.5" height="7.5" rx="1.25" stroke-dasharray="2.5 2" />
-                        </svg>
-                        <span class="canvas-context-menu-label">Permanent Subtract (Pathfinder)</span>
-                      </span>
-                    </button>
-                  </>
-                )}
-              </>
-            )}
-          </div>
+          <StudioContextMenu
+            position={{ x: contextMenu.x, y: contextMenu.y }}
+            ariaLabel={showObjectMenu ? 'Canvas object actions' : 'Canvas actions'}
+            entries={entries}
+            testId="canvas-context-menu"
+            onClose={() => setContextMenu(null)}
+          />
         );
       })()}
     </div>

@@ -91,6 +91,7 @@ import {
   type PresetsMenuLayout,
 } from './NodeLogicPresetsMenu';
 import { StudioIcon } from './StudioIcon';
+import { StudioContextMenu, type StudioContextMenuItem } from './StudioContextMenu';
 
 export interface NodeLogicWorkspaceProps {
   project: FolioProject;
@@ -240,6 +241,11 @@ export default function NodeLogicWorkspace({
   const [wireLiftCandidate, setWireLiftCandidate] = useState<WireLiftCandidate | null>(null);
   const suppressNextPortClickRef = useRef(false);
   const suppressContextMenuRef = useRef(false);
+  const [stageContextMenu, setStageContextMenu] = useState<{
+    x: number;
+    y: number;
+    nodeId: string | null;
+  } | null>(null);
 
   const computePresetsMenuPosition = useCallback((): PresetsMenuLayout | null => {
     const btn = presetsButtonRef.current;
@@ -1008,6 +1014,9 @@ export default function NodeLogicWorkspace({
       if (panDrag && event.pointerId === panDrag.pointerId) {
         const dx = event.clientX - panDrag.startClientX;
         const dy = event.clientY - panDrag.startClientY;
+        if (Math.hypot(dx, dy) > 4) {
+          suppressContextMenuRef.current = true;
+        }
         setViewport((current) => ({
           ...current,
           panX: Math.round(panDrag.originPanX + dx),
@@ -1877,15 +1886,30 @@ export default function NodeLogicWorkspace({
           class={`nl-canvas-stage ${panDrag ? 'is-panning' : ''} ${spacePanHeld && !panDrag ? 'is-space-pan' : ''} ${marqueeDrag?.hasDragged ? 'is-marquee-selecting' : ''} ${isWireActivelyShown ? 'is-connecting' : ''}`}
           data-testid="node-logic-canvas"
           onContextMenu={(event) => {
+            event.preventDefault();
             if (suppressContextMenuRef.current) {
-              event.preventDefault();
               suppressContextMenuRef.current = false;
+              return;
             }
+            const target = event.target as HTMLElement | null;
+            if (target?.closest('input, textarea, select')) return;
+            const nodeCard = target?.closest<HTMLElement>('[data-logic-node-id]');
+            const hitNodeId = nodeCard?.getAttribute('data-logic-node-id') ?? null;
+            if (hitNodeId) {
+              setSelectedNodeId(hitNodeId);
+              if (!selectedNodeIds.includes(hitNodeId)) {
+                setSelectedNodeIds([hitNodeId]);
+              }
+              setSelectedFrameId(null);
+              setSelectedConnectionId(null);
+            }
+            setStageContextMenu({ x: event.clientX, y: event.clientY, nodeId: hitNodeId });
           }}
           onPointerDown={(event) => {
             if (event.button !== 0 && event.button !== 1 && event.button !== 2) return;
             setPresetsOpen(false);
             setOpenGuideNodeId(null);
+            setStageContextMenu(null);
             if (wirePatch) {
               setWirePatch(null);
               return;
@@ -1899,7 +1923,7 @@ export default function NodeLogicWorkspace({
                 event.preventDefault();
               }
               if (event.button === 2) {
-                suppressContextMenuRef.current = true;
+                suppressContextMenuRef.current = false;
               }
               setPanDrag({
                 pointerId: event.pointerId,
@@ -2761,6 +2785,108 @@ export default function NodeLogicWorkspace({
           onToggleComponentNodeLogic={onToggleComponentNodeLogic}
         />
       </div>
+      {stageContextMenu && (
+        <StudioContextMenu
+          open={true}
+          x={stageContextMenu.x}
+          y={stageContextMenu.y}
+          ariaLabel="Node Logic actions"
+          testId="node-logic-context-menu"
+          onClose={() => setStageContextMenu(null)}
+          items={(() => {
+            const items: StudioContextMenuItem[] = [];
+            const hitNode = stageContextMenu.nodeId && activeGraph
+              ? activeGraph.nodes.find((n) => n.id === stageContextMenu.nodeId) ?? null
+              : null;
+            if (hitNode && activeGraph) {
+              const def = getLogicNodeDefinition(hitNode.type);
+              items.push({ kind: 'header', id: 'hdr-node', label: def?.label ?? hitNode.type });
+              items.push({
+                kind: 'item',
+                id: 'wrap-frame',
+                label: 'Wrap in Logic Frame',
+                shortcut: ['Mod', 'G'],
+                onSelect: handleCreateOrWrapFrame,
+              });
+              items.push({
+                kind: 'item',
+                id: 'dup-node',
+                label: 'Duplicate Logic Node',
+                onSelect: () => {
+                  const { graph: nextGraph, node: cloned } = addNodeToGraph(
+                    activeGraph,
+                    hitNode.type as BuiltInLogicNodeType,
+                    { x: Math.round(hitNode.x + 40), y: Math.round(hitNode.y + 40) },
+                    { ...hitNode.data },
+                  );
+                  commitGraphUpdate(nextGraph, `Duplicate ${def?.label ?? hitNode.type}`);
+                  setSelectedNodeId(cloned.id);
+                  setSelectedNodeIds([cloned.id]);
+                },
+              });
+              items.push({ kind: 'divider', id: 'div-del' });
+              items.push({
+                kind: 'item',
+                id: 'del-node',
+                label: 'Delete Logic Node',
+                shortcut: ['Delete'],
+                danger: true,
+                onSelect: () => {
+                  commitGraphUpdate(removeNodeFromGraph(activeGraph, hitNode.id), 'Delete logic node');
+                  setSelectedNodeId(null);
+                  setSelectedNodeIds((prev) => prev.filter((id) => id !== hitNode.id));
+                },
+              });
+              return items;
+            }
+
+            items.push({ kind: 'header', id: 'hdr-stage', label: activeGraph?.name ?? 'Node Logic Stage' });
+            items.push({
+              kind: 'item',
+              id: 'add-trigger',
+              label: 'Add Event Trigger (On Click)',
+              onSelect: () => handleAddNodeFromPalette('event.on-click'),
+            });
+            items.push({
+              kind: 'item',
+              id: 'add-action',
+              label: 'Add Action (Modify Layer)',
+              onSelect: () => handleAddNodeFromPalette('action.set-layer'),
+            });
+            items.push({
+              kind: 'item',
+              id: 'add-branch',
+              label: 'Add Condition (If / Else)',
+              onSelect: () => handleAddNodeFromPalette('logic.branch'),
+            });
+            if (activeGraph) {
+              items.push({ kind: 'divider', id: 'div-org' });
+              items.push({
+                kind: 'item',
+                id: 'create-frame',
+                label: 'Create Logic Frame',
+                shortcut: ['Mod', 'G'],
+                onSelect: handleCreateOrWrapFrame,
+              });
+              items.push({
+                kind: 'item',
+                id: 'auto-arrange',
+                label: 'Auto-Arrange Graph',
+                onSelect: handleAutoArrange,
+              });
+              items.push({ kind: 'divider', id: 'div-view' });
+              items.push({ kind: 'item', id: 'fit-view', label: 'Fit Graph to View', onSelect: handleFitView });
+              items.push({
+                kind: 'item',
+                id: 'reset-zoom',
+                label: 'Reset Zoom (100%)',
+                onSelect: () => setViewport((current) => ({ ...current, zoom: 1 })),
+              });
+            }
+            return items;
+          })()}
+        />
+      )}
     </div>
   );
 }

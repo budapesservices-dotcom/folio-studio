@@ -1,9 +1,9 @@
 import { lazy, Suspense } from 'preact/compat';
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { AssetReference, BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument, FolioProject } from '../../core/document/types';
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { CanvasToolId, CanvasToolOptions } from '../../core/tools/operationContract';
-import { Canvas } from '../../engines/canvas/Canvas';
+import { Canvas, type CanvasContextMenuActions } from '../../engines/canvas/Canvas';
 import type { GpuSceneMetrics, ViewportRendererMode } from '../../engines/canvas/gpu/types';
 import type { Alignment, DistributionAxis } from '../../engines/canvas/geometry';
 import type { ValidatedToolOperation } from '../../engines/canvas/geometryEngine';
@@ -17,6 +17,93 @@ import type { StudioVectorActions } from './inspectorVectorHelpers';
 import type { ComponentRecoveryStatus } from './useComponentMasterLifecycle';
 
 const CANVAS_BG_PRESETS = ['#FFFFFF', '#111827'] as const;
+
+interface RendererModeMenuProps {
+  rendererMode: ViewportRendererMode;
+  gpuMetrics: GpuSceneMetrics | null;
+  onChangeMode: (mode: ViewportRendererMode) => void;
+}
+
+function RendererModeMenu({ rendererMode, gpuMetrics, onChangeMode }: RendererModeMenuProps) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleOutside = (event: PointerEvent) => {
+      if (menuRef.current && event.target instanceof Node && menuRef.current.contains(event.target)) return;
+      setOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('pointerdown', handleOutside, true);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      window.removeEventListener('pointerdown', handleOutside, true);
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [open]);
+
+  const currentLabel = rendererMode === 'gpu-hybrid' ? 'GPU' : rendererMode === 'svg-dom' ? 'SVG' : 'Auto';
+
+  return (
+    <div class="canvas-renderer-popover" ref={menuRef}>
+      <button
+        type="button"
+        class={`renderer-mode-compact-btn${open ? ' is-open' : ''}${gpuMetrics ? ' is-gpu-active' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-testid="canvas-renderer-menu-btn"
+        title={
+          gpuMetrics
+            ? `Hybrid GPU (${gpuMetrics.backend}) · ${gpuMetrics.instancedPrimitives} instanced · ${gpuMetrics.lastFrameMs.toFixed(1)} ms`
+            : 'Canvas viewport renderer (Auto switches to Hybrid GPU at 250+ layers)'
+        }
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <span>{currentLabel}</span>
+        <span class="renderer-mode-caret" aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <div class="canvas-renderer-menu" role="menu" aria-label="Canvas viewport renderer">
+          <div class="studio-opt-popover-title">Viewport Renderer</div>
+          {([
+            { id: 'auto', label: 'Auto (Recommended)', detail: 'SVG < 250 layers · GPU ≥ 250' },
+            { id: 'gpu-hybrid', label: 'Hybrid GPU', detail: 'WebGL2 SDF + 512px Tile Cache' },
+            { id: 'svg-dom', label: 'SVG DOM', detail: 'Pure vector DOM rendering' },
+          ] as const).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={rendererMode === item.id}
+              class={`studio-opt-popover-item${rendererMode === item.id ? ' is-active' : ''}`}
+              onClick={() => {
+                onChangeMode(item.id);
+                setOpen(false);
+              }}
+            >
+              <span class="renderer-menu-copy">
+                <strong>{item.label}</strong>
+                <small>{item.detail}</small>
+              </span>
+              {rendererMode === item.id && <span aria-hidden="true">✓</span>}
+            </button>
+          ))}
+          {gpuMetrics && (
+            <>
+              <div class="studio-opt-popover-divider" role="separator" />
+              <div class="renderer-menu-metrics">
+                {gpuMetrics.backend} · {gpuMetrics.instancedPrimitives} primitives · {gpuMetrics.lastFrameMs.toFixed(1)}ms
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface CanvasBackgroundControlProps {
   background: string;
@@ -154,6 +241,7 @@ export interface MainCanvasWindowProps {
   componentAnimPlaying?: boolean;
   onToggleComponentAnimPlaying?: () => void;
   studioActions?: StudioVectorActions;
+  canvasContextMenuExtras?: Partial<CanvasContextMenuActions>;
 }
 
 export function MainCanvasWindow({
@@ -211,9 +299,21 @@ export function MainCanvasWindow({
   componentAnimPlaying = true,
   onToggleComponentAnimPlaying,
   studioActions,
+  canvasContextMenuExtras,
 }: MainCanvasWindowProps) {
   const [rendererMode, setRendererMode] = useState<ViewportRendererMode>('auto');
   const [gpuMetrics, setGpuMetrics] = useState<GpuSceneMetrics | null>(null);
+
+  const mergedContextMenuActions: CanvasContextMenuActions | undefined = studioActions
+    ? {
+        ...studioActions,
+        onConvertToPath,
+        onFlip,
+        onChangeBackground,
+        onResetView: () => onZoomChange(1),
+        ...canvasContextMenuExtras,
+      }
+    : undefined;
 
   return (
     <>
@@ -255,33 +355,11 @@ export function MainCanvasWindow({
                   </button>
                 ))}
               </div>
-              <div
-                class="renderer-mode-switcher"
-                role="group"
-                aria-label="Canvas viewport renderer"
-                title={
-                  gpuMetrics
-                    ? `Hybrid GPU (${gpuMetrics.backend}) · ${gpuMetrics.instancedPrimitives} instanced · ${gpuMetrics.richNodes} tiled · ${gpuMetrics.lastFrameMs.toFixed(1)} ms`
-                    : 'Auto switches to Hybrid GPU + Tile Cache at 250+ layers'
-                }
-              >
-                {([
-                  { id: 'auto', label: 'Auto', tip: 'Auto: SVG < 250 nodes, Hybrid GPU >= 250 nodes' },
-                  { id: 'gpu-hybrid', label: 'GPU', tip: 'Force Hybrid GPU (WebGL2 SDF + 512px Tile Cache)' },
-                  { id: 'svg-dom', label: 'SVG', tip: 'Force SVG DOM renderer' },
-                ] as const).map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    class={`renderer-mode-btn${rendererMode === mode.id ? ' is-active' : ''}`}
-                    title={mode.tip}
-                    aria-pressed={rendererMode === mode.id}
-                    onClick={() => setRendererMode(mode.id)}
-                  >
-                    {mode.label}
-                  </button>
-                ))}
-              </div>
+              <RendererModeMenu
+                rendererMode={rendererMode}
+                gpuMetrics={gpuMetrics}
+                onChangeMode={setRendererMode}
+              />
             </div>
             <div class="canvas-window-tools">
               <AlignmentTools
@@ -379,7 +457,7 @@ export function MainCanvasWindow({
               rendererMode={rendererMode}
               onGpuMetrics={setGpuMetrics}
               animationTimeMs={animationTimeMs}
-              contextMenuActions={studioActions}
+              contextMenuActions={mergedContextMenuActions}
             />
           </div>
         </FloatingWindow>
@@ -477,6 +555,7 @@ export interface ComponentCanvasWindowProps {
   onDropImageFiles?: (files: readonly File[], point: { x: number; y: number }) => void;
   onChangeBackground?: (background: string) => void;
   studioActions?: StudioVectorActions;
+  canvasContextMenuExtras?: Partial<CanvasContextMenuActions>;
 }
 
 export function ComponentCanvasWindow({
@@ -539,11 +618,23 @@ export function ComponentCanvasWindow({
   onDropImageFiles,
   onChangeBackground,
   studioActions,
+  canvasContextMenuExtras,
 }: ComponentCanvasWindowProps) {
   const safeDocument = normalizeCanvasDocument(document);
   const safeNodes = safeDocument?.nodes ?? [];
   const safeSelectedNodeIds = Array.isArray(selectedNodeIds) ? selectedNodeIds : [];
   const safeSelectedComponentNodes = Array.isArray(selectedComponentNodes) ? selectedComponentNodes : [];
+  const mergedComponentContextMenuActions: CanvasContextMenuActions | undefined = studioActions
+    ? {
+        ...studioActions,
+        onConvertToPath,
+        onFlip,
+        onChangeBackground,
+        onResetView: () => onZoomChange(1),
+        onSaveAsComponent: onSaveSelectionAsNew,
+        ...canvasContextMenuExtras,
+      }
+    : undefined;
 
   return (
     <>
@@ -716,7 +807,7 @@ export function ComponentCanvasWindow({
                 onToolOperationBatch={onToolOperationBatch}
                 onLayerDrop={onLayerDrop}
                 onDropImageFiles={onDropImageFiles}
-                contextMenuActions={studioActions}
+                contextMenuActions={mergedComponentContextMenuActions}
               />
             ) : (
               <div class="component-canvas-empty" role="status">

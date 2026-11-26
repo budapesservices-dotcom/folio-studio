@@ -29,7 +29,6 @@ import {
 import {
   InspectorInteractiveStateSection,
   InspectorQuickHeaderActions,
-  InspectorSelectSimilarControl,
 } from './workspace/InspectorInteractiveStateSection';
 import { InspectorFrameLayoutSection } from './workspace/InspectorFrameLayoutSection';
 import { InspectorSizePositionSection } from './workspace/InspectorSizePositionSection';
@@ -48,6 +47,7 @@ import {
   InspectorEmptyStateView,
   InspectorMultiSelectionView,
 } from './workspace/InspectorSelectionStates';
+import { StudioContextMenu, type StudioContextMenuEntry } from './workspace/StudioContextMenu';
 import type {
   QuickInteractionConfig,
   QuickInteractionEntry,
@@ -133,7 +133,7 @@ export interface InspectorPanelProps {
   studioActions?: StudioVectorActions;
 }
 
-type AccordionSectionId =
+export type InspectorAccordionSectionId =
   | 'layout-frame'
   | 'size-position'
   | 'appearance'
@@ -142,15 +142,19 @@ type AccordionSectionId =
   | 'responsive-semantic'
   | 'component-logic';
 
-const DEFAULT_ACCORDION_STATE: Record<AccordionSectionId, boolean> = {
-  'layout-frame': true,
-  'size-position': true,
-  appearance: true,
-  text: true,
-  'modern-effects': false,
-  'responsive-semantic': false,
-  'component-logic': false,
-};
+export function getDefaultInspectorOpenSections(
+  nodeType: DesignNode['type'],
+): Record<InspectorAccordionSectionId, boolean> {
+  return {
+    'size-position': true,
+    appearance: true,
+    text: nodeType === 'text',
+    'layout-frame': nodeType === 'frame' || nodeType === 'group',
+    'modern-effects': false,
+    'responsive-semantic': false,
+    'component-logic': nodeType === 'component-instance',
+  };
+}
 
 interface InspectorSelectedNodeBodyProps {
   panel: InspectorPanelProps;
@@ -161,6 +165,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
   const {
     activeEditorId,
     scopedNodes = [],
+    canRemoveFromCanvas,
     selectedInstanceComponent,
     editingMasterComponent = null,
     activeBreakpoint,
@@ -169,6 +174,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
     project,
     activePageId,
     onCommitEdit,
+    onRemoveFromCanvas,
     onUpdateSelected,
     onUpdateSelectedStyle,
     onTogglePropertyKeyframe,
@@ -187,6 +193,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
     onSimplifyPath,
     onChooseTool,
     onDuplicateSelection,
+    onCopySelection,
     onCreateQuickInteraction,
     onUpdateQuickInteraction,
     onDeleteQuickInteraction,
@@ -194,14 +201,19 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
     studioActions,
   } = panel;
 
-  const [openSections, setOpenSections] = useState<Record<AccordionSectionId, boolean>>(
-    DEFAULT_ACCORDION_STATE,
+  const [openSections, setOpenSections] = useState<Record<InspectorAccordionSectionId, boolean>>(
+    () => getDefaultInspectorOpenSections(selectedNode.type),
   );
   const [activeState, setActiveState] = useState<InteractiveStateId>('default');
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     setActiveState('default');
   }, [selectedNode.id]);
+
+  useEffect(() => {
+    setOpenSections(getDefaultInspectorOpenSections(selectedNode.type));
+  }, [selectedNode.type]);
 
   const isTextNode = selectedNode.type === 'text';
   const isConvertibleVector =
@@ -223,11 +235,11 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
     hasQuickInteractions ||
     Boolean(studioActions?.onOpenNodeLogic);
 
-  const visibleSectionIds: AccordionSectionId[] = [
-    'layout-frame',
+  const visibleSectionIds: InspectorAccordionSectionId[] = [
     'size-position',
     'appearance',
     ...(isTextNode ? (['text'] as const) : []),
+    'layout-frame',
     'modern-effects',
     'responsive-semantic',
     ...(isComponentLogicVisible ? (['component-logic'] as const) : []),
@@ -237,12 +249,11 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
   const allExpanded = openCount === visibleSectionIds.length;
 
   const toggleSection = (id: string) => {
-    const typedId = id as AccordionSectionId;
+    const typedId = id as InspectorAccordionSectionId;
     setOpenSections((prev) => ({ ...prev, [typedId]: !prev[typedId] }));
   };
 
-  const toggleAllSections = () => {
-    const nextOpen = !allExpanded;
+  const setAllSectionsOpen = (nextOpen: boolean) => {
     setOpenSections((prev) => {
       const next = { ...prev };
       for (const id of visibleSectionIds) {
@@ -250,6 +261,10 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
       }
       return next;
     });
+  };
+
+  const toggleAllSections = () => {
+    setAllSectionsOpen(!allExpanded);
   };
 
   const handleUpdateExtendedStyle = (patch: Record<string, unknown>) => {
@@ -296,8 +311,104 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
           ? 'STACK ITEM'
           : 'WEB';
 
+  const inspectorContextEntries: StudioContextMenuEntry[] = [
+    { kind: 'header', id: 'hdr-node', label: selectedNode.name, meta: selectedNode.type.toUpperCase() },
+    {
+      kind: 'item',
+      id: 'dup',
+      label: 'Duplicate Layer',
+      shortcut: ['Mod', 'D'],
+      onSelect: onDuplicateSelection,
+    },
+    {
+      kind: 'item',
+      id: 'copy',
+      label: 'Copy Layer',
+      shortcut: ['Mod', 'C'],
+      onSelect: onCopySelection,
+    },
+    { kind: 'divider', id: 'div-1' },
+    {
+      kind: 'item',
+      id: 'toggle-vis',
+      label: selectedNode.visible ? 'Hide Layer' : 'Show Layer',
+      shortcut: ['Mod', 'Shift', 'H'],
+      onSelect: () => {
+        onUpdateSelected({ visible: !selectedNode.visible });
+        onCommitEdit();
+      },
+    },
+    {
+      kind: 'item',
+      id: 'toggle-lock',
+      label: selectedNode.locked ? 'Unlock Layer' : 'Lock Layer',
+      shortcut: ['Mod', 'Shift', 'L'],
+      onSelect: () => {
+        onUpdateSelected({ locked: !selectedNode.locked });
+        onCommitEdit();
+      },
+    },
+    {
+      kind: 'item',
+      id: 'reset-rot',
+      label: 'Reset Rotation (0°)',
+      disabled: Math.abs(selectedNode.rotation) < 0.001,
+      onSelect: () => {
+        onUpdateSelected({ rotation: 0 });
+        onCommitEdit();
+      },
+    },
+    {
+      kind: 'item',
+      id: 'reset-op',
+      label: 'Reset Opacity (100%)',
+      disabled: Math.abs(selectedNode.opacity - 1) < 0.001,
+      onSelect: () => {
+        onUpdateSelected({ opacity: 1 });
+        onCommitEdit();
+      },
+    },
+    { kind: 'divider', id: 'div-2' },
+    {
+      kind: 'item',
+      id: 'expand-all',
+      label: 'Expand All Sections',
+      disabled: allExpanded,
+      onSelect: () => setAllSectionsOpen(true),
+    },
+    {
+      kind: 'item',
+      id: 'collapse-all',
+      label: 'Collapse All Sections',
+      disabled: openCount === 0,
+      onSelect: () => setAllSectionsOpen(false),
+    },
+    ...(canRemoveFromCanvas
+      ? [
+          { kind: 'divider' as const, id: 'div-3' },
+          {
+            kind: 'item' as const,
+            id: 'remove',
+            label: 'Remove from Canvas',
+            shortcut: ['Delete'],
+            tone: 'danger' as const,
+            onSelect: () => onRemoveFromCanvas(selectedNode.id),
+          },
+        ]
+      : []),
+  ];
+
   return (
-    <div class={`inspector-content inspector-zero-typing${isPseudoState ? ' is-state-editing' : ''}`}>
+    <div
+      class={`inspector-content inspector-zero-typing${isPseudoState ? ' is-state-editing' : ''}`}
+      onContextMenu={(event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.matches('input, select')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setContextMenu({ x: event.clientX, y: event.clientY });
+      }}
+    >
       <InspectorAccordionToolbar
         allExpanded={allExpanded}
         openCount={openCount}
@@ -305,7 +416,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
         onToggleAll={toggleAllSections}
       />
 
-      {/* SECTION 1 — HEADER IDENTITY & INTERACTIVE STATE SWITCHER */}
+      {/* SECTION 1 — HEADER IDENTITY & COMPACT QUICK ACTIONS */}
       <section class="inspector-quick-header" aria-label="Identity and interactive states">
         <div class="inspector-quick-name-row">
           <input
@@ -333,29 +444,9 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
           onUpdateSelected={onUpdateSelected}
           onCommitEdit={onCommitEdit}
         />
-
-        {studioActions && <InspectorSelectSimilarControl studioActions={studioActions} />}
       </section>
 
-      {/* SECTION 2 — LAYOUT & FRAME */}
-      <InspectorAccordionSection
-        id="layout-frame"
-        title="Layout & Frame"
-        badge={layoutBadge}
-        isOpen={openSections['layout-frame']}
-        onToggle={toggleSection}
-      >
-        <InspectorFrameLayoutSection
-          selectedNode={selectedNode}
-          parentNode={parentNode}
-          onUpdateSelected={onUpdateSelected}
-          onApplyAutoLayout={onApplyAutoLayout}
-          onConvertFrameLayoutMode={onConvertFrameLayoutMode}
-          onCommitEdit={onCommitEdit}
-        />
-      </InspectorAccordionSection>
-
-      {/* SECTION 3 — SIZE & POSITION */}
+      {/* SECTION 2 — SIZE & POSITION */}
       <InspectorAccordionSection
         id="size-position"
         title="Size & Position"
@@ -373,7 +464,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
         />
       </InspectorAccordionSection>
 
-      {/* SECTION 4 — FILL, BORDER & RADIUS */}
+      {/* SECTION 3 — FILL, BORDER & RADIUS */}
       <InspectorAccordionSection
         id="appearance"
         title="Fill, Border & Radius"
@@ -393,7 +484,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
         />
       </InspectorAccordionSection>
 
-      {/* SECTION 5 — TEXT & PARAGRAPH (TEXT NODES ONLY) */}
+      {/* SECTION 4 — TEXT & PARAGRAPH (TEXT NODES ONLY) */}
       {isTextNode && (
         <InspectorAccordionSection
           id="text"
@@ -410,6 +501,24 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
           />
         </InspectorAccordionSection>
       )}
+
+      {/* SECTION 5 — LAYOUT & FRAME */}
+      <InspectorAccordionSection
+        id="layout-frame"
+        title="Layout & Frame"
+        badge={layoutBadge}
+        isOpen={openSections['layout-frame']}
+        onToggle={toggleSection}
+      >
+        <InspectorFrameLayoutSection
+          selectedNode={selectedNode}
+          parentNode={parentNode}
+          onUpdateSelected={onUpdateSelected}
+          onApplyAutoLayout={onApplyAutoLayout}
+          onConvertFrameLayoutMode={onConvertFrameLayoutMode}
+          onCommitEdit={onCommitEdit}
+        />
+      </InspectorAccordionSection>
 
       {/* SECTION 6 — MODERN EFFECTS */}
       <InspectorAccordionSection
@@ -493,6 +602,14 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
           />
         </InspectorAccordionSection>
       )}
+
+      <StudioContextMenu
+        position={contextMenu}
+        ariaLabel="Inspector actions"
+        entries={inspectorContextEntries}
+        testId="inspector-context-menu"
+        onClose={() => setContextMenu(null)}
+      />
     </div>
   );
 }
