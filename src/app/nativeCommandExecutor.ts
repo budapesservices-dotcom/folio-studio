@@ -282,6 +282,7 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'page.create':
     case 'page.set-active':
     case 'document.set-background':
+    case 'document.set-size':
     case 'component.create':
     case 'component.sync-document':
     case 'component.rename':
@@ -343,6 +344,7 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'page.create':
     case 'page.set-active':
     case 'document.set-background':
+    case 'document.set-size':
     case 'component.create':
     case 'component.sync-document':
     case 'component.rename':
@@ -509,7 +511,11 @@ function computeProjectChangeDraft(
       : { added: afterPage.document.nodes.map((node) => node.id), updated: [], removed: [] };
 
     const backgroundChanged = Boolean(beforePage && beforePage.document.background !== afterPage.document.background);
-    const hasChanges = diff.added.length > 0 || diff.updated.length > 0 || diff.removed.length > 0 || !beforePage || backgroundChanged;
+    const sizeChanged = Boolean(
+      beforePage &&
+      (beforePage.document.width !== afterPage.document.width || beforePage.document.height !== afterPage.document.height),
+    );
+    const hasChanges = diff.added.length > 0 || diff.updated.length > 0 || diff.removed.length > 0 || !beforePage || backgroundChanged || sizeChanged;
     if (hasChanges || isPrimary) {
       const key = `${address.owner.id}:${address.documentId}`;
       seenDocumentKeys.add(key);

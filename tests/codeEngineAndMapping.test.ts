@@ -475,9 +475,10 @@ describe('Tahap 3 — Mapped Round-Trip Sync & Custom Code Preservation via Nati
   it('persists Custom & Extension codeModules via code.update-modules with Undo/Redo and preserves them across Canvas visual edits', () => {
     expect(Object.keys(NATIVE_COMMAND_REGISTRY).length).toBe(14);
     const allCommandTypes = Object.keys(ALL_NATIVE_COMMAND_REGISTRY);
-    expect(allCommandTypes.length).toBe(44);
-    expect(new Set(allCommandTypes).size).toBe(44);
+    expect(allCommandTypes.length).toBe(45);
+    expect(new Set(allCommandTypes).size).toBe(45);
     expect(ALL_NATIVE_COMMAND_REGISTRY['animation.update-custom-easings']).toBeDefined();
+    expect(ALL_NATIVE_COMMAND_REGISTRY['document.set-size']).toBeDefined();
 
     const project = createInitialProject('Sync Demo');
     const store = createCanonicalEditorStore(createEditorState(project));

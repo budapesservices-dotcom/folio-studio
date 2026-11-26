@@ -111,7 +111,7 @@ function buildDrawnNode(
     return createLineNode(session.start.x, session.start.y, end.x, end.y, {
       arrowEnd: session.toolId === 'draw-arrow',
       stroke: strokeColor,
-      strokeWidth: Math.max(1.5, opts.strokeWidth),
+      strokeWidth: Math.max(2, opts.strokeWidth),
     });
   }
 

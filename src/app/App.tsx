@@ -879,6 +879,10 @@ export function App() {
         onLayerDrop={(nodeIds) => layers.dropLayersOnCanvas(nodeIds, 'component')}
         onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'component', point); }}
         onChangeBackground={(background) => { componentCommandClient.setDocumentBackground(background); }}
+        onResizeDocument={(width, height) => {
+          const res = componentCommandClient.setDocumentSize(width, height, 'Resize component canvas');
+          if (res.status === 'applied') windows.centerComponentCanvasView(width, height);
+        }}
         studioActions={selectionActions.createStudioActionsForTarget('component')}
         canvasContextMenuExtras={componentCanvasContextMenuExtras}
       />

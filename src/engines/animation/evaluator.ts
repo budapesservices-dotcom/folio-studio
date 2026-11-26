@@ -549,6 +549,9 @@ export function applyAnimatedPosesToDocument(
       }
       if (pose.radius !== undefined && 'radius' in nextNode.style) {
         nextStyle.radius = Math.max(0, roundTo2(pose.radius));
+        if ('cornerRadii' in nextStyle) {
+          delete nextStyle.cornerRadii;
+        }
       }
       nextNode = {
         ...nextNode,

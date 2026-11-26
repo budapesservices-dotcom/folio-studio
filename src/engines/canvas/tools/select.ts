@@ -748,7 +748,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           snapTolerance,
           { lockAspect, fromCenter: event.altKey },
         );
-        const previewNodes = resizeNodes(
+        const resizedRaw = resizeNodes(
           session.nodes,
           session.bounds,
           session.handle,
@@ -760,6 +760,38 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             constrainAspect: event.shiftKey || nodeLocksAspect,
           },
         );
+        const affectsWidth = session.handle !== 'n' && session.handle !== 's';
+        const affectsHeight = session.handle !== 'e' && session.handle !== 'w';
+        const previewNodes = resizedRaw.map((node, index) => {
+          const orig = session.nodes[index];
+          if (!node.layoutChild || !orig) return node;
+          const widthChanged = affectsWidth && Math.abs(node.width - orig.width) > 0.01;
+          const heightChanged = affectsHeight && Math.abs(node.height - orig.height) > 0.01;
+          if (!widthChanged && !heightChanged) return node;
+          const nextChild = { ...node.layoutChild };
+          let mutated = false;
+          if (widthChanged) {
+            if (nextChild.widthValue !== undefined) {
+              delete nextChild.widthValue;
+              mutated = true;
+            }
+            if (nextChild.widthMode && nextChild.widthMode !== 'fixed') {
+              nextChild.widthMode = 'fixed';
+              mutated = true;
+            }
+          }
+          if (heightChanged) {
+            if (nextChild.heightValue !== undefined) {
+              delete nextChild.heightValue;
+              mutated = true;
+            }
+            if (nextChild.heightMode && nextChild.heightMode !== 'fixed') {
+              nextChild.heightMode = 'fixed';
+              mutated = true;
+            }
+          }
+          return mutated ? { ...node, layoutChild: nextChild } : node;
+        });
         const nextBounds = getBounds(previewNodes);
         return {
           session: {

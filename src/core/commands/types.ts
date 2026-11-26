@@ -136,6 +136,11 @@ export interface DocumentSetBackgroundPayload {
   background: string;
 }
 
+export interface DocumentSetSizePayload {
+  width: number;
+  height: number;
+}
+
 export interface ComponentRenamePayload {
   componentId: string;
   name: string;
@@ -315,6 +320,7 @@ export type ProjectReplaceCommand = NativeCommandEnvelope<'project.replace', Pro
 export type PageCreateCommand = NativeCommandEnvelope<'page.create', PageCreatePayload>;
 export type PageSetActiveCommand = NativeCommandEnvelope<'page.set-active', PageSetActivePayload>;
 export type DocumentSetBackgroundCommand = NativeCommandEnvelope<'document.set-background', DocumentSetBackgroundPayload>;
+export type DocumentSetSizeCommand = NativeCommandEnvelope<'document.set-size', DocumentSetSizePayload>;
 export type ComponentCreateCommand = NativeCommandEnvelope<'component.create', ComponentCreatePayload>;
 export type ComponentSyncDocumentCommand = NativeCommandEnvelope<'component.sync-document', ComponentSyncDocumentPayload>;
 export type ComponentRenameCommand = NativeCommandEnvelope<'component.rename', ComponentRenamePayload>;
@@ -376,6 +382,7 @@ export type ExtendedNativeCommand =
   | PageCreateCommand
   | PageSetActiveCommand
   | DocumentSetBackgroundCommand
+  | DocumentSetSizeCommand
   | ComponentCreateCommand
   | ComponentSyncDocumentCommand
   | ComponentRenameCommand
@@ -409,6 +416,7 @@ export type NativeCommandPayload =
   | PageCreatePayload
   | PageSetActivePayload
   | DocumentSetBackgroundPayload
+  | DocumentSetSizePayload
   | ComponentCreatePayload
   | ComponentSyncDocumentPayload
   | ComponentRenamePayload

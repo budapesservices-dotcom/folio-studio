@@ -640,15 +640,15 @@ export function useSelectionAndVectorActions({
           style: {
             ...node.style,
             fill: '#FFFFFF',
-            stroke: '#111827',
-            strokeWidth: 2,
+            stroke: '#00000000',
+            strokeWidth: 0,
             ...(node.style.fills ? { fills: undefined } : {}),
           },
         }) as DesignNode),
         'Reset default fill and stroke',
       );
     }
-    onUpdateToolOptions?.({ fillColor: '#FFFFFF', strokeColor: '#111827', strokeWidth: 2 });
+    onUpdateToolOptions?.({ fillColor: '#FFFFFF', strokeColor: '#20212A', strokeWidth: 0 });
   };
 
   const handleApplySwatch = (target: EditorTarget, color: string, channel: 'fill' | 'stroke') => {

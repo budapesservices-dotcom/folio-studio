@@ -14,6 +14,7 @@ import {
   validateComponentSyncDocumentPayload,
   validateComponentUpdateContractPayload,
   validateDocumentSetBackgroundPayload,
+  validateDocumentSetSizePayload,
   validateEmptyCommandPayload,
   validateLayerClippingMaskPayload,
   validateLayerGroupPayload,
@@ -318,6 +319,17 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
     toEditorActions(command: NativeCommand): readonly EditorAction[] {
       if (command.type !== 'document.set-background') return [];
       return [{ type: 'set-document-background', background: command.payload.background }];
+    },
+  }),
+  'document.set-size': Object.freeze({
+    type: 'document.set-size' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['document'] as const),
+    requiredPermission: 'node.update',
+    validatePayload: validateDocumentSetSizePayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'document.set-size') return [];
+      return [{ type: 'set-document-size', width: command.payload.width, height: command.payload.height }];
     },
   }),
   'component.create': Object.freeze({

@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact';
 import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { DesignNode, DesignTokenCollection, PathNode } from '../core/document/types';
@@ -34,6 +35,7 @@ export interface ToolOptionsBarProps {
   onTogglePathClosed: () => void;
   onSelectTool?: (toolId: CanvasToolId) => void;
   studioActions?: StudioVectorActions;
+  trailingSlot?: ComponentChildren;
 }
 
 const OPTION_TOOLS = new Set<CanvasToolId>([
@@ -250,6 +252,7 @@ export function ToolOptionsBar({
   onTogglePathClosed,
   onSelectTool,
   studioActions,
+  trailingSlot,
 }: ToolOptionsBarProps) {
   const [openMenu, setOpenMenu] = useState<'pathfinder' | 'vector' | null>(null);
   const [popoverCoords, setPopoverCoords] = useState<{ x: number; y: number }>({ x: 16, y: 80 });
@@ -316,7 +319,8 @@ export function ToolOptionsBar({
     hasToolControls ||
     canPathfinder ||
     canCombine ||
-    pathNodes.length > 0;
+    pathNodes.length > 0 ||
+    Boolean(trailingSlot);
 
   if (!showBar) return null;
 
@@ -983,6 +987,7 @@ export function ToolOptionsBar({
           )}
         </div>
       )}
+      {trailingSlot && <div class="studio-options-trailing">{trailingSlot}</div>}
     </div>
   );
 }

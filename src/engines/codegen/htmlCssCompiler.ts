@@ -1276,8 +1276,9 @@ export function compilePageHtmlCss(
   pushCssRule(cssLines, `.${pageClass}`, [
     'position: relative;',
     hasResponsiveDesign ? 'width: 100%;' : `width: ${docWidth}px;`,
-    `max-width: ${docWidth}px;`,
+    hasResponsiveDesign ? 'max-width: none;' : `max-width: ${docWidth}px;`,
     `min-height: ${docHeight}px;`,
+    ...(hasResponsiveDesign ? ['min-height: 100dvh;'] : []),
     'margin: 0 auto;',
     `background: ${sanitizeCssValue(page.document.background, '#ffffff')};`,
     'overflow-x: clip;',
@@ -1746,6 +1747,21 @@ export function compilePageHtmlCss(
     cssLines.push('  }');
     cssLines.push('}');
     cssLines.push('');
+    cssLines.push(`@media (min-width: ${Math.floor(docWidth) + 1}px) {`);
+    cssLines.push(`  .${pageClass} {`);
+    cssLines.push(`    width: ${docWidth}px;`);
+    cssLines.push('    max-width: none;');
+    cssLines.push('    margin: 0;');
+    cssLines.push('    transform-origin: top left;');
+    cssLines.push(`    zoom: tan(atan2(100vw, ${docWidth}px));`);
+    cssLines.push('  }');
+    cssLines.push('  @supports not (zoom: 1) {');
+    cssLines.push(`    .${pageClass} {`);
+    cssLines.push(`      transform: scale(tan(atan2(100vw, ${docWidth}px)));`);
+    cssLines.push('    }');
+    cssLines.push('  }');
+    cssLines.push('}');
+    cssLines.push('');
   }
 
   if (tabletRules.length > 0) {
@@ -1889,7 +1905,7 @@ export function buildLivePreviewHtml(
 
   const baseResetCss = [
     '*, *::before, *::after { box-sizing: border-box; }',
-    `html, body { margin: 0; padding: 0; min-height: 100%; overflow-x: hidden; background: ${bodyBg}; color: var(--text-primary, #1d1f28); font-family: system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }`,
+    `html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; min-height: 100dvh; overflow-x: hidden; background: ${bodyBg}; color: var(--text-primary, #1d1f28); font-family: system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }`,
     'a { color: inherit; text-decoration: none; }',
     'button { font: inherit; text-align: inherit; cursor: pointer; background: none; border: none; padding: 0; }',
   ].join('\n');

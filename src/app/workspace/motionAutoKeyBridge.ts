@@ -28,14 +28,22 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
     onCanvasInteraction,
   } = options;
 
+  const isDocumentMutatingOperation = (op: ValidatedToolOperation): boolean =>
+    op.category === 'document-mutation';
+
   const createWorkspaceExecutor = (
     targetScope: 'main' | 'component',
     executor: ToolOperationExecutor,
   ) => (operations: readonly ValidatedToolOperation[]) => {
     const autoKeyActiveHere = activeEditorId === targetScope && motion.motionOpen && motion.autoKeyEnabled;
     if (!autoKeyActiveHere) {
-      if (activeEditorId === targetScope && motion.motionOpen && motion.isPlaying) {
-        motion.pause();
+      if (activeEditorId === targetScope && motion.motionOpen) {
+        const mutatesDocument = operations.some(isDocumentMutatingOperation);
+        if (mutatesDocument && (motion.previewActive || motion.isPlaying)) {
+          motion.exitPreview?.();
+        } else if (motion.isPlaying) {
+          motion.pause();
+        }
       }
       return executor.executeBatch(operations);
     }
@@ -75,7 +83,8 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
 
     const reports = executor.executeBatch(operations);
     for (let i = 0; i < operations.length; i += 1) {
-      if (reports[i]?.status !== 'applied') continue;
+      const status = reports[i]?.status;
+      if (status === 'rejected') continue;
       const payload = operations[i].payload;
       if (payload.kind === 'transform-nodes' && payload.nodes.length > 0) {
         motion.recordAutoKeyNodes(payload.nodes, 'Sync 0.00s keyframe');
@@ -90,6 +99,13 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
   const executeComponentToolOperations = createWorkspaceExecutor('component', componentToolOperationExecutor);
 
   const handleInspectorUpdateSelected = (patch: Partial<DesignNode>, coalesceKey?: string) => {
+    if (
+      motion.motionOpen
+      && !motion.autoKeyEnabled
+      && (motion.previewActive || motion.isPlaying)
+    ) {
+      motion.exitPreview?.();
+    }
     if (
       motion.motionOpen
       && motion.autoKeyEnabled
@@ -133,6 +149,13 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
     patch: Record<string, string | number>,
     coalesceKey?: string,
   ) => {
+    if (
+      motion.motionOpen
+      && !motion.autoKeyEnabled
+      && (motion.previewActive || motion.isPlaying)
+    ) {
+      motion.exitPreview?.();
+    }
     if (
       motion.motionOpen
       && motion.autoKeyEnabled

@@ -71,6 +71,7 @@ export type EditorAction =
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }
   | { type: 'set-document-background'; background: string }
+  | { type: 'set-document-size'; width: number; height: number }
   | { type: 'add-component'; component: ComponentDefinition }
   | { type: 'sync-component-document'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; document: FolioDocument; animations?: AnimationClip[]; updatedAt: string }
   | { type: 'rename-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; name: string }
@@ -541,6 +542,20 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ...currentDoc,
         background: action.background,
       });
+      return withSnapshot(state, next);
+    }
+
+    case 'set-document-size': {
+      const currentDoc = getActiveDocument(state.project);
+      const nextWidth = Math.max(64, Math.min(8192, Math.round(action.width)));
+      const nextHeight = Math.max(64, Math.min(8192, Math.round(action.height)));
+      if (!Number.isFinite(nextWidth) || !Number.isFinite(nextHeight)) return state;
+      if (currentDoc.width === nextWidth && currentDoc.height === nextHeight) return state;
+      const next = touch(updateActiveDocument(state.project, {
+        ...currentDoc,
+        width: nextWidth,
+        height: nextHeight,
+      }));
       return withSnapshot(state, next);
     }
 

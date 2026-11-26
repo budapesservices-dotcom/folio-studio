@@ -133,6 +133,7 @@ export interface MainCanvasCommandClient {
   createPage(page: FolioPage, description?: string): NativeCommandResult;
   setActivePage(pageId: string, description?: string): NativeCommandResult;
   setDocumentBackground(background: string, description?: string): NativeCommandResult;
+  setDocumentSize(width: number, height: number, description?: string): NativeCommandResult;
   createComponent(
     component: ComponentDefinition,
     description?: string,
@@ -445,6 +446,18 @@ export function createWorkspaceCommandClient(
         'document.set-background',
         { kind: 'document', address: astView.address },
         { background },
+        description,
+      );
+    },
+
+    setDocumentSize(width, height, description = 'Resize canvas artboard') {
+      const astView = getActiveAstView();
+      const clampedW = Math.max(64, Math.min(8192, Math.round(Number(width))));
+      const clampedH = Math.max(64, Math.min(8192, Math.round(Number(height))));
+      return submit(
+        'document.set-size',
+        { kind: 'document', address: astView.address },
+        { width: clampedW, height: clampedH },
         description,
       );
     },

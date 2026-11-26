@@ -62,6 +62,7 @@ export interface MotionPlaybackController {
   selectClip: (clipId: string) => void;
   play: () => void;
   pause: () => void;
+  exitPreview: () => void;
   togglePlay: () => void;
   stop: () => void;
   seek: (ms: number) => void;
@@ -259,6 +260,11 @@ export function useMotionPlayback({
     setIsPlaying(false);
     playheadRef.current = 0;
     setPlayheadMs(0);
+    setPreviewActive(false);
+  }, []);
+
+  const exitPreview = useCallback(() => {
+    setIsPlaying(false);
     setPreviewActive(false);
   }, []);
 
@@ -828,6 +834,7 @@ export function useMotionPlayback({
     selectClip,
     play,
     pause,
+    exitPreview,
     togglePlay,
     stop,
     seek,

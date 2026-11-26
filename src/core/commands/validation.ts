@@ -49,6 +49,7 @@ import type {
   ComponentSyncDocumentPayload,
   ComponentUpdateContractPayload,
   DocumentSetBackgroundPayload,
+  DocumentSetSizePayload,
   HistoryCommitEditPayload,
   HistoryRedoPayload,
   HistoryUndoPayload,
@@ -1065,6 +1066,39 @@ export function validateDocumentSetBackgroundPayload(
     return invalid('INVALID_PAYLOAD', 'Document background update requires a valid background color string.');
   }
   return { ok: true, value: { background: data.background } };
+}
+
+export const MIN_DOCUMENT_DIMENSION = 64;
+export const MAX_DOCUMENT_DIMENSION = 8192;
+
+export function validateDocumentSetSizePayload(
+  value: unknown,
+): ValidationOutcome<DocumentSetSizePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['width', 'height']) ||
+    !isFiniteNumber(data.width) ||
+    !isFiniteNumber(data.height) ||
+    data.width < MIN_DOCUMENT_DIMENSION ||
+    data.width > MAX_DOCUMENT_DIMENSION ||
+    data.height < MIN_DOCUMENT_DIMENSION ||
+    data.height > MAX_DOCUMENT_DIMENSION
+  ) {
+    return invalid(
+      'INVALID_PAYLOAD',
+      `Document size update requires finite width and height between ${MIN_DOCUMENT_DIMENSION} and ${MAX_DOCUMENT_DIMENSION}.`,
+    );
+  }
+  return {
+    ok: true,
+    value: {
+      width: Math.round(data.width),
+      height: Math.round(data.height),
+    },
+  };
 }
 
 export function validateComponentSyncDocumentPayload(

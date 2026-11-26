@@ -18,6 +18,130 @@ import type { StudioVectorActions } from './inspectorVectorHelpers';
 import type { ComponentRecoveryStatus } from './useComponentMasterLifecycle';
 
 const CANVAS_BG_PRESETS = ['#FFFFFF', '#111827'] as const;
+const COMPONENT_SIZE_PRESETS = [
+  { label: 'Compact (320 × 240)', width: 320, height: 240 },
+  { label: 'Default (420 × 280)', width: 420, height: 280 },
+  { label: 'Card (640 × 480)', width: 640, height: 480 },
+  { label: 'Wide (800 × 600)', width: 800, height: 600 },
+  { label: 'Square (1080 × 1080)', width: 1080, height: 1080 },
+  { label: 'Hero (1440 × 900)', width: 1440, height: 900 },
+] as const;
+
+interface ComponentCanvasSizeControlProps {
+  width: number;
+  height: number;
+  onResize: (width: number, height: number) => void;
+}
+
+function ComponentCanvasSizeControl({ width, height, onResize }: ComponentCanvasSizeControlProps) {
+  const [draftW, setDraftW] = useState(String(Math.round(width)));
+  const [draftH, setDraftH] = useState(String(Math.round(height)));
+
+  useEffect(() => {
+    setDraftW(String(Math.round(width)));
+    setDraftH(String(Math.round(height)));
+  }, [width, height]);
+
+  const commit = (rawW: string, rawH: string) => {
+    const parsedW = Math.round(Number(rawW));
+    const parsedH = Math.round(Number(rawH));
+    const nextW = Number.isFinite(parsedW) && parsedW >= 64 ? Math.min(8192, parsedW) : Math.round(width);
+    const nextH = Number.isFinite(parsedH) && parsedH >= 64 ? Math.min(8192, parsedH) : Math.round(height);
+    setDraftW(String(nextW));
+    setDraftH(String(nextH));
+    if (nextW !== Math.round(width) || nextH !== Math.round(height)) {
+      onResize(nextW, nextH);
+    }
+  };
+
+  const matchedPreset = COMPONENT_SIZE_PRESETS.find(
+    (p) => p.width === Math.round(width) && p.height === Math.round(height),
+  );
+
+  return (
+    <div
+      class="workspace-tools component-canvas-size-control"
+      role="group"
+      aria-label="Component canvas dimensions"
+      data-testid="component-canvas-size-control"
+    >
+      <label class="component-size-field" title="Component canvas width (64–8192 px)">
+        <span>W</span>
+        <input
+          type="number"
+          min="64"
+          max="8192"
+          step="10"
+          aria-label="Component canvas width"
+          data-testid="component-canvas-width-input"
+          value={draftW}
+          onInput={(event) => setDraftW((event.target as HTMLInputElement).value)}
+          onBlur={() => commit(draftW, draftH)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commit(draftW, draftH);
+              (event.target as HTMLInputElement).blur();
+            } else if (event.key === 'Escape') {
+              setDraftW(String(Math.round(width)));
+              (event.target as HTMLInputElement).blur();
+            }
+          }}
+        />
+      </label>
+      <span class="component-size-times" aria-hidden="true">×</span>
+      <label class="component-size-field" title="Component canvas height (64–8192 px)">
+        <span>H</span>
+        <input
+          type="number"
+          min="64"
+          max="8192"
+          step="10"
+          aria-label="Component canvas height"
+          data-testid="component-canvas-height-input"
+          value={draftH}
+          onInput={(event) => setDraftH((event.target as HTMLInputElement).value)}
+          onBlur={() => commit(draftW, draftH)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commit(draftW, draftH);
+              (event.target as HTMLInputElement).blur();
+            } else if (event.key === 'Escape') {
+              setDraftH(String(Math.round(height)));
+              (event.target as HTMLInputElement).blur();
+            }
+          }}
+        />
+      </label>
+      <select
+        class="component-size-preset"
+        aria-label="Component canvas size presets"
+        data-testid="component-canvas-size-preset"
+        title="Quick component canvas size presets"
+        value={matchedPreset ? `${matchedPreset.width}x${matchedPreset.height}` : ''}
+        onChange={(event) => {
+          const val = (event.target as HTMLSelectElement).value;
+          const [wStr, hStr] = val.split('x');
+          const nextW = Number(wStr);
+          const nextH = Number(hStr);
+          if (Number.isFinite(nextW) && Number.isFinite(nextH)) {
+            onResize(nextW, nextH);
+          }
+        }}
+      >
+        <option value="" disabled>
+          Preset
+        </option>
+        {COMPONENT_SIZE_PRESETS.map((preset) => (
+          <option key={preset.label} value={`${preset.width}x${preset.height}`}>
+            {preset.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
 
 interface RendererModeMenuProps {
   rendererMode: ViewportRendererMode;
@@ -607,6 +731,7 @@ export interface ComponentCanvasWindowProps {
   onLayerDrop: (nodeIds: string[]) => void;
   onDropImageFiles?: (files: readonly File[], point: { x: number; y: number }) => void;
   onChangeBackground?: (background: string) => void;
+  onResizeDocument?: (width: number, height: number) => void;
   studioActions?: StudioVectorActions;
   canvasContextMenuExtras?: Partial<CanvasContextMenuActions>;
 }
@@ -671,6 +796,7 @@ export function ComponentCanvasWindow({
   onLayerDrop,
   onDropImageFiles,
   onChangeBackground,
+  onResizeDocument,
   studioActions,
   canvasContextMenuExtras,
 }: ComponentCanvasWindowProps) {
@@ -851,6 +977,15 @@ export function ComponentCanvasWindow({
               onTogglePathClosed={onTogglePathClosed}
               onSelectTool={onSelectTool}
               studioActions={studioActions}
+              trailingSlot={
+                safeDocument && onResizeDocument ? (
+                  <ComponentCanvasSizeControl
+                    width={safeDocument.width}
+                    height={safeDocument.height}
+                    onResize={onResizeDocument}
+                  />
+                ) : undefined
+              }
             />
             {safeDocument ? (
               <Canvas

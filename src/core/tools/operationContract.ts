@@ -1,10 +1,19 @@
 import type { ShapeColorBlendMode } from '../document/colorBlend';
+import {
+  isCssLengthUnit,
+  isSafeHtmlClassName,
+  isSafeHtmlId,
+} from '../document/cssUnits';
 import { isBlendMode, isFillPaint, isVisualEffect } from '../document/styling';
 import type { DesignNode } from '../document/types';
 import {
+  isBorderSidesConfig,
+  isNodeCssFilters,
   isNodeLayoutChildConfig,
   isNodeLayoutConfig,
+  isNodeStateOverrides,
   isNodeTokenBindings,
+  isNodeTransitionConfig,
   isResponsiveOverrides,
   SEMANTIC_HTML_TAGS,
 } from '../document/validation';
@@ -145,7 +154,7 @@ export const DEFAULT_CANVAS_TOOL_OPTIONS: CanvasToolOptions = {
   polygonSides: 6,
   starPoints: 5,
   starInnerRatio: 0.44,
-  strokeWidth: 2.5,
+  strokeWidth: 0,
   strokeColor: '#20212A',
   fillColor: '#8B7CF6',
   keepToolActive: false,
@@ -377,6 +386,7 @@ const COMMON_NODE_KEYS = [
   'opacity',
   'blendMode',
   'effects',
+  'cssFilters',
   'visible',
   'locked',
   'aspectRatioLocked',
@@ -389,6 +399,14 @@ const COMMON_NODE_KEYS = [
   'semanticTag',
   'ariaLabel',
   'href',
+  'linkTarget',
+  'htmlId',
+  'className',
+  'cursor',
+  'pointerEvents',
+  'userSelect',
+  'transition',
+  'stateOverrides',
   'layout',
   'layoutChild',
   'responsive',
@@ -408,7 +426,20 @@ const INSTANCE_NODE_KEYS = [
   'slotAssignments',
 ] as const;
 
-const SHAPE_STYLE_KEYS = ['fill', 'fills', 'stroke', 'strokeWidth', 'strokeDasharray', 'strokeAlign', 'radius', 'cornerRadii'] as const;
+const SHAPE_STYLE_KEYS = [
+  'fill',
+  'fills',
+  'stroke',
+  'strokeWidth',
+  'strokeWidthUnit',
+  'strokeStyle',
+  'strokeDasharray',
+  'strokeAlign',
+  'borderSides',
+  'radius',
+  'radiusUnit',
+  'cornerRadii',
+] as const;
 const PATH_STYLE_KEYS = [
   'fill',
   'fills',
@@ -425,17 +456,30 @@ const PATH_STYLE_KEYS = [
 const TEXT_STYLE_KEYS = [
   'fill',
   'fontSize',
+  'fontSizeUnit',
   'fontFamily',
   'fontWeight',
   'letterSpacing',
+  'letterSpacingUnit',
   'lineHeight',
+  'lineHeightUnit',
   'textAlign',
   'verticalAlign',
   'textWrap',
   'textTransform',
   'textDecoration',
 ] as const;
-const IMAGE_STYLE_KEYS = ['fit', 'radius', 'cornerRadii', 'stroke', 'strokeWidth'] as const;
+const IMAGE_STYLE_KEYS = [
+  'fit',
+  'radius',
+  'radiusUnit',
+  'cornerRadii',
+  'stroke',
+  'strokeWidth',
+  'strokeWidthUnit',
+  'strokeStyle',
+  'borderSides',
+] as const;
 const ANCHOR_POINT_KEYS = ['id', 'x', 'y', 'handleIn', 'handleOut', 'pointType', 'cornerRadius'] as const;
 const CORNER_RADII_KEYS = ['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as const;
 const POINT_2D_KEYS = ['x', 'y'] as const;
@@ -458,6 +502,7 @@ const VALID_PATH_KINDS = new Set([
 const VALID_STROKE_LINECAPS = new Set(['butt', 'round', 'square']);
 const VALID_STROKE_LINEJOINS = new Set(['miter', 'round', 'bevel']);
 const VALID_STROKE_ALIGNS = new Set(['inside', 'center', 'outside']);
+const VALID_BORDER_LINE_STYLES = new Set(['solid', 'dashed', 'dotted']);
 const VALID_CLIP_MASK_MODES = new Set(['inside', 'outside']);
 const VALID_DRAW_MODES = new Set(['normal', 'inside', 'outside']);
 const VALID_POINT_TYPES = new Set(['corner', 'smooth', 'symmetric']);
@@ -467,6 +512,12 @@ const VALID_TEXT_WRAPS = new Set(['wrap', 'nowrap']);
 const VALID_TEXT_TRANSFORMS = new Set(['none', 'uppercase', 'lowercase', 'capitalize']);
 const VALID_TEXT_DECORATIONS = new Set(['none', 'underline', 'line-through']);
 const VALID_IMAGE_FITS = new Set(['cover', 'contain', 'fill']);
+const VALID_LINK_TARGETS = new Set(['_self', '_blank']);
+const VALID_CURSORS = new Set(['default', 'pointer', 'grab', 'text', 'not-allowed']);
+const VALID_AUTO_NONE = new Set(['auto', 'none']);
+const VALID_FONT_SIZE_UNITS = new Set(['px', 'rem', 'em']);
+const VALID_LETTER_SPACING_UNITS = new Set(['px', 'em']);
+const VALID_LINE_HEIGHT_UNITS = new Set(['', 'px', '%']);
 
 const STANDARD_OBJECT_PROTOTYPE_KEYS = new Set(Reflect.ownKeys(Object.prototype));
 const STANDARD_ARRAY_PROTOTYPE_KEYS = new Set(Reflect.ownKeys(Array.prototype));
@@ -652,6 +703,15 @@ function validateShapeStyle(
   if (!isFiniteNumber(value.strokeWidth) || value.strokeWidth < 0) {
     return fail('INVALID_GEOMETRY', `${path}.strokeWidth must be a finite number >= 0.`, `${path}.strokeWidth`);
   }
+  if (value.strokeWidthUnit !== undefined && !isCssLengthUnit(value.strokeWidthUnit)) {
+    return fail('INVALID_NODE', `${path}.strokeWidthUnit is not a valid CSS length unit.`, `${path}.strokeWidthUnit`);
+  }
+  if (
+    value.strokeStyle !== undefined &&
+    (typeof value.strokeStyle !== 'string' || !VALID_BORDER_LINE_STYLES.has(value.strokeStyle))
+  ) {
+    return fail('INVALID_NODE', `${path}.strokeStyle must be "solid", "dashed", or "dotted".`, `${path}.strokeStyle`);
+  }
   if (
     value.strokeDasharray !== undefined &&
     (typeof value.strokeDasharray !== 'string' || value.strokeDasharray.length > TOOL_OPERATION_LIMITS.maxColorLength)
@@ -664,8 +724,14 @@ function validateShapeStyle(
   ) {
     return fail('INVALID_NODE', `${path}.strokeAlign must be "inside", "center", or "outside".`, `${path}.strokeAlign`);
   }
+  if (value.borderSides !== undefined && !isBorderSidesConfig(value.borderSides)) {
+    return fail('INVALID_NODE', `${path}.borderSides is not a valid border sides configuration.`, `${path}.borderSides`);
+  }
   if (value.radius !== undefined && (!isFiniteNumber(value.radius) || value.radius < 0)) {
     return fail('INVALID_GEOMETRY', `${path}.radius must be a finite number >= 0.`, `${path}.radius`);
+  }
+  if (value.radiusUnit !== undefined && !isCssLengthUnit(value.radiusUnit)) {
+    return fail('INVALID_NODE', `${path}.radiusUnit is not a valid CSS length unit.`, `${path}.radiusUnit`);
   }
   if (value.cornerRadii !== undefined) {
     const err = validateCornerRadii(value.cornerRadii, `${path}.cornerRadii`);
@@ -786,6 +852,9 @@ export function validateDesignNodePayload(
       return fail('INVALID_NODE', `${path}.effects must contain up to 16 valid VisualEffect entries.`, `${path}.effects`);
     }
   }
+  if (value.cssFilters !== undefined && !isNodeCssFilters(value.cssFilters)) {
+    return fail('INVALID_NODE', `${path}.cssFilters is not a valid CSS filter configuration.`, `${path}.cssFilters`);
+  }
   if (value.semanticTag !== undefined && !SEMANTIC_HTML_TAGS.has(String(value.semanticTag))) {
     return fail('INVALID_NODE', `${path}.semanticTag is not a supported semantic HTML tag.`, `${path}.semanticTag`);
   }
@@ -794,6 +863,30 @@ export function validateDesignNodePayload(
   }
   if (value.href !== undefined && (typeof value.href !== 'string' || value.href.length > 2048)) {
     return fail('INVALID_NODE', `${path}.href must be a string.`, `${path}.href`);
+  }
+  if (value.linkTarget !== undefined && (typeof value.linkTarget !== 'string' || !VALID_LINK_TARGETS.has(value.linkTarget))) {
+    return fail('INVALID_NODE', `${path}.linkTarget must be "_self" or "_blank".`, `${path}.linkTarget`);
+  }
+  if (value.htmlId !== undefined && (typeof value.htmlId !== 'string' || !isSafeHtmlId(value.htmlId))) {
+    return fail('INVALID_NODE', `${path}.htmlId is not a valid HTML id.`, `${path}.htmlId`);
+  }
+  if (value.className !== undefined && (typeof value.className !== 'string' || !isSafeHtmlClassName(value.className))) {
+    return fail('INVALID_NODE', `${path}.className is not a valid HTML class list.`, `${path}.className`);
+  }
+  if (value.cursor !== undefined && (typeof value.cursor !== 'string' || !VALID_CURSORS.has(value.cursor))) {
+    return fail('INVALID_NODE', `${path}.cursor is not a supported cursor value.`, `${path}.cursor`);
+  }
+  if (value.pointerEvents !== undefined && (typeof value.pointerEvents !== 'string' || !VALID_AUTO_NONE.has(value.pointerEvents))) {
+    return fail('INVALID_NODE', `${path}.pointerEvents must be "auto" or "none".`, `${path}.pointerEvents`);
+  }
+  if (value.userSelect !== undefined && (typeof value.userSelect !== 'string' || !VALID_AUTO_NONE.has(value.userSelect))) {
+    return fail('INVALID_NODE', `${path}.userSelect must be "auto" or "none".`, `${path}.userSelect`);
+  }
+  if (value.transition !== undefined && !isNodeTransitionConfig(value.transition)) {
+    return fail('INVALID_NODE', `${path}.transition is not a valid transition configuration.`, `${path}.transition`);
+  }
+  if (value.stateOverrides !== undefined && !isNodeStateOverrides(value.stateOverrides)) {
+    return fail('INVALID_NODE', `${path}.stateOverrides is not a valid interactive state map.`, `${path}.stateOverrides`);
   }
   if (value.layout !== undefined && !isNodeLayoutConfig(value.layout)) {
     return fail('INVALID_NODE', `${path}.layout is not a valid Auto-Layout configuration.`, `${path}.layout`);
@@ -877,6 +970,9 @@ export function validateDesignNodePayload(
       if (!isFiniteNumber(style.fontSize) || style.fontSize <= 0) {
         return fail('INVALID_GEOMETRY', `Text node ${value.id} has invalid fontSize.`, `${path}.style.fontSize`);
       }
+      if (style.fontSizeUnit !== undefined && (typeof style.fontSizeUnit !== 'string' || !VALID_FONT_SIZE_UNITS.has(style.fontSizeUnit))) {
+        return fail('INVALID_NODE', `${path}.style.fontSizeUnit is invalid.`, `${path}.style.fontSizeUnit`);
+      }
       if (!isFiniteNumber(style.fontWeight)) {
         return fail('INVALID_GEOMETRY', `Text node ${value.id} has non-finite fontWeight.`, `${path}.style.fontWeight`);
       }
@@ -887,8 +983,20 @@ export function validateDesignNodePayload(
           `${path}.style.letterSpacing`,
         );
       }
+      if (
+        style.letterSpacingUnit !== undefined &&
+        (typeof style.letterSpacingUnit !== 'string' || !VALID_LETTER_SPACING_UNITS.has(style.letterSpacingUnit))
+      ) {
+        return fail('INVALID_NODE', `${path}.style.letterSpacingUnit is invalid.`, `${path}.style.letterSpacingUnit`);
+      }
       if (!isFiniteNumber(style.lineHeight) || style.lineHeight <= 0) {
         return fail('INVALID_GEOMETRY', `Text node ${value.id} has invalid lineHeight.`, `${path}.style.lineHeight`);
+      }
+      if (
+        style.lineHeightUnit !== undefined &&
+        (typeof style.lineHeightUnit !== 'string' || !VALID_LINE_HEIGHT_UNITS.has(style.lineHeightUnit))
+      ) {
+        return fail('INVALID_NODE', `${path}.style.lineHeightUnit is invalid.`, `${path}.style.lineHeightUnit`);
       }
       if (style.textAlign !== undefined && (typeof style.textAlign !== 'string' || !VALID_TEXT_ALIGNS.has(style.textAlign))) {
         return fail('INVALID_NODE', `${path}.style.textAlign must be "left", "center", "right", or "justify".`, `${path}.style.textAlign`);
@@ -943,6 +1051,9 @@ export function validateDesignNodePayload(
       if (style.radius !== undefined && (!isFiniteNumber(style.radius) || style.radius < 0)) {
         return fail('INVALID_GEOMETRY', `${path}.style.radius must be a finite number >= 0.`, `${path}.style.radius`);
       }
+      if (style.radiusUnit !== undefined && !isCssLengthUnit(style.radiusUnit)) {
+        return fail('INVALID_NODE', `${path}.style.radiusUnit is not a valid CSS length unit.`, `${path}.style.radiusUnit`);
+      }
       if (style.cornerRadii !== undefined) {
         const err = validateCornerRadii(style.cornerRadii, `${path}.style.cornerRadii`);
         if (err) return err;
@@ -952,6 +1063,18 @@ export function validateDesignNodePayload(
       }
       if (style.strokeWidth !== undefined && (!isFiniteNumber(style.strokeWidth) || style.strokeWidth < 0)) {
         return fail('INVALID_GEOMETRY', `${path}.style.strokeWidth must be a finite number >= 0.`, `${path}.style.strokeWidth`);
+      }
+      if (style.strokeWidthUnit !== undefined && !isCssLengthUnit(style.strokeWidthUnit)) {
+        return fail('INVALID_NODE', `${path}.style.strokeWidthUnit is not a valid CSS length unit.`, `${path}.style.strokeWidthUnit`);
+      }
+      if (
+        style.strokeStyle !== undefined &&
+        (typeof style.strokeStyle !== 'string' || !VALID_BORDER_LINE_STYLES.has(style.strokeStyle))
+      ) {
+        return fail('INVALID_NODE', `${path}.style.strokeStyle must be "solid", "dashed", or "dotted".`, `${path}.style.strokeStyle`);
+      }
+      if (style.borderSides !== undefined && !isBorderSidesConfig(style.borderSides)) {
+        return fail('INVALID_NODE', `${path}.style.borderSides is not a valid border sides configuration.`, `${path}.style.borderSides`);
       }
       return null;
     }

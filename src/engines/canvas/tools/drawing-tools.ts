@@ -419,7 +419,7 @@ export const paintBucketTool: CanvasToolHandler = {
         color: opts.paintBucketColor,
         target: opts.paintBucketTarget,
         gapTolerance: opts.paintBucketGapTolerance,
-        fallbackStrokeWidth: opts.strokeWidth,
+        fallbackStrokeWidth: opts.strokeWidth > 0 ? opts.strokeWidth : 2,
         tokenId: opts.paintBucketTokenId,
         designTokens: context.designTokens,
       },

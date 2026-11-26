@@ -21,10 +21,16 @@ export interface LivePreviewPaneProps {
   onDownloadHtml: () => void;
 }
 
-const PREVIEW_BREAKPOINTS: readonly { id: BreakpointId; label: string; widthPx: number | null; icon: string }[] = [
-  { id: 'desktop', label: 'Desktop', widthPx: null, icon: 'desktop' },
-  { id: 'tablet', label: 'Tablet', widthPx: 768, icon: 'tablet' },
-  { id: 'mobile', label: 'Mobile', widthPx: 390, icon: 'mobile' },
+const PREVIEW_BREAKPOINTS: readonly {
+  id: BreakpointId;
+  label: string;
+  widthPx: number | null;
+  heightPx: number | null;
+  icon: string;
+}[] = [
+  { id: 'desktop', label: 'Desktop', widthPx: null, heightPx: null, icon: 'desktop' },
+  { id: 'tablet', label: 'Tablet', widthPx: 768, heightPx: 1024, icon: 'tablet' },
+  { id: 'mobile', label: 'Mobile', widthPx: 390, heightPx: 844, icon: 'mobile' },
 ];
 
 export function LivePreviewPane({
@@ -42,7 +48,7 @@ export function LivePreviewPane({
   onDownloadHtml,
 }: LivePreviewPaneProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const [stageWidth, setStageWidth] = useState(560);
+  const [stageSize, setStageSize] = useState({ width: 560, height: 520 });
 
   useEffect(() => {
     const el = stageRef.current;
@@ -51,28 +57,33 @@ export function LivePreviewPane({
     let rafId: number | null = null;
     let disposed = false;
 
-    const commitWidth = () => {
+    const commitSize = () => {
       if (disposed) return;
-      const measured = el.getBoundingClientRect().width;
-      if (!Number.isFinite(measured) || measured <= 0) return;
-      const rounded = Math.round(measured);
-      setStageWidth((prev) => (Math.abs(prev - rounded) >= 1 ? rounded : prev));
+      const rect = el.getBoundingClientRect();
+      if (!Number.isFinite(rect.width) || rect.width <= 0) return;
+      const nextWidth = Math.round(rect.width);
+      const nextHeight = Number.isFinite(rect.height) && rect.height > 0 ? Math.round(rect.height) : 520;
+      setStageSize((prev) =>
+        Math.abs(prev.width - nextWidth) >= 1 || Math.abs(prev.height - nextHeight) >= 1
+          ? { width: nextWidth, height: nextHeight }
+          : prev,
+      );
     };
 
     const scheduleMeasure = () => {
       if (disposed) return;
       if (typeof requestAnimationFrame !== 'function') {
-        commitWidth();
+        commitSize();
         return;
       }
       if (rafId !== null) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
-        commitWidth();
+        commitSize();
       });
     };
 
-    commitWidth();
+    commitSize();
     if (typeof ResizeObserver === 'undefined') {
       window.addEventListener('resize', scheduleMeasure);
       return () => {
@@ -104,10 +115,13 @@ export function LivePreviewPane({
   const currentPreset =
     PREVIEW_BREAKPOINTS.find((preset) => preset.id === breakpoint) ?? PREVIEW_BREAKPOINTS[0];
 
-  const targetViewportWidth = currentPreset.widthPx ?? Math.max(320, currentPage?.document.width ?? 1440);
-  const targetViewportHeight = Math.max(600, currentPage?.document.height ?? 900);
-  const availableWidth = Math.max(260, stageWidth - 28);
-  const scale = Math.min(1, availableWidth / targetViewportWidth);
+  const docWidth = Math.max(320, Math.round(currentPage?.document.width ?? 1440));
+  const docHeight = Math.max(400, Math.round(currentPage?.document.height ?? 900));
+  const targetViewportWidth = currentPreset.widthPx ?? docWidth;
+  const targetViewportHeight = currentPreset.heightPx ?? docHeight;
+  const availableWidth = Math.max(260, stageSize.width - 28);
+  const availableHeight = Math.max(260, stageSize.height - 64);
+  const scale = Math.min(1, availableWidth / targetViewportWidth, availableHeight / targetViewportHeight);
   const scaledWidth = Math.round(targetViewportWidth * scale);
   const scaledHeight = Math.round(targetViewportHeight * scale);
   const zoomPercent = Math.round(scale * 100);
@@ -196,7 +210,7 @@ export function LivePreviewPane({
             <span class="live-preview-meta">
               {currentPreset.label}
               {' · '}
-              {targetViewportWidth}px
+              {targetViewportWidth}×{targetViewportHeight}px
               {' · '}
               {zoomPercent}%
               {currentTheme ? ` · ${currentTheme.name}` : ''}
