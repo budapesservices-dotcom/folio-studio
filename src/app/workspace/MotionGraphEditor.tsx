@@ -131,8 +131,8 @@ export function EasingCurveMiniSvg({
         y1={height - 4}
         x2={width - 4}
         y2={4}
-        stroke="#4A5568"
-        stroke-opacity="0.35"
+        stroke="var(--line-strong)"
+        stroke-opacity="0.5"
         stroke-width="1"
         stroke-dasharray="2 2"
       />
@@ -438,16 +438,16 @@ export function MotionGraphEditor({
                 y={PAD_T}
                 width={PLOT_W}
                 height={Math.max(0, yOneSvg - PAD_T)}
-                fill="#00E5FF"
-                fill-opacity="0.035"
+                fill="var(--accent)"
+                fill-opacity="0.045"
               />
               <rect
                 x={PAD_L}
                 y={yZeroSvg}
                 width={PLOT_W}
                 height={Math.max(0, PAD_T + PLOT_H - yZeroSvg)}
-                fill="#00E5FF"
-                fill-opacity="0.035"
+                fill="var(--accent)"
+                fill-opacity="0.045"
               />
 
               {/* Vertical time grid (0.25, 0.5, 0.75) */}
@@ -458,8 +458,8 @@ export function MotionGraphEditor({
                   y1={PAD_T}
                   x2={toSvgX(gx)}
                   y2={PAD_T + PLOT_H}
-                  stroke="#4A5568"
-                  stroke-opacity="0.3"
+                  stroke="var(--line-strong)"
+                  stroke-opacity="0.35"
                   stroke-width="1"
                 />
               ))}
@@ -472,8 +472,8 @@ export function MotionGraphEditor({
                   y1={toSvgY(gy)}
                   x2={PAD_L + PLOT_W}
                   y2={toSvgY(gy)}
-                  stroke="#4A5568"
-                  stroke-opacity={gy === 0.5 ? '0.28' : '0.65'}
+                  stroke="var(--line-strong)"
+                  stroke-opacity={gy === 0.5 ? '0.32' : '0.75'}
                   stroke-dasharray={gy === 0.5 ? '3 3' : undefined}
                   stroke-width="1"
                 />
@@ -486,8 +486,8 @@ export function MotionGraphEditor({
                 width={PLOT_W}
                 height={yZeroSvg - yOneSvg}
                 fill="none"
-                stroke="#4A5568"
-                stroke-opacity="0.6"
+                stroke="var(--line-strong)"
+                stroke-opacity="0.7"
                 stroke-width="1"
               />
 
@@ -497,8 +497,8 @@ export function MotionGraphEditor({
                 y1={yZeroSvg}
                 x2={xOneSvg}
                 y2={yOneSvg}
-                stroke="#4A5568"
-                stroke-opacity="0.35"
+                stroke="var(--line-strong)"
+                stroke-opacity="0.45"
                 stroke-dasharray="4 4"
                 stroke-width="1"
               />
@@ -510,22 +510,12 @@ export function MotionGraphEditor({
               <text x={toSvgX(0.5)} y={SVG_H - 6} text-anchor="middle" class="mge-axis-label">50%</text>
               <text x={xOneSvg} y={SVG_H - 6} text-anchor="middle" class="mge-axis-label">100%</text>
 
-              {/* Soft glow under active curve */}
+              {/* Main precision curve */}
               <path
                 d={curvePath}
                 fill="none"
-                stroke="#00E5FF"
-                stroke-opacity="0.22"
-                stroke-width="6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-              {/* Main #00E5FF curve */}
-              <path
-                d={curvePath}
-                fill="none"
-                stroke="#00E5FF"
-                stroke-width="2.2"
+                stroke="var(--accent)"
+                stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"
               />
@@ -535,14 +525,14 @@ export function MotionGraphEditor({
                 cx={toSvgX(previewProgress)}
                 cy={toSvgY(evaluateEasing(value, previewProgress))}
                 r="3.5"
-                fill="#FFFFFF"
-                stroke="#00E5FF"
-                stroke-width="1.5"
+                fill="var(--panel)"
+                stroke="var(--accent)"
+                stroke-width="1.8"
               />
 
               {/* Start (0,0) and End (1,1) anchor points */}
-              <circle cx={xZeroSvg} cy={yZeroSvg} r="4" fill="#12161A" stroke="#E2E8F0" stroke-width="1.8" />
-              <circle cx={xOneSvg} cy={yOneSvg} r="4" fill="#12161A" stroke="#E2E8F0" stroke-width="1.8" />
+              <circle cx={xZeroSvg} cy={yZeroSvg} r="3.8" fill="var(--panel)" stroke="var(--text-primary)" stroke-width="1.6" />
+              <circle cx={xOneSvg} cy={yOneSvg} r="3.8" fill="var(--panel)" stroke="var(--text-primary)" stroke-width="1.6" />
 
               {/* Cubic Bezier handles */}
               {editMode === 'cubic-bezier' && (
@@ -552,8 +542,8 @@ export function MotionGraphEditor({
                     y1={yZeroSvg}
                     x2={toSvgX(x1)}
                     y2={toSvgY(y1)}
-                    stroke="#00E5FF"
-                    stroke-opacity="0.7"
+                    stroke="var(--accent)"
+                    stroke-opacity="0.72"
                     stroke-dasharray="3 2"
                     stroke-width="1.2"
                   />
@@ -562,8 +552,8 @@ export function MotionGraphEditor({
                     y1={yOneSvg}
                     x2={toSvgX(x2)}
                     y2={toSvgY(y2)}
-                    stroke="#A855F7"
-                    stroke-opacity="0.75"
+                    stroke="var(--studio-amber)"
+                    stroke-opacity="0.78"
                     stroke-dasharray="3 2"
                     stroke-width="1.2"
                   />

@@ -192,7 +192,7 @@ export function GlobalToolbar({
       document.documentElement.dataset.studioTheme = nextTheme;
       const themeMeta = document.querySelector('meta[name="theme-color"]');
       if (themeMeta) {
-        themeMeta.setAttribute('content', nextTheme === 'light' ? '#f4f6fa' : '#0b0d12');
+        themeMeta.setAttribute('content', nextTheme === 'light' ? '#f2f3f5' : '#141518');
       }
     }
     try {
@@ -783,7 +783,7 @@ export function GlobalToolbar({
             <button
               class={`global-panel-toggle studio-theme-toggle ${studioTheme === 'light' ? 'active' : ''}`}
               type="button"
-              title={studioTheme === 'dark' ? 'Switch to Daylight Atelier (Light) theme' : 'Switch to Obsidian Studio (Dark) theme'}
+              title={studioTheme === 'dark' ? 'Switch to Light Workstation theme' : 'Switch to Dark Graphite theme'}
               aria-label={studioTheme === 'dark' ? 'Switch to Light theme' : 'Switch to Dark theme'}
               aria-pressed={studioTheme === 'light'}
               onClick={handleToggleStudioTheme}
@@ -791,8 +791,8 @@ export function GlobalToolbar({
                 onUpdateToolbarHint(
                   'STUDIO THEME',
                   studioTheme === 'dark'
-                    ? 'Switch workspace chrome to Daylight Atelier light mode.'
-                    : 'Switch workspace chrome to Obsidian Studio dark mode.',
+                    ? 'Switch workspace chrome to Light Workstation mode.'
+                    : 'Switch workspace chrome to Dark Graphite mode.',
                 )
               }
             >

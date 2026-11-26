@@ -8,50 +8,53 @@
 }
 .canvas-selection-contour {
   fill: none;
-  stroke: #00e5ff;
-  stroke-width: 1.8;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.75;
   stroke-dasharray: 5 3;
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 .canvas-selection-contour.is-draw-inside {
-  stroke: #00e5ff;
+  stroke: var(--accent, #4c8dff);
   stroke-width: 2;
   stroke-dasharray: 6 3;
 }
 .canvas-selection-contour.is-draw-outside {
-  stroke: #f59e0b;
+  stroke: var(--studio-amber, #e09834);
   stroke-width: 2;
   stroke-dasharray: 6 3;
 }
 .canvas-selection-outline {
   fill: none;
-  stroke: rgba(0, 229, 255, 0.72);
+  stroke: var(--accent, #4c8dff);
+  stroke-opacity: 0.78;
   stroke-width: 1.25;
   stroke-dasharray: 6 4;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 .canvas-selection-outline.is-scale {
-  stroke: #00e5ff;
+  stroke: var(--accent, #4c8dff);
+  stroke-opacity: 1;
   stroke-dasharray: 4 3;
 }
 .artboard[data-workspace="component"] .canvas-selection-outline {
-  stroke: rgba(0, 229, 255, 0.78);
+  stroke: var(--studio-amber, #e09834);
+  stroke-opacity: 0.85;
 }
 .canvas-resize-handle {
-  fill: #12161a;
-  stroke: #00e5ff;
-  stroke-width: 1.85;
+  fill: #ffffff;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.75;
   vector-effect: non-scaling-stroke;
   pointer-events: all;
 }
 .canvas-resize-handle.is-scale {
-  stroke: #00e5ff;
+  stroke: var(--accent, #4c8dff);
 }
 .artboard[data-workspace="component"] .canvas-resize-handle {
-  stroke: #00e5ff;
+  stroke: var(--studio-amber, #e09834);
 }
 .canvas-rotate-zone {
   fill: transparent;
@@ -59,44 +62,44 @@
   cursor: alias;
 }
 .canvas-guide {
-  stroke: #a494ff;
-  stroke-width: 1.5;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.35;
   stroke-dasharray: 5 4;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 .artboard[data-workspace="component"] .canvas-guide {
-  stroke: #f0ad62;
+  stroke: var(--studio-amber, #e09834);
 }
 .alignment-tools {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   margin-left: auto;
   margin-right: 10px;
-  padding: 3px;
-  border: 1px solid #303746;
-  border-radius: 7px;
-  background: #131821;
+  padding: 2px;
+  border: 1px solid var(--control-border, #343842);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--control-bg, #15161a);
 }
 .alignment-tools button {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 25px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 4px;
-  color: #a7afbe;
+  border-radius: var(--radius-xs, 3px);
+  color: var(--text-secondary, #9ba1ae);
   background: transparent;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1;
   cursor: pointer;
 }
 .alignment-tools button:hover {
-  border-color: #514976;
-  color: #f0edff;
-  background: #302b4b;
+  border-color: var(--accent-border, rgba(76, 141, 255, 0.36));
+  color: var(--accent-bright, #74a8ff);
+  background: var(--accent-soft, rgba(76, 141, 255, 0.14));
 }
 @media (max-width: 1060px) {
   .alignment-tools {
@@ -126,15 +129,15 @@
 }
 
 .canvas-marquee {
-  fill: rgba(0, 229, 255, 0.1);
-  stroke: #00e5ff;
+  fill: rgba(76, 141, 255, 0.11);
+  stroke: var(--accent, #4c8dff);
   stroke-width: 1.25;
   stroke-dasharray: 5 3;
   vector-effect: non-scaling-stroke;
 }
 .artboard[data-workspace="component"] .canvas-marquee {
-  fill: rgba(0, 229, 255, 0.1);
-  stroke: #00e5ff;
+  fill: rgba(224, 152, 52, 0.12);
+  stroke: var(--studio-amber, #e09834);
 }
 
 /* Selection handles communicate the active transform before dragging. */
@@ -178,8 +181,8 @@
 }
 
 .canvas-lasso {
-  fill: rgba(169, 159, 255, 0.08);
-  stroke: #b2a7ff;
+  fill: rgba(76, 141, 255, 0.08);
+  stroke: var(--accent, #4c8dff);
   stroke-width: 1.5;
   stroke-dasharray: 5 3;
   stroke-linecap: round;
@@ -190,13 +193,13 @@
 /* Draw preview & HUD badges */
 .canvas-draw-preview-box {
   fill: none;
-  stroke: #8b7cf6;
+  stroke: var(--accent, #4c8dff);
   stroke-width: 1.25;
   stroke-dasharray: 4 3;
   vector-effect: non-scaling-stroke;
 }
 .artboard[data-workspace="component"] .canvas-draw-preview-box {
-  stroke: #e59a4c;
+  stroke: var(--studio-amber, #e09834);
 }
 
 .canvas-hud-badge rect {
@@ -270,99 +273,100 @@
   stroke-width: 3;
 }
 .canvas-al-reorder-container {
-  fill: rgba(0, 229, 255, 0.04);
-  stroke: rgba(0, 229, 255, 0.55);
+  fill: rgba(76, 141, 255, 0.05);
+  stroke: var(--accent, #4c8dff);
+  stroke-opacity: 0.6;
   stroke-width: 1.25;
   stroke-dasharray: 5 3;
   vector-effect: non-scaling-stroke;
 }
 .canvas-al-reorder-line {
-  stroke: #00e5ff;
-  stroke-width: 2.5;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 2.25;
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
 }
 .canvas-al-reorder-cap {
-  fill: #0f172a;
-  stroke: #00e5ff;
+  fill: #18191d;
+  stroke: var(--accent, #4c8dff);
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
 }
 
-/* Illustrator-grade Vector Anchor & Bezier Handle Overlays */
+/* Precision Vector Anchor & Bezier Handle Overlays */
 .canvas-vector-wireframe {
   fill: none;
-  stroke: #6366f1;
+  stroke: var(--accent, #4c8dff);
   stroke-width: 1.35;
   vector-effect: non-scaling-stroke;
 }
 .artboard[data-workspace="component"] .canvas-vector-wireframe {
-  stroke: #e59a4c;
+  stroke: var(--studio-amber, #e09834);
 }
 .canvas-bezier-tangent {
-  stroke: #9ca7be;
+  stroke: #8a93a6;
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 .canvas-bezier-handle {
-  fill: #121620;
-  stroke: #38bdf8;
+  fill: #18191d;
+  stroke: var(--accent-bright, #74a8ff);
   stroke-width: 1.75;
   cursor: pointer;
   vector-effect: non-scaling-stroke;
 }
 .artboard[data-workspace="component"] .canvas-bezier-handle {
-  stroke: #f6b76c;
+  stroke: var(--studio-amber-bright, #f0b254);
 }
 .canvas-vector-anchor {
   fill: #ffffff;
-  stroke: #6366f1;
+  stroke: var(--accent, #4c8dff);
   stroke-width: 1.75;
   cursor: pointer;
   vector-effect: non-scaling-stroke;
 }
 .artboard[data-workspace="component"] .canvas-vector-anchor {
-  stroke: #e59a4c;
+  stroke: var(--studio-amber, #e09834);
 }
 .canvas-vector-anchor.is-active,
 .canvas-vector-anchor.is-origin {
-  fill: #8b7cf6;
+  fill: var(--accent, #4c8dff);
   stroke: #ffffff;
 }
 .artboard[data-workspace="component"] .canvas-vector-anchor.is-active,
 .artboard[data-workspace="component"] .canvas-vector-anchor.is-origin {
-  fill: #e59a4c;
+  fill: var(--studio-amber, #e09834);
 }
 
 /* Pen & Curvature live draft */
 .canvas-pen-draft-path {
   fill: none;
-  stroke: #8b7cf6;
-  stroke-width: 2;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.85;
   vector-effect: non-scaling-stroke;
 }
 .artboard[data-workspace="component"] .canvas-pen-draft-path {
-  stroke: #e59a4c;
+  stroke: var(--studio-amber, #e09834);
 }
 .canvas-pen-rubberband {
   fill: none;
-  stroke: #a5b4fc;
+  stroke: var(--accent-bright, #74a8ff);
   stroke-width: 1.25;
   stroke-dasharray: 4 3;
   vector-effect: non-scaling-stroke;
 }
 .artboard[data-workspace="component"] .canvas-pen-rubberband {
-  stroke: #f4b975;
+  stroke: var(--studio-amber-bright, #f0b254);
 }
 .canvas-pen-close-ring {
-  fill: rgba(139, 124, 246, 0.16);
-  stroke: #8b7cf6;
+  fill: rgba(76, 141, 255, 0.16);
+  stroke: var(--accent, #4c8dff);
   stroke-width: 1.75;
   vector-effect: non-scaling-stroke;
 }
 .artboard[data-workspace="component"] .canvas-pen-close-ring {
-  fill: rgba(229, 154, 76, 0.18);
-  stroke: #e59a4c;
+  fill: rgba(224, 152, 52, 0.18);
+  stroke: var(--studio-amber, #e09834);
 }
 
 /* Pencil & Smooth freehand preview */
@@ -374,10 +378,10 @@
   vector-effect: non-scaling-stroke;
 }
 .canvas-freehand-preview.is-pencil {
-  stroke: #8b7cf6;
+  stroke: var(--accent, #4c8dff);
 }
 .artboard[data-workspace="component"] .canvas-freehand-preview.is-pencil {
-  stroke: #e59a4c;
+  stroke: var(--studio-amber, #e09834);
 }
 .canvas-freehand-preview.is-smooth {
   stroke: #f59e0b;
@@ -433,13 +437,13 @@
   height: 100%;
   margin: 0;
   padding: 2px 4px;
-  border: 1.5px solid #8b7cf6;
+  border: 1.5px solid var(--accent, #4c8dff);
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.94);
   outline: none;
   resize: none;
   overflow: hidden;
-  box-shadow: 0 4px 16px rgba(10, 14, 24, 0.25);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
 }
 
 /* On-Canvas Smart Handles (Corner Radius & Star Inner Ratio) */
@@ -452,22 +456,22 @@
 }
 .canvas-smart-handle-ring {
   fill: #ffffff;
-  stroke: #8b7cf6;
+  stroke: var(--accent, #4c8dff);
   stroke-width: 1.75;
   vector-effect: non-scaling-stroke;
 }
 .canvas-smart-handle-dot {
-  fill: #8b7cf6;
+  fill: var(--accent, #4c8dff);
 }
 .artboard[data-workspace="component"] .canvas-smart-handle-ring {
-  stroke: #e59a4c;
+  stroke: var(--studio-amber, #e09834);
 }
 .artboard[data-workspace="component"] .canvas-smart-handle-dot {
-  fill: #e59a4c;
+  fill: var(--studio-amber, #e09834);
 }
 .canvas-smart-handle-diamond {
   fill: #ffffff;
-  stroke: #e59a4c;
+  stroke: var(--studio-amber, #e09834);
   stroke-width: 1.75;
   vector-effect: non-scaling-stroke;
 }
@@ -693,9 +697,9 @@
 
 /* Image file drag-and-drop highlight on canvas viewport */
 .canvas-scroll-area.is-file-drop-active {
-  outline: 2px dashed #8b7cf6;
+  outline: 2px dashed var(--accent, #4c8dff);
   outline-offset: -6px;
-  background-color: rgba(139, 124, 246, 0.08);
+  background-color: var(--accent-soft, rgba(76, 141, 255, 0.12));
 }
 
 /* Hybrid GPU Viewport (WebGL2/WebGPU SDF Instancing + 512x512 LRU Tile Cache) */
@@ -710,12 +714,12 @@
   pointer-events: none;
   z-index: 0;
   overflow: hidden;
-  background-color: #1a202c;
+  background-color: var(--checker-b, #1a1c21);
   background-image:
-    linear-gradient(45deg, #212836 25%, transparent 25%),
-    linear-gradient(-45deg, #212836 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #212836 75%),
-    linear-gradient(-45deg, transparent 75%, #212836 75%);
+    linear-gradient(45deg, var(--checker-a, #24272e) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker-a, #24272e) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--checker-a, #24272e) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--checker-a, #24272e) 75%);
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
@@ -749,18 +753,18 @@
   gap: 2px;
   padding: 2px;
   margin-left: 6px;
-  border: 1px solid #2f3646;
-  border-radius: 6px;
-  background: #131822;
+  border: 1px solid var(--control-border, #343842);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--control-bg, #15161a);
 }
 
 .renderer-mode-btn {
   height: 20px;
   padding: 0 6px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-xs, 3px);
   background: transparent;
-  color: #8f9ab0;
+  color: var(--text-secondary, #9ba1ae);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.2px;
@@ -769,23 +773,23 @@
 }
 
 .renderer-mode-btn:hover {
-  color: #e4e8f3;
-  background: rgba(139, 124, 246, 0.14);
+  color: var(--text-primary, #eef0f4);
+  background: var(--surface-hover, #262930);
 }
 
 .renderer-mode-btn.is-active {
-  color: #eef0ff;
-  background: #302b4d;
-  border-color: #6c5ce7;
+  color: var(--accent-bright, #74a8ff);
+  background: var(--accent-soft, rgba(76, 141, 255, 0.14));
+  border-color: var(--accent-border, rgba(76, 141, 255, 0.36));
 }
 
 .renderer-mode-telemetry {
   margin-left: 4px;
   padding-right: 4px;
-  color: #6ee7b7;
-  font-size: 9.5px;
+  color: var(--status-ok, #2fb37c);
+  font-size: 10px;
   font-weight: 600;
-  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-family: var(--font-mono, ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -794,33 +798,31 @@
 @keyframes canvasContextMenuIn {
   from {
     opacity: 0;
-    transform: scale(0.97) translateY(-2px);
+    transform: translateY(-2px);
   }
   to {
     opacity: 1;
-    transform: scale(1) translateY(0);
+    transform: translateY(0);
   }
 }
 
 .canvas-context-menu {
   position: fixed;
   z-index: 1600;
-  min-width: 236px;
-  max-width: 272px;
-  padding: 6px;
-  border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.14));
-  border-radius: 10px;
-  background: var(--panel-elevated, #171c27);
-  box-shadow: var(--shadow-popover, 0 16px 40px rgba(0, 0, 0, 0.55));
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  color: var(--text, #f1f5f9);
+  min-width: 232px;
+  max-width: 268px;
+  padding: 4px;
+  border: 1px solid var(--line-strong, #3b3f4a);
+  border-radius: var(--radius-md, 6px);
+  background: var(--panel-elevated, #24272d);
+  box-shadow: var(--shadow-popover, 0 12px 28px rgba(0, 0, 0, 0.45));
+  color: var(--text, #d6dae2);
   font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
   display: flex;
   flex-direction: column;
   gap: 1px;
   user-select: none;
-  animation: canvasContextMenuIn 110ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: canvasContextMenuIn 90ms ease-out;
 }
 
 .canvas-context-menu-header {
