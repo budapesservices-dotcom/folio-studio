@@ -1,27 +1,6 @@
-import type { JSX, RefObject } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import type {
-  AnimatableProperty,
-  AssetReference,
-  BreakpointId,
-  ComponentDefinition,
-  ComponentSlotDefinition,
-  ComponentVariantAxis,
-  DesignNode,
-  DesignTokenCollection,
-  EllipseNode,
-  FolioProject,
-  FrameNode,
-  InteractiveStateId,
-  LayoutMode,
-  PathNode,
-  RectNode,
-  TextNode,
-} from '../core/document/types';
-import { PANEL_RESIZE_CONSTRAINTS, type ResizablePanelId } from './panelResize';
-import type { EditorTarget } from './editorContext';
-import type { CanvasToolId, ShapeColorBlendMode } from '../core/tools/operationContract';
-import type { StudioVectorActions } from './workspace/inspectorVectorHelpers';
+import type { DesignNode, InteractiveStateId } from '../core/document/types';
+import { PANEL_RESIZE_CONSTRAINTS } from './panelResize';
 import {
   InspectorAccordionSection,
   InspectorAccordionToolbar,
@@ -47,114 +26,23 @@ import {
   InspectorEmptyStateView,
   InspectorMultiSelectionView,
 } from './workspace/InspectorSelectionStates';
-import { StudioContextMenu, type StudioContextMenuEntry } from './workspace/StudioContextMenu';
-import type {
-  QuickInteractionConfig,
-  QuickInteractionEntry,
-  QuickInteractionScopeContext,
-} from './workspace/quickInteractions';
+import { StudioContextMenu } from './workspace/StudioContextMenu';
+import {
+  buildInspectorContextEntries,
+  getDefaultInspectorOpenSections,
+  resolveInspectorLayoutBadge,
+  type InspectorAccordionSectionId,
+  type InspectorOverrideTargets,
+  type InspectorPanelProps,
+} from './workspace/inspectorPanelTypes';
 
-export { INSPECTOR_FONT_FAMILIES };
-
-export interface InspectorOverrideTargets {
-  fillNode?: FrameNode | RectNode | EllipseNode | PathNode | TextNode | null;
-  textNode?: TextNode | null;
-}
-
-export interface InspectorPanelProps {
-  visible: boolean;
-  width: number;
-  isResizing: boolean;
-  resizeHandleRef: RefObject<HTMLDivElement>;
-  activeEditorId: EditorTarget;
-  selectedNode: DesignNode | null;
-  selectedNodes: readonly DesignNode[];
-  selectedCount: number;
-  canRemoveFromCanvas: boolean;
-  selectedInstanceComponent: ComponentDefinition | null;
-  editingMasterComponent?: ComponentDefinition | null;
-  instanceOverrideTargets: InspectorOverrideTargets | null;
-  activeBreakpoint: BreakpointId;
-  designTokens: DesignTokenCollection;
-  assets?: readonly AssetReference[];
-  defaultFillColor: string;
-  renderIcon: (name: 'trash' | 'layers' | 'cursor') => JSX.Element;
-  onStartResize: (panel: ResizablePanelId, event: JSX.TargetedMouseEvent<HTMLDivElement>) => void;
-  onResizeDoubleClick: (panel: ResizablePanelId, event: JSX.TargetedMouseEvent<HTMLDivElement>) => void;
-  onResizeKeyDown: (panel: ResizablePanelId, event: JSX.TargetedKeyboardEvent<HTMLDivElement>) => void;
-  onCommitEdit: () => void;
-  onHoverHint: () => void;
-  onRemoveFromCanvas: (nodeId: string) => void;
-  onUpdateSelected: (patch: Partial<DesignNode>, coalesceKey?: string) => void;
-  onUpdateSelectedStyle: (patch: Record<string, string | number>, coalesceKey?: string) => void;
-  onTogglePropertyKeyframe?: (nodeId: string, property: AnimatableProperty) => void;
-  isPropertyKeyedAtPlayhead?: (nodeId: string, property: AnimatableProperty) => boolean;
-  onApplyAutoLayout: (containerId: string) => void;
-  onConvertFrameLayoutMode?: (containerId: string, mode: LayoutMode) => void;
-  onSwitchBreakpoint?: (bp: BreakpointId) => void;
-  onUpdateInstanceOverride: (childNodeId: string, patch: { fill?: string; text?: string }) => void;
-  onUpdateInstanceVariant: (axisId: string, optionId: string) => void;
-  onUpdateInstanceSlot: (slotId: string, patch: { text?: string; visible?: boolean }) => void;
-  onUpdateMasterContract: (
-    component: ComponentDefinition,
-    patch: {
-      variants?: ComponentVariantAxis[];
-      slots?: ComponentSlotDefinition[];
-      nodeLogicEnabled?: boolean;
-    },
-  ) => void;
-  onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
-  onResetInstanceOverrides: () => void;
-  onDetachInstance: () => void;
-  onConvertToPath: (target: EditorTarget) => void;
-  onTogglePathClosed: (target: EditorTarget) => void;
-  onSimplifyPath: (target: EditorTarget) => void;
-  onChooseTool: (toolId: CanvasToolId, target: EditorTarget) => void;
-  onQuickAdd: (type: 'rect' | 'text') => void;
-  onInsertImageFiles?: (files: readonly File[]) => void;
-  onDuplicateSelection: () => void;
-  onCopySelection: () => void;
-  project?: FolioProject;
-  activePageId?: string;
-  scopedNodes?: readonly DesignNode[];
-  onCreateQuickInteraction?: (
-    scopeContext: QuickInteractionScopeContext,
-    config: QuickInteractionConfig,
-  ) => { entryId: string } | null;
-  onUpdateQuickInteraction?: (
-    entry: QuickInteractionEntry,
-    layerId: string,
-    nextConfig: QuickInteractionConfig,
-  ) => void;
-  onDeleteQuickInteraction?: (entry: QuickInteractionEntry) => void;
-  onOpenInteractionInNodeGraph?: (graphId: string, nodeIds: readonly string[]) => void;
-  colorBlendMode?: ShapeColorBlendMode;
-  onChangeColorBlendMode?: (mode: ShapeColorBlendMode) => void;
-  studioActions?: StudioVectorActions;
-}
-
-export type InspectorAccordionSectionId =
-  | 'layout-frame'
-  | 'size-position'
-  | 'appearance'
-  | 'text'
-  | 'modern-effects'
-  | 'responsive-semantic'
-  | 'component-logic';
-
-export function getDefaultInspectorOpenSections(
-  nodeType: DesignNode['type'],
-): Record<InspectorAccordionSectionId, boolean> {
-  return {
-    'size-position': true,
-    appearance: true,
-    text: nodeType === 'text',
-    'layout-frame': nodeType === 'frame' || nodeType === 'group',
-    'modern-effects': false,
-    'responsive-semantic': false,
-    'component-logic': nodeType === 'component-instance',
-  };
-}
+export {
+  INSPECTOR_FONT_FAMILIES,
+  getDefaultInspectorOpenSections,
+  type InspectorAccordionSectionId,
+  type InspectorOverrideTargets,
+  type InspectorPanelProps,
+};
 
 interface InspectorSelectedNodeBodyProps {
   panel: InspectorPanelProps;
@@ -263,10 +151,6 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
     });
   };
 
-  const toggleAllSections = () => {
-    setAllSectionsOpen(!allExpanded);
-  };
-
   const handleUpdateExtendedStyle = (patch: Record<string, unknown>) => {
     const isPrimitiveOnly = Object.values(patch).every(
       (value) => typeof value === 'string' || typeof value === 'number',
@@ -295,108 +179,20 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
   const parentNode = selectedNode.parentId
     ? scopedNodes.find((node) => node.id === selectedNode.parentId) ?? null
     : null;
-  const parentLayout = parentNode?.layout;
   const isPseudoState = activeState !== 'default';
-
-  const layoutBadge =
-    selectedNode.type === 'frame' || selectedNode.type === 'group'
-      ? selectedNode.layout?.mode === 'flex'
-        ? 'STACK'
-        : selectedNode.layout?.mode === 'grid'
-          ? 'GRID'
-          : 'FREE'
-      : parentLayout?.mode === 'grid'
-        ? 'GRID ITEM'
-        : parentLayout?.mode === 'flex'
-          ? 'STACK ITEM'
-          : 'WEB';
-
-  const inspectorContextEntries: StudioContextMenuEntry[] = [
-    { kind: 'header', id: 'hdr-node', label: selectedNode.name, meta: selectedNode.type.toUpperCase() },
-    {
-      kind: 'item',
-      id: 'dup',
-      label: 'Duplicate Layer',
-      shortcut: ['Mod', 'D'],
-      onSelect: onDuplicateSelection,
-    },
-    {
-      kind: 'item',
-      id: 'copy',
-      label: 'Copy Layer',
-      shortcut: ['Mod', 'C'],
-      onSelect: onCopySelection,
-    },
-    { kind: 'divider', id: 'div-1' },
-    {
-      kind: 'item',
-      id: 'toggle-vis',
-      label: selectedNode.visible ? 'Hide Layer' : 'Show Layer',
-      shortcut: ['Mod', 'Shift', 'H'],
-      onSelect: () => {
-        onUpdateSelected({ visible: !selectedNode.visible });
-        onCommitEdit();
-      },
-    },
-    {
-      kind: 'item',
-      id: 'toggle-lock',
-      label: selectedNode.locked ? 'Unlock Layer' : 'Lock Layer',
-      shortcut: ['Mod', 'Shift', 'L'],
-      onSelect: () => {
-        onUpdateSelected({ locked: !selectedNode.locked });
-        onCommitEdit();
-      },
-    },
-    {
-      kind: 'item',
-      id: 'reset-rot',
-      label: 'Reset Rotation (0°)',
-      disabled: Math.abs(selectedNode.rotation) < 0.001,
-      onSelect: () => {
-        onUpdateSelected({ rotation: 0 });
-        onCommitEdit();
-      },
-    },
-    {
-      kind: 'item',
-      id: 'reset-op',
-      label: 'Reset Opacity (100%)',
-      disabled: Math.abs(selectedNode.opacity - 1) < 0.001,
-      onSelect: () => {
-        onUpdateSelected({ opacity: 1 });
-        onCommitEdit();
-      },
-    },
-    { kind: 'divider', id: 'div-2' },
-    {
-      kind: 'item',
-      id: 'expand-all',
-      label: 'Expand All Sections',
-      disabled: allExpanded,
-      onSelect: () => setAllSectionsOpen(true),
-    },
-    {
-      kind: 'item',
-      id: 'collapse-all',
-      label: 'Collapse All Sections',
-      disabled: openCount === 0,
-      onSelect: () => setAllSectionsOpen(false),
-    },
-    ...(canRemoveFromCanvas
-      ? [
-          { kind: 'divider' as const, id: 'div-3' },
-          {
-            kind: 'item' as const,
-            id: 'remove',
-            label: 'Remove from Canvas',
-            shortcut: ['Delete'],
-            tone: 'danger' as const,
-            onSelect: () => onRemoveFromCanvas(selectedNode.id),
-          },
-        ]
-      : []),
-  ];
+  const layoutBadge = resolveInspectorLayoutBadge(selectedNode, parentNode);
+  const inspectorContextEntries = buildInspectorContextEntries({
+    selectedNode,
+    canRemoveFromCanvas,
+    allExpanded,
+    openCount,
+    onDuplicateSelection,
+    onCopySelection,
+    onUpdateSelected,
+    onCommitEdit,
+    onSetAllSectionsOpen: setAllSectionsOpen,
+    onRemoveFromCanvas,
+  });
 
   return (
     <div
@@ -413,7 +209,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
         allExpanded={allExpanded}
         openCount={openCount}
         totalCount={visibleSectionIds.length}
-        onToggleAll={toggleAllSections}
+        onToggleAll={() => setAllSectionsOpen(!allExpanded)}
       />
 
       {/* SECTION 1 — HEADER IDENTITY & COMPACT QUICK ACTIONS */}

@@ -1,6 +1,11 @@
 import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
+import {
+  computePlayheadPercent,
+  computeTimelineScrubMs,
+  resolveTimelineTrackBounds,
+} from './motionTimelineMath';
 import type {
   AnimatableProperty,
   AnimationClip,
@@ -200,6 +205,7 @@ export function MotionTimelinePanel({
   } | null>(null);
 
   const rulerRef = useRef<HTMLDivElement | null>(null);
+  const rulerTrackRef = useRef<HTMLDivElement | null>(null);
   const lanesContainerRef = useRef<HTMLDivElement | null>(null);
   const presetsAnchorRef = useRef<HTMLDivElement | null>(null);
   const presetsMenuRef = useRef<HTMLDivElement | null>(null);
@@ -369,7 +375,7 @@ export function MotionTimelinePanel({
   }, [activeClip, selection, groupedLayers]);
 
   const durationMs = activeClip?.durationMs ?? 1200;
-  const playheadPct = Math.max(0, Math.min(100, (playheadMs / Math.max(1, durationMs)) * 100));
+  const playheadPct = computePlayheadPercent(playheadMs, durationMs);
 
   const tickMarks = useMemo(() => {
     const stepCount = durationMs <= 1200 ? 4 : durationMs <= 2400 ? 6 : 8;
@@ -385,11 +391,19 @@ export function MotionTimelinePanel({
     return marks;
   }, [durationMs]);
 
-  const computeTimeFromClientX = (clientX: number, rect: DOMRect): number => {
-    const inset = 12;
-    const trackWidth = Math.max(1, rect.width - inset * 2);
-    const ratio = Math.max(0, Math.min(1, (clientX - (rect.left + inset)) / trackWidth));
-    return Math.round((ratio * durationMs) / 10) * 10;
+  const computeTimeForElement = (
+    clientX: number,
+    containerEl: HTMLElement,
+    trackEl?: HTMLElement | null,
+  ): number => {
+    const bounds = resolveTimelineTrackBounds(containerEl, trackEl);
+    return computeTimelineScrubMs({
+      clientX,
+      trackLeft: bounds.left,
+      trackWidth: bounds.width,
+      durationMs,
+      snapMs: 10,
+    });
   };
 
   const isLayerGroupExpanded = (targetNodeId: string, trackCount: number): boolean => {
@@ -413,19 +427,27 @@ export function MotionTimelinePanel({
   const handleRulerPointerDown = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     const target = event.currentTarget;
-    target.setPointerCapture?.(event.pointerId);
-    const rect = target.getBoundingClientRect();
-    onSeek(computeTimeFromClientX(event.clientX, rect));
+    try {
+      target.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Synthetic or already-cancelled pointer IDs throw NotFoundError in Chromium.
+    }
+    const seekFromClientX = (clientX: number) => {
+      onSeek(computeTimeForElement(clientX, target, rulerTrackRef.current));
+    };
+    seekFromClientX(event.clientX);
 
     const handleMove = (moveEvent: PointerEvent) => {
-      onSeek(computeTimeFromClientX(moveEvent.clientX, rect));
+      seekFromClientX(moveEvent.clientX);
     };
     const handleUp = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
     };
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
   };
 
   const handleKeyframePointerDown = (
@@ -518,8 +540,8 @@ export function MotionTimelinePanel({
     track: AnimationTrack,
   ) => {
     if (!activeClip) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const clickedMs = computeTimeFromClientX(event.clientX, rect);
+    const laneTrackEl = event.currentTarget.querySelector<HTMLElement>('.mt-lane-track');
+    const clickedMs = computeTimeForElement(event.clientX, event.currentTarget, laneTrackEl);
     const node = nodeById.get(track.targetNodeId);
     const evaluated = evaluateTrackAtTime(track, clickedMs)
       ?? (node ? getDefaultNodePropertyValue(node, track.property) : 0);
@@ -536,8 +558,8 @@ export function MotionTimelinePanel({
     if (!activeClip) return;
     const node = nodeById.get(targetNodeId);
     if (!node) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const clickedMs = computeTimeFromClientX(event.clientX, rect);
+    const laneTrackEl = event.currentTarget.querySelector<HTMLElement>('.mt-lane-track');
+    const clickedMs = computeTimeForElement(event.clientX, event.currentTarget, laneTrackEl);
     const group = groupedLayers.find((g) => g.targetNodeId === targetNodeId);
     let nextClip = activeClip;
     if (group && group.tracks.length > 0) {
@@ -930,6 +952,7 @@ export function MotionTimelinePanel({
   };
 
   const handleDockKeyDown = (event: JSX.TargetedKeyboardEvent<HTMLElement>) => {
+    if (event.defaultPrevented) return;
     const target = event.target as HTMLElement | null;
     if (target?.matches('input, textarea, select')) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -1354,17 +1377,28 @@ export function MotionTimelinePanel({
             onKeyDown={(event) => {
               if (event.key === 'ArrowRight') {
                 event.preventDefault();
-                onSeek(playheadMs + (event.shiftKey ? 100 : 20));
+                event.stopPropagation();
+                onSeek(Math.min(durationMs, playheadMs + (event.shiftKey ? 100 : 20)));
               } else if (event.key === 'ArrowLeft') {
                 event.preventDefault();
-                onSeek(playheadMs - (event.shiftKey ? 100 : 20));
+                event.stopPropagation();
+                onSeek(Math.max(0, playheadMs - (event.shiftKey ? 100 : 20)));
+              } else if (event.key === 'Home') {
+                event.preventDefault();
+                event.stopPropagation();
+                onSeek(0);
+              } else if (event.key === 'End') {
+                event.preventDefault();
+                event.stopPropagation();
+                onSeek(durationMs);
               } else if (event.key === ' ') {
                 event.preventDefault();
+                event.stopPropagation();
                 onTogglePlay();
               }
             }}
           >
-            <div class="mt-ruler-track">
+            <div ref={rulerTrackRef} class="mt-ruler-track">
               {tickMarks.map((tick, idx) => (
                 <div key={tick.ms} class={`mt-ruler-tick ${idx === tickMarks.length - 1 ? 'is-end' : ''}`} style={{ left: `${tick.pct}%` }}>
                   <span>{tick.label}</span>

@@ -1209,6 +1209,47 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
           }
           await new Promise((r) => setTimeout(r, 60));
           const timecodeAfterScrub = document.querySelector('[data-testid="motion-timecode"]')?.textContent?.trim() ?? '';
+          const playheadPctAfterKeyboard = parseFloat(
+            document.querySelector('.mt-playhead-cap')?.style?.left ?? 'NaN',
+          );
+
+          const scrubTrackRatio = async (ratio) => {
+            const trackEl = document.querySelector('.mt-ruler-track');
+            const rect = trackEl.getBoundingClientRect();
+            const clientX = rect.left + rect.width * ratio;
+            const clientY = rect.top + rect.height / 2;
+            ruler.dispatchEvent(new PointerEvent('pointerdown', {
+              bubbles: true,
+              clientX,
+              clientY,
+              pointerId: 7,
+            }));
+            window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 7 }));
+            await new Promise((r) => setTimeout(r, 40));
+            return {
+              timecode: document.querySelector('[data-testid="motion-timecode"]')?.textContent?.trim() ?? '',
+              playheadPct: parseFloat(document.querySelector('.mt-playhead-cap')?.style?.left ?? 'NaN'),
+            };
+          };
+
+          const scrubStart = await scrubTrackRatio(0);
+          const scrubMid = await scrubTrackRatio(0.5);
+          const scrubEnd = await scrubTrackRatio(1);
+
+          // Verify scrub accuracy when ruler has asymmetric/extra padding
+          const prevRulerPadding = ruler.style.padding;
+          ruler.style.padding = '0 40px';
+          await new Promise((r) => setTimeout(r, 30));
+          const scrubPaddedMid = await scrubTrackRatio(0.5);
+          ruler.style.padding = prevRulerPadding;
+
+          // Verify scrub accuracy after timeline dock resizes
+          const prevDockWidth = dock.style.width;
+          dock.style.width = '760px';
+          await new Promise((r) => setTimeout(r, 30));
+          const scrubResizedMid = await scrubTrackRatio(0.5);
+          dock.style.width = prevDockWidth;
+          await new Promise((r) => setTimeout(r, 30));
 
           // Select first keyframe to open inspector strip
           const firstKf = document.querySelector('.mt-keyframe');
@@ -1217,8 +1258,17 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
           await new Promise((r) => setTimeout(r, 40));
           const hasEasingSelect = Boolean(document.querySelector('[aria-label="Keyframe easing curve"]'));
 
-          // Launch Live Preview from Motion Timeline CTA and confirm @keyframes CSS
-          document.querySelector('.mt-cta-btn')?.click();
+          // Launch Live Preview from Motion Timeline More menu and confirm @keyframes CSS
+          const moreBtn = document.querySelector('[data-testid="motion-more-btn"]');
+          moreBtn?.click();
+          const moreMenuDeadline = Date.now() + 2000;
+          while (Date.now() < moreMenuDeadline && !document.querySelector('[data-testid="motion-more-menu"]')) {
+            await new Promise((r) => setTimeout(r, 25));
+          }
+          const previewItem = Array.from(
+            document.querySelectorAll('[data-testid="motion-more-menu"] [role="menuitem"]'),
+          ).find((el) => el.textContent?.includes('Test in Live Preview'));
+          previewItem?.click();
           const previewDeadline = Date.now() + 5000;
           while (Date.now() < previewDeadline && !document.querySelector('.live-preview-iframe')) {
             await new Promise((r) => setTimeout(r, 50));
@@ -1232,6 +1282,12 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
             initialKeyframes,
             clipLabel,
             timecodeAfterScrub,
+            playheadPctAfterKeyboard,
+            scrubStart,
+            scrubMid,
+            scrubEnd,
+            scrubPaddedMid,
+            scrubResizedMid,
             hasEasingSelect,
             hasKeyframesCss: srcdoc.includes('@keyframes folio-kf-'),
             hasReducedMotionGuard: srcdoc.includes('prefers-reduced-motion: reduce'),
@@ -1244,6 +1300,17 @@ describe('Folio Merge Readiness browser QA regressions (WEB-01..WEB-14 + SVG)', 
         expect(motionResult.initialKeyframes).toBeGreaterThanOrEqual(8);
         expect(motionResult.clipLabel).toContain('Hero Entrance');
         expect(motionResult.timecodeAfterScrub).toContain('0.40s');
+        expect(motionResult.playheadPctAfterKeyboard).toBeCloseTo((400 / 1200) * 100, 1);
+        expect(motionResult.scrubStart.timecode).toContain('0.00s');
+        expect(motionResult.scrubStart.playheadPct).toBeCloseTo(0, 1);
+        expect(motionResult.scrubMid.timecode).toContain('0.60s');
+        expect(motionResult.scrubMid.playheadPct).toBeCloseTo(50, 1);
+        expect(motionResult.scrubEnd.timecode).toContain('1.20s');
+        expect(motionResult.scrubEnd.playheadPct).toBeCloseTo(100, 1);
+        expect(motionResult.scrubPaddedMid.timecode).toContain('0.60s');
+        expect(motionResult.scrubPaddedMid.playheadPct).toBeCloseTo(50, 1);
+        expect(motionResult.scrubResizedMid.timecode).toContain('0.60s');
+        expect(motionResult.scrubResizedMid.playheadPct).toBeCloseTo(50, 1);
         expect(motionResult.hasEasingSelect).toBe(true);
         expect(motionResult.hasKeyframesCss).toBe(true);
         expect(motionResult.hasReducedMotionGuard).toBe(true);

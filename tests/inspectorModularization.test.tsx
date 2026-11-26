@@ -1,5 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRef } from 'preact';
+
+const hookMocks = vi.hoisted(() => ({
+  useState: vi.fn((initial: unknown) => [
+    typeof initial === 'function' ? (initial as () => unknown)() : initial,
+    vi.fn(),
+  ]),
+  useEffect: vi.fn(),
+  useLayoutEffect: vi.fn(),
+  useRef: vi.fn((initial: unknown) => ({ current: initial })),
+  useMemo: vi.fn((factory: () => unknown) => factory()),
+  useCallback: vi.fn((fn: unknown) => fn),
+}));
+
+vi.mock('preact/hooks', () => hookMocks);
+
 import { createRectNode, createTextNode } from '../src/core/document/factory';
 import { createDefaultDesignTokens } from '../src/core/document/tokens';
 import type { ComponentDefinition, NodeLayoutChildConfig } from '../src/core/document/types';
@@ -222,6 +237,13 @@ describe('Inspector Modularization — Pure Helpers & Extracted Sections', () =>
       nodeLogicEnabled: true,
     } as unknown as ComponentDefinition;
 
+    hookMocks.useState.mockClear();
+    hookMocks.useEffect.mockClear();
+    hookMocks.useLayoutEffect.mockClear();
+    hookMocks.useRef.mockClear();
+    hookMocks.useMemo.mockClear();
+    hookMocks.useCallback.mockClear();
+
     expect(InspectorPanel(createBaseInspectorProps())).toBeTruthy();
     expect(
       InspectorPanel(
@@ -249,6 +271,14 @@ describe('Inspector Modularization — Pure Helpers & Extracted Sections', () =>
         }),
       ),
     ).toBeTruthy();
+
+    // InspectorPanel root must remain strictly hook-free (zero hook calls across all 4 modes)
+    expect(hookMocks.useState).not.toHaveBeenCalled();
+    expect(hookMocks.useEffect).not.toHaveBeenCalled();
+    expect(hookMocks.useLayoutEffect).not.toHaveBeenCalled();
+    expect(hookMocks.useRef).not.toHaveBeenCalled();
+    expect(hookMocks.useMemo).not.toHaveBeenCalled();
+    expect(hookMocks.useCallback).not.toHaveBeenCalled();
   });
 
   it('keeps InspectorPanel orchestrator concise and enforces Zero-Typing across all extracted modules', () => {

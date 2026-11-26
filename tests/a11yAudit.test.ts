@@ -161,12 +161,13 @@ describe('P1-3 — WCAG 2.1 AA Accessibility & Semantic Audit Engine', () => {
     expect(fixedOnDark).toMatch(/^#[0-9A-F]{6}$/);
     expect(computeContrastRatio(fixedOnDark!, '#1E293B')).toBeGreaterThanOrEqual(4.5);
 
-    // Apply all suggested fixes onto the starter artboard and confirm 100/100 score
+    // Apply all suggested fixes onto the default transparent starter artboard and confirm 100/100 score
     const project = createInitialProject('Starter Fix Check');
     const page = getActivePage(project);
     const before = auditPageAccessibility(project, page);
     const fixableIssues = before.issues.filter((issue) => Boolean(issue.fix));
-    expect(fixableIssues.length).toBeGreaterThanOrEqual(2);
+    expect(fixableIssues.length).toBeGreaterThanOrEqual(1);
+    expect(fixableIssues.some((issue) => issue.code === 'SKIPPED_HEADING_LEVEL')).toBe(true);
 
     page.document.nodes = page.document.nodes.map((node) => {
       let updated = node;
@@ -181,5 +182,29 @@ describe('P1-3 — WCAG 2.1 AA Accessibility & Semantic Audit Engine', () => {
     const after = auditPageAccessibility(project, page);
     expect(after.score).toBe(100);
     expect(after.issues).toHaveLength(0);
+
+    // Also verify a warm light-surface artboard (#F5F2EC) flags BOTH low contrast and skipped heading and auto-fixes to 100/100
+    const warmProject = createInitialProject('Warm Surface Fix Check');
+    const warmPage = getActivePage(warmProject);
+    warmPage.document.background = '#F5F2EC';
+    const warmBefore = auditPageAccessibility(warmProject, warmPage);
+    const warmFixable = warmBefore.issues.filter((issue) => Boolean(issue.fix));
+    expect(warmFixable.length).toBeGreaterThanOrEqual(2);
+    expect(warmFixable.some((issue) => issue.code === 'CONTRAST_TOO_LOW')).toBe(true);
+    expect(warmFixable.some((issue) => issue.code === 'SKIPPED_HEADING_LEVEL')).toBe(true);
+
+    warmPage.document.nodes = warmPage.document.nodes.map((node) => {
+      let updated = node;
+      for (const issue of warmFixable) {
+        if (issue.fix && issue.fix.nodeId === node.id) {
+          updated = applyA11yQuickFixToNode(updated, issue.fix);
+        }
+      }
+      return updated;
+    });
+
+    const warmAfter = auditPageAccessibility(warmProject, warmPage);
+    expect(warmAfter.score).toBe(100);
+    expect(warmAfter.issues).toHaveLength(0);
   });
 });

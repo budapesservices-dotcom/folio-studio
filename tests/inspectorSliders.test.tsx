@@ -87,18 +87,25 @@ describe('Inspector Zero-Typing Sliders (Preact compat drag regression)', () => 
     expect(inputs).toHaveLength(1);
     const sliderProps = inputs[0].props;
 
-    // Critical regression guard: NEVER bind onChange alongside onInput on <input type="range">
+    // Critical regression guard: NEVER bind onChange alongside onInput on <input type="range">.
+    // Note: importing preact/compat installs Preact's VNode normalizer which maps JSX `onInput` -> `oninput`
+    // and `onBlur` -> `onfocusout` (and would synthesize `oninputCapture` if `onChange` were also bound).
+    const inputHandler = (sliderProps.onInput ?? sliderProps.oninput) as
+      | ((e: { currentTarget: { value: string } }) => void)
+      | undefined;
+    const blurHandler = sliderProps.onBlur ?? sliderProps.onfocusout;
+
     expect(sliderProps.onChange).toBeUndefined();
-    expect(typeof sliderProps.onInput).toBe('function');
+    expect(sliderProps.oninputCapture).toBeUndefined();
+    expect(typeof inputHandler).toBe('function');
     expect(typeof sliderProps.onPointerUp).toBe('function');
     expect(typeof sliderProps.onKeyUp).toBe('function');
-    expect(typeof sliderProps.onBlur).toBe('function');
+    expect(typeof blurHandler).toBe('function');
     expect((sliderProps.style as Record<string, string>)['--slider-pct']).toBeDefined();
 
-    const fireInput = sliderProps.onInput as (e: { currentTarget: { value: string } }) => void;
-    fireInput({ currentTarget: { value: '350' } });
-    fireInput({ currentTarget: { value: '480' } });
-    fireInput({ currentTarget: { value: '620' } });
+    inputHandler!({ currentTarget: { value: '350' } });
+    inputHandler!({ currentTarget: { value: '480' } });
+    inputHandler!({ currentTarget: { value: '620' } });
 
     expect(onChange).toHaveBeenNthCalledWith(1, 350);
     expect(onChange).toHaveBeenNthCalledWith(2, 480);
@@ -130,11 +137,16 @@ describe('Inspector Zero-Typing Sliders (Preact compat drag regression)', () => 
     expect(colorInputs).toHaveLength(1);
 
     expect(rangeInputs[0].props.onChange).toBeUndefined();
+    expect(rangeInputs[0].props.oninputCapture).toBeUndefined();
     expect(colorInputs[0].props.onChange).toBeUndefined();
+    expect(colorInputs[0].props.oninputCapture).toBeUndefined();
 
-    const fireAlpha = rangeInputs[0].props.onInput as (e: { currentTarget: { value: string } }) => void;
-    fireAlpha({ currentTarget: { value: '50' } });
-    fireAlpha({ currentTarget: { value: '25' } });
+    const fireAlpha = (rangeInputs[0].props.onInput ?? rangeInputs[0].props.oninput) as
+      | ((e: { currentTarget: { value: string } }) => void)
+      | undefined;
+    expect(typeof fireAlpha).toBe('function');
+    fireAlpha!({ currentTarget: { value: '50' } });
+    fireAlpha!({ currentTarget: { value: '25' } });
     expect(onChangeColor).toHaveBeenCalledTimes(2);
     expect(onChangeColor.mock.calls[0][0]).toContain('rgba(');
     expect(onCommit).not.toHaveBeenCalled();

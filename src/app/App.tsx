@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { lazy, Suspense } from 'preact/compat';
 import type { JSX } from 'preact';
 import { createInitialProject } from '../core/document/factory';
 import { getComponentOverrideTargets } from '../core/document/components';
@@ -15,20 +14,20 @@ import {
   type CanvasToolId,
   type CanvasToolOptions,
 } from '../engines/canvas/tools/types';
-import { documentHasAnyAnimations } from '../engines/animation/svgExport';
 import { InspectorPanel } from './InspectorPanel';
 import type { StudioClipboardPayload } from './nodeClipboard';
 import { createEditorState } from './editorReducer';
 import { createCanonicalEditorStore } from './editorStore';
 import { createComponentCanvasCommandClient, createMainCanvasCommandClient } from './mainCanvasCommandClient';
-import { createToolOperationExecutor } from './toolOperationExecutor';
 import { getActiveEditorContext, type EditorTarget } from './editorContext';
-import type { NewProjectActionMode } from './newProjectFlow';
 import { getWindowZIndex } from './windowManager';
 import { createToolbarHintStore, DEFAULT_TOOLBAR_HINT } from './ToolbarHintBar';
 import { StudioIcon } from './workspace/StudioIcon';
 import { useWorkspaceWindows } from './workspace/useWorkspaceWindows';
 import { useWorkspaceChromeEffects } from './workspace/useWorkspaceChromeEffects';
+import { useWorkspaceChromeActions } from './workspace/useWorkspaceChromeActions';
+import { useWorkspaceDialogs } from './workspace/useWorkspaceDialogs';
+import { useWorkspaceMotionBridge } from './workspace/useWorkspaceMotionBridge';
 import { usePanelResizeController } from './workspace/usePanelResizeController';
 import { useComponentMasterLifecycle } from './workspace/useComponentMasterLifecycle';
 import { useWorkspaceShortcuts } from './workspace/useWorkspaceShortcuts';
@@ -37,7 +36,6 @@ import { useSelectionAndVectorActions } from './workspace/useSelectionAndVectorA
 import { useProjectFileLifecycle } from './workspace/useProjectFileLifecycle';
 import { usePageAndTemplateActions } from './workspace/usePageAndTemplateActions';
 import { useDesignSystemActions } from './workspace/useDesignSystemActions';
-import { useMotionPlayback } from './workspace/useMotionPlayback';
 import { useMediaAndFontsLifecycle } from './workspace/useMediaAndFontsLifecycle';
 import { GlobalToolbar, WorkspacePreferencesRecoveryBanner, type TopMenuId } from './workspace/GlobalToolbar';
 import { buildGlobalToolbarMenuActions } from './workspace/globalMenuActions';
@@ -45,20 +43,15 @@ import { createInteractiveStarterProject } from './workspace/starterProject';
 import type { CodeWorkspaceViewMode } from './workspace/useCodeWorkspace';
 import { ToolRail } from './workspace/ToolRail';
 import { LayersPanel } from './workspace/LayersPanel';
-import { LayerColorPalette, LayerContextMenu } from './workspace/LayerPopovers';
 import { ComponentCanvasWindow, MainCanvasWindow, NodeLogicWindow } from './workspace/CanvasWindows';
 import { PagesRackPanel } from './workspace/PagesRackPanel';
 import { ComponentRackPanel } from './workspace/ComponentRackPanel';
 import { StatusBar } from './workspace/StatusBar';
 import { ComponentDeletionDialog, ProjectHydrationOverlay } from './workspace/ComponentDeletionDialog';
-import { createMotionAutoKeyBridge } from './workspace/motionAutoKeyBridge';
+import { buildCanvasContextMenuExtras, buildWorkspaceToolExecutor } from './workspace/canvasContextMenuExtras';
 import { useQuickInteractionActions } from './workspace/useQuickInteractionActions';
 import { WorkspaceModals } from './workspace/WorkspaceModals';
-
-// Lazy-loaded feature bundles kept outside Folio's critical startup chunk.
-const LazyCodeWorkspace = lazy(() => import('./workspace/LazyCodeWorkspace'));
-const LazyTokensPanel = lazy(() => import('./workspace/TokensPanel').then((m) => ({ default: m.TokensPanel })));
-const LazyMotionTimelinePanel = lazy(() => import('./workspace/MotionTimelinePanel').then((m) => ({ default: m.MotionTimelinePanel })));
+import { WorkspaceStudioOverlays } from './workspace/WorkspaceStudioOverlays';
 
 export function App() {
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
@@ -89,27 +82,17 @@ export function App() {
     page.document.nodes = [];
     return createEditorState(project);
   }, []);
-  const componentStore = useMemo(
-    () => createCanonicalEditorStore(componentInitialState, { workspace: 'component' }),
-    [componentInitialState],
-  );
+  const componentStore = useMemo(() => createCanonicalEditorStore(componentInitialState, { workspace: 'component' }), [componentInitialState]);
   const [componentState, setComponentState] = useState(() => componentStore.getSnapshot().editorState);
   const syncComponentStateFromStore = useCallback(() => {
     const next = componentStore.getSnapshot().editorState;
     setComponentState((current) => (current === next ? current : next));
   }, [componentStore]);
-  useEffect(
-    () => componentStore.subscribe(syncComponentStateFromStore),
-    [componentStore, syncComponentStateFromStore],
-  );
+  useEffect(() => componentStore.subscribe(syncComponentStateFromStore), [componentStore, syncComponentStateFromStore]);
   const componentCommandClient = useMemo(() => createComponentCanvasCommandClient(componentStore, {
     onRejected: (result) => commandRejectNoticeRef.current(result.message),
   }), [componentStore]);
-
-  const getCommandClient = useCallback(
-    (target: EditorTarget) => (target === 'main' ? mainCommandClient : componentCommandClient),
-    [mainCommandClient, componentCommandClient],
-  );
+  const getCommandClient = useCallback((target: EditorTarget) => (target === 'main' ? mainCommandClient : componentCommandClient), [mainCommandClient, componentCommandClient]);
 
   // Workspace windows, layout preferences & view persistence
   const windows = useWorkspaceWindows({ setActiveEditorId, setNotice });
@@ -149,25 +132,11 @@ export function App() {
   const [codeWorkspaceLaunch, setCodeWorkspaceLaunch] = useState<{ viewMode: CodeWorkspaceViewMode; pageId?: string; nonce: number }>({ viewMode: 'code', nonce: 0 });
   const [workspaceTools, setWorkspaceTools] = useState<Record<EditorTarget, CanvasToolId>>({ main: 'select', component: 'select' });
   const [toolOptions, setToolOptions] = useState<CanvasToolOptions>(DEFAULT_CANVAS_TOOL_OPTIONS);
-  const [projectNameEditing, setProjectNameEditing] = useState(false);
-  const [projectNameDraft, setProjectNameDraft] = useState('');
-  const projectNameCancelRef = useRef(false);
   const [componentRackSearch, setComponentRackSearch] = useState('');
   const selectionSourceRef = useRef<'layers' | 'canvas'>('canvas');
   const clipboardRef = useRef<StudioClipboardPayload | null>(null);
-
-  const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
-  const [diagnosticsModalOpen, setDiagnosticsModalOpen] = useState(false);
-  const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
-  const [newProjectBusyMode, setNewProjectBusyMode] = useState<NewProjectActionMode | null>(null);
-  const [newProjectError, setNewProjectError] = useState<string | null>(null);
-  const [shortcutsMountTick, setShortcutsMountTick] = useState(0);
-  const shortcutsModalHostRef = useRef<HTMLDivElement | null>(null);
-  const shortcutsDialogRef = useRef<HTMLElement | null>(null);
-  const shortcutsFocusReturnRef = useRef<HTMLElement | null>(null);
-  const newProjectModalHostRef = useRef<HTMLDivElement | null>(null);
-  const newProjectDialogRef = useRef<HTMLElement | null>(null);
-  const newProjectFocusReturnRef = useRef<HTMLElement | null>(null);
+  const setProjectNameEditingRef = useRef<(editing: boolean) => void>(() => {});
+  const chromeActionsRef = useRef<ReturnType<typeof useWorkspaceChromeActions> | null>(null);
 
   // Derived active documents
   const activeDocument = getActiveDocument(state.project);
@@ -274,59 +243,25 @@ export function App() {
     setNotice,
   });
 
-  const openShortcutsModal = useCallback(() => {
-    shortcutsFocusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const dismissPopoversForDialog = useCallback(() => {
     setOpenMenu(null);
     setToolRackOpen(null);
     layers.setLayerContextMenu(null);
-    setShortcutsModalOpen(true);
   }, [layers.setLayerContextMenu]);
 
-  const closeShortcutsModal = useCallback(() => {
-    setShortcutsModalOpen(false);
-  }, []);
+  const handleAfterNewProjectReset = useCallback(() => {
+    setCodeWorkspaceOpen(false);
+    setMotionExportOpen(false);
+    setProjectNameEditingRef.current(false);
+    windows.openMainCanvas();
+  }, [windows]);
 
-  const handleShortcutsModalReady = useCallback(() => {
-    setShortcutsMountTick((tick) => tick + 1);
-  }, []);
-
-  const openNewProjectDialog = useCallback(() => {
-    if (isHydrating) return;
-    newProjectFocusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setOpenMenu(null);
-    setToolRackOpen(null);
-    layers.setLayerContextMenu(null);
-    setNewProjectError(null);
-    setNewProjectBusyMode(null);
-    setNewProjectDialogOpen(true);
-  }, [isHydrating, layers.setLayerContextMenu]);
-
-  const closeNewProjectDialog = useCallback(() => {
-    if (newProjectBusyMode !== null) return;
-    setNewProjectError(null);
-    setNewProjectDialogOpen(false);
-  }, [newProjectBusyMode]);
-
-  const confirmNewProject = useCallback(async (mode: NewProjectActionMode) => {
-    if (newProjectBusyMode !== null) return;
-    setNewProjectError(null);
-    setNewProjectBusyMode(mode);
-    try {
-      const outcome = await fileLifecycle.createNewProject(mode, isHydrating, () => {
-        setCodeWorkspaceOpen(false);
-        setMotionExportOpen(false);
-        setProjectNameEditing(false);
-        windows.openMainCanvas();
-      });
-      if (outcome.ok) {
-        setNewProjectDialogOpen(false);
-      } else {
-        setNewProjectError(outcome.error);
-      }
-    } finally {
-      setNewProjectBusyMode(null);
-    }
-  }, [fileLifecycle, isHydrating, newProjectBusyMode, windows]);
+  const dialogs = useWorkspaceDialogs({
+    isHydrating,
+    onDismissPopovers: dismissPopoversForDialog,
+    onCreateNewProject: fileLifecycle.createNewProject,
+    onAfterNewProjectReset: handleAfterNewProjectReset,
+  });
 
   useWorkspaceChromeEffects({
     notice,
@@ -339,20 +274,20 @@ export function App() {
     toolRailRef,
     recoverWindow: windows.recoverWindow,
     clampCurrentPanelWidths: panelResize.clampCurrentPanelWidths,
-    shortcutsModalOpen,
-    shortcutsMountTick,
+    shortcutsModalOpen: dialogs.shortcutsModalOpen,
+    shortcutsMountTick: dialogs.shortcutsMountTick,
     componentDeletionDialogOpen: componentMaster.componentDeletionDialogOpen,
     appShellRef,
-    shortcutsModalHostRef,
-    shortcutsDialogRef,
-    shortcutsFocusReturnRef,
-    closeShortcutsModal,
-    newProjectDialogOpen,
-    newProjectBusy: newProjectBusyMode !== null,
-    newProjectModalHostRef,
-    newProjectDialogRef,
-    newProjectFocusReturnRef,
-    closeNewProjectDialog,
+    shortcutsModalHostRef: dialogs.shortcutsModalHostRef,
+    shortcutsDialogRef: dialogs.shortcutsDialogRef,
+    shortcutsFocusReturnRef: dialogs.shortcutsFocusReturnRef,
+    closeShortcutsModal: dialogs.closeShortcutsModal,
+    newProjectDialogOpen: dialogs.newProjectDialogOpen,
+    newProjectBusy: dialogs.newProjectBusyMode !== null,
+    newProjectModalHostRef: dialogs.newProjectModalHostRef,
+    newProjectDialogRef: dialogs.newProjectDialogRef,
+    newProjectFocusReturnRef: dialogs.newProjectFocusReturnRef,
+    closeNewProjectDialog: dialogs.closeNewProjectDialog,
   });
 
   const updateToolbarHint = useCallback((panel: string, description: string, shortcuts: string[] = []) => {
@@ -441,49 +376,20 @@ export function App() {
     }));
   }, []);
 
-  const buildToolExecutor = (workspace: EditorTarget) => {
-    const isMain = workspace === 'main';
-    const commandClient = isMain ? mainCommandClient : componentCommandClient;
-    return createToolOperationExecutor({
-      workspace,
-      commandClient,
-      shell: {
-        isHydrating: () => isHydrating,
-        onSelectionChange: (nodeIds) => {
-          selectionSourceRef.current = 'canvas';
-          commandClient.selectNodes(nodeIds, isMain ? 'Select layers on canvas' : 'Select layers on component canvas');
-          if (isMain && nodeIds.length > 0) windows.setInspectorVisible(true);
-        },
-        onPanChange: isMain ? windows.setMainPan : windows.setComponentCanvasPan,
-        onZoomChange: isMain ? windows.setZoom : windows.setComponentCanvasZoom,
-        onToolChange: (nextTool) => chooseCanvasTool(nextTool, workspace),
-        onNotice: setNotice,
-        onSampledColorOptionChange: applySampledColorOption,
-        onCanvasMutationCommitted: (kind) => {
-          selectionSourceRef.current = 'canvas';
-          if (isMain && kind === 'create') windows.setInspectorVisible(true);
-        },
-      },
-    });
-  };
+  const buildToolExecutor = (workspace: EditorTarget) => buildWorkspaceToolExecutor({
+    workspace,
+    commandClient: workspace === 'main' ? mainCommandClient : componentCommandClient,
+    isHydrating,
+    onMarkCanvasSelectionSource: () => { selectionSourceRef.current = 'canvas'; },
+    onShowInspectorOnMain: () => windows.setInspectorVisible(true),
+    onPanChange: workspace === 'main' ? windows.setMainPan : windows.setComponentCanvasPan,
+    onZoomChange: workspace === 'main' ? windows.setZoom : windows.setComponentCanvasZoom,
+    onToolChange: chooseCanvasTool,
+    onNotice: setNotice,
+    onSampledColorOptionChange: applySampledColorOption,
+  });
   const mainToolOperationExecutor = buildToolExecutor('main');
   const componentToolOperationExecutor = buildToolExecutor('component');
-
-  const enterFullscreen = () => {
-    const root = document.querySelector('.app-shell') as HTMLElement | null;
-    if (!document.fullscreenElement) {
-      root?.requestFullscreen?.().catch(() => setNotice('Fullscreen is unavailable in this browser.'));
-    } else {
-      document.exitFullscreen?.();
-    }
-  };
-
-  const resetWindowLayout = () => {
-    windows.resetAllWindowLayouts();
-    panelResize.resetAllPanelWidths();
-    setOpenMenu(null);
-    setNotice('Window layout has been reset.');
-  };
 
   // Global keyboard shortcuts
   useWorkspaceShortcuts({
@@ -493,31 +399,19 @@ export function App() {
     componentState,
     isHydrating,
     componentDeletionDialogOpen: componentMaster.componentDeletionDialogOpen,
-    shortcutsModalOpen,
-    newProjectDialogOpen,
+    shortcutsModalOpen: dialogs.shortcutsModalOpen,
+    newProjectDialogOpen: dialogs.newProjectDialogOpen,
     selectionSourceRef,
     clipboardRef,
     getCommandClient,
-    openShortcutsModal,
+    openShortcutsModal: dialogs.openShortcutsModal,
     copySelection: selectionActions.copySelection,
     cutSelection: selectionActions.cutSelection,
     pasteSelection: selectionActions.pasteSelection,
     duplicateSelection: selectionActions.duplicateSelection,
     chooseCanvasTool,
     setNotice,
-    onZoomStep: (target, action) => {
-      const currentZoom = target === 'main' ? windows.zoom : windows.componentCanvasZoom;
-      const setTargetZoom = target === 'main' ? windows.setZoom : windows.setComponentCanvasZoom;
-      if (action === 'reset') {
-        setTargetZoom(1);
-        setNotice('Zoom reset to 100%.');
-        return;
-      }
-      const next = action === 'in'
-        ? Math.min(4, Math.round(currentZoom * 1.15 * 100) / 100)
-        : Math.max(0.2, Math.round((currentZoom / 1.15) * 100) / 100);
-      setTargetZoom(next);
-    },
+    onZoomStep: (target, action) => chromeActionsRef.current?.stepWorkspaceZoom(target, action),
     onArrangeOrder: (target, action) => selectionActions.handleArrangeOrder(target, action),
     onToggleSelectedProperty: (target, property) => {
       const editor = target === 'main' ? state : componentState;
@@ -529,29 +423,8 @@ export function App() {
       if (!windows.layersVisible) windows.setLayersVisible(true);
       layers.beginLayerRename(nodeId, false);
     },
-    onToggleFocusCanvas: () => {
-      const anySidebarOpen = windows.layersVisible || windows.inspectorVisible;
-      windows.setLayersVisible(!anySidebarOpen);
-      windows.setInspectorVisible(!anySidebarOpen);
-      setNotice(anySidebarOpen ? 'Focus Canvas enabled (Ctrl+\\ to restore panels).' : 'Studio sidebars restored.');
-    },
-    onToggleStudioPanel: (panel) => {
-      if (panel === 'layers') {
-        windows.setLayersVisible(!windows.layersVisible);
-      } else if (panel === 'inspector') {
-        windows.setInspectorVisible(!windows.inspectorVisible);
-      } else if (panel === 'pages') {
-        if (windows.pagesRackOpen) closePagesRack();
-        else windows.setPagesRackOpen(true);
-      } else if (panel === 'components') {
-        if (windows.componentRackOpen) closeComponentRack();
-        else windows.setComponentRackOpen(true);
-      } else if (panel === 'motion') {
-        motion.toggleMotionOpen();
-      } else if (panel === 'code') {
-        setCodeWorkspaceOpen((prev) => !prev);
-      }
-    },
+    onToggleFocusCanvas: () => chromeActionsRef.current?.toggleFocusCanvas(),
+    onToggleStudioPanel: (panel) => chromeActionsRef.current?.toggleStudioPanel(panel),
   });
 
   const designSystem = useDesignSystemActions({
@@ -566,20 +439,13 @@ export function App() {
   });
   activeBreakpointRef.current = designSystem.activeBreakpoint;
 
-  const mainCanvasVisible = !windows.canvasClosed
-    && !windows.canvasMinimized
+  const mainCanvasVisible = !windows.canvasClosed && !windows.canvasMinimized
     && !(windows.componentCanvasOpen && !windows.componentCanvasFloating && !windows.canvasFloating)
     && !(windows.nodeLogicOpen && !windows.nodeLogicFloating && !windows.canvasFloating);
-
-  const nodeLogicCoversDockedComponent = windows.nodeLogicOpen
-    && !windows.nodeLogicFloating
+  const nodeLogicCoversDockedComponent = windows.nodeLogicOpen && !windows.nodeLogicFloating
     && !windows.componentCanvasFloating
     && getWindowZIndex(windows.windowOrder, 'node-logic') > getWindowZIndex(windows.windowOrder, 'component-canvas');
-
-  const componentCanvasVisible = !windows.componentCanvasClosed
-    && !windows.componentCanvasMinimized
-    && !nodeLogicCoversDockedComponent;
-
+  const componentCanvasVisible = !windows.componentCanvasClosed && !windows.componentCanvasMinimized && !nodeLogicCoversDockedComponent;
   const pendingOpenComponentName = componentMaster.pendingComponentOpenId
     ? (state.project.components.find((item) => item.id === componentMaster.pendingComponentOpenId)?.name ?? 'another master')
     : null;
@@ -632,84 +498,92 @@ export function App() {
     onDeleteSelected: deleteLayersSafely,
     onNotice: setNotice,
   });
-  const activeMotionProject = activeEditorId === 'component' ? componentState.project : state.project;
-  const activeMotionPage = getActivePage(activeMotionProject);
-  const motionExportProject = useMemo(() => {
-    if (activeEditorId !== 'component') return state.project;
-    return {
-      ...activeMotionProject,
-      metadata: {
-        ...activeMotionProject.metadata,
-        name: componentMaster.editingComponent?.name ?? activeMotionProject.metadata.name,
-      },
-      components: state.project.components,
-      assets: state.project.assets,
-      designTokens: state.project.designTokens,
-    };
-  }, [activeEditorId, state.project, activeMotionProject, componentMaster.editingComponent?.name]);
   const activeMotionSelectedNodeIds = focusedEditor.state.selectedNodeIds;
-  const motion = useMotionPlayback({
-    workspaceScope: activeEditorId,
-    project: activeMotionProject,
-    activePage: activeMotionPage,
-    selectedNodeIds: activeMotionSelectedNodeIds,
-    commandClient: focusedCommandClient,
-    onNotice: setNotice,
-  });
-  const isActiveMotionPose = motion.motionOpen && (motion.previewActive || motion.isPlaying);
-  const animatedActiveNodesById = useMemo(
-    () => new Map(motion.animatedMainDocument.nodes.map((node) => [node.id, node])),
-    [motion.animatedMainDocument.nodes],
-  );
-  const inspectorSelectedNode = isActiveMotionPose && selectedNode
-    ? (animatedActiveNodesById.get(selectedNode.id) ?? selectedNode)
-    : selectedNode;
-  const inspectorSelectedNodes = isActiveMotionPose
-    ? focusedEditor.selectedNodes.map((node) => animatedActiveNodesById.get(node.id) ?? node)
-    : focusedEditor.selectedNodes;
-  const motionAutoKeyBridge = createMotionAutoKeyBridge({
-    activeEditorId,
+  const {
+    activeMotionProject,
+    activeMotionPage,
+    motionExportProject,
     motion,
     inspectorSelectedNode,
+    inspectorSelectedNodes,
+    motionAutoKeyBridge,
+    hasAnimatedComponentsOnMain,
+    componentAnimPlaying,
+    toggleComponentAnimPlaying,
+    effectiveMainAnimationTimeMs,
+    mainCanvasDocument,
+    componentCanvasDocument,
+  } = useWorkspaceMotionBridge({
+    activeEditorId,
+    mainProject: state.project,
+    componentProject: componentState.project,
+    activeDocument,
+    componentDocument,
+    editingComponentName: componentMaster.editingComponent?.name,
+    selectedNode,
+    selectedNodes: focusedEditor.selectedNodes,
+    selectedNodeIds: activeMotionSelectedNodeIds,
+    focusedCommandClient,
     mainToolOperationExecutor,
     componentToolOperationExecutor,
     onUpdateSelectedFallback: selectionActions.updateSelected,
     onUpdateSelectedStyleFallback: selectionActions.updateSelectedStyle,
     onSampledColorOption: applySampledColorOption,
     onCanvasInteraction: () => { selectionSourceRef.current = 'canvas'; },
+    onNotice: setNotice,
   });
 
-  // Live animation clock for saved animated Component Instances (including nested) placed on the Main Page
-  const hasAnimatedComponentsOnMain = useMemo(
-    () => documentHasAnyAnimations(activeDocument.nodes, state.project.components, null),
-    [activeDocument.nodes, state.project.components],
-  );
+  const mainCanvasContextMenuExtras = buildCanvasContextMenuExtras({
+    workspace: 'main',
+    documentNodes: activeDocument.nodes,
+    selectedNodeIds: state.selectedNodeIds,
+    canPaste: clipboardRef.current !== null,
+    commandClient: mainCommandClient,
+    onCopy: selectionActions.copySelection,
+    onCut: selectionActions.cutSelection,
+    onPaste: selectionActions.pasteSelection,
+    onDuplicate: selectionActions.duplicateSelection,
+    onToggleLayerProperty: layers.toggleLayerPropertyFromRow,
+    onSaveAsComponent: componentMaster.saveNodesAsComponent,
+    onUnpackComponent: selectionActions.unpackComponentInstance,
+    onQuickAdd: pageActions.addNode,
+  });
 
-  const [componentAnimPlaying, setComponentAnimPlaying] = useState(true);
-  const [componentAnimTimeMs, setComponentAnimTimeMs] = useState(0);
+  const componentCanvasContextMenuExtras = buildCanvasContextMenuExtras({
+    workspace: 'component',
+    documentNodes: componentDocument?.nodes ?? [],
+    selectedNodeIds: componentState.selectedNodeIds,
+    canPaste: clipboardRef.current !== null,
+    commandClient: componentCommandClient,
+    onCopy: selectionActions.copySelection,
+    onCut: selectionActions.cutSelection,
+    onPaste: selectionActions.pasteSelection,
+    onDuplicate: selectionActions.duplicateSelection,
+    onToggleLayerProperty: layers.toggleLayerPropertyFromRow,
+    onUnpackComponent: selectionActions.unpackComponentInstance,
+    onQuickAdd: pageActions.addNode,
+  });
 
-  useEffect(() => {
-    if (!hasAnimatedComponentsOnMain || !componentAnimPlaying) return;
-    if (typeof requestAnimationFrame !== 'function') return;
-    let rafId = 0;
-    let lastStamp = performance.now();
-    const tick = (now: number) => {
-      const dt = Math.min(100, Math.max(0, now - lastStamp));
-      lastStamp = now;
-      setComponentAnimTimeMs((prev) => prev + dt);
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
-  }, [hasAnimatedComponentsOnMain, componentAnimPlaying]);
-
-  const mainCanvasDocument = activeEditorId === 'main' ? motion.animatedMainDocument : activeDocument;
-  const componentCanvasDocument = activeEditorId === 'component' ? motion.animatedMainDocument : componentDocument;
-  const effectiveMainAnimationTimeMs = hasAnimatedComponentsOnMain
-    ? (activeEditorId === 'main' && motion.motionOpen && (motion.isPlaying || motion.previewActive)
-      ? motion.playheadMs
-      : componentAnimTimeMs)
-    : undefined;
+  const chromeActions = useWorkspaceChromeActions({
+    projectName: state.project.metadata.name,
+    windows,
+    tokensRackOpen: designSystem.tokensRackOpen,
+    setTokensRackOpen: designSystem.setTokensRackOpen,
+    closeTokensRack: designSystem.closeTokensRack,
+    closePagesRack,
+    closeComponentRack,
+    resetAllPanelWidths: panelResize.resetAllPanelWidths,
+    motionOpen: motion.motionOpen,
+    toggleMotionOpen: motion.toggleMotionOpen,
+    setOpenMenu,
+    setToolRackOpen,
+    setActiveEditorId,
+    setCodeWorkspaceOpen,
+    onCommitProjectName: pageActions.commitProjectName,
+    setNotice,
+  });
+  chromeActionsRef.current = chromeActions;
+  setProjectNameEditingRef.current = chromeActions.setProjectNameEditing;
 
   const openLivePreviewForPage = useCallback((pageId?: string) => {
     setActiveEditorId('main');
@@ -747,8 +621,8 @@ export function App() {
         pagesRackToggleRef={pagesRackToggleRef}
         componentRackToggleRef={componentRackToggleRef}
         tokensRackToggleRef={designSystem.tokensRackToggleRef}
-        projectNameEditing={projectNameEditing}
-        projectNameDraft={projectNameDraft}
+        projectNameEditing={chromeActions.projectNameEditing}
+        projectNameDraft={chromeActions.projectNameDraft}
         pagesRackOpen={windows.pagesRackOpen}
         componentRackOpen={windows.componentRackOpen}
         tokensRackOpen={designSystem.tokensRackOpen}
@@ -764,78 +638,35 @@ export function App() {
         nodeLogicMinimized={windows.nodeLogicMinimized}
         codeWorkspaceOpen={codeWorkspaceOpen}
         motionTimelineOpen={motion.motionOpen}
-        shortcutsModalOpen={shortcutsModalOpen}
+        shortcutsModalOpen={dialogs.shortcutsModalOpen}
         toolbarHintStore={toolbarHintStore}
         onToggleMenu={(menu) => { setOpenMenu((current) => (current === menu ? null : menu)); setToolRackOpen(null); }}
         onCloseMenus={() => setOpenMenu(null)}
-        onRequestNewProject={openNewProjectDialog}
+        onRequestNewProject={dialogs.openNewProjectDialog}
         onOpenProjectPicker={() => { if (isHydrating) return; setOpenMenu(null); projectFileInputRef.current?.click(); }}
         onProjectFileSelected={fileLifecycle.handleProjectFileSelected}
         onExportCurrentProject={() => { void fileLifecycle.exportCurrentProject(isHydrating); }}
         onExportActiveCanvasSvg={() => { void fileLifecycle.exportActiveCanvasSvg(isHydrating); }}
         onExportActiveCanvasPng={() => { void fileLifecycle.exportActiveCanvasPng(isHydrating); }}
         onOpenMotionExport={() => setMotionExportOpen(true)}
-        onResetWindowLayout={resetWindowLayout}
-        onOpenShortcutsModal={openShortcutsModal}
-        onOpenDiagnosticsModal={() => setDiagnosticsModalOpen(true)}
-        onStartProjectRename={() => {
-          setProjectNameDraft(state.project.metadata.name);
-          projectNameCancelRef.current = false;
-          setProjectNameEditing(true);
-        }}
-        onProjectNameDraftChange={setProjectNameDraft}
-        onCommitProjectRename={() => {
-          if (!projectNameCancelRef.current) pageActions.commitProjectName(projectNameDraft);
-          projectNameCancelRef.current = false;
-          setProjectNameEditing(false);
-        }}
-        onCancelProjectRename={() => {
-          projectNameCancelRef.current = true;
-          setProjectNameDraft(state.project.metadata.name);
-          setProjectNameEditing(false);
-        }}
-        onTogglePagesRack={() => {
-          setToolRackOpen(null);
-          if (windows.pagesRackOpen) closePagesRack();
-          else { windows.focusWindow('pages'); windows.setPagesRackOpen(true); closeComponentRack(); designSystem.closeTokensRack(); }
-        }}
-        onToggleComponentRack={() => {
-          setToolRackOpen(null);
-          if (windows.componentRackOpen) closeComponentRack();
-          else { windows.setComponentRackOpen(true); closePagesRack(); designSystem.closeTokensRack(); }
-        }}
-        onToggleTokensRack={() => {
-          setToolRackOpen(null);
-          if (designSystem.tokensRackOpen) designSystem.closeTokensRack();
-          else { designSystem.setTokensRackOpen(true); closePagesRack(); closeComponentRack(); }
-        }}
+        onResetWindowLayout={chromeActions.resetWindowLayout}
+        onOpenShortcutsModal={dialogs.openShortcutsModal}
+        onOpenDiagnosticsModal={() => dialogs.setDiagnosticsModalOpen(true)}
+        onStartProjectRename={chromeActions.startProjectRename}
+        onProjectNameDraftChange={chromeActions.setProjectNameDraft}
+        onCommitProjectRename={chromeActions.commitProjectRename}
+        onCancelProjectRename={chromeActions.cancelProjectRename}
+        onTogglePagesRack={chromeActions.togglePagesRack}
+        onToggleComponentRack={chromeActions.toggleComponentRack}
+        onToggleTokensRack={chromeActions.toggleTokensRack}
         onToggleLayersVisible={() => windows.setLayersVisible((value) => !value)}
         onToggleInspectorVisible={() => windows.setInspectorVisible((value) => !value)}
-        onToggleMainCanvas={() => {
-          if (windows.canvasClosed || windows.canvasMinimized) windows.openMainCanvas();
-          else { windows.setCanvasClosed(true); windows.setCanvasMinimized(false); }
-        }}
-        onToggleComponentCanvas={() => {
-          if (windows.componentCanvasClosed || windows.componentCanvasMinimized) windows.openComponentCanvas();
-          else {
-            windows.setComponentCanvasClosed(true); windows.setComponentCanvasMinimized(false); setActiveEditorId('main');
-            if (!windows.canvasClosed && !windows.canvasMinimized) windows.focusWindow('main-canvas');
-          }
-        }}
-        onToggleNodeLogic={() => {
-          if (windows.nodeLogicClosed || windows.nodeLogicMinimized) windows.openNodeLogic();
-          else { windows.setNodeLogicClosed(true); windows.setNodeLogicMinimized(false); }
-        }}
+        onToggleMainCanvas={chromeActions.toggleMainCanvas}
+        onToggleComponentCanvas={chromeActions.toggleComponentCanvas}
+        onToggleNodeLogic={chromeActions.toggleNodeLogic}
         onToggleCodeWorkspace={() => setCodeWorkspaceOpen((open) => { if (!open) setActiveEditorId('main'); return !open; })}
-        onToggleMotionTimeline={() => {
-          if (!motion.motionOpen) {
-            closePagesRack();
-            closeComponentRack();
-            designSystem.closeTokensRack();
-          }
-          motion.toggleMotionOpen();
-        }}
-        onEnterFullscreen={enterFullscreen}
+        onToggleMotionTimeline={chromeActions.toggleMotionTimeline}
+        onEnterFullscreen={chromeActions.enterFullscreen}
         onUpdateToolbarHint={updateToolbarHint}
       />
 
@@ -976,35 +807,9 @@ export function App() {
         animationTimeMs={effectiveMainAnimationTimeMs}
         hasAnimatedComponents={hasAnimatedComponentsOnMain}
         componentAnimPlaying={componentAnimPlaying}
-        onToggleComponentAnimPlaying={() => setComponentAnimPlaying((playing) => !playing)}
+        onToggleComponentAnimPlaying={toggleComponentAnimPlaying}
         studioActions={selectionActions.createStudioActionsForTarget('main')}
-        canvasContextMenuExtras={{
-          onCopy: () => selectionActions.copySelection('main'),
-          onCut: () => selectionActions.cutSelection('main'),
-          onPaste: () => selectionActions.pasteSelection('main'),
-          canPaste: clipboardRef.current !== null,
-          onDuplicate: () => selectionActions.duplicateSelection('main'),
-          onSelectAll: () => mainCommandClient.selectNodes(activeDocument.nodes.map((n) => n.id), 'Select all layers'),
-          onToggleVisible: () => {
-            const firstId = state.selectedNodeIds[0];
-            if (firstId) layers.toggleLayerPropertyFromRow(firstId, 'visible');
-          },
-          onToggleLock: () => {
-            const firstId = state.selectedNodeIds[0];
-            if (firstId) layers.toggleLayerPropertyFromRow(firstId, 'locked');
-          },
-          onRemoveFromCanvas: () => {
-            if (state.selectedNodeIds.length > 0) {
-              mainCommandClient.setNodesCanvasState(state.selectedNodeIds, false, 'Remove from canvas');
-            }
-          },
-          onSaveAsComponent: () => componentMaster.saveNodesAsComponent(
-            activeDocument.nodes.filter((n) => state.selectedNodeIds.includes(n.id)),
-            activeDocument.nodes,
-          ),
-          onUnpackComponent: (nodeId) => selectionActions.unpackComponentInstance('main', nodeId),
-          onQuickAdd: (kind) => pageActions.addNode(kind),
-        }}
+        canvasContextMenuExtras={mainCanvasContextMenuExtras}
       />
 
       <ComponentCanvasWindow
@@ -1075,29 +880,7 @@ export function App() {
         onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'component', point); }}
         onChangeBackground={(background) => { componentCommandClient.setDocumentBackground(background); }}
         studioActions={selectionActions.createStudioActionsForTarget('component')}
-        canvasContextMenuExtras={{
-          onCopy: () => selectionActions.copySelection('component'),
-          onCut: () => selectionActions.cutSelection('component'),
-          onPaste: () => selectionActions.pasteSelection('component'),
-          canPaste: clipboardRef.current !== null,
-          onDuplicate: () => selectionActions.duplicateSelection('component'),
-          onSelectAll: () => componentCommandClient.selectNodes((componentDocument?.nodes ?? []).map((n) => n.id), 'Select all layers'),
-          onToggleVisible: () => {
-            const firstId = componentState.selectedNodeIds[0];
-            if (firstId) layers.toggleLayerPropertyFromRow(firstId, 'visible');
-          },
-          onToggleLock: () => {
-            const firstId = componentState.selectedNodeIds[0];
-            if (firstId) layers.toggleLayerPropertyFromRow(firstId, 'locked');
-          },
-          onRemoveFromCanvas: () => {
-            if (componentState.selectedNodeIds.length > 0) {
-              componentCommandClient.setNodesCanvasState(componentState.selectedNodeIds, false, 'Remove from canvas');
-            }
-          },
-          onUnpackComponent: (nodeId) => selectionActions.unpackComponentInstance('component', nodeId),
-          onQuickAdd: (kind) => pageActions.addNode(kind),
-        }}
+        canvasContextMenuExtras={componentCanvasContextMenuExtras}
       />
 
       <NodeLogicWindow
@@ -1240,153 +1023,91 @@ export function App() {
         onToggleNodeLogic={(component) => designSystem.toggleComponentNodeLogic(component)}
       />
 
-      {designSystem.tokensRackOpen && (
-        <Suspense fallback={null}>
-          <LazyTokensPanel
-            panelRef={designSystem.tokensRackRef}
-            open={designSystem.tokensRackOpen}
-            project={state.project}
-            tokens={designSystem.designTokens}
-            onUpdateTokens={designSystem.updateDesignTokens}
-            onCopyNotice={setNotice}
-            onClose={designSystem.closeTokensRack}
-          />
-        </Suspense>
-      )}
-
-      {codeWorkspaceOpen && (
-        <Suspense
-          fallback={(
-            <div class="code-workspace-overlay" role="status" aria-live="polite">
-              <div class="code-workspace-shell" style={{ alignItems: 'center', justifyContent: 'center' }}>
-                Loading Code &amp; Live Preview Studio…
-              </div>
-            </div>
-          )}
-        >
-          <LazyCodeWorkspace
-            key={codeWorkspaceLaunch.nonce}
-            project={state.project}
-            pages={pages}
-            themes={designSystem.designTokens.themes}
-            selectedNodeId={state.selectedNodeId}
-            activeBreakpoint={designSystem.activeBreakpoint}
-            initialViewMode={codeWorkspaceLaunch.viewMode}
-            initialPageId={codeWorkspaceLaunch.pageId}
-            mainCommandClient={mainCommandClient}
-            onNotice={setNotice}
-            onJumpToCanvasNode={() => {
-              setActiveEditorId('main');
-              windows.openMainCanvas();
-            }}
-            onClose={() => setCodeWorkspaceOpen(false)}
-          />
-        </Suspense>
-      )}
-
-      <LayerColorPalette
-        pickerKey={layers.layerColorPickerKey}
+      <WorkspaceStudioOverlays
+        project={state.project}
+        activePage={activePage}
+        pages={pages}
         activeEditorId={activeEditorId}
+        selectedMainNodeId={state.selectedNodeId}
+        activeBreakpoint={designSystem.activeBreakpoint}
+        designTokens={designSystem.designTokens}
+        mainCommandClient={mainCommandClient}
+        focusedCommandClient={focusedCommandClient}
+        getCommandClient={getCommandClient}
+        tokensRackOpen={designSystem.tokensRackOpen}
+        tokensRackRef={designSystem.tokensRackRef}
+        onUpdateDesignTokens={designSystem.updateDesignTokens}
+        onCloseTokensRack={designSystem.closeTokensRack}
+        codeWorkspaceOpen={codeWorkspaceOpen}
+        codeWorkspaceLaunch={codeWorkspaceLaunch}
+        onJumpToCanvasNode={() => {
+          setActiveEditorId('main');
+          windows.openMainCanvas();
+        }}
+        onCloseCodeWorkspace={() => setCodeWorkspaceOpen(false)}
+        layerColorPickerKey={layers.layerColorPickerKey}
         layerSourceNodes={layers.layerSourceNodes}
-        position={layers.layerColorPickerPosition}
-        paletteRef={layers.layerColorPaletteRef}
-        onSelectPresetColor={(nodeId, color) => {
+        layerColorPickerPosition={layers.layerColorPickerPosition}
+        layerColorPaletteRef={layers.layerColorPaletteRef}
+        onSelectPresetLayerColor={(nodeId, color) => {
           layers.setLayerColorFromRow(nodeId, color);
           layers.closeLayerColorPicker();
         }}
-        onSelectCustomColor={layers.setLayerColorFromRow}
-      />
-
-      <LayerContextMenu
-        menu={layers.layerContextMenu}
-        menuRef={layers.layerContextMenuRef}
-        targetNodeName={
-          layers.layerContextMenu
-            ? (layers.contextMenuNodes.find((node) => node.id === layers.layerContextMenu?.nodeId)?.name ?? 'layer')
-            : 'layer'
-        }
-        targetNodeVisible={
-          layers.layerContextMenu
-            ? (layers.contextMenuNodes.find((node) => node.id === layers.layerContextMenu?.nodeId)?.visible ?? true)
-            : true
-        }
-        targetNodeLocked={
-          layers.layerContextMenu
-            ? (layers.contextMenuNodes.find((node) => node.id === layers.layerContextMenu?.nodeId)?.locked ?? false)
-            : false
-        }
+        onSelectCustomLayerColor={layers.setLayerColorFromRow}
+        layerContextMenu={layers.layerContextMenu}
+        layerContextMenuRef={layers.layerContextMenuRef}
+        contextMenuNodes={layers.contextMenuNodes}
+        contextMenuCapabilities={layers.contextMenuCapabilities}
         canPaste={clipboardRef.current !== null}
-        capabilities={layers.contextMenuCapabilities}
-        referenceWarning={layers.layerContextMenu?.editorId === 'main' ? (() => {
-          const refs = findCrossStudioNodeReferences(state.project, layers.layerContextMenu.nodeIds, activePage.id);
-          return refs.totalCount > 0
-            ? { logicCount: refs.logicBindings.length, motionCount: refs.animationTracks.length, codeExtensionCount: refs.codeExtensions.length }
-            : null;
-        })() : null}
-        onRename={(nodeId) => { layers.setLayerContextMenu(null); layers.beginLayerRename(nodeId, false); }}
-        onCopy={(editorId) => { layers.setLayerContextMenu(null); selectionActions.copySelection(editorId); }}
-        onCut={(editorId) => { layers.setLayerContextMenu(null); selectionActions.cutSelection(editorId); }}
-        onPaste={(editorId) => { layers.setLayerContextMenu(null); selectionActions.pasteSelection(editorId); }}
-        onDuplicate={(editorId) => { layers.setLayerContextMenu(null); selectionActions.duplicateSelection(editorId); }}
-        onToggleVisible={(nodeId) => { layers.setLayerContextMenu(null); layers.toggleLayerPropertyFromRow(nodeId, 'visible'); }}
-        onToggleLock={(nodeId) => { layers.setLayerContextMenu(null); layers.toggleLayerPropertyFromRow(nodeId, 'locked'); }}
-        onArrange={(editorId, direction) => { layers.setLayerContextMenu(null); selectionActions.handleArrangeOrder(editorId, direction); }}
-        onCombineSelection={(editorId) => { layers.setLayerContextMenu(null); selectionActions.handleCombineSelection(editorId); }}
-        onSaveAsComponent={(editorId) => {
-          layers.setLayerContextMenu(null);
+        onDismissLayerContextMenu={() => layers.setLayerContextMenu(null)}
+        onRenameLayer={(nodeId) => layers.beginLayerRename(nodeId, false)}
+        onCopyLayer={selectionActions.copySelection}
+        onCutLayer={selectionActions.cutSelection}
+        onPasteLayer={selectionActions.pasteSelection}
+        onDuplicateLayer={selectionActions.duplicateSelection}
+        onToggleLayerVisible={(nodeId) => layers.toggleLayerPropertyFromRow(nodeId, 'visible')}
+        onToggleLayerLock={(nodeId) => layers.toggleLayerPropertyFromRow(nodeId, 'locked')}
+        onArrangeLayer={selectionActions.handleArrangeOrder}
+        onCombineSelection={selectionActions.handleCombineSelection}
+        onSaveLayerAsComponent={(editorId) => {
           const docNodes = editorId === 'main' ? activeDocument.nodes : (componentDocument?.nodes ?? []);
           const selectedIds = editorId === 'main' ? state.selectedNodeIds : componentState.selectedNodeIds;
           componentMaster.saveNodesAsComponent(docNodes.filter((n) => selectedIds.includes(n.id)), docNodes);
         }}
-        onGroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).groupLayers(rootIds); }}
-        onUngroup={(editorId, rootIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).ungroupLayers(rootIds); }}
-        onCreateClippingMask={(editorId, rootId) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).createClippingMask(rootId); }}
-        onRemoveClippingMask={(editorId, rootId) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; getCommandClient(editorId).removeClippingMask(rootId); }}
-        onUnpackComponent={(editorId, nodeId) => { layers.setLayerContextMenu(null); selectionActions.unpackComponentInstance(editorId, nodeId); }}
-        onDelete={(editorId, nodeIds) => { layers.setLayerContextMenu(null); selectionSourceRef.current = 'layers'; deleteLayersSafely(editorId, nodeIds); }}
+        onUnpackComponent={selectionActions.unpackComponentInstance}
+        onDeleteLayers={deleteLayersSafely}
+        onMarkLayerSelectionSource={() => { selectionSourceRef.current = 'layers'; }}
+        motionOpen={motion.motionOpen}
+        activeMotionPage={activeMotionPage}
+        activeMotionProject={activeMotionProject}
+        pageClips={motion.pageClips}
+        activeClip={motion.activeClip}
+        activeMotionSelectedNodeIds={activeMotionSelectedNodeIds}
+        playheadMs={motion.playheadMs}
+        isPlaying={motion.isPlaying}
+        previewActive={motion.previewActive}
+        autoKeyEnabled={motion.autoKeyEnabled}
+        onToggleAutoKey={motion.toggleAutoKey}
+        onSelectClip={motion.selectClip}
+        onCreateClip={motion.createNewClip}
+        onApplyPreset={motion.applyPreset}
+        onDeleteClip={motion.deleteActiveClip}
+        onUpdateClip={motion.updateClip}
+        onUpdateCustomEasings={motion.updateCustomEasings}
+        onTogglePlay={motion.togglePlay}
+        onStop={motion.stop}
+        onSeek={motion.seek}
+        onKeyframeSelected={() => motion.keyframeSelectedLayers()}
+        onKeyframePathMorph={() => motion.keyframeShapeMorph()}
+        onImportMorphFromComponent={(component, options) =>
+          motion.importShapeMorphFromComponent(component, designSystem.designTokens, options)
+        }
+        onChooseTool={chooseCanvasTool}
+        onOpenLivePreview={openLivePreviewForPage}
+        onOpenMotionExport={() => setMotionExportOpen(true)}
+        onCloseMotion={motion.closeMotion}
+        onNotice={setNotice}
       />
-
-      {motion.motionOpen && (
-        <Suspense fallback={null}>
-          <LazyMotionTimelinePanel
-            workspaceScope={activeEditorId}
-            activePage={activeMotionPage}
-            pageClips={motion.pageClips}
-            activeClip={motion.activeClip}
-            components={state.project.components}
-            designTokens={designSystem.designTokens}
-            customEasings={activeMotionProject.customEasings ?? []}
-            selectedNodeIds={activeMotionSelectedNodeIds}
-            playheadMs={motion.playheadMs}
-            isPlaying={motion.isPlaying}
-            previewActive={motion.previewActive}
-            autoKeyEnabled={motion.autoKeyEnabled}
-            onToggleAutoKey={motion.toggleAutoKey}
-            onSelectClip={motion.selectClip}
-            onCreateClip={motion.createNewClip}
-            onApplyPreset={motion.applyPreset}
-            onDeleteClip={motion.deleteActiveClip}
-            onUpdateClip={motion.updateClip}
-            onUpdateCustomEasings={motion.updateCustomEasings}
-            onTogglePlay={motion.togglePlay}
-            onStop={motion.stop}
-            onSeek={motion.seek}
-            onKeyframeSelected={() => motion.keyframeSelectedLayers()}
-            onKeyframePathMorph={() => motion.keyframeShapeMorph()}
-            onImportMorphFromComponent={(component, options) =>
-              motion.importShapeMorphFromComponent(component, designSystem.designTokens, options)
-            }
-            onEditMorphPoints={(nodeId) => {
-              focusedCommandClient.selectNodes([nodeId], 'Select morph layer for point editing');
-              chooseCanvasTool('direct-selection', activeEditorId);
-            }}
-            onOpenLivePreview={openLivePreviewForPage}
-            onOpenMotionExport={() => setMotionExportOpen(true)}
-            onSelectCanvasNode={(nodeId) => { focusedCommandClient.selectNodes([nodeId], 'Select animated layer'); }}
-            onClose={motion.closeMotion}
-          />
-        </Suspense>
-      )}
 
       <StatusBar
         layerCount={activeDocument.nodes.length}
@@ -1428,27 +1149,27 @@ export function App() {
         breakpoint={designSystem.activeBreakpoint}
         activeWorkspace={activeEditorId}
         componentDeletionDialogOpen={componentMaster.componentDeletionDialogOpen}
-        newProjectDialogOpen={newProjectDialogOpen}
-        newProjectBusyMode={newProjectBusyMode}
-        newProjectError={newProjectError}
-        newProjectModalHostRef={newProjectModalHostRef}
-        newProjectDialogRef={newProjectDialogRef}
-        onSaveAndCreateNewProject={() => { void confirmNewProject('save'); }}
-        onDeleteAndCreateNewProject={() => { void confirmNewProject('delete'); }}
-        onCancelNewProject={closeNewProjectDialog}
+        newProjectDialogOpen={dialogs.newProjectDialogOpen}
+        newProjectBusyMode={dialogs.newProjectBusyMode}
+        newProjectError={dialogs.newProjectError}
+        newProjectModalHostRef={dialogs.newProjectModalHostRef}
+        newProjectDialogRef={dialogs.newProjectDialogRef}
+        onSaveAndCreateNewProject={() => { void dialogs.confirmNewProject('save'); }}
+        onDeleteAndCreateNewProject={() => { void dialogs.confirmNewProject('delete'); }}
+        onCancelNewProject={dialogs.closeNewProjectDialog}
         motionExportOpen={motionExportOpen}
-        shortcutsModalOpen={shortcutsModalOpen}
-        diagnosticsModalOpen={diagnosticsModalOpen}
+        shortcutsModalOpen={dialogs.shortcutsModalOpen}
+        diagnosticsModalOpen={dialogs.diagnosticsModalOpen}
         historyUndoCount={state.past.length}
         historyRedoCount={state.future.length}
-        shortcutsModalHostRef={shortcutsModalHostRef}
-        shortcutsDialogRef={shortcutsDialogRef}
+        shortcutsModalHostRef={dialogs.shortcutsModalHostRef}
+        shortcutsDialogRef={dialogs.shortcutsDialogRef}
         onNotice={setNotice}
         onCloseMotionExport={() => setMotionExportOpen(false)}
-        onCloseShortcuts={closeShortcutsModal}
-        onShortcutsReady={handleShortcutsModalReady}
+        onCloseShortcuts={dialogs.closeShortcutsModal}
+        onShortcutsReady={dialogs.handleShortcutsModalReady}
         onOpenCodeStudio={() => { setActiveEditorId('main'); setCodeWorkspaceOpen(true); }}
-        onCloseDiagnostics={() => setDiagnosticsModalOpen(false)}
+        onCloseDiagnostics={() => dialogs.setDiagnosticsModalOpen(false)}
       />
 
       <ProjectHydrationOverlay visible={isHydrating} />

@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { VNode } from 'preact';
+
+vi.mock('preact/hooks', () => ({
+  useState: (initial: unknown) => [
+    typeof initial === 'function' ? (initial as () => unknown)() : initial,
+    vi.fn(),
+  ],
+  useEffect: vi.fn(),
+  useLayoutEffect: vi.fn(),
+  useRef: (initial: unknown) => ({ current: initial }),
+  useMemo: (factory: () => unknown) => factory(),
+  useCallback: (fn: unknown) => fn,
+}));
+
 import { createInitialProject } from '../src/core/document/factory';
 import { getActiveDocument } from '../src/core/document/project';
 import { createDefaultDesignTokens } from '../src/core/document/tokens';

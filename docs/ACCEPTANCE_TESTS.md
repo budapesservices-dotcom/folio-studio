@@ -305,6 +305,29 @@ The actual modal is also browser-tested: initial focus enters the safe dialog ac
 
 ---
 
+### P0 Stabilization & CI Recovery (2026-11-26)
+
+- **Implementation status:** **Implemented** and **Verified (local)** (2026-11-26).
+- **Implemented scope (Categories A–G):**
+  1. **Category A — Registry Contract Alignment (`tests/p03SubsystemBoundaries.test.ts`, `tests/precisionTools.test.ts`, `tests/vectorTools.test.ts`, `tests/codeEngineAndMapping.test.ts`):** Audited actual intentional registries (`30` studio tools including `draw-triangle`, `44` Native Commands including `animation.update-custom-easings`, `9` Motion export formats including Animated SVG) and updated exact-count and uniqueness assertions without removing tools, commands, or export formats.
+  2. **Category B — Canvas Engine P0.3 Boundary Restoration (`src/shared/shortcutFormatting.ts`, `src/shared/ui/StudioContextMenu.tsx`, `src/engines/canvas/Canvas.tsx`, `src/app/keyboardShortcuts.ts`, `src/app/workspace/StudioContextMenu.tsx`):** Extracted shared shortcut formatting and `StudioContextMenu` into `src/shared/` so `src/engines/canvas/**` has zero imports from `src/app/**` while preserving context-menu interaction, positioning, and callbacks.
+  3. **Category C — Motion Timeline Scrub Accuracy & Keyboard Bubbling Fix (`src/app/workspace/motionTimelineMath.ts`, `src/app/workspace/MotionTimelinePanel.tsx`, `tests/motionTimelineScrub.test.ts`, `tests/mergeReadiness.browser.test.mjs`):** Eliminated double-increment keyboard scrub bubbling (`stopPropagation()` + `defaultPrevented` guard + duration clamping + `Home`/`End`), extracted live-bounds scrub coordinate math (`computeTimelineScrubMs`, `computePlayheadPercent`, `resolveTimelineTrackBounds`) measuring `.mt-ruler-track` / `.mt-lane-track` live on `pointerdown`/`pointermove`/resize, guarded `setPointerCapture` against `NotFoundError` with `pointercancel` cleanup, updated browser test to launch Live Preview via `[data-testid="motion-more-btn"] -> Test in Live Preview`, and added unit + browser assertions covering start (`0.00s`), mid (`0.60s`), end (`1.20s`), custom ruler padding (`0 40px`), post-resize (`760px`), and playhead `%` parity.
+  4. **Category D — Preact Hooks & `preact/compat` VNode Normalization (`tests/inspectorModularization.test.tsx`, `tests/vectorDrawingTools.test.tsx`, `tests/inspectorSliders.test.tsx`):** Added hoisted `preact/hooks` harnesses for direct VNode rendering of extracted hook-using sections while asserting zero hook calls across all 4 modes of the hook-free `InspectorPanel` root, and aligned slider VNode prop inspection with `preact/compat` normalization (`oninput`/`onfocusout`) while verifying `onChange === undefined` and `oninputCapture === undefined`.
+  5. **Category E — Reproducible `package.json` & Canonical `package-lock.json`:** Added `"packageManager": "npm@10.9.9"` to `package.json` and generated a canonical `lockfileVersion: 3` `package-lock.json` with HTTPS `resolved` URLs and `sha512-` integrity hashes passing plain `npm ci --no-audit --no-fund` and `tests/p12QualityFoundation.test.ts` (5/5).
+  6. **Category F — `App.tsx` (< 1,200 lines) & `InspectorPanel.tsx` (< 650 lines) Modularization (`src/app/App.tsx`, `src/app/InspectorPanel.tsx`, `src/app/workspace/inspectorPanelTypes.ts`, `useWorkspaceDialogs.ts`, `useAnimatedComponentsClock.ts`, `useWorkspaceMotionBridge.ts`, `useWorkspaceChromeActions.ts`, `canvasContextMenuExtras.ts`, `WorkspaceStudioOverlays.tsx`):** Reduced `App.tsx` to 1,183 lines and `InspectorPanel.tsx` to 556 lines with zero Native Command bypasses and all workspace boundary tests green.
+  7. **Category G — WCAG Starter Fixture Alignment (`tests/a11yAudit.test.ts`):** Verified both default transparent starter artboard (`SKIPPED_HEADING_LEVEL` -> `100/100`) and warm `#F5F2EC` artboard (`CONTRAST_TOO_LOW` + `SKIPPED_HEADING_LEVEL` -> `100/100`) auto-fix round-trips.
+- **Local Automated Gate (2026-11-26):**
+  - `npm ci --no-audit --no-fund`: **PASS** (116 packages).
+  - `npm run check` (`tsc --noEmit`): **PASS** (0 errors).
+  - `npm run test:unit`: **PASS** (**91 test files / 858 tests passed**, including new `tests/motionTimelineScrub.test.ts` 4/4 and all Morph, Export Parity, P0.3 boundary, P1.2 lockfile, Inspector, and Workspace module suites).
+  - `npm run test:browser`: **PASS** (**4 test files / 11 Chromium tests passed** — `mergeReadiness.browser.test.mjs` 4/4, `componentRecovery.browser.test.mjs` 5/5, `workspaceGeometry.browser.test.mjs` 1/1, `nativePersistence.browser.test.mjs` 1/1).
+  - `npm run build` (`tsc --noEmit && vite build`): **PASS** (`dist/` compiled cleanly).
+  - Live headless Chromium visual QA (`playwright-cli` against `http://localhost:3000/folio-studio/` at `1440×900`): **PASS** — verified initial hydration, Motion Timeline keyboard + pointer scrub, Inspector selected-node rendering, Canvas right-click shared `StudioContextMenu`, and **0 console errors / 0 warnings**.
+- **Pending / Not Claimed:**
+  - Remote GitHub Actions CI run on a pushed branch and human manual browser acceptance below remain **pending** (this sandbox has no `.git` remote).
+
+---
+
 ## Consolidated Manual Browser Acceptance Checklist (PR #17 Readiness)
 
 Execute on the target desktop browser (Chrome/Edge on Windows 10) against a fresh `npm run dev` or `npm run build && npm run preview` session. Record **PASS / FAIL** per item before approving merge of PR #17 into `main`.

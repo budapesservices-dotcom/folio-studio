@@ -70,7 +70,7 @@ import './canvas.css';
 
 import type { DrawMaskMode } from '../../core/document/types';
 import type { SelectSimilarCriterion } from '../../core/document/selectionQueries';
-import { StudioContextMenu, type StudioContextMenuEntry } from '../../app/workspace/StudioContextMenu';
+import { StudioContextMenu, type StudioContextMenuEntry } from '../../shared/ui/StudioContextMenu';
 
 export interface CanvasContextMenuActions {
   readonly onDeselect: () => void;
