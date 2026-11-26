@@ -17,7 +17,7 @@ import {
 } from '../../core/document/styling';
 import { applyAutoLayoutToNodes } from '../layout/autoLayout';
 import { evaluateTrackAtTime, sortKeyframes } from './evaluator';
-import { easingToCubicBezier, toCssTimingFunction } from './easing';
+import { easingToCubicBezier, evaluateEasing, isMultiPointEasing, toCssTimingFunction } from './easing';
 import { sanitizeCssValue } from '../codegen/sanitize';
 import {
   parsePathMorphSnapshot,
@@ -92,6 +92,156 @@ function trackValuesVary(track: AnimationTrack): boolean {
     }
   }
   return false;
+}
+
+function getTrackNormalizedStops(track: AnimationTrack, durationMs: number): number[] {
+  const sorted = sortKeyframes(track.keyframes);
+  const set = new Set<number>([0, durationMs]);
+  for (const kf of sorted) {
+    set.add(Math.max(0, Math.min(durationMs, Math.round(kf.timeMs))));
+  }
+  return [...set].sort((a, b) => a - b);
+}
+
+function getTrackIntervalCssEasing(
+  track: AnimationTrack,
+  stopMs: number,
+  nextStopMs: number,
+): string | null {
+  const sorted = sortKeyframes(track.keyframes);
+  if (sorted.length < 2) return null;
+  if (nextStopMs <= sorted[0].timeMs || stopMs >= sorted[sorted.length - 1].timeMs) {
+    return null; // Constant hold outside track range
+  }
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const a = sorted[i];
+    const b = sorted[i + 1];
+    if (stopMs >= a.timeMs - 1 && nextStopMs <= b.timeMs + 1) {
+      // Check whether value actually changes on this segment
+      if (typeof a.value === 'number' && typeof b.value === 'number' && Math.abs(a.value - b.value) <= 1e-4) {
+        return null;
+      }
+      if (typeof a.value === 'string' && typeof b.value === 'string' && a.value === b.value) {
+        return null;
+      }
+      return toCssTimingFunction(b.easing);
+    }
+  }
+  return null;
+}
+
+/**
+ * Determines whether a set of tracks compiled into ONE `@keyframes` rule have
+ * divergent stop timestamps or different per-interval easings (which would cause
+ * double-easing or cross-track easing contamination if emitted as sparse stops).
+ */
+function tracksRequireDenseLinearSampling(
+  tracks: readonly AnimationTrack[],
+  durationMs: number,
+  ancestorTracks: readonly AnimationTrack[],
+  hasRotatingAnimatedParent: boolean,
+): boolean {
+  if (hasRotatingAnimatedParent) return true;
+  const varying = tracks.filter((t) => t.keyframes.length >= 2 && trackValuesVary(t));
+  const varyingAnc = ancestorTracks.filter((t) => t.keyframes.length >= 2 && trackValuesVary(t));
+  const combined = [...varying, ...varyingAnc];
+  if (combined.length <= 1) return false;
+
+  // Build union of stop timestamps
+  const stopSet = new Set<number>([0, durationMs]);
+  for (const tr of combined) {
+    for (const kf of tr.keyframes) {
+      stopSet.add(Math.max(0, Math.min(durationMs, Math.round(kf.timeMs))));
+    }
+  }
+  const stops = [...stopSet].sort((a, b) => a - b);
+
+  // Check if any track has an interior stop that splits another track's eased segment!
+  for (const tr of combined) {
+    const sorted = sortKeyframes(tr.keyframes);
+    for (let i = 0; i < sorted.length - 1; i += 1) {
+      const a = sorted[i];
+      const b = sorted[i + 1];
+      const valChanges =
+        typeof a.value === 'number' && typeof b.value === 'number'
+          ? Math.abs(a.value - b.value) > 1e-4
+          : String(a.value) !== String(b.value);
+      if (!valChanges) continue;
+      const isLinearSeg = b.easing === 'linear';
+      if (isLinearSeg) continue;
+      // If any union stop falls strictly inside (a.timeMs, b.timeMs), splitting this
+      // non-linear segment into sub-segments would double-ease it!
+      if (stops.some((s) => s > a.timeMs + 1 && s < b.timeMs - 1)) {
+        return true;
+      }
+    }
+  }
+
+  // Check if two tracks have DIFFERENT CSS easings on any overlapping active interval
+  for (let i = 0; i < stops.length - 1; i += 1) {
+    let seenEasing: string | null = null;
+    for (const tr of combined) {
+      const e = getTrackIntervalCssEasing(tr, stops[i], stops[i + 1]);
+      if (!e) continue;
+      if (seenEasing === null) {
+        seenEasing = e;
+      } else if (seenEasing !== e) {
+        return true;
+      }
+    }
+  }
+
+  // Also check if two tracks have different start/end hold boundaries around non-linear segments
+  if (varying.length > 1) {
+    const firstStops = getTrackNormalizedStops(varying[0], durationMs).join(',');
+    for (let i = 1; i < varying.length; i += 1) {
+      if (getTrackNormalizedStops(varying[i], durationMs).join(',') !== firstStops) {
+        // Different stop sets with any non-linear easing -> sample cleanly
+        const anyNonLinear = varying.some((tr) =>
+          sortKeyframes(tr.keyframes).some((kf, idx) => idx > 0 && kf.easing !== 'linear'),
+        );
+        if (anyNonLinear) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function buildDenseTimestamps(durationMs: number, exactStops: readonly number[]): number[] {
+  const sampleCount = Math.max(24, Math.min(60, Math.round((durationMs / 1000) * 30)));
+  const set = new Set<number>([0, durationMs]);
+  for (let i = 1; i < sampleCount; i += 1) {
+    set.add(Math.round((i / sampleCount) * durationMs));
+  }
+  for (const s of exactStops) {
+    set.add(Math.max(0, Math.min(durationMs, Math.round(s))));
+  }
+  return [...set].sort((a, b) => a - b);
+}
+
+function pickDominantEasing(tracks: readonly AnimationTrack[]): string {
+  for (const track of tracks) {
+    const sorted = sortKeyframes(track.keyframes);
+    for (let i = 1; i < sorted.length; i += 1) {
+      const a = sorted[i - 1];
+      const b = sorted[i];
+      const changes =
+        typeof a.value === 'number' && typeof b.value === 'number'
+          ? Math.abs(a.value - b.value) > 1e-4
+          : String(a.value) !== String(b.value);
+      if (changes) {
+        return toCssTimingFunction(b.easing);
+      }
+    }
+  }
+  for (const track of tracks) {
+    const sorted = sortKeyframes(track.keyframes);
+    if (sorted.length > 1) {
+      return toCssTimingFunction(sorted[1].easing);
+    }
+  }
+  return 'ease-out';
 }
 
 /**
@@ -216,13 +366,46 @@ export function collectPageMorphNodeIds(
   return result;
 }
 
+/**
+ * Returns a map from emitted `data-folio-id` to the `t=0` serialized `pathMorph`
+ * snapshot string so `htmlCssCompiler` can initialize `<path d="...">` with the
+ * exact starting shape of the animation (avoiding flash of un-morphed base geometry).
+ */
+export function collectPageInitialMorphSnapshots(
+  project: FolioProject,
+  page: FolioPage,
+): Map<string, string> {
+  const result = new Map<string, string>();
+  const pageClips = (project.animations ?? []).filter((clip) => clip.pageId === page.id);
+  const { scopedClips } = collectPageComponentInstanceAnimations(project, page);
+  for (const clip of [...pageClips, ...scopedClips]) {
+    if (!clip.autoplay) continue;
+    for (const track of clip.tracks) {
+      if (track.property !== 'pathMorph' || track.keyframes.length === 0) continue;
+      if (result.has(track.targetNodeId)) continue;
+      const sorted = sortKeyframes(track.keyframes);
+      if (typeof sorted[0]?.value === 'string') {
+        result.set(track.targetNodeId, sorted[0].value);
+      }
+    }
+  }
+  return result;
+}
+
 export function compilePageAnimationsCss(project: FolioProject, page: FolioPage): string {
   const pageClips = (project.animations ?? []).filter((clip) => clip.pageId === page.id && clip.tracks.length > 0);
   const { scopedClips, scopedNodesById } = collectPageComponentInstanceAnimations(project, page);
   const clips = [...pageClips, ...scopedClips];
   if (clips.length === 0) return '';
 
-  const nodesById = new Map<string, DesignNode>(page.document.nodes.map((node) => [node.id, node]));
+  // Solve Auto-Layout first so animation baseline (node.x, node.y, width, height)
+  // matches the exact CSS layout box emitted by compilePageHtmlCss!
+  const tokens = getProjectDesignTokens(project);
+  const solvedPageNodes = page.document.nodes.some((n) => n.layout && n.layout.mode !== 'none')
+    ? applyAutoLayoutToNodes(page.document.nodes, undefined, tokens)
+    : page.document.nodes;
+
+  const nodesById = new Map<string, DesignNode>(solvedPageNodes.map((node) => [node.id, node]));
   for (const [scopedId, scopedNode] of scopedNodesById.entries()) {
     nodesById.set(scopedId, scopedNode);
   }
@@ -321,85 +504,6 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       const nearestAnimatedAncestor = animatedAncestors[0] ?? null;
       const directParent = getValidParent(node);
 
-      // Union this node's stop timestamps with any animated ancestor's stop timestamps
-      // so child compensation stays locked to parent motion at every intermediate keyframe.
-      const stopSet = new Set<number>([0, clip.durationMs]);
-      for (const track of nodeTracks) {
-        for (const kf of track.keyframes) {
-          stopSet.add(Math.max(0, Math.min(clip.durationMs, Math.round(kf.timeMs))));
-        }
-      }
-      for (const anc of animatedAncestors) {
-        for (const ancTrack of tracksByNode.get(anc.id) ?? []) {
-          for (const kf of ancTrack.keyframes) {
-            stopSet.add(Math.max(0, Math.min(clip.durationMs, Math.round(kf.timeMs))));
-          }
-        }
-      }
-      const stops = [...stopSet].sort((a, b) => a - b);
-
-      // Pick dominant easing from the first non-initial keyframe for overall timing
-      let dominantEasing = 'ease-out';
-      for (const track of nodeTracks) {
-        const sorted = sortKeyframes(track.keyframes);
-        if (sorted.length > 1) {
-          dominantEasing = toCssTimingFunction(sorted[1].easing);
-          break;
-        }
-      }
-
-      // Determine whether this node has static constraint centering that must be preserved in transform
-      const parentIsAutoLayout = Boolean(directParent?.layout && directParent.layout.mode !== 'none');
-      const isOutOfFlowInAutoLayout =
-        parentIsAutoLayout
-        && (node.layoutChild?.position === 'absolute' || node.layoutChild?.position === 'fixed');
-      const hasExplicitInsets = Boolean(
-        node.layoutChild?.inset
-        && (node.layoutChild.inset.top || node.layoutChild.inset.right || node.layoutChild.inset.bottom || node.layoutChild.inset.left),
-      );
-      const constraints = isOutOfFlowInAutoLayout && !hasExplicitInsets ? node.layoutChild?.constraints : undefined;
-      const parentStaticWorldRot = getEffectiveParentStaticWorldRotation(node);
-      const staticLocalRot = roundCssNum(getEffectiveStaticWorldRotation(node) - parentStaticWorldRot);
-
-      // Check whether static CSS emitted a border on this node
-      const hasStaticBorder =
-        (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse')
-          ? Boolean(
-              node.style.borderSides
-              || (node.style.strokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none'),
-            )
-          : node.type === 'image'
-            ? Boolean(
-                node.style.borderSides
-                || ((node.style.strokeWidth ?? 0) > 0 && node.style.stroke && node.style.stroke !== 'none'),
-              )
-            : false;
-
-      const hasStaticMultiFill =
-        (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse')
-        && Array.isArray(node.style.fills)
-        && node.style.fills.some((f) => f.visible !== false && f.type !== 'solid');
-
-      const heightTrack = nodeTracks.find((t) => t.property === 'height');
-      const textHeightActuallyChanges =
-        node.type === 'text'
-          ? Boolean(
-              (heightTrack && trackValuesVary(heightTrack))
-              || node.style.verticalAlign === 'middle'
-              || node.style.verticalAlign === 'bottom',
-            )
-          : true;
-
-      // Check if segments use mixed easings so we only emit per-stop animation-timing-function when needed
-      const segmentEasings: Array<string | null> = stops.map((stopMs, idx) => {
-        if (idx >= stops.length - 1) return null;
-        const seg = resolveSegmentEasing(nodeTracks, stopMs, stops[idx + 1]);
-        return seg ? toCssTimingFunction(seg) : null;
-      });
-      const hasMixedEasings = segmentEasings.some((e) => e !== null && e !== dominantEasing);
-
-      const svgPathKeyframeLines: string[] = [];
-      const svgPolygonKeyframeLines: string[] = [];
       const isMorphSvgNode = morphNodeIds.has(node.id);
       const isPathNode = node.type === 'path' || isMorphSvgNode;
       const isBoxShadowNode =
@@ -411,7 +515,119 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
         node.points.length >= 2 &&
         Boolean(node.style.arrowStart || node.style.arrowEnd);
 
-      const trackedProps = new Set(nodeTracks.map((t) => t.property));
+      // Partition tracks into wrapper-CSS tracks vs SVG-element tracks (`> svg path` / `polygon`)
+      // so SVG color/stroke animations do not pollute wrapper transform timing or vice versa!
+      const svgTargetedProps = new Set<AnimationTrack['property']>(
+        isPathNode ? ['fill', 'stroke', 'strokeWidth'] : [],
+      );
+      const wrapperTracks = nodeTracks.filter(
+        (t) => t.property !== 'pathMorph' && !svgTargetedProps.has(t.property),
+      );
+      const svgTracks = nodeTracks.filter((t) => svgTargetedProps.has(t.property));
+
+      const ancestorTracksForWrapper: AnimationTrack[] = [];
+      for (const anc of animatedAncestors) {
+        for (const ancTrack of tracksByNode.get(anc.id) ?? []) {
+          if (
+            ancTrack.property === 'x' ||
+            ancTrack.property === 'y' ||
+            ancTrack.property === 'width' ||
+            ancTrack.property === 'height' ||
+            ancTrack.property === 'rotation' ||
+            ancTrack.property === 'scale' ||
+            ancTrack.property === 'opacity'
+          ) {
+            ancestorTracksForWrapper.push(ancTrack);
+          }
+        }
+      }
+
+      const directParentHasAnimRot = Boolean(
+        directParent &&
+          directParent.type !== 'group' &&
+          tracksByNode.get(directParent.id)?.some((t) => t.property === 'rotation' && trackValuesVary(t)),
+      );
+
+      // Build wrapper stop timestamps
+      const wrapperStopSet = new Set<number>([0, clip.durationMs]);
+      for (const track of wrapperTracks) {
+        for (const kf of track.keyframes) {
+          wrapperStopSet.add(Math.max(0, Math.min(clip.durationMs, Math.round(kf.timeMs))));
+        }
+      }
+      for (const ancTrack of ancestorTracksForWrapper) {
+        for (const kf of ancTrack.keyframes) {
+          wrapperStopSet.add(Math.max(0, Math.min(clip.durationMs, Math.round(kf.timeMs))));
+        }
+      }
+      const rawWrapperStops = [...wrapperStopSet].sort((a, b) => a - b);
+      const useDenseWrapperLinear = tracksRequireDenseLinearSampling(
+        wrapperTracks,
+        clip.durationMs,
+        ancestorTracksForWrapper,
+        directParentHasAnimRot,
+      );
+      const stops = useDenseWrapperLinear
+        ? buildDenseTimestamps(clip.durationMs, rawWrapperStops)
+        : rawWrapperStops;
+
+      const dominantEasing = useDenseWrapperLinear ? 'linear' : pickDominantEasing(wrapperTracks);
+
+      // Determine whether this node has static constraint centering that must be preserved in transform
+      const parentIsAutoLayout = Boolean(directParent?.layout && directParent.layout.mode !== 'none');
+      const isOutOfFlowInAutoLayout =
+        parentIsAutoLayout &&
+        (node.layoutChild?.position === 'absolute' || node.layoutChild?.position === 'fixed');
+      const hasExplicitInsets = Boolean(
+        node.layoutChild?.inset &&
+          (node.layoutChild.inset.top ||
+            node.layoutChild.inset.right ||
+            node.layoutChild.inset.bottom ||
+            node.layoutChild.inset.left),
+      );
+      const constraints = isOutOfFlowInAutoLayout && !hasExplicitInsets ? node.layoutChild?.constraints : undefined;
+      const parentStaticWorldRot = getEffectiveParentStaticWorldRotation(node);
+      const staticLocalRot = roundCssNum(getEffectiveStaticWorldRotation(node) - parentStaticWorldRot);
+
+      // Check whether static CSS emitted a border on this node
+      const hasStaticBorder =
+        node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse'
+          ? Boolean(
+              node.style.borderSides ||
+                (node.style.strokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none'),
+            )
+          : node.type === 'image'
+            ? Boolean(
+                node.style.borderSides ||
+                  ((node.style.strokeWidth ?? 0) > 0 && node.style.stroke && node.style.stroke !== 'none'),
+              )
+            : false;
+
+      const hasStaticMultiFill =
+        (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') &&
+        Array.isArray(node.style.fills) &&
+        node.style.fills.some((f) => f.visible !== false && f.type !== 'solid');
+
+      const heightTrack = wrapperTracks.find((t) => t.property === 'height');
+      const textHeightActuallyChanges =
+        node.type === 'text'
+          ? Boolean(
+              (heightTrack && trackValuesVary(heightTrack)) ||
+                node.style.verticalAlign === 'middle' ||
+                node.style.verticalAlign === 'bottom',
+            )
+          : true;
+
+      const segmentEasings: Array<string | null> = useDenseWrapperLinear
+        ? stops.map(() => null)
+        : stops.map((stopMs, idx) => {
+            if (idx >= stops.length - 1) return null;
+            const seg = resolveSegmentEasing(wrapperTracks, stopMs, stops[idx + 1]);
+            return seg ? toCssTimingFunction(seg) : null;
+          });
+      const hasMixedEasings = !useDenseWrapperLinear && segmentEasings.some((e) => e !== null && e !== dominantEasing);
+
+      const trackedProps = new Set(wrapperTracks.map((t) => t.property));
       const hasShadowTracks =
         trackedProps.has('shadowOffsetX') ||
         trackedProps.has('shadowOffsetY') ||
@@ -453,12 +669,12 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       for (let stopIdx = 0; stopIdx < stops.length; stopIdx += 1) {
         const stopMs = stops[stopIdx];
         const declarations: string[] = [];
-        const svgPathDecls: string[] = [];
-        const svgPolyDecls: string[] = [];
         let rawWorldDx = 0;
         let rawWorldDy = 0;
         let hasXTrack = false;
         let hasYTrack = false;
+        let evalWidth: number | undefined;
+        let evalHeight: number | undefined;
         let rotationVal: number | undefined;
         let scale: number | undefined;
         let hasTransform = false;
@@ -474,7 +690,7 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
         let stopSaturate: number | undefined;
         let stopGrayscale: number | undefined;
 
-        for (const track of nodeTracks) {
+        for (const track of wrapperTracks) {
           const val = evaluateTrackAtTime(track, stopMs);
           if (val === undefined) continue;
           if (track.property === 'x') {
@@ -486,10 +702,18 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
             hasYTrack = true;
             hasTransform = true;
           } else if (track.property === 'width') {
-            declarations.push(`width: ${Math.max(1, roundCssNum(Number(val)))}px;`);
+            evalWidth = Math.max(1, roundCssNum(Number(val)));
+            if (node.type === 'component-instance') {
+              hasTransform = true;
+            } else {
+              declarations.push(`width: ${evalWidth}px;`);
+            }
           } else if (track.property === 'height') {
-            if (textHeightActuallyChanges) {
-              declarations.push(`height: ${Math.max(1, roundCssNum(Number(val)))}px;`);
+            evalHeight = Math.max(1, roundCssNum(Number(val)));
+            if (node.type === 'component-instance') {
+              hasTransform = true;
+            } else if (textHeightActuallyChanges) {
+              declarations.push(`height: ${evalHeight}px;`);
             }
           } else if (track.property === 'rotation') {
             if (!(node.type === 'group' && hasAnimatedDescendant.has(node.id))) {
@@ -514,9 +738,7 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
             declarations.push(`border-radius: ${Math.max(0, roundCssNum(Number(val)))}px;`);
           } else if (track.property === 'fill') {
             const safeColor = sanitizeCssValue(String(val), 'rgba(0, 0, 0, 0)');
-            if (isPathNode) {
-              svgPathDecls.push(`fill: ${safeColor};`);
-            } else if (node.type === 'text') {
+            if (node.type === 'text') {
               declarations.push(`color: ${safeColor};`);
             } else {
               if (hasStaticMultiFill && trackValuesVary(track)) {
@@ -526,24 +748,13 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
             }
           } else if (track.property === 'stroke') {
             const safeStroke = sanitizeCssValue(String(val), 'rgba(0, 0, 0, 0)');
-            if (isPathNode) {
-              svgPathDecls.push(`stroke: ${safeStroke};`);
-              if (pathHasArrows) {
-                svgPolyDecls.push(`fill: ${safeStroke};`);
-              }
-            } else {
-              declarations.push(`border-color: ${safeStroke};`);
-            }
+            declarations.push(`border-color: ${safeStroke};`);
           } else if (track.property === 'strokeWidth') {
             const sw = Math.max(0, roundCssNum(Number(val)));
-            if (isPathNode) {
-              svgPathDecls.push(`stroke-width: ${sw}px;`);
-            } else {
-              if (!hasStaticBorder && sw > 0) {
-                declarations.push('border-style: solid;');
-              }
-              declarations.push(`border-width: ${sw}px;`);
+            if (!hasStaticBorder && sw > 0) {
+              declarations.push('border-style: solid;');
             }
+            declarations.push(`border-width: ${sw}px;`);
           } else if (track.property === 'layerBlur') {
             stopLayerBlur = Math.max(0, roundCssNum(Number(val)));
           } else if (track.property === 'backdropBlur') {
@@ -621,6 +832,22 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
           declarations.push(`box-shadow: ${allShadows.join(', ')};`);
         }
 
+        // For component-instance width/height animation, scale interior cleanly via transform
+        // and shift center by half the size delta so top-left stays anchored to x/y like Canvas.
+        let scaleX = scale;
+        let scaleY = scale;
+        if (node.type === 'component-instance' && (evalWidth !== undefined || evalHeight !== undefined)) {
+          const wRatio = (evalWidth ?? node.width) / Math.max(1, node.width);
+          const hRatio = (evalHeight ?? node.height) / Math.max(1, node.height);
+          const baseScale = scale ?? 1;
+          scaleX = Math.round(wRatio * baseScale * 1000) / 1000;
+          scaleY = Math.round(hRatio * baseScale * 1000) / 1000;
+          rawWorldDx += ((evalWidth ?? node.width) - node.width) / 2;
+          rawWorldDy += ((evalHeight ?? node.height) - node.height) / 2;
+          hasXTrack = true;
+          hasYTrack = true;
+        }
+
         // Subtract nearest animated ancestor's world translation so nested children never double-translate
         let ancWorldDx = 0;
         let ancWorldDy = 0;
@@ -641,18 +868,58 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
           }
         }
 
-        const netWorldDx = hasXTrack ? rawWorldDx - ancWorldDx : 0;
-        const netWorldDy = hasYTrack ? rawWorldDy - ancWorldDy : 0;
+        const parentAnimWorldRot = directParent
+          ? getEffectiveAnimWorldRotation(directParent, stopMs)
+          : 0;
 
-        // Project world delta into parent's rotated local coordinate space if parent is rotated
-        let localDx = netWorldDx;
-        let localDy = netWorldDy;
-        if ((Math.abs(netWorldDx) > 0.001 || Math.abs(netWorldDy) > 0.001) && Math.abs(parentStaticWorldRot) > 0.01) {
+        // Project world delta into parent's rotated local coordinate space (handling animated parent rotation!)
+        let localDx = hasXTrack ? rawWorldDx - ancWorldDx : 0;
+        let localDy = hasYTrack ? rawWorldDy - ancWorldDy : 0;
+        if (
+          directParent &&
+          directParent.type !== 'group' &&
+          (hasXTrack || hasYTrack) &&
+          Math.abs(parentAnimWorldRot - parentStaticWorldRot) > 0.01
+        ) {
+          const pcx0 = directParent.x + directParent.width / 2;
+          const pcy0 = directParent.y + directParent.height / 2;
+          const pEvalW = Number(evalProp(directParent.id, 'width', stopMs) ?? directParent.width);
+          const pEvalH = Number(evalProp(directParent.id, 'height', stopMs) ?? directParent.height);
+          const pcxAnim = Number(evalProp(directParent.id, 'x', stopMs) ?? directParent.x) + pEvalW / 2;
+          const pcyAnim = Number(evalProp(directParent.id, 'y', stopMs) ?? directParent.y) + pEvalH / 2;
+
+          const ccx0 = node.x + node.width / 2;
+          const ccy0 = node.y + node.height / 2;
+          const ccxAnim = node.x + rawWorldDx + (evalWidth ?? node.width) / 2;
+          const ccyAnim = node.y + rawWorldDy + (evalHeight ?? node.height) / 2;
+
+          const sRad = (parentStaticWorldRot * Math.PI) / 180;
+          const sCos = Math.cos(sRad);
+          const sSin = Math.sin(sRad);
+          const c0LocalX = (ccx0 - pcx0) * sCos + (ccy0 - pcy0) * sSin;
+          const c0LocalY = -(ccx0 - pcx0) * sSin + (ccy0 - pcy0) * sCos;
+
+          const aRad = (parentAnimWorldRot * Math.PI) / 180;
+          const aCos = Math.cos(aRad);
+          const aSin = Math.sin(aRad);
+          const targetLocalX = (ccxAnim - pcxAnim) * aCos + (ccyAnim - pcyAnim) * aSin;
+          const targetLocalY = -(ccxAnim - pcxAnim) * aSin + (ccyAnim - pcyAnim) * aCos;
+
+          const sizeShiftX = node.type === 'component-instance' ? 0 : ((evalWidth ?? node.width) - node.width) / 2;
+          const sizeShiftY = node.type === 'component-instance' ? 0 : ((evalHeight ?? node.height) - node.height) / 2;
+          localDx = targetLocalX - c0LocalX - sizeShiftX;
+          localDy = targetLocalY - c0LocalY - sizeShiftY;
+        } else if (
+          (Math.abs(localDx) > 0.001 || Math.abs(localDy) > 0.001) &&
+          Math.abs(parentStaticWorldRot) > 0.01
+        ) {
           const rad = (parentStaticWorldRot * Math.PI) / 180;
           const cos = Math.cos(rad);
           const sin = Math.sin(rad);
-          localDx = netWorldDx * cos + netWorldDy * sin;
-          localDy = -netWorldDx * sin + netWorldDy * cos;
+          const nextLocalDx = localDx * cos + localDy * sin;
+          const nextLocalDy = -localDx * sin + localDy * cos;
+          localDx = nextLocalDx;
+          localDy = nextLocalDy;
         }
         const dx = roundCssNum(localDx);
         const dy = roundCssNum(localDy);
@@ -660,18 +927,10 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
         // Compute effective local rotation (preserving static rotation when rotation isn't keyed,
         // and subtracting animated parent rotation to prevent double-rotation)
         let effectiveLocalRot: number | undefined;
-        const parentAnimWorldRot = directParent
-          ? getEffectiveAnimWorldRotation(directParent, stopMs)
-          : 0;
         if (rotationVal !== undefined) {
           effectiveLocalRot = roundCssNum(rotationVal - parentAnimWorldRot);
-        } else if (hasTransform) {
-          const preservedRot = roundCssNum(getEffectiveStaticWorldRotation(node) - parentAnimWorldRot);
-          if (Math.abs(preservedRot) > 0.01) {
-            effectiveLocalRot = preservedRot;
-          } else if (Math.abs(staticLocalRot) > 0.01) {
-            effectiveLocalRot = staticLocalRot;
-          }
+        } else if (hasTransform && Math.abs(staticLocalRot) > 0.01) {
+          effectiveLocalRot = staticLocalRot;
         }
 
         if (hasTransform) {
@@ -680,7 +939,9 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
           if (constraints?.vertical === 'center') parts.push('translateY(-50%)');
           if (dx !== 0 || dy !== 0) parts.push(`translate(${dx}px, ${dy}px)`);
           if (effectiveLocalRot !== undefined) parts.push(`rotate(${effectiveLocalRot}deg)`);
-          if (scale !== undefined) parts.push(`scale(${scale})`);
+          if (scaleX !== undefined && scaleY !== undefined) {
+            parts.push(Math.abs(scaleX - scaleY) < 0.001 ? `scale(${scaleX})` : `scale(${scaleX}, ${scaleY})`);
+          }
           declarations.push(`transform: ${parts.length > 0 ? parts.join(' ') : 'none'};`);
         }
 
@@ -690,18 +951,6 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
 
         if (declarations.length > 0) {
           lines.push(`  ${formatPct(stopMs, clip.durationMs)} { ${declarations.join(' ')} }`);
-        }
-        if (svgPathDecls.length > 0) {
-          if (hasMixedEasings && stopIdx < stops.length - 1 && segmentEasings[stopIdx]) {
-            svgPathDecls.push(`animation-timing-function: ${segmentEasings[stopIdx]};`);
-          }
-          svgPathKeyframeLines.push(`  ${formatPct(stopMs, clip.durationMs)} { ${svgPathDecls.join(' ')} }`);
-        }
-        if (svgPolyDecls.length > 0) {
-          if (hasMixedEasings && stopIdx < stops.length - 1 && segmentEasings[stopIdx]) {
-            svgPolyDecls.push(`animation-timing-function: ${segmentEasings[stopIdx]};`);
-          }
-          svgPolygonKeyframeLines.push(`  ${formatPct(stopMs, clip.durationMs)} { ${svgPolyDecls.join(' ')} }`);
         }
       }
       lines.push('}');
@@ -729,56 +978,119 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
         `.${playClass}--stopped ${attrSelector}, ${attrSelector}.${playClass}--stopped { animation: none; }`,
       );
 
-      if (svgPathKeyframeLines.length > 0) {
-        const svgKfName = `${kfName}--svg`;
-        const pathSel = `${attrSelector} > svg path`;
-        const svgAnimSpec = `${svgKfName} ${clip.durationMs}ms ${dominantEasing} ${iteration} ${fillMode}`;
-        if (clip.autoplay) {
-          const list = autoplaySvgPathSpecs.get(nodeId) ?? [];
-          list.push(svgAnimSpec);
-          autoplaySvgPathSpecs.set(nodeId, list);
+      // Build independent SVG path & arrowhead polygon @keyframes with their own accurate timing!
+      if (svgTracks.length > 0) {
+        const svgStopSet = new Set<number>([0, clip.durationMs]);
+        for (const track of svgTracks) {
+          for (const kf of track.keyframes) {
+            svgStopSet.add(Math.max(0, Math.min(clip.durationMs, Math.round(kf.timeMs))));
+          }
         }
-        lines.push(`@keyframes ${svgKfName} {`);
-        lines.push(...svgPathKeyframeLines);
-        lines.push('}');
-        lines.push(
-          `.${playClass} ${pathSel}, ${attrSelector}.${playClass} > svg path { animation: ${svgAnimSpec}; }`,
-        );
-        lines.push(
-          `.${playClass}--reverse ${pathSel}, ${attrSelector}.${playClass}--reverse > svg path { animation-direction: reverse; }`,
-        );
-        lines.push(
-          `.${playClass}--paused ${pathSel}, ${attrSelector}.${playClass}--paused > svg path { animation-play-state: paused; }`,
-        );
-        lines.push(
-          `.${playClass}--stopped ${pathSel}, ${attrSelector}.${playClass}--stopped > svg path { animation: none; }`,
-        );
-      }
+        const rawSvgStops = [...svgStopSet].sort((a, b) => a - b);
+        const useDenseSvgLinear = tracksRequireDenseLinearSampling(svgTracks, clip.durationMs, [], false);
+        const svgStops = useDenseSvgLinear
+          ? buildDenseTimestamps(clip.durationMs, rawSvgStops)
+          : rawSvgStops;
+        const svgDominantEasing = useDenseSvgLinear ? 'linear' : pickDominantEasing(svgTracks);
+        const svgSegmentEasings: Array<string | null> = useDenseSvgLinear
+          ? svgStops.map(() => null)
+          : svgStops.map((stopMs, idx) => {
+              if (idx >= svgStops.length - 1) return null;
+              const seg = resolveSegmentEasing(svgTracks, stopMs, svgStops[idx + 1]);
+              return seg ? toCssTimingFunction(seg) : null;
+            });
+        const svgHasMixedEasings =
+          !useDenseSvgLinear && svgSegmentEasings.some((e) => e !== null && e !== svgDominantEasing);
 
-      if (svgPolygonKeyframeLines.length > 0) {
-        const polyKfName = `${kfName}--poly`;
-        const polySel = `${attrSelector} > svg polygon`;
-        const polyAnimSpec = `${polyKfName} ${clip.durationMs}ms ${dominantEasing} ${iteration} ${fillMode}`;
-        if (clip.autoplay) {
-          const list = autoplaySvgPolySpecs.get(nodeId) ?? [];
-          list.push(polyAnimSpec);
-          autoplaySvgPolySpecs.set(nodeId, list);
+        const svgPathKeyframeLines: string[] = [];
+        const svgPolygonKeyframeLines: string[] = [];
+
+        for (let stopIdx = 0; stopIdx < svgStops.length; stopIdx += 1) {
+          const stopMs = svgStops[stopIdx];
+          const svgPathDecls: string[] = [];
+          const svgPolyDecls: string[] = [];
+          for (const track of svgTracks) {
+            const val = evaluateTrackAtTime(track, stopMs);
+            if (val === undefined) continue;
+            if (track.property === 'fill') {
+              const safeColor = sanitizeCssValue(String(val), 'rgba(0, 0, 0, 0)');
+              svgPathDecls.push(`fill: ${safeColor};`);
+            } else if (track.property === 'stroke') {
+              const safeStroke = sanitizeCssValue(String(val), 'rgba(0, 0, 0, 0)');
+              svgPathDecls.push(`stroke: ${safeStroke};`);
+              if (pathHasArrows) {
+                svgPolyDecls.push(`fill: ${safeStroke};`);
+              }
+            } else if (track.property === 'strokeWidth') {
+              const sw = Math.max(0, roundCssNum(Number(val)));
+              svgPathDecls.push(`stroke-width: ${sw}px;`);
+            }
+          }
+          if (svgPathDecls.length > 0) {
+            if (svgHasMixedEasings && stopIdx < svgStops.length - 1 && svgSegmentEasings[stopIdx]) {
+              svgPathDecls.push(`animation-timing-function: ${svgSegmentEasings[stopIdx]};`);
+            }
+            svgPathKeyframeLines.push(`  ${formatPct(stopMs, clip.durationMs)} { ${svgPathDecls.join(' ')} }`);
+          }
+          if (svgPolyDecls.length > 0) {
+            if (svgHasMixedEasings && stopIdx < svgStops.length - 1 && svgSegmentEasings[stopIdx]) {
+              svgPolyDecls.push(`animation-timing-function: ${svgSegmentEasings[stopIdx]};`);
+            }
+            svgPolygonKeyframeLines.push(`  ${formatPct(stopMs, clip.durationMs)} { ${svgPolyDecls.join(' ')} }`);
+          }
         }
-        lines.push(`@keyframes ${polyKfName} {`);
-        lines.push(...svgPolygonKeyframeLines);
-        lines.push('}');
-        lines.push(
-          `.${playClass} ${polySel}, ${attrSelector}.${playClass} > svg polygon { animation: ${polyAnimSpec}; }`,
-        );
-        lines.push(
-          `.${playClass}--reverse ${polySel}, ${attrSelector}.${playClass}--reverse > svg polygon { animation-direction: reverse; }`,
-        );
-        lines.push(
-          `.${playClass}--paused ${polySel}, ${attrSelector}.${playClass}--paused > svg polygon { animation-play-state: paused; }`,
-        );
-        lines.push(
-          `.${playClass}--stopped ${polySel}, ${attrSelector}.${playClass}--stopped > svg polygon { animation: none; }`,
-        );
+
+        if (svgPathKeyframeLines.length > 0) {
+          const svgKfName = `${kfName}--svg`;
+          const pathSel = `${attrSelector} > svg path`;
+          const svgAnimSpec = `${svgKfName} ${clip.durationMs}ms ${svgDominantEasing} ${iteration} ${fillMode}`;
+          if (clip.autoplay) {
+            const list = autoplaySvgPathSpecs.get(nodeId) ?? [];
+            list.push(svgAnimSpec);
+            autoplaySvgPathSpecs.set(nodeId, list);
+          }
+          lines.push(`@keyframes ${svgKfName} {`);
+          lines.push(...svgPathKeyframeLines);
+          lines.push('}');
+          lines.push(
+            `.${playClass} ${pathSel}, ${attrSelector}.${playClass} > svg path { animation: ${svgAnimSpec}; }`,
+          );
+          lines.push(
+            `.${playClass}--reverse ${pathSel}, ${attrSelector}.${playClass}--reverse > svg path { animation-direction: reverse; }`,
+          );
+          lines.push(
+            `.${playClass}--paused ${pathSel}, ${attrSelector}.${playClass}--paused > svg path { animation-play-state: paused; }`,
+          );
+          lines.push(
+            `.${playClass}--stopped ${pathSel}, ${attrSelector}.${playClass}--stopped > svg path { animation: none; }`,
+          );
+        }
+
+        if (svgPolygonKeyframeLines.length > 0) {
+          const polyKfName = `${kfName}--poly`;
+          const polySel = `${attrSelector} > svg polygon`;
+          const polyAnimSpec = `${polyKfName} ${clip.durationMs}ms ${svgDominantEasing} ${iteration} ${fillMode}`;
+          if (clip.autoplay) {
+            const list = autoplaySvgPolySpecs.get(nodeId) ?? [];
+            list.push(polyAnimSpec);
+            autoplaySvgPolySpecs.set(nodeId, list);
+          }
+          lines.push(`@keyframes ${polyKfName} {`);
+          lines.push(...svgPolygonKeyframeLines);
+          lines.push('}');
+          lines.push(
+            `.${playClass} ${polySel}, ${attrSelector}.${playClass} > svg polygon { animation: ${polyAnimSpec}; }`,
+          );
+          lines.push(
+            `.${playClass}--reverse ${polySel}, ${attrSelector}.${playClass}--reverse > svg polygon { animation-direction: reverse; }`,
+          );
+          lines.push(
+            `.${playClass}--paused ${polySel}, ${attrSelector}.${playClass}--paused > svg polygon { animation-play-state: paused; }`,
+          );
+          lines.push(
+            `.${playClass}--stopped ${polySel}, ${attrSelector}.${playClass}--stopped > svg polygon { animation: none; }`,
+          );
+        }
       }
     }
   }
@@ -832,10 +1144,18 @@ export function buildLivePreviewAnimationPayload(
     }));
 }
 
+type CompiledMorphEasing =
+  | 'linear'
+  | 'spring'
+  | 'bounce-out'
+  | 'elastic-out'
+  | { t: 'cb'; b: readonly [number, number, number, number] }
+  | { t: 'lut'; y: number[] };
+
 interface CompiledMorphSegment {
   t0: number;
   t1: number;
-  bezier: readonly [number, number, number, number];
+  easing: CompiledMorphEasing;
   n: number;
   closed: boolean;
   /** Interleaved [x, y, hiX, hiY, hoX, hoY] * n (6 numbers per anchor) */
@@ -845,16 +1165,33 @@ interface CompiledMorphSegment {
 
 interface CompiledMorphTrack {
   nodeId: string;
+  kfName: string;
   segments: CompiledMorphSegment[];
 }
 
 interface CompiledMorphClip {
   id: string;
   className: string;
+  kfPrefix: string;
   durationMs: number;
   loop: boolean;
   autoplay: boolean;
   tracks: CompiledMorphTrack[];
+}
+
+function compileMorphEasing(easing: AnimationEasing): CompiledMorphEasing {
+  if (easing === 'linear' || easing === 'spring' || easing === 'bounce-out' || easing === 'elastic-out') {
+    return easing;
+  }
+  if (isMultiPointEasing(easing)) {
+    const steps = 32;
+    const y: number[] = [];
+    for (let i = 0; i <= steps; i += 1) {
+      y.push(Math.round(evaluateEasing(easing, i / steps) * 10000) / 10000);
+    }
+    return { t: 'lut', y };
+  }
+  return { t: 'cb', b: easingToCubicBezier(easing) };
 }
 
 function packBuffer6(buf: Float64Array, flags: Uint8Array, count: number): number[] {
@@ -877,7 +1214,9 @@ function packBuffer6(buf: Float64Array, flags: Uint8Array, count: number): numbe
 
 /**
  * Generates a compact, zero-`eval`, CSP-safe inline `<script>` that drives real
- * cubic Bezier Native Shape Morph animations inside Live Preview and HTML5 exports.
+ * cubic Bezier Native Shape Morph animations inside Live Preview and HTML5 exports,
+ * with exact Folio easing parity (`cubic-bezier`, `spring`, `bounce-out`, `elastic-out`,
+ * `multi-point`) and live Web Animations clock synchronization against CSS `@keyframes`.
  * Returns `''` when the page has no `pathMorph` tracks.
  */
 export function buildLivePreviewMorphScript(
@@ -904,7 +1243,7 @@ export function buildLivePreviewMorphScript(
           segments.push({
             t0: 0,
             t1: Math.max(1, clip.durationMs),
-            bezier: [0, 0, 1, 1],
+            easing: 'linear',
             n: pair.pointCount,
             closed: pair.closed,
             from: packed,
@@ -926,7 +1265,7 @@ export function buildLivePreviewMorphScript(
           segments.push({
             t0: Math.round(a.timeMs),
             t1: Math.round(b.timeMs),
-            bezier: easingToCubicBezier(b.easing),
+            easing: compileMorphEasing(b.easing),
             n: pair.pointCount,
             closed: pair.closed,
             from: packBuffer6(pair.fromBuf, pair.flags, pair.pointCount),
@@ -938,6 +1277,7 @@ export function buildLivePreviewMorphScript(
       if (segments.length > 0) {
         morphTracks.push({
           nodeId: track.targetNodeId,
+          kfName: getKeyframesName(clip.id, track.targetNodeId),
           segments,
         });
       }
@@ -947,6 +1287,7 @@ export function buildLivePreviewMorphScript(
       compiledClips.push({
         id: clip.id,
         className: getClipCssClassName(clip),
+        kfPrefix: `folio-kf-${slugifyMotionId(clip.id)}-`,
         durationMs: Math.max(1, clip.durationMs),
         loop: clip.loop,
         autoplay: clip.autoplay,
@@ -964,17 +1305,44 @@ export function buildLivePreviewMorphScript(
     '  var reduced=typeof window!=="undefined"&&window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;',
     '  function solveBezier(b,x){',
     '    if(x<=0)return 0;if(x>=1)return 1;',
-    '    var x1=b[0],y1=b[1],x2=b[2],y2=b[3];',
-    '    if(x1===y1&&x2===y2)return x;',
-    '    var t=x;',
-    '    for(var i=0;i<6;i++){',
-    '      var mt=1-t;',
-    '      var cx=3*mt*mt*t*x1+3*mt*t*t*x2+t*t*t-x;',
-    '      var dx=3*mt*mt*x1+6*mt*t*(x2-x1)+3*t*t*(1-x2);',
-    '      if(Math.abs(dx)<1e-5)break;',
-    '      t-=cx/dx;if(t<0)t=0;if(t>1)t=1;',
+    '    var x1=Math.max(0,Math.min(1,b[0])),y1=b[1],x2=Math.max(0,Math.min(1,b[2])),y2=b[3];',
+    '    if(Math.abs(x1-y1)<1e-6&&Math.abs(x2-y2)<1e-6)return x;',
+    '    var cx=3*x1,bx=3*(x2-x1)-cx,ax=1-cx-bx;',
+    '    var cy=3*y1,by=3*(y2-y1)-cy,ay=1-cy-by;',
+    '    var u=x;',
+    '    for(var i=0;i<8;i++){',
+    '      var xe=((ax*u+bx)*u+cx)*u-x;',
+    '      if(Math.abs(xe)<1e-6)return((ay*u+by)*u+cy)*u;',
+    '      var dx=(3*ax*u+2*bx)*u+cx;',
+    '      if(Math.abs(dx)<1e-6)break;',
+    '      u-=xe/dx;',
     '    }',
-    '    var m=1-t;return 3*m*m*t*y1+3*m*t*t*y2+t*t*t;',
+    '    var lo=0,hi=1;u=x;',
+    '    for(var k=0;k<18;k++){',
+    '      var xv=((ax*u+bx)*u+cx)*u;',
+    '      if(Math.abs(xv-x)<1e-6)break;',
+    '      if(x>xv)lo=u;else hi=u;u=0.5*(lo+hi);',
+    '    }',
+    '    return((ay*u+by)*u+cy)*u;',
+    '  }',
+    '  function evalEasing(e,x){',
+    '    if(x<=0)return 0;if(x>=1)return 1;',
+    '    if(e==="linear")return x;',
+    '    if(e==="spring")return 1-Math.exp(-6*x)*Math.cos(x*Math.PI*2.5);',
+    '    if(e==="elastic-out")return Math.pow(2,-10*x)*Math.sin((x*10-0.75)*(2*Math.PI/3))+1;',
+    '    if(e==="bounce-out"){',
+    '      var n1=7.5625,d1=2.75;',
+    '      if(x<1/d1)return n1*x*x;',
+    '      if(x<2/d1){x-=1.5/d1;return n1*x*x+0.75;}',
+    '      if(x<2.5/d1){x-=2.25/d1;return n1*x*x+0.9375;}',
+    '      x-=2.625/d1;return n1*x*x+0.984375;',
+    '    }',
+    '    if(e&&e.t==="cb")return solveBezier(e.b,x);',
+    '    if(e&&e.t==="lut"&&e.y&&e.y.length>1){',
+    '      var idx=x*(e.y.length-1),lo=Math.floor(idx),hi=Math.min(e.y.length-1,lo+1),f=idx-lo;',
+    '      return e.y[lo]+(e.y[hi]-e.y[lo])*f;',
+    '    }',
+    '    return x;',
     '  }',
     '  function buildPathD(seg,t){',
     '    var n=seg.n,a=seg.from,b=seg.to,parts=[];',
@@ -1001,16 +1369,46 @@ export function buildLivePreviewMorphScript(
     '      if(timeMs>=s.t0&&timeMs<=s.t1){',
     '        var span=s.t1-s.t0;',
     '        var raw=span>0?(timeMs-s.t0)/span:1;',
-    '        return buildPathD(s,solveBezier(s.bezier,raw));',
+    '        return buildPathD(s,evalEasing(s.easing,raw));',
     '      }',
     '    }',
     '    return buildPathD(last,1);',
     '  }',
-    '  function findPathEl(nodeId){',
+    '  function findWrapEl(nodeId){',
     '    var esc=nodeId.replace(/"/g,"\\\\\\"");',
-    '    var wrap=document.querySelector("[data-folio-id=\\""+esc+"\\"]");',
-    '    if(!wrap)return null;',
-    '    return wrap.querySelector("svg path[data-folio-morph-path]")||wrap.querySelector("svg path");',
+    '    return document.querySelector("[data-folio-id=\\""+esc+"\\"]");',
+    '  }',
+    '  function findPathEls(nodeId){',
+    '    var wrap=findWrapEl(nodeId);',
+    '    if(!wrap)return[];',
+    '    var tagged=wrap.querySelectorAll("svg path[data-folio-morph-path]");',
+    '    if(tagged&&tagged.length)return tagged;',
+    '    var p=wrap.querySelector("svg path");',
+    '    return p?[p]:[];',
+    '  }',
+    '  function readSyncedCssTime(st){',
+    '    for(var i=0;i<st.clip.tracks.length;i++){',
+    '      var tr=st.clip.tracks[i];',
+    '      var wrap=findWrapEl(tr.nodeId);',
+    '      if(!wrap||typeof wrap.getAnimations!=="function")continue;',
+    '      var anims=wrap.getAnimations();',
+    '      for(var j=0;j<anims.length;j++){',
+    '        var an=anims[j];',
+    '        if(an&&an.animationName===tr.kfName&&an.currentTime!==null&&typeof an.currentTime==="number"&&isFinite(an.currentTime)){',
+    '          return{time:an.currentTime,state:an.playState};',
+    '        }',
+    '      }',
+    '    }',
+    '    if(st.clip.kfPrefix&&typeof document.getAnimations==="function"){',
+    '      var allAnims=document.getAnimations();',
+    '      for(var m=0;m<allAnims.length;m++){',
+    '        var a=allAnims[m];',
+    '        if(a&&typeof a.animationName==="string"&&a.animationName.indexOf(st.clip.kfPrefix)===0&&a.currentTime!==null&&typeof a.currentTime==="number"&&isFinite(a.currentTime)){',
+    '          return{time:a.currentTime,state:a.playState};',
+    '        }',
+    '      }',
+    '    }',
+    '    return null;',
     '  }',
     '  var states=CLIPS.map(function(clip){',
     '    return{clip:clip,playing:Boolean(clip.autoplay)&&!reduced,startAt:0,elapsed:0,reverse:false};',
@@ -1020,10 +1418,10 @@ export function buildLivePreviewMorphScript(
     '    if(t<0)t=0;if(t>st.clip.durationMs)t=st.clip.durationMs;',
     '    for(var i=0;i<st.clip.tracks.length;i++){',
     '      var tr=st.clip.tracks[i];',
-    '      var el=findPathEl(tr.nodeId);',
-    '      if(!el)continue;',
+    '      var els=findPathEls(tr.nodeId);',
+    '      if(!els.length)continue;',
     '      var d=evalTrack(tr,t);',
-    '      if(d)el.setAttribute("d",d);',
+    '      if(d){for(var k=0;k<els.length;k++)els[k].setAttribute("d",d);}',
     '    }',
     '  }',
     '  function syncClassState(){',
@@ -1048,11 +1446,20 @@ export function buildLivePreviewMorphScript(
     '    for(var i=0;i<states.length;i++){',
     '      var st=states[i];',
     '      if(!st.playing)continue;',
-    '      if(!st.startAt)st.startAt=now;',
-    '      var elapsed=now-st.startAt;',
-    '      if(st.clip.loop){elapsed=elapsed%st.clip.durationMs;anyActive=true;}',
-    '      else if(elapsed>=st.clip.durationMs){elapsed=st.clip.durationMs;st.playing=false;}',
-    '      else{anyActive=true;}',
+    '      var synced=readSyncedCssTime(st);',
+    '      var elapsed;',
+    '      if(synced){',
+    '        var ct=synced.time;',
+    '        if(st.clip.loop){elapsed=((ct%st.clip.durationMs)+st.clip.durationMs)%st.clip.durationMs;anyActive=true;}',
+    '        else if(ct>=st.clip.durationMs||synced.state==="finished"){elapsed=st.clip.durationMs;st.playing=false;}',
+    '        else{elapsed=Math.max(0,ct);anyActive=true;}',
+    '      }else{',
+    '        if(!st.startAt)st.startAt=now;',
+    '        elapsed=now-st.startAt;',
+    '        if(st.clip.loop){elapsed=elapsed%st.clip.durationMs;anyActive=true;}',
+    '        else if(elapsed>=st.clip.durationMs){elapsed=st.clip.durationMs;st.playing=false;}',
+    '        else{anyActive=true;}',
+    '      }',
     '      st.elapsed=elapsed;',
     '      renderAt(st,elapsed);',
     '    }',

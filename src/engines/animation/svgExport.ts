@@ -4,14 +4,19 @@
  * Emits self-contained, zero-JavaScript SVG SMIL (`<animate>`, `<animateTransform>`)
  * markup for both page-level animation clips and embedded animated components
  * (`component.animations`) so standalone `.svg` exports animate natively in every
- * modern browser (Chrome, Firefox, Safari, Edge).
+ * modern browser (Chrome, Firefox, Safari, Edge) with 1:1 fidelity to Canvas & Video.
  *
  * Supports:
  *   - Native Shape Morph (`pathMorph`) via `<animate attributeName="d" ... />`
- *     with topology-matched cubic Bezier contours (`M ... C ... Z`)
- *   - Transform tracks (`x`, `y`, `rotation`, `scale`) via `<animateTransform>`
- *   - Visual & box tracks (`opacity`, `fill`, `stroke`, `strokeWidth`, `width`, `height`, `radius`)
- *   - Accurate cubic-bezier `calcMode="spline"` `keySplines` and multi-point curve sampling
+ *     with flags-aware, topology-locked cubic Bezier contours (`M ... C ... Z`)
+ *     across 2-keyframe AND 3+ keyframe sequences with zero handle collapse or twist
+ *   - Transform tracks (`x`, `y`, `rotation`, `scale`, `width`, `height`) in exact
+ *     world-space `translate -> rotate -> scale` order (matching `evaluator.ts`)
+ *   - Animated parent Group / Frame transform & opacity propagation to descendants
+ *   - Visual & box tracks (`opacity`, `fill`, `stroke`, `strokeWidth`, `radius`)
+ *   - Strictly spec-compliant SMIL `keySplines` in `[0, 1]` with automatic high-density
+ *     `calcMode="linear"` sampling for overshoot, `spring`, `bounce-out`, `elastic-out`,
+ *     and `multi-point` easing curves
  */
 
 import type {
@@ -21,16 +26,26 @@ import type {
   AnimationTrack,
   ComponentDefinition,
   DesignNode,
+  FolioDocument,
   FolioPage,
   FolioProject,
 } from '../../core/document/types';
 import {
-  evaluatePreparedMorphPairToAnchors,
   parsePathMorphSnapshot,
   prepareMorphPair,
 } from '../../core/document/pathMorph';
+import { formatColorWithAlpha, isTransparentColor, parseColorWithAlpha } from '../../core/document/styling';
 import { easingToCubicBezier, evaluateEasing, isMultiPointEasing } from './easing';
-import { evaluateTrackAtTime, sortKeyframes } from './evaluator';
+import {
+  applyAnimatedPosesToDocument,
+  evaluateClipAtTime,
+  evaluateTrackAtTime,
+  sortKeyframes,
+} from './evaluator';
+
+const MORPH_STRIDE = 7;
+const FLAG_HI = 1;
+const FLAG_HO = 2;
 
 function escapeXmlAttr(value: string): string {
   return value
@@ -42,6 +57,7 @@ function escapeXmlAttr(value: string): string {
 }
 
 function fmtNum(n: number): string {
+  if (!Number.isFinite(n)) return '0';
   const rounded = Math.round(n * 100) / 100;
   return String(Object.is(rounded, -0) ? 0 : rounded);
 }
@@ -51,14 +67,34 @@ function fmtKeyTime(ratio: number): string {
   return String(Math.round(clamped * 10000) / 10000);
 }
 
+/**
+ * Per SVG SMIL 3.0 / Blink / Gecko / WebKit rules, ALL four values in
+ * `keySplines="x1 y1 x2 y2"` must lie strictly inside `[0, 1]` — overshoot
+ * cubic-beziers (`y < 0` or `y > 1`) are rejected by Chromium and break the
+ * entire `<animate>` element! Any non-cubic or overshoot easing MUST be sampled
+ * via `calcMode="linear"` instead.
+ */
+export function needsSmilSampling(easing: AnimationEasing): boolean {
+  if (isMultiPointEasing(easing)) return true;
+  if (
+    easing === 'spring' ||
+    easing === 'bounce-out' ||
+    easing === 'elastic-out' ||
+    easing === 'overshoot-out' ||
+    easing === 'back-in-out'
+  ) {
+    return true;
+  }
+  const [x1, y1, x2, y2] = easingToCubicBezier(easing);
+  return x1 < 0 || x1 > 1 || y1 < 0 || y1 > 1 || x2 < 0 || x2 > 1 || y2 < 0 || y2 > 1;
+}
+
 function formatEasingKeySpline(easing: AnimationEasing): string {
   const [x1, y1, x2, y2] = easingToCubicBezier(easing);
-  // SMIL keySplines requires x1,x2 in [0,1]; y1,y2 can overshoot in modern browsers,
-  // but clamping y softly to [-1.5, 2.5] avoids invalid parse rejection.
   const cx1 = Math.max(0, Math.min(1, x1));
+  const cy1 = Math.max(0, Math.min(1, y1));
   const cx2 = Math.max(0, Math.min(1, x2));
-  const cy1 = Math.max(-1.5, Math.min(2.5, y1));
-  const cy2 = Math.max(-1.5, Math.min(2.5, y2));
+  const cy2 = Math.max(0, Math.min(1, y2));
   return `${fmtNum(cx1)} ${fmtNum(cy1)} ${fmtNum(cx2)} ${fmtNum(cy2)}`;
 }
 
@@ -103,6 +139,45 @@ function anchorsToCubicSegments(
   return segs;
 }
 
+/**
+ * Converts a packed `PreparedMorphPair` Float64Array buffer (`fromBuf` or `toBuf`)
+ * into explicit `CubicSegment[]`, strictly honoring `flags` (`FLAG_HI = 1`, `FLAG_HO = 2`)
+ * so straight segments keep their anchor coordinates instead of collapsing control
+ * points to `(0, 0)`.
+ */
+function preparedBufferToCubicSegments(
+  buf: Float64Array,
+  flags: Uint8Array,
+  pointCount: number,
+  closed: boolean,
+): CubicSegment[] {
+  const segs: CubicSegment[] = [];
+  if (pointCount < 2) return segs;
+  const segCount = closed ? pointCount : pointCount - 1;
+  for (let i = 0; i < segCount; i += 1) {
+    const next = (i + 1) % pointCount;
+    const bi = i * MORPH_STRIDE;
+    const bn = next * MORPH_STRIDE;
+    const ax = buf[bi];
+    const ay = buf[bi + 1];
+    const bx = buf[bn];
+    const by = buf[bn + 1];
+    const hasOut = (flags[i] & FLAG_HO) !== 0;
+    const hasIn = (flags[next] & FLAG_HI) !== 0;
+    segs.push({
+      p0x: ax,
+      p0y: ay,
+      c1x: hasOut ? buf[bi + 4] : ax,
+      c1y: hasOut ? buf[bi + 5] : ay,
+      c2x: hasIn ? buf[bn + 2] : bx,
+      c2y: hasIn ? buf[bn + 3] : by,
+      p3x: bx,
+      p3y: by,
+    });
+  }
+  return segs;
+}
+
 function splitCubicAtHalf(s: CubicSegment): [CubicSegment, CubicSegment] {
   const m01x = (s.p0x + s.c1x) * 0.5;
   const m01y = (s.p0y + s.c1y) * 0.5;
@@ -135,27 +210,58 @@ function estimateSegmentLength(s: CubicSegment): number {
 }
 
 /**
- * Raises a cubic segment list to `targetCount` segments by iteratively splitting
- * the longest segment via exact de Casteljau midpoint subdivision.
- * Guarantees every `values` entry in SMIL `<animate attributeName="d">` has
- * identical `M ... C ... Z` command topology!
+ * Simultaneously elevates a matched `(fromSegs, toSegs)` pair to `targetCount`
+ * segments by splitting the SAME segment index in both contours via exact
+ * de Casteljau midpoint subdivision. Guarantees 100% locked 1-to-1 vertex
+ * correspondence and zero shape distortion across the entire morph transition.
  */
-function elevateSegmentsToCount(segs: readonly CubicSegment[], targetCount: number): CubicSegment[] {
-  const list = segs.map((s) => ({ ...s }));
-  while (list.length > 0 && list.length < targetCount) {
+function elevateSegmentPairToCount(
+  fromSegs: readonly CubicSegment[],
+  toSegs: readonly CubicSegment[],
+  targetCount: number,
+): { from: CubicSegment[]; to: CubicSegment[] } {
+  const fList = fromSegs.map((s) => ({ ...s }));
+  const tList = toSegs.map((s) => ({ ...s }));
+  while (fList.length > 0 && fList.length === tList.length && fList.length < targetCount) {
     let bestIdx = 0;
-    let bestLen = -1;
-    for (let i = 0; i < list.length; i += 1) {
-      const len = estimateSegmentLength(list[i]);
-      if (len > bestLen) {
-        bestLen = len;
+    let bestScore = -1;
+    for (let i = 0; i < fList.length; i += 1) {
+      const score = estimateSegmentLength(fList[i]) + estimateSegmentLength(tList[i]);
+      if (score > bestScore) {
+        bestScore = score;
         bestIdx = i;
       }
     }
-    const [left, right] = splitCubicAtHalf(list[bestIdx]);
-    list.splice(bestIdx, 1, left, right);
+    const [fl, fr] = splitCubicAtHalf(fList[bestIdx]);
+    const [tl, tr] = splitCubicAtHalf(tList[bestIdx]);
+    fList.splice(bestIdx, 1, fl, fr);
+    tList.splice(bestIdx, 1, tl, tr);
   }
-  return list;
+  return { from: fList, to: tList };
+}
+
+function lerpCubicSegments(
+  fromSegs: readonly CubicSegment[],
+  toSegs: readonly CubicSegment[],
+  t: number,
+): CubicSegment[] {
+  const n = Math.min(fromSegs.length, toSegs.length);
+  const out: CubicSegment[] = new Array(n);
+  for (let i = 0; i < n; i += 1) {
+    const a = fromSegs[i];
+    const b = toSegs[i];
+    out[i] = {
+      p0x: a.p0x + (b.p0x - a.p0x) * t,
+      p0y: a.p0y + (b.p0y - a.p0y) * t,
+      c1x: a.c1x + (b.c1x - a.c1x) * t,
+      c1y: a.c1y + (b.c1y - a.c1y) * t,
+      c2x: a.c2x + (b.c2x - a.c2x) * t,
+      c2y: a.c2y + (b.c2y - a.c2y) * t,
+      p3x: a.p3x + (b.p3x - a.p3x) * t,
+      p3y: a.p3y + (b.p3y - a.p3y) * t,
+    };
+  }
+  return out;
 }
 
 function serializeCubicSegmentsToSvgD(
@@ -169,29 +275,6 @@ function serializeCubicSegmentsToSvgD(
   for (const s of segs) {
     parts.push(
       `C ${fmtNum(s.c1x + offsetX)} ${fmtNum(s.c1y + offsetY)} ${fmtNum(s.c2x + offsetX)} ${fmtNum(s.c2y + offsetY)} ${fmtNum(s.p3x + offsetX)} ${fmtNum(s.p3y + offsetY)}`,
-    );
-  }
-  if (closed) parts.push('Z');
-  return parts.join(' ');
-}
-
-function buildPreparedBufferD(
-  buf: Float64Array,
-  pointCount: number,
-  closed: boolean,
-  offsetX = 0,
-  offsetY = 0,
-): string {
-  if (pointCount < 2) return '';
-  const STRIDE = 7;
-  const parts: string[] = [`M ${fmtNum(buf[0] + offsetX)} ${fmtNum(buf[1] + offsetY)}`];
-  const segCount = closed ? pointCount : pointCount - 1;
-  for (let i = 0; i < segCount; i += 1) {
-    const next = (i + 1) % pointCount;
-    const bi = i * STRIDE;
-    const bn = next * STRIDE;
-    parts.push(
-      `C ${fmtNum(buf[bi + 4] + offsetX)} ${fmtNum(buf[bi + 5] + offsetY)} ${fmtNum(buf[bn + 2] + offsetX)} ${fmtNum(buf[bn + 3] + offsetY)} ${fmtNum(buf[bn] + offsetX)} ${fmtNum(buf[bn + 1] + offsetY)}`,
     );
   }
   if (closed) parts.push('Z');
@@ -240,12 +323,14 @@ export function buildSvgPathMorphSmil(
     };
   }
 
-  // Fast exact path: 2 keyframes with standard / cubic-bezier easing -> ultra-compact 120Hz native SMIL spline!
-  if (sorted.length === 2 && !isMultiPointEasing(sorted[1].easing)) {
+  // Fast exact path: 2 keyframes with SMIL-safe cubic-bezier easing (all spline values in [0,1])
+  if (sorted.length === 2 && !needsSmilSampling(sorted[1].easing)) {
     const pair = prepareMorphPair(String(sorted[0].value), String(sorted[1].value));
     if (pair && pair.compatible) {
-      const d0 = buildPreparedBufferD(pair.fromBuf, pair.pointCount, pair.closed, offsetX, offsetY);
-      const d1 = buildPreparedBufferD(pair.toBuf, pair.pointCount, pair.closed, offsetX, offsetY);
+      const fromSegs = preparedBufferToCubicSegments(pair.fromBuf, pair.flags, pair.pointCount, pair.closed);
+      const toSegs = preparedBufferToCubicSegments(pair.toBuf, pair.flags, pair.pointCount, pair.closed);
+      const d0 = serializeCubicSegmentsToSvgD(fromSegs, pair.closed, offsetX, offsetY);
+      const d1 = serializeCubicSegmentsToSvgD(toSegs, pair.closed, offsetX, offsetY);
       const t0 = Math.max(0, Math.min(1, sorted[0].timeMs / durationMs));
       const t1 = Math.max(t0, Math.min(1, sorted[1].timeMs / durationMs));
 
@@ -266,7 +351,6 @@ export function buildSvgPathMorphSmil(
         keyTimes.push('1');
         keySplines.push('0 0 1 1');
       }
-      // keySplines must have exactly values.length - 1 entries
       while (keySplines.length > values.length - 1) keySplines.pop();
 
       const animateMarkup =
@@ -278,61 +362,126 @@ export function buildSvgPathMorphSmil(
     }
   }
 
-  // General path (3+ keyframes or custom multi-point curves):
-  // Evaluate smooth frames across the clip and elevate all frames to ONE uniform
-  // cubic segment count so every SMIL value has identical `M ... C ... Z` topology.
-  const pairs: Array<{
+  // General path (3+ keyframes, or spring/bounce/elastic/overshoot/multi-point easing):
+  // Elevate every adjacent pair's `(fromSegs, toSegs)` simultaneously to ONE uniform
+  // segment count so every SMIL value has identical `M ... C ... Z` topology and
+  // locked 1-to-1 vertex correspondence with zero per-frame scrambling!
+  const rawPairs: Array<{
     t0: number;
     t1: number;
     easing: AnimationEasing;
-    pair: NonNullable<ReturnType<typeof prepareMorphPair>>;
+    closed: boolean;
+    fromSegs: CubicSegment[];
+    toSegs: CubicSegment[];
   }> = [];
+
   for (let i = 0; i < sorted.length - 1; i += 1) {
     const prepared = prepareMorphPair(String(sorted[i].value), String(sorted[i + 1].value));
     if (!prepared || !prepared.compatible) continue;
-    pairs.push({
-      t0: sorted[i].timeMs,
-      t1: sorted[i + 1].timeMs,
+    rawPairs.push({
+      t0: Math.max(0, Math.min(durationMs, sorted[i].timeMs)),
+      t1: Math.max(0, Math.min(durationMs, sorted[i + 1].timeMs)),
       easing: sorted[i + 1].easing,
-      pair: prepared,
+      closed: prepared.closed,
+      fromSegs: preparedBufferToCubicSegments(prepared.fromBuf, prepared.flags, prepared.pointCount, prepared.closed),
+      toSegs: preparedBufferToCubicSegments(prepared.toBuf, prepared.flags, prepared.pointCount, prepared.closed),
     });
   }
-  if (pairs.length === 0) return null;
+  if (rawPairs.length === 0) return null;
 
-  const closed = pairs[0].pair.closed;
-  const maxSegs = Math.max(...pairs.map((p) => (closed ? p.pair.pointCount : p.pair.pointCount - 1)));
-  const sampleCount = Math.max(12, Math.min(72, Math.round((durationMs / 1000) * 24)));
+  const closed = rawPairs[0].closed;
+  const maxSegs = Math.max(...rawPairs.map((p) => p.fromSegs.length));
+  const alignedPairs = rawPairs.map((p) => {
+    const elevated = elevateSegmentPairToCount(p.fromSegs, p.toSegs, maxSegs);
+    return {
+      t0: p.t0,
+      t1: p.t1,
+      easing: p.easing,
+      fromSegs: elevated.from,
+      toSegs: elevated.to,
+    };
+  });
+
   const values: string[] = [];
-  const keyTimes: string[] = [];
+  const keyTimes: number[] = [];
 
-  for (let s = 0; s <= sampleCount; s += 1) {
-    const ratio = s / sampleCount;
-    const tMs = ratio * durationMs;
-    let active = pairs[pairs.length - 1];
-    let localT = 1;
-    if (tMs <= pairs[0].t0) {
-      active = pairs[0];
-      localT = 0;
-    } else {
-      for (const seg of pairs) {
-        if (tMs >= seg.t0 && tMs <= seg.t1) {
-          active = seg;
-          const span = seg.t1 - seg.t0;
-          const raw = span > 0 ? (tMs - seg.t0) / span : 1;
-          localT = evaluateEasing(seg.easing, raw);
-          break;
+  const pushFrame = (ratio: number, d: string) => {
+    const clamped = Math.max(0, Math.min(1, Math.round(ratio * 10000) / 10000));
+    if (keyTimes.length > 0) {
+      const prev = keyTimes[keyTimes.length - 1];
+      if (clamped <= prev) {
+        if (values[values.length - 1] === d) return;
+        // Ultra-short 0.0001 (~0.1ms) handoff ensures strictly increasing keyTimes
+        // in all SVG renderers while switching aligned topology invisibly at exact keyframes.
+        const nudged = Math.min(1, Math.round((prev + 0.0001) * 10000) / 10000);
+        if (nudged > prev) {
+          keyTimes.push(nudged);
+          values.push(d);
+        } else {
+          values[values.length - 1] = d;
         }
+        return;
       }
     }
-    const anchors = evaluatePreparedMorphPairToAnchors(active.pair, localT);
-    const segs = elevateSegmentsToCount(anchorsToCubicSegments(anchors, closed), maxSegs);
-    values.push(serializeCubicSegmentsToSvgD(segs, closed, offsetX, offsetY));
-    keyTimes.push(fmtKeyTime(ratio));
+    keyTimes.push(clamped);
+    values.push(d);
+  };
+
+  // Hold initial shape if first keyframe starts after t=0
+  const firstD = serializeCubicSegmentsToSvgD(alignedPairs[0].fromSegs, closed, offsetX, offsetY);
+  if (alignedPairs[0].t0 > 0) {
+    pushFrame(0, firstD);
+  }
+
+  for (let pIdx = 0; pIdx < alignedPairs.length; pIdx += 1) {
+    const seg = alignedPairs[pIdx];
+    const spanMs = Math.max(0, seg.t1 - seg.t0);
+    const startD = serializeCubicSegmentsToSvgD(seg.fromSegs, closed, offsetX, offsetY);
+
+    if (spanMs <= 0) {
+      pushFrame(seg.t0 / durationMs, startD);
+      const endD = serializeCubicSegmentsToSvgD(seg.toSegs, closed, offsetX, offsetY);
+      pushFrame(seg.t1 / durationMs, endD);
+      continue;
+    }
+
+    const isSampledEasing = needsSmilSampling(seg.easing);
+    const isLinear = seg.easing === 'linear';
+    const steps = isSampledEasing
+      ? Math.max(14, Math.min(48, Math.round((spanMs / 1000) * 32)))
+      : isLinear
+        ? Math.max(2, Math.min(8, Math.round((spanMs / 1000) * 6)))
+        : Math.max(10, Math.min(28, Math.round((spanMs / 1000) * 20)));
+
+    // Emit start frame of this pair (handles invisible topology handoff if pIdx > 0)
+    pushFrame(seg.t0 / durationMs, startD);
+    const actualStartRatio = keyTimes[keyTimes.length - 1];
+    const targetEndRatio = Math.max(actualStartRatio, seg.t1 / durationMs);
+
+    for (let s = 1; s <= steps; s += 1) {
+      const raw = s / steps;
+      const eased = evaluateEasing(seg.easing, raw);
+      const ratio = actualStartRatio + (targetEndRatio - actualStartRatio) * raw;
+      const frameSegs = lerpCubicSegments(seg.fromSegs, seg.toSegs, eased);
+      pushFrame(ratio, serializeCubicSegmentsToSvgD(frameSegs, closed, offsetX, offsetY));
+    }
+  }
+
+  // Hold final shape through t=1 if last keyframe ends early
+  if (keyTimes[keyTimes.length - 1] < 1) {
+    pushFrame(1, values[values.length - 1]);
+  }
+  // Ensure exact 0 start and 1 end strings
+  if (keyTimes[0] !== 0) {
+    keyTimes[0] = 0;
+  }
+  if (keyTimes[keyTimes.length - 1] !== 1) {
+    keyTimes[keyTimes.length - 1] = 1;
   }
 
   const animateMarkup =
     `<animate attributeName="d" dur="${durStr}" ${repeatAttr} calcMode="linear"` +
-    ` keyTimes="${keyTimes.join(';')}"` +
+    ` keyTimes="${keyTimes.map(fmtKeyTime).join(';')}"` +
     ` values="${escapeXmlAttr(values.join(';'))}" />`;
   return {
     initialD: values[0],
@@ -340,25 +489,88 @@ export function buildSvgPathMorphSmil(
   };
 }
 
+interface SmilSeries {
+  values: string;
+  keyTimes: string;
+  keySplines?: string;
+  calcMode: 'spline' | 'linear';
+}
+
+function buildSampledTimestamps(durationMs: number, extraTimes: readonly number[], fps = 30): number[] {
+  const sampleCount = Math.max(16, Math.min(64, Math.round((durationMs / 1000) * fps)));
+  const set = new Set<number>([0, durationMs]);
+  for (let i = 1; i < sampleCount; i += 1) {
+    set.add(Math.round((i / sampleCount) * durationMs));
+  }
+  for (const t of extraTimes) {
+    if (Number.isFinite(t)) {
+      set.add(Math.max(0, Math.min(durationMs, Math.round(t))));
+    }
+  }
+  return [...set].sort((a, b) => a - b);
+}
+
+function normalizeColorTrackValue(
+  raw: string,
+  partnerHex: string,
+): string {
+  if (isTransparentColor(raw)) {
+    return formatColorWithAlpha(partnerHex, 0);
+  }
+  return raw;
+}
+
+function findPartnerHexForColorTrack(track: AnimationTrack): string {
+  for (const kf of track.keyframes) {
+    const s = String(kf.value);
+    if (!isTransparentColor(s) && s !== 'none') {
+      return parseColorWithAlpha(s, '#000000').hex;
+    }
+  }
+  return '#000000';
+}
+
 function buildTrackSmilSeries(
   track: AnimationTrack,
   clip: AnimationClip,
   formatVal: (val: number | string) => string,
-): { values: string; keyTimes: string; keySplines?: string; calcMode: 'spline' | 'linear' } | null {
+  options?: { isColor?: boolean },
+): SmilSeries | null {
   const sorted = sortKeyframes(track.keyframes);
-  if (sorted.length < 2) return null;
+  if (sorted.length === 0) return null;
   const durationMs = Math.max(100, clip.durationMs);
-  const hasMultiPoint = sorted.some((kf, idx) => idx > 0 && isMultiPointEasing(kf.easing));
 
-  if (hasMultiPoint) {
-    const samples = Math.max(16, Math.min(60, Math.round((durationMs / 1000) * 24)));
+  // Single keyframe: emit constant hold so static SVG matches evaluated pose at t=0
+  if (sorted.length === 1) {
+    const v = formatVal(sorted[0].value);
+    return {
+      values: `${v};${v}`,
+      keyTimes: '0;1',
+      calcMode: 'linear',
+    };
+  }
+
+  const partnerHex = options?.isColor ? findPartnerHexForColorTrack(track) : '#000000';
+  const hasTransparentColor = options?.isColor && sorted.some((kf) => isTransparentColor(String(kf.value)));
+  const requiresSampling =
+    hasTransparentColor ||
+    sorted.some((kf, idx) => idx > 0 && needsSmilSampling(kf.easing));
+
+  if (requiresSampling) {
+    const timestamps = buildSampledTimestamps(
+      durationMs,
+      sorted.map((kf) => kf.timeMs),
+      30,
+    );
     const vals: string[] = [];
     const times: string[] = [];
-    for (let i = 0; i <= samples; i += 1) {
-      const ratio = i / samples;
-      const evaluated = evaluateTrackAtTime(track, ratio * durationMs);
-      vals.push(formatVal(evaluated ?? sorted[0].value));
-      times.push(fmtKeyTime(ratio));
+    for (const t of timestamps) {
+      const evaluated = evaluateTrackAtTime(track, t) ?? sorted[0].value;
+      const formatted = options?.isColor
+        ? formatVal(normalizeColorTrackValue(String(evaluated), partnerHex))
+        : formatVal(evaluated);
+      vals.push(formatted);
+      times.push(fmtKeyTime(t / durationMs));
     }
     return { values: vals.join(';'), keyTimes: times.join(';'), calcMode: 'linear' };
   }
@@ -376,8 +588,13 @@ function buildTrackSmilSeries(
   for (let i = 0; i < sorted.length; i += 1) {
     const kf = sorted[i];
     const ratio = Math.max(0, Math.min(1, kf.timeMs / durationMs));
+    const ratioStr = fmtKeyTime(ratio);
+    if (times.length > 0 && ratioStr === times[times.length - 1]) {
+      vals[vals.length - 1] = formatVal(kf.value);
+      continue;
+    }
     vals.push(formatVal(kf.value));
-    times.push(fmtKeyTime(ratio));
+    times.push(ratioStr);
     if (i > 0) {
       splines.push(formatEasingKeySpline(kf.easing));
     }
@@ -389,9 +606,16 @@ function buildTrackSmilSeries(
     splines.push('0 0 1 1');
   }
 
-  // Ensure monotonic keyTimes and exact spline count (vals.length - 1)
   while (splines.length < vals.length - 1) splines.push('0 0 1 1');
   while (splines.length > vals.length - 1) splines.pop();
+
+  if (vals.length < 2) {
+    return {
+      values: `${vals[0]};${vals[0]}`,
+      keyTimes: '0;1',
+      calcMode: 'linear',
+    };
+  }
 
   return {
     values: vals.join(';'),
@@ -404,15 +628,25 @@ function buildTrackSmilSeries(
 function buildSmilAttrTag(
   tagName: 'animate' | 'animateTransform',
   attrs: string,
-  series: { values: string; keyTimes: string; keySplines?: string; calcMode: 'spline' | 'linear' },
+  series: SmilSeries,
   clip: AnimationClip,
 ): string {
   const durStr = `${fmtNum(Math.max(100, clip.durationMs) / 1000)}s`;
   const repeatAttr = clip.loop ? 'repeatCount="indefinite"' : 'repeatCount="1" fill="freeze"';
-  const splineAttr = series.calcMode === 'spline' && series.keySplines
-    ? ` keySplines="${series.keySplines}"`
-    : '';
+  const splineAttr =
+    series.calcMode === 'spline' && series.keySplines
+      ? ` keySplines="${series.keySplines}"`
+      : '';
   return `<${tagName} ${attrs} dur="${durStr}" ${repeatAttr} calcMode="${series.calcMode}" keyTimes="${series.keyTimes}"${splineAttr} values="${escapeXmlAttr(series.values)}" />`;
+}
+
+function seriesHasVariation(values: readonly string[]): boolean {
+  if (values.length <= 1) return false;
+  const first = values[0];
+  for (let i = 1; i < values.length; i += 1) {
+    if (values[i] !== first) return true;
+  }
+  return false;
 }
 
 export interface NodeSvgAnimationBundle {
@@ -422,18 +656,58 @@ export interface NodeSvgAnimationBundle {
   readonly shapeSmilMarkup: string;
   /** Optional `pathMorph` replacement `<path d="...">` + `<animate attributeName="d">` markup. */
   readonly morphSmil: SvgMorphTrackSmilResult | null;
+  /**
+   * When true, `wrapperSmilMarkup` already encodes the full world `translate -> rotate -> scale`
+   * transform chain, so the caller MUST omit the static `transform="rotate(...)"` attribute on
+   * the same `<g>` to avoid double-rotation or translating along rotated local axes.
+   */
+  readonly replacesStaticTransform?: boolean;
+  /**
+   * When true, a `fill` animation track overrides static gradient/multi-fill paints, so
+   * `<path>` / `<rect>` / `<ellipse>` should start with a solid color rather than `url(#grad)`.
+   */
+  readonly overridesStaticFill?: boolean;
+  /** Initial solid fill color at `t = 0` when `overridesStaticFill` is true. */
+  readonly initialSolidFill?: string;
+}
+
+function collectAncestorChain(
+  node: DesignNode,
+  allNodes: readonly DesignNode[] | undefined,
+): DesignNode[] {
+  if (!allNodes || allNodes.length === 0 || !node.parentId) return [];
+  const byId = new Map(allNodes.map((n) => [n.id, n]));
+  const chain: DesignNode[] = [];
+  const seen = new Set<string>([node.id]);
+  let cur: DesignNode | undefined = node;
+  while (cur?.parentId && !seen.has(cur.parentId)) {
+    const parent = byId.get(cur.parentId);
+    if (!parent) break;
+    seen.add(parent.id);
+    chain.unshift(parent);
+    cur = parent;
+  }
+  return chain;
 }
 
 /**
- * Compiles all animation tracks targeting `node` in `clip` into native SVG SMIL markup.
+ * Compiles all animation tracks targeting `node` (plus any inherited motion from
+ * animated parent Groups/Frames when `allNodes` is provided) into native SVG SMIL markup.
  */
 export function buildNodeSvgSmilAnimations(
   node: DesignNode,
   clip: AnimationClip | null | undefined,
+  allNodes?: readonly DesignNode[],
 ): NodeSvgAnimationBundle | null {
   if (!clip || clip.tracks.length === 0) return null;
   const nodeTracks = clip.tracks.filter((t) => t.targetNodeId === node.id && t.keyframes.length > 0);
-  if (nodeTracks.length === 0) return null;
+  const ancestors = collectAncestorChain(node, allNodes);
+  const ancestorIdSet = new Set(ancestors.map((a) => a.id));
+  const ancestorTracks = ancestors.length > 0
+    ? clip.tracks.filter((t) => ancestorIdSet.has(t.targetNodeId) && t.keyframes.length > 0)
+    : [];
+
+  if (nodeTracks.length === 0 && ancestorTracks.length === 0) return null;
 
   const trackByProp = new Map<AnimatableProperty, AnimationTrack>();
   for (const tr of nodeTracks) {
@@ -443,6 +717,7 @@ export function buildNodeSvgSmilAnimations(
   const wrapperTags: string[] = [];
   const shapeTags: string[] = [];
   let morphSmil: SvgMorphTrackSmilResult | null = null;
+  let replacesStaticTransform = false;
 
   // 1. Shape Morph (`pathMorph`)
   const morphTrack = trackByProp.get('pathMorph');
@@ -450,40 +725,170 @@ export function buildNodeSvgSmilAnimations(
     morphSmil = buildSvgPathMorphSmil(morphTrack, clip, node.x, node.y);
   }
 
-  // 2. Translation delta (`x` / `y` relative to base node position)
   const xTrack = trackByProp.get('x');
   const yTrack = trackByProp.get('y');
-  if ((xTrack && xTrack.keyframes.length >= 2) || (yTrack && yTrack.keyframes.length >= 2)) {
-    const durationMs = Math.max(100, clip.durationMs);
-    const timeSet = new Set<number>([0, durationMs]);
-    xTrack?.keyframes.forEach((kf) => timeSet.add(Math.max(0, Math.min(durationMs, kf.timeMs))));
-    yTrack?.keyframes.forEach((kf) => timeSet.add(Math.max(0, Math.min(durationMs, kf.timeMs))));
-    const useSampled =
-      Boolean(xTrack?.keyframes.some((kf, i) => i > 0 && isMultiPointEasing(kf.easing))) ||
-      Boolean(yTrack?.keyframes.some((kf, i) => i > 0 && isMultiPointEasing(kf.easing))) ||
-      (Boolean(xTrack) && Boolean(yTrack));
+  const widthTrack = trackByProp.get('width');
+  const heightTrack = trackByProp.get('height');
+  const rotTrack = trackByProp.get('rotation');
+  const scaleTrack = trackByProp.get('scale');
+  const opacityTrack = trackByProp.get('opacity');
 
-    if (useSampled) {
-      const samples = Math.max(16, Math.min(48, Math.round((durationMs / 1000) * 24)));
-      const vals: string[] = [];
-      const times: string[] = [];
-      for (let i = 0; i <= samples; i += 1) {
-        const ratio = i / samples;
-        const t = ratio * durationMs;
-        const vx = xTrack ? Number(evaluateTrackAtTime(xTrack, t) ?? node.x) : node.x;
-        const vy = yTrack ? Number(evaluateTrackAtTime(yTrack, t) ?? node.y) : node.y;
-        vals.push(`${fmtNum(vx - node.x)} ${fmtNum(vy - node.y)}`);
-        times.push(fmtKeyTime(ratio));
+  const hasDirectBoxResize =
+    !morphSmil &&
+    (node.type === 'rect' || node.type === 'frame') &&
+    Boolean(widthTrack || heightTrack) &&
+    !scaleTrack &&
+    !rotTrack &&
+    Math.abs(node.rotation || 0) < 0.01 &&
+    ancestorTracks.length === 0;
+
+  const hasAnimatedAncestorTransformOrOpacity = ancestorTracks.some(
+    (t) =>
+      t.property === 'x' ||
+      t.property === 'y' ||
+      t.property === 'width' ||
+      t.property === 'height' ||
+      t.property === 'rotation' ||
+      t.property === 'scale' ||
+      t.property === 'opacity',
+  );
+
+  const hasNonRectResize = Boolean(widthTrack || heightTrack) && !hasDirectBoxResize;
+  const hasStaticRotation = Math.abs(node.rotation || 0) > 0.01;
+  const hasTransformTracks = Boolean(xTrack || yTrack || rotTrack || scaleTrack || hasNonRectResize);
+
+  // Use exact evaluator-driven world transform sampling whenever:
+  // - An ancestor Group/Frame animates transform or opacity, OR
+  // - Non-rect width/height or combined width/height + scale/rotation animates, OR
+  // - Static rotation coexists with animated translate/scale/resize, OR
+  // - Combined x + y or any transform track uses overshoot/spring/bounce/elastic/multi-point easing
+  const transformTracks = [xTrack, yTrack, widthTrack, heightTrack, rotTrack, scaleTrack].filter(
+    (t): t is AnimationTrack => Boolean(t),
+  );
+  const transformNeedsEvaluatorSampling =
+    hasAnimatedAncestorTransformOrOpacity ||
+    hasNonRectResize ||
+    (hasStaticRotation && hasTransformTracks) ||
+    Boolean(xTrack && yTrack) ||
+    transformTracks.some((tr) => tr.keyframes.some((kf, i) => i > 0 && needsSmilSampling(kf.easing)));
+
+  const durationMs = Math.max(100, clip.durationMs);
+  const baseCx = node.x + node.width / 2;
+  const baseCy = node.y + node.height / 2;
+  const baseW = Math.max(1, node.width);
+  const baseH = Math.max(1, node.height);
+
+  if (transformNeedsEvaluatorSampling) {
+    const miniDoc: FolioDocument = {
+      id: 'smil-eval',
+      name: 'smil-eval',
+      width: 1000,
+      height: 1000,
+      background: 'transparent',
+      nodes: [...ancestors, node],
+    };
+    const relevantTracks = [...nodeTracks, ...ancestorTracks];
+    const extraTimes: number[] = [];
+    for (const tr of relevantTracks) {
+      for (const kf of tr.keyframes) {
+        extraTimes.push(kf.timeMs);
       }
+    }
+    const timestamps = buildSampledTimestamps(durationMs, extraTimes, 30);
+
+    const translateVals: string[] = [];
+    const rotateVals: string[] = [];
+    const scaleOriginVals: string[] = [];
+    const scaleVals: string[] = [];
+    const opacityVals: string[] = [];
+    const keyTimes: string[] = [];
+
+    for (const t of timestamps) {
+      const poses = evaluateClipAtTime(clip, t);
+      const evalDoc = applyAnimatedPosesToDocument(miniDoc, poses);
+      const evalNode = evalDoc.nodes[evalDoc.nodes.length - 1];
+      const evalCx = evalNode.x + evalNode.width / 2;
+      const evalCy = evalNode.y + evalNode.height / 2;
+      const dx = evalCx - baseCx;
+      const dy = evalCy - baseCy;
+      const rot = evalNode.rotation || 0;
+      const sx = Math.max(0.001, evalNode.width / baseW);
+      const sy = Math.max(0.001, evalNode.height / baseH);
+
+      translateVals.push(`${fmtNum(dx)} ${fmtNum(dy)}`);
+      rotateVals.push(`${fmtNum(rot)} ${fmtNum(baseCx)} ${fmtNum(baseCy)}`);
+      scaleOriginVals.push(`${fmtNum(baseCx * (1 - sx))} ${fmtNum(baseCy * (1 - sy))}`);
+      scaleVals.push(`${fmtNum(sx)} ${fmtNum(sy)}`);
+      opacityVals.push(fmtNum(Math.max(0, Math.min(1, evalNode.opacity))));
+      keyTimes.push(fmtKeyTime(t / durationMs));
+    }
+
+    const keyTimesStr = keyTimes.join(';');
+    const hasTranslate =
+      seriesHasVariation(translateVals) || translateVals[0] !== '0 0';
+    const hasRotate =
+      seriesHasVariation(rotateVals) ||
+      Math.abs((node.rotation || 0)) > 0.01 ||
+      !rotateVals[0].startsWith('0 ');
+    const hasScale =
+      seriesHasVariation(scaleVals) || scaleVals[0] !== '1 1';
+    const hasOpacity =
+      Boolean(opacityTrack || ancestorTracks.some((t) => t.property === 'opacity')) &&
+      (seriesHasVariation(opacityVals) || Number(opacityVals[0]) !== node.opacity);
+
+    // Emit in exact world order: translate(world) * rotate(about base center) * scale(about base center)
+    if (hasTranslate) {
       wrapperTags.push(
         buildSmilAttrTag(
           'animateTransform',
           'attributeName="transform" type="translate" additive="sum"',
-          { values: vals.join(';'), keyTimes: times.join(';'), calcMode: 'linear' },
+          { values: translateVals.join(';'), keyTimes: keyTimesStr, calcMode: 'linear' },
           clip,
         ),
       );
-    } else if (xTrack) {
+    }
+    if (hasRotate) {
+      replacesStaticTransform = true;
+      wrapperTags.push(
+        buildSmilAttrTag(
+          'animateTransform',
+          'attributeName="transform" type="rotate" additive="sum"',
+          { values: rotateVals.join(';'), keyTimes: keyTimesStr, calcMode: 'linear' },
+          clip,
+        ),
+      );
+    }
+    if (hasScale) {
+      wrapperTags.push(
+        buildSmilAttrTag(
+          'animateTransform',
+          'attributeName="transform" type="translate" additive="sum"',
+          { values: scaleOriginVals.join(';'), keyTimes: keyTimesStr, calcMode: 'linear' },
+          clip,
+        ),
+      );
+      wrapperTags.push(
+        buildSmilAttrTag(
+          'animateTransform',
+          'attributeName="transform" type="scale" additive="sum"',
+          { values: scaleVals.join(';'), keyTimes: keyTimesStr, calcMode: 'linear' },
+          clip,
+        ),
+      );
+    }
+    if (hasOpacity) {
+      wrapperTags.push(
+        buildSmilAttrTag(
+          'animate',
+          'attributeName="opacity"',
+          { values: opacityVals.join(';'), keyTimes: keyTimesStr, calcMode: 'linear' },
+          clip,
+        ),
+      );
+    }
+  } else {
+    // Clean spline fast-path (no animated ancestors, no static rotation conflict, spline-safe easings)
+    if (xTrack) {
       const series = buildTrackSmilSeries(xTrack, clip, (v) => `${fmtNum(Number(v) - node.x)} 0`);
       if (series) {
         wrapperTags.push(
@@ -498,91 +903,98 @@ export function buildNodeSvgSmilAnimations(
         );
       }
     }
-  }
 
-  // 3. Rotation delta around node center (cx, cy)
-  const rotTrack = trackByProp.get('rotation');
-  if (rotTrack && rotTrack.keyframes.length >= 2) {
-    const cx = fmtNum(node.x + node.width / 2);
-    const cy = fmtNum(node.y + node.height / 2);
-    const baseRot = node.rotation || 0;
-    const series = buildTrackSmilSeries(rotTrack, clip, (v) => `${fmtNum(Number(v) - baseRot)} ${cx} ${cy}`);
-    if (series) {
-      wrapperTags.push(
-        buildSmilAttrTag('animateTransform', 'attributeName="transform" type="rotate" additive="sum"', series, clip),
-      );
-    }
-  }
-
-  // 4. Scale around node center (cx, cy) via additive translate(cx,cy) -> scale(s) -> translate(-cx,-cy)
-  const scaleTrack = trackByProp.get('scale');
-  if (scaleTrack && scaleTrack.keyframes.length >= 2) {
-    const cx = node.x + node.width / 2;
-    const cy = node.y + node.height / 2;
-    const series = buildTrackSmilSeries(scaleTrack, clip, (v) => {
-      const s = Math.max(0.01, Number(v));
-      return `${fmtNum(s)} ${fmtNum(s)}`;
-    });
-    if (series) {
-      // Scale around center: translate(cx*(1-s), cy*(1-s)) + scale(s, s)
-      const translateSeries = buildTrackSmilSeries(scaleTrack, clip, (v) => {
-        const s = Math.max(0.01, Number(v));
-        return `${fmtNum(cx * (1 - s))} ${fmtNum(cy * (1 - s))}`;
-      });
-      if (translateSeries) {
+    if (rotTrack) {
+      const cx = fmtNum(baseCx);
+      const cy = fmtNum(baseCy);
+      replacesStaticTransform = true;
+      const series = buildTrackSmilSeries(rotTrack, clip, (v) => `${fmtNum(Number(v))} ${cx} ${cy}`);
+      if (series) {
         wrapperTags.push(
-          buildSmilAttrTag('animateTransform', 'attributeName="transform" type="translate" additive="sum"', translateSeries, clip),
+          buildSmilAttrTag('animateTransform', 'attributeName="transform" type="rotate" additive="sum"', series, clip),
         );
       }
-      wrapperTags.push(
-        buildSmilAttrTag('animateTransform', 'attributeName="transform" type="scale" additive="sum"', series, clip),
+    }
+
+    if (scaleTrack) {
+      const series = buildTrackSmilSeries(scaleTrack, clip, (v) => {
+        const s = Math.max(0.01, Number(v));
+        return `${fmtNum(s)} ${fmtNum(s)}`;
+      });
+      if (series) {
+        const translateSeries = buildTrackSmilSeries(scaleTrack, clip, (v) => {
+          const s = Math.max(0.01, Number(v));
+          return `${fmtNum(baseCx * (1 - s))} ${fmtNum(baseCy * (1 - s))}`;
+        });
+        if (translateSeries) {
+          wrapperTags.push(
+            buildSmilAttrTag('animateTransform', 'attributeName="transform" type="translate" additive="sum"', translateSeries, clip),
+          );
+        }
+        wrapperTags.push(
+          buildSmilAttrTag('animateTransform', 'attributeName="transform" type="scale" additive="sum"', series, clip),
+        );
+      }
+    }
+
+    if (opacityTrack) {
+      const series = buildTrackSmilSeries(opacityTrack, clip, (v) => fmtNum(Math.max(0, Math.min(1, Number(v)))));
+      if (series) {
+        wrapperTags.push(buildSmilAttrTag('animate', 'attributeName="opacity"', series, clip));
+      }
+    }
+  }
+
+  // 6. Shape-level attributes (`fill`, `stroke`, `strokeWidth`, `radius`, direct `width`/`height`)
+  let overridesStaticFill = false;
+  let initialSolidFill: string | undefined;
+
+  const fillTrack = trackByProp.get('fill');
+  if (fillTrack) {
+    const partnerHex = findPartnerHexForColorTrack(fillTrack);
+    const series = buildTrackSmilSeries(fillTrack, clip, (v) => normalizeColorTrackValue(String(v), partnerHex), {
+      isColor: true,
+    });
+    if (series) {
+      shapeTags.push(buildSmilAttrTag('animate', 'attributeName="fill"', series, clip));
+      overridesStaticFill = true;
+      initialSolidFill = normalizeColorTrackValue(
+        String(evaluateTrackAtTime(fillTrack, 0) ?? fillTrack.keyframes[0].value),
+        partnerHex,
       );
     }
   }
-
-  // 5. Opacity
-  const opacityTrack = trackByProp.get('opacity');
-  if (opacityTrack && opacityTrack.keyframes.length >= 2) {
-    const series = buildTrackSmilSeries(opacityTrack, clip, (v) => fmtNum(Math.max(0, Math.min(1, Number(v)))));
-    if (series) {
-      wrapperTags.push(buildSmilAttrTag('animate', 'attributeName="opacity"', series, clip));
-    }
-  }
-
-  // 6. Shape-level attributes (`fill`, `stroke`, `strokeWidth`, `radius`, `width`, `height`)
-  const fillTrack = trackByProp.get('fill');
-  if (fillTrack && fillTrack.keyframes.length >= 2) {
-    const series = buildTrackSmilSeries(fillTrack, clip, (v) => String(v));
-    if (series) shapeTags.push(buildSmilAttrTag('animate', 'attributeName="fill"', series, clip));
-  }
   const strokeTrack = trackByProp.get('stroke');
-  if (strokeTrack && strokeTrack.keyframes.length >= 2) {
-    const series = buildTrackSmilSeries(strokeTrack, clip, (v) => String(v));
+  if (strokeTrack) {
+    const partnerHex = findPartnerHexForColorTrack(strokeTrack);
+    const series = buildTrackSmilSeries(strokeTrack, clip, (v) => normalizeColorTrackValue(String(v), partnerHex), {
+      isColor: true,
+    });
     if (series) shapeTags.push(buildSmilAttrTag('animate', 'attributeName="stroke"', series, clip));
   }
   const strokeWTrack = trackByProp.get('strokeWidth');
-  if (strokeWTrack && strokeWTrack.keyframes.length >= 2) {
+  if (strokeWTrack) {
     const series = buildTrackSmilSeries(strokeWTrack, clip, (v) => fmtNum(Math.max(0, Number(v))));
     if (series) shapeTags.push(buildSmilAttrTag('animate', 'attributeName="stroke-width"', series, clip));
   }
   if (!morphSmil && (node.type === 'rect' || node.type === 'frame')) {
     const radiusTrack = trackByProp.get('radius');
-    if (radiusTrack && radiusTrack.keyframes.length >= 2) {
+    if (radiusTrack) {
       const series = buildTrackSmilSeries(radiusTrack, clip, (v) => fmtNum(Math.max(0, Number(v))));
       if (series) {
         shapeTags.push(buildSmilAttrTag('animate', 'attributeName="rx"', series, clip));
         shapeTags.push(buildSmilAttrTag('animate', 'attributeName="ry"', series, clip));
       }
     }
-    const widthTrack = trackByProp.get('width');
-    if (widthTrack && widthTrack.keyframes.length >= 2) {
-      const series = buildTrackSmilSeries(widthTrack, clip, (v) => fmtNum(Math.max(1, Number(v))));
-      if (series) shapeTags.push(buildSmilAttrTag('animate', 'attributeName="width"', series, clip));
-    }
-    const heightTrack = trackByProp.get('height');
-    if (heightTrack && heightTrack.keyframes.length >= 2) {
-      const series = buildTrackSmilSeries(heightTrack, clip, (v) => fmtNum(Math.max(1, Number(v))));
-      if (series) shapeTags.push(buildSmilAttrTag('animate', 'attributeName="height"', series, clip));
+    if (hasDirectBoxResize) {
+      if (widthTrack) {
+        const series = buildTrackSmilSeries(widthTrack, clip, (v) => fmtNum(Math.max(1, Number(v))));
+        if (series) shapeTags.push(buildSmilAttrTag('animate', 'attributeName="width"', series, clip));
+      }
+      if (heightTrack) {
+        const series = buildTrackSmilSeries(heightTrack, clip, (v) => fmtNum(Math.max(1, Number(v))));
+        if (series) shapeTags.push(buildSmilAttrTag('animate', 'attributeName="height"', series, clip));
+      }
     }
   }
 
@@ -592,6 +1004,9 @@ export function buildNodeSvgSmilAnimations(
     wrapperSmilMarkup: wrapperTags.join(''),
     shapeSmilMarkup: shapeTags.join(''),
     morphSmil,
+    replacesStaticTransform,
+    overridesStaticFill,
+    initialSolidFill,
   };
 }
 

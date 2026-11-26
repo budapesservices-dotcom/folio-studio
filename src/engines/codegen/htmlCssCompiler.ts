@@ -17,7 +17,10 @@ import {
   buildCssBackgroundFromFills,
   buildCssEffectsAndBlendDeclarations,
   buildNodeTransitionCss,
+  buildSvgPaintId,
+  getVisibleFillPaints,
   resolveShadowPresetCss,
+  serializeNodeSvgPaintDefs,
 } from '../../core/document/styling';
 import {
   generateDesignTokensCss,
@@ -64,6 +67,7 @@ import type { CodeMappingEntry, CompiledCodeFile } from './types';
 import { buildLivePreviewLogicScript } from '../prototype/codegen';
 import {
   buildLivePreviewMorphScript,
+  collectPageInitialMorphSnapshots,
   collectPageMorphNodeIds,
   compilePageAnimationsCss,
 } from '../animation/codegen';
@@ -229,6 +233,8 @@ function buildInlineSvgMarkup(
   tokens: DesignTokenCollection,
   indent: string,
   isMorphTarget = false,
+  paintPrefix = 'folio-svg',
+  asBackgroundOverlay = false,
 ): string[] {
   const d = serializePathPointsToSvgD(node.points, node.closed, node.subpaths);
   const w = Math.max(1, roundCss(node.width));
@@ -245,11 +251,51 @@ function buildInlineSvgMarkup(
     ? ` stroke-dasharray="${escapeAttr(node.style.strokeDasharray)}"`
     : '';
   const morphAttr = isMorphTarget ? ' data-folio-morph-path="true"' : '';
+  const svgStyle = asBackgroundOverlay
+    ? 'position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none'
+    : 'display:block;width:100%;height:100%';
+
+  const visibleFills = getVisibleFillPaints(node);
+  const hasGradientOrMultiFill =
+    !fillVar &&
+    (visibleFills.length > 1 ||
+      visibleFills.some((paint) => paint.type !== 'solid') ||
+      (visibleFills.length === 1 &&
+        visibleFills[0].type === 'solid' &&
+        (visibleFills[0].opacity ?? 1) < 0.999));
 
   const svgLines: string[] = [
-    `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style="display:block;width:100%;height:100%" aria-hidden="true">`,
-    `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${fillRule}${linecap}${linejoin}${dash} />`,
+    `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style="${svgStyle}" aria-hidden="true">`,
   ];
+
+  if (hasGradientOrMultiFill) {
+    const paintDefs = serializeNodeSvgPaintDefs(node, paintPrefix);
+    if (paintDefs) {
+      svgLines.push(`${indent}  <defs>${paintDefs}</defs>`);
+    }
+    visibleFills.forEach((paint, idx) => {
+      const paintFill =
+        paint.type === 'solid'
+          ? sanitizeCssValue(paint.color, 'none')
+          : `url(#${buildSvgPaintId(paintPrefix, node.id, idx)})`;
+      const fillOpacityAttr =
+        paint.type === 'solid' && (paint.opacity ?? 1) < 0.999
+          ? ` fill-opacity="${roundCss(paint.opacity ?? 1)}"`
+          : '';
+      svgLines.push(
+        `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="${escapeAttr(paintFill)}"${fillOpacityAttr} stroke="none"${fillRule} />`,
+      );
+    });
+    if (strokeWidth > 0 && stroke && stroke !== 'none') {
+      svgLines.push(
+        `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="none" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${linecap}${linejoin}${dash} />`,
+      );
+    }
+  } else {
+    svgLines.push(
+      `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${fillRule}${linecap}${linejoin}${dash} />`,
+    );
+  }
 
   if (!node.closed && node.points.length >= 2 && (node.style.arrowStart || node.style.arrowEnd)) {
     const arrowColor =
@@ -1116,7 +1162,9 @@ export function buildNodeCssDeclarations(
     }
   }
 
-  const effectAndBlendDecls = buildCssEffectsAndBlendDeclarations(node);
+  const effectAndBlendDecls = buildCssEffectsAndBlendDeclarations(node, {
+    forceVectorShadow: isMorphRenderedAsSvg,
+  });
   if (effectAndBlendDecls.length > 0) {
     declarations.push(...effectAndBlendDecls);
   }
@@ -1173,6 +1221,7 @@ export function compilePageHtmlCss(
   const assetMode = options.assetMode ?? 'bundle';
   const tokens = getProjectDesignTokens(project);
   const morphNodeIds = collectPageMorphNodeIds(project, page);
+  const initialMorphSnapshots = collectPageInitialMorphSnapshots(project, page);
   const slug = toPageFileSlug(page.route, page.name);
   const componentsById = new Map<string, ComponentDefinition>(
     project.components.map((component) => [component.id, component]),
@@ -1435,19 +1484,61 @@ export function compilePageHtmlCss(
       );
     } else if (node.type === 'path') {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+      const isMorph = morphNodeIds.has(emittedId);
+      const initialSnap = isMorph ? initialMorphSnapshots.get(emittedId) : undefined;
+      const renderedNode = initialSnap ? applyMorphGeometryToDesignNode(node, initialSnap) : node;
       htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
-      htmlBodyLines.push(...buildInlineSvgMarkup(node, tokens, `${indent}  `, morphNodeIds.has(emittedId)));
+      htmlBodyLines.push(
+        ...buildInlineSvgMarkup(
+          renderedNode.type === 'path' ? renderedNode : node,
+          tokens,
+          `${indent}  `,
+          isMorph,
+          maskPrefix,
+        ),
+      );
       htmlBodyLines.push(`${indent}</${wrapperTag}>`);
     } else if (
       (node.type === 'ellipse' || node.type === 'rect' || node.type === 'frame') &&
       morphNodeIds.has(emittedId)
     ) {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
-      const snap = extractMorphSnapshotFromNode(node);
+      const children = node.type === 'frame' ? (activeChildrenByParent.get(node.id) ?? []) : [];
+      const selfIsAutoLayout = Boolean(node.layout && node.layout.mode !== 'none');
+      const snap = initialMorphSnapshots.get(emittedId) ?? extractMorphSnapshotFromNode(node);
       const projected = snap ? applyMorphGeometryToDesignNode(node, snap) : null;
       htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
       if (projected && projected.type === 'path') {
-        htmlBodyLines.push(...buildInlineSvgMarkup(projected, tokens, `${indent}  `, true));
+        htmlBodyLines.push(
+          ...buildInlineSvgMarkup(
+            projected,
+            tokens,
+            `${indent}  `,
+            true,
+            maskPrefix,
+            children.length > 0,
+          ),
+        );
+      }
+      if (children.length > 0) {
+        const borderInset = getNodeBorderInset(node);
+        const nextOrigin = { x: node.x + borderInset.left, y: node.y + borderInset.top };
+        for (const child of children) {
+          emitNodeHtml(
+            child,
+            node,
+            depth + 1,
+            selfIsAutoLayout,
+            isInstanceChild,
+            nextOrigin,
+            htmlLineOffset,
+            activeChildrenByParent,
+            activeNodeById,
+            idPrefix,
+            visitedComponentIds,
+            componentDepth,
+          );
+        }
       }
       htmlBodyLines.push(`${indent}</${wrapperTag}>`);
     } else if (node.type === 'component-instance') {

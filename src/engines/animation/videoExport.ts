@@ -795,10 +795,31 @@ export async function exportMotionAnimation(
 
   if (options.format === 'html5') {
     options.onProgress?.({ phase: 'encoding', frame: 1, totalFrames: 1, percent: 80, message: 'Compiling standalone HTML5 animation…' });
-    const html = buildLivePreviewHtml(project, {
+    const exportProject: FolioProject = {
+      ...project,
+      pages: options.transparentBackground
+        ? project.pages.map((p) =>
+            p.id === page.id
+              ? { ...p, document: { ...p.document, background: 'transparent' } }
+              : p,
+          )
+        : project.pages,
+      animations: (project.animations ?? []).map((item) => {
+        if (clip && item.id === clip.id) {
+          return {
+            ...item,
+            autoplay: true,
+            loop: options.loopCount === 0 ? true : item.loop,
+          };
+        }
+        return item;
+      }),
+    };
+    const html = buildLivePreviewHtml(exportProject, {
       pageId: page.id,
       includeCustomScripts: false,
       themeId: getProjectDesignTokens(project).activeThemeId,
+      assetMode: 'portable',
     });
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     options.onProgress?.({ phase: 'complete', frame: 1, totalFrames: 1, percent: 100, message: 'HTML5 animation ready.' });

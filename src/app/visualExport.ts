@@ -272,6 +272,7 @@ function serializePrimitiveNode(
   maskFill = '#fff',
   embedAnimations = false,
   activeClip: AnimationClip | null = null,
+  allNodes?: readonly DesignNode[],
 ): string {
   if (node.type === 'group') return '';
   const transformAttr = formatRotationTransform(node);
@@ -282,12 +283,12 @@ function serializePrimitiveNode(
   const blendStyleAttr = buildBlendStyleAttr(node, mask);
   const cssFilterStyleAttr = buildCssFilterStyleAttr(node, mask);
   const smil = embedAnimations && !mask && !rasterizeSafe && activeClip
-    ? buildNodeSvgSmilAnimations(node, activeClip)
+    ? buildNodeSvgSmilAnimations(node, activeClip, allNodes)
     : null;
 
   let inner = '';
   if (smil?.morphSmil && (node.type === 'frame' || node.type === 'rect' || node.type === 'ellipse' || node.type === 'path')) {
-    const fills = getVisibleFillPaints(node);
+    const fills = smil.overridesStaticFill ? [] : getVisibleFillPaints(node);
     const fillRule = node.type === 'path' ? (node.style.fillRule ?? 'nonzero') : 'nonzero';
     const linecap = node.type === 'path' ? (node.style.strokeLinecap ?? 'round') : 'round';
     const linejoin = node.type === 'path' ? (node.style.strokeLinejoin ?? 'round') : 'round';
@@ -296,10 +297,12 @@ function serializePrimitiveNode(
       : '';
     const sw = node.style.strokeWidth;
     const morphInnerSmil = `${smil.morphSmil.animateMarkup}${smil.shapeSmilMarkup}`;
-    if (fills.length <= 1) {
-      const fillAttr = fills.length === 1
-        ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
-        : ' fill="none"';
+    if (smil.overridesStaticFill || fills.length <= 1) {
+      const fillAttr = smil.overridesStaticFill && smil.initialSolidFill
+        ? ` fill="${escapeXml(smil.initialSolidFill)}"`
+        : fills.length === 1
+          ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
+          : ' fill="none"';
       inner = `<path d="${escapeXml(smil.morphSmil.initialD)}"${fillAttr} fill-rule="${fillRule}" stroke="${escapeXml(node.style.stroke)}" stroke-width="${sw}" stroke-linecap="${linecap}" stroke-linejoin="${linejoin}"${dashAttr}>${morphInnerSmil}</path>`;
     } else {
       const fillPaths = fills
@@ -349,12 +352,15 @@ function serializePrimitiveNode(
       return `<rect x="${x}" y="${y}" width="${w}" height="${h}"${adjRxAttr}${attrs} />`;
     };
 
-    if (mask || (fills.length <= 1 && !needsSeparateStroke)) {
+    const overrideFill = !mask && Boolean(smil?.overridesStaticFill && smil.initialSolidFill);
+    if (mask || overrideFill || (fills.length <= 1 && !needsSeparateStroke)) {
       const fillAttr = mask
         ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill}"`
-        : fills.length === 1
-          ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
-          : ' fill="none"';
+        : overrideFill
+          ? ` fill="${escapeXml(smil!.initialSolidFill!)}"`
+          : fills.length === 1
+            ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
+            : ' fill="none"';
       const stroke = mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke;
       inner = `${backdrop}${renderBoxShape(
         node.x,
@@ -399,12 +405,15 @@ function serializePrimitiveNode(
     const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
     const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
     const backdrop = serializeBackdropBlur(node, mask, 0, true, rasterizeSafe);
-    if (mask || (fills.length <= 1 && !needsSeparateStroke)) {
+    const overrideFill = !mask && Boolean(smil?.overridesStaticFill && smil.initialSolidFill);
+    if (mask || overrideFill || (fills.length <= 1 && !needsSeparateStroke)) {
       const fillAttr = mask
         ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill}"`
-        : fills.length === 1
-          ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
-          : ' fill="none"';
+        : overrideFill
+          ? ` fill="${escapeXml(smil!.initialSolidFill!)}"`
+          : fills.length === 1
+            ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
+            : ' fill="none"';
       const stroke = mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke;
       inner = `${backdrop}<ellipse cx="${cx}" cy="${cy}" rx="${node.width / 2}" ry="${node.height / 2}"${fillAttr} stroke="${escapeXml(stroke)}" stroke-width="${sw}" />`;
     } else {
@@ -424,12 +433,15 @@ function serializePrimitiveNode(
     const linejoin = node.style.strokeLinejoin ?? 'round';
     const dashAttr = node.style.strokeDasharray ? ` stroke-dasharray="${escapeXml(node.style.strokeDasharray)}"` : '';
     const arrows = serializeArrowheads(node, mask, maskFill);
-    if (mask || fills.length <= 1) {
+    const overrideFill = !mask && Boolean(smil?.overridesStaticFill && smil.initialSolidFill);
+    if (mask || overrideFill || fills.length <= 1) {
       const fillAttr = mask
         ? ` fill="${node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill}"`
-        : fills.length === 1
-          ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
-          : ' fill="none"';
+        : overrideFill
+          ? ` fill="${escapeXml(smil!.initialSolidFill!)}"`
+          : fills.length === 1
+            ? serializePaintFillAttr(fills[0], node.id, 0, prefix)
+            : ' fill="none"';
       const stroke = mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke;
       inner = `<g transform="translate(${node.x} ${node.y})"><path d="${escapeXml(pathD)}"${fillAttr} fill-rule="${fillRule}" stroke="${escapeXml(stroke)}" stroke-width="${node.style.strokeWidth}" stroke-linecap="${linecap}" stroke-linejoin="${linejoin}"${dashAttr} />${arrows}</g>`;
     } else {
@@ -495,6 +507,12 @@ function serializePrimitiveNode(
   }
   const wrappedInner = cssFilterStyleAttr ? `<g${cssFilterStyleAttr}>${inner}</g>` : inner;
   const wrapperSmil = smil?.wrapperSmilMarkup ?? '';
+  if (wrapperSmil && smil?.replacesStaticTransform) {
+    return `<g${opacityAttr}${filterAttr}${blendStyleAttr}>${wrapperSmil}${wrappedInner}</g>`;
+  }
+  if (wrapperSmil && transformAttr) {
+    return `<g${opacityAttr}${filterAttr}${blendStyleAttr}>${wrapperSmil}<g${transformAttr}>${wrappedInner}</g></g>`;
+  }
   return `<g${transformAttr}${opacityAttr}${filterAttr}${blendStyleAttr}>${wrapperSmil}${wrappedInner}</g>`;
 }
 
@@ -767,10 +785,19 @@ function serializeNodesBlock(
           const blendStyleAttr = buildBlendStyleAttr(node, mask);
           const cssFilterStyleAttr = buildCssFilterStyleAttr(node, mask);
           const innerWithCss = cssFilterStyleAttr ? `<g${cssFilterStyleAttr}>${inner}</g>` : inner;
-          const instanceSmil = embedAnimations && !mask && !rasterizeSafe && activeClip
-            ? (buildNodeSvgSmilAnimations(node, activeClip)?.wrapperSmilMarkup ?? '')
-            : '';
-          markup = `<g${formatRotationTransform(node)}${opacityAttr}${filterAttr}${blendStyleAttr}>${instanceSmil}<g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${innerWithCss}</g></g>`;
+          const instanceSmilBundle = embedAnimations && !mask && !rasterizeSafe && activeClip
+            ? buildNodeSvgSmilAnimations(node, activeClip, canvasNodes)
+            : null;
+          const instanceSmil = instanceSmilBundle?.wrapperSmilMarkup ?? '';
+          const instTransformAttr = formatRotationTransform(node);
+          const scaledInner = `<g transform="translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})">${innerWithCss}</g>`;
+          if (instanceSmil && instanceSmilBundle?.replacesStaticTransform) {
+            markup = `<g${opacityAttr}${filterAttr}${blendStyleAttr}>${instanceSmil}${scaledInner}</g>`;
+          } else if (instanceSmil && instTransformAttr) {
+            markup = `<g${opacityAttr}${filterAttr}${blendStyleAttr}>${instanceSmil}<g${instTransformAttr}>${scaledInner}</g></g>`;
+          } else {
+            markup = `<g${instTransformAttr}${opacityAttr}${filterAttr}${blendStyleAttr}>${instanceSmil}${scaledInner}</g>`;
+          }
         }
       } else {
         markup = serializePrimitiveNode(
@@ -782,6 +809,7 @@ function serializeNodesBlock(
           maskFill,
           embedAnimations,
           activeClip,
+          canvasNodes,
         );
       }
 

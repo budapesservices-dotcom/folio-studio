@@ -282,14 +282,16 @@ export function buildCssBackgroundFromFills(
  */
 export function buildCssEffectsAndBlendDeclarations(
   node: DesignNode,
+  options?: { forceVectorShadow?: boolean },
 ): string[] {
   const declarations: string[] = [];
   const effects = getVisibleEffects(node);
   const isBoxNode =
-    node.type === 'frame' ||
-    node.type === 'rect' ||
-    node.type === 'ellipse' ||
-    node.type === 'image';
+    !options?.forceVectorShadow &&
+    (node.type === 'frame' ||
+      node.type === 'rect' ||
+      node.type === 'ellipse' ||
+      node.type === 'image');
 
   const boxShadows: string[] = [];
   const filters: string[] = [];
@@ -504,7 +506,7 @@ export function computeSvgFilterRegion(node: DesignNode): SvgFilterRegion {
  * Serializes SVG `<linearGradient>`, `<radialGradient>`, and `<filter>` `<defs>`
  * XML strings for a single node — used by standalone SVG/PNG visual export.
  */
-export function serializeNodeSvgStyleDefs(node: DesignNode, prefix: string): string {
+export function serializeNodeSvgPaintDefs(node: DesignNode, prefix: string): string {
   const parts: string[] = [];
 
   if (node.type === 'frame' || node.type === 'rect' || node.type === 'ellipse' || node.type === 'path') {
@@ -536,6 +538,16 @@ export function serializeNodeSvgStyleDefs(node: DesignNode, prefix: string): str
         );
       }
     });
+  }
+
+  return parts.join('');
+}
+
+export function serializeNodeSvgStyleDefs(node: DesignNode, prefix: string): string {
+  const parts: string[] = [];
+  const paintDefs = serializeNodeSvgPaintDefs(node, prefix);
+  if (paintDefs) {
+    parts.push(paintDefs);
   }
 
   const effects = getVisibleEffects(node).filter(
