@@ -324,6 +324,31 @@ export function saveProjectAndActivate(input: FolioProject): Promise<void> {
   });
 }
 
+/**
+ * Deletes a stored project record from IndexedDB inside the serialized write queue.
+ * Never removes the reserved Component Canvas buffer record.
+ */
+export function deleteProjectById(projectId: string): Promise<void> {
+  if (!projectId || projectId === RESERVED_COMPONENT_PROJECT_ID) {
+    return Promise.resolve();
+  }
+  return enqueueProjectWrite(async () => {
+    const database = await openDatabase();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction(PROJECT_STORE, 'readwrite');
+        transaction.objectStore(PROJECT_STORE).delete(projectId);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error ?? new Error('Could not delete the project record.'));
+        transaction.onabort = () => reject(transaction.error ?? new Error('Project deletion was cancelled.'));
+      });
+      persistedProjectRevisions.delete(projectId);
+    } finally {
+      database.close();
+    }
+  });
+}
+
 export async function loadProjectById(projectId: string): Promise<FolioProject | null> {
   const database = await openDatabase();
   let stored: unknown;

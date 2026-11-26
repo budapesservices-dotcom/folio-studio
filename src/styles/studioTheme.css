@@ -3987,6 +3987,298 @@ textarea:focus-visible {
   }
 }
 
+/* ============================================================================
+ * NEW PROJECT VERIFICATION DIALOG (Save, Delete, Cancel)
+ * Uses studio theme CSS custom properties for Obsidian Dark & Daylight Light
+ * ============================================================================ */
+.new-project-modal-host {
+  position: fixed;
+  z-index: 10000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  isolation: isolate;
+}
+
+.new-project-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(7, 9, 15, 0.72);
+  backdrop-filter: blur(4px);
+  pointer-events: auto;
+}
+
+:root[data-studio-theme="light"] .new-project-backdrop {
+  background: rgba(15, 23, 42, 0.44);
+}
+
+.new-project-dialog {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(468px, 100%);
+  max-height: min(90vh, 620px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: var(--shadow-popover);
+  animation: new-project-dialog-enter 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes new-project-dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.new-project-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.new-project-dialog-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.new-project-dialog-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--accent-ring);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.new-project-dialog-icon .icon-svg {
+  width: 18px;
+  height: 18px;
+}
+
+.new-project-dialog h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.new-project-dialog-meta {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.new-project-dialog-filename {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.new-project-dialog-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.new-project-dialog-close .icon-svg {
+  width: 15px;
+  height: 15px;
+}
+
+.new-project-dialog-close:hover:not(:disabled) {
+  background: var(--control-hover);
+  border-color: var(--control-border);
+  color: var(--text-primary);
+}
+
+.new-project-dialog-description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.new-project-dialog-description code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  color: var(--text-primary);
+}
+
+.new-project-dialog-error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(244, 63, 94, 0.48);
+  background: var(--danger-soft);
+  color: var(--status-danger);
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 500;
+}
+
+.new-project-dialog-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.new-project-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease, transform 120ms ease;
+}
+
+.new-project-action:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+}
+
+.new-project-action:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+.new-project-action-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-project-action-head .icon-svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.new-project-action-label {
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.3;
+  color: inherit;
+}
+
+.new-project-action-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  padding-left: 23px;
+}
+
+.new-project-action-primary {
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.new-project-action-primary .icon-svg {
+  color: var(--accent-bright);
+}
+
+.new-project-action-primary:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.24);
+}
+
+:root[data-studio-theme="light"] .new-project-action-primary:hover:not(:disabled) {
+  background: rgba(37, 99, 235, 0.16);
+}
+
+.new-project-action-danger {
+  border-color: rgba(244, 63, 94, 0.42);
+  background: var(--danger-soft);
+  color: #fecdd3;
+}
+
+.new-project-action-danger .icon-svg {
+  color: var(--status-danger);
+}
+
+.new-project-action-danger .new-project-action-hint {
+  color: rgba(254, 205, 211, 0.78);
+}
+
+.new-project-action-danger:hover:not(:disabled) {
+  border-color: var(--status-danger);
+  background: rgba(244, 63, 94, 0.24);
+  color: #fff1f2;
+}
+
+:root[data-studio-theme="light"] .new-project-action-danger {
+  color: #9f1239;
+}
+
+:root[data-studio-theme="light"] .new-project-action-danger .new-project-action-hint {
+  color: #881337;
+}
+
+:root[data-studio-theme="light"] .new-project-action-danger:hover:not(:disabled) {
+  background: rgba(225, 29, 72, 0.16);
+  color: #881337;
+}
+
+.new-project-action-cancel .icon-svg {
+  color: var(--text-secondary);
+}
+
+.new-project-dialog button:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+}
+
+.new-project-dialog button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+
 
 
 

@@ -423,3 +423,30 @@ export function createInitialProject(name = 'Untitled project'): FolioProject {
     designTokens: createDefaultDesignTokens(),
   };
 }
+
+export function createBlankProject(name = 'Untitled project'): FolioProject {
+  const now = new Date().toISOString();
+  const trimmedName = name.trim() || 'Untitled project';
+  return {
+    format: FOLIO_FORMAT,
+    formatVersion: FOLIO_FORMAT_VERSION,
+    appVersion: '0.1.0',
+    metadata: {
+      id: createId('project'),
+      name: trimmedName,
+      createdAt: now,
+      updatedAt: now,
+    },
+    activePageId: 'page-main',
+    pages: [{
+      id: 'page-main',
+      name: 'Main Page',
+      route: '/',
+      document: createEmptyDocument('Main Page', 1440, 900),
+    }],
+    components: [],
+    logicGraphs: [],
+    assets: [],
+    designTokens: createDefaultDesignTokens(),
+  };
+}

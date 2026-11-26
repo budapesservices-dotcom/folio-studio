@@ -3,6 +3,8 @@ import { lazy, Suspense } from 'preact/compat';
 import type { AnimationClip, BreakpointId, FolioPage, FolioProject } from '../../core/document/types';
 import type { EditorTarget } from '../editorContext';
 import type { KeyboardShortcutsModalProps } from '../KeyboardShortcutsModal';
+import { summarizeProjectForNewProjectDialog, type NewProjectActionMode } from '../newProjectFlow';
+import { NewProjectConfirmDialog } from './NewProjectConfirmDialog';
 
 const LazyMotionExportModal = lazy(() => import('./MotionExportModal').then((m) => ({ default: m.MotionExportModal })));
 const LazyDiagnosticsModal = lazy(() => import('./DiagnosticsModal'));
@@ -27,6 +29,14 @@ export interface WorkspaceModalsProps {
   breakpoint: BreakpointId;
   activeWorkspace: EditorTarget;
   componentDeletionDialogOpen: boolean;
+  newProjectDialogOpen: boolean;
+  newProjectBusyMode: NewProjectActionMode | null;
+  newProjectError: string | null;
+  newProjectModalHostRef: { current: HTMLDivElement | null };
+  newProjectDialogRef: { current: HTMLElement | null };
+  onSaveAndCreateNewProject: () => void;
+  onDeleteAndCreateNewProject: () => void;
+  onCancelNewProject: () => void;
   motionExportOpen: boolean;
   shortcutsModalOpen: boolean;
   diagnosticsModalOpen: boolean;
@@ -51,6 +61,14 @@ export function WorkspaceModals(props: WorkspaceModalsProps) {
     breakpoint,
     activeWorkspace,
     componentDeletionDialogOpen,
+    newProjectDialogOpen,
+    newProjectBusyMode,
+    newProjectError,
+    newProjectModalHostRef,
+    newProjectDialogRef,
+    onSaveAndCreateNewProject,
+    onDeleteAndCreateNewProject,
+    onCancelNewProject,
     motionExportOpen,
     shortcutsModalOpen,
     diagnosticsModalOpen,
@@ -68,6 +86,20 @@ export function WorkspaceModals(props: WorkspaceModalsProps) {
 
   return (
     <>
+      {newProjectDialogOpen && !componentDeletionDialogOpen && (
+        <NewProjectConfirmDialog
+          open
+          summary={summarizeProjectForNewProjectDialog(project)}
+          busyMode={newProjectBusyMode}
+          errorMessage={newProjectError}
+          hostRef={newProjectModalHostRef}
+          dialogRef={newProjectDialogRef}
+          onSaveAndCreateNew={onSaveAndCreateNewProject}
+          onDeleteAndCreateNew={onDeleteAndCreateNewProject}
+          onCancel={onCancelNewProject}
+        />
+      )}
+
       {motionExportOpen && (
         <Suspense fallback={null}>
           <LazyMotionExportModal
@@ -82,7 +114,7 @@ export function WorkspaceModals(props: WorkspaceModalsProps) {
         </Suspense>
       )}
 
-      {shortcutsModalOpen && !componentDeletionDialogOpen && (
+      {shortcutsModalOpen && !componentDeletionDialogOpen && !newProjectDialogOpen && (
         <Suspense fallback={null}>
           <LazyKeyboardShortcutsModal
             open
@@ -95,7 +127,7 @@ export function WorkspaceModals(props: WorkspaceModalsProps) {
         </Suspense>
       )}
 
-      {diagnosticsModalOpen && !componentDeletionDialogOpen && (
+      {diagnosticsModalOpen && !componentDeletionDialogOpen && !newProjectDialogOpen && (
         <Suspense fallback={null}>
           <LazyDiagnosticsModal
             open

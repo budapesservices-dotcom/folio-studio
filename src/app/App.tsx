@@ -22,6 +22,7 @@ import { createCanonicalEditorStore } from './editorStore';
 import { createComponentCanvasCommandClient, createMainCanvasCommandClient } from './mainCanvasCommandClient';
 import { createToolOperationExecutor } from './toolOperationExecutor';
 import { getActiveEditorContext, type EditorTarget } from './editorContext';
+import type { NewProjectActionMode } from './newProjectFlow';
 import { getWindowZIndex } from './windowManager';
 import { createToolbarHintStore, DEFAULT_TOOLBAR_HINT } from './ToolbarHintBar';
 import { StudioIcon } from './workspace/StudioIcon';
@@ -156,10 +157,16 @@ export function App() {
 
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
   const [diagnosticsModalOpen, setDiagnosticsModalOpen] = useState(false);
+  const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
+  const [newProjectBusyMode, setNewProjectBusyMode] = useState<NewProjectActionMode | null>(null);
+  const [newProjectError, setNewProjectError] = useState<string | null>(null);
   const [shortcutsMountTick, setShortcutsMountTick] = useState(0);
   const shortcutsModalHostRef = useRef<HTMLDivElement | null>(null);
   const shortcutsDialogRef = useRef<HTMLElement | null>(null);
   const shortcutsFocusReturnRef = useRef<HTMLElement | null>(null);
+  const newProjectModalHostRef = useRef<HTMLDivElement | null>(null);
+  const newProjectDialogRef = useRef<HTMLElement | null>(null);
+  const newProjectFocusReturnRef = useRef<HTMLElement | null>(null);
 
   // Derived active documents
   const activeDocument = getActiveDocument(state.project);
@@ -281,6 +288,44 @@ export function App() {
     setShortcutsMountTick((tick) => tick + 1);
   }, []);
 
+  const openNewProjectDialog = useCallback(() => {
+    if (isHydrating) return;
+    newProjectFocusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setOpenMenu(null);
+    setToolRackOpen(null);
+    layers.setLayerContextMenu(null);
+    setNewProjectError(null);
+    setNewProjectBusyMode(null);
+    setNewProjectDialogOpen(true);
+  }, [isHydrating, layers.setLayerContextMenu]);
+
+  const closeNewProjectDialog = useCallback(() => {
+    if (newProjectBusyMode !== null) return;
+    setNewProjectError(null);
+    setNewProjectDialogOpen(false);
+  }, [newProjectBusyMode]);
+
+  const confirmNewProject = useCallback(async (mode: NewProjectActionMode) => {
+    if (newProjectBusyMode !== null) return;
+    setNewProjectError(null);
+    setNewProjectBusyMode(mode);
+    try {
+      const outcome = await fileLifecycle.createNewProject(mode, isHydrating, () => {
+        setCodeWorkspaceOpen(false);
+        setMotionExportOpen(false);
+        setProjectNameEditing(false);
+        windows.openMainCanvas();
+      });
+      if (outcome.ok) {
+        setNewProjectDialogOpen(false);
+      } else {
+        setNewProjectError(outcome.error);
+      }
+    } finally {
+      setNewProjectBusyMode(null);
+    }
+  }, [fileLifecycle, isHydrating, newProjectBusyMode, windows]);
+
   useWorkspaceChromeEffects({
     notice,
     setNotice,
@@ -300,6 +345,12 @@ export function App() {
     shortcutsDialogRef,
     shortcutsFocusReturnRef,
     closeShortcutsModal,
+    newProjectDialogOpen,
+    newProjectBusy: newProjectBusyMode !== null,
+    newProjectModalHostRef,
+    newProjectDialogRef,
+    newProjectFocusReturnRef,
+    closeNewProjectDialog,
   });
 
   const updateToolbarHint = useCallback((panel: string, description: string, shortcuts: string[] = []) => {
@@ -441,6 +492,7 @@ export function App() {
     isHydrating,
     componentDeletionDialogOpen: componentMaster.componentDeletionDialogOpen,
     shortcutsModalOpen,
+    newProjectDialogOpen,
     selectionSourceRef,
     clipboardRef,
     getCommandClient,
@@ -604,6 +656,7 @@ export function App() {
         toolbarHintStore={toolbarHintStore}
         onToggleMenu={(menu) => { setOpenMenu((current) => (current === menu ? null : menu)); setToolRackOpen(null); }}
         onCloseMenus={() => setOpenMenu(null)}
+        onRequestNewProject={openNewProjectDialog}
         onOpenProjectPicker={() => { if (isHydrating) return; setOpenMenu(null); projectFileInputRef.current?.click(); }}
         onProjectFileSelected={fileLifecycle.handleProjectFileSelected}
         onExportCurrentProject={() => { void fileLifecycle.exportCurrentProject(isHydrating); }}
@@ -1148,6 +1201,14 @@ export function App() {
         breakpoint={designSystem.activeBreakpoint}
         activeWorkspace={activeEditorId}
         componentDeletionDialogOpen={componentMaster.componentDeletionDialogOpen}
+        newProjectDialogOpen={newProjectDialogOpen}
+        newProjectBusyMode={newProjectBusyMode}
+        newProjectError={newProjectError}
+        newProjectModalHostRef={newProjectModalHostRef}
+        newProjectDialogRef={newProjectDialogRef}
+        onSaveAndCreateNewProject={() => { void confirmNewProject('save'); }}
+        onDeleteAndCreateNewProject={() => { void confirmNewProject('delete'); }}
+        onCancelNewProject={closeNewProjectDialog}
         motionExportOpen={motionExportOpen}
         shortcutsModalOpen={shortcutsModalOpen}
         diagnosticsModalOpen={diagnosticsModalOpen}

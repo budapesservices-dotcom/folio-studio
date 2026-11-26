@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { AssetReference, BreakpointId, FolioDocument, FolioProject } from '../../core/document/types';
 import {
+  deleteProjectById,
   isStorageQuotaExceededError,
   loadMostRecentProject,
   saveProjectAndActivate,
@@ -28,6 +29,12 @@ import type { EditorTarget } from '../editorContext';
 import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
 import { createProjectExportSnapshot } from '../projectExport';
 import { openProjectFile } from '../projectFileActions';
+import {
+  executeNewProjectAction,
+  type NewProjectActionMode,
+  type NewProjectActionOutcome,
+  type NewProjectExportResult,
+} from '../newProjectFlow';
 import { resolveActiveExportTarget } from './canvasViewState';
 
 export { MAX_PROJECT_SIZE };
@@ -715,9 +722,14 @@ export function useProjectFileLifecycle({
     }
   };
 
-  const exportCurrentProject = async (isHydrating: boolean) => {
+  const exportCurrentProject = async (
+    isHydrating: boolean,
+    options: { silentNotice?: boolean } = {},
+  ): Promise<NewProjectExportResult> => {
     setFileMenuOpen(false);
-    if (isHydrating) return;
+    if (isHydrating) {
+      return { ok: false, error: 'Wait for the workspace to finish loading before exporting.' };
+    }
     try {
       const exportSnapshot = createProjectExportSnapshot(
         project,
@@ -726,12 +738,61 @@ export function useProjectFileLifecycle({
       );
       const portableSnapshot = await materializeProjectAssetsForExport(exportSnapshot);
       downloadProject(portableSnapshot);
-      setNotice('Project exported successfully as a .flop file.');
+      if (!options.silentNotice) {
+        setNotice('Project exported successfully as a .flop file.');
+      }
+      return { ok: true };
     } catch (error) {
       console.error('Folio could not export the current project:', error);
       const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
       setNotice('Unable to export project: ' + detail);
+      return { ok: false, error: detail };
     }
+  };
+
+  const createNewProject = async (
+    mode: NewProjectActionMode,
+    isHydrating: boolean,
+    onAfterSwitch?: () => void,
+  ): Promise<NewProjectActionOutcome> => {
+    if (isHydrating) {
+      return {
+        ok: false,
+        mode,
+        stage: 'persist',
+        error: 'Wait for the workspace to finish loading before starting a new project.',
+      };
+    }
+
+    const currentProject = getCanonicalProject();
+    const outcome = await executeNewProjectAction(mode, {
+      currentProject,
+      exportCurrentProject: () => exportCurrentProject(false, { silentNotice: true }),
+      persistAndActivateProject: async (nextProject) => {
+        if ('indexedDB' in globalThis) {
+          await saveProjectAndActivate(nextProject);
+        }
+      },
+      deleteStoredProject: async (projectId) => {
+        if ('indexedDB' in globalThis) {
+          await deleteProjectById(projectId);
+        }
+      },
+      replaceCanonicalProject: (nextProject, description) =>
+        mainCommandClient.replaceProject(nextProject, description),
+      resetWorkspaceAfterProjectSwitch: () => {
+        setActiveEditorId('main');
+        onResetEditingComponent();
+        setComponentCanvasClosed(true);
+        setComponentCanvasMinimized(false);
+        onAfterSwitch?.();
+      },
+    });
+
+    if (outcome.ok) {
+      setNotice(outcome.notice);
+    }
+    return outcome;
   };
 
   // Dynamically import visualExport so PNG/SVG export code stays off the critical startup chunk.
@@ -796,6 +857,7 @@ export function useProjectFileLifecycle({
     saveStatus,
     handleProjectFileSelected,
     exportCurrentProject,
+    createNewProject,
     exportActiveCanvasSvg,
     exportActiveCanvasPng,
   };

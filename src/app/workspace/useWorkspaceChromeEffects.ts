@@ -21,6 +21,12 @@ export interface UseWorkspaceChromeEffectsOptions {
   shortcutsDialogRef: RefObject<HTMLElement>;
   shortcutsFocusReturnRef: { current: HTMLElement | null };
   closeShortcutsModal: () => void;
+  newProjectDialogOpen: boolean;
+  newProjectBusy: boolean;
+  newProjectModalHostRef: RefObject<HTMLElement>;
+  newProjectDialogRef: RefObject<HTMLElement>;
+  newProjectFocusReturnRef: { current: HTMLElement | null };
+  closeNewProjectDialog: () => void;
 }
 
 /**
@@ -49,6 +55,12 @@ export function useWorkspaceChromeEffects({
   shortcutsDialogRef,
   shortcutsFocusReturnRef,
   closeShortcutsModal,
+  newProjectDialogOpen,
+  newProjectBusy,
+  newProjectModalHostRef,
+  newProjectDialogRef,
+  newProjectFocusReturnRef,
+  closeNewProjectDialog,
 }: UseWorkspaceChromeEffectsOptions): void {
   // Auto-dismiss transient status toast
   useEffect(() => {
@@ -122,7 +134,7 @@ export function useWorkspaceChromeEffects({
 
   // Keyboard Shortcuts modal focus trap
   useEffect(() => {
-    if (!shortcutsModalOpen || componentDeletionDialogOpen) return;
+    if (!shortcutsModalOpen || componentDeletionDialogOpen || newProjectDialogOpen) return;
     const shell = appShellRef.current;
     const host = shortcutsModalHostRef.current;
     const dialog = shortcutsDialogRef.current;
@@ -146,10 +158,40 @@ export function useWorkspaceChromeEffects({
     shortcutsModalOpen,
     shortcutsMountTick,
     componentDeletionDialogOpen,
+    newProjectDialogOpen,
     appShellRef,
     shortcutsModalHostRef,
     shortcutsDialogRef,
     shortcutsFocusReturnRef,
     closeShortcutsModal,
+  ]);
+
+  // New Project confirmation dialog focus trap
+  useEffect(() => {
+    if (!newProjectDialogOpen || componentDeletionDialogOpen) return;
+    const shell = appShellRef.current;
+    const host = newProjectModalHostRef.current;
+    const dialog = newProjectDialogRef.current;
+    if (!shell || !host || !dialog) return;
+    const restoreFocus = activateModalDialog(shell, host, dialog, newProjectFocusReturnRef.current);
+    const onKeyDown = (event: KeyboardEvent) => {
+      trapModalDialogKeydown(dialog, event, () => {
+        if (!newProjectBusy) closeNewProjectDialog();
+      });
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      restoreFocus();
+    };
+  }, [
+    newProjectDialogOpen,
+    newProjectBusy,
+    componentDeletionDialogOpen,
+    appShellRef,
+    newProjectModalHostRef,
+    newProjectDialogRef,
+    newProjectFocusReturnRef,
+    closeNewProjectDialog,
   ]);
 }

@@ -22,6 +22,7 @@ export interface UseWorkspaceShortcutsOptions {
   isHydrating: boolean;
   componentDeletionDialogOpen: boolean;
   shortcutsModalOpen: boolean;
+  newProjectDialogOpen?: boolean;
   selectionSourceRef: RefObject<'layers' | 'canvas'>;
   clipboardRef: RefObject<StudioClipboardPayload | null>;
   getCommandClient: (target: EditorTarget) => MainCanvasCommandClient | WorkspaceCommandClient;
@@ -42,6 +43,7 @@ export function useWorkspaceShortcuts({
   isHydrating,
   componentDeletionDialogOpen,
   shortcutsModalOpen,
+  newProjectDialogOpen = false,
   selectionSourceRef,
   clipboardRef,
   getCommandClient,
@@ -55,7 +57,7 @@ export function useWorkspaceShortcuts({
 }: UseWorkspaceShortcutsOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (isHydrating || componentDeletionDialogOpen || shortcutsModalOpen) return;
+      if (isHydrating || componentDeletionDialogOpen || shortcutsModalOpen || newProjectDialogOpen) return;
       const target = event.target instanceof Element ? event.target : null;
       if (
         (target instanceof HTMLElement && target.isContentEditable) ||
@@ -243,6 +245,7 @@ export function useWorkspaceShortcuts({
     isHydrating,
     componentDeletionDialogOpen,
     shortcutsModalOpen,
+    newProjectDialogOpen,
     openShortcutsModal,
     getCommandClient,
     copySelection,

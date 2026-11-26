@@ -76,6 +76,7 @@ export interface GlobalToolbarProps {
   toolbarHintStore: ToolbarHintStore;
   onToggleMenu: (menu: TopMenuId) => void;
   onCloseMenus: () => void;
+  onRequestNewProject?: () => void;
   onOpenProjectPicker: () => void;
   onProjectFileSelected: (file: File) => void | Promise<ProjectImportOutcome | void>;
   onExportCurrentProject: () => void;
@@ -147,6 +148,7 @@ export function GlobalToolbar({
   toolbarHintStore,
   onToggleMenu,
   onCloseMenus,
+  onRequestNewProject,
   onOpenProjectPicker,
   onProjectFileSelected,
   onExportCurrentProject,
@@ -248,12 +250,26 @@ export function GlobalToolbar({
                 aria-haspopup="menu"
                 aria-expanded={openMenu === 'file'}
                 onClick={() => onToggleMenu('file')}
-                onMouseEnter={() => onUpdateToolbarHint('FILE', 'Open or export the current native .flop project.')}
+                onMouseEnter={() => onUpdateToolbarHint('FILE', 'Create, open, or export native .flop projects.')}
               >
                 File
               </button>
               {openMenu === 'file' && (
                 <div class="global-menu-dropdown" role="menu" aria-label="File menu">
+                  {onRequestNewProject && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="file-new-project-btn"
+                      onClick={() => runMenuAction(() => {
+                        setImportError(null);
+                        onRequestNewProject();
+                      })}
+                      disabled={isHydrating}
+                    >
+                      New Project…
+                    </button>
+                  )}
                   <button type="button" role="menuitem" onClick={handleOpenProjectPickerClick} disabled={isHydrating}>
                     Open Project…
                   </button>
