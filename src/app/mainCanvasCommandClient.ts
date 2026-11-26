@@ -131,6 +131,11 @@ export interface MainCanvasCommandClient {
   renameProject(name: string): NativeCommandResult;
   replaceProject(project: FolioProject, description?: string): NativeCommandResult;
   createPage(page: FolioPage, description?: string): NativeCommandResult;
+  createPageWithLogic(
+    page: FolioPage,
+    logicGraph: LogicGraph | null,
+    description?: string,
+  ): NativeCommandTransactionResult;
   setActivePage(pageId: string, description?: string): NativeCommandResult;
   setDocumentBackground(background: string, description?: string): NativeCommandResult;
   setDocumentSize(width: number, height: number, description?: string): NativeCommandResult;
@@ -143,6 +148,7 @@ export interface MainCanvasCommandClient {
     component: ComponentDefinition,
     instance: ComponentInstanceNode,
     description?: string,
+    componentLogicGraph?: LogicGraph | null,
   ): NativeCommandTransactionResult;
   syncComponentDocument(
     args: {
@@ -215,6 +221,11 @@ export interface MainCanvasCommandClient {
     description?: string,
   ): NativeCommandTransactionResult;
   createNodes(nodes: readonly DesignNode[], description?: string): NativeCommandResult;
+  insertTemplateWithLogic(
+    nodes: readonly DesignNode[],
+    logicGraph: LogicGraph | null,
+    description?: string,
+  ): NativeCommandTransactionResult;
   replaceNode(node: DesignNode, description?: string): NativeCommandResult;
   replaceNodes(
     removeIds: readonly string[],
@@ -391,6 +402,37 @@ export function createWorkspaceCommandClient(
       );
     },
 
+    createPageWithLogic(page, logicGraph, description = 'Create page from template') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      const transactionId = createCommandId();
+      const commands: NativeCommandEnvelope<string, unknown>[] = [
+        createEnvelope(
+          'page.create',
+          { kind: 'project', projectId },
+          { page: stripUndefinedEntries(page) },
+          description,
+          transactionId,
+        ),
+      ];
+      if (logicGraph) {
+        commands.push(
+          createEnvelope(
+            'logic.create-graph',
+            { kind: 'project', projectId },
+            stripUndefinedEntries({ graph: logicGraph }),
+            description,
+            transactionId,
+          ),
+        );
+      }
+      const result = executeNativeCommandTransaction(store, commands, buildContext());
+      if (result.status === 'rejected' && result.commandResults.length > 0) {
+        const failed = result.commandResults[result.failedCommandIndex ?? result.commandResults.length - 1];
+        if (failed) options.onRejected?.(failed);
+      }
+      return result;
+    },
+
     setActivePage(pageId, description = 'Switch active page') {
       const projectId = store.getSnapshot().editorState.project.metadata.id;
       return submit(
@@ -412,11 +454,16 @@ export function createWorkspaceCommandClient(
       );
     },
 
-    createComponentWithInstance(component, instance, description = 'Insert template as component') {
+    createComponentWithInstance(
+      component,
+      instance,
+      description = 'Insert template as component',
+      componentLogicGraph = null,
+    ) {
       const astView = getActiveAstView();
       const projectId = store.getSnapshot().editorState.project.metadata.id;
       const transactionId = createCommandId();
-      const commands = [
+      const commands: NativeCommandEnvelope<string, unknown>[] = [
         createEnvelope(
           'component.create',
           { kind: 'project', projectId },
@@ -424,6 +471,19 @@ export function createWorkspaceCommandClient(
           description,
           transactionId,
         ),
+      ];
+      if (componentLogicGraph) {
+        commands.push(
+          createEnvelope(
+            'logic.create-graph',
+            { kind: 'project', projectId },
+            stripUndefinedEntries({ graph: componentLogicGraph }),
+            description,
+            transactionId,
+          ),
+        );
+      }
+      commands.push(
         createEnvelope(
           'node.create',
           { kind: 'document', address: astView.address },
@@ -431,7 +491,7 @@ export function createWorkspaceCommandClient(
           description,
           transactionId,
         ),
-      ];
+      );
       const result = executeNativeCommandTransaction(store, commands, buildContext());
       if (result.status === 'rejected' && result.commandResults.length > 0) {
         const failed = result.commandResults[result.failedCommandIndex ?? result.commandResults.length - 1];
@@ -677,6 +737,39 @@ export function createWorkspaceCommandClient(
       if (nodes.length === 0) return makeNoOpResult('No nodes were supplied to create.', astView.address);
       const cleanNodes = nodes.map((node) => stripUndefinedEntries(node));
       return submit('node.create', { kind: 'document', address: astView.address }, { nodes: cleanNodes }, description);
+    },
+
+    insertTemplateWithLogic(nodes, logicGraph, description = 'Insert template') {
+      const astView = getActiveAstView();
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      const transactionId = createCommandId();
+      const cleanNodes = nodes.map((node) => stripUndefinedEntries(node));
+      const commands: NativeCommandEnvelope<string, unknown>[] = [
+        createEnvelope(
+          'node.create',
+          { kind: 'document', address: astView.address },
+          { nodes: cleanNodes },
+          description,
+          transactionId,
+        ),
+      ];
+      if (logicGraph) {
+        commands.push(
+          createEnvelope(
+            'logic.create-graph',
+            { kind: 'project', projectId },
+            stripUndefinedEntries({ graph: logicGraph }),
+            description,
+            transactionId,
+          ),
+        );
+      }
+      const result = executeNativeCommandTransaction(store, commands, buildContext());
+      if (result.status === 'rejected' && result.commandResults.length > 0) {
+        const failed = result.commandResults[result.failedCommandIndex ?? result.commandResults.length - 1];
+        if (failed) options.onRejected?.(failed);
+      }
+      return result;
     },
 
     replaceNode(node, description = 'Replace node') {

@@ -4,10 +4,12 @@ import {
   collectProjectGoogleFonts,
   ensureStudioCustomFontsLoaded,
   ensureStudioGoogleFontsLoaded,
+  formatCustomFontCssStack,
 } from '../../core/document/fonts';
 import {
   createImageNodeFromAsset,
   getAssetCacheRevision,
+  ingestFontFile,
   ingestImageFile,
   subscribeAssetCacheUpdates,
 } from '../../core/persistence/assetStore';
@@ -30,8 +32,8 @@ export interface UseMediaAndFontsLifecycleOptions {
 }
 
 /**
- * Manages Studio Google Fonts / @font-face dynamic stylesheet loading and
- * SHA-256 deduplicated image ingestion (drag-and-drop or Inspector file picker).
+ * Manages Studio Google Fonts / @font-face dynamic stylesheet loading,
+ * SHA-256 deduplicated image ingestion, and custom font file import (.woff2/.woff/.ttf/.otf).
  */
 export function useMediaAndFontsLifecycle({
   project,
@@ -136,7 +138,88 @@ export function useMediaAndFontsLifecycle({
     setNotice,
   ]);
 
+  const handleImportFontFiles = useCallback(async (
+    files: readonly File[],
+    targetEditor: EditorTarget = activeEditorId,
+  ) => {
+    if (isHydrating || files.length === 0) return;
+    let importedCount = 0;
+    let reusedCount = 0;
+    let lastFamilyName = '';
+    let latestPortabilityWarning: string | null = null;
+    const errors: string[] = [];
+
+    for (const file of files) {
+      try {
+        const existingAssets = canonicalStore.getSnapshot().editorState.project.assets;
+        const ingested = await ingestFontFile(file, existingAssets);
+        if (ingested.deduplicated) reusedCount += 1;
+        if (ingested.portabilityWarning) latestPortabilityWarning = ingested.portabilityWarning;
+
+        const res = mainCommandClient.upsertAsset(
+          ingested.asset,
+          `Import font "${ingested.familyName}"`,
+        );
+        if (res.status === 'applied') {
+          importedCount += 1;
+          lastFamilyName = ingested.familyName;
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : 'Unsupported font file.';
+        errors.push(`${file.name}: ${msg}`);
+      }
+    }
+
+    if (importedCount > 0) {
+      const updatedProject = canonicalStore.getSnapshot().editorState.project;
+      ensureStudioCustomFontsLoaded(updatedProject.assets);
+
+      let appliedToText = false;
+      if (lastFamilyName) {
+        const targetStore = targetEditor === 'component' ? componentStore : canonicalStore;
+        const targetClient = targetEditor === 'component' ? componentCommandClient : mainCommandClient;
+        const snap = targetStore.getSnapshot().editorState;
+        const activeDoc = getActiveDocument(snap.project);
+        const selectedTextNodes = snap.selectedNodeIds
+          .map((id) => activeDoc.nodes.find((n) => n.id === id))
+          .filter((node): node is Extract<typeof activeDoc.nodes[number], { type: 'text' }> => node?.type === 'text');
+        if (selectedTextNodes.length > 0) {
+          const stack = formatCustomFontCssStack(lastFamilyName);
+          targetClient.transformNodes(
+            selectedTextNodes.map((node) => ({
+              ...node,
+              style: { ...node.style, fontFamily: stack },
+            })),
+            `Apply imported font "${lastFamilyName}"`,
+          );
+          appliedToText = true;
+        }
+      }
+
+      const details: string[] = [];
+      if (reusedCount > 0) details.push(`${reusedCount} deduplicated`);
+      if (appliedToText) details.push('applied to selection');
+      const suffix = details.length > 0 ? ` (${details.join(', ')})` : '';
+      const baseNotice =
+        importedCount === 1
+          ? `Imported font "${lastFamilyName}"${suffix}.`
+          : `Imported ${importedCount} custom fonts${suffix}.`;
+      setNotice(latestPortabilityWarning ? `${baseNotice} Warning: ${latestPortabilityWarning}` : baseNotice);
+    } else if (errors.length > 0) {
+      setNotice(errors[0]);
+    }
+  }, [
+    activeEditorId,
+    canonicalStore,
+    componentCommandClient,
+    componentStore,
+    isHydrating,
+    mainCommandClient,
+    setNotice,
+  ]);
+
   return {
     handleInsertImageFiles,
+    handleImportFontFiles,
   };
 }

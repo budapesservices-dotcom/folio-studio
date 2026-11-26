@@ -2100,8 +2100,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   top: 74px;
   bottom: auto;
   left: 62px;
-  width: min(384px, calc(100vw - 74px));
-  max-height: min(620px, calc(100vh - 108px));
+  width: min(452px, calc(100vw - 74px));
+  max-height: min(640px, calc(100vh - 108px));
   padding: 12px;
   gap: 10px;
   border: 1px solid #354056;
@@ -2252,8 +2252,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 .template-category-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 3px;
   padding: 2px;
   border: 1px solid #2b3346;
   border-radius: 7px;

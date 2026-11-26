@@ -6,6 +6,7 @@ import {
   buildTemplatePreviewDocument,
   countMatchingTemplatesByCategory,
   filterStudioTemplates,
+  getTemplateLogicNodeCount,
   groupTemplatesByCategory,
   splitHighlightSegments,
   tokenizeTemplateSearch,
@@ -31,18 +32,21 @@ interface PreparedTemplatePreview {
   readonly template: StudioTemplateDefinition;
   readonly previewDocument: ReturnType<typeof buildTemplatePreviewDocument>;
   readonly layerCount: number;
+  readonly logicNodeCount: number;
   readonly viewBox: string;
   readonly maskPrefix: string;
 }
 
 const PREPARED_TEMPLATE_PREVIEWS: readonly PreparedTemplatePreview[] = STUDIO_TEMPLATE_CATALOG.map((template) => {
   const previewDocument = buildTemplatePreviewDocument(template);
+  const logicNodeCount = getTemplateLogicNodeCount(template);
   const padX = Math.max(8, Math.round(template.width * 0.06));
   const padY = Math.max(8, Math.round(template.height * 0.06));
   return {
     template,
     previewDocument,
     layerCount: previewDocument.nodes.length,
+    logicNodeCount,
     viewBox: `${-padX} ${-padY} ${template.width + padX * 2} ${template.height + padY * 2}`,
     maskPrefix: `folio-tpl-mask-${sanitizeMaskIdSegment(template.id)}`,
   };
@@ -114,8 +118,29 @@ export function TemplateLibraryPopover({
     ? PREPARED_TEMPLATE_PREVIEWS.length
     : PREPARED_TEMPLATE_PREVIEWS.filter((entry) => entry.template.category === activeCategory).length;
 
-  const renderTemplateCard = ({ template, previewDocument, layerCount, viewBox, maskPrefix }: PreparedTemplatePreview) => {
+  const renderTemplateCard = ({
+    template,
+    previewDocument,
+    layerCount,
+    logicNodeCount,
+    viewBox,
+    maskPrefix,
+  }: PreparedTemplatePreview) => {
     const titleSegments = splitHighlightSegments(template.name, searchTokens);
+    const isPageTemplate = template.category === 'pages' && !isVectorStudio;
+    const primaryMode: TemplateInsertMode = isPageTemplate ? 'page' : effectiveMode;
+    const altMode: TemplateInsertMode = isPageTemplate ? 'nodes' : alternateMode;
+    const altLabel = isPageTemplate ? '+ Layers' : (altMode === 'component' ? '+ Comp' : '+ Nodes');
+    const primaryActionText =
+      primaryMode === 'page'
+        ? 'as a new ready-to-use Page with wired Node Logic'
+        : primaryMode === 'component'
+          ? 'as Master Component + linked Instance'
+          : 'as editable native layers';
+    const metaShortcuts = logicNodeCount > 0
+      ? [`${template.width}×${template.height}`, `${layerCount} LAYERS`, `${logicNodeCount} LOGIC`]
+      : [`${template.width}×${template.height}`, `${layerCount} LAYERS`];
+
     return (
       <div
         class="template-card"
@@ -127,12 +152,12 @@ export function TemplateLibraryPopover({
         <button
           type="button"
           class="template-card-primary"
-          title={`Insert ${template.name} (${effectiveMode === 'component' ? 'as Component + Instance' : 'as editable Nodes'})`}
-          onClick={() => onInsertTemplate(template, effectiveMode)}
+          title={`Insert ${template.name} (${primaryActionText})`}
+          onClick={() => onInsertTemplate(template, primaryMode)}
           onMouseEnter={() => onHoverHint(
             template.name.toUpperCase(),
-            `${template.summary} Click to insert as ${effectiveMode === 'component' ? 'Master Component + Instance' : 'editable native layers'}.`,
-            [`${template.width}×${template.height}`, `${layerCount} LAYERS`],
+            `${template.summary} Click to insert ${primaryActionText}.`,
+            metaShortcuts,
           )}
         >
           <span
@@ -164,6 +189,7 @@ export function TemplateLibraryPopover({
             </span>
             <span class="template-card-meta">
               {template.width} × {template.height} · {layerCount} layers
+              {logicNodeCount > 0 ? ` · ${logicNodeCount} logic` : ''}
             </span>
           </span>
         </button>
@@ -171,21 +197,27 @@ export function TemplateLibraryPopover({
           <button
             type="button"
             class="template-card-alt-action"
-            title={alternateMode === 'component'
-              ? `Insert ${template.name} as Master Component + Instance`
-              : `Insert ${template.name} as editable Nodes`}
+            title={
+              isPageTemplate
+                ? `Insert ${template.name} layers + logic onto the active page`
+                : altMode === 'component'
+                  ? `Insert ${template.name} as Master Component + Instance`
+                  : `Insert ${template.name} as editable Nodes`
+            }
             onClick={(event) => {
               event.stopPropagation();
-              onInsertTemplate(template, alternateMode);
+              onInsertTemplate(template, altMode);
             }}
             onMouseEnter={() => onHoverHint(
-              `${template.name.toUpperCase()} (${alternateMode === 'component' ? 'COMPONENT' : 'NODES'})`,
-              alternateMode === 'component'
-                ? 'Registers this template in Component Rack and places a linked Instance on Main Canvas.'
-                : 'Places this template directly as editable native layers without creating a master.',
+              `${template.name.toUpperCase()} (${isPageTemplate ? 'LAYERS' : altMode === 'component' ? 'COMPONENT' : 'NODES'})`,
+              isPageTemplate
+                ? 'Inserts all layers and wired Node Logic directly into the currently active page.'
+                : altMode === 'component'
+                  ? 'Registers this template in Component Rack (with Node Logic) and places a linked Instance on Main Canvas.'
+                  : 'Places this template directly as editable native layers with wired Node Logic.',
             )}
           >
-            {alternateMode === 'component' ? '+ Comp' : '+ Nodes'}
+            {altLabel}
           </button>
         )}
       </div>
@@ -271,7 +303,7 @@ export function TemplateLibraryPopover({
             ref={searchInputRef}
             type="search"
             class="template-library-search"
-            placeholder="Filter UI, sections, vector kits..."
+            placeholder="Filter UI, sections, pages, vectors..."
             aria-label="Search templates"
             autoComplete="off"
             spellcheck={false}
@@ -281,7 +313,9 @@ export function TemplateLibraryPopover({
               if (event.key === 'Enter' && filteredItems.length > 0) {
                 event.preventDefault();
                 event.stopPropagation();
-                onInsertTemplate(filteredItems[0].template, effectiveMode);
+                const first = filteredItems[0].template;
+                const mode = first.category === 'pages' && !isVectorStudio ? 'page' : effectiveMode;
+                onInsertTemplate(first, mode);
               }
             }}
           />

@@ -9,6 +9,7 @@ import type {
   MultiPointEasingStop,
 } from '../../core/document/types';
 import {
+  EASING_CATEGORY_META,
   EASING_PRESET_CATALOG,
   areEasingsEqual,
   easingToCubicBezier,
@@ -28,7 +29,7 @@ export interface MotionGraphEditorProps {
   onClose: () => void;
 }
 
-type PresetTabId = EasingPresetCategory | 'custom';
+type PresetTabId = 'all' | EasingPresetCategory | 'custom';
 type GraphEditMode = 'cubic-bezier' | 'multi-point';
 
 const SVG_W = 264;
@@ -165,7 +166,8 @@ export function MotionGraphEditor({
 }: MotionGraphEditorProps) {
   const isMultiPointValue = typeof value === 'object' && value !== null && value.type === 'multi-point';
   const [editMode, setEditMode] = useState<GraphEditMode>(isMultiPointValue ? 'multi-point' : 'cubic-bezier');
-  const [activeTab, setActiveTab] = useState<PresetTabId>('standard');
+  const [activeTab, setActiveTab] = useState<PresetTabId>('all');
+  const [presetQuery, setPresetQuery] = useState('');
   const [selectedStopIndex, setSelectedStopIndex] = useState<number | null>(null);
   const [previewPlaying, setPreviewPlaying] = useState(true);
   const [previewProgress, setPreviewProgress] = useState(0);
@@ -353,10 +355,21 @@ export function MotionGraphEditor({
     onUpdateCustomEasings(next, `Delete custom easing "${name}"`);
   };
 
-  const visibleCatalogPresets = useMemo(
-    () => (activeTab === 'custom' ? [] : EASING_PRESET_CATALOG.filter((item) => item.category === activeTab)),
-    [activeTab],
-  );
+  const visibleCatalogPresets = useMemo(() => {
+    if (activeTab === 'custom') return [];
+    const needle = presetQuery.trim().toLowerCase();
+    return EASING_PRESET_CATALOG.filter((item) => {
+      if (activeTab !== 'all' && item.category !== activeTab) return false;
+      if (!needle) return true;
+      return (
+        item.label.toLowerCase().includes(needle) ||
+        item.shortLabel.toLowerCase().includes(needle) ||
+        item.id.toLowerCase().includes(needle) ||
+        item.category.toLowerCase().includes(needle) ||
+        item.description.toLowerCase().includes(needle)
+      );
+    });
+  }, [activeTab, presetQuery]);
 
   const yZeroSvg = toSvgY(0);
   const yOneSvg = toSvgY(1);
@@ -669,53 +682,83 @@ export function MotionGraphEditor({
           </div>
         </div>
 
-        {/* RIGHT COLUMN: Categorized Preset Thumbnails + My Custom */}
+        {/* RIGHT COLUMN: Categorized Preset Thumbnails + Search + My Custom */}
         <div class="mge-presets-col">
           <div class="mge-tabs" role="tablist" aria-label="Easing preset categories">
-            {(
-              [
-                { id: 'standard', label: 'Standard' },
-                { id: 'dynamic', label: 'Dynamic' },
-                { id: 'expressive', label: 'Expressive' },
-                { id: 'custom', label: `My Custom (${customEasings.length})` },
-              ] as const
-            ).map((tab) => (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'all'}
+              class={`mge-tab-btn${activeTab === 'all' ? ' is-active' : ''}`}
+              onClick={() => setActiveTab('all')}
+            >
+              All ({EASING_PRESET_CATALOG.length})
+            </button>
+            {EASING_CATEGORY_META.map((cat) => (
               <button
-                key={tab.id}
+                key={cat.id}
                 type="button"
                 role="tab"
-                aria-selected={activeTab === tab.id}
-                class={`mge-tab-btn${activeTab === tab.id ? ' is-active' : ''}`}
-                onClick={() => setActiveTab(tab.id)}
+                aria-selected={activeTab === cat.id}
+                class={`mge-tab-btn${activeTab === cat.id ? ' is-active' : ''}`}
+                onClick={() => setActiveTab(cat.id)}
               >
-                {tab.label}
+                {cat.shortLabel}
               </button>
             ))}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'custom'}
+              class={`mge-tab-btn${activeTab === 'custom' ? ' is-active' : ''}`}
+              onClick={() => setActiveTab('custom')}
+            >
+              Custom ({customEasings.length})
+            </button>
           </div>
 
           {activeTab !== 'custom' ? (
-            <div class="mge-preset-grid" role="listbox" aria-label={`${activeTab} easing presets`}>
-              {visibleCatalogPresets.map((preset) => {
-                const isActive = areEasingsEqual(value, preset.id);
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    role="option"
-                    aria-selected={isActive}
-                    class={`mge-preset-card${isActive ? ' is-active' : ''}`}
-                    title={preset.label}
-                    onClick={() => {
-                      setEditMode('cubic-bezier');
-                      onChange(preset.id);
-                    }}
-                  >
-                    <EasingCurveMiniSvg easing={preset.id} width={44} height={28} />
-                    <span class="mge-preset-name">{preset.shortLabel}</span>
-                  </button>
-                );
-              })}
-            </div>
+            <>
+              <div class="mge-search-row">
+                <input
+                  type="search"
+                  class="mge-search-input"
+                  aria-label="Search easing templates"
+                  placeholder="Search 68 curves (spring, bounce, ios, material, expo, steps)…"
+                  value={presetQuery}
+                  onInput={(e) => setPresetQuery(e.currentTarget.value)}
+                />
+                <span class="mge-search-count">{visibleCatalogPresets.length}</span>
+              </div>
+              {visibleCatalogPresets.length === 0 ? (
+                <div class="mge-custom-empty">
+                  No easing presets match "{presetQuery}". Try "spring", "ios", "bounce", or "expo".
+                </div>
+              ) : (
+                <div class="mge-preset-grid" role="listbox" aria-label={`${activeTab} easing presets`}>
+                  {visibleCatalogPresets.map((preset) => {
+                    const isActive = areEasingsEqual(value, preset.id);
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        role="option"
+                        aria-selected={isActive}
+                        class={`mge-preset-card${isActive ? ' is-active' : ''}`}
+                        title={`${preset.label} — ${preset.description}`}
+                        onClick={() => {
+                          setEditMode('cubic-bezier');
+                          onChange(preset.id);
+                        }}
+                      >
+                        <EasingCurveMiniSvg easing={preset.id} width={44} height={28} />
+                        <span class="mge-preset-name">{preset.shortLabel}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           ) : (
             <div class="mge-custom-panel">
               <div class="mge-custom-save-row">

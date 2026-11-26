@@ -352,7 +352,7 @@ export function App() {
   });
 
   // Studio Google Fonts / @font-face loader & deduplicated image ingestion
-  const { handleInsertImageFiles } = useMediaAndFontsLifecycle({
+  const { handleInsertImageFiles, handleImportFontFiles } = useMediaAndFontsLifecycle({
     project: state.project,
     activeEditorId,
     isHydrating,
@@ -971,6 +971,7 @@ export function App() {
         onChooseTool={chooseCanvasTool}
         onQuickAdd={pageActions.addNode}
         onInsertImageFiles={(files) => { void handleInsertImageFiles(files, activeEditorId); }}
+        onImportFontFiles={(files) => { void handleImportFontFiles(files, activeEditorId); }}
         onDuplicateSelection={() => selectionActions.duplicateSelection(activeEditorId)}
         onCopySelection={() => selectionActions.copySelection(activeEditorId)}
         project={state.project}

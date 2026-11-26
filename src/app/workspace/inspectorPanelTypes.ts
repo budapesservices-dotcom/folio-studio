@@ -83,6 +83,7 @@ export interface InspectorPanelProps {
   onChooseTool: (toolId: CanvasToolId, target: EditorTarget) => void;
   onQuickAdd: (type: 'rect' | 'text') => void;
   onInsertImageFiles?: (files: readonly File[]) => void;
+  onImportFontFiles?: (files: readonly File[]) => void;
   onDuplicateSelection: () => void;
   onCopySelection: () => void;
   project?: FolioProject;

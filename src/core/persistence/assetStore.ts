@@ -35,6 +35,13 @@ export const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/svg+xml',
 ]);
 
+export const ALLOWED_FONT_MIME_TYPES = new Set([
+  'font/woff2',
+  'font/woff',
+  'font/ttf',
+  'font/otf',
+]);
+
 const EXTENSION_BY_MIME: Record<string, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -700,7 +707,7 @@ function resolveSafeInlineAssetDataUrl(
 
   if (kind === 'font') {
     if (
-      /^data:(?:font\/(?:woff2|woff|ttf|otf|sfnt)|application\/(?:font-woff2|font-woff|x-font-ttf|x-font-opentype|font-sfnt|octet-stream));base64,/i.test(
+      /^data:(?:font\/(?:woff2|woff|ttf|otf|sfnt)|application\/(?:font-woff2|font-woff|x-font-ttf|x-font-truetype|x-font-opentype|vnd\.ms-opentype|font-sfnt|octet-stream));base64,/i.test(
         src,
       )
     ) {
@@ -923,6 +930,165 @@ export async function ingestImageFile(
   }
   const buffer = await file.arrayBuffer();
   return ingestImageBytes(
+    {
+      name: file.name,
+      mimeType: file.type,
+      bytes: new Uint8Array(buffer),
+    },
+    existingAssets,
+  );
+}
+
+export interface IngestedFontResult {
+  readonly asset: AssetReference;
+  readonly familyName: string;
+  readonly deduplicated: boolean;
+  readonly existingAssetId?: string;
+  readonly budgetReport: ProjectAssetBudgetReport;
+  readonly portabilityWarning?: string;
+}
+
+export function inferFontMimeType(fileName: string, rawMimeType: string): string | null {
+  const lowerMime = rawMimeType.trim().toLowerCase().split(';')[0].trim();
+  if (lowerMime === 'font/woff2' || lowerMime === 'application/font-woff2') return 'font/woff2';
+  if (lowerMime === 'font/woff' || lowerMime === 'application/font-woff') return 'font/woff';
+  if (
+    lowerMime === 'font/otf' ||
+    lowerMime === 'application/x-font-opentype' ||
+    lowerMime === 'application/vnd.ms-opentype'
+  ) {
+    return 'font/otf';
+  }
+  if (
+    lowerMime === 'font/ttf' ||
+    lowerMime === 'font/sfnt' ||
+    lowerMime === 'application/x-font-ttf' ||
+    lowerMime === 'application/x-font-truetype' ||
+    lowerMime === 'application/font-sfnt'
+  ) {
+    return 'font/ttf';
+  }
+  const lowerName = fileName.trim().toLowerCase();
+  if (lowerName.endsWith('.woff2')) return 'font/woff2';
+  if (lowerName.endsWith('.woff')) return 'font/woff';
+  if (lowerName.endsWith('.otf')) return 'font/otf';
+  if (lowerName.endsWith('.ttf')) return 'font/ttf';
+  return null;
+}
+
+function sanitizeImportedFontBaseName(fileName: string): string {
+  const withoutExt = fileName.replace(/\.(woff2?|ttf|otf)$/i, '');
+  const clean = withoutExt
+    .replace(/[_]+/g, ' ')
+    .replace(/[^a-zA-Z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[^a-zA-Z0-9]+/, '')
+    .slice(0, 60)
+    .trim();
+  return clean || 'Custom Font';
+}
+
+function containsDisallowedMarkupPrefix(bytes: Uint8Array): boolean {
+  const prefix = new TextDecoder().decode(bytes.subarray(0, 64)).trim().toLowerCase();
+  return (
+    prefix.startsWith('<!doctype') ||
+    prefix.startsWith('<html') ||
+    prefix.startsWith('<script') ||
+    prefix.startsWith('<svg') ||
+    prefix.startsWith('<?xml')
+  );
+}
+
+/**
+ * Validates, SHA-256 hashes, deduplicates, and stores custom font bytes
+ * (.woff2, .woff, .ttf, .otf) into IndexedDB + memory cache as an `AssetReference`
+ * (`kind: 'font'`).
+ */
+export async function ingestFontBytes(
+  input: {
+    name: string;
+    mimeType: string;
+    bytes: Uint8Array;
+  },
+  existingAssets: readonly AssetReference[] = [],
+): Promise<IngestedFontResult> {
+  const mimeType = inferFontMimeType(input.name, input.mimeType);
+  if (!mimeType) {
+    throw new Error('Unsupported font format. Please upload a .woff2, .woff, .ttf, or .otf file.');
+  }
+  if (input.bytes.byteLength === 0) {
+    throw new Error('The font file is empty.');
+  }
+  if (input.bytes.byteLength > MAX_BINARY_ASSET_BYTES) {
+    throw new Error(
+      `Font exceeds the ${Math.round(MAX_BINARY_ASSET_BYTES / (1024 * 1024))} MB per-asset safety limit.`,
+    );
+  }
+  if (containsDisallowedMarkupPrefix(input.bytes)) {
+    throw new Error('Invalid font binary payload.');
+  }
+
+  const sha256 = await computeBytesSha256(input.bytes);
+  const dataUrl = bytesToDataUrl(input.bytes, mimeType);
+  const stored = await putDeduplicatedAssetBlob({
+    sha256,
+    bytes: input.bytes,
+    mimeType,
+  });
+
+  const existing = existingAssets.find((item) => item.kind === 'font' && item.sha256 === sha256);
+  if (existing) {
+    const budgetReport = evaluateProjectAssetPortabilityBudget(existingAssets);
+    return {
+      asset: existing,
+      familyName: sanitizeImportedFontBaseName(existing.name),
+      deduplicated: true,
+      existingAssetId: existing.id,
+      budgetReport,
+      ...(budgetReport.warningMessage ? { portabilityWarning: budgetReport.warningMessage } : {}),
+    };
+  }
+
+  const familyName = sanitizeImportedFontBaseName(input.name);
+  const ext = EXTENSION_BY_MIME[mimeType] ?? 'woff2';
+  const persistedSource =
+    stored.persistedInIdb && input.bytes.byteLength > INLINE_ASSET_BYTE_THRESHOLD
+      ? `${INTERNAL_ASSET_URI_PREFIX}${sha256}`
+      : dataUrl;
+
+  const asset: AssetReference = {
+    id: `font-${sha256.slice(0, 12)}`,
+    name: `${familyName}.${ext}`,
+    kind: 'font',
+    mimeType,
+    source: persistedSource,
+    sha256,
+    byteLength: input.bytes.byteLength,
+    createdAt: new Date().toISOString(),
+  };
+
+  const budgetReport = evaluateProjectAssetPortabilityBudget([...existingAssets, asset]);
+  return {
+    asset,
+    familyName,
+    deduplicated: false,
+    budgetReport,
+    ...(budgetReport.warningMessage ? { portabilityWarning: budgetReport.warningMessage } : {}),
+  };
+}
+
+export async function ingestFontFile(
+  file: File,
+  existingAssets: readonly AssetReference[] = [],
+): Promise<IngestedFontResult> {
+  if (file.size > MAX_BINARY_ASSET_BYTES) {
+    throw new Error(
+      `Font "${file.name}" exceeds the ${Math.round(MAX_BINARY_ASSET_BYTES / (1024 * 1024))} MB per-asset limit.`,
+    );
+  }
+  const buffer = await file.arrayBuffer();
+  return ingestFontBytes(
     {
       name: file.name,
       mimeType: file.type,

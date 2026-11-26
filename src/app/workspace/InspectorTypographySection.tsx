@@ -1,7 +1,16 @@
 import type { JSX } from 'preact';
-import { CURATED_FONT_FAMILIES } from '../../core/document/fonts';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import {
+  CURATED_FONT_FAMILIES,
+  FONT_CATEGORY_META,
+  ensureStudioPreviewGoogleFontsLoaded,
+  extractPrimaryFontFamily,
+  getProjectCustomFontEntries,
+  type CuratedFontCategory,
+} from '../../core/document/fonts';
 import type { CssUnitOption } from '../../core/document/cssUnits';
 import type {
+  AssetReference,
   TextAlign,
   TextDecoration,
   TextNode,
@@ -105,8 +114,12 @@ function renderVerticalAlignIcon(align: TextVerticalAlign): JSX.Element {
   );
 }
 
+type FontBrowserTab = 'all' | 'custom' | CuratedFontCategory;
+
 export interface InspectorTypographySectionProps {
   selectedNode: TextNode;
+  projectAssets?: readonly AssetReference[];
+  onImportFontFiles?: (files: readonly File[]) => void;
   onUpdateSelectedStyle: (patch: Record<string, string | number>) => void;
   onUpdateExtendedStyle: (patch: Record<string, unknown>) => void;
   onCommitEdit: () => void;
@@ -114,30 +127,282 @@ export interface InspectorTypographySectionProps {
 
 export function InspectorTypographySection({
   selectedNode,
+  projectAssets = [],
+  onImportFontFiles,
   onUpdateSelectedStyle,
   onUpdateExtendedStyle,
   onCommitEdit,
 }: InspectorTypographySectionProps) {
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [browserTab, setBrowserTab] = useState<FontBrowserTab>('all');
+  const [fontQuery, setFontQuery] = useState('');
+  const fontFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const customFonts = useMemo(
+    () => getProjectCustomFontEntries(projectAssets),
+    [projectAssets],
+  );
+
+  const activePrimaryFamily = useMemo(
+    () => extractPrimaryFontFamily(selectedNode.style.fontFamily).toLowerCase(),
+    [selectedNode.style.fontFamily],
+  );
+
+  const curatedByCategory = useMemo(() => {
+    const groups = new Map<CuratedFontCategory, typeof CURATED_FONT_FAMILIES[number][]>();
+    for (const meta of FONT_CATEGORY_META) {
+      groups.set(meta.id, []);
+    }
+    for (const entry of CURATED_FONT_FAMILIES) {
+      groups.get(entry.category)?.push(entry);
+    }
+    return groups;
+  }, []);
+
+  const hasMatchingSelectOption = useMemo(() => {
+    const cur = selectedNode.style.fontFamily;
+    if (CURATED_FONT_FAMILIES.some((f) => f.value === cur)) return true;
+    if (customFonts.some((f) => f.value === cur)) return true;
+    return false;
+  }, [selectedNode.style.fontFamily, customFonts]);
+
+  const browserItems = useMemo(() => {
+    const needle = fontQuery.trim().toLowerCase();
+    const out: {
+      readonly key: string;
+      readonly label: string;
+      readonly family: string;
+      readonly value: string;
+      readonly meta: string;
+      readonly isCustom: boolean;
+      readonly googleFont: boolean;
+    }[] = [];
+
+    if (browserTab === 'all' || browserTab === 'custom') {
+      for (const cf of customFonts) {
+        if (
+          needle &&
+          !cf.family.toLowerCase().includes(needle) &&
+          !cf.label.toLowerCase().includes(needle) &&
+          !'custom imported'.includes(needle)
+        ) {
+          continue;
+        }
+        out.push({
+          key: `custom:${cf.assetId}`,
+          label: cf.family,
+          family: cf.family,
+          value: cf.value,
+          meta: `Imported · ${cf.format === 'truetype' ? 'TTF' : cf.format === 'opentype' ? 'OTF' : cf.format.toUpperCase()}`,
+          isCustom: true,
+          googleFont: false,
+        });
+      }
+    }
+
+    if (browserTab !== 'custom') {
+      for (const font of CURATED_FONT_FAMILIES) {
+        if (browserTab !== 'all' && font.category !== browserTab) continue;
+        if (
+          needle &&
+          !font.label.toLowerCase().includes(needle) &&
+          !font.family.toLowerCase().includes(needle) &&
+          !font.category.toLowerCase().includes(needle)
+        ) {
+          continue;
+        }
+        out.push({
+          key: `curated:${font.family}`,
+          label: font.label,
+          family: font.family,
+          value: font.value,
+          meta: FONT_CATEGORY_META.find((c) => c.id === font.category)?.shortLabel ?? font.category,
+          isCustom: false,
+          googleFont: font.googleFont,
+        });
+      }
+    }
+
+    return out;
+  }, [browserTab, customFonts, fontQuery]);
+
+  // Lazily load visible Google Fonts while the inline Font Browser is open
+  useEffect(() => {
+    if (!browserOpen) return;
+    const families = browserItems
+      .filter((item) => item.googleFont)
+      .slice(0, 28)
+      .map((item) => item.family);
+    if (families.length > 0) {
+      ensureStudioPreviewGoogleFontsLoaded(families);
+    }
+  }, [browserOpen, browserItems]);
+
+  const applyFontFamily = (fontValue: string) => {
+    onUpdateSelectedStyle({ fontFamily: fontValue });
+    onCommitEdit();
+  };
+
   return (
     <div class="inspector-acc-group">
-      <label class="field-label">
-        Font Family
+      <div class="font-family-header-row">
+        <span class="framer-mini-kicker">Font Family</span>
+        <div class="font-family-header-actions">
+          <button
+            type="button"
+            class={`font-mini-btn${browserOpen ? ' is-active' : ''}`}
+            aria-expanded={browserOpen}
+            aria-label="Browse all fonts"
+            title="Search and preview 74+ fonts"
+            onClick={() => setBrowserOpen((prev) => !prev)}
+          >
+            Browse ({CURATED_FONT_FAMILIES.length + customFonts.length})
+          </button>
+          {onImportFontFiles && (
+            <>
+              <button
+                type="button"
+                class="font-mini-btn is-import"
+                aria-label="Import custom font"
+                title="Import custom font file (.woff2, .woff, .ttf, .otf)"
+                onClick={() => fontFileInputRef.current?.click()}
+              >
+                + Import
+              </button>
+              <input
+                ref={fontFileInputRef}
+                type="file"
+                accept=".woff2,.woff,.ttf,.otf,font/woff2,font/woff,font/ttf,font/otf"
+                multiple
+                class="sr-only-file-input"
+                aria-label="Upload custom font files"
+                onChange={(event) => {
+                  const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+                  if (files.length > 0) {
+                    onImportFontFiles(files);
+                  }
+                  event.currentTarget.value = '';
+                }}
+              />
+            </>
+          )}
+        </div>
+      </div>
+
+      <label class="field-label font-select-wrap">
+        <span class="sr-only">Font Family</span>
         <select
           class="select-field"
           aria-label="Font Family"
           value={selectedNode.style.fontFamily}
-          onChange={(event) => {
-            onUpdateSelectedStyle({ fontFamily: event.currentTarget.value });
-            onCommitEdit();
-          }}
+          onChange={(event) => applyFontFamily(event.currentTarget.value)}
         >
-          {INSPECTOR_FONT_FAMILIES.map((font) => (
-            <option key={font.value} value={font.value}>
-              {font.label}
+          {!hasMatchingSelectOption && (
+            <option value={selectedNode.style.fontFamily}>
+              {extractPrimaryFontFamily(selectedNode.style.fontFamily) || selectedNode.style.fontFamily}
             </option>
-          ))}
+          )}
+          {customFonts.length > 0 && (
+            <optgroup label={`Imported Fonts (${customFonts.length})`}>
+              {customFonts.map((font) => (
+                <option key={font.assetId} value={font.value}>
+                  {font.label}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {FONT_CATEGORY_META.map((cat) => {
+            const list = curatedByCategory.get(cat.id) ?? [];
+            return (
+              <optgroup key={cat.id} label={`${cat.label} (${list.length})`}>
+                {list.map((font) => (
+                  <option key={font.value} value={font.value}>
+                    {font.label}
+                  </option>
+                ))}
+              </optgroup>
+            );
+          })}
         </select>
       </label>
+
+      {browserOpen && (
+        <div class="font-browser-panel" data-testid="inspector-font-browser">
+          <div class="font-browser-search-row">
+            <input
+              type="search"
+              class="font-browser-search"
+              aria-label="Search fonts"
+              placeholder="Search fonts (Syne, Playfair, Mono, Caveat)…"
+              value={fontQuery}
+              onInput={(e) => setFontQuery(e.currentTarget.value)}
+            />
+          </div>
+          <div class="font-browser-tabs" role="tablist" aria-label="Font categories">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={browserTab === 'all'}
+              class={`font-browser-tab${browserTab === 'all' ? ' is-active' : ''}`}
+              onClick={() => setBrowserTab('all')}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={browserTab === 'custom'}
+              class={`font-browser-tab${browserTab === 'custom' ? ' is-active' : ''}`}
+              onClick={() => setBrowserTab('custom')}
+            >
+              Imported ({customFonts.length})
+            </button>
+            {FONT_CATEGORY_META.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                role="tab"
+                aria-selected={browserTab === cat.id}
+                class={`font-browser-tab${browserTab === cat.id ? ' is-active' : ''}`}
+                onClick={() => setBrowserTab(cat.id)}
+              >
+                {cat.shortLabel}
+              </button>
+            ))}
+          </div>
+
+          {browserItems.length === 0 ? (
+            <div class="font-browser-empty">
+              {browserTab === 'custom'
+                ? 'No custom fonts imported yet. Click "+ Import" to upload .woff2, .woff, .ttf, or .otf files.'
+                : `No fonts match "${fontQuery}".`}
+            </div>
+          ) : (
+            <div class="font-browser-list" role="listbox" aria-label="Available fonts">
+              {browserItems.map((item) => {
+                const isSelected =
+                  selectedNode.style.fontFamily === item.value ||
+                  activePrimaryFamily === item.family.toLowerCase();
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    class={`font-browser-item${isSelected ? ' is-active' : ''}`}
+                    onClick={() => applyFontFamily(item.value)}
+                  >
+                    <span class="font-browser-item-name" style={{ fontFamily: item.value }}>
+                      {item.label}
+                    </span>
+                    <span class="font-browser-item-meta">{item.meta}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       <div class="folio-dual-grid">
         <label class="field-label">

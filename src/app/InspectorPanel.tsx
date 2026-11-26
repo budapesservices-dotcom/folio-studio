@@ -86,6 +86,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
     onUpdateQuickInteraction,
     onDeleteQuickInteraction,
     onOpenInteractionInNodeGraph,
+    onImportFontFiles,
     studioActions,
   } = panel;
 
@@ -291,6 +292,8 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
         >
           <InspectorTypographySection
             selectedNode={selectedNode}
+            projectAssets={project?.assets}
+            onImportFontFiles={onImportFontFiles}
             onUpdateSelectedStyle={onUpdateSelectedStyle}
             onUpdateExtendedStyle={handleUpdateExtendedStyle}
             onCommitEdit={onCommitEdit}

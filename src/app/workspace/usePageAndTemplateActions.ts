@@ -80,25 +80,74 @@ export function usePageAndTemplateActions({
 
     const executeInsert = ({
       buildTemplateComponentAndInstance,
+      buildTemplatePageBundle,
       computeTemplateInsertionOrigin,
+      instantiateTemplateBundle,
       instantiateTemplateNodes,
     }: typeof import('../../core/document/templates')) => {
+      if (effectiveMode === 'page' && activeEditorId === 'main') {
+        const { page, logicGraph } = buildTemplatePageBundle(template, project.pages);
+        const txResult = mainCommandClient.createPageWithLogic(
+          page,
+          logicGraph,
+          `Create page from "${template.name}"`,
+        );
+        if (txResult.status === 'applied') {
+          setWorkspaceTools((current) => ({ ...current, main: 'select' }));
+          setToolRackOpen(null);
+          closePagesRack();
+          openMainCanvas();
+          setInspectorVisible(true);
+          const logicSummary = logicGraph ? ` · ${logicGraph.nodes.length} logic nodes ready` : '';
+          setNotice(`Created page “${page.name}” (${page.document.nodes.length} layers${logicSummary}).`);
+        }
+        return;
+      }
+
       const origin = computeTemplateInsertionOrigin(focusedDocument, template, staggerIndex);
 
       if (effectiveMode === 'component' && activeEditorId === 'main') {
         const existingNames = project.components.map((item) => item.name);
-        const { component, instance } = buildTemplateComponentAndInstance(template, origin, existingNames);
+        const { component, instance, componentLogicGraph } = buildTemplateComponentAndInstance(
+          template,
+          origin,
+          existingNames,
+        );
         const txResult = mainCommandClient.createComponentWithInstance(
           component,
           instance,
           `Insert "${template.name}" as component`,
+          componentLogicGraph,
         );
         if (txResult.status === 'applied') {
           mainCommandClient.selectNodes([instance.id], `Select inserted ${component.name} instance`);
           setWorkspaceTools((current) => ({ ...current, main: 'select' }));
           setToolRackOpen(null);
           setInspectorVisible(true);
-          setNotice(`Inserted “${component.name}” as Master Component + linked Instance.`);
+          const logicSummary = componentLogicGraph
+            ? ` + ${componentLogicGraph.nodes.length} logic nodes`
+            : '';
+          setNotice(`Inserted “${component.name}” as Master Component + linked Instance${logicSummary}.`);
+        }
+        return;
+      }
+
+      if (activeEditorId === 'main') {
+        const { nodes, logicGraph, logicNodeCount } = instantiateTemplateBundle(template, origin, {
+          scope: 'page',
+          targetId: project.activePageId,
+        });
+        const result = logicGraph
+          ? mainCommandClient.insertTemplateWithLogic(nodes, logicGraph, `Insert "${template.name}" template`)
+          : mainCommandClient.createNodes(nodes, `Insert "${template.name}" template`);
+        if (result.status === 'applied') {
+          const rootIds = nodes.filter((node) => !node.parentId).map((node) => node.id);
+          mainCommandClient.selectNodes(rootIds.length > 0 ? rootIds : [nodes[0].id], `Select inserted ${template.name}`);
+          setWorkspaceTools((current) => ({ ...current, main: 'select' }));
+          setToolRackOpen(null);
+          setInspectorVisible(true);
+          const logicSummary = logicNodeCount > 0 ? ` · ${logicNodeCount} logic nodes ready` : '';
+          setNotice(`Inserted “${template.name}” (${nodes.length} layers${logicSummary}).`);
         }
         return;
       }
