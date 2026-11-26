@@ -4,7 +4,7 @@
 
 ## Product direction
 
-Folio is a browser-based, visual-first full-stack web development studio designed around a single native project aggregate (`.flop` v2) and multiple independent workspaces. Main Canvas, Component Canvas, Node Logic, Code & Preview Studio, Component Rack, and Pages Rack are views over shared project data, never isolated project silos.
+FOLIO is evolving toward a unified creative development studio: one project environment for visual design and vector creation, code and full-stack development, interactive behavior, motion and animation, and a future non-destructive video/media editing workspace. The current repository implements meaningful foundations across Canvas, Component Canvas, Node Logic, Code & Preview Studio, reusable components, motion timelines, and motion export. A full multitrack video editor and native geometry Morph are roadmap capabilities, not current implementation claims. All workspaces remain views over shared project data, never isolated project silos.
 
 ## Architectural rules
 
@@ -153,6 +153,11 @@ The following capabilities from the target blueprint are **not yet implemented**
 - **Real backend execution, server functions, database/auth runtime & live network secret injection** (`Agreed (Roadmap)`): Current `network.http`, `network.socket`, and `source.external` nodes are **Implemented (Simulated)** with zero persisted credentials.
 - **Runtime execution for `variable.persist` and `variable.computed`** (`Open`): Stored as `.flop` v2 metadata only (`unsupported` across Headless, Live Preview, and React TSX).
 - **Plugin runtime, AI project control, collaborative multiplayer presence, cloud project sync, and hosted backend/deployment adapters** (`Agreed (Roadmap)`).
+
+### Additional creative capabilities — roadmap / open
+
+- **Native geometry Morph (Agreed product direction; detailed implementation Open):** The current Motion Engine animates supported properties through keyframes. A path/geometry keyframe system that morphs one object between shapes while retaining one stable node identity is not implemented. Path correspondence, topology handling, automatic matching, and manual correction controls require dedicated design and acceptance tests.
+- **Video & Media Editing workspace (Agreed Roadmap; not implemented as a full editor):** The repository has Motion Export capabilities that encode rendered animation into video and other output formats. That is not equivalent to a non-destructive source-media editor with imported footage, multitrack video/audio clips, trimming, transitions, effects, compositing, audio mixing, and timeline editing. Those capabilities require a separate specialist media model and engine integrated with the existing project and asset contracts.
 
 ## Core architectural flows
 
