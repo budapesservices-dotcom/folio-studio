@@ -192,8 +192,8 @@ export function ComponentRackPanel({
               onClick={() => onInsertComponent(component)}
             >
               <ComponentThumbnail component={component} components={components} designTokens={designTokens} assets={assets} />
-              <span class="component-rack-card-name">
-                {component.name}
+              <span class="component-rack-card-heading-row">
+                <span class="component-rack-card-name">{component.name}</span>
                 <span
                   class={`component-scope-badge is-${getComponentScope(component)}`}
                   title={

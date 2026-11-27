@@ -6232,10 +6232,23 @@ textarea:focus-visible {
   color: var(--accent-bright);
 }
 
+.component-rack-card-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.component-rack-card-heading-row .component-rack-card-name {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
 .component-scope-badge {
   display: inline-flex;
   align-items: center;
-  margin-left: 6px;
+  flex-shrink: 0;
   padding: 1px 5px;
   border-radius: var(--radius-xs);
   font-size: 9.5px;
