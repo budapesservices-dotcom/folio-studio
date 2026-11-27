@@ -100,6 +100,8 @@ export interface WorkspaceStudioOverlaysProps {
   onOpenMotionExport: () => void;
   selectedMotionPathPoint?: MotionPathPointSelection | null;
   onSelectMotionPathPoint?: (selection: MotionPathPointSelection | null) => void;
+  showMorphCorrespondence?: boolean;
+  onToggleMorphCorrespondence?: () => void;
   onCloseMotion: () => void;
   onNotice: (message: string) => void;
 }
@@ -177,6 +179,8 @@ export function WorkspaceStudioOverlays(props: WorkspaceStudioOverlaysProps) {
     onOpenMotionExport,
     selectedMotionPathPoint,
     onSelectMotionPathPoint,
+    showMorphCorrespondence,
+    onToggleMorphCorrespondence,
     onCloseMotion,
     onNotice,
   } = props;
@@ -315,6 +319,8 @@ export function WorkspaceStudioOverlays(props: WorkspaceStudioOverlaysProps) {
             onSelectCanvasNode={(nodeId) => { focusedCommandClient.selectNodes([nodeId], 'Select animated layer'); }}
             selectedMotionPathPoint={selectedMotionPathPoint}
             onSelectMotionPathPoint={onSelectMotionPathPoint}
+            showMorphCorrespondence={showMorphCorrespondence}
+            onToggleMorphCorrespondence={onToggleMorphCorrespondence}
             onClose={onCloseMotion}
           />
         </Suspense>

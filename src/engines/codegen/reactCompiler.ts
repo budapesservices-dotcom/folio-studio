@@ -3,6 +3,7 @@ import { sanitizeProjectNetworkSecrets } from '../../core/document/networkSecret
 import {
   applyMorphGeometryToDesignNode,
   extractMorphSnapshotFromNode,
+  parsePathMorphSnapshot,
 } from '../../core/document/pathMorph';
 import {
   computeContourTrimIntervals,
@@ -737,6 +738,27 @@ function buildComponentFiles(
   }
 
   const { roots, childrenByParent } = buildChildrenMap(component.document.nodes);
+  const compTrimNodeIds = new Set<string>();
+  const compMorphNodeIds = new Set<string>();
+  const compMultiContourMorphNodeIds = new Set<string>();
+  const compInitialMorphSnapshots = new Map<string, string>();
+  for (const clip of component.animations ?? []) {
+    for (const track of clip.tracks) {
+      if (track.keyframes.length === 0) continue;
+      if (track.property === 'trimStart' || track.property === 'trimEnd' || track.property === 'trimOffset') {
+        compTrimNodeIds.add(track.targetNodeId);
+      } else if (track.property === 'pathMorph') {
+        compMorphNodeIds.add(track.targetNodeId);
+        const sortedKfs = [...track.keyframes].sort((a, b) => a.timeMs - b.timeMs);
+        if (!compInitialMorphSnapshots.has(track.targetNodeId) && typeof sortedKfs[0]?.value === 'string') {
+          compInitialMorphSnapshots.set(track.targetNodeId, sortedKfs[0].value);
+        }
+        if (sortedKfs.some((kf) => typeof kf.value === 'string' && parsePathMorphSnapshot(kf.value)?.subpaths?.length)) {
+          compMultiContourMorphNodeIds.add(track.targetNodeId);
+        }
+      }
+    }
+  }
   const mappings: CodeMappingEntry[] = [];
 
   const emitMasterJsx = (node: DesignNode, depth: number) => {
@@ -926,12 +948,49 @@ function buildComponentFiles(
       }
     } else if (node.type === 'path') {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+      const isMorph = compMorphNodeIds.has(node.id);
+      const isTrim = compTrimNodeIds.has(node.id) || hasActiveTrimPath(node.style);
       lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
-      lines.push(...buildInlineJsxSvgLines(node, tokens, `${indent}  `, effectiveFillExpr));
+      lines.push(
+        ...buildInlineJsxSvgLines(node, tokens, `${indent}  `, effectiveFillExpr, {
+          isMorphTarget: isMorph,
+          isTrimTarget: isTrim,
+          forceEvenOdd: compMultiContourMorphNodeIds.has(node.id),
+        }),
+      );
+      lines.push(`${indent}</${wrapperTag}>`);
+    } else if (
+      (node.type === 'ellipse' || node.type === 'rect' || node.type === 'frame') &&
+      compMorphNodeIds.has(node.id)
+    ) {
+      const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+      const children = node.type === 'frame' ? (childrenByParent.get(node.id) ?? []) : [];
+      const snap = compInitialMorphSnapshots.get(node.id) ?? extractMorphSnapshotFromNode(node);
+      const projected = snap ? applyMorphGeometryToDesignNode(node, snap) : null;
+      const isTrim = compTrimNodeIds.has(node.id) || hasActiveTrimPath(node.style);
+      lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
+      if (projected && projected.type === 'path') {
+        lines.push(
+          ...buildInlineJsxSvgLines(projected, tokens, `${indent}  `, effectiveFillExpr, {
+            isMorphTarget: true,
+            isTrimTarget: isTrim,
+            asBackdrop: children.length > 0,
+            forceEvenOdd: compMultiContourMorphNodeIds.has(node.id),
+          }),
+        );
+      }
+      for (const child of children) {
+        emitMasterJsx(child, depth + 1);
+      }
       lines.push(`${indent}</${wrapperTag}>`);
     } else {
       const children = childrenByParent.get(node.id) ?? [];
-      if (slot && children.length === 0) {
+      const trimOverlayLines =
+        (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') &&
+        (compTrimNodeIds.has(node.id) || hasActiveTrimPath(node.style))
+          ? buildShapeTrimOverlayJsxLines(node, tokens, `${indent}  `)
+          : [];
+      if (slot && children.length === 0 && trimOverlayLines.length === 0) {
         if (tag === 'input') {
           lines.push(
             `${indent}<input ${attrs.join(' ')} type="text" defaultValue={typeof ${slot.contentProp} === "string" || typeof ${slot.contentProp} === "number" ? String(${slot.contentProp}) : ""} />`,
@@ -943,7 +1002,7 @@ function buildComponentFiles(
         } else {
           lines.push(`${indent}<${tag} ${attrs.join(' ')}>{${slot.contentProp}}</${tag}>`);
         }
-      } else if (children.length === 0) {
+      } else if (children.length === 0 && trimOverlayLines.length === 0) {
         if (tag === 'input') {
           lines.push(`${indent}<input ${attrs.join(' ')} type="text" />`);
         } else if (tag === 'img') {
@@ -954,6 +1013,12 @@ function buildComponentFiles(
       } else {
         const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
         lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
+        if (trimOverlayLines.length > 0) {
+          lines.push(...trimOverlayLines);
+        }
+        if (slot && children.length === 0) {
+          lines.push(`${indent}  {${slot.contentProp}}`);
+        }
         for (const child of children) {
           emitMasterJsx(child, depth + 1);
         }
@@ -1192,10 +1257,12 @@ function buildPageReactFile(
         if (Object.keys(cleanedOverrides).length > 0) {
           instanceProps.push(`overrides={${JSON.stringify(cleanedOverrides)}}`);
         }
-        if (supportsScopedForComp && logicPlan.hasLogic) {
+        if (supportsScopedForComp) {
           instanceProps.push(`instanceId=${escapeTsString(node.id)}`);
-          instanceProps.push('logicOverrides={logicOverrides}');
-          instanceProps.push('onLogicEvent={runLogicTrigger}');
+          if (logicPlan.hasLogic) {
+            instanceProps.push('logicOverrides={logicOverrides}');
+            instanceProps.push('onLogicEvent={runLogicTrigger}');
+          }
         }
 
         const instanceEventAttrs = logicPlan.getNodeEventAttrs(node.id);
@@ -1998,14 +2065,22 @@ export function compileReactProjectFiles(
   const componentsWithScopedLogic = new Set<string>();
 
   for (const comp of project.components) {
+    const hasEmbeddedAnimation = Boolean(
+      comp.animations?.some(
+        (clip) =>
+          clip.tracks.some((tr) => tr.keyframes.length > 0) ||
+          (clip.motionPaths !== undefined && clip.motionPaths.some((mp) => mp.points.length >= 2)),
+      ),
+    );
     if (
-      comp.nodeLogicEnabled
+      hasEmbeddedAnimation ||
+      (comp.nodeLogicEnabled
       && project.logicGraphs.some(
         (graph) =>
           graph.scope === 'component'
           && graph.targetId === comp.id
           && graph.nodes.some((n) => isBuiltInLogicNodeType(n.type)),
-      )
+      ))
     ) {
       componentsWithScopedLogic.add(comp.id);
     }

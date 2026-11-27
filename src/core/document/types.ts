@@ -1034,6 +1034,9 @@ export type AnimatableProperty =
   | 'strokeWidth'
   | 'pathMorph'
   | 'motionPathProgress'
+  | 'motionPathStart'
+  | 'motionPathEnd'
+  | 'motionPathOffset'
   | 'trimStart'
   | 'trimEnd'
   | 'trimOffset'
@@ -1052,6 +1055,20 @@ export type AnimatableProperty =
 export type MotionPathLoopMode = 'none' | 'loop' | 'ping-pong';
 
 /**
+ * Keyframed snapshot of a Motion Path's world-space cubic Bézier geometry
+ * so the trajectory curve itself can animate smoothly over time.
+ */
+export interface MotionPathShapeKeyframe {
+  id: string;
+  /** Time offset in milliseconds within [0, clip.durationMs]. */
+  timeMs: number;
+  /** Cubic Bézier anchors in world/document coordinates (min 2 points). */
+  points: VectorAnchorPoint[];
+  /** Optional easing curve applied when interpolating into this keyframe. */
+  easing?: AnimationEasing;
+}
+
+/**
  * Motion Path binding stored inside an `AnimationClip` for a target node.
  * Anchor points and handles are stored in world/document coordinates so the
  * path stays anchored in space while the node travels along it.
@@ -1061,6 +1078,8 @@ export interface MotionPathBinding {
   targetNodeId: string;
   /** Cubic Bézier anchors in world/document coordinates (min 2 points). */
   points: VectorAnchorPoint[];
+  /** Optional time-keyframed trajectory snapshots allowing the motion path curve itself to morph over time. */
+  pathKeyframes?: MotionPathShapeKeyframe[];
   /** Whether the last anchor connects back to the first anchor. */
   closed: boolean;
   /** Optional source `PathNode.id` if created from an existing vector layer. */

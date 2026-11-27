@@ -16,8 +16,13 @@ import {
   type CanvasToolOptions,
 } from '../engines/canvas/tools/types';
 import type { MotionPathBinding } from '../core/document/types';
-import type { MotionPathPointSelection } from '../engines/canvas/MotionPathOverlay';
-import { upsertMotionPathInClip } from '../engines/animation';
+import {
+  applyMotionPathEditAtTime,
+  evaluateMotionPathBindingAtTime,
+} from '../core/document/pathStudio';
+import { parsePathMorphSnapshot } from '../core/document/pathMorph';
+import type { MorphCorrespondenceMeta, MotionPathPointSelection } from '../engines/canvas/MotionPathOverlay';
+import { evaluateEasing, upsertMotionPathInClip } from '../engines/animation';
 import { InspectorPanel } from './InspectorPanel';
 import type { StudioClipboardPayload } from './nodeClipboard';
 import { createEditorState } from './editorReducer';
@@ -140,6 +145,7 @@ export function App() {
   const [toolOptions, setToolOptions] = useState<CanvasToolOptions>(DEFAULT_CANVAS_TOOL_OPTIONS);
   const [componentRackSearch, setComponentRackSearch] = useState('');
   const [selectedMotionPathPoint, setSelectedMotionPathPoint] = useState<MotionPathPointSelection | null>(null);
+  const [showMorphCorrespondence, setShowMorphCorrespondence] = useState(false);
   const selectionSourceRef = useRef<'layers' | 'canvas'>('canvas');
   const clipboardRef = useRef<StudioClipboardPayload | null>(null);
   const setProjectNameEditingRef = useRef<(editing: boolean) => void>(() => {});
@@ -589,20 +595,58 @@ export function App() {
   const activeCanvasMotionPaths = useMemo(
     () =>
       motion.motionOpen && motion.activeClip?.motionPaths && motion.activeClip.motionPaths.length > 0
-        ? motion.activeClip.motionPaths
+        ? motion.activeClip.motionPaths.map((mp) =>
+            evaluateMotionPathBindingAtTime(mp, motion.playheadMs, evaluateEasing),
+          )
         : undefined,
-    [motion.motionOpen, motion.activeClip?.motionPaths],
+    [motion.motionOpen, motion.activeClip?.motionPaths, motion.playheadMs],
   );
+
+  const morphCorrespondenceMetaByNodeId = useMemo<Readonly<Record<string, MorphCorrespondenceMeta>> | undefined>(() => {
+    if (!motion.motionOpen || !showMorphCorrespondence || !motion.activeClip) return undefined;
+    const result: Record<string, MorphCorrespondenceMeta> = {};
+    for (const track of motion.activeClip.tracks) {
+      if (track.property !== 'pathMorph' || track.keyframes.length === 0) continue;
+      const exact = track.keyframes.find((kf) => Math.abs(kf.timeMs - motion.playheadMs) <= 25);
+      let activeKf = exact ?? track.keyframes[0];
+      if (!exact) {
+        for (const kf of track.keyframes) {
+          if (kf.timeMs <= motion.playheadMs) activeKf = kf;
+        }
+      }
+      if (typeof activeKf.value !== 'string') continue;
+      const parsed = parsePathMorphSnapshot(activeKf.value);
+      if (parsed?.morph) {
+        result[track.targetNodeId] = {
+          startOffset: parsed.morph.startOffset ?? 0,
+          reverse: Boolean(parsed.morph.reverse),
+        };
+      }
+    }
+    return result;
+  }, [motion.motionOpen, showMorphCorrespondence, motion.activeClip, motion.playheadMs]);
 
   const handleUpdateCanvasMotionPath = useCallback(
     (binding: MotionPathBinding, options?: { coalesceKey?: string; description?: string }) => {
       if (!motion.activeClip) return;
-      const nextClip = upsertMotionPathInClip(motion.activeClip, binding, {
+      const existing = motion.activeClip.motionPaths?.find(
+        (mp) => mp.targetNodeId === binding.targetNodeId,
+      );
+      const nextBinding =
+        existing && existing.pathKeyframes && existing.pathKeyframes.length > 0
+          ? applyMotionPathEditAtTime(
+              { ...existing, ...binding, pathKeyframes: existing.pathKeyframes },
+              motion.playheadMs,
+              binding.points,
+              evaluateEasing,
+            )
+          : binding;
+      const nextClip = upsertMotionPathInClip(motion.activeClip, nextBinding, {
         ensureProgressTrack: true,
       });
       motion.updateClip(nextClip, options?.description ?? 'Edit Motion Path', options?.coalesceKey);
     },
-    [motion.activeClip, motion.updateClip],
+    [motion.activeClip, motion.playheadMs, motion.updateClip],
   );
 
   return (
@@ -831,6 +875,8 @@ export function App() {
         selectedMotionPathPoint={activeEditorId === 'main' ? selectedMotionPathPoint : null}
         onSelectMotionPathPoint={setSelectedMotionPathPoint}
         onUpdateMotionPath={activeEditorId === 'main' ? handleUpdateCanvasMotionPath : undefined}
+        showMorphCorrespondence={activeEditorId === 'main' && motion.motionOpen && showMorphCorrespondence}
+        morphCorrespondenceMetaByNodeId={activeEditorId === 'main' ? morphCorrespondenceMetaByNodeId : undefined}
       />
 
       <ComponentCanvasWindow
@@ -910,6 +956,8 @@ export function App() {
         selectedMotionPathPoint={activeEditorId === 'component' ? selectedMotionPathPoint : null}
         onSelectMotionPathPoint={setSelectedMotionPathPoint}
         onUpdateMotionPath={activeEditorId === 'component' ? handleUpdateCanvasMotionPath : undefined}
+        showMorphCorrespondence={activeEditorId === 'component' && motion.motionOpen && showMorphCorrespondence}
+        morphCorrespondenceMetaByNodeId={activeEditorId === 'component' ? morphCorrespondenceMetaByNodeId : undefined}
       />
 
       <NodeLogicWindow
@@ -1122,6 +1170,8 @@ export function App() {
         onOpenMotionExport={() => setMotionExportOpen(true)}
         selectedMotionPathPoint={selectedMotionPathPoint}
         onSelectMotionPathPoint={setSelectedMotionPathPoint}
+        showMorphCorrespondence={showMorphCorrespondence}
+        onToggleMorphCorrespondence={() => setShowMorphCorrespondence((v) => !v)}
         onCloseMotion={motion.closeMotion}
         onNotice={setNotice}
       />

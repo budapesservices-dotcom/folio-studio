@@ -909,6 +909,18 @@ export function buildNodeSvgSmilAnimations(
         extraTimes.push(kf.timeMs);
       }
     }
+    if (nodeMotionPath?.pathKeyframes) {
+      for (const pkf of nodeMotionPath.pathKeyframes) {
+        extraTimes.push(pkf.timeMs);
+      }
+    }
+    for (const mp of clip.motionPaths ?? []) {
+      if (ancestorIdSet.has(mp.targetNodeId) && mp.pathKeyframes) {
+        for (const pkf of mp.pathKeyframes) {
+          extraTimes.push(pkf.timeMs);
+        }
+      }
+    }
     const timestamps = buildSampledTimestamps(durationMs, extraTimes, 30);
 
     const translateVals: string[] = [];

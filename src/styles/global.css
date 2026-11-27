@@ -7185,6 +7185,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
     "footer footer footer footer";
 }
 
+.app-shell.has-motion-timeline:has(.motion-timeline-dock.has-path-studio) {
+  grid-template-rows: 56px minmax(0, 1fr) 338px 27px;
+}
+
 .motion-timeline-dock {
   grid-area: motion;
   position: relative;

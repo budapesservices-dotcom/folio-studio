@@ -28,6 +28,7 @@ import {
 import {
   computeContourTrimIntervals,
   evaluateMotionPathAtProgress,
+  evaluateMotionPathBindingAtTime,
   getNodeContourLengths,
   intervalsToSvgStrokeDash,
 } from '../../core/document/pathStudio';
@@ -603,7 +604,10 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
             ancTrack.property === 'rotation' ||
             ancTrack.property === 'scale' ||
             ancTrack.property === 'opacity' ||
-            ancTrack.property === 'motionPathProgress'
+            ancTrack.property === 'motionPathProgress' ||
+            ancTrack.property === 'motionPathStart' ||
+            ancTrack.property === 'motionPathEnd' ||
+            ancTrack.property === 'motionPathOffset'
           ) {
             ancestorTracksForWrapper.push(ancTrack);
           }
@@ -622,6 +626,11 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       for (const track of wrapperTracks) {
         for (const kf of track.keyframes) {
           wrapperStopSet.add(Math.max(0, Math.min(clip.durationMs, Math.round(kf.timeMs))));
+        }
+      }
+      if (nodeMotionPath?.pathKeyframes) {
+        for (const pkf of nodeMotionPath.pathKeyframes) {
+          wrapperStopSet.add(Math.max(0, Math.min(clip.durationMs, Math.round(pkf.timeMs))));
         }
       }
       for (const ancTrack of ancestorTracksForWrapper) {
@@ -859,7 +868,20 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
             : clip.durationMs > 0
               ? (stopMs / clip.durationMs) * 100
               : 0;
-          const mpSample = evaluateMotionPathAtProgress(nodeMotionPath, progressPct);
+          const startChVal = evalProp(nodeId, 'motionPathStart', stopMs);
+          const endChVal = evalProp(nodeId, 'motionPathEnd', stopMs);
+          const offsetChVal = evalProp(nodeId, 'motionPathOffset', stopMs);
+          const timedMp = evaluateMotionPathBindingAtTime(nodeMotionPath, stopMs, evaluateEasing);
+          const effectiveMp: MotionPathBinding =
+            startChVal !== undefined || endChVal !== undefined || offsetChVal !== undefined
+              ? {
+                  ...timedMp,
+                  startPct: startChVal !== undefined ? Math.max(0, Math.min(100, Number(startChVal))) : timedMp.startPct,
+                  endPct: endChVal !== undefined ? Math.max(0, Math.min(100, Number(endChVal))) : timedMp.endPct,
+                  offsetPx: offsetChVal !== undefined ? Math.max(-4000, Math.min(4000, Number(offsetChVal))) : timedMp.offsetPx,
+                }
+              : timedMp;
+          const mpSample = evaluateMotionPathAtProgress(effectiveMp, progressPct);
           if (mpSample) {
             const effW = evalWidth ?? node.width;
             const effH = evalHeight ?? node.height;
@@ -868,9 +890,9 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
             hasXTrack = true;
             hasYTrack = true;
             hasTransform = true;
-            if (nodeMotionPath.autoOrient) {
+            if (effectiveMp.autoOrient) {
               const rotDelta = rotationVal !== undefined ? rotationVal - (node.rotation || 0) : 0;
-              rotationVal = roundCssNum(mpSample.tangentAngleDeg + (nodeMotionPath.orientOffsetDeg ?? 0) + rotDelta);
+              rotationVal = roundCssNum(mpSample.tangentAngleDeg + (effectiveMp.orientOffsetDeg ?? 0) + rotDelta);
             }
           }
         }

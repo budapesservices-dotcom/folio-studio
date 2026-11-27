@@ -4,7 +4,7 @@ import type { AssetReference, BreakpointId, ComponentDefinition, DesignNode, Des
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { CanvasToolId, CanvasToolOptions } from '../../core/tools/operationContract';
 import { Canvas, type CanvasContextMenuActions } from '../../engines/canvas/Canvas';
-import type { MotionPathPointSelection } from '../../engines/canvas/MotionPathOverlay';
+import type { MorphCorrespondenceMeta, MotionPathPointSelection } from '../../engines/canvas/MotionPathOverlay';
 import type { GpuSceneMetrics, ViewportRendererMode } from '../../engines/canvas/gpu/types';
 import type { Alignment, DistributionAxis } from '../../engines/canvas/geometry';
 import type { ValidatedToolOperation } from '../../engines/canvas/geometryEngine';
@@ -418,6 +418,8 @@ export interface MainCanvasWindowProps {
     binding: MotionPathBinding,
     options?: { coalesceKey?: string; description?: string },
   ) => void;
+  showMorphCorrespondence?: boolean;
+  morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
 }
 
 export function MainCanvasWindow({
@@ -481,6 +483,8 @@ export function MainCanvasWindow({
   selectedMotionPathPoint,
   onSelectMotionPathPoint,
   onUpdateMotionPath,
+  showMorphCorrespondence,
+  morphCorrespondenceMetaByNodeId,
 }: MainCanvasWindowProps) {
   const [rendererMode, setRendererMode] = useState<ViewportRendererMode>('auto');
   const [gpuMetrics, setGpuMetrics] = useState<GpuSceneMetrics | null>(null);
@@ -650,6 +654,8 @@ export function MainCanvasWindow({
               selectedMotionPathPoint={selectedMotionPathPoint}
               onSelectMotionPathPoint={onSelectMotionPathPoint}
               onUpdateMotionPath={onUpdateMotionPath}
+              showMorphCorrespondence={showMorphCorrespondence}
+              morphCorrespondenceMetaByNodeId={morphCorrespondenceMetaByNodeId}
             />
           </div>
         </FloatingWindow>
@@ -757,6 +763,8 @@ export interface ComponentCanvasWindowProps {
     binding: MotionPathBinding,
     options?: { coalesceKey?: string; description?: string },
   ) => void;
+  showMorphCorrespondence?: boolean;
+  morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
 }
 
 export function ComponentCanvasWindow({
@@ -826,6 +834,8 @@ export function ComponentCanvasWindow({
   selectedMotionPathPoint,
   onSelectMotionPathPoint,
   onUpdateMotionPath,
+  showMorphCorrespondence,
+  morphCorrespondenceMetaByNodeId,
 }: ComponentCanvasWindowProps) {
   const safeDocument = normalizeCanvasDocument(document);
   const safeNodes = safeDocument?.nodes ?? [];
@@ -1035,6 +1045,8 @@ export function ComponentCanvasWindow({
                 selectedMotionPathPoint={selectedMotionPathPoint}
                 onSelectMotionPathPoint={onSelectMotionPathPoint}
                 onUpdateMotionPath={onUpdateMotionPath}
+                showMorphCorrespondence={showMorphCorrespondence}
+                morphCorrespondenceMetaByNodeId={morphCorrespondenceMetaByNodeId}
               />
             ) : (
               <div class="component-canvas-empty" role="status">

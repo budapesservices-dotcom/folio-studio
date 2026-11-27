@@ -1,3 +1,4 @@
+import type { JSX } from 'preact';
 import type { DesignNode, MotionPathBinding } from '../../core/document/types';
 import {
   evaluateMotionPathAtProgress,
@@ -5,10 +6,19 @@ import {
   sampleMotionPathChevrons,
   serializeMotionPathToSvgD,
 } from '../../core/document/pathStudio';
+import {
+  extractMorphSnapshotFromNode,
+  parsePathMorphSnapshot,
+} from '../../core/document/pathMorph';
 
 export interface MotionPathPointSelection {
   readonly nodeId: string;
   readonly pointIndex: number;
+}
+
+export interface MorphCorrespondenceMeta {
+  readonly startOffset?: number;
+  readonly reverse?: boolean;
 }
 
 interface MotionPathOverlayProps {
@@ -18,6 +28,32 @@ interface MotionPathOverlayProps {
   selectedPoint?: MotionPathPointSelection | null;
   invZoom: number;
   interactive: boolean;
+  showMorphCorrespondence?: boolean;
+  morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
+}
+
+function toNodeWorldPoint(
+  node: DesignNode,
+  localX: number,
+  localY: number,
+): { x: number; y: number } {
+  const wx = node.x + localX;
+  const wy = node.y + localY;
+  const rot = node.rotation ?? 0;
+  if (Math.abs(rot) < 0.01) {
+    return { x: wx, y: wy };
+  }
+  const cx = node.x + node.width / 2;
+  const cy = node.y + node.height / 2;
+  const rad = (rot * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = wx - cx;
+  const dy = wy - cy;
+  return {
+    x: cx + dx * cos - dy * sin,
+    y: cy + dx * sin + dy * cos,
+  };
 }
 
 export function MotionPathOverlay({
@@ -27,8 +63,11 @@ export function MotionPathOverlay({
   selectedPoint,
   invZoom,
   interactive,
+  showMorphCorrespondence = false,
+  morphCorrespondenceMetaByNodeId,
 }: MotionPathOverlayProps) {
-  if (!motionPaths || motionPaths.length === 0) return null;
+  const hasMotionPaths = Boolean(motionPaths && motionPaths.length > 0);
+  if (!hasMotionPaths && !showMorphCorrespondence) return null;
 
   const selectedIdSet = new Set(selectedNodeIds);
   const nodeById = new Map<string, DesignNode>();
@@ -44,9 +83,29 @@ export function MotionPathOverlay({
   const dashPattern = `${6 * invZoom} ${4 * invZoom}`;
   const offsetDash = `${3 * invZoom} ${3 * invZoom}`;
 
+  const morphCorrespondenceNodes = showMorphCorrespondence
+    ? selectedNodeIds
+        .map((id) => nodeById.get(id))
+        .filter((node): node is DesignNode => Boolean(node))
+        .map((node) => {
+          const rawSnap = extractMorphSnapshotFromNode(node);
+          const snap = rawSnap ? parsePathMorphSnapshot(rawSnap) : null;
+          if (!snap || snap.points.length === 0) return null;
+          const contours = [
+            { points: snap.points, closed: snap.closed !== false },
+            ...(snap.subpaths ?? []).map((sp) => ({
+              points: sp.points,
+              closed: sp.closed !== false,
+            })),
+          ];
+          return { node, contours };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+    : [];
+
   return (
     <g class="canvas-motion-path-layer" data-testid="canvas-motion-path-overlay">
-      {motionPaths.map((binding) => {
+      {hasMotionPaths && (motionPaths ?? []).map((binding) => {
         if (binding.visible === false || binding.points.length < 2) return null;
         const d = serializeMotionPathToSvgD(binding.points, binding.closed);
         if (!d) return null;
@@ -313,6 +372,145 @@ export function MotionPathOverlay({
           </g>
         );
       })}
+
+      {/* Live Canvas Shape Morph Point Correspondence Overlay */}
+      {showMorphCorrespondence && morphCorrespondenceNodes.length > 0 && (
+        <g
+          class="canvas-morph-correspondence-layer"
+          data-testid="canvas-morph-correspondence-overlay"
+          pointer-events="none"
+        >
+          {morphCorrespondenceNodes.map(({ node, contours }) => {
+            const corrMeta = morphCorrespondenceMetaByNodeId?.[node.id];
+            const startOffset = corrMeta?.startOffset ?? 0;
+            const isReversed = Boolean(corrMeta?.reverse);
+            return (
+            <g
+              key={`morph-corr-${node.id}`}
+              data-morph-corr-node={node.id}
+              data-morph-start-offset={String(startOffset)}
+              data-morph-reversed={isReversed ? 'true' : 'false'}
+            >
+              {contours.map((contour, cIdx) => {
+                const pts = contour.points;
+                if (pts.length === 0) return null;
+                let worldPts = pts.map((pt) => toNodeWorldPoint(node, pt.x, pt.y));
+                if (cIdx === 0 && worldPts.length >= 2) {
+                  if (isReversed) {
+                    worldPts = contour.closed
+                      ? [worldPts[0], ...worldPts.slice(1).reverse()]
+                      : [...worldPts].reverse();
+                  }
+                  if (contour.closed && startOffset !== 0) {
+                    const n = worldPts.length;
+                    const shift = ((Math.trunc(startOffset) % n) + n) % n;
+                    if (shift > 0) {
+                      worldPts = [...worldPts.slice(shift), ...worldPts.slice(0, shift)];
+                    }
+                  }
+                }
+                const step = worldPts.length > 32 ? Math.ceil(worldPts.length / 24) : 1;
+                const badgeR = 7.2 * invZoom;
+                const fontSize = 8.4 * invZoom;
+
+                // Winding direction arrow from vertex #1 toward vertex #2
+                let arrowEl: JSX.Element | null = null;
+                if (worldPts.length >= 2) {
+                  const p0 = worldPts[0];
+                  const p1 = worldPts[1];
+                  const dx = p1.x - p0.x;
+                  const dy = p1.y - p0.y;
+                  const len = Math.hypot(dx, dy);
+                  if (len > 2) {
+                    const ux = dx / len;
+                    const uy = dy / len;
+                    const startDist = Math.min(len * 0.25, badgeR + 2 * invZoom);
+                    const endDist = Math.min(len * 0.72, startDist + 24 * invZoom);
+                    const ax1 = p0.x + ux * startDist;
+                    const ay1 = p0.y + uy * startDist;
+                    const ax2 = p0.x + ux * endDist;
+                    const ay2 = p0.y + uy * endDist;
+                    const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+                    arrowEl = (
+                      <g key={`arrow-${cIdx}`}>
+                        <line
+                          class="canvas-morph-corr-arrow"
+                          x1={ax1}
+                          y1={ay1}
+                          x2={ax2}
+                          y2={ay2}
+                          strokeWidth={2 * invZoom}
+                          strokeLinecap="round"
+                        />
+                        <g transform={`translate(${ax2} ${ay2}) rotate(${angleDeg}) scale(${invZoom})`}>
+                          <path
+                            class="canvas-morph-corr-arrow"
+                            d="M -4 -3 L 2 0 L -4 3"
+                            fill="none"
+                            strokeWidth={2}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </g>
+                      </g>
+                    );
+                  }
+                }
+
+                return (
+                  <g key={`contour-${cIdx}`}>
+                    {arrowEl}
+                    {worldPts.map((wp, vIdx) => {
+                      const isStart = vIdx === 0;
+                      const isLast = vIdx === worldPts.length - 1;
+                      if (!isStart && !isLast && vIdx % step !== 0) return null;
+                      return (
+                        <g
+                          key={`v-${cIdx}-${vIdx}`}
+                          data-testid={
+                            cIdx === 0 && isStart
+                              ? 'morph-corr-start-vertex'
+                              : `morph-corr-vertex-${cIdx}-${vIdx + 1}`
+                          }
+                        >
+                          {isStart && (
+                            <circle
+                              class="canvas-morph-corr-start-ring"
+                              cx={wp.x}
+                              cy={wp.y}
+                              r={badgeR + 3.2 * invZoom}
+                              fill="none"
+                              strokeWidth={1.6 * invZoom}
+                            />
+                          )}
+                          <circle
+                            class={`canvas-morph-corr-badge${isStart ? ' is-start' : ''}`}
+                            cx={wp.x}
+                            cy={wp.y}
+                            r={badgeR}
+                            strokeWidth={1.35 * invZoom}
+                          />
+                          <text
+                            class={`canvas-morph-corr-label${isStart ? ' is-start' : ''}`}
+                            x={wp.x}
+                            y={wp.y}
+                            fontSize={fontSize}
+                            textAnchor="middle"
+                            dominantBaseline="central"
+                          >
+                            {vIdx + 1}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </g>
+                );
+              })}
+            </g>
+            );
+          })}
+        </g>
+      )}
     </g>
   );
 }

@@ -49,7 +49,7 @@ import {
   upsertKeyframeInClip,
   type MotionPresetDefinition,
 } from '../../engines/animation';
-import { EasingCurveMiniSvg, MotionGraphEditor } from './MotionGraphEditor';
+import { EasingCurveMiniSvg, MotionGraphEditor, type MotionGraphViewMode } from './MotionGraphEditor';
 import { PathStudioControls } from './PathStudioControls';
 import type { MotionPathPointSelection } from '../../engines/canvas/MotionPathOverlay';
 import { StudioContextMenu, clampContextMenuPosition, type StudioContextMenuEntry } from './StudioContextMenu';
@@ -91,6 +91,8 @@ export interface MotionTimelinePanelProps {
   onFocusStudio?: () => void;
   selectedMotionPathPoint?: MotionPathPointSelection | null;
   onSelectMotionPathPoint?: (selection: MotionPathPointSelection | null) => void;
+  showMorphCorrespondence?: boolean;
+  onToggleMorphCorrespondence?: () => void;
   onClose: () => void;
 }
 
@@ -150,6 +152,8 @@ export function MotionTimelinePanel({
   onFocusStudio,
   selectedMotionPathPoint = null,
   onSelectMotionPathPoint,
+  showMorphCorrespondence = false,
+  onToggleMorphCorrespondence,
   onClose,
 }: MotionTimelinePanelProps) {
   const nodes = activePage.document.nodes;
@@ -192,6 +196,7 @@ export function MotionTimelinePanel({
 
   const [selection, setSelection] = useState<TimelineSelection | null>(null);
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
+  const [graphEditorView, setGraphEditorView] = useState<MotionGraphViewMode>('easing');
   const [pathStudioOpen, setPathStudioOpen] = useState(false);
   const [expandedOverrides, setExpandedOverrides] = useState<Readonly<Record<string, boolean>>>(() => ({}));
   const [presetsOpen, setPresetsOpen] = useState(false);
@@ -986,7 +991,7 @@ export function MotionTimelinePanel({
 
   return (
     <section
-      class="motion-timeline-dock"
+      class={`motion-timeline-dock${pathStudioOpen ? ' has-path-studio' : ''}`}
       aria-label="Motion Timeline Studio"
       data-testid="motion-timeline"
       tabIndex={-1}
@@ -1363,17 +1368,24 @@ export function MotionTimelinePanel({
           onKeyframePathMorph={onKeyframePathMorph}
           onImportMorphFromComponent={onImportMorphFromComponent}
           onEditMorphPoints={onEditMorphPoints}
-          onOpenSpeedCurve={(nodeId) => {
+          showMorphCorrespondence={showMorphCorrespondence}
+          onToggleMorphCorrespondence={onToggleMorphCorrespondence}
+          onOpenSpeedCurve={(nodeId, preferredProp = 'motionPathProgress', preferredView = 'speed') => {
             if (!activeClip) return;
-            const progTrack = activeClip.tracks.find(
-              (t) => t.targetNodeId === nodeId && t.property === 'motionPathProgress',
-            );
+            const targetTrack =
+              activeClip.tracks.find(
+                (t) => t.targetNodeId === nodeId && t.property === preferredProp,
+              ) ??
+              activeClip.tracks.find(
+                (t) => t.targetNodeId === nodeId && ANIMATABLE_PROPERTY_META[t.property]?.kind === 'number',
+              );
             const targetKf =
-              progTrack && progTrack.keyframes.length >= 2
-                ? progTrack.keyframes[progTrack.keyframes.length - 1]
-                : progTrack?.keyframes[0];
-            if (progTrack && targetKf) {
-              setSelection({ kind: 'track', trackId: progTrack.id, keyframeId: targetKf.id });
+              targetTrack && targetTrack.keyframes.length >= 2
+                ? targetTrack.keyframes[targetTrack.keyframes.length - 1]
+                : targetTrack?.keyframes[0];
+            if (targetTrack && targetKf) {
+              setSelection({ kind: 'track', trackId: targetTrack.id, keyframeId: targetKf.id });
+              setGraphEditorView(preferredView);
               setGraphEditorOpen(true);
             }
           }}
@@ -2048,7 +2060,7 @@ export function MotionTimelinePanel({
         )}
       </footer>
 
-      {graphEditorOpen && (activeTrackSelection || activeLayerSelection) && (
+      {graphEditorOpen && activeClip && (activeTrackSelection || activeLayerSelection) && (
         <MotionGraphEditor
           value={
             activeTrackSelection
@@ -2061,9 +2073,39 @@ export function MotionTimelinePanel({
               : `${nodeById.get(activeLayerSelection?.targetNodeId ?? '')?.name ?? 'Layer'} · Pose @ ${activeLayerSelection?.timeMs ?? 0}ms`
           }
           customEasings={customEasings}
+          track={activeTrackSelection?.track}
+          selectedKeyframeId={activeTrackSelection?.keyframe.id}
+          clipDurationMs={activeClip.durationMs}
+          playheadMs={playheadMs}
+          propertyUnit={
+            activeTrackSelection
+              ? ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property]?.unit
+              : undefined
+          }
+          initialGraphView={graphEditorView}
           onChange={handleGraphEasingChange}
+          onUpdateTrack={(nextTrack, description, coalesceKey) => {
+            const nextClip: AnimationClip = {
+              ...activeClip,
+              tracks: activeClip.tracks.map((tr) => (tr.id === nextTrack.id ? nextTrack : tr)),
+              updatedAt: new Date().toISOString(),
+            };
+            onUpdateClip(nextClip, description ?? 'Edit track in Graph Editor', coalesceKey);
+          }}
+          onSelectKeyframe={(kfId) => {
+            if (activeTrackSelection) {
+              setSelection({
+                kind: 'track',
+                trackId: activeTrackSelection.track.id,
+                keyframeId: kfId,
+              });
+            }
+          }}
           onUpdateCustomEasings={(next, desc) => onUpdateCustomEasings?.(next, desc)}
-          onClose={() => setGraphEditorOpen(false)}
+          onClose={() => {
+            setGraphEditorOpen(false);
+            setGraphEditorView('easing');
+          }}
         />
       )}
 

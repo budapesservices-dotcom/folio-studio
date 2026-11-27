@@ -16,9 +16,11 @@
  */
 
 import type {
+  AnimationEasing,
   DesignNode,
   MotionPathBinding,
   MotionPathLoopMode,
+  MotionPathShapeKeyframe,
   PathNode,
   TrimPathMode,
   VectorAnchorPoint,
@@ -735,18 +737,309 @@ export function removeMotionPathPoint(
 export function reverseMotionPathPoints(
   binding: MotionPathBinding,
 ): MotionPathBinding {
-  const reversed = [...binding.points].reverse().map((pt) => {
-    const next: VectorAnchorPoint = {
+  const reversePointsList = (pts: readonly VectorAnchorPoint[]): VectorAnchorPoint[] =>
+    [...pts].reverse().map((pt) => ({
       id: pt.id,
       x: pt.x,
       y: pt.y,
       pointType: pt.pointType,
       ...(pt.handleOut ? { handleIn: { ...pt.handleOut } } : {}),
       ...(pt.handleIn ? { handleOut: { ...pt.handleIn } } : {}),
+    }));
+  return {
+    ...binding,
+    points: reversePointsList(binding.points),
+    ...(binding.pathKeyframes && binding.pathKeyframes.length > 0
+      ? {
+          pathKeyframes: binding.pathKeyframes.map((kf) => ({
+            ...kf,
+            points: reversePointsList(kf.points),
+          })),
+        }
+      : {}),
+  };
+}
+
+// ============================================================================
+// 2B. KEYFRAMEABLE MOTION PATH GEOMETRY (ANIMATED TRAJECTORY MORPHING)
+// ============================================================================
+
+export function cloneVectorAnchorPoints(
+  points: readonly VectorAnchorPoint[],
+): VectorAnchorPoint[] {
+  return points.map((pt) => ({
+    id: pt.id,
+    x: pt.x,
+    y: pt.y,
+    pointType: pt.pointType,
+    ...(pt.handleIn ? { handleIn: { x: pt.handleIn.x, y: pt.handleIn.y } } : {}),
+    ...(pt.handleOut ? { handleOut: { x: pt.handleOut.x, y: pt.handleOut.y } } : {}),
+  }));
+}
+
+/**
+ * Elevates a cubic Bézier anchor list to `targetCount` points via exact de Casteljau
+ * midpoint subdivision of the longest segment so two Motion Path shape keyframes
+ * with different point counts interpolate smoothly without snapping.
+ */
+export function resampleVectorAnchorPoints(
+  points: readonly VectorAnchorPoint[],
+  closed: boolean,
+  targetCount: number,
+): VectorAnchorPoint[] {
+  if (points.length < 2 || points.length >= targetCount) {
+    return cloneVectorAnchorPoints(points);
+  }
+  let working: MotionPathBinding = {
+    id: '__resample__',
+    targetNodeId: '__resample__',
+    points: cloneVectorAnchorPoints(points),
+    closed,
+    autoOrient: false,
+    reverse: false,
+    startPct: 0,
+    endPct: 100,
+    offsetPx: 0,
+    constantSpeed: false,
+    loopMode: 'none',
+  };
+  let guard = 0;
+  while (working.points.length < targetCount && guard < 256) {
+    guard += 1;
+    const segs = extractCubicSegments(working.points, closed);
+    if (segs.length === 0) break;
+    let longestIdx = 0;
+    let longestLen = -1;
+    for (let i = 0; i < segs.length; i += 1) {
+      const s = segs[i];
+      const chord = Math.hypot(s.p3x - s.p0x, s.p3y - s.p0y);
+      const poly =
+        Math.hypot(s.c1x - s.p0x, s.c1y - s.p0y) +
+        Math.hypot(s.c2x - s.c1x, s.c2y - s.c1y) +
+        Math.hypot(s.p3x - s.c2x, s.p3y - s.c2y);
+      const est = (chord + poly) * 0.5;
+      if (est > longestLen) {
+        longestLen = est;
+        longestIdx = i;
+      }
+    }
+    const res = insertMotionPathPointOnSegment(working, longestIdx, 0.5);
+    if (res.insertedIndex < 0) break;
+    working = res.binding;
+  }
+  return working.points;
+}
+
+/**
+ * Smoothly interpolates two cubic Bézier anchor point lists at normalized progress `t`,
+ * automatically elevating mismatched anchor counts via exact de Casteljau subdivision.
+ */
+export function interpolateVectorAnchorPoints(
+  fromPoints: readonly VectorAnchorPoint[],
+  toPoints: readonly VectorAnchorPoint[],
+  closed: boolean,
+  t: number,
+): VectorAnchorPoint[] {
+  if (fromPoints.length < 2) return cloneVectorAnchorPoints(toPoints);
+  if (toPoints.length < 2) return cloneVectorAnchorPoints(fromPoints);
+  const targetCount = Math.max(fromPoints.length, toPoints.length);
+  const aPts = fromPoints.length === targetCount
+    ? fromPoints
+    : resampleVectorAnchorPoints(fromPoints, closed, targetCount);
+  const bPts = toPoints.length === targetCount
+    ? toPoints
+    : resampleVectorAnchorPoints(toPoints, closed, targetCount);
+
+  const out: VectorAnchorPoint[] = [];
+  for (let i = 0; i < targetCount; i += 1) {
+    const a = aPts[i];
+    const b = bPts[i];
+    const x = round2(a.x + (b.x - a.x) * t);
+    const y = round2(a.y + (b.y - a.y) * t);
+
+    let handleIn: VectorPointHandle | undefined;
+    if (a.handleIn || b.handleIn) {
+      const aHi = a.handleIn ?? { x: a.x, y: a.y };
+      const bHi = b.handleIn ?? { x: b.x, y: b.y };
+      handleIn = {
+        x: round2(aHi.x + (bHi.x - aHi.x) * t),
+        y: round2(aHi.y + (bHi.y - aHi.y) * t),
+      };
+    }
+
+    let handleOut: VectorPointHandle | undefined;
+    if (a.handleOut || b.handleOut) {
+      const aHo = a.handleOut ?? { x: a.x, y: a.y };
+      const bHo = b.handleOut ?? { x: b.x, y: b.y };
+      handleOut = {
+        x: round2(aHo.x + (bHo.x - aHo.x) * t),
+        y: round2(aHo.y + (bHo.y - aHo.y) * t),
+      };
+    }
+
+    out.push({
+      id: a.id || b.id || makePathStudioPointId(`mp${i}`),
+      x,
+      y,
+      pointType: t < 0.5 ? a.pointType : b.pointType,
+      ...(handleIn ? { handleIn } : {}),
+      ...(handleOut ? { handleOut } : {}),
+    });
+  }
+  return out;
+}
+
+function sortMotionPathShapeKeyframes(
+  keyframes: readonly MotionPathShapeKeyframe[],
+): MotionPathShapeKeyframe[] {
+  return [...keyframes].sort((a, b) => a.timeMs - b.timeMs);
+}
+
+/**
+ * Resolves a `MotionPathBinding` at `timeMs`, interpolating its trajectory `points`
+ * smoothly across `binding.pathKeyframes` if any shape keyframes exist.
+ */
+export function evaluateMotionPathBindingAtTime(
+  binding: MotionPathBinding,
+  timeMs: number,
+  easeFn?: (easing: AnimationEasing, t: number) => number,
+): MotionPathBinding {
+  const kfs = binding.pathKeyframes;
+  if (!kfs || kfs.length === 0) return binding;
+
+  const sorted = sortMotionPathShapeKeyframes(kfs);
+  if (sorted.length === 1 || timeMs <= sorted[0].timeMs) {
+    return { ...binding, points: cloneVectorAnchorPoints(sorted[0].points) };
+  }
+  const last = sorted[sorted.length - 1];
+  if (timeMs >= last.timeMs) {
+    return { ...binding, points: cloneVectorAnchorPoints(last.points) };
+  }
+
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const start = sorted[i];
+    const end = sorted[i + 1];
+    if (timeMs >= start.timeMs && timeMs <= end.timeMs) {
+      const span = end.timeMs - start.timeMs;
+      if (span <= EPS) {
+        return { ...binding, points: cloneVectorAnchorPoints(end.points) };
+      }
+      const rawT = clamp((timeMs - start.timeMs) / span, 0, 1);
+      const easedT = easeFn && end.easing ? easeFn(end.easing, rawT) : rawT;
+      return {
+        ...binding,
+        points: interpolateVectorAnchorPoints(start.points, end.points, binding.closed, easedT),
+      };
+    }
+  }
+  return { ...binding, points: cloneVectorAnchorPoints(last.points) };
+}
+
+export function hasMotionPathShapeKeyframeAtTime(
+  binding: MotionPathBinding | null | undefined,
+  timeMs: number,
+  toleranceMs = 15,
+): boolean {
+  if (!binding?.pathKeyframes || binding.pathKeyframes.length === 0) return false;
+  const rounded = Math.max(0, Math.round(timeMs));
+  return binding.pathKeyframes.some((kf) => Math.abs(kf.timeMs - rounded) <= toleranceMs);
+}
+
+/**
+ * Inserts or updates a Motion Path geometry keyframe at `timeMs`.
+ * If this is the first shape keyframe and `timeMs > 15`, automatically seeds a `0ms`
+ * baseline keyframe from `binding.points` so trajectory morphing works immediately.
+ */
+export function upsertMotionPathShapeKeyframe(
+  binding: MotionPathBinding,
+  timeMs: number,
+  points?: readonly VectorAnchorPoint[],
+  easing: AnimationEasing = 'ease-in-out',
+  easeFn?: (easing: AnimationEasing, t: number) => number,
+): { binding: MotionPathBinding; keyframeId: string } {
+  const clampedTime = Math.max(0, Math.round(timeMs));
+  const snapshotPoints = points
+    ? cloneVectorAnchorPoints(points)
+    : evaluateMotionPathBindingAtTime(binding, clampedTime, easeFn).points;
+
+  const existing = binding.pathKeyframes ? [...binding.pathKeyframes] : [];
+  if (existing.length === 0 && clampedTime > 15) {
+    existing.push({
+      id: makePathStudioPointId('mpkf'),
+      timeMs: 0,
+      points: cloneVectorAnchorPoints(binding.points),
+      easing: 'linear',
+    });
+  }
+
+  const nearIdx = existing.findIndex((kf) => Math.abs(kf.timeMs - clampedTime) <= 15);
+  let keyframeId: string;
+  if (nearIdx >= 0) {
+    keyframeId = existing[nearIdx].id;
+    existing[nearIdx] = {
+      ...existing[nearIdx],
+      timeMs: clampedTime,
+      points: snapshotPoints,
+      easing: clampedTime === 0 ? 'linear' : (existing[nearIdx].easing ?? easing),
     };
+  } else {
+    keyframeId = makePathStudioPointId('mpkf');
+    existing.push({
+      id: keyframeId,
+      timeMs: clampedTime,
+      points: snapshotPoints,
+      easing: clampedTime === 0 ? 'linear' : easing,
+    });
+  }
+
+  const sorted = sortMotionPathShapeKeyframes(existing);
+  return {
+    keyframeId,
+    binding: {
+      ...binding,
+      points: sorted[0] ? cloneVectorAnchorPoints(sorted[0].points) : binding.points,
+      pathKeyframes: sorted,
+    },
+  };
+}
+
+export function removeMotionPathShapeKeyframe(
+  binding: MotionPathBinding,
+  keyframeId: string,
+): MotionPathBinding {
+  if (!binding.pathKeyframes || binding.pathKeyframes.length === 0) return binding;
+  const remaining = binding.pathKeyframes.filter((kf) => kf.id !== keyframeId);
+  if (remaining.length === 0) {
+    const next = { ...binding };
+    delete next.pathKeyframes;
     return next;
-  });
-  return { ...binding, points: reversed };
+  }
+  const sorted = sortMotionPathShapeKeyframes(remaining);
+  return {
+    ...binding,
+    points: cloneVectorAnchorPoints(sorted[0].points),
+    pathKeyframes: sorted,
+  };
+}
+
+/**
+ * Applies a direct canvas geometry edit (`nextPoints`) to `binding` at `timeMs`.
+ * If `binding` already has `pathKeyframes`, writes directly into the shape keyframe
+ * at `timeMs` (updating or creating it automatically); otherwise updates static `binding.points`.
+ */
+export function applyMotionPathEditAtTime(
+  binding: MotionPathBinding,
+  timeMs: number,
+  nextPoints: readonly VectorAnchorPoint[],
+  easeFn?: (easing: AnimationEasing, t: number) => number,
+): MotionPathBinding {
+  if (binding.pathKeyframes && binding.pathKeyframes.length > 0) {
+    return upsertMotionPathShapeKeyframe(binding, timeMs, nextPoints, 'ease-in-out', easeFn).binding;
+  }
+  return {
+    ...binding,
+    points: cloneVectorAnchorPoints(nextPoints),
+  };
 }
 
 export function serializeMotionPathToSvgD(

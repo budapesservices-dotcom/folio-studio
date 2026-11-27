@@ -5,12 +5,15 @@ import type { MotionPathBinding, PathNode, VectorAnchorPoint } from '../src/core
 import { validateProject } from '../src/core/document/validation';
 import { cleanupDeletedNodeReferences } from '../src/core/document/nodeReferenceCleanup';
 import {
+  applyMotionPathEditAtTime,
   buildPathArcLengthTable,
   computeContourTrimIntervals,
   createDefaultMotionPathForNode,
   createMotionPathFromPathNode,
   evaluateMotionPathAtProgress,
+  evaluateMotionPathBindingAtTime,
   getNodeContourLengths,
+  hasMotionPathShapeKeyframeAtTime,
   insertMotionPathPointOnSegment,
   intervalsToSvgStrokeDash,
   moveMotionPathAnchor,
@@ -18,13 +21,16 @@ import {
   normalizeTrimIntervals,
   projectPointOntoMotionPath,
   removeMotionPathPoint,
+  removeMotionPathShapeKeyframe,
   resolveMotionPathLoopProgress,
   reverseMotionPathPoints,
   serializeMotionPathToSvgD,
   setMotionPathPointType,
+  upsertMotionPathShapeKeyframe,
 } from '../src/core/document/pathStudio';
 import {
   checkNodeMorphSupport,
+  createMorphPresetSnapshot,
   extractMorphSnapshotFromNode,
   interpolatePathMorph,
   parsePathMorphSnapshot,
@@ -32,12 +38,15 @@ import {
 import {
   addTrackToClip,
   applyAnimatedPosesToDocument,
+  applyStaggeredMotionPathInClip,
+  applyStaggeredTrimPathInClip,
   buildNodeSvgSmilAnimations,
   buildPresetClipForPage,
   compilePageAnimationsCss,
   createAnimationClip,
   enableTrimPathInClip,
   evaluateClipAtTime,
+  evaluateEasing,
   setNodeTrimModeInClip,
   upsertKeyframeInClip,
   upsertMotionPathInClip,
@@ -465,3 +474,254 @@ describe('FOLIO Path Studio — Unified Engine Integration, Export Parity, Valid
     expect(store.getSnapshot().editorState.project.animations?.[0].motionPaths?.[0].points[1].x).toBeCloseTo(420, 1);
   });
 });
+
+describe('FOLIO Path Studio — Pro Upgrade (Morphing Paths, Channels, Stagger, Master Export Parity)', () => {
+  it('keyframes Motion Path curve geometry over time including mismatched point counts and validates cleanly', () => {
+    const project = createInitialProject('Morphing Motion Path');
+    const page = getActivePage(project);
+    const dot = createEllipseNode(0);
+    dot.id = 'mover-1';
+    dot.x = 50;
+    dot.y = 50;
+    dot.width = 40;
+    dot.height = 40;
+    page.document.nodes = [dot];
+
+    let mp = createDefaultMotionPathForNode(dot);
+    // Add shape keyframe at t=1000ms with an extra point & shifted y coordinates
+    const editedAt1000: VectorAnchorPoint[] = [
+      { id: 'pt-a', x: 70, y: 200, pointType: 'corner' },
+      { id: 'pt-b', x: 200, y: 320, pointType: 'smooth' },
+      { id: 'pt-c', x: 350, y: 180, pointType: 'smooth' },
+      { id: 'pt-d', x: 460, y: 260, pointType: 'corner' },
+    ];
+    mp = upsertMotionPathShapeKeyframe(mp, 1000, editedAt1000, 'linear', evaluateEasing).binding;
+    expect(mp.pathKeyframes?.length).toBe(2); // auto-seeded t=0 + t=1000
+    expect(hasMotionPathShapeKeyframeAtTime(mp, 0)).toBe(true);
+    expect(hasMotionPathShapeKeyframeAtTime(mp, 1000)).toBe(true);
+
+    // Midpoint at t=500ms interpolates smoothly even though t=0 has 3 pts and t=1000 has 4 pts
+    const mid = evaluateMotionPathBindingAtTime(mp, 500, evaluateEasing);
+    expect(mid.points.length).toBe(4);
+    expect(mid.points[0].y).toBeGreaterThan(70);
+    expect(mid.points[0].y).toBeLessThan(200);
+
+    // Direct canvas edit at t=500ms creates a 3rd shape keyframe
+    const editedMid = mid.points.map((pt, idx) => (idx === 0 ? { ...pt, y: 150 } : pt));
+    const afterEdit = applyMotionPathEditAtTime(mp, 500, editedMid, evaluateEasing);
+    expect(afterEdit.pathKeyframes?.length).toBe(3);
+    expect(evaluateMotionPathBindingAtTime(afterEdit, 500, evaluateEasing).points[0].y).toBeCloseTo(150, 1);
+
+    // Remove midpoint shape key restores 2 keys
+    const midKf = afterEdit.pathKeyframes!.find((kf) => Math.abs(kf.timeMs - 500) <= 15)!;
+    const afterRemove = removeMotionPathShapeKeyframe(afterEdit, midKf.id);
+    expect(afterRemove.pathKeyframes?.length).toBe(2);
+
+    // Reverse also reverses keyframed shapes
+    const reversed = reverseMotionPathPoints(afterRemove);
+    expect(reversed.pathKeyframes?.[1].points[0].x).toBeCloseTo(460, 1);
+
+    // Validate project with pathKeyframes
+    let clip = createAnimationClip({ pageId: page.id, name: 'Morphing Path', durationMs: 1000 });
+    clip = upsertMotionPathInClip(clip, afterRemove, { ensureProgressTrack: true });
+    project.animations = [clip];
+    const validation = validateProject(project);
+    expect(validation.ok).toBe(true);
+  });
+
+  it('animates independent motionPathStart, motionPathEnd, and motionPathOffset channels across evaluator, CSS, and SVG SMIL', () => {
+    const project = createInitialProject('Animated MP Channels');
+    const page = getActivePage(project);
+    const box = createRectNode(0);
+    box.id = 'channel-box';
+    box.x = 0;
+    box.y = 0;
+    box.width = 40;
+    box.height = 40;
+    page.document.nodes = [box];
+
+    // Straight horizontal path from (0, 100) to (400, 100)
+    const mp: MotionPathBinding = {
+      id: 'mp-ch',
+      targetNodeId: box.id,
+      points: [
+        { id: 'ch-p0', x: 0, y: 100, pointType: 'corner' },
+        { id: 'ch-p1', x: 400, y: 100, pointType: 'corner' },
+      ],
+      closed: false,
+      autoOrient: false,
+      orientOffsetDeg: 0,
+      reverse: false,
+      constantSpeed: true,
+      startPct: 0,
+      endPct: 100,
+      offsetPx: 0,
+      loopMode: 'none',
+      visible: true,
+    };
+
+    let clip = createAnimationClip({ pageId: page.id, name: 'Channels', durationMs: 1000 });
+    clip = upsertMotionPathInClip(clip, mp, { ensureProgressTrack: false });
+    // Keep progress fixed at 50%, animate startPct 0->50, endPct 100->100, offsetPx 0->40
+    const pTrack = addTrackToClip(clip, box, 'motionPathProgress');
+    clip = upsertKeyframeInClip(pTrack.clip, pTrack.trackId, 0, 50, 'linear').clip;
+    clip = upsertKeyframeInClip(clip, pTrack.trackId, 1000, 50, 'linear').clip;
+
+    const sTrack = addTrackToClip(clip, box, 'motionPathStart');
+    clip = upsertKeyframeInClip(sTrack.clip, sTrack.trackId, 0, 0, 'linear').clip;
+    clip = upsertKeyframeInClip(clip, sTrack.trackId, 1000, 50, 'linear').clip;
+
+    const oTrack = addTrackToClip(clip, box, 'motionPathOffset');
+    clip = upsertKeyframeInClip(oTrack.clip, oTrack.trackId, 0, 0, 'linear').clip;
+    clip = upsertKeyframeInClip(clip, oTrack.trackId, 1000, 40, 'linear').clip;
+
+    project.animations = [clip];
+    expect(validateProject(project).ok).toBe(true);
+
+    // At t=0: start=0, end=100, progress=50% => center (200, 100) => node.x=180, node.y=80
+    const doc0 = applyAnimatedPosesToDocument(page.document, evaluateClipAtTime(clip, 0));
+    const n0 = doc0.nodes.find((n) => n.id === box.id)!;
+    expect(n0.x).toBeCloseTo(180, 1);
+    expect(n0.y).toBeCloseTo(80, 1);
+
+    // At t=1000: start=50, end=100, progress=50% => 75% along [0..400] => center (300, 140) => node.x=280, node.y=120
+    const doc1 = applyAnimatedPosesToDocument(page.document, evaluateClipAtTime(clip, 1000));
+    const n1 = doc1.nodes.find((n) => n.id === box.id)!;
+    expect(n1.x).toBeCloseTo(280, 1);
+    expect(n1.y).toBeCloseTo(120, 1);
+
+    // CSS & SVG SMIL export include the animated translation delta
+    const css = compilePageAnimationsCss(project, page);
+    expect(css).toContain('translate(180px, 80px)');
+    expect(css).toContain('280');
+    expect(css).toContain('120px');
+
+    const smil = buildNodeSvgSmilAnimations(box, clip, page.document.nodes);
+    expect(smil).not.toBeNull();
+    expect(smil!.wrapperSmilMarkup).toContain('animateTransform');
+  });
+
+  it('staggers multiple selected objects sequentially for both Motion Path and Trim Path (forward & reverse)', () => {
+    const project = createInitialProject('Multi-Object Stagger');
+    const page = getActivePage(project);
+    const n1 = createRectNode(0); n1.id = 'item-1'; n1.x = 40; n1.y = 40;
+    const n2 = createRectNode(1); n2.id = 'item-2'; n2.x = 40; n2.y = 120;
+    const n3 = createRectNode(2); n3.id = 'item-3'; n3.x = 40; n3.y = 200;
+    page.document.nodes = [n1, n2, n3];
+
+    let clip = createAnimationClip({ pageId: page.id, name: 'Stagger', durationMs: 1000 });
+    clip = applyStaggeredMotionPathInClip(clip, [n1, n2, n3], {
+      staggerMs: 150,
+      travelDurationMs: 1000,
+      order: 'selection',
+    });
+
+    expect(clip.motionPaths?.length).toBe(3);
+    expect(clip.durationMs).toBeGreaterThanOrEqual(1300);
+    const t1 = clip.tracks.find((t) => t.targetNodeId === 'item-1' && t.property === 'motionPathProgress');
+    const t2 = clip.tracks.find((t) => t.targetNodeId === 'item-2' && t.property === 'motionPathProgress');
+    const t3 = clip.tracks.find((t) => t.targetNodeId === 'item-3' && t.property === 'motionPathProgress');
+    // item-1 runs 0 -> 1000; item-2 holds at 0 until 150 -> 1150; item-3 holds at 0 until 300 -> 1300
+    expect(t1?.keyframes[0].timeMs).toBe(0);
+    expect(t2?.keyframes.some((kf) => kf.timeMs === 150 && kf.value === 0)).toBe(true);
+    expect(t2?.keyframes[t2.keyframes.length - 1].timeMs).toBe(1150);
+    expect(t3?.keyframes.some((kf) => kf.timeMs === 300 && kf.value === 0)).toBe(true);
+    expect(t3?.keyframes[t3.keyframes.length - 1].timeMs).toBe(1300);
+
+    // Reverse stagger on Trim Path
+    const trimClip = applyStaggeredTrimPathInClip(
+      createAnimationClip({ pageId: page.id, name: 'Trim Stagger', durationMs: 800 }),
+      [n1, n2, n3],
+      'draw-in',
+      'sequential',
+      { staggerMs: 200, strokeDurationMs: 800, order: 'reverse' },
+    );
+    const tr1 = trimClip.tracks.find((t) => t.targetNodeId === 'item-1' && t.property === 'trimEnd');
+    const tr3 = trimClip.tracks.find((t) => t.targetNodeId === 'item-3' && t.property === 'trimEnd');
+    // Reverse order => item-3 starts at 0ms -> 800ms, item-1 holds until 400ms -> 1200ms
+    expect(tr3?.keyframes[0].timeMs).toBe(0);
+    expect(tr3?.keyframes[tr3.keyframes.length - 1].timeMs).toBe(800);
+    expect(tr1?.keyframes.some((kf) => kf.timeMs === 400 && kf.value === 0)).toBe(true);
+    expect(tr1?.keyframes[tr1.keyframes.length - 1].timeMs).toBe(1200);
+    expect(tr1?.trimMode).toBe('sequential');
+  });
+
+  it('maintains React TSX export parity for animated Master Components with combined Shape Morph + Trim Path + Motion Path', () => {
+    const project = createInitialProject('Master Parity');
+    const page = getActivePage(project);
+
+    const masterShape = createRectNode(0);
+    masterShape.id = 'master-icon';
+    masterShape.name = 'Master Icon';
+    masterShape.x = 20;
+    masterShape.y = 20;
+    masterShape.width = 80;
+    masterShape.height = 80;
+    masterShape.style = { ...masterShape.style, fill: '#3b82f6', stroke: '#ffffff', strokeWidth: 3 };
+
+    const masterMp = createDefaultMotionPathForNode(masterShape);
+    let compClip = createAnimationClip({ pageId: 'comp-page', name: 'Icon Anim', durationMs: 1200, autoplay: true, loop: true });
+    compClip = upsertMotionPathInClip(compClip, masterMp, { ensureProgressTrack: true });
+    compClip = enableTrimPathInClip(compClip, masterShape, 'draw-in', 'simultaneous');
+    const mTrack = addTrackToClip(compClip, masterShape, 'pathMorph');
+    compClip = upsertKeyframeInClip(mTrack.clip, mTrack.trackId, 0, extractMorphSnapshotFromNode(masterShape)!, 'ease-in-out').clip;
+    compClip = upsertKeyframeInClip(compClip, mTrack.trackId, 1200, createMorphPresetSnapshot('star', 80, 80), 'ease-in-out').clip;
+
+    const now = new Date().toISOString();
+    project.components = [
+      {
+        id: 'comp-animated-badge',
+        name: 'Animated Badge',
+        scope: 'global',
+        createdAt: now,
+        updatedAt: now,
+        document: {
+          id: 'doc-comp-badge',
+          name: 'Animated Badge',
+          width: 160,
+          height: 160,
+          background: 'transparent',
+          nodes: [masterShape],
+        },
+        animations: [compClip],
+      },
+    ];
+
+    page.document.nodes = [
+      {
+        id: 'inst-1',
+        type: 'component-instance',
+        name: 'Animated Badge Instance',
+        componentId: 'comp-animated-badge',
+        x: 100,
+        y: 100,
+        width: 160,
+        height: 160,
+        visible: true,
+        locked: false,
+        rotation: 0,
+        opacity: 1,
+        overrides: {},
+      },
+    ];
+
+    const reactFiles = compileReactProjectFiles(project);
+    const compFile = reactFiles.find((f) => f.path.includes('AnimatedBadge') && f.path.endsWith('.tsx'));
+    const pageFile = reactFiles.find((f) => f.path.includes('src/pages/') && f.path.endsWith('.tsx'));
+    const morphHookFile = reactFiles.find((f) => f.path === 'src/motion/useFolioShapeMorph.ts');
+    const pageAnimCss = compilePageAnimationsCss(project, page);
+    expect(compFile).toBeDefined();
+    expect(pageFile).toBeDefined();
+    expect(morphHookFile).toBeDefined();
+
+    // Master Component JSX emits scoped IDs, morph target attribute, AND trim contour attribute!
+    expect(compFile!.content).toContain('scopedId');
+    expect(compFile!.content).toContain('data-folio-morph-path="true"');
+    expect(compFile!.content).toContain('data-folio-trim-contour="0"');
+    // Page JSX passes instanceId="inst-1" so scoped CSS matches 1:1
+    expect(pageFile!.content).toContain('instanceId="inst-1"');
+    // Compiled CSS includes the component's scoped keyframes
+    expect(pageAnimCss).toContain('inst-1__master-icon');
+  });
+});
+

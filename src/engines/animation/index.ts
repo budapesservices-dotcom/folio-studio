@@ -27,6 +27,8 @@ export {
   addTrackToClip,
   applyAnimatedPosesToDocument,
   applyAutoKeyFromNodeChange,
+  applyStaggeredMotionPathInClip,
+  applyStaggeredTrimPathInClip,
   buildPresetClipForPage,
   captureNodeKeyframeSnapshot,
   createAnimationClip,

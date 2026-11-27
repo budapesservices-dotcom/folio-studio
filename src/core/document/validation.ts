@@ -1394,6 +1394,9 @@ const ANIMATABLE_PROPERTIES_SET = new Set([
   'strokeWidth',
   'pathMorph',
   'motionPathProgress',
+  'motionPathStart',
+  'motionPathEnd',
+  'motionPathOffset',
   'trimStart',
   'trimEnd',
   'trimOffset',
@@ -1540,6 +1543,8 @@ export function isAnimationClip(value: unknown): value is import('./types').Anim
         if ((track.property === 'trimStart' || track.property === 'trimEnd') && (kf.value < 0 || kf.value > 100)) return false;
         if (track.property === 'trimOffset' && (kf.value < -1000 || kf.value > 1000)) return false;
         if (track.property === 'motionPathProgress' && (kf.value < -1000 || kf.value > 1000)) return false;
+        if ((track.property === 'motionPathStart' || track.property === 'motionPathEnd') && (kf.value < 0 || kf.value > 100)) return false;
+        if (track.property === 'motionPathOffset' && (kf.value < -4000 || kf.value > 4000)) return false;
         if ((track.property === 'layerBlur' || track.property === 'backdropBlur' || track.property === 'shadowBlur') && (kf.value < 0 || kf.value > 200)) return false;
         if ((track.property === 'shadowOffsetX' || track.property === 'shadowOffsetY') && (kf.value < -500 || kf.value > 500)) return false;
         if (track.property === 'shadowSpread' && (kf.value < -100 || kf.value > 100)) return false;
@@ -1573,6 +1578,24 @@ export function isAnimationClip(value: unknown): value is import('./types').Anim
         (mp.visible !== undefined && typeof mp.visible !== 'boolean')
       ) {
         return false;
+      }
+      if (mp.pathKeyframes !== undefined) {
+        if (!Array.isArray(mp.pathKeyframes) || mp.pathKeyframes.length > 128) return false;
+        const pkfIds = new Set<string>();
+        for (const pkf of mp.pathKeyframes) {
+          if (
+            !isRecord(pkf) ||
+            !isString(pkf.id) || pkf.id.trim().length === 0 || pkf.id.length > 128 ||
+            !isFiniteNumber(pkf.timeMs) || pkf.timeMs < 0 || pkf.timeMs > value.durationMs ||
+            !Array.isArray(pkf.points) || pkf.points.length < 2 || pkf.points.length > 500 ||
+            !pkf.points.every(isVectorAnchorPoint) ||
+            (pkf.easing !== undefined && !isAnimationEasing(pkf.easing))
+          ) {
+            return false;
+          }
+          if (pkfIds.has(pkf.id)) return false;
+          pkfIds.add(pkf.id);
+        }
       }
       if (mpIds.has(mp.id) || mpTargets.has(mp.targetNodeId)) return false;
       mpIds.add(mp.id);

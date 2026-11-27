@@ -46,7 +46,11 @@ import {
 } from './canvasHelpers';
 import { hitTestNodesAtPoint } from './hitTest';
 import { CanvasInteractiveOverlays, type HoveredAutoLayoutHandle } from './CanvasOverlays';
-import { MotionPathOverlay, type MotionPathPointSelection } from './MotionPathOverlay';
+import {
+  MotionPathOverlay,
+  type MorphCorrespondenceMeta,
+  type MotionPathPointSelection,
+} from './MotionPathOverlay';
 import { isAutoLayoutContainer } from './autoLayoutHandles';
 import { CanvasSceneLayer, type LiveEraserPreview } from './CanvasSceneLayer';
 import {
@@ -152,6 +156,8 @@ interface CanvasProps {
     binding: MotionPathBinding,
     options?: { coalesceKey?: string; description?: string },
   ) => void;
+  showMorphCorrespondence?: boolean;
+  morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
 }
 
 interface PanSession {
@@ -211,6 +217,8 @@ export function Canvas({
   selectedMotionPathPoint,
   onSelectMotionPathPoint,
   onUpdateMotionPath,
+  showMorphCorrespondence,
+  morphCorrespondenceMetaByNodeId,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -1970,6 +1978,8 @@ export function Canvas({
             selectedPoint={selectedMotionPathPoint}
             invZoom={invZoom}
             interactive={Boolean(onUpdateMotionPath)}
+            showMorphCorrespondence={showMorphCorrespondence}
+            morphCorrespondenceMetaByNodeId={morphCorrespondenceMetaByNodeId}
           />
 
           {inlineEditNode && inlineTextEdit && (
