@@ -27,7 +27,7 @@ export async function onRequest(context: CloudflarePagesFunctionContext): Promis
 }
 
 /**
- * TEMPORARY PREVIEW DIAGNOSTIC.
+ * TEMPORARY PREVIEW DIAGNOSTIC — environment refresh.
  * Reports only whether required variables/session markers exist; never returns
  * secret values. Remove after the Cloudflare Preview configuration is verified.
  */
