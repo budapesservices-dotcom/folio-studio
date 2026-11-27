@@ -35,7 +35,7 @@ export async function onRequestGet(context: CloudflarePagesFunctionContext): Pro
   const env = context.env ?? {};
   const headers = context.request.headers;
   const cookie = headers.get('cookie') ?? '';
-  const hasAccessCookie = /(?:^|;\\s*)CF_Authorization=/.test(cookie);
+  const hasAccessCookie = cookie.split(';').some((part) => part.trim().startsWith('CF_Authorization='));
   const hasAccessAssertion = Boolean(headers.get('cf-access-jwt-assertion')?.trim());
 
   if (!hasAccessCookie && !hasAccessAssertion) {
