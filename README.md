@@ -4,7 +4,7 @@ Folio is a lightweight-first visual development studio for interface design, int
 
 ## Local development
 
-Requirements: Node.js 24.11 or newer in the 24.x line, or Node.js 26.x; npm; and a modern browser.
+Requirements: Node.js 24.11 or newer in the 24.x line, or Node.js 26.x; npm; and a modern browsers.
 
 ```bash
 npm install
