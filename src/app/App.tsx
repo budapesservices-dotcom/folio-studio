@@ -22,7 +22,7 @@ import {
 } from '../core/document/pathStudio';
 import { parsePathMorphSnapshot } from '../core/document/pathMorph';
 import type { MorphCorrespondenceMeta, MotionPathPointSelection } from '../engines/canvas/MotionPathOverlay';
-import { evaluateEasing, upsertMotionPathInClip } from '../engines/animation';
+import { evaluateEasing, hasActiveMotionPathForNode, upsertMotionPathInClip } from '../engines/animation';
 import { InspectorPanel } from './InspectorPanel';
 import type { StudioClipboardPayload } from './nodeClipboard';
 import { createEditorState } from './editorReducer';
@@ -1028,6 +1028,11 @@ export function App() {
         onUpdateSelectedStyle={motionAutoKeyBridge.handleInspectorUpdateSelectedStyle}
         onTogglePropertyKeyframe={motion.togglePropertyKeyframe}
         isPropertyKeyedAtPlayhead={motion.isPropertyKeyedAtPlayhead}
+        positionLockedByMotionPath={Boolean(
+          motion.motionOpen &&
+          inspectorSelectedNode &&
+          hasActiveMotionPathForNode(motion.activeClip, inspectorSelectedNode.id),
+        )}
         onApplyAutoLayout={designSystem.applyAutoLayout}
         onConvertFrameLayoutMode={designSystem.convertFrameLayoutMode}
         onSwitchBreakpoint={designSystem.setActiveBreakpoint}

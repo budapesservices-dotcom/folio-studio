@@ -97,6 +97,7 @@ export function useWorkspaceMotionBridge(options: UseWorkspaceMotionBridgeOption
     onUpdateSelectedStyleFallback,
     onSampledColorOption,
     onCanvasInteraction,
+    onNotice,
   });
 
   const {

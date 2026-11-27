@@ -67,6 +67,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
     onUpdateSelectedStyle,
     onTogglePropertyKeyframe,
     isPropertyKeyedAtPlayhead,
+    positionLockedByMotionPath = false,
     onApplyAutoLayout,
     onConvertFrameLayoutMode,
     onSwitchBreakpoint,
@@ -255,6 +256,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
           selectedNode={selectedNode}
           parentNode={parentNode}
           studioActions={studioActions}
+          positionLockedByMotionPath={positionLockedByMotionPath}
           onUpdateSelected={onUpdateSelected}
           onApplyAutoLayout={onApplyAutoLayout}
           onCommitEdit={onCommitEdit}

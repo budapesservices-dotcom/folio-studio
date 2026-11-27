@@ -585,6 +585,7 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
           t.property !== 'trimStart' &&
           t.property !== 'trimEnd' &&
           t.property !== 'trimOffset' &&
+          !(nodeMotionPath && (t.property === 'x' || t.property === 'y')) &&
           !svgTargetedProps.has(t.property),
       );
       const svgTracks = nodeTracks.filter((t) => svgTargetedProps.has(t.property));
@@ -592,10 +593,14 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       const ancestorTracksForWrapper: AnimationTrack[] = [];
       let hasMotionPathAncestor = false;
       for (const anc of animatedAncestors) {
-        if (motionPathByNode.has(anc.id)) {
+        const ancHasMotionPath = motionPathByNode.has(anc.id);
+        if (ancHasMotionPath) {
           hasMotionPathAncestor = true;
         }
         for (const ancTrack of tracksByNode.get(anc.id) ?? []) {
+          if (ancHasMotionPath && (ancTrack.property === 'x' || ancTrack.property === 'y')) {
+            continue;
+          }
           if (
             ancTrack.property === 'x' ||
             ancTrack.property === 'y' ||

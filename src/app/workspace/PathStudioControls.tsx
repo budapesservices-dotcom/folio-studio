@@ -657,7 +657,7 @@ export function PathStudioControls({
       if (!motionBinding) {
         return 'Step 1: Add a Motion Path or pick an existing Path layer. Select 2+ layers to animate with sequential Stagger.';
       }
-      return 'Drag anchors & handles directly on Canvas · Alt+Click curve to insert · Use "+ Path Key" to animate curve shape over time.';
+      return 'Motion Path drives X/Y (no position conflicts) · Rotation, size, color & effects remain keyframeable · Drag anchors on Canvas or "+ Path Key".';
     }
     if (activeTab === 'shape-morph') {
       return 'Move playhead & pick a target shape or "+ Morph Key" · Toggle "Vertex #" to inspect start point (#1) and winding direction on Canvas.';

@@ -39,6 +39,7 @@ import {
   formatEasingLabel,
   getDefaultNodePropertyValue,
   groupClipTracksByNode,
+  hasActiveMotionPathForNode,
   inspectComponentMorphSource,
   moveLayerKeyframesInClip,
   removeLayerTracksFromClip,
@@ -205,6 +206,16 @@ export function MotionTimelinePanel({
   const [moreCoords, setMoreCoords] = useState<{ x: number; y: number } | null>(null);
   const [newTrackNodeId, setNewTrackNodeId] = useState<string>('');
   const [newTrackProperty, setNewTrackProperty] = useState<AnimatableProperty>('y');
+  const newTrackNodeHasMotionPath = useMemo(
+    () => Boolean(activeClip && newTrackNodeId && hasActiveMotionPathForNode(activeClip, newTrackNodeId)),
+    [activeClip, newTrackNodeId],
+  );
+
+  useEffect(() => {
+    if (newTrackNodeHasMotionPath && (newTrackProperty === 'x' || newTrackProperty === 'y')) {
+      setNewTrackProperty('rotation');
+    }
+  }, [newTrackNodeHasMotionPath, newTrackProperty]);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -1416,16 +1427,21 @@ export function MotionTimelinePanel({
               disabled={!activeClip}
               onChange={(event) => setNewTrackProperty(event.currentTarget.value as AnimatableProperty)}
             >
-              {ANIMATABLE_PROPERTIES.map((prop) => (
-                <option key={prop} value={prop}>
-                  {ANIMATABLE_PROPERTY_META[prop].label}
-                </option>
-              ))}
+              {ANIMATABLE_PROPERTIES.map((prop) => {
+                const lockedByPath = newTrackNodeHasMotionPath && (prop === 'x' || prop === 'y');
+                return (
+                  <option key={prop} value={prop} disabled={lockedByPath}>
+                    {lockedByPath
+                      ? `${ANIMATABLE_PROPERTY_META[prop].label} (Motion Path)`
+                      : ANIMATABLE_PROPERTY_META[prop].label}
+                  </option>
+                );
+              })}
             </select>
             <button
               type="button"
               class="mt-btn mt-add-track-btn"
-              disabled={!activeClip || !newTrackNodeId}
+              disabled={!activeClip || !newTrackNodeId || (newTrackNodeHasMotionPath && (newTrackProperty === 'x' || newTrackProperty === 'y'))}
               onClick={handleAddTrack}
               title="Add property animation track"
             >
@@ -1551,6 +1567,15 @@ export function MotionTimelinePanel({
                           title={targetNode ? `Select "${targetNode.name}" on canvas` : 'Missing layer'}
                         >
                           <span class="mt-track-node-name">{targetNode?.name ?? 'Missing layer'}</span>
+                          {hasActiveMotionPathForNode(activeClip, group.targetNodeId) && (
+                            <span
+                              class="mt-layer-path-tag"
+                              data-testid="mt-layer-path-badge"
+                              title="Position (X/Y) is controlled by Motion Path — rotation, size, color, and effects remain freely keyframeable"
+                            >
+                              PATH
+                            </span>
+                          )}
                           <span class="mt-layer-prop-count" title="Animated properties in this layer">
                             {group.tracks.length} {group.tracks.length === 1 ? 'prop' : 'props'}
                           </span>

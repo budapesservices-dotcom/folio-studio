@@ -417,6 +417,37 @@ function evaluateMorphTrackToGeometry(
 /**
  * Evaluates all tracks in an AnimationClip at `timeMs` (automatically wrapping if `clip.loop` is true).
  */
+export const MOTION_PATH_POSITION_PROPERTIES: readonly AnimatableProperty[] = Object.freeze([
+  'x',
+  'y',
+]);
+
+/**
+ * Returns `true` when `nodeId` is driven by an active Motion Path binding in `clip`.
+ * While active, Motion Path owns the layer's position (`x`, `y`) so independent X/Y
+ * keyframes are excluded to prevent transform conflicts — rotation, size, scale,
+ * opacity, color, stroke, morph, trim, and effects remain freely keyframeable.
+ */
+export function hasActiveMotionPathForNode(
+  clip: AnimationClip | null | undefined,
+  nodeId: string,
+): boolean {
+  if (!clip?.motionPaths || clip.motionPaths.length === 0) return false;
+  return clip.motionPaths.some((mp) => mp.targetNodeId === nodeId && mp.points.length >= 2);
+}
+
+/**
+ * Returns `true` when `property` (`x` or `y`) is locked because `nodeId` is driven
+ * by an active Motion Path binding in `clip`.
+ */
+export function isPropertyLockedByMotionPath(
+  clip: AnimationClip | null | undefined,
+  nodeId: string,
+  property: AnimatableProperty,
+): boolean {
+  return (property === 'x' || property === 'y') && hasActiveMotionPathForNode(clip, nodeId);
+}
+
 export function evaluateClipAtTime(
   clip: AnimationClip,
   timeMs: number,
@@ -427,8 +458,21 @@ export function evaluateClipAtTime(
       ? timeMs % clip.durationMs
       : clamp(timeMs, 0, clip.durationMs);
 
+  const motionPathNodeIds = new Set<string>(
+    (clip.motionPaths ?? [])
+      .filter((mp) => mp.points.length >= 2)
+      .map((mp) => mp.targetNodeId),
+  );
+
   const poses: Record<string, AnimatedNodePose> = {};
   for (const track of clip.tracks) {
+    // Defense-in-depth: Motion Path owns X/Y positioning; ignore any legacy X/Y tracks to prevent collision.
+    if (
+      (track.property === 'x' || track.property === 'y') &&
+      motionPathNodeIds.has(track.targetNodeId)
+    ) {
+      continue;
+    }
     if (track.property === 'pathMorph') {
       const morphGeom = evaluateMorphTrackToGeometry(track, effectiveTime);
       if (morphGeom) {
@@ -1088,6 +1132,9 @@ export function addTrackToClip(
   node: DesignNode,
   property: AnimatableProperty,
 ): { clip: AnimationClip; trackId: string } {
+  if (isPropertyLockedByMotionPath(clip, node.id, property)) {
+    return { clip, trackId: '' };
+  }
   const existing = clip.tracks.find((t) => t.targetNodeId === node.id && t.property === property);
   if (existing) return { clip, trackId: existing.id };
 
@@ -1261,9 +1308,16 @@ export function captureNodeKeyframeSnapshot(
     easing?: AnimationEasing;
   },
 ): { clip: AnimationClip; capturedProperties: readonly AnimatableProperty[] } {
-  const properties = options?.properties && options.properties.length > 0
+  const rawProperties = options?.properties && options.properties.length > 0
     ? [...options.properties]
     : getCoreAnimatablePropertiesForNode(node);
+  const lockPosition = hasActiveMotionPathForNode(clip, node.id);
+  const properties = lockPosition
+    ? rawProperties.filter((prop) => prop !== 'x' && prop !== 'y')
+    : rawProperties;
+  if (properties.length === 0) {
+    return { clip, capturedProperties: [] };
+  }
   const clampedTime = clamp(Math.round(timeMs), 0, clip.durationMs);
   const easing = options?.easing ?? 'ease-out';
   const baselineNode = options?.baselineNode;
@@ -1376,6 +1430,13 @@ export function togglePropertyKeyframeInClip(
     };
   }
 
+  if (isPropertyLockedByMotionPath(clip, node.id, property)) {
+    return {
+      action: 'removed',
+      clip,
+    };
+  }
+
   const { clip: nextClip } = captureNodeKeyframeSnapshot(clip, node, clampedTime, {
     baselineNode: options?.baselineNode,
     properties: [property],
@@ -1407,14 +1468,21 @@ export function applyAutoKeyFromNodeChange(
   recorded: boolean;
   changedProperties: AnimatableProperty[];
 } {
+  const lockPosition = hasActiveMotionPathForNode(clip, afterNode.id);
   const hasExistingMorphTrack = clip.tracks.some(
     (t) => t.targetNodeId === afterNode.id && t.property === 'pathMorph',
   );
-  const allProperties = getAnimatablePropertiesForNode(afterNode);
+  const allProperties = getAnimatablePropertiesForNode(afterNode).filter(
+    (prop) => !(lockPosition && (prop === 'x' || prop === 'y')),
+  );
   if (hasExistingMorphTrack && !allProperties.includes('pathMorph')) {
     allProperties.push('pathMorph');
   }
-  const corePropertySet = new Set(getCoreAnimatablePropertiesForNode(afterNode));
+  const corePropertySet = new Set(
+    getCoreAnimatablePropertiesForNode(afterNode).filter(
+      (prop) => !(lockPosition && (prop === 'x' || prop === 'y')),
+    ),
+  );
   const changedProperties: AnimatableProperty[] = [];
   for (const property of allProperties) {
     if (property === 'pathMorph' && !hasExistingMorphTrack && afterNode.type !== 'path') {
@@ -1442,8 +1510,19 @@ export function applyAutoKeyFromNodeChange(
       targetPropertySet.add(coreProp);
     }
   }
+  const trackOnlyPathStudioProps = new Set<AnimatableProperty>([
+    'motionPathProgress',
+    'motionPathStart',
+    'motionPathEnd',
+    'motionPathOffset',
+    'trimStart',
+    'trimEnd',
+    'trimOffset',
+  ]);
   for (const track of clip.tracks) {
     if (track.targetNodeId === afterNode.id) {
+      if (lockPosition && (track.property === 'x' || track.property === 'y')) continue;
+      if (trackOnlyPathStudioProps.has(track.property)) continue;
       targetPropertySet.add(track.property);
     }
   }
@@ -1598,14 +1677,20 @@ export function upsertMotionPathInClip(
     ? existingPaths.map((mp, i) => (i === idx ? binding : mp))
     : [...existingPaths, binding];
 
-  let nextTracks = clip.tracks;
+  // Strip any conflicting X/Y positioning tracks on this node — Motion Path is the sole position driver,
+  // while rotation, size, scale, opacity, color, morph, trim, and effects remain freely animatable.
+  let nextTracks = binding.points.length >= 2
+    ? clip.tracks.filter(
+        (t) => !(t.targetNodeId === binding.targetNodeId && (t.property === 'x' || t.property === 'y')),
+      )
+    : clip.tracks;
   if (options?.ensureProgressTrack) {
-    const hasProgress = clip.tracks.some(
+    const hasProgress = nextTracks.some(
       (t) => t.targetNodeId === binding.targetNodeId && t.property === 'motionPathProgress',
     );
     if (!hasProgress) {
       nextTracks = [
-        ...clip.tracks,
+        ...nextTracks,
         {
           id: createMotionId('track'),
           targetNodeId: binding.targetNodeId,

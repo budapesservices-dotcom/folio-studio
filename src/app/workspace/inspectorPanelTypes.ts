@@ -60,6 +60,7 @@ export interface InspectorPanelProps {
   onUpdateSelectedStyle: (patch: Record<string, string | number>, coalesceKey?: string) => void;
   onTogglePropertyKeyframe?: (nodeId: string, property: AnimatableProperty) => void;
   isPropertyKeyedAtPlayhead?: (nodeId: string, property: AnimatableProperty) => boolean;
+  positionLockedByMotionPath?: boolean;
   onApplyAutoLayout: (containerId: string) => void;
   onConvertFrameLayoutMode?: (containerId: string, mode: LayoutMode) => void;
   onSwitchBreakpoint?: (bp: BreakpointId) => void;

@@ -38,16 +38,21 @@ import {
 import {
   addTrackToClip,
   applyAnimatedPosesToDocument,
+  applyAutoKeyFromNodeChange,
   applyStaggeredMotionPathInClip,
   applyStaggeredTrimPathInClip,
   buildNodeSvgSmilAnimations,
   buildPresetClipForPage,
+  captureNodeKeyframeSnapshot,
   compilePageAnimationsCss,
   createAnimationClip,
   enableTrimPathInClip,
   evaluateClipAtTime,
   evaluateEasing,
+  hasActiveMotionPathForNode,
+  isPropertyLockedByMotionPath,
   setNodeTrimModeInClip,
+  togglePropertyKeyframeInClip,
   upsertKeyframeInClip,
   upsertMotionPathInClip,
 } from '../src/engines/animation';
@@ -723,5 +728,155 @@ describe('FOLIO Path Studio — Pro Upgrade (Morphing Paths, Channels, Stagger, 
     // Compiled CSS includes the component's scoped keyframes
     expect(pageAnimCss).toContain('inst-1__master-icon');
   });
+
+  it('prevents X/Y position keyframe conflicts when Motion Path is active while keeping rotation, size, color, and opacity animatable', () => {
+    const project = createInitialProject('Motion Path Position Ownership');
+    const page = getActivePage(project);
+    const box = createRectNode(0);
+    box.id = 'path-owned-box';
+    box.x = 100;
+    box.y = 100;
+    box.width = 60;
+    box.height = 60;
+    box.rotation = 0;
+    box.opacity = 1;
+    box.style = { ...box.style, fill: '#3B82F6' };
+    page.document.nodes = [box];
+
+    // 1. Pre-populate conflicting X/Y tracks alongside rotation & opacity
+    let clip = createAnimationClip({ pageId: page.id, name: 'No Collision', durationMs: 1000 });
+    clip = addTrackToClip(clip, box, 'x').clip;
+    clip = addTrackToClip(clip, box, 'y').clip;
+    clip = addTrackToClip(clip, box, 'rotation').clip;
+    clip = addTrackToClip(clip, box, 'opacity').clip;
+    expect(clip.tracks.some((t) => t.property === 'x')).toBe(true);
+    expect(clip.tracks.some((t) => t.property === 'y')).toBe(true);
+
+    // 2. Attach Motion Path -> conflicting X/Y tracks MUST be stripped, rotation & opacity preserved
+    const mp: MotionPathBinding = {
+      id: 'mp-no-collision',
+      targetNodeId: box.id,
+      points: [
+        { id: 'nc-0', x: 50, y: 200, pointType: 'corner' },
+        { id: 'nc-1', x: 450, y: 200, pointType: 'corner' },
+      ],
+      closed: false,
+      autoOrient: false,
+      orientOffsetDeg: 0,
+      reverse: false,
+      constantSpeed: true,
+      startPct: 0,
+      endPct: 100,
+      offsetPx: 0,
+      loopMode: 'none',
+      visible: true,
+    };
+    clip = upsertMotionPathInClip(clip, mp, { ensureProgressTrack: true });
+
+    expect(hasActiveMotionPathForNode(clip, box.id)).toBe(true);
+    expect(isPropertyLockedByMotionPath(clip, box.id, 'x')).toBe(true);
+    expect(isPropertyLockedByMotionPath(clip, box.id, 'y')).toBe(true);
+    expect(isPropertyLockedByMotionPath(clip, box.id, 'rotation')).toBe(false);
+    expect(isPropertyLockedByMotionPath(clip, box.id, 'width')).toBe(false);
+    expect(isPropertyLockedByMotionPath(clip, box.id, 'fill')).toBe(false);
+    expect(clip.tracks.some((t) => t.property === 'x' || t.property === 'y')).toBe(false);
+    expect(clip.tracks.some((t) => t.property === 'rotation')).toBe(true);
+    expect(clip.tracks.some((t) => t.property === 'opacity')).toBe(true);
+    expect(clip.tracks.some((t) => t.property === 'motionPathProgress')).toBe(true);
+
+    // 3. Direct addTrackToClip & togglePropertyKeyframeInClip block X/Y but allow fill/width/rotation
+    const blockedX = addTrackToClip(clip, box, 'x');
+    const blockedY = addTrackToClip(clip, box, 'y');
+    expect(blockedX.trackId).toBe('');
+    expect(blockedY.trackId).toBe('');
+    expect(blockedX.clip).toBe(clip);
+
+    const toggledX = togglePropertyKeyframeInClip(clip, box, 'x', 500, { baselineNode: box });
+    expect(toggledX.clip.tracks.some((t) => t.property === 'x')).toBe(false);
+
+    const addedFill = addTrackToClip(clip, box, 'fill');
+    expect(addedFill.trackId).not.toBe('');
+    clip = addedFill.clip;
+
+    // 4. captureNodeKeyframeSnapshot (+ Key) captures rotation/size/color/opacity, NEVER x/y
+    const snapRes = captureNodeKeyframeSnapshot(clip, box, 500, { baselineNode: box });
+    expect(snapRes.capturedProperties).not.toContain('x');
+    expect(snapRes.capturedProperties).not.toContain('y');
+    expect(snapRes.capturedProperties).toContain('rotation');
+    expect(snapRes.capturedProperties).toContain('width');
+    expect(snapRes.capturedProperties).toContain('fill');
+    clip = snapRes.clip;
+    expect(clip.tracks.some((t) => t.property === 'x' || t.property === 'y')).toBe(false);
+
+    // 5. Auto-Key ignores pure X/Y drag, and when resizing/rotating + shifting X/Y only records non-position props
+    const onlyMoved = { ...box, x: 320, y: 420 };
+    const autoMoved = applyAutoKeyFromNodeChange(clip, box, onlyMoved, 500, { baselineNode: box });
+    expect(autoMoved.recorded).toBe(false);
+    expect(autoMoved.changedProperties).toEqual([]);
+
+    const resizedAndRotated = {
+      ...box,
+      x: 240,
+      y: 260,
+      width: 110,
+      rotation: 90,
+      style: { ...box.style, fill: '#EF4444' },
+    };
+    const autoMixed = applyAutoKeyFromNodeChange(clip, box, resizedAndRotated, 500, { baselineNode: box });
+    expect(autoMixed.recorded).toBe(true);
+    expect(autoMixed.changedProperties).toContain('width');
+    expect(autoMixed.changedProperties).toContain('rotation');
+    expect(autoMixed.changedProperties).toContain('fill');
+    expect(autoMixed.changedProperties).not.toContain('x');
+    expect(autoMixed.changedProperties).not.toContain('y');
+    expect(autoMixed.clip.tracks.some((t) => t.property === 'x' || t.property === 'y')).toBe(false);
+    clip = autoMixed.clip;
+
+    // 6. Defense-in-depth: even if a legacy .flop file manually injects X/Y tracks alongside Motion Path,
+    //    evaluator, CSS codegen, and SVG SMIL all honor Motion Path exclusively!
+    const legacyConflictClip = {
+      ...clip,
+      tracks: [
+        ...clip.tracks,
+        {
+          id: 'legacy-x',
+          targetNodeId: box.id,
+          property: 'x' as const,
+          keyframes: [
+            { id: 'lx0', timeMs: 0, value: 999, easing: 'linear' as const },
+            { id: 'lx1', timeMs: 1000, value: 1999, easing: 'linear' as const },
+          ],
+        },
+        {
+          id: 'legacy-y',
+          targetNodeId: box.id,
+          property: 'y' as const,
+          keyframes: [
+            { id: 'ly0', timeMs: 0, value: 888, easing: 'linear' as const },
+            { id: 'ly1', timeMs: 1000, value: 1888, easing: 'linear' as const },
+          ],
+        },
+      ],
+    };
+
+    const poseMid = evaluateClipAtTime(legacyConflictClip, 500)[box.id];
+    expect(poseMid.x).toBeUndefined();
+    expect(poseMid.y).toBeUndefined();
+    expect(poseMid.motionPathCenterX).toBeCloseTo(250, 1);
+    expect(poseMid.motionPathCenterY).toBeCloseTo(200, 1);
+    expect(poseMid.rotation).toBeCloseTo(90, 1);
+    expect(poseMid.width).toBeCloseTo(110, 1);
+
+    project.animations = [legacyConflictClip];
+    const css = compilePageAnimationsCss(project, page);
+    expect(css).not.toContain('899px');
+    expect(css).not.toContain('1899px');
+    expect(css).toContain('rotate(90deg)');
+
+    const smil = buildNodeSvgSmilAnimations(box, legacyConflictClip, page.document.nodes);
+    expect(smil).not.toBeNull();
+    expect(smil!.wrapperSmilMarkup).not.toContain('899');
+  });
 });
+
 

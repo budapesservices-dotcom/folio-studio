@@ -1,4 +1,5 @@
 import type { DesignNode } from '../../core/document/types';
+import { hasActiveMotionPathForNode } from '../../engines/animation';
 import type { ValidatedToolOperation } from '../../engines/canvas/geometryEngine';
 import type { ToolOperationExecutor } from '../toolOperationExecutor';
 import type { MotionPlaybackController } from './useMotionPlayback';
@@ -13,6 +14,7 @@ export interface MotionAutoKeyBridgeOptions {
   onUpdateSelectedStyleFallback: (patch: Record<string, string | number>) => void;
   onSampledColorOption: (color: string, target: 'fill' | 'stroke') => void;
   onCanvasInteraction: () => void;
+  onNotice?: (message: string) => void;
 }
 
 export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
@@ -26,7 +28,17 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
     onUpdateSelectedStyleFallback,
     onSampledColorOption,
     onCanvasInteraction,
+    onNotice,
   } = options;
+
+  const isNodePositionLockedByMotionPath = (nodeId: string): boolean =>
+    Boolean(motion.motionOpen && hasActiveMotionPathForNode(motion.activeClip, nodeId));
+
+  const notifyMotionPathPositionLock = () => {
+    onNotice?.(
+      'Position (X/Y) is controlled by Motion Path. Edit path anchors on Canvas, or keyframe rotation, size, color, and effects.',
+    );
+  };
 
   const isDocumentMutatingOperation = (op: ValidatedToolOperation): boolean =>
     op.category === 'document-mutation';
@@ -65,6 +77,14 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
             onCanvasInteraction();
             continue;
           }
+          // If every transformed node is controlled by a Motion Path and no non-position
+          // property changed (e.g., user dragged X/Y on Canvas), block position mutation
+          // so X/Y never conflicts with the Motion Path trajectory.
+          if (payload.nodes.every((n) => isNodePositionLockedByMotionPath(n.id))) {
+            notifyMotionPathPositionLock();
+            onCanvasInteraction();
+            continue;
+          }
         } else if (payload.kind === 'sample-color' && payload.resolvedNodesToUpdate.length > 0) {
           const captured = motion.recordAutoKeyNodes(
             payload.resolvedNodesToUpdate,
@@ -99,6 +119,21 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
   const executeComponentToolOperations = createWorkspaceExecutor('component', componentToolOperationExecutor);
 
   const handleInspectorUpdateSelected = (patch: Partial<DesignNode>, coalesceKey?: string) => {
+    let effectivePatch = patch;
+    if (
+      inspectorSelectedNode &&
+      isNodePositionLockedByMotionPath(inspectorSelectedNode.id) &&
+      ('x' in patch || 'y' in patch)
+    ) {
+      const rest = { ...patch };
+      delete rest.x;
+      delete rest.y;
+      if (Object.keys(rest).length === 0) {
+        notifyMotionPathPositionLock();
+        return;
+      }
+      effectivePatch = rest;
+    }
     if (
       motion.motionOpen
       && !motion.autoKeyEnabled
@@ -114,7 +149,7 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
       if (motion.isPlaying) {
         motion.pause();
       }
-      const safePatch = { ...patch };
+      const safePatch = { ...effectivePatch };
       if ('width' in patch) {
         const nextW = Number(patch.width);
         safePatch.width = Number.isFinite(nextW) && nextW > 0 ? nextW : inspectorSelectedNode.width;
@@ -137,12 +172,12 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
         const res = motion.recordAutoKeyNodes([candidate], 'Auto-keyframe inspector edit', autoCoalesceKey);
         if (res.captured && res.keepCanonicalUnchanged) return;
       } else {
-        onUpdateSelectedFallback(patch);
+        onUpdateSelectedFallback(effectivePatch);
         motion.recordAutoKeyNodes([candidate], 'Sync 0.00s inspector keyframe', autoCoalesceKey);
         return;
       }
     }
-    onUpdateSelectedFallback(patch);
+    onUpdateSelectedFallback(effectivePatch);
   };
 
   const handleInspectorUpdateSelectedStyle = (

@@ -838,8 +838,8 @@ export function buildNodeSvgSmilAnimations(
     morphSmil = buildSvgPathMorphSmil(morphTrack, clip, node.x, node.y);
   }
 
-  const xTrack = trackByProp.get('x');
-  const yTrack = trackByProp.get('y');
+  const xTrack = nodeMotionPath ? undefined : trackByProp.get('x');
+  const yTrack = nodeMotionPath ? undefined : trackByProp.get('y');
   const widthTrack = trackByProp.get('width');
   const heightTrack = trackByProp.get('height');
   const rotTrack = trackByProp.get('rotation');

@@ -167,6 +167,7 @@ export interface InspectorSizePositionSectionProps {
   selectedNode: DesignNode;
   parentNode: DesignNode | null;
   studioActions?: StudioVectorActions;
+  positionLockedByMotionPath?: boolean;
   onUpdateSelected: (patch: Partial<DesignNode>) => void;
   onApplyAutoLayout: (containerId: string) => void;
   onCommitEdit: () => void;
@@ -176,6 +177,7 @@ export function InspectorSizePositionSection({
   selectedNode,
   parentNode,
   studioActions,
+  positionLockedByMotionPath = false,
   onUpdateSelected,
   onApplyAutoLayout,
   onCommitEdit,
@@ -594,6 +596,16 @@ export function InspectorSizePositionSection({
 
       {/* Canvas X / Y, Rotation, Flip, Transform Origin, Opacity & Z-Index */}
       <div class="inspector-acc-group">
+        {positionLockedByMotionPath && (
+          <div
+            class="inspector-motion-path-lock-banner"
+            data-testid="inspector-motion-path-pos-lock"
+            title="Position (X/Y) is driven by Motion Path to prevent keyframe conflicts. Rotation, size, color, opacity, and effects remain freely editable."
+          >
+            <span class="inspector-mp-lock-dot" aria-hidden="true" />
+            <span>Motion Path drives X / Y · Rot, size &amp; style active</span>
+          </div>
+        )}
         <div class="folio-dual-grid">
           <NumericUnitInput
             label="X"
@@ -605,6 +617,7 @@ export function InspectorSizePositionSection({
             max={8000}
             step={2}
             allowNegative
+            disabled={positionLockedByMotionPath}
             onPreview={(p) =>
               onUpdateSelected(computePositionPatchForOrigin(selectedNode, transformOrigin, 'x', p.value))
             }
@@ -623,6 +636,7 @@ export function InspectorSizePositionSection({
             max={8000}
             step={2}
             allowNegative
+            disabled={positionLockedByMotionPath}
             onPreview={(p) =>
               onUpdateSelected(computePositionPatchForOrigin(selectedNode, transformOrigin, 'y', p.value))
             }
