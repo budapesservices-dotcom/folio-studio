@@ -31,7 +31,7 @@ function json(body: unknown, status: number): Response {
   });
 }
 
-export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
+export async function onRequestPost(context: { request: Request; env: Env }): Promise<Response> {\n  const { request, env } = context;
   const startedAt = Date.now();
   const url = new URL(request.url);
 
@@ -51,7 +51,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   }
 
   const fetchSite = request.headers.get("sec-fetch-site");
-  if (fetchSite === "cross-site" || fetchSite === "same-site") {
+  if (fetchSite === "cross-site") {
     return json({ ok: false, error: "Cross-site requests are not allowed." }, 403);
   }
 
