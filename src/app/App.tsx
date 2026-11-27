@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { createInitialProject } from '../core/document/factory';
+import { getActiveApplication, getProjectApplications } from '../core/document/applications';
 import { getComponentOverrideTargets } from '../core/document/components';
 import { findCrossStudioNodeReferences, formatLayerDeletionCleanupNotice } from '../core/document/nodeReferenceCleanup';
 import { getActiveDocument, getActivePage } from '../core/document/project';
@@ -79,6 +80,8 @@ export function App() {
     const page = getActivePage(project);
     page.name = 'Component Canvas';
     page.document.name = 'Component Canvas';
+    page.document.width = 420;
+    page.document.height = 280;
     page.document.nodes = [];
     return createEditorState(project);
   }, []);
@@ -206,6 +209,8 @@ export function App() {
   // Derived active workspace context
   const pages = state.project.pages;
   const activePageId = state.project.activePageId;
+  const projectApplications = getProjectApplications(state.project);
+  const activeApplication = getActiveApplication(state.project);
   const ownedComponents = state.project.components;
   const focusedEditor = getActiveEditorContext(activeEditorId, state, componentState);
   const focusedDocument = focusedEditor.document;
@@ -393,36 +398,21 @@ export function App() {
 
   // Global keyboard shortcuts
   useWorkspaceShortcuts({
-    activeEditorId,
-    editingComponentId: componentMaster.editingComponentId,
-    state,
-    componentState,
-    isHydrating,
+    activeEditorId, editingComponentId: componentMaster.editingComponentId, state, componentState, isHydrating,
     componentDeletionDialogOpen: componentMaster.componentDeletionDialogOpen,
-    shortcutsModalOpen: dialogs.shortcutsModalOpen,
-    newProjectDialogOpen: dialogs.newProjectDialogOpen,
-    selectionSourceRef,
-    clipboardRef,
-    getCommandClient,
-    openShortcutsModal: dialogs.openShortcutsModal,
-    copySelection: selectionActions.copySelection,
-    cutSelection: selectionActions.cutSelection,
-    pasteSelection: selectionActions.pasteSelection,
-    duplicateSelection: selectionActions.duplicateSelection,
-    chooseCanvasTool,
-    setNotice,
+    shortcutsModalOpen: dialogs.shortcutsModalOpen, newProjectDialogOpen: dialogs.newProjectDialogOpen,
+    diagnosticsModalOpen: dialogs.diagnosticsModalOpen, projectLibraryOpen: dialogs.projectLibraryOpen, motionExportOpen,
+    selectionSourceRef, clipboardRef, getCommandClient, openShortcutsModal: dialogs.openShortcutsModal,
+    copySelection: selectionActions.copySelection, cutSelection: selectionActions.cutSelection,
+    pasteSelection: selectionActions.pasteSelection, duplicateSelection: selectionActions.duplicateSelection,
+    chooseCanvasTool, setNotice,
     onZoomStep: (target, action) => chromeActionsRef.current?.stepWorkspaceZoom(target, action),
     onArrangeOrder: (target, action) => selectionActions.handleArrangeOrder(target, action),
     onToggleSelectedProperty: (target, property) => {
-      const editor = target === 'main' ? state : componentState;
-      const primaryId = editor.selectedNodeIds[0];
-      if (!primaryId) return;
-      layers.toggleLayerPropertyFromRow(primaryId, property);
+      const primaryId = (target === 'main' ? state : componentState).selectedNodeIds[0];
+      if (primaryId) layers.toggleLayerPropertyFromRow(primaryId, property);
     },
-    onBeginLayerRename: (nodeId) => {
-      if (!windows.layersVisible) windows.setLayersVisible(true);
-      layers.beginLayerRename(nodeId, false);
-    },
+    onBeginLayerRename: (nodeId) => { if (!windows.layersVisible) windows.setLayersVisible(true); layers.beginLayerRename(nodeId, false); },
     onToggleFocusCanvas: () => chromeActionsRef.current?.toggleFocusCanvas(),
     onToggleStudioPanel: (panel) => chromeActionsRef.current?.toggleStudioPanel(panel),
   });
@@ -579,6 +569,7 @@ export function App() {
     setToolRackOpen,
     setActiveEditorId,
     setCodeWorkspaceOpen,
+    onResetComponentView: () => windows.centerComponentCanvasView(componentDocument?.width ?? 420, componentDocument?.height ?? 280),
     onCommitProjectName: pageActions.commitProjectName,
     setNotice,
   });
@@ -639,6 +630,7 @@ export function App() {
         codeWorkspaceOpen={codeWorkspaceOpen}
         motionTimelineOpen={motion.motionOpen}
         shortcutsModalOpen={dialogs.shortcutsModalOpen}
+        projectLibraryOpen={dialogs.projectLibraryOpen}
         toolbarHintStore={toolbarHintStore}
         onToggleMenu={(menu) => { setOpenMenu((current) => (current === menu ? null : menu)); setToolRackOpen(null); }}
         onCloseMenus={() => setOpenMenu(null)}
@@ -646,6 +638,8 @@ export function App() {
         onOpenProjectPicker={() => { if (isHydrating) return; setOpenMenu(null); projectFileInputRef.current?.click(); }}
         onProjectFileSelected={fileLifecycle.handleProjectFileSelected}
         onExportCurrentProject={() => { void fileLifecycle.exportCurrentProject(isHydrating); }}
+        onExportCurrentProjectArchive={() => { void fileLifecycle.exportCurrentProjectArchive(isHydrating); }}
+        onOpenProjectLibrary={dialogs.openProjectLibrary}
         onExportActiveCanvasSvg={() => { void fileLifecycle.exportActiveCanvasSvg(isHydrating); }}
         onExportActiveCanvasPng={() => { void fileLifecycle.exportActiveCanvasPng(isHydrating); }}
         onOpenMotionExport={() => setMotionExportOpen(true)}
@@ -987,43 +981,28 @@ export function App() {
       />
 
       <PagesRackPanel
-        panelRef={pagesRackRef}
-        open={windows.pagesRackOpen}
-        pages={pages}
-        activePageId={activePageId}
-        pageNameDraft={pageActions.pageNameDraft}
-        onFocus={() => windows.focusWindow('pages')}
-        onPageNameDraftChange={pageActions.setPageNameDraft}
-        onAddPage={pageActions.addPage}
-        onSwitchPage={pageActions.switchPage}
-        onClose={closePagesRack}
-        onNotice={setNotice}
+        panelRef={pagesRackRef} open={windows.pagesRackOpen} pages={pages} activePageId={activePageId}
+        applications={projectApplications} activeApplicationId={activeApplication.id}
+        onSelectApplication={pageActions.switchApplication} onCreateApplication={pageActions.addApplication}
+        pageNameDraft={pageActions.pageNameDraft} onFocus={() => windows.focusWindow('pages')}
+        onPageNameDraftChange={pageActions.setPageNameDraft} onAddPage={pageActions.addPage}
+        onSwitchPage={pageActions.switchPage} onClose={closePagesRack} onNotice={setNotice}
       />
 
       <ComponentRackPanel
-        panelRef={componentRackRef}
-        open={windows.componentRackOpen}
-        components={ownedComponents}
-        designTokens={designSystem.designTokens}
-        assets={state.project.assets}
-        searchQuery={componentRackSearch}
-        canSaveSelection={selectedNodes.length > 0}
-        renamingComponentId={componentMaster.renamingComponentId}
-        componentNameDraft={componentMaster.componentNameDraft}
-        onSearchChange={setComponentRackSearch}
+        panelRef={componentRackRef} open={windows.componentRackOpen} components={ownedComponents}
+        activeApplicationId={activeApplication.id} activeApplicationName={activeApplication.name}
+        onSetComponentScope={componentMaster.setComponentScope}
+        designTokens={designSystem.designTokens} assets={state.project.assets} searchQuery={componentRackSearch}
+        canSaveSelection={selectedNodes.length > 0} renamingComponentId={componentMaster.renamingComponentId}
+        componentNameDraft={componentMaster.componentNameDraft} onSearchChange={setComponentRackSearch}
         onCreateNewMaster={componentMaster.createNewMasterComponent}
         onSaveSelection={() => componentMaster.saveNodesAsComponent(focusedEditor.selectedNodes, focusedDocument.nodes)}
-        onClose={closeComponentRack}
-        onInsertComponent={pageActions.insertOwnedComponent}
+        onClose={closeComponentRack} onInsertComponent={pageActions.insertOwnedComponent}
         onEditMaster={componentMaster.openMasterComponent}
-        onStartRename={(component) => {
-          componentMaster.setRenamingComponentId(component.id);
-          componentMaster.setComponentNameDraft(component.name);
-        }}
-        onRenameDraftChange={componentMaster.setComponentNameDraft}
-        onCommitRename={componentMaster.renameComponent}
-        onCancelRename={() => componentMaster.setRenamingComponentId(null)}
-        onDuplicateComponent={componentMaster.duplicateComponent}
+        onStartRename={(c) => { componentMaster.setRenamingComponentId(c.id); componentMaster.setComponentNameDraft(c.name); }}
+        onRenameDraftChange={componentMaster.setComponentNameDraft} onCommitRename={componentMaster.renameComponent}
+        onCancelRename={() => componentMaster.setRenamingComponentId(null)} onDuplicateComponent={componentMaster.duplicateComponent}
         onDeleteComponent={(component) => { void componentMaster.deleteComponent(component); }}
         onToggleNodeLogic={(component) => designSystem.toggleComponentNodeLogic(component)}
       />
@@ -1145,36 +1124,27 @@ export function App() {
       />
 
       <WorkspaceModals
-        project={state.project}
-        activePage={activePage}
-        motionExportProject={motionExportProject}
-        motionExportPage={activeMotionPage}
-        pageClips={motion.pageClips}
-        activeClip={motion.activeClip}
-        breakpoint={designSystem.activeBreakpoint}
-        activeWorkspace={activeEditorId}
+        project={state.project} activePage={activePage} motionExportProject={motionExportProject}
+        motionExportPage={activeMotionPage} pageClips={motion.pageClips} activeClip={motion.activeClip}
+        breakpoint={designSystem.activeBreakpoint} activeWorkspace={activeEditorId}
         componentDeletionDialogOpen={componentMaster.componentDeletionDialogOpen}
-        newProjectDialogOpen={dialogs.newProjectDialogOpen}
-        newProjectBusyMode={dialogs.newProjectBusyMode}
-        newProjectError={dialogs.newProjectError}
-        newProjectModalHostRef={dialogs.newProjectModalHostRef}
+        newProjectDialogOpen={dialogs.newProjectDialogOpen} newProjectBusyMode={dialogs.newProjectBusyMode}
+        newProjectError={dialogs.newProjectError} newProjectModalHostRef={dialogs.newProjectModalHostRef}
         newProjectDialogRef={dialogs.newProjectDialogRef}
         onSaveAndCreateNewProject={() => { void dialogs.confirmNewProject('save'); }}
         onDeleteAndCreateNewProject={() => { void dialogs.confirmNewProject('delete'); }}
         onCancelNewProject={dialogs.closeNewProjectDialog}
-        motionExportOpen={motionExportOpen}
-        shortcutsModalOpen={dialogs.shortcutsModalOpen}
-        diagnosticsModalOpen={dialogs.diagnosticsModalOpen}
-        historyUndoCount={state.past.length}
-        historyRedoCount={state.future.length}
-        shortcutsModalHostRef={dialogs.shortcutsModalHostRef}
-        shortcutsDialogRef={dialogs.shortcutsDialogRef}
-        onNotice={setNotice}
-        onCloseMotionExport={() => setMotionExportOpen(false)}
-        onCloseShortcuts={dialogs.closeShortcutsModal}
-        onShortcutsReady={dialogs.handleShortcutsModalReady}
+        motionExportOpen={motionExportOpen} shortcutsModalOpen={dialogs.shortcutsModalOpen}
+        diagnosticsModalOpen={dialogs.diagnosticsModalOpen} projectLibraryOpen={dialogs.projectLibraryOpen}
+        historyUndoCount={state.past.length} historyRedoCount={state.future.length}
+        shortcutsModalHostRef={dialogs.shortcutsModalHostRef} shortcutsDialogRef={dialogs.shortcutsDialogRef}
+        onNotice={setNotice} onCloseMotionExport={() => setMotionExportOpen(false)}
+        onCloseShortcuts={dialogs.closeShortcutsModal} onShortcutsReady={dialogs.handleShortcutsModalReady}
         onOpenCodeStudio={() => { setActiveEditorId('main'); setCodeWorkspaceOpen(true); }}
         onCloseDiagnostics={() => dialogs.setDiagnosticsModalOpen(false)}
+        onLoadStoredProject={fileLifecycle.loadStoredProjectIntoWorkspace}
+        onOpenProjectFilePicker={() => { if (!isHydrating) projectFileInputRef.current?.click(); }}
+        onCloseProjectLibrary={dialogs.closeProjectLibrary}
       />
 
       <ProjectHydrationOverlay visible={isHydrating} />

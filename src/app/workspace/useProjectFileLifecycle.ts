@@ -23,6 +23,7 @@ import {
   getUtf8ByteLength,
   type LargestProjectAssetInfo,
 } from '../../core/persistence/projectFile';
+import { downloadProjectArchive, isZipArchiveBytes } from '../../core/persistence/flopArchive';
 import { estimateBase64DataUrlBytes } from '../../core/persistence/projectPortability';
 import { setRevisionFencedAutosaveStatus } from '../debouncedAutosave';
 import type { EditorTarget } from '../editorContext';
@@ -506,7 +507,7 @@ export function scanRawProjectFileBeforeParse(
 export async function validateRawProjectFileBeforeParse(
   file: File,
   maxContractBytes: number = MAX_PROJECT_SIZE,
-): Promise<PreParseFileValidationResult & { readonly rawContent: string | null }> {
+): Promise<PreParseFileValidationResult & { readonly rawContent: string | null; readonly isZipArchive?: boolean }> {
   if (typeof file.size === 'number' && Number.isFinite(file.size) && file.size > maxContractBytes) {
     const error = new ProjectFileSizeLimitError({
       direction: 'import',
@@ -527,11 +528,33 @@ export async function validateRawProjectFileBeforeParse(
     };
   }
 
+  // Detect archive-based `.flop` ZIP containers before JSON text scanning.
+  if (typeof file.slice === 'function' && typeof file.arrayBuffer === 'function') {
+    const headBuffer = await file.slice(0, 4).arrayBuffer();
+    if (isZipArchiveBytes(new Uint8Array(headBuffer))) {
+      const incomingFileBytes = typeof file.size === 'number' && Number.isFinite(file.size) ? file.size : 0;
+      return {
+        allowed: true,
+        incomingFileBytes,
+        totalRawAssetBytes: 0,
+        totalAssetsBytes: 0,
+        effectiveTotalBytes: incomingFileBytes,
+        maxContractBytes,
+        largestAsset: null,
+        error: null,
+        errorMessage: null,
+        rawContent: null,
+        isZipArchive: true,
+      };
+    }
+  }
+
   const rawContent = await file.text();
   const scan = scanRawProjectFileBeforeParse(rawContent, file.size, maxContractBytes);
   return {
     ...scan,
     rawContent: scan.allowed ? rawContent : null,
+    isZipArchive: false,
   };
 }
 
@@ -666,7 +689,7 @@ export function useProjectFileLifecycle({
   const handleProjectFileSelected = async (file: File): Promise<ProjectImportOutcome> => {
     try {
       const preParseCheck = await validateRawProjectFileBeforeParse(file, MAX_PROJECT_SIZE);
-      if (!preParseCheck.allowed || preParseCheck.rawContent === null) {
+      if (!preParseCheck.allowed || (!preParseCheck.isZipArchive && preParseCheck.rawContent === null)) {
         const errorMessage =
           preParseCheck.errorMessage ??
           new ProjectFileSizeLimitError({
@@ -679,11 +702,13 @@ export function useProjectFileLifecycle({
         return { ok: false, error: errorMessage };
       }
 
-      const preReadFile = {
-        name: file.name,
-        size: preParseCheck.incomingFileBytes,
-        text: async () => preParseCheck.rawContent as string,
-      } as File;
+      const preReadFile = preParseCheck.isZipArchive
+        ? file
+        : ({
+            name: file.name,
+            size: preParseCheck.incomingFileBytes,
+            text: async () => preParseCheck.rawContent as string,
+          } as File);
 
       let preImportWarning: string | null = null;
       const loaded = await openProjectFile(preReadFile, async (loadedProject) => {
@@ -746,6 +771,31 @@ export function useProjectFileLifecycle({
       console.error('Folio could not export the current project:', error);
       const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
       setNotice('Unable to export project: ' + detail);
+      return { ok: false, error: detail };
+    }
+  };
+
+  const exportCurrentProjectArchive = async (
+    isHydrating: boolean,
+  ): Promise<NewProjectExportResult> => {
+    setFileMenuOpen(false);
+    if (isHydrating) {
+      return { ok: false, error: 'Wait for the workspace to finish loading before exporting.' };
+    }
+    try {
+      const exportSnapshot = createProjectExportSnapshot(
+        project,
+        getEditingComponentId(),
+        componentProject,
+      );
+      const portableSnapshot = await materializeProjectAssetsForExport(exportSnapshot);
+      downloadProjectArchive(portableSnapshot);
+      setNotice('Project exported successfully as a .flop ZIP archive.');
+      return { ok: true };
+    } catch (error) {
+      console.error('Folio could not export the project archive:', error);
+      const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
+      setNotice('Unable to export .flop archive: ' + detail);
       return { ok: false, error: detail };
     }
   };
@@ -869,11 +919,24 @@ export function useProjectFileLifecycle({
     }
   };
 
+  const loadStoredProjectIntoWorkspace = async (nextProject: FolioProject) => {
+    if ('indexedDB' in globalThis) {
+      await saveProjectAndActivate(nextProject);
+    }
+    mainCommandClient.replaceProject(nextProject, 'Open local project');
+    setActiveEditorId('main');
+    onResetEditingComponent();
+    setComponentCanvasClosed(true);
+    setComponentCanvasMinimized(false);
+  };
+
   return {
     isProjectLoaded,
     saveStatus,
     handleProjectFileSelected,
     exportCurrentProject,
+    exportCurrentProjectArchive,
+    loadStoredProjectIntoWorkspace,
     createNewProject,
     exportActiveCanvasSvg,
     exportActiveCanvasPng,

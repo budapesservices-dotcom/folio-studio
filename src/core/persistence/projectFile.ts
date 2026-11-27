@@ -14,6 +14,7 @@ import {
   getUtf8ByteLength,
   type LargestProjectAssetInfo,
 } from './projectPortability';
+import { isZipArchiveBytes, parseFlopZipArchive } from './flopArchive';
 
 export {
   MAX_PROJECT_FILE_BYTES,
@@ -110,6 +111,8 @@ export function parseProjectJsonSafe(content: string): unknown {
   });
 }
 
+const utf8Decoder = new TextDecoder();
+
 export async function readProjectFile(file: File): Promise<FolioProject> {
   if (typeof file.size === 'number' && file.size > MAX_PROJECT_FILE_BYTES) {
     throw new ProjectFileSizeLimitError({
@@ -119,7 +122,25 @@ export async function readProjectFile(file: File): Promise<FolioProject> {
     });
   }
 
-  const content = await file.text();
+  let content: string;
+  if (typeof file.arrayBuffer === 'function') {
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    if (bytes.byteLength > MAX_PROJECT_FILE_BYTES) {
+      throw new ProjectFileSizeLimitError({
+        direction: 'import',
+        actualBytes: bytes.byteLength,
+        maxBytes: MAX_PROJECT_FILE_BYTES,
+      });
+    }
+    if (isZipArchiveBytes(bytes)) {
+      return parseFlopZipArchive(bytes);
+    }
+    content = utf8Decoder.decode(bytes);
+  } else {
+    content = await file.text();
+  }
+
   const actualBytes = getUtf8ByteLength(content);
   if (actualBytes > MAX_PROJECT_FILE_BYTES) {
     throw new ProjectFileSizeLimitError({

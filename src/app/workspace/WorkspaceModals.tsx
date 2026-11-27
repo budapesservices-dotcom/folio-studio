@@ -4,10 +4,15 @@ import type { AnimationClip, BreakpointId, FolioPage, FolioProject } from '../..
 import type { EditorTarget } from '../editorContext';
 import type { KeyboardShortcutsModalProps } from '../KeyboardShortcutsModal';
 import { summarizeProjectForNewProjectDialog, type NewProjectActionMode } from '../newProjectFlow';
-import { MotionExportModal } from './MotionExportModal';
 import { NewProjectConfirmDialog } from './NewProjectConfirmDialog';
 
+const LazyMotionExportModal = lazy(() =>
+  import('./MotionExportModal').then((module) => ({ default: module.MotionExportModal })),
+);
 const LazyDiagnosticsModal = lazy(() => import('./DiagnosticsModal'));
+const LazyProjectLibraryModal = lazy(() =>
+  import('./ProjectLibraryModal').then((module) => ({ default: module.ProjectLibraryModal })),
+);
 const LazyKeyboardShortcutsModal = lazy(async () => {
   const module = await import('../KeyboardShortcutsModal');
   return {
@@ -42,6 +47,7 @@ export interface WorkspaceModalsProps {
   motionExportOpen: boolean;
   shortcutsModalOpen: boolean;
   diagnosticsModalOpen: boolean;
+  projectLibraryOpen?: boolean;
   historyUndoCount: number;
   historyRedoCount: number;
   shortcutsModalHostRef: { current: HTMLDivElement | null };
@@ -52,6 +58,9 @@ export interface WorkspaceModalsProps {
   onShortcutsReady: () => void;
   onOpenCodeStudio: () => void;
   onCloseDiagnostics: () => void;
+  onLoadStoredProject?: (project: FolioProject) => Promise<void>;
+  onOpenProjectFilePicker?: () => void;
+  onCloseProjectLibrary?: () => void;
 }
 
 export function WorkspaceModals(props: WorkspaceModalsProps) {
@@ -76,6 +85,7 @@ export function WorkspaceModals(props: WorkspaceModalsProps) {
     motionExportOpen,
     shortcutsModalOpen,
     diagnosticsModalOpen,
+    projectLibraryOpen = false,
     historyUndoCount,
     historyRedoCount,
     shortcutsModalHostRef,
@@ -86,6 +96,9 @@ export function WorkspaceModals(props: WorkspaceModalsProps) {
     onShortcutsReady,
     onOpenCodeStudio,
     onCloseDiagnostics,
+    onLoadStoredProject,
+    onOpenProjectFilePicker,
+    onCloseProjectLibrary,
   } = props;
 
   return (
@@ -104,16 +117,18 @@ export function WorkspaceModals(props: WorkspaceModalsProps) {
         />
       )}
 
-      {motionExportOpen && (
-        <MotionExportModal
-          project={motionExportProject ?? project}
-          activePage={motionExportPage ?? activePage}
-          pageClips={pageClips}
-          activeClip={activeClip}
-          breakpoint={breakpoint}
-          onNotice={onNotice}
-          onClose={onCloseMotionExport}
-        />
+      {motionExportOpen && !componentDeletionDialogOpen && !newProjectDialogOpen && (
+        <Suspense fallback={null}>
+          <LazyMotionExportModal
+            project={motionExportProject ?? project}
+            activePage={motionExportPage ?? activePage}
+            pageClips={pageClips}
+            activeClip={activeClip}
+            breakpoint={breakpoint}
+            onNotice={onNotice}
+            onClose={onCloseMotionExport}
+          />
+        </Suspense>
       )}
 
       {shortcutsModalOpen && !componentDeletionDialogOpen && !newProjectDialogOpen && (
@@ -139,6 +154,19 @@ export function WorkspaceModals(props: WorkspaceModalsProps) {
             historyRedoCount={historyRedoCount}
             onOpenCodeStudio={onOpenCodeStudio}
             onClose={onCloseDiagnostics}
+          />
+        </Suspense>
+      )}
+
+      {projectLibraryOpen && !componentDeletionDialogOpen && !newProjectDialogOpen && onLoadStoredProject && onCloseProjectLibrary && (
+        <Suspense fallback={null}>
+          <LazyProjectLibraryModal
+            open
+            project={project}
+            onLoadProject={onLoadStoredProject}
+            onOpenFilePicker={onOpenProjectFilePicker ?? (() => undefined)}
+            onNotice={onNotice}
+            onClose={onCloseProjectLibrary}
           />
         </Suspense>
       )}

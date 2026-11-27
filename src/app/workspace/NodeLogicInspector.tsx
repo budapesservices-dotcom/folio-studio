@@ -690,13 +690,13 @@ export function NodeLogicInspector({
                             }
                           >
                             <option value="none">No persist</option>
-                            <option value="local">LocalStorage (metadata only)</option>
-                            <option value="session">Session (metadata only)</option>
+                            <option value="local">LocalStorage (persisted)</option>
+                            <option value="session">SessionStorage (tab)</option>
                           </select>
                         </div>
                         {variable.persist && variable.persist !== 'none' && (
                           <p class="nl-inspector-hint">
-                            Metadata only · runtime persistence is not yet active.
+                            Active · hydrates &amp; persists automatically in Simulator, Live Preview, and React TSX.
                           </p>
                         )}
                         <div class="nl-var-row-edit">
@@ -737,7 +737,7 @@ export function NodeLogicInspector({
                               onUpdateVariable(variable.id, { computed: event.currentTarget.checked })
                             }
                           />
-                          <span>Computed (metadata only)</span>
+                          <span>Computed (reactive zero-eval)</span>
                         </label>
                         {variable.computed && (
                           <>
@@ -745,14 +745,14 @@ export function NodeLogicInspector({
                               class="nl-input"
                               type="text"
                               aria-label={`Computed expression for ${variable.name}`}
-                              placeholder="Expression (e.g. {{count}} items)"
+                              placeholder="Expression (e.g. clicks * 2 or {{count}} items)"
                               value={variable.computedExpression ?? ''}
                               onInput={(event) =>
                                 onUpdateVariable(variable.id, { computedExpression: event.currentTarget.value })
                               }
                             />
                             <p class="nl-inspector-hint">
-                              Metadata only · not evaluated at runtime.
+                              Active · supports math, ternary, comparisons, min/max/round/clamp/len, and {'{{var}}'} templates.
                             </p>
                           </>
                         )}

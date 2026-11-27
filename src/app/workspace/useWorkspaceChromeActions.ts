@@ -25,6 +25,7 @@ export interface WorkspaceChromeWindowsSlice {
   setNodeLogicMinimized: (value: boolean) => void;
   zoom: number;
   setZoom: (value: number) => void;
+  resetMainView: () => void;
   componentCanvasZoom: number;
   setComponentCanvasZoom: (value: number) => void;
   focusWindow: (windowId: 'main-canvas' | 'component-canvas' | 'node-logic' | 'pages') => void;
@@ -49,6 +50,7 @@ export interface UseWorkspaceChromeActionsOptions {
   setToolRackOpen: (value: string | null) => void;
   setActiveEditorId: (target: EditorTarget) => void;
   setCodeWorkspaceOpen: (value: boolean | ((prev: boolean) => boolean)) => void;
+  onResetComponentView?: () => void;
   onCommitProjectName: (draft: string) => void;
   setNotice: (message: string) => void;
 }
@@ -69,6 +71,7 @@ export function useWorkspaceChromeActions(options: UseWorkspaceChromeActionsOpti
     setToolRackOpen,
     setActiveEditorId,
     setCodeWorkspaceOpen,
+    onResetComponentView,
     onCommitProjectName,
     setNotice,
   } = options;
@@ -115,7 +118,13 @@ export function useWorkspaceChromeActions(options: UseWorkspaceChromeActionsOpti
     const currentZoom = target === 'main' ? windows.zoom : windows.componentCanvasZoom;
     const setTargetZoom = target === 'main' ? windows.setZoom : windows.setComponentCanvasZoom;
     if (action === 'reset') {
-      setTargetZoom(1);
+      if (target === 'main') {
+        windows.resetMainView();
+      } else if (onResetComponentView) {
+        onResetComponentView();
+      } else {
+        setTargetZoom(1);
+      }
       setNotice('Zoom reset to 100%.');
       return;
     }
@@ -130,24 +139,6 @@ export function useWorkspaceChromeActions(options: UseWorkspaceChromeActionsOpti
     windows.setLayersVisible(!anySidebarOpen);
     windows.setInspectorVisible(!anySidebarOpen);
     setNotice(anySidebarOpen ? 'Focus Canvas enabled (Ctrl+\\ to restore panels).' : 'Studio sidebars restored.');
-  };
-
-  const toggleStudioPanel = (panel: 'layers' | 'inspector' | 'pages' | 'components' | 'motion' | 'code') => {
-    if (panel === 'layers') {
-      windows.setLayersVisible(!windows.layersVisible);
-    } else if (panel === 'inspector') {
-      windows.setInspectorVisible(!windows.inspectorVisible);
-    } else if (panel === 'pages') {
-      if (windows.pagesRackOpen) closePagesRack();
-      else windows.setPagesRackOpen(true);
-    } else if (panel === 'components') {
-      if (windows.componentRackOpen) closeComponentRack();
-      else windows.setComponentRackOpen(true);
-    } else if (panel === 'motion') {
-      toggleMotionOpen();
-    } else if (panel === 'code') {
-      setCodeWorkspaceOpen((prev) => !prev);
-    }
   };
 
   const togglePagesRack = () => {
@@ -181,6 +172,34 @@ export function useWorkspaceChromeActions(options: UseWorkspaceChromeActionsOpti
     }
   };
 
+  const toggleMotionTimeline = () => {
+    if (!motionOpen) {
+      closePagesRack();
+      closeComponentRack();
+      closeTokensRack();
+    }
+    toggleMotionOpen();
+  };
+
+  const toggleStudioPanel = (panel: 'layers' | 'inspector' | 'pages' | 'components' | 'motion' | 'code') => {
+    if (panel === 'layers') {
+      windows.setLayersVisible(!windows.layersVisible);
+    } else if (panel === 'inspector') {
+      windows.setInspectorVisible(!windows.inspectorVisible);
+    } else if (panel === 'pages') {
+      togglePagesRack();
+    } else if (panel === 'components') {
+      toggleComponentRack();
+    } else if (panel === 'motion') {
+      toggleMotionTimeline();
+    } else if (panel === 'code') {
+      setCodeWorkspaceOpen((prev) => {
+        if (!prev) setActiveEditorId('main');
+        return !prev;
+      });
+    }
+  };
+
   const toggleMainCanvas = () => {
     if (windows.canvasClosed || windows.canvasMinimized) windows.openMainCanvas();
     else {
@@ -205,15 +224,6 @@ export function useWorkspaceChromeActions(options: UseWorkspaceChromeActionsOpti
       windows.setNodeLogicClosed(true);
       windows.setNodeLogicMinimized(false);
     }
-  };
-
-  const toggleMotionTimeline = () => {
-    if (!motionOpen) {
-      closePagesRack();
-      closeComponentRack();
-      closeTokensRack();
-    }
-    toggleMotionOpen();
   };
 
   return {

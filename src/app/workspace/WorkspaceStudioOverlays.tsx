@@ -37,7 +37,7 @@ export interface WorkspaceStudioOverlaysProps {
   getCommandClient: (target: EditorTarget) => MainCanvasCommandClient;
   tokensRackOpen: boolean;
   tokensRackRef: RefObject<HTMLElement>;
-  onUpdateDesignTokens: (nextTokens: DesignTokenCollection) => void;
+  onUpdateDesignTokens: (nextTokens: DesignTokenCollection, unbindTokenIds?: string[], description?: string) => void;
   onCloseTokensRack: () => void;
   codeWorkspaceOpen: boolean;
   codeWorkspaceLaunch: { viewMode: CodeWorkspaceViewMode; pageId?: string; nonce: number };

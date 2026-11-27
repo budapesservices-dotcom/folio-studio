@@ -75,6 +75,7 @@ export interface GlobalToolbarProps {
   codeWorkspaceOpen: boolean;
   motionTimelineOpen: boolean;
   shortcutsModalOpen: boolean;
+  projectLibraryOpen?: boolean;
   toolbarHintStore: ToolbarHintStore;
   onToggleMenu: (menu: TopMenuId) => void;
   onCloseMenus: () => void;
@@ -82,6 +83,8 @@ export interface GlobalToolbarProps {
   onOpenProjectPicker: () => void;
   onProjectFileSelected: (file: File) => void | Promise<ProjectImportOutcome | void>;
   onExportCurrentProject: () => void;
+  onExportCurrentProjectArchive?: () => void;
+  onOpenProjectLibrary?: () => void;
   onExportActiveCanvasSvg: () => void;
   onExportActiveCanvasPng: () => void;
   onOpenMotionExport?: () => void;
@@ -147,6 +150,7 @@ export function GlobalToolbar({
   codeWorkspaceOpen,
   motionTimelineOpen,
   shortcutsModalOpen,
+  projectLibraryOpen = false,
   toolbarHintStore,
   onToggleMenu,
   onCloseMenus,
@@ -154,6 +158,8 @@ export function GlobalToolbar({
   onOpenProjectPicker,
   onProjectFileSelected,
   onExportCurrentProject,
+  onExportCurrentProjectArchive,
+  onOpenProjectLibrary,
   onExportActiveCanvasSvg,
   onExportActiveCanvasPng,
   onOpenMotionExport,
@@ -281,6 +287,31 @@ export function GlobalToolbar({
                   <button type="button" role="menuitem" onClick={() => runMenuAction(onExportCurrentProject)} disabled={isHydrating}>
                     Export Project (.flop)
                   </button>
+                  {onExportCurrentProjectArchive && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="file-export-archive-btn"
+                      onClick={() => runMenuAction(onExportCurrentProjectArchive)}
+                      disabled={isHydrating}
+                    >
+                      Export Archive (.flop ZIP)
+                    </button>
+                  )}
+                  {onOpenProjectLibrary && (
+                    <>
+                      <div class="global-menu-divider" role="separator" />
+                      <button
+                        type="button"
+                        role="menuitem"
+                        data-testid="file-project-library-btn"
+                        onClick={() => runMenuAction(onOpenProjectLibrary)}
+                        disabled={isHydrating}
+                      >
+                        Local Project Library…
+                      </button>
+                    </>
+                  )}
                   <div class="global-menu-divider" role="separator" />
                   <button type="button" role="menuitem" onClick={() => runMenuAction(onExportActiveCanvasSvg)} disabled={isHydrating}>
                     Export SVG
@@ -307,7 +338,7 @@ export function GlobalToolbar({
               <input
                 ref={projectFileInputRef}
                 type="file"
-                accept=".flop,application/vnd.folio.project+json"
+                accept=".flop,application/vnd.folio.project+json,application/zip"
                 aria-label="Choose a FOLIO project file"
                 hidden
                 onChange={handleFileInputChange}
@@ -780,6 +811,27 @@ export function GlobalToolbar({
           </div>
           <span class="global-panel-group-divider" aria-hidden="true" />
           <div class="global-panel-group" role="group" aria-label="Utilities">
+            {onOpenProjectLibrary && (
+              <button
+                class={`global-panel-toggle project-library-header-toggle ${projectLibraryOpen ? 'active' : ''}`}
+                type="button"
+                data-testid="toolbar-project-library-btn"
+                title="Local Project Library (Free Offline Storage)"
+                aria-label="Local Project Library"
+                aria-haspopup="dialog"
+                aria-expanded={projectLibraryOpen}
+                onClick={onOpenProjectLibrary}
+                disabled={isHydrating}
+                onMouseEnter={() =>
+                  onUpdateToolbarHint(
+                    'PROJECT LIBRARY',
+                    'Manage, snapshot, open, and export local Folio projects saved offline in browser storage.',
+                  )
+                }
+              >
+                <StudioIcon name="folder" />
+              </button>
+            )}
             <button
               class={`global-panel-toggle studio-theme-toggle ${studioTheme === 'light' ? 'active' : ''}`}
               type="button"

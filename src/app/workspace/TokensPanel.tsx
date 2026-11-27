@@ -41,8 +41,9 @@ const LAYERS: ReadonlyArray<{ id: 'all' | DesignTokenLayer; label: string }> = [
   { id: 'primitive', label: 'Primitive' },
 ];
 
-function createTokenId(name: string, existing: readonly DesignTokenDefinition[]): string {
-  const base = 'tok-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'tok-custom';
+export function createTokenId(name: string, existing: readonly DesignTokenDefinition[]): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const base = slug ? `tok-${slug}` : 'tok-custom';
   const ids = new Set(existing.map((t) => t.id));
   if (!ids.has(base)) return base;
   let n = 2;
@@ -187,6 +188,11 @@ export function TokensPanel({
     event.preventDefault();
     const trimmed = newName.trim();
     if (!trimmed) return;
+    const candidateCssVar = toCssVariableName(trimmed);
+    if (tokens.tokens.some((token) => toCssVariableName(token.name) === candidateCssVar)) {
+      onCopyNotice(`A design token for ${candidateCssVar} already exists.`);
+      return;
+    }
     const isNumeric = newCategory !== 'color';
     if (!isNumeric) {
       const candidateColor = newValue.trim() || '#7C6FF6';

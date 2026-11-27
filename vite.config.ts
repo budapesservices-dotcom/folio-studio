@@ -1,5 +1,101 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import preact from '@preact/preset-vite';
+import { executeServerHttpProxy } from './src/server/httpProxyHandler.ts';
+
+function folioHttpProxyPlugin(): Plugin {
+  const attachProxyMiddleware = (middlewares: {
+    use: (
+      path: string,
+      handler: (
+        req: { method?: string; on: (ev: string, cb: (chunk?: unknown) => void) => void },
+        res: { statusCode: number; setHeader: (k: string, v: string) => void; end: (body: string) => void },
+        next: () => void,
+      ) => void,
+    ) => void;
+  }) => {
+    middlewares.use('/api/logic/http-proxy', (req, res, next) => {
+      if (req.method !== 'POST') {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204;
+          res.end('');
+          return;
+        }
+        res.statusCode = 405;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ ok: false, error: 'Method Not Allowed. Use POST.' }));
+        return;
+      }
+      const chunks: string[] = [];
+      let totalLen = 0;
+      let aborted = false;
+      req.on('data', (chunk) => {
+        if (aborted) return;
+        const text = typeof chunk === 'string' ? chunk : String(chunk ?? '');
+        totalLen += text.length;
+        if (totalLen > 512 * 1024) {
+          aborted = true;
+          res.statusCode = 413;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ok: false, error: 'Proxy request payload exceeds 512 KiB.' }));
+          return;
+        }
+        chunks.push(text);
+      });
+      req.on('end', () => {
+        if (aborted) return;
+        void (async () => {
+          try {
+            const parsed = JSON.parse(chunks.join('') || '{}') as Record<string, unknown>;
+            const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+            const dnsSpec = 'node:dns/promises';
+            const dnsMod = (await import(/* @vite-ignore */ dnsSpec)) as {
+              lookup: (
+                hostname: string,
+                opts: { all: true; verbatim: true },
+              ) => Promise<Array<{ address: string; family: number }>>;
+            };
+            const result = await executeServerHttpProxy(
+              {
+                url: typeof parsed.url === 'string' ? parsed.url : '',
+                method: typeof parsed.method === 'string' ? parsed.method : 'GET',
+                headers:
+                  parsed.headers && typeof parsed.headers === 'object' && !Array.isArray(parsed.headers)
+                    ? (parsed.headers as Record<string, string>)
+                    : undefined,
+                body: typeof parsed.body === 'string' ? parsed.body : undefined,
+                authSecretRef: typeof parsed.authSecretRef === 'string' ? parsed.authSecretRef : undefined,
+              },
+              {
+                dnsLookup: (hostname) => dnsMod.lookup(hostname, { all: true, verbatim: true }),
+                env: proc?.env ?? {},
+              },
+            );
+            res.statusCode = result.httpStatus;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(result.body));
+          } catch {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ ok: false, error: 'Invalid JSON request body.' }));
+          }
+        })();
+      });
+      req.on('error', () => {
+        next();
+      });
+    });
+  };
+
+  return {
+    name: 'folio-http-proxy',
+    configureServer(server) {
+      attachProxyMiddleware(server.middlewares as unknown as Parameters<typeof attachProxyMiddleware>[0]);
+    },
+    configurePreviewServer(server) {
+      attachProxyMiddleware(server.middlewares as unknown as Parameters<typeof attachProxyMiddleware>[0]);
+    },
+  };
+}
 
 export default defineConfig(({ command }) => {
   const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
@@ -14,6 +110,7 @@ export default defineConfig(({ command }) => {
   return {
     base: resolvedBase,
     plugins: [
+      folioHttpProxyPlugin(),
       preact({
         devToolsEnabled: isServe,
         prefreshEnabled: isServe,
@@ -61,8 +158,22 @@ export default defineConfig(({ command }) => {
           if (id.includes('/src/engines/canvas/gpu/') && !id.endsWith('/gpu/types.ts')) {
             return 'gpu-engine';
           }
+          if (id.includes('/src/engines/canvas/tools/')) {
+            return 'canvas-tools';
+          }
           if (id.includes('/src/engines/canvas/')) {
             return 'canvas-engine';
+          }
+          if (
+            id.includes('/src/engines/animation/videoExport')
+            || id.includes('/src/engines/animation/videoMuxer')
+            || id.includes('/src/engines/animation/gifEncoder')
+            || id.includes('/src/engines/animation/svgExport')
+          ) {
+            return 'motion-export-engine';
+          }
+          if (id.includes('/src/app/workspace/Inspector') || id.includes('/src/app/InspectorPanel')) {
+            return 'inspector-panel';
           }
           if (
             id.includes('/src/engines/layout/')

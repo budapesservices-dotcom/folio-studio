@@ -1,6 +1,15 @@
 import type { RefObject } from 'preact';
 import { useState } from 'preact/hooks';
-import type { AssetReference, ComponentDefinition, DesignTokenCollection } from '../../core/document/types';
+import {
+  canUseComponentInApplication,
+  getComponentScope,
+} from '../../core/document/applications';
+import type {
+  AssetReference,
+  ComponentDefinition,
+  ComponentScope,
+  DesignTokenCollection,
+} from '../../core/document/types';
 import { ComponentThumbnail } from '../ComponentThumbnail';
 import { StudioIcon } from './StudioIcon';
 import { StudioContextMenu, type StudioContextMenuItem } from './StudioContextMenu';
@@ -28,6 +37,9 @@ export interface ComponentRackPanelProps {
   onDuplicateComponent: (component: ComponentDefinition) => void;
   onDeleteComponent: (component: ComponentDefinition) => void;
   onToggleNodeLogic?: (component: ComponentDefinition) => void;
+  activeApplicationId?: string;
+  activeApplicationName?: string;
+  onSetComponentScope?: (component: ComponentDefinition, scope: ComponentScope) => void;
 }
 
 export function ComponentRackPanel({
@@ -53,16 +65,26 @@ export function ComponentRackPanel({
   onDuplicateComponent,
   onDeleteComponent,
   onToggleNodeLogic,
+  activeApplicationId,
+  activeApplicationName,
+  onSetComponentScope,
 }: ComponentRackPanelProps) {
+  const [scopeFilter, setScopeFilter] = useState<'all' | 'global' | 'local'>('all');
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
     component: ComponentDefinition | null;
   } | null>(null);
+  const availableComponents = activeApplicationId
+    ? components.filter((component) => canUseComponentInApplication(component, activeApplicationId))
+    : components;
+  const scopeFilteredComponents = scopeFilter === 'all'
+    ? availableComponents
+    : availableComponents.filter((component) => getComponentScope(component) === scopeFilter);
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const filteredComponents = normalizedQuery
-    ? components.filter((component) => component.name.toLowerCase().includes(normalizedQuery))
-    : components;
+    ? scopeFilteredComponents.filter((component) => component.name.toLowerCase().includes(normalizedQuery))
+    : scopeFilteredComponents;
 
   return (
     <section
@@ -76,7 +98,22 @@ export function ComponentRackPanel({
         <div class="component-rack-title">
           <span class="panel-kicker">YOUR LIBRARY</span>
           <strong>Component Rack</strong>
-          <span class="component-rack-count">{components.length}</span>
+          <span class="component-rack-count">{availableComponents.length}</span>
+          {onSetComponentScope && (
+            <div class="component-scope-filter" role="group" aria-label="Filter components by scope" data-testid="component-scope-filter">
+              {(['all', 'global', 'local'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  class={`component-scope-filter-btn ${scopeFilter === mode ? 'is-active' : ''}`}
+                  aria-pressed={scopeFilter === mode}
+                  onClick={() => setScopeFilter(mode)}
+                >
+                  {mode === 'all' ? 'All' : mode === 'global' ? 'Global' : 'Local'}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div class="component-rack-actions">
           <div class="component-rack-search-wrap">
@@ -155,7 +192,19 @@ export function ComponentRackPanel({
               onClick={() => onInsertComponent(component)}
             >
               <ComponentThumbnail component={component} components={components} designTokens={designTokens} assets={assets} />
-              <span class="component-rack-card-name">{component.name}</span>
+              <span class="component-rack-card-name">
+                {component.name}
+                <span
+                  class={`component-scope-badge is-${getComponentScope(component)}`}
+                  title={
+                    getComponentScope(component) === 'local'
+                      ? `Local to ${activeApplicationName ?? 'active application'}`
+                      : 'Global component shared across all applications'
+                  }
+                >
+                  {getComponentScope(component) === 'local' ? 'Local' : 'Global'}
+                </span>
+              </span>
               <span class="component-rack-card-meta">
                 {component.document.nodes.length} layer{component.document.nodes.length === 1 ? '' : 's'}
                 {(component.variants?.length ?? 0) > 0 ? ` · ${component.variants!.length} var` : ''}
@@ -177,6 +226,24 @@ export function ComponentRackPanel({
                   onClick={() => onToggleNodeLogic(component)}
                 >
                   {component.nodeLogicEnabled ? '✓ In Node' : 'Send to Node'}
+                </button>
+              )}
+              {onSetComponentScope && (
+                <button
+                  type="button"
+                  title={
+                    getComponentScope(component) === 'local'
+                      ? `Promote "${component.name}" to Global`
+                      : `Scope "${component.name}" as Local to ${activeApplicationName ?? 'this app'}`
+                  }
+                  onClick={() =>
+                    onSetComponentScope(
+                      component,
+                      getComponentScope(component) === 'local' ? 'global' : 'local',
+                    )
+                  }
+                >
+                  {getComponentScope(component) === 'local' ? 'Make Global' : 'Make Local'}
                 </button>
               )}
               <button type="button" title={`Edit ${component.name} master`} onClick={() => onEditMaster(component)}>
@@ -224,9 +291,13 @@ export function ComponentRackPanel({
             <span>Select layers on the canvas and choose “Save selection” to keep reusable components here.</span>
           </div>
         )}
-        {components.length > 0 && filteredComponents.length === 0 && (
+        {availableComponents.length > 0 && filteredComponents.length === 0 && (
           <div class="component-rack-empty">
-            <span>No components match “{searchQuery}”.</span>
+            <span>
+              {searchQuery
+                ? `No components match “${searchQuery}”.`
+                : `No ${scopeFilter} components in ${activeApplicationName ?? 'this application'}.`}
+            </span>
           </div>
         )}
       </div>
@@ -269,6 +340,15 @@ export function ComponentRackPanel({
                 label: comp.nodeLogicEnabled ? 'Disable in Node Logic' : 'Send to Node Logic',
                 active: Boolean(comp.nodeLogicEnabled),
                 onSelect: () => onToggleNodeLogic(comp),
+              });
+            }
+            if (onSetComponentScope) {
+              const isLocal = getComponentScope(comp) === 'local';
+              items.push({
+                kind: 'item',
+                id: 'toggle-scope',
+                label: isLocal ? 'Promote to Global Component' : 'Make Local to Active App',
+                onSelect: () => onSetComponentScope(comp, isLocal ? 'global' : 'local'),
               });
             }
             items.push({ kind: 'divider', id: 'div-del' });

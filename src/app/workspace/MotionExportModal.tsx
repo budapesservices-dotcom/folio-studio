@@ -111,6 +111,8 @@ export function MotionExportModal({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !isExporting) {
+        event.preventDefault();
+        event.stopPropagation();
         onClose();
       }
     };

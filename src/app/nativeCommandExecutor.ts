@@ -1,4 +1,5 @@
 import { getClippingMaskBaseId, getEffectiveLayerStates } from '../core/document/layers';
+import { getProjectApplications } from '../core/document/applications';
 import { areDocumentsStructurallyEqual } from '../core/document/equality';
 import { freezeImmutableGraph, validateProjectIncremental } from '../core/document/validation';
 import { createDocumentAstView, type DocumentAddress, type NativeAstDocumentView, type NativeNodeRef } from '../core/document/ast';
@@ -281,6 +282,9 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'project.replace':
     case 'page.create':
     case 'page.set-active':
+    case 'app.create':
+    case 'app.set-active':
+    case 'app.rename':
     case 'document.set-background':
     case 'document.set-size':
     case 'component.create':
@@ -288,6 +292,7 @@ function getPayloadNodeRefs(command: NativeCommand): NativeNodeRef[] {
     case 'component.rename':
     case 'component.delete':
     case 'component.update-contract':
+    case 'component.set-scope':
     case 'tokens.update':
     case 'code.update-modules':
     case 'logic.create-graph':
@@ -343,6 +348,9 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'project.replace':
     case 'page.create':
     case 'page.set-active':
+    case 'app.create':
+    case 'app.set-active':
+    case 'app.rename':
     case 'document.set-background':
     case 'document.set-size':
     case 'component.create':
@@ -350,6 +358,7 @@ function getLockCheckedNodeIds(command: NativeCommand): string[] {
     case 'component.rename':
     case 'component.delete':
     case 'component.update-contract':
+    case 'component.set-scope':
     case 'tokens.update':
     case 'code.update-modules':
     case 'logic.create-graph':
@@ -909,6 +918,44 @@ function prepareCommandStep(
           status: 'rejected',
           result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', 'The requested page does not exist in this project.'),
         };
+      }
+    } else if (command.type === 'app.create') {
+      const existingApps = getProjectApplications(project);
+      if (existingApps.some((app) => app.id === command.payload.application.id || app.slug === command.payload.application.slug)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'PRECONDITION_FAILED', 'An application with this ID or slug already exists.'),
+        };
+      }
+      if (project.pages.some((page) => page.id === command.payload.homePage.id || page.route === command.payload.homePage.route)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'PRECONDITION_FAILED', 'A page with this home route already exists.'),
+        };
+      }
+    } else if (command.type === 'app.set-active' || command.type === 'app.rename') {
+      const existingApps = getProjectApplications(project);
+      if (!existingApps.some((app) => app.id === command.payload.applicationId)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', 'The requested application does not exist in this project.'),
+        };
+      }
+    } else if (command.type === 'component.set-scope') {
+      if (!project.components.some((component) => component.id === command.payload.componentId)) {
+        return {
+          status: 'rejected',
+          result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', 'The target component does not exist in this project.'),
+        };
+      }
+      if (command.payload.scope === 'local') {
+        const existingApps = getProjectApplications(project);
+        if (!command.payload.applicationId || !existingApps.some((app) => app.id === command.payload.applicationId)) {
+          return {
+            status: 'rejected',
+            result: createResult(snapshot, command, 'rejected', 'TARGET_NOT_FOUND', 'The target application for this local component does not exist.'),
+          };
+        }
       }
     } else if (command.type === 'component.create') {
       if (project.components.some((component) => component.id === command.payload.component.id)) {

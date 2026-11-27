@@ -6,6 +6,7 @@ import type { LayerDropPosition } from '../document/layers';
 import type {
   ComponentDefinition,
   DesignNode,
+  FolioApplication,
   FolioDocument,
   FolioPage,
   FolioProject,
@@ -41,11 +42,15 @@ import type {
   AnimationDeleteClipPayload,
   AnimationUpdateClipPayload,
   AnimationUpdateCustomEasingsPayload,
+  AppCreatePayload,
+  AppRenamePayload,
+  AppSetActivePayload,
   AssetUpsertPayload,
   CodeUpdateModulesPayload,
   ComponentCreatePayload,
   ComponentDeletePayload,
   ComponentRenamePayload,
+  ComponentSetScopePayload,
   ComponentSyncDocumentPayload,
   ComponentUpdateContractPayload,
   DocumentSetBackgroundPayload,
@@ -972,18 +977,33 @@ function isFolioDocumentData(value: unknown): value is FolioDocument {
   return true;
 }
 
+function isFolioApplicationData(value: unknown): value is FolioApplication {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'slug', 'basePath'])) return false;
+  return (
+    isNonEmptyString(value.id, 128) &&
+    isNonEmptyString(value.name, 160) &&
+    typeof value.slug === 'string' &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.slug) &&
+    typeof value.basePath === 'string' &&
+    value.basePath.startsWith('/') &&
+    value.basePath.length <= 256 &&
+    !/[\u0000-\u001F\u007F\u2028\u2029]/.test(value.basePath)
+  );
+}
+
 function isFolioPageData(value: unknown): value is FolioPage {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'route', 'document'])) return false;
+  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'route', 'applicationId', 'document'])) return false;
   return (
     isNonEmptyString(value.id) &&
     isNonEmptyString(value.name, 512) &&
     isNonEmptyString(value.route, 512) &&
+    (value.applicationId === undefined || isNonEmptyString(value.applicationId, 128)) &&
     isFolioDocumentData(value.document)
   );
 }
 
 function isComponentDefinitionData(value: unknown): value is ComponentDefinition {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'document', 'createdAt', 'updatedAt', 'variants', 'slots', 'nodeLogicEnabled', 'animations'])) {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'name', 'document', 'createdAt', 'updatedAt', 'variants', 'slots', 'nodeLogicEnabled', 'animations', 'scope', 'applicationId'])) {
     return false;
   }
   if (
@@ -1000,6 +1020,9 @@ function isComponentDefinitionData(value: unknown): value is ComponentDefinition
   if (value.slots !== undefined && !isComponentSlotsList(value.slots, masterNodesById)) return false;
   if (value.nodeLogicEnabled !== undefined && typeof value.nodeLogicEnabled !== 'boolean') return false;
   if (value.animations !== undefined && (!Array.isArray(value.animations) || value.animations.length > 100 || !value.animations.every(isAnimationClip))) return false;
+  if (value.scope !== undefined && value.scope !== 'global' && value.scope !== 'local') return false;
+  if (value.applicationId !== undefined && !isNonEmptyString(value.applicationId, 128)) return false;
+  if (value.scope === 'local' && !isNonEmptyString(value.applicationId, 128)) return false;
   return true;
 }
 
@@ -1037,6 +1060,91 @@ export function validatePageSetActivePayload(
     return invalid('INVALID_PAYLOAD', 'Setting the active page requires a non-empty page ID.');
   }
   return { ok: true, value: { pageId: data.pageId } };
+}
+
+export function validateAppCreatePayload(
+  value: unknown,
+): ValidationOutcome<AppCreatePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['application', 'homePage']) ||
+    !isFolioApplicationData(data.application) ||
+    !isFolioPageData(data.homePage)
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Creating an application requires a valid application definition and home page.');
+  }
+  if (data.homePage.applicationId !== undefined && data.homePage.applicationId !== data.application.id) {
+    return invalid('INVALID_PAYLOAD', 'Application home page applicationId must match the created application ID.');
+  }
+  return {
+    ok: true,
+    value: {
+      application: data.application,
+      homePage: { ...data.homePage, applicationId: data.application.id },
+    },
+  };
+}
+
+export function validateAppSetActivePayload(
+  value: unknown,
+): ValidationOutcome<AppSetActivePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (!isRecord(data) || !hasOnlyKeys(data, ['applicationId']) || !isNonEmptyString(data.applicationId, 128)) {
+    return invalid('INVALID_PAYLOAD', 'Switching active application requires a non-empty applicationId.');
+  }
+  return { ok: true, value: { applicationId: data.applicationId } };
+}
+
+export function validateAppRenamePayload(
+  value: unknown,
+): ValidationOutcome<AppRenamePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['applicationId', 'name']) ||
+    !isNonEmptyString(data.applicationId, 128) ||
+    !isNonEmptyString(data.name, 160)
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Renaming an application requires an applicationId and non-empty name.');
+  }
+  return { ok: true, value: { applicationId: data.applicationId, name: data.name.trim() } };
+}
+
+export function validateComponentSetScopePayload(
+  value: unknown,
+): ValidationOutcome<ComponentSetScopePayload> {
+  const normalized = cloneRuntimeData(value);
+  if (!normalized.ok) return invalid('INVALID_PAYLOAD', 'The payload must contain only plain own data properties.');
+  const data = normalized.value;
+  if (
+    !isRecord(data) ||
+    !hasOnlyKeys(data, ['componentId', 'scope', 'applicationId']) ||
+    !isNonEmptyString(data.componentId, 128) ||
+    (data.scope !== 'global' && data.scope !== 'local')
+  ) {
+    return invalid('INVALID_PAYLOAD', 'Updating component scope requires a componentId and scope ("global" or "local").');
+  }
+  if (data.scope === 'local' && !isNonEmptyString(data.applicationId, 128)) {
+    return invalid('INVALID_PAYLOAD', 'Local components require an owning applicationId.');
+  }
+  if (data.applicationId !== undefined && !isNonEmptyString(data.applicationId, 128)) {
+    return invalid('INVALID_PAYLOAD', 'Component applicationId must be a non-empty string when provided.');
+  }
+  return {
+    ok: true,
+    value: {
+      componentId: data.componentId,
+      scope: data.scope,
+      ...(data.scope === 'local' && typeof data.applicationId === 'string' ? { applicationId: data.applicationId } : {}),
+    },
+  };
 }
 
 export function validateComponentCreatePayload(

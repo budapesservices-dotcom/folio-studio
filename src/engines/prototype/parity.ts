@@ -97,17 +97,17 @@ export const RUNTIME_FEATURE_PARITY_MATRIX: readonly RuntimeFeatureParityEntry[]
   },
   {
     feature: 'variable.persist',
-    headless: 'unsupported',
-    livePreview: 'unsupported',
-    reactCodegen: 'unsupported',
-    notes: 'Stored as .flop v2 metadata only; browser storage is blocked in sandboxed Live Preview (<iframe sandbox="allow-scripts">) and not yet executed at runtime',
+    headless: 'full',
+    livePreview: 'full',
+    reactCodegen: 'full',
+    notes: 'Persists and hydrates declared local/session variables safely across Headless Simulator, Live Preview (with automatic sandbox in-memory fallback), and Exported React TSX',
   },
   {
     feature: 'variable.computed',
-    headless: 'unsupported',
-    livePreview: 'unsupported',
-    reactCodegen: 'unsupported',
-    notes: 'Stored as .flop v2 metadata only; computed expression evaluation is not active at runtime under FOLIO zero-eval security policy',
+    headless: 'full',
+    livePreview: 'full',
+    reactCodegen: 'full',
+    notes: 'Evaluated reactively using FOLIO zero-eval recursive-descent expression evaluator across Headless Simulator, Live Preview, and Exported React TSX',
   },
   {
     feature: 'motion.shape-morph',
@@ -126,7 +126,7 @@ export const NODE_RUNTIME_PARITY_MATRIX: readonly NodeRuntimeParityEntry[] = [
   // Sources (3)
   { type: 'source.element', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Element triggers & property reads' },
   { type: 'source.context', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Page route, theme, viewport, URL params, auth context' },
-  { type: 'source.external', headless: 'simulated', livePreview: 'simulated', reactCodegen: 'simulated', notes: 'Deterministic external collection payload (zero secrets)' },
+  { type: 'source.external', headless: 'simulated', livePreview: 'full', reactCodegen: 'full', notes: 'Deterministic simulated payload in Headless; supports executionMode "live" via SSRF-hardened /api/logic/http-proxy or direct fetch in Live Preview & React TSX (zero secrets)' },
   // Events (8)
   { type: 'event.on-click', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Click, Double Click, Click Outside + once guard' },
   { type: 'event.on-hover', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Hover enter/leave + once guard' },
@@ -158,7 +158,7 @@ export const NODE_RUNTIME_PARITY_MATRIX: readonly NodeRuntimeParityEntry[] = [
   { type: 'flow.loop-timer', headless: 'simulated', livePreview: 'full', reactCodegen: 'simulated', notes: 'For-each list iteration full across all 3; interval timer real in Live Preview and single-tick simulated in Headless & React TSX' },
   { type: 'flow.control', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Sequence, parallel, debounce/throttle fan-out' },
   // Network & Backend (3)
-  { type: 'network.http', headless: 'simulated', livePreview: 'simulated', reactCodegen: 'simulated', notes: 'Safe structured HTTP step payload (zero embedded secrets/tokens)' },
+  { type: 'network.http', headless: 'simulated', livePreview: 'full', reactCodegen: 'full', notes: 'Deterministic simulated step in Headless; supports executionMode "live" via SSRF-hardened /api/logic/http-proxy or direct fetch in Live Preview & React TSX (zero embedded secrets)' },
   { type: 'network.json', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Get field, parse, stringify, validity check' },
   { type: 'network.socket', headless: 'simulated', livePreview: 'simulated', reactCodegen: 'simulated', notes: 'Channel event simulation (zero embedded secrets)' },
 ] as const;
@@ -233,6 +233,9 @@ export interface CompiledPageLogicRuntimeConfig {
   readonly variableInitialValues: Record<string, LogicVariableValue>;
   readonly variableTypes: Record<string, string>;
   readonly variableNameToId: Record<string, string>;
+  readonly variablePersist: Record<string, 'local' | 'session'>;
+  readonly variableComputed: Record<string, string>;
+  readonly networkSettingsByGraphId: Record<string, { readonly baseUrl?: string; readonly authSecretRef?: string }>;
   readonly nodeMeta: Record<string, CompiledRuntimeNodeMeta>;
   readonly pageRouteById: Record<string, string>;
   readonly themeSlugById: Record<string, string>;
@@ -275,11 +278,26 @@ export function compilePageLogicRuntimeConfig(
   const variableInitialValues: Record<string, LogicVariableValue> = {};
   const variableTypes: Record<string, string> = {};
   const variableNameToId: Record<string, string> = {};
+  const variablePersist: Record<string, 'local' | 'session'> = {};
+  const variableComputed: Record<string, string> = {};
+  const networkSettingsByGraphId: Record<string, { readonly baseUrl?: string; readonly authSecretRef?: string }> = {};
 
   for (const graph of graphs) {
     const isInstanceGraph = Boolean(getInstanceIdFromExpandedGraphId(graph.id));
+    if (graph.networkSettings && (graph.networkSettings.baseUrl || graph.networkSettings.authSecretRef)) {
+      networkSettingsByGraphId[graph.id] = {
+        ...(graph.networkSettings.baseUrl ? { baseUrl: graph.networkSettings.baseUrl } : {}),
+        ...(graph.networkSettings.authSecretRef ? { authSecretRef: graph.networkSettings.authSecretRef } : {}),
+      };
+    }
     for (const variable of graph.variables ?? []) {
       variableTypes[variable.id] = variable.valueType;
+      if (variable.persist === 'local' || variable.persist === 'session') {
+        variablePersist[variable.id] = variable.persist;
+      }
+      if (variable.computed && typeof variable.computedExpression === 'string' && variable.computedExpression.trim()) {
+        variableComputed[variable.id] = variable.computedExpression.trim();
+      }
       if (!isInstanceGraph || !Object.prototype.hasOwnProperty.call(variableNameToId, variable.name)) {
         variableNameToId[variable.name] = variable.id;
         variableNameToId[variable.name.toLowerCase()] = variable.id;
@@ -479,6 +497,9 @@ export function compilePageLogicRuntimeConfig(
     variableInitialValues,
     variableTypes,
     variableNameToId,
+    variablePersist,
+    variableComputed,
+    networkSettingsByGraphId,
     nodeMeta,
     pageRouteById,
     themeSlugById,

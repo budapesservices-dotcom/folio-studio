@@ -3,17 +3,20 @@ import type {
   AssetReference,
   CodeModuleRecord,
   ComponentDefinition,
+  ComponentScope,
   ComponentSlotDefinition,
   ComponentVariantAxis,
   CustomEasingPreset,
   DesignNode,
   DesignTokenCollection,
+  FolioApplication,
   FolioDocument,
   FolioPage,
   FolioProject,
   LogicGraph,
   NodeTokenBindings,
 } from '../core/document/types';
+import { getPageApplicationId, getProjectApplications } from '../core/document/applications';
 import { pruneLogicGraphsForDeletedComponent } from '../engines/prototype/validator';
 import { getActiveDocument, updateActiveDocument } from '../core/document/project';
 import { areDocumentsStructurallyEqual } from '../core/document/equality';
@@ -70,6 +73,9 @@ export type EditorAction =
   | { type: 'rename-project'; name: string }
   | { type: 'add-page'; page: FolioPage }
   | { type: 'set-active-page'; pageId: string }
+  | { type: 'create-app'; application: FolioApplication; homePage: FolioPage }
+  | { type: 'set-active-app'; applicationId: string }
+  | { type: 'rename-app'; applicationId: string; name: string }
   | { type: 'set-document-background'; background: string }
   | { type: 'set-document-size'; width: number; height: number }
   | { type: 'add-component'; component: ComponentDefinition }
@@ -77,6 +83,7 @@ export type EditorAction =
   | { type: 'rename-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; name: string }
   | { type: 'delete-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string }
   | { type: 'update-component-contract'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[]; nodeLogicEnabled?: boolean }
+  | { type: 'set-component-scope'; componentId: string; scope: ComponentScope; applicationId?: string }
   | { type: 'update-design-tokens'; designTokens: DesignTokenCollection; unbindTokenIds?: string[] }
   | { type: 'update-code-modules'; codeModules: CodeModuleRecord[]; coalesceKey?: string }
   | { type: 'create-logic-graph'; graph: LogicGraph }
@@ -520,8 +527,10 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'add-page': {
       if (state.project.pages.some((page) => page.id === action.page.id || page.route === action.page.route)) return state;
+      const nextActiveAppId = action.page.applicationId ?? state.project.activeApplicationId;
       const next = touch({
         ...state.project,
+        ...(nextActiveAppId !== undefined ? { activeApplicationId: nextActiveAppId } : {}),
         activePageId: action.page.id,
         pages: [...state.project.pages, action.page],
       });
@@ -529,10 +538,78 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'set-active-page': {
-      if (!state.project.pages.some((page) => page.id === action.pageId)) return state;
-      if (state.project.activePageId === action.pageId) return state;
-      const next = touch({ ...state.project, activePageId: action.pageId });
+      const targetPage = state.project.pages.find((page) => page.id === action.pageId);
+      if (!targetPage) return state;
+      const targetAppId = state.project.applications ? getPageApplicationId(state.project, targetPage) : state.project.activeApplicationId;
+      if (state.project.activePageId === action.pageId && state.project.activeApplicationId === targetAppId) return state;
+      const next = touch({
+        ...state.project,
+        activePageId: action.pageId,
+        ...(targetAppId !== undefined ? { activeApplicationId: targetAppId } : {}),
+      });
       return withSnapshot(state, next, null, []);
+    }
+
+    case 'create-app': {
+      const existingApps = [...getProjectApplications(state.project)];
+      if (
+        existingApps.some((app) => app.id === action.application.id || app.slug === action.application.slug) ||
+        state.project.pages.some((page) => page.id === action.homePage.id || page.route === action.homePage.route)
+      ) {
+        return state;
+      }
+      const defaultAppId = existingApps[0].id;
+      const normalizedExistingPages = state.project.pages.map((page) =>
+        page.applicationId ? page : { ...page, applicationId: defaultAppId },
+      );
+      const homePage: FolioPage = {
+        ...action.homePage,
+        applicationId: action.application.id,
+      };
+      const next = touch({
+        ...state.project,
+        applications: [...existingApps, action.application],
+        activeApplicationId: action.application.id,
+        activePageId: homePage.id,
+        pages: [...normalizedExistingPages, homePage],
+      });
+      return withSnapshot(state, next, null, []);
+    }
+
+    case 'set-active-app': {
+      const apps = getProjectApplications(state.project);
+      if (!apps.some((app) => app.id === action.applicationId)) return state;
+      const appPages = state.project.pages.filter(
+        (page) => getPageApplicationId(state.project, page) === action.applicationId,
+      );
+      const nextActivePageId = appPages.some((page) => page.id === state.project.activePageId)
+        ? state.project.activePageId
+        : (appPages[0]?.id ?? state.project.activePageId);
+      if (state.project.activeApplicationId === action.applicationId && state.project.activePageId === nextActivePageId) {
+        return state;
+      }
+      const next = touch({
+        ...state.project,
+        applications: [...apps],
+        activeApplicationId: action.applicationId,
+        activePageId: nextActivePageId,
+      });
+      return withSnapshot(state, next, null, []);
+    }
+
+    case 'rename-app': {
+      const trimmed = action.name.trim();
+      if (!trimmed) return state;
+      const apps = getProjectApplications(state.project);
+      const target = apps.find((app) => app.id === action.applicationId);
+      if (!target || target.name === trimmed) return state;
+      const nextApps = apps.map((app) => (app.id === action.applicationId ? { ...app, name: trimmed } : app));
+      const next = touch({
+        ...state.project,
+        applications: nextApps,
+        activeApplicationId: state.project.activeApplicationId ?? apps[0].id,
+      });
+      return withSnapshot(state, next);
     }
 
     case 'set-document-background': {
@@ -772,6 +849,42 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         return document === page.document ? page : { ...page, document };
       });
       return withSnapshot(state, touch({ ...state.project, pages, components }));
+    }
+
+    case 'set-component-scope': {
+      const target = state.project.components.find((component) => component.id === action.componentId);
+      if (!target) return state;
+      const nextScope = action.scope;
+      const apps = getProjectApplications(state.project);
+      const nextAppId = nextScope === 'local'
+        ? (action.applicationId && apps.some((app) => app.id === action.applicationId) ? action.applicationId : apps[0].id)
+        : undefined;
+      if ((target.scope ?? 'global') === nextScope && target.applicationId === nextAppId) {
+        return state;
+      }
+      const now = new Date().toISOString();
+      const updatedComponent: ComponentDefinition = {
+        ...target,
+        scope: nextScope,
+        updatedAt: now,
+      };
+      if (nextScope === 'local' && nextAppId) {
+        updatedComponent.applicationId = nextAppId;
+      } else {
+        delete updatedComponent.applicationId;
+      }
+      const components = state.project.components.map((component) =>
+        component.id === action.componentId ? updatedComponent : component,
+      );
+      const shouldEnsureApps = nextScope === 'local' && !state.project.applications;
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          ...(shouldEnsureApps ? { applications: [...apps], activeApplicationId: apps[0].id } : {}),
+          components,
+        }),
+      );
     }
 
     case 'update-design-tokens': {

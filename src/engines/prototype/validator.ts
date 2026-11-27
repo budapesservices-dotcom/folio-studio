@@ -32,6 +32,7 @@ import {
   resolveAstNodeById,
   type PipelineOriginRef,
 } from './pipeline';
+import { validateComputedExpression } from './computedExpr';
 import {
   containsRawSecretPattern,
   detectInlineSecretHeaders,
@@ -186,21 +187,18 @@ export function validateLogicGraphSemantics(
     }
   }
 
-  // Honest capability warnings for variable metadata features not executed at runtime
+  // Validate computed variable expressions under FOLIO's zero-eval evaluator
   for (const variable of graph.variables ?? []) {
-    if (variable.persist && variable.persist !== 'none') {
-      push(
-        'warning',
-        'UNSUPPORTED_VARIABLE_PERSIST',
-        `Variable "${variable.name}" sets persist="${variable.persist}", which is stored as .flop metadata only and is not yet executed in Headless Simulator, sandboxed Live Preview, or exported React TSX.`,
-      );
-    }
     if (variable.computed) {
-      push(
-        'warning',
-        'UNSUPPORTED_COMPUTED_VARIABLE',
-        `Variable "${variable.name}" is marked as computed, which is stored as .flop metadata only and is not evaluated at runtime under FOLIO's zero-eval security policy.`,
-      );
+      const expr = typeof variable.computedExpression === 'string' ? variable.computedExpression : '';
+      const exprCheck = validateComputedExpression(expr);
+      if (!exprCheck.valid) {
+        push(
+          'warning',
+          'INVALID_COMPUTED_EXPRESSION',
+          `Computed variable "${variable.name}" has an invalid expression: ${exprCheck.error ?? 'syntax error.'}`,
+        );
+      }
     }
   }
 

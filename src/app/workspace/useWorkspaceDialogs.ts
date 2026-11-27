@@ -17,6 +17,7 @@ export function useWorkspaceDialogs(options: UseWorkspaceDialogsOptions) {
 
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
   const [diagnosticsModalOpen, setDiagnosticsModalOpen] = useState(false);
+  const [projectLibraryOpen, setProjectLibraryOpen] = useState(false);
   const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
   const [newProjectBusyMode, setNewProjectBusyMode] = useState<NewProjectActionMode | null>(null);
   const [newProjectError, setNewProjectError] = useState<string | null>(null);
@@ -37,6 +38,16 @@ export function useWorkspaceDialogs(options: UseWorkspaceDialogsOptions) {
 
   const closeShortcutsModal = useCallback(() => {
     setShortcutsModalOpen(false);
+  }, []);
+
+  const openProjectLibrary = useCallback(() => {
+    if (isHydrating) return;
+    onDismissPopovers();
+    setProjectLibraryOpen(true);
+  }, [isHydrating, onDismissPopovers]);
+
+  const closeProjectLibrary = useCallback(() => {
+    setProjectLibraryOpen(false);
   }, []);
 
   const handleShortcutsModalReady = useCallback(() => {
@@ -78,6 +89,9 @@ export function useWorkspaceDialogs(options: UseWorkspaceDialogsOptions) {
     shortcutsModalOpen,
     diagnosticsModalOpen,
     setDiagnosticsModalOpen,
+    projectLibraryOpen,
+    openProjectLibrary,
+    closeProjectLibrary,
     newProjectDialogOpen,
     newProjectBusyMode,
     newProjectError,

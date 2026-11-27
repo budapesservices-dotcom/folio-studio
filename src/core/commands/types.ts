@@ -6,11 +6,13 @@ import type {
   AssetReference,
   CodeModuleRecord,
   ComponentDefinition,
+  ComponentScope,
   ComponentSlotDefinition,
   ComponentVariantAxis,
   CustomEasingPreset,
   DesignNode,
   DesignTokenCollection,
+  FolioApplication,
   FolioDocument,
   FolioPage,
   FolioProject,
@@ -117,6 +119,26 @@ export interface PageCreatePayload {
 
 export interface PageSetActivePayload {
   pageId: string;
+}
+
+export interface AppCreatePayload {
+  application: FolioApplication;
+  homePage: FolioPage;
+}
+
+export interface AppSetActivePayload {
+  applicationId: string;
+}
+
+export interface AppRenamePayload {
+  applicationId: string;
+  name: string;
+}
+
+export interface ComponentSetScopePayload {
+  componentId: string;
+  scope: ComponentScope;
+  applicationId?: string;
 }
 
 export interface ComponentCreatePayload {
@@ -319,6 +341,9 @@ export type ProjectRenameCommand = NativeCommandEnvelope<'project.rename', Proje
 export type ProjectReplaceCommand = NativeCommandEnvelope<'project.replace', ProjectReplacePayload>;
 export type PageCreateCommand = NativeCommandEnvelope<'page.create', PageCreatePayload>;
 export type PageSetActiveCommand = NativeCommandEnvelope<'page.set-active', PageSetActivePayload>;
+export type AppCreateCommand = NativeCommandEnvelope<'app.create', AppCreatePayload>;
+export type AppSetActiveCommand = NativeCommandEnvelope<'app.set-active', AppSetActivePayload>;
+export type AppRenameCommand = NativeCommandEnvelope<'app.rename', AppRenamePayload>;
 export type DocumentSetBackgroundCommand = NativeCommandEnvelope<'document.set-background', DocumentSetBackgroundPayload>;
 export type DocumentSetSizeCommand = NativeCommandEnvelope<'document.set-size', DocumentSetSizePayload>;
 export type ComponentCreateCommand = NativeCommandEnvelope<'component.create', ComponentCreatePayload>;
@@ -326,6 +351,7 @@ export type ComponentSyncDocumentCommand = NativeCommandEnvelope<'component.sync
 export type ComponentRenameCommand = NativeCommandEnvelope<'component.rename', ComponentRenamePayload>;
 export type ComponentDeleteCommand = NativeCommandEnvelope<'component.delete', ComponentDeletePayload>;
 export type ComponentUpdateContractCommand = NativeCommandEnvelope<'component.update-contract', ComponentUpdateContractPayload>;
+export type ComponentSetScopeCommand = NativeCommandEnvelope<'component.set-scope', ComponentSetScopePayload>;
 export type TokensUpdateCommand = NativeCommandEnvelope<'tokens.update', TokensUpdatePayload>;
 export type CodeUpdateModulesCommand = NativeCommandEnvelope<'code.update-modules', CodeUpdateModulesPayload>;
 export type LogicCreateGraphCommand = NativeCommandEnvelope<'logic.create-graph', LogicCreateGraphPayload>;
@@ -381,6 +407,9 @@ export type ExtendedNativeCommand =
   | ProjectReplaceCommand
   | PageCreateCommand
   | PageSetActiveCommand
+  | AppCreateCommand
+  | AppSetActiveCommand
+  | AppRenameCommand
   | DocumentSetBackgroundCommand
   | DocumentSetSizeCommand
   | ComponentCreateCommand
@@ -388,6 +417,7 @@ export type ExtendedNativeCommand =
   | ComponentRenameCommand
   | ComponentDeleteCommand
   | ComponentUpdateContractCommand
+  | ComponentSetScopeCommand
   | TokensUpdateCommand
   | CodeUpdateModulesCommand
   | LogicCreateGraphCommand
@@ -415,6 +445,9 @@ export type NativeCommandPayload =
   | ProjectReplacePayload
   | PageCreatePayload
   | PageSetActivePayload
+  | AppCreatePayload
+  | AppSetActivePayload
+  | AppRenamePayload
   | DocumentSetBackgroundPayload
   | DocumentSetSizePayload
   | ComponentCreatePayload
@@ -422,6 +455,7 @@ export type NativeCommandPayload =
   | ComponentRenamePayload
   | ComponentDeletePayload
   | ComponentUpdateContractPayload
+  | ComponentSetScopePayload
   | TokensUpdatePayload
   | CodeUpdateModulesPayload
   | LogicCreateGraphPayload

@@ -1776,6 +1776,41 @@ export function validateProject(input: unknown): ValidationResult {
     }
   }
 
+  let applicationIds: Set<string> | null = null;
+  if (input.applications !== undefined) {
+    if (!Array.isArray(input.applications) || input.applications.length === 0 || input.applications.length > 100) {
+      return { ok: false, error: 'Project applications must be a non-empty array of valid application definitions.' };
+    }
+    applicationIds = new Set<string>();
+    const appSlugs = new Set<string>();
+    for (const app of input.applications) {
+      if (
+        !isRecord(app) ||
+        !isString(app.id) || !app.id.trim() || app.id.length > 128 ||
+        !isString(app.name) || !app.name.trim() || app.name.length > 160 ||
+        !isString(app.slug) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(app.slug) ||
+        !isString(app.basePath) || !app.basePath.startsWith('/') || /[\u0000-\u001F\u007F\u2028\u2029]/.test(app.basePath)
+      ) {
+        return { ok: false, error: 'One or more project application definitions are invalid.' };
+      }
+      if (applicationIds.has(app.id)) {
+        return { ok: false, error: 'Application IDs must be unique within a project.' };
+      }
+      if (appSlugs.has(app.slug)) {
+        return { ok: false, error: 'Application slugs must be unique within a project.' };
+      }
+      applicationIds.add(app.id);
+      appSlugs.add(app.slug);
+    }
+    if (input.activeApplicationId !== undefined) {
+      if (!isString(input.activeApplicationId) || !applicationIds.has(input.activeApplicationId)) {
+        return { ok: false, error: 'The active application ID does not belong to this project.' };
+      }
+    }
+  } else if (input.activeApplicationId !== undefined && (!isString(input.activeApplicationId) || !input.activeApplicationId.trim())) {
+    return { ok: false, error: 'The active application ID must be a non-empty string.' };
+  }
+
   const pageIds = new Set<string>();
   const routes = new Set<string>();
   for (let i = 0; i < input.pages.length; i += 1) {
@@ -1783,8 +1818,12 @@ export function validateProject(input: unknown): ValidationResult {
     if (!isRecord(page) || !isString(page.id) || !page.id ||
         !isString(page.name) || !page.name.trim() ||
         !isString(page.route) || !page.route.startsWith('/') || /[\u0000-\u001F\u007F\u2028\u2029]/.test(page.route) ||
+        (page.applicationId !== undefined && (!isString(page.applicationId) || !page.applicationId.trim())) ||
         !isDocument(page.document)) {
       return { ok: false, error: 'One or more pages contain invalid route or document data.' };
+    }
+    if (applicationIds && page.applicationId !== undefined && !applicationIds.has(page.applicationId)) {
+      return { ok: false, error: `Page "${page.name}" references unknown application "${page.applicationId}".` };
     }
     if (pageIds.has(page.id)) return { ok: false, error: 'Page IDs must be unique within a project.' };
     if (routes.has(page.route)) return { ok: false, error: 'Page routes must be unique within a project.' };
@@ -1838,6 +1877,18 @@ export function validateProject(input: unknown): ValidationResult {
       }
       if (component.animations !== undefined && !isAnimationClipList(component.animations)) {
         return { ok: false, error: `Component "${component.name}" contains invalid animation clips.` };
+      }
+      if (component.scope !== undefined && component.scope !== 'global' && component.scope !== 'local') {
+        return { ok: false, error: `Component "${component.name}" contains an invalid scope.` };
+      }
+      if (component.applicationId !== undefined && (!isString(component.applicationId) || !component.applicationId.trim())) {
+        return { ok: false, error: `Component "${component.name}" contains an invalid applicationId.` };
+      }
+      if (component.scope === 'local' && (!isString(component.applicationId) || !component.applicationId.trim())) {
+        return { ok: false, error: `Local component "${component.name}" must specify an owning applicationId.` };
+      }
+      if (applicationIds && component.applicationId !== undefined && !applicationIds.has(component.applicationId)) {
+        return { ok: false, error: `Component "${component.name}" references unknown application "${component.applicationId}".` };
       }
     }
     componentIds.add(component.id);

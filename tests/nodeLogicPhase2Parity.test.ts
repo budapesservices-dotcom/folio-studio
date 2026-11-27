@@ -1056,31 +1056,30 @@ describe('Phase 2 — Node Logic Parity Unification (Headless ↔ Live Preview �
     expect(reactHarness.getStyle(fx.cardBId).background).toBe('#EC4899');
   });
 
-  it('honestly marks variable.persist and variable.computed as unsupported in feature parity matrix, emits validator warnings, and executes safely without eval or storage errors', () => {
+  it('executes variable.persist and variable.computed with full zero-eval parity across Headless, Live Preview, and React TSX', () => {
     const byFeature = new Map(RUNTIME_FEATURE_PARITY_MATRIX.map((entry) => [entry.feature, entry]));
-    for (const fullFeature of ['component.scoped-logic', 'pipeline.scoped-context', 'frame.baked', 'legacy.v1-migration'] as const) {
+    for (const fullFeature of [
+      'component.scoped-logic',
+      'pipeline.scoped-context',
+      'frame.baked',
+      'legacy.v1-migration',
+      'variable.persist',
+      'variable.computed',
+    ] as const) {
       const entry = byFeature.get(fullFeature);
       expect(entry, `Missing feature ${fullFeature}`).toBeDefined();
       expect(entry!.headless).toBe('full');
       expect(entry!.livePreview).toBe('full');
       expect(entry!.reactCodegen).toBe('full');
-    }
-
-    for (const unsupportedFeature of ['variable.persist', 'variable.computed'] as const) {
-      const entry = byFeature.get(unsupportedFeature);
-      expect(entry, `Missing feature ${unsupportedFeature}`).toBeDefined();
-      expect(entry!.headless).toBe('unsupported');
-      expect(entry!.livePreview).toBe('unsupported');
-      expect(entry!.reactCodegen).toBe('unsupported');
       expect(entry!.notes.length).toBeGreaterThan(10);
     }
 
     const fx = createParityFixture();
-    const persistedVar = createLogicVariable({
-      id: 'var-persisted',
-      name: 'savedName',
-      valueType: 'string',
-      initialValue: 'guest',
+    const clicksVar = createLogicVariable({
+      id: 'var-clicks',
+      name: 'clicks',
+      valueType: 'number',
+      initialValue: 3,
       persist: 'local',
     });
     const computedVar = createLogicVariable({
@@ -1091,52 +1090,88 @@ describe('Phase 2 — Node Logic Parity Unification (Headless ↔ Live Preview �
       computed: true,
       computedExpression: 'clicks * 2',
     });
+    const badComputedVar = createLogicVariable({
+      id: 'var-bad-computed',
+      name: 'badExpr',
+      valueType: 'number',
+      initialValue: 0,
+      computed: true,
+      computedExpression: 'window.alert(1)',
+    });
     const graph = createLogicGraph({
       id: 'graph-audit-vars',
-      name: 'Persist & Computed Audit',
+      name: 'Persist & Computed Parity',
       scope: 'page',
       targetId: fx.pageId,
-      variables: [persistedVar, computedVar],
+      variables: [clicksVar, computedVar],
       nodes: [
         createLogicNode({ id: 'ev-audit', type: 'event.on-click', data: { targetNodeId: fx.triggerBtnId } }),
         createLogicNode({
+          id: 'st-inc',
+          type: 'state.update',
+          data: { variableId: clicksVar.id, operation: 'increment', step: 2 },
+        }),
+        createLogicNode({
+          id: 'tpl-out',
+          type: 'logic.text',
+          data: { mode: 'template', template: 'Doubled={{doubled}}' },
+        }),
+        createLogicNode({
           id: 'act-audit',
           type: 'action.set-layer',
-          data: { targetMode: 'override', targetNodeId: fx.statusTextId, property: 'text', text: 'Safe' },
+          data: { targetMode: 'override', targetNodeId: fx.statusTextId, property: 'text' },
         }),
       ],
       connections: [
-        createLogicConnection({ id: 'ca1', sourceNodeId: 'ev-audit', sourcePortId: 'exec', targetNodeId: 'act-audit', targetPortId: 'exec' }),
+        createLogicConnection({ id: 'ca1', sourceNodeId: 'ev-audit', sourcePortId: 'exec', targetNodeId: 'st-inc', targetPortId: 'exec' }),
+        createLogicConnection({ id: 'ca2', sourceNodeId: 'st-inc', sourcePortId: 'next', targetNodeId: 'act-audit', targetPortId: 'exec' }),
+        createLogicConnection({ id: 'ca3', sourceNodeId: 'tpl-out', sourcePortId: 'text', targetNodeId: 'act-audit', targetPortId: 'value' }),
       ],
     });
     const project: FolioProject = { ...fx.project, logicGraphs: [graph] };
 
-    // Validator emits explicit non-fatal warnings for both unsupported metadata fields
+    // Valid computed expression produces zero warnings; unsafe expression warns cleanly
     const report = validateLogicGraphSemantics(graph, project);
     expect(report.ok).toBe(true);
-    expect(report.warnings.some((w) => w.code === 'UNSUPPORTED_VARIABLE_PERSIST')).toBe(true);
-    expect(report.warnings.some((w) => w.code === 'UNSUPPORTED_COMPUTED_VARIABLE')).toBe(true);
+    expect(report.warnings.some((w) => w.code === 'INVALID_COMPUTED_EXPRESSION')).toBe(false);
 
-    // All 3 runtimes execute cleanly without eval/new Function or storage SecurityError
-    const rt = createPrototypeRuntime(project);
+    const badGraph = { ...graph, variables: [...graph.variables!, badComputedVar] };
+    const badReport = validateLogicGraphSemantics(badGraph, { ...project, logicGraphs: [badGraph] });
+    expect(badReport.warnings.some((w) => w.code === 'INVALID_COMPUTED_EXPRESSION')).toBe(true);
+
+    // 1. Headless Runtime with backing storage persists & hydrates + recomputes
+    const storeMap = new Map<string, string>();
+    const storageAdapter = {
+      local: {
+        getItem: (k: string) => storeMap.get(k) ?? null,
+        setItem: (k: string, v: string) => { storeMap.set(k, v); },
+      },
+    };
+    const rt = createPrototypeRuntime(project, { storage: storageAdapter });
+    expect(rt.getSnapshot().variables[computedVar.id]).toBe(6);
     const snap = rt.dispatchNodeEvent(fx.triggerBtnId, 'click');
-    expect(snap.variables[persistedVar.id]).toBe('guest');
-    expect(snap.variables[computedVar.id]).toBe(0);
-    expect(snap.nodeOverrides[fx.statusTextId]?.text).toBe('Safe');
+    expect(snap.variables[clicksVar.id]).toBe(5);
+    expect(snap.variables[computedVar.id]).toBe(10);
+    expect(snap.nodeOverrides[fx.statusTextId]?.text).toBe('Doubled=10');
 
+    // Re-mounting a fresh runtime hydrates persisted clicks=5 -> doubled=10 immediately
+    const rtReloaded = createPrototypeRuntime(project, { storage: storageAdapter });
+    expect(rtReloaded.getSnapshot().variables[clicksVar.id]).toBe(5);
+    expect(rtReloaded.getSnapshot().variables[computedVar.id]).toBe(10);
+
+    // 2. Live Preview Micro-Runtime (zero-eval, safe storage fallback)
     const page = getActivePage(project);
     const script = buildLivePreviewLogicScript(project, page)!;
-    expect(script).not.toContain('localStorage');
     expect(script).not.toContain('eval(');
     const preview = createPreviewDomHarness(script, [fx.triggerBtnId, fx.statusTextId]);
     preview.click(fx.triggerBtnId);
-    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('Safe');
+    expect(preview.elements.get(fx.statusTextId)?.textContent).toBe('Doubled=10');
 
+    // 3. Exported React TSX (zero-eval, reactive computed + storage)
     const reactHarness = createReactTsxHarness(project, fx.pageId);
-    expect(reactHarness.pageFile.content).not.toContain('localStorage');
     expect(reactHarness.pageFile.content).not.toContain('eval(');
     reactHarness.click(fx.triggerBtnId);
-    expect(reactHarness.getText(fx.statusTextId)).toBe('Safe');
+    expect(reactHarness.getText(fx.statusTextId)).toBe('Doubled=10');
   });
 
   it('honestly reports flow.delay and flow.loop-timer as simulated in React TSX parity matrix and executes for-each + delay consistently across all 3 runtimes', () => {

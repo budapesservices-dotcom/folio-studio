@@ -667,3 +667,102 @@ export async function loadMostRecentProject(): Promise<FolioProject | null> {
 
   return project;
 }
+
+export interface LocalProjectSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly updatedAt: string;
+  readonly createdAt: string;
+  readonly pageCount: number;
+  readonly componentCount: number;
+  readonly applicationCount: number;
+  readonly assetCount: number;
+}
+
+/** Builds a lightweight summary row for any Folio project in the Local Project Library. */
+export function summarizeLocalProject(project: FolioProject): LocalProjectSummary {
+  return {
+    id: project.metadata.id,
+    name: project.metadata.name,
+    updatedAt: project.metadata.updatedAt,
+    createdAt: project.metadata.createdAt,
+    pageCount: project.pages.length,
+    componentCount: project.components.length,
+    applicationCount: Math.max(1, project.applications?.length ?? 1),
+    assetCount: project.assets.length,
+  };
+}
+
+/**
+ * Lists all saved Folio projects in the browser's local IndexedDB database
+ * (100% offline, zero external backend or billing), sorted newest-first.
+ */
+export async function listSavedProjects(): Promise<LocalProjectSummary[]> {
+  if (!('indexedDB' in globalThis)) {
+    return [];
+  }
+  const database = await openDatabase();
+  let storedProjects: unknown[] = [];
+  try {
+    storedProjects = await new Promise<unknown[]>((resolve, reject) => {
+      const transaction = database.transaction(PROJECT_STORE, 'readonly');
+      const request = transaction.objectStore(PROJECT_STORE).getAll();
+      request.onsuccess = () => resolve((request.result as unknown[]) ?? []);
+      request.onerror = () => reject(request.error ?? new Error('Could not list local projects.'));
+    });
+  } finally {
+    database.close();
+  }
+
+  const summaries: LocalProjectSummary[] = [];
+  for (const record of storedProjects) {
+    if (!record || typeof record !== 'object') continue;
+    const rawId = (record as { metadata?: { id?: unknown } }).metadata?.id;
+    if (
+      typeof rawId !== 'string' ||
+      rawId === RESERVED_COMPONENT_PROJECT_ID ||
+      rawId.startsWith('folio-page-')
+    ) {
+      continue;
+    }
+    try {
+      const normalized = migrateProjectToV2(record);
+      summaries.push(summarizeLocalProject(normalized));
+    } catch {
+      // Skip malformed records so one corrupt entry never hides valid projects.
+    }
+  }
+
+  summaries.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  return summaries;
+}
+
+/**
+ * Saves an independent copy/snapshot of a project into local IndexedDB with a
+ * fresh project ID and sanitized network secrets (zero raw credentials stored).
+ */
+export async function saveProjectCopy(
+  input: FolioProject,
+  copyName?: string,
+): Promise<FolioProject> {
+  const sanitized = sanitizeProjectNetworkSecrets(input);
+  const now = new Date().toISOString();
+  const nextId =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? `folio-${globalThis.crypto.randomUUID()}`
+      : `folio-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const trimmedName = copyName?.trim() || `${sanitized.metadata.name} (Copy)`;
+  const cloned: FolioProject = requireValidProject({
+    ...structuredClone(sanitized),
+    metadata: {
+      ...sanitized.metadata,
+      id: nextId,
+      name: trimmedName,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+  await saveProject(cloned);
+  return cloned;
+}
+

@@ -441,6 +441,80 @@ async function yieldToMainThread(): Promise<void> {
   });
 }
 
+function parseColorLuminance(color: string | undefined): number | null {
+  if (!color) return null;
+  const trimmed = color.trim().toLowerCase();
+  if (!trimmed || trimmed === 'none' || trimmed === 'transparent') return null;
+
+  let r: number | null = null;
+  let g: number | null = null;
+  let b: number | null = null;
+  let a = 1;
+
+  if (trimmed.startsWith('#')) {
+    const hex = trimmed.slice(1);
+    if (hex.length === 3 || hex.length === 4) {
+      r = parseInt(hex[0] + hex[0], 16);
+      g = parseInt(hex[1] + hex[1], 16);
+      b = parseInt(hex[2] + hex[2], 16);
+      if (hex.length === 4) a = parseInt(hex[3] + hex[3], 16) / 255;
+    } else if (hex.length === 6 || hex.length === 8) {
+      r = parseInt(hex.slice(0, 2), 16);
+      g = parseInt(hex.slice(2, 4), 16);
+      b = parseInt(hex.slice(4, 6), 16);
+      if (hex.length === 8) a = parseInt(hex.slice(6, 8), 16) / 255;
+    }
+  } else {
+    const rgbMatch = trimmed.match(/^rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)(?:\s*,\s*([0-9.]+))?\s*\)$/);
+    if (rgbMatch) {
+      r = Number(rgbMatch[1]);
+      g = Number(rgbMatch[2]);
+      b = Number(rgbMatch[3]);
+      if (rgbMatch[4] !== undefined) a = Number(rgbMatch[4]);
+    }
+  }
+
+  if (r === null || g === null || b === null || Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) || a <= 0.05) {
+    return null;
+  }
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
+export function resolveOpaqueExportBackground(doc: FolioDocument): string {
+  const bg = doc.background?.trim();
+  const normalized = bg?.toLowerCase();
+  if (
+    bg
+    && normalized !== 'transparent'
+    && normalized !== 'none'
+    && normalized !== '#00000000'
+    && normalized !== '#0000'
+    && !/^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(?:\.0+)?\s*\)$/.test(normalized ?? '')
+  ) {
+    return bg;
+  }
+
+  let luminanceSum = 0;
+  let sampleCount = 0;
+  for (const node of doc.nodes) {
+    if (!node.visible || node.opacity <= 0.05) continue;
+    if ('style' in node && node.style) {
+      const weight = node.type === 'text' ? 2 : 1;
+      const fillColor = 'fill' in node.style ? node.style.fill : undefined;
+      const strokeColor = 'stroke' in node.style ? node.style.stroke : undefined;
+      const lum = parseColorLuminance(fillColor) ?? parseColorLuminance(strokeColor);
+      if (lum !== null) {
+        luminanceSum += lum * weight;
+        sampleCount += weight;
+      }
+    }
+  }
+  if (sampleCount > 0 && luminanceSum / sampleCount > 0.62) {
+    return '#12161A';
+  }
+  return '#FFFFFF';
+}
+
 /**
  * Renders a single evaluated animation frame onto `canvas` with exact aspect-ratio fit.
  */
@@ -494,9 +568,7 @@ export async function renderAnimatedFrameToCanvas(
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!options.transparentBackground) {
-      const bg = page.document.background;
-      const fillBg = bg && bg !== 'transparent' && bg !== 'none' && bg !== '#00000000' ? bg : '#12161A';
-      ctx.fillStyle = fillBg;
+      ctx.fillStyle = resolveOpaqueExportBackground(page.document);
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 

@@ -1,3 +1,4 @@
+import { useState } from 'preact/hooks';
 import { isSafeCssColorValue } from '../../core/document/tokens';
 import type {
   AnimationClip,
@@ -89,6 +90,68 @@ export function NodeLogicNodeFields({
   onUpdateNodeData,
   onToggleComponentNodeLogic,
 }: NodeLogicNodeFieldsProps) {
+  const [liveTestState, setLiveTestState] = useState<{
+    readonly nodeId: string;
+    readonly loading: boolean;
+    readonly status?: number;
+    readonly ok?: boolean;
+    readonly durationMs?: number;
+    readonly preview?: string;
+    readonly error?: string;
+  } | null>(null);
+
+  const runLiveProxyTest = async (rawUrl: string, method: string, body?: string, useAuth?: boolean) => {
+    const baseUrl = graph?.networkSettings?.baseUrl?.trim() ?? '';
+    const trimmed = rawUrl.trim();
+    const resolvedUrl =
+      /^https?:\/\//i.test(trimmed)
+        ? trimmed
+        : baseUrl
+          ? `${baseUrl.replace(/\/+$/, '')}/${trimmed.replace(/^\/+/, '')}`
+          : trimmed;
+    setLiveTestState({ nodeId: node.id, loading: true });
+    try {
+      const response = await fetch('/api/logic/http-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: resolvedUrl,
+          method,
+          ...(body && method !== 'GET' ? { body } : {}),
+          ...(useAuth && graph?.networkSettings?.authSecretRef
+            ? { authSecretRef: graph.networkSettings.authSecretRef }
+            : {}),
+        }),
+      });
+      const json = (await response.json()) as {
+        status?: number;
+        ok?: boolean;
+        durationMs?: number;
+        data?: unknown;
+        error?: string;
+      };
+      const rawPreview =
+        json.data !== undefined && json.data !== null
+          ? (typeof json.data === 'string' ? json.data : JSON.stringify(json.data, null, 2))
+          : '';
+      setLiveTestState({
+        nodeId: node.id,
+        loading: false,
+        status: json.status ?? response.status,
+        ok: Boolean(json.ok),
+        durationMs: json.durationMs,
+        preview: rawPreview.slice(0, 600),
+        error: json.error,
+      });
+    } catch (err) {
+      setLiveTestState({
+        nodeId: node.id,
+        loading: false,
+        ok: false,
+        error: err instanceof Error ? err.message : 'Proxy request failed.',
+      });
+    }
+  };
   const targetNodeId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId : '';
   const variableId = typeof node.data.variableId === 'string' ? node.data.variableId : '';
   const targetMode: PipelineTargetMode = getNodeTargetMode(node);
@@ -638,6 +701,18 @@ export function NodeLogicNodeFields({
               value={typeof node.data.query === 'string' ? node.data.query : ''}
               onInput={(event) => onUpdateNodeData(node.id, { query: event.currentTarget.value })}
             />
+          </label>
+          <label class="nl-field">
+            <span>Execution mode</span>
+            <select
+              class="select-field"
+              aria-label="External data execution mode"
+              value={node.data.executionMode === 'live' ? 'live' : 'simulated'}
+              onChange={(event) => onUpdateNodeData(node.id, { executionMode: event.currentTarget.value })}
+            >
+              <option value="simulated">Simulated (Deterministic Offline)</option>
+              <option value="live">Live HTTP (via Server Proxy)</option>
+            </select>
           </label>
           <button type="button" class="nl-inline-link" onClick={() => onChangeTab('network')}>
             Configure Base URL & Auth in Network Settings →
@@ -2185,14 +2260,58 @@ export function NodeLogicNodeFields({
               />
             </label>
           )}
+          <label class="nl-field">
+            <span>Execution mode</span>
+            <select
+              class="select-field"
+              aria-label="HTTP request execution mode"
+              value={node.data.executionMode === 'live' ? 'live' : 'simulated'}
+              onChange={(event) => onUpdateNodeData(node.id, { executionMode: event.currentTarget.value })}
+            >
+              <option value="simulated">Simulated (Deterministic Offline)</option>
+              <option value="live">Live HTTP (via /api/logic/http-proxy)</option>
+            </select>
+          </label>
           <label class="nl-checkbox-row">
             <input
               type="checkbox"
               checked={Boolean(node.data.useAuth)}
               onChange={(event) => onUpdateNodeData(node.id, { useAuth: event.currentTarget.checked })}
             />
-            <span>Use Project Auth Token &amp; Global Headers</span>
+            <span>Use Project Auth Secret Ref (server-side)</span>
           </label>
+          <div class="nl-live-http-test">
+            <button
+              type="button"
+              class="nl-secondary-btn"
+              disabled={liveTestState?.nodeId === node.id && liveTestState.loading}
+              onClick={() =>
+                void runLiveProxyTest(
+                  typeof node.data.url === 'string' ? node.data.url : '',
+                  typeof node.data.method === 'string' ? node.data.method : 'GET',
+                  typeof node.data.body === 'string' ? node.data.body : undefined,
+                  Boolean(node.data.useAuth),
+                )
+              }
+            >
+              {liveTestState?.nodeId === node.id && liveTestState.loading
+                ? 'Testing via Proxy…'
+                : 'Test Live Request'}
+            </button>
+            {liveTestState?.nodeId === node.id && !liveTestState.loading && (
+              <div class={`nl-live-http-result ${liveTestState.ok ? 'is-ok' : 'is-err'}`} data-testid="nl-live-http-result">
+                <div class="nl-live-http-result-head">
+                  <strong>{liveTestState.ok ? `HTTP ${liveTestState.status ?? 200}` : `Error (${liveTestState.status ?? 'Blocked'})`}</strong>
+                  {typeof liveTestState.durationMs === 'number' && <span>{liveTestState.durationMs}ms</span>}
+                </div>
+                {liveTestState.error ? (
+                  <p class="nl-live-http-result-msg">{liveTestState.error}</p>
+                ) : (
+                  <pre class="nl-live-http-result-pre">{liveTestState.preview || '(empty response)'}</pre>
+                )}
+              </div>
+            )}
+          </div>
           <button type="button" class="nl-inline-link" onClick={() => onChangeTab('network')}>
             Open Project Network Settings →
           </button>

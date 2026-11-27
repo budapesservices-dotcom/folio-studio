@@ -9,11 +9,13 @@ import type {
   CodeModuleRecord,
   ComponentDefinition,
   ComponentInstanceNode,
+  ComponentScope,
   ComponentSlotDefinition,
   ComponentVariantAxis,
   CustomEasingPreset,
   DesignNode,
   DesignTokenCollection,
+  FolioApplication,
   FolioDocument,
   FolioPage,
   FolioProject,
@@ -137,6 +139,15 @@ export interface MainCanvasCommandClient {
     description?: string,
   ): NativeCommandTransactionResult;
   setActivePage(pageId: string, description?: string): NativeCommandResult;
+  createApplication(application: FolioApplication, homePage: FolioPage, description?: string): NativeCommandResult;
+  setActiveApplication(applicationId: string, description?: string): NativeCommandResult;
+  renameApplication(applicationId: string, name: string, description?: string): NativeCommandResult;
+  setComponentScope(
+    componentId: string,
+    scope: ComponentScope,
+    applicationId?: string,
+    description?: string,
+  ): NativeCommandResult;
   setDocumentBackground(background: string, description?: string): NativeCommandResult;
   setDocumentSize(width: number, height: number, description?: string): NativeCommandResult;
   createComponent(
@@ -439,6 +450,53 @@ export function createWorkspaceCommandClient(
         'page.set-active',
         { kind: 'project', projectId },
         { pageId },
+        description,
+      );
+    },
+
+    createApplication(application, homePage, description = 'Create application') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'app.create',
+        { kind: 'project', projectId },
+        {
+          application: stripUndefinedEntries(application),
+          homePage: stripUndefinedEntries(homePage),
+        },
+        description,
+      );
+    },
+
+    setActiveApplication(applicationId, description = 'Switch active application') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'app.set-active',
+        { kind: 'project', projectId },
+        { applicationId },
+        description,
+      );
+    },
+
+    renameApplication(applicationId, name, description = 'Rename application') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'app.rename',
+        { kind: 'project', projectId },
+        { applicationId, name },
+        description,
+      );
+    },
+
+    setComponentScope(componentId, scope, applicationId, description = 'Update component scope') {
+      const projectId = store.getSnapshot().editorState.project.metadata.id;
+      return submit(
+        'component.set-scope',
+        { kind: 'project', projectId },
+        stripUndefinedEntries({
+          componentId,
+          scope,
+          ...(scope === 'local' && applicationId ? { applicationId } : {}),
+        }),
         description,
       );
     },

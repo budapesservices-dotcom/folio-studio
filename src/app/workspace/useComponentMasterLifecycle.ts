@@ -5,8 +5,15 @@ import {
   buildComponentDefinitionFromNodes,
   extractComponentAnimationsFromClips,
 } from '../../core/document/components';
+import { getActiveApplication, getActiveApplicationId } from '../../core/document/applications';
 import { getActiveDocument } from '../../core/document/project';
-import type { ComponentDefinition, DesignNode, FolioDocument, FolioProject } from '../../core/document/types';
+import type {
+  ComponentDefinition,
+  ComponentScope,
+  DesignNode,
+  FolioDocument,
+  FolioProject,
+} from '../../core/document/types';
 import { loadProjectById, saveProject, withProjectWriteLock } from '../../core/persistence/indexedDb';
 import { createDebouncedAutosave } from '../debouncedAutosave';
 import { activateModalDialog, trapModalDialogKeydown } from '../modalFocus';
@@ -397,6 +404,29 @@ export function useComponentMasterLifecycle({
     };
     mainCommandClient.createComponent(copy, 'Duplicate component');
     setNotice(`“${component.name}” duplicated.`);
+  };
+
+  const setComponentScope = (component: ComponentDefinition, scope: ComponentScope) => {
+    if (isHydrating) return;
+    const previousUpdatedAt = component.updatedAt;
+    const activeApp = getActiveApplication(state.project);
+    const activeAppId = getActiveApplicationId(state.project);
+    const result = mainCommandClient.setComponentScope(
+      component.id,
+      scope,
+      scope === 'local' ? activeAppId : undefined,
+      scope === 'local'
+        ? `Scope "${component.name}" to ${activeApp.name}`
+        : `Promote "${component.name}" to Global`,
+    );
+    if (result.status === 'applied') {
+      acknowledgeMasterMetadataUpdate(component.id, previousUpdatedAt);
+      setNotice(
+        scope === 'local'
+          ? `“${component.name}” is now Local to ${activeApp.name}.`
+          : `“${component.name}” is now a Global component.`,
+      );
+    }
   };
 
   const componentDeletionTarget = (component: ComponentDefinition) => ({
@@ -844,6 +874,7 @@ export function useComponentMasterLifecycle({
     createNewMasterComponent,
     renameComponent,
     duplicateComponent,
+    setComponentScope,
     deleteComponent,
     cancelComponentDeletion,
     saveBufferAsNewAndDelete,

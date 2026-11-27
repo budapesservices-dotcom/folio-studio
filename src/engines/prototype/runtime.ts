@@ -28,6 +28,7 @@ import {
   getInstanceIdFromExpandedGraphId,
   resolveApplicableGraphsForPage,
 } from './componentScope';
+import { evaluateComputedExpression } from './computedExpr';
 import {
   buildPipelineOriginRef,
   clonePipelineContextWithStep,
@@ -99,10 +100,21 @@ export interface PrototypeRuntimeSnapshot {
   readonly warnings: readonly string[];
 }
 
+export interface PrototypeStorageBucket {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem?(key: string): void;
+  clear?(): void;
+}
+
 export interface PrototypeRuntimeOptions {
   pageId?: string;
   maxSteps?: number;
   urlParams?: Readonly<Record<string, string>>;
+  storage?: {
+    readonly local?: PrototypeStorageBucket;
+    readonly session?: PrototypeStorageBucket;
+  };
 }
 
 export interface PrototypeRuntime {
@@ -377,6 +389,8 @@ export function createPrototypeRuntime(
   let variableTypes = new Map<string, LogicValueType>();
   let variableInitialValues = new Map<string, LogicVariableValue>();
   let variableNameToId = new Map<string, string>();
+  let variablePersist = new Map<string, 'local' | 'session'>();
+  let variableComputed = new Map<string, string>();
   let variables: Record<string, LogicVariableValue> = {};
   let privateMemory: Record<string, boolean> = {};
   let memoryStorage: { local: Map<string, string>; session: Map<string, string> } = {
@@ -396,6 +410,83 @@ export function createPrototypeRuntime(
     return `${prefix}-${executionCounter}`;
   };
 
+  const persistKeyForVariable = (variableId: string): string => `folio:var:${variableId}`;
+
+  const readPersistedVariable = (
+    variableId: string,
+    scope: 'local' | 'session',
+    expectedType: LogicValueType,
+    fallback: LogicVariableValue,
+  ): LogicVariableValue | undefined => {
+    const key = persistKeyForVariable(variableId);
+    let raw: string | null = null;
+    const externalBucket = options.storage?.[scope];
+    if (externalBucket) {
+      try {
+        raw = externalBucket.getItem(key);
+      } catch {
+        raw = null;
+      }
+    }
+    if (raw === null && memoryStorage[scope].has(key)) {
+      raw = memoryStorage[scope].get(key) ?? null;
+    }
+    if (raw === null) return undefined;
+    try {
+      const parsed = JSON.parse(raw);
+      return coerceVariableValue(parsed, expectedType, fallback);
+    } catch {
+      return coerceVariableValue(raw, expectedType, fallback);
+    }
+  };
+
+  const writePersistedVariable = (variableId: string, value: LogicVariableValue) => {
+    const scope = variablePersist.get(variableId);
+    if (!scope) return;
+    const key = persistKeyForVariable(variableId);
+    let serialized = '';
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      serialized = String(value);
+    }
+    memoryStorage[scope].set(key, serialized);
+    const externalBucket = options.storage?.[scope];
+    if (externalBucket) {
+      try {
+        externalBucket.setItem(key, serialized);
+      } catch {
+        // Safe fallback to in-memory storage
+      }
+    }
+  };
+
+  const recomputeComputedVariables = (
+    onChanged?: (variableId: string, nextValue: LogicVariableValue) => void,
+  ) => {
+    if (variableComputed.size === 0) return;
+    const maxPasses = Math.min(variableComputed.size, 6);
+    for (let pass = 0; pass < maxPasses; pass += 1) {
+      let anyChanged = false;
+      for (const [varId, expr] of variableComputed.entries()) {
+        const expectedType = variableTypes.get(varId);
+        if (!expectedType) continue;
+        const result = evaluateComputedExpression(expr, variables, variableNameToId);
+        if (!result.ok) continue;
+        const prev = variables[varId];
+        const fallback = variableInitialValues.get(varId) ?? prev;
+        const nextVal = coerceVariableValue(result.value, expectedType, fallback);
+        if (JSON.stringify(nextVal) !== JSON.stringify(prev)) {
+          variables[varId] = nextVal;
+          writePersistedVariable(varId, nextVal);
+          anyChanged = true;
+          onChanged?.(varId, nextVal);
+        }
+      }
+      if (!anyChanged) break;
+    }
+  };
+
   const loadPageContext = (page: FolioPage, preserveVariables: boolean) => {
     activePageId = page.id;
     activeRoute = page.route;
@@ -408,6 +499,8 @@ export function createPrototypeRuntime(
       variableTypes = new Map();
       variableInitialValues = new Map();
       variableNameToId = new Map();
+      variablePersist = new Map();
+      variableComputed = new Map();
     }
 
     for (const entry of indexedGraphs) {
@@ -421,11 +514,22 @@ export function createPrototypeRuntime(
         variableInitialValues.set(variable.id, normalizedInitial);
         variableNameToId.set(variable.name, variable.id);
         variableNameToId.set(variable.name.toLowerCase(), variable.id);
+        if (variable.persist === 'local' || variable.persist === 'session') {
+          variablePersist.set(variable.id, variable.persist);
+        }
+        if (variable.computed && typeof variable.computedExpression === 'string' && variable.computedExpression.trim()) {
+          variableComputed.set(variable.id, variable.computedExpression.trim());
+        }
         if (!Object.prototype.hasOwnProperty.call(variables, variable.id)) {
-          variables[variable.id] = normalizedInitial;
+          const persisted =
+            variable.persist === 'local' || variable.persist === 'session'
+              ? readPersistedVariable(variable.id, variable.persist, variable.valueType, normalizedInitial)
+              : undefined;
+          variables[variable.id] = persisted !== undefined ? persisted : normalizedInitial;
         }
       }
     }
+    recomputeComputedVariables();
   };
 
   const resetState = () => {
@@ -979,6 +1083,8 @@ export function createPrototypeRuntime(
           const prevVal = variables[variableId];
           const coerced = coerceVariableValue(rawVal, expectedType, prevVal);
           variables[variableId] = coerced;
+          writePersistedVariable(variableId, coerced);
+          recomputeComputedVariables((cId, cVal) => enqueueStateChangeListeners(cId, cVal));
           const stepPayload: PipelineStepOutput = { variableId, value: coerced, previous: prevVal };
           const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
@@ -1033,6 +1139,8 @@ export function createPrototypeRuntime(
           const prevVal = Boolean(variables[variableId]);
           const nextVal = !prevVal;
           variables[variableId] = nextVal;
+          writePersistedVariable(variableId, nextVal);
+          recomputeComputedVariables((cId, cVal) => enqueueStateChangeListeners(cId, cVal));
           const stepPayload: PipelineStepOutput = { value: nextVal, previous: prevVal, variableId };
           const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
@@ -1062,6 +1170,8 @@ export function createPrototypeRuntime(
           if (typeof node.data.min === 'number' && Number.isFinite(node.data.min)) nextVal = Math.max(node.data.min, nextVal);
           if (typeof node.data.max === 'number' && Number.isFinite(node.data.max)) nextVal = Math.min(node.data.max, nextVal);
           variables[variableId] = nextVal;
+          writePersistedVariable(variableId, nextVal);
+          recomputeComputedVariables((cId, cVal) => enqueueStateChangeListeners(cId, cVal));
           const stepPayload: PipelineStepOutput = { variableId, value: nextVal, previous: prevVal };
           const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
@@ -1127,6 +1237,8 @@ export function createPrototypeRuntime(
           }
 
           variables[variableId] = nextVal;
+          writePersistedVariable(variableId, nextVal);
+          recomputeComputedVariables((cId, cVal) => enqueueStateChangeListeners(cId, cVal));
           const stepPayload: PipelineStepOutput = { variableId, operation: op, value: nextVal, previous: prevVal };
           const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
@@ -1990,26 +2102,36 @@ export function createPrototypeRuntime(
       const prev = variables[variableId];
       const coerced = coerceVariableValue(value, expectedType, prev);
       variables[variableId] = coerced;
+      writePersistedVariable(variableId, coerced);
+      const changedIds: Array<{ id: string; val: LogicVariableValue }> = [];
       if (coerced !== prev) {
+        changedIds.push({ id: variableId, val: coerced });
+      }
+      recomputeComputedVariables((cId, cVal) => {
+        changedIds.push({ id: cId, val: cVal });
+      });
+      if (changedIds.length > 0) {
         const starters: ExecutionQueueItem[] = [];
-        for (const indexed of indexedGraphs) {
-          for (const node of indexed.graph.nodes) {
-            if (node.type === 'event.on-state-change' && node.data.variableId === variableId) {
-              const stateOrigin = indexed.instanceId
-                ? buildPipelineOriginRef(
-                    indexed.instanceId,
-                    astNodesById,
-                    componentsById,
-                    project.animations,
-                    tokens,
-                  )
-                : null;
-              starters.push({
-                indexed,
-                nodeId: node.id,
-                context: createPipelineContext(nextExecutionId('state'), 'state-change', stateOrigin),
-                initialStepPayload: { variableId, value: coerced },
-              });
+        for (const changed of changedIds) {
+          for (const indexed of indexedGraphs) {
+            for (const node of indexed.graph.nodes) {
+              if (node.type === 'event.on-state-change' && node.data.variableId === changed.id) {
+                const stateOrigin = indexed.instanceId
+                  ? buildPipelineOriginRef(
+                      indexed.instanceId,
+                      astNodesById,
+                      componentsById,
+                      project.animations,
+                      tokens,
+                    )
+                  : null;
+                starters.push({
+                  indexed,
+                  nodeId: node.id,
+                  context: createPipelineContext(nextExecutionId('state'), 'state-change', stateOrigin),
+                  initialStepPayload: { variableId: changed.id, value: changed.val },
+                });
+              }
             }
           }
         }

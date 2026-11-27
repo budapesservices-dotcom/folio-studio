@@ -6,6 +6,7 @@ import type {
   CustomEasingPreset,
   DesignNode,
   DesignTokenCollection,
+  FolioApplication,
   FolioPage,
   FolioProject,
   LogicFramePreset,
@@ -57,6 +58,12 @@ export interface ProjectDelta {
   readonly metadataAfter?: FolioProject['metadata'];
   readonly activePageIdBefore?: string;
   readonly activePageIdAfter?: string;
+  readonly applicationsChanged?: boolean;
+  readonly applicationsBefore?: readonly FolioApplication[];
+  readonly applicationsAfter?: readonly FolioApplication[];
+  readonly activeApplicationIdChanged?: boolean;
+  readonly activeApplicationIdBefore?: string;
+  readonly activeApplicationIdAfter?: string;
   readonly pageOrderBefore?: readonly string[];
   readonly pageOrderAfter?: readonly string[];
   readonly pages: readonly PageDeltaEntry[];
@@ -239,6 +246,8 @@ export function isProjectDeltaEmpty(delta: ProjectDelta): boolean {
   return (
     delta.metadataAfter === undefined &&
     delta.activePageIdAfter === undefined &&
+    !delta.applicationsChanged &&
+    !delta.activeApplicationIdChanged &&
     delta.pageOrderAfter === undefined &&
     delta.pages.length === 0 &&
     delta.componentOrderAfter === undefined &&
@@ -276,7 +285,10 @@ export function computeProjectDelta(
           ? computeDocumentNodesDelta(beforePage.document, afterPage.document)
           : undefined;
       const docChanged = candidateDocDelta !== undefined && !isDocumentNodesDeltaEmpty(candidateDocDelta);
-      const metaChanged = beforePage.name !== afterPage.name || beforePage.route !== afterPage.route;
+      const metaChanged =
+        beforePage.name !== afterPage.name ||
+        beforePage.route !== afterPage.route ||
+        beforePage.applicationId !== afterPage.applicationId;
       if (docChanged || metaChanged) {
         pages.push({
           kind: 'updated',
@@ -343,8 +355,15 @@ export function computeProjectDelta(
     before.logicFramePresets !== after.logicFramePresets &&
     !areValuesDeepEqual(before.logicFramePresets, after.logicFramePresets);
 
+  const applicationsChanged =
+    before.applications !== after.applications &&
+    !areValuesDeepEqual(before.applications, after.applications);
+  const activeApplicationIdChanged = before.activeApplicationId !== after.activeApplicationId;
+
   const hasNonMetadataChanges =
     before.activePageId !== after.activePageId ||
+    applicationsChanged ||
+    activeApplicationIdChanged ||
     pageOrderChanged ||
     pages.length > 0 ||
     componentOrderChanged ||
@@ -373,6 +392,20 @@ export function computeProjectDelta(
       : {}),
     ...(before.activePageId !== after.activePageId
       ? { activePageIdBefore: before.activePageId, activePageIdAfter: after.activePageId }
+      : {}),
+    ...(applicationsChanged
+      ? {
+          applicationsChanged: true,
+          applicationsBefore: before.applications,
+          applicationsAfter: after.applications,
+        }
+      : {}),
+    ...(activeApplicationIdChanged
+      ? {
+          activeApplicationIdChanged: true,
+          activeApplicationIdBefore: before.activeApplicationId,
+          activeApplicationIdAfter: after.activeApplicationId,
+        }
       : {}),
     ...(pageOrderChanged ? { pageOrderBefore, pageOrderAfter } : {}),
     pages,
@@ -460,11 +493,16 @@ export function applyProjectDelta(
         const nextDoc = entry.documentDelta
           ? applyDocumentNodesDelta(existing.document, entry.documentDelta, direction)
           : existing.document;
-        pageMap.set(entry.pageId, {
+        const updatedPage: FolioPage = {
           ...existing,
           ...(metaTarget ? { name: metaTarget.name, route: metaTarget.route } : {}),
           document: nextDoc,
-        });
+        };
+        if (metaTarget) {
+          if (metaTarget.applicationId === undefined) delete updatedPage.applicationId;
+          else updatedPage.applicationId = metaTarget.applicationId;
+        }
+        pageMap.set(entry.pageId, updatedPage);
       }
     }
 
@@ -531,6 +569,19 @@ export function applyProjectDelta(
       ? [...((direction === 'forward' ? delta.assetsAfter : delta.assetsBefore) ?? [])]
       : project.assets,
   };
+
+  if (delta.applicationsChanged) {
+    const nextApplications = direction === 'forward' ? delta.applicationsAfter : delta.applicationsBefore;
+    if (nextApplications === undefined) delete nextProject.applications;
+    else nextProject.applications = [...nextApplications];
+  }
+
+  if (delta.activeApplicationIdChanged) {
+    const nextActiveAppId =
+      direction === 'forward' ? delta.activeApplicationIdAfter : delta.activeApplicationIdBefore;
+    if (nextActiveAppId === undefined) delete nextProject.activeApplicationId;
+    else nextProject.activeApplicationId = nextActiveAppId;
+  }
 
   if (delta.designTokensChanged) {
     const nextTokens = direction === 'forward' ? delta.designTokensAfter : delta.designTokensBefore;

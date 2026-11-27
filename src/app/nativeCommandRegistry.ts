@@ -6,11 +6,15 @@ import {
   validateAnimationDeleteClipPayload,
   validateAnimationUpdateClipPayload,
   validateAnimationUpdateCustomEasingsPayload,
+  validateAppCreatePayload,
+  validateAppRenamePayload,
+  validateAppSetActivePayload,
   validateAssetUpsertPayload,
   validateCodeUpdateModulesPayload,
   validateComponentCreatePayload,
   validateComponentDeletePayload,
   validateComponentRenamePayload,
+  validateComponentSetScopePayload,
   validateComponentSyncDocumentPayload,
   validateComponentUpdateContractPayload,
   validateDocumentSetBackgroundPayload,
@@ -310,6 +314,41 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
       return [{ type: 'set-active-page', pageId: command.payload.pageId }];
     },
   }),
+  'app.create': Object.freeze({
+    type: 'app.create' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'page.create',
+    resetsHistory: true,
+    validatePayload: validateAppCreatePayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'app.create') return [];
+      return [{ type: 'create-app', application: command.payload.application, homePage: command.payload.homePage }];
+    },
+  }),
+  'app.set-active': Object.freeze({
+    type: 'app.set-active' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'page.switch',
+    resetsHistory: true,
+    validatePayload: validateAppSetActivePayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'app.set-active') return [];
+      return [{ type: 'set-active-app', applicationId: command.payload.applicationId }];
+    },
+  }),
+  'app.rename': Object.freeze({
+    type: 'app.rename' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'project.rename',
+    validatePayload: validateAppRenamePayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'app.rename') return [];
+      return [{ type: 'rename-app', applicationId: command.payload.applicationId, name: command.payload.name }];
+    },
+  }),
   'document.set-background': Object.freeze({
     type: 'document.set-background' as const,
     commandVersion: 1 as const,
@@ -411,6 +450,22 @@ export const EXTENDED_NATIVE_COMMAND_REGISTRY = Object.freeze({
         ...(command.payload.nodeLogicEnabled !== undefined ? { nodeLogicEnabled: command.payload.nodeLogicEnabled } : {}),
         expectedUpdatedAt: command.payload.expectedUpdatedAt,
         expectedMasterDocument: context.liveComponentMasterDocument,
+      }];
+    },
+  }),
+  'component.set-scope': Object.freeze({
+    type: 'component.set-scope' as const,
+    commandVersion: 1 as const,
+    allowedTargets: Object.freeze(['project'] as const),
+    requiredPermission: 'component.update',
+    validatePayload: validateComponentSetScopePayload,
+    toEditorActions(command: NativeCommand): readonly EditorAction[] {
+      if (command.type !== 'component.set-scope') return [];
+      return [{
+        type: 'set-component-scope',
+        componentId: command.payload.componentId,
+        scope: command.payload.scope,
+        ...(command.payload.applicationId !== undefined ? { applicationId: command.payload.applicationId } : {}),
       }];
     },
   }),

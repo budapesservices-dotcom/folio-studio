@@ -588,10 +588,21 @@ export interface ProjectMetadata {
   updatedAt: string;
 }
 
+export interface FolioApplication {
+  id: string;
+  name: string;
+  slug: string;
+  basePath: string;
+}
+
+export type ComponentScope = 'global' | 'local';
+
 export interface FolioPage {
   id: string;
   name: string;
   route: string;
+  /** Optional owning application ID for multi-application projects. */
+  applicationId?: string;
   document: FolioDocument;
 }
 
@@ -639,6 +650,10 @@ export interface ComponentDefinition {
   nodeLogicEnabled?: boolean;
   /** Optional Motion Timeline clips authored in Component Canvas so saved instances animate as 1 unified object. */
   animations?: AnimationClip[];
+  /** Project-wide Global component (default) or application-scoped Local component. */
+  scope?: ComponentScope;
+  /** Owning application ID when scope === 'local'. */
+  applicationId?: string;
 }
 
 export type DesignTokenLayer = 'primitive' | 'semantic';
@@ -1061,6 +1076,10 @@ export interface FolioProjectV2 {
   customEasings?: CustomEasingPreset[];
   /** Optional reusable Smart Logic Frame presets saved by the user. */
   logicFramePresets?: LogicFramePreset[];
+  /** Optional multi-application manifest inside a unified `.flop` v2 project. */
+  applications?: FolioApplication[];
+  /** Optional currently active application ID when `applications` is defined. */
+  activeApplicationId?: string;
 }
 
 /** Current project alias used by the editor, persistence and file I/O. */

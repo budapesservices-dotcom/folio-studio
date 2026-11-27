@@ -479,7 +479,7 @@ export function MainCanvasWindow({
         onConvertToPath,
         onFlip,
         onChangeBackground,
-        onResetView: () => onZoomChange(1),
+        onResetView: onResetView ?? (() => onZoomChange(1)),
         ...canvasContextMenuExtras,
       }
     : undefined;
@@ -810,7 +810,7 @@ export function ComponentCanvasWindow({
         onConvertToPath,
         onFlip,
         onChangeBackground,
-        onResetView: () => onZoomChange(1),
+        onResetView: onResetView ?? (() => onZoomChange(1)),
         onSaveAsComponent: onSaveSelectionAsNew,
         ...canvasContextMenuExtras,
       }

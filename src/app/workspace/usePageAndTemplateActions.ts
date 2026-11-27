@@ -1,4 +1,10 @@
 import { useRef, useState } from 'preact/hooks';
+import {
+  createApplicationWithHomePage,
+  getActiveApplication,
+  getActiveApplicationId,
+  getProjectApplications,
+} from '../../core/document/applications';
 import { createEmptyDocument, createFrameNode, createNodeForDocument, createTriangleNode } from '../../core/document/factory';
 import { createComponentInstance, wouldCreateComponentCycle } from '../../core/document/components';
 import type { ComponentDefinition, FolioDocument, FolioPage, FolioProject } from '../../core/document/types';
@@ -86,7 +92,10 @@ export function usePageAndTemplateActions({
       instantiateTemplateNodes,
     }: typeof import('../../core/document/templates')) => {
       if (effectiveMode === 'page' && activeEditorId === 'main') {
-        const { page, logicGraph } = buildTemplatePageBundle(template, project.pages);
+        const { page: rawPage, logicGraph } = buildTemplatePageBundle(template, project.pages);
+        const page: FolioPage = project.applications && project.applications.length > 0
+          ? { ...rawPage, applicationId: getActiveApplicationId(project) }
+          : rawPage;
         const txResult = mainCommandClient.createPageWithLogic(
           page,
           logicGraph,
@@ -193,8 +202,10 @@ export function usePageAndTemplateActions({
     if (isHydrating) return;
     const name = pageNameDraft.trim();
     if (!name) return;
+    const activeApp = getActiveApplication(project);
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `page-${project.pages.length + 1}`;
-    const route = `/${slug}`;
+    const routePrefix = activeApp.basePath !== '/' ? activeApp.basePath.replace(/\/+$/, '') : '';
+    const route = `${routePrefix}/${slug}`;
     if (project.pages.some((page) => page.route === route)) {
       setNotice('A page with this route already exists.');
       return;
@@ -204,11 +215,46 @@ export function usePageAndTemplateActions({
       ...createEmptyDocument(name, activeDocument.width, activeDocument.height),
       background: activeDocument.background,
     };
-    mainCommandClient.createPage({ id, name, route, document }, 'Create page');
+    const nextPage: FolioPage = project.applications && project.applications.length > 0
+      ? { id, name, route, applicationId: activeApp.id, document }
+      : { id, name, route, document };
+    mainCommandClient.createPage(nextPage, 'Create page');
     setPageNameDraft('');
     closePagesRack();
     setInspectorVisible(true);
     setNotice(`Created ${name}.`);
+  };
+
+  const addApplication = (rawName: string) => {
+    if (isHydrating) return;
+    const name = rawName.trim();
+    if (!name) return;
+    const { application, homePage } = createApplicationWithHomePage(project, name, {
+      width: activeDocument.width,
+      height: activeDocument.height,
+      background: activeDocument.background,
+    });
+    const result = mainCommandClient.createApplication(application, homePage, `Create application "${application.name}"`);
+    if (result.status === 'applied') {
+      setActiveEditorId('main');
+      openMainCanvas();
+      setInspectorVisible(true);
+      setNotice(`Created application “${application.name}” (${application.basePath}).`);
+    }
+  };
+
+  const switchApplication = (applicationId: string) => {
+    if (isHydrating) return;
+    const currentActiveId = getActiveApplicationId(project);
+    if (applicationId === currentActiveId) return;
+    const targetApp = getProjectApplications(project).find((app) => app.id === applicationId);
+    if (!targetApp) return;
+    const result = mainCommandClient.setActiveApplication(applicationId, `Switch to ${targetApp.name}`);
+    if (result.status === 'applied') {
+      setActiveEditorId('main');
+      openMainCanvas();
+      setNotice(`Switched to application “${targetApp.name}”.`);
+    }
   };
 
   const commitProjectName = (value: string) => {
@@ -252,6 +298,8 @@ export function usePageAndTemplateActions({
     insertTemplate,
     switchPage,
     addPage,
+    addApplication,
+    switchApplication,
     commitProjectName,
     insertOwnedComponent,
   };
