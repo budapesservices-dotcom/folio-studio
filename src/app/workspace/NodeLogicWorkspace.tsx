@@ -2763,10 +2763,34 @@ export default function NodeLogicWorkspace({
           }}
           onRunMount={() => {
             if (!runtimeRef.current) return;
+            const hasLiveNodes = project.logicGraphs.some((g) =>
+              g.nodes.some(
+                (n) => (n.type === 'network.http' || n.type === 'source.external') && n.data.executionMode === 'live',
+              ),
+            );
+            if (hasLiveNodes) {
+              const activeRuntime = runtimeRef.current;
+              void activeRuntime.mountAsync().then((snap) => {
+                if (runtimeRef.current === activeRuntime) setRuntimeSnapshot(snap);
+              });
+              return;
+            }
             setRuntimeSnapshot(runtimeRef.current.mount());
           }}
           onTriggerNodeEvent={(targetAstNodeId: string, eventKind: LogicNodeEventKind) => {
             if (!runtimeRef.current) return;
+            const hasLiveNodes = project.logicGraphs.some((g) =>
+              g.nodes.some(
+                (n) => (n.type === 'network.http' || n.type === 'source.external') && n.data.executionMode === 'live',
+              ),
+            );
+            if (hasLiveNodes) {
+              const activeRuntime = runtimeRef.current;
+              void activeRuntime.dispatchNodeEventAsync(targetAstNodeId, eventKind).then((snap) => {
+                if (runtimeRef.current === activeRuntime) setRuntimeSnapshot(snap);
+              });
+              return;
+            }
             setRuntimeSnapshot(runtimeRef.current.dispatchNodeEvent(targetAstNodeId, eventKind));
           }}
           onResetRuntime={() => {

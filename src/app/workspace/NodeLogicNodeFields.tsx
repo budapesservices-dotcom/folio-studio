@@ -14,9 +14,11 @@ import type {
 import {
   getNodeTargetMode,
   getScopedUpstreamOutputs,
+  getSessionNetworkTestToken,
   getUpstreamPipelineOrigins,
   LOGIC_COMPARE_OPERATORS,
   parsePipelineRef,
+  parseSafeRuntimeHeaders,
   resolveAstNodeById,
   type LogicPortDataType,
   type PipelineOriginChildRef,
@@ -98,6 +100,7 @@ export function NodeLogicNodeFields({
     readonly durationMs?: number;
     readonly preview?: string;
     readonly error?: string;
+    readonly authMode?: 'session-token' | 'server-secret' | 'none';
   } | null>(null);
 
   const runLiveProxyTest = async (rawUrl: string, method: string, body?: string, useAuth?: boolean) => {
@@ -109,7 +112,27 @@ export function NodeLogicNodeFields({
         : baseUrl
           ? `${baseUrl.replace(/\/+$/, '')}/${trimmed.replace(/^\/+/, '')}`
           : trimmed;
-    setLiveTestState({ nodeId: node.id, loading: true });
+
+    const safeGlobalHeaders = parseSafeRuntimeHeaders(graph?.networkSettings?.globalHeaders);
+    const authSecretRef = graph?.networkSettings?.authSecretRef?.trim() ?? '';
+    const sessionTestToken = graph ? getSessionNetworkTestToken(graph.id, authSecretRef).trim() : '';
+
+    const requestHeaders: Record<string, string> = { ...(safeGlobalHeaders ?? {}) };
+    let authMode: 'session-token' | 'server-secret' | 'none' = 'none';
+    let effectiveAuthSecretRef: string | undefined;
+
+    if (useAuth && sessionTestToken) {
+      // Strictly session-only in-memory token used ONLY for this live test request when auth is enabled.
+      requestHeaders.Authorization = /^(?:Bearer|Basic|Token)\s+/i.test(sessionTestToken)
+        ? sessionTestToken
+        : `Bearer ${sessionTestToken}`;
+      authMode = 'session-token';
+    } else if (useAuth && authSecretRef) {
+      effectiveAuthSecretRef = authSecretRef;
+      authMode = 'server-secret';
+    }
+
+    setLiveTestState({ nodeId: node.id, loading: true, authMode });
     try {
       const response = await fetch('/api/logic/http-proxy', {
         method: 'POST',
@@ -117,19 +140,34 @@ export function NodeLogicNodeFields({
         body: JSON.stringify({
           url: resolvedUrl,
           method,
-          ...(body && method !== 'GET' ? { body } : {}),
-          ...(useAuth && graph?.networkSettings?.authSecretRef
-            ? { authSecretRef: graph.networkSettings.authSecretRef }
-            : {}),
+          ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
+          ...(body && method !== 'GET' && method !== 'HEAD' ? { body } : {}),
+          ...(effectiveAuthSecretRef ? { authSecretRef: effectiveAuthSecretRef } : {}),
         }),
       });
-      const json = (await response.json()) as {
+      const text = await response.text();
+      let json: {
         status?: number;
         ok?: boolean;
         durationMs?: number;
         data?: unknown;
         error?: string;
       };
+      try {
+        json = JSON.parse(text) as {
+          status?: number;
+          ok?: boolean;
+          durationMs?: number;
+          data?: unknown;
+          error?: string;
+        };
+      } catch {
+        json = {
+          status: response.status,
+          ok: false,
+          error: `Proxy returned non-JSON HTTP ${response.status}.`,
+        };
+      }
       const rawPreview =
         json.data !== undefined && json.data !== null
           ? (typeof json.data === 'string' ? json.data : JSON.stringify(json.data, null, 2))
@@ -142,6 +180,7 @@ export function NodeLogicNodeFields({
         durationMs: json.durationMs,
         preview: rawPreview.slice(0, 600),
         error: json.error,
+        authMode,
       });
     } catch (err) {
       setLiveTestState({
@@ -149,6 +188,7 @@ export function NodeLogicNodeFields({
         loading: false,
         ok: false,
         error: err instanceof Error ? err.message : 'Proxy request failed.',
+        authMode,
       });
     }
   };
@@ -636,19 +676,24 @@ export function NodeLogicNodeFields({
           )}
 
           {contextKind === 'user-auth' && (
-            <label class="nl-field">
-              <span>Auth field</span>
-              <select
-                class="select-field"
-                value={typeof node.data.authField === 'string' ? node.data.authField : 'isSignedIn'}
-                onChange={(event) => onUpdateNodeData(node.id, { authField: event.currentTarget.value })}
-              >
-                <option value="isSignedIn">Is Signed In (boolean)</option>
-                <option value="name">Display Name</option>
-                <option value="email">Email</option>
-                <option value="role">Role</option>
-              </select>
-            </label>
+            <>
+              <label class="nl-field">
+                <span>Auth field</span>
+                <select
+                  class="select-field"
+                  value={typeof node.data.authField === 'string' ? node.data.authField : 'isSignedIn'}
+                  onChange={(event) => onUpdateNodeData(node.id, { authField: event.currentTarget.value })}
+                >
+                  <option value="isSignedIn">Is Signed In (boolean)</option>
+                  <option value="name">Display Name</option>
+                  <option value="email">Email</option>
+                  <option value="role">Role</option>
+                </select>
+              </label>
+              <p class="nl-hint">
+                Returns guest defaults unless your host app supplies an auth context — live user authentication is not connected.
+              </p>
+            </>
           )}
         </>
       );
@@ -711,9 +756,53 @@ export function NodeLogicNodeFields({
               onChange={(event) => onUpdateNodeData(node.id, { executionMode: event.currentTarget.value })}
             >
               <option value="simulated">Simulated (Deterministic Offline)</option>
-              <option value="live">Live HTTP (via Server Proxy)</option>
+              <option value="live">Live HTTP (via /api/logic/http-proxy)</option>
             </select>
           </label>
+          <label class="nl-checkbox-row">
+            <input
+              type="checkbox"
+              checked={Boolean(node.data.useAuth)}
+              onChange={(event) => onUpdateNodeData(node.id, { useAuth: event.currentTarget.checked })}
+            />
+            <span>Use Project Auth Secret Ref (server-side)</span>
+          </label>
+          <div class="nl-live-http-test">
+            <button
+              type="button"
+              class="nl-secondary-btn"
+              disabled={liveTestState?.nodeId === node.id && liveTestState.loading}
+              onClick={() => {
+                const rawTarget =
+                  sourceKind === 'cms'
+                    ? `/collections/${String(node.data.collection ?? '').trim().replace(/^\/+/, '')}`
+                    : String(node.data.endpoint ?? '').trim();
+                const query = typeof node.data.query === 'string' ? node.data.query.trim().replace(/^\?/, '') : '';
+                const targetWithQuery = query && rawTarget ? `${rawTarget}${rawTarget.includes('?') ? '&' : '?'}${query}` : rawTarget;
+                void runLiveProxyTest(targetWithQuery, 'GET', undefined, Boolean(node.data.useAuth));
+              }}
+            >
+              {liveTestState?.nodeId === node.id && liveTestState.loading
+                ? 'Testing via Proxy…'
+                : 'Test Live Request'}
+            </button>
+            {liveTestState?.nodeId === node.id && !liveTestState.loading && (
+              <div class={`nl-live-http-result ${liveTestState.ok ? 'is-ok' : 'is-err'}`} data-testid="nl-live-http-result">
+                <div class="nl-live-http-result-head">
+                  <strong>{liveTestState.ok ? `HTTP ${liveTestState.status ?? 200}` : `Error (${liveTestState.status ?? 'Blocked'})`}</strong>
+                  {typeof liveTestState.durationMs === 'number' && <span>{liveTestState.durationMs}ms</span>}
+                </div>
+                {liveTestState.authMode === 'session-token' && (
+                  <p class="nl-hint">Used Session-Only Local Test Token (in-memory only).</p>
+                )}
+                {liveTestState.error ? (
+                  <p class="nl-live-http-result-msg">{liveTestState.error}</p>
+                ) : (
+                  <pre class="nl-live-http-result-pre">{liveTestState.preview || '(empty response)'}</pre>
+                )}
+              </div>
+            )}
+          </div>
           <button type="button" class="nl-inline-link" onClick={() => onChangeTab('network')}>
             Configure Base URL & Auth in Network Settings →
           </button>
@@ -2304,6 +2393,9 @@ export function NodeLogicNodeFields({
                   <strong>{liveTestState.ok ? `HTTP ${liveTestState.status ?? 200}` : `Error (${liveTestState.status ?? 'Blocked'})`}</strong>
                   {typeof liveTestState.durationMs === 'number' && <span>{liveTestState.durationMs}ms</span>}
                 </div>
+                {liveTestState.authMode === 'session-token' && (
+                  <p class="nl-hint">Used Session-Only Local Test Token (in-memory only).</p>
+                )}
                 {liveTestState.error ? (
                   <p class="nl-live-http-result-msg">{liveTestState.error}</p>
                 ) : (
@@ -2385,6 +2477,9 @@ export function NodeLogicNodeFields({
               onInput={(event) => onUpdateNodeData(node.id, { eventName: event.currentTarget.value })}
             />
           </label>
+          <p class="nl-hint">
+            Simulated offline channel only — live WebSocket transport is not yet available.
+          </p>
         </>
       );
 

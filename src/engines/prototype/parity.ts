@@ -14,7 +14,11 @@
  * - Explicit, unit-testable capability parity matrix across all 31 primary nodes.
  */
 
-import { sanitizeLogicNodeDataRecord } from '../../core/document/networkSecrets';
+import {
+  isSensitiveHeaderName,
+  sanitizeGlobalHeadersForPersistence,
+  sanitizeLogicNodeDataRecord,
+} from '../../core/document/networkSecrets';
 import { getProjectDesignTokens, toDesignTokenThemeSlug } from '../../core/document/tokens';
 import type {
   DesignNode,
@@ -126,7 +130,7 @@ export const NODE_RUNTIME_PARITY_MATRIX: readonly NodeRuntimeParityEntry[] = [
   // Sources (3)
   { type: 'source.element', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Element triggers & property reads' },
   { type: 'source.context', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Page route, theme, viewport, URL params, auth context' },
-  { type: 'source.external', headless: 'simulated', livePreview: 'full', reactCodegen: 'full', notes: 'Deterministic simulated payload in Headless; supports executionMode "live" via SSRF-hardened /api/logic/http-proxy or direct fetch in Live Preview & React TSX (zero secrets)' },
+  { type: 'source.external', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Live HTTP via /api/logic/http-proxy in Headless async (mountAsync), Live Preview, and React TSX; deterministic offline simulation when executionMode is simulated (zero embedded secrets)' },
   // Events (8)
   { type: 'event.on-click', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Click, Double Click, Click Outside + once guard' },
   { type: 'event.on-hover', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Hover enter/leave + once guard' },
@@ -158,9 +162,9 @@ export const NODE_RUNTIME_PARITY_MATRIX: readonly NodeRuntimeParityEntry[] = [
   { type: 'flow.loop-timer', headless: 'simulated', livePreview: 'full', reactCodegen: 'simulated', notes: 'For-each list iteration full across all 3; interval timer real in Live Preview and single-tick simulated in Headless & React TSX' },
   { type: 'flow.control', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Sequence, parallel, debounce/throttle fan-out' },
   // Network & Backend (3)
-  { type: 'network.http', headless: 'simulated', livePreview: 'full', reactCodegen: 'full', notes: 'Deterministic simulated step in Headless; supports executionMode "live" via SSRF-hardened /api/logic/http-proxy or direct fetch in Live Preview & React TSX (zero embedded secrets)' },
+  { type: 'network.http', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Live HTTP via /api/logic/http-proxy in Headless async (dispatchNodeEventAsync), Live Preview, and React TSX; deterministic offline simulation when executionMode is simulated (zero embedded secrets)' },
   { type: 'network.json', headless: 'full', livePreview: 'full', reactCodegen: 'full', notes: 'Get field, parse, stringify, validity check' },
-  { type: 'network.socket', headless: 'simulated', livePreview: 'simulated', reactCodegen: 'simulated', notes: 'Channel event simulation (zero embedded secrets)' },
+  { type: 'network.socket', headless: 'simulated', livePreview: 'simulated', reactCodegen: 'simulated', notes: 'Simulated offline channel only — live WebSocket transport is not yet available (zero embedded secrets)' },
 ] as const;
 
 export interface CompiledOriginChildMeta {
@@ -235,7 +239,14 @@ export interface CompiledPageLogicRuntimeConfig {
   readonly variableNameToId: Record<string, string>;
   readonly variablePersist: Record<string, 'local' | 'session'>;
   readonly variableComputed: Record<string, string>;
-  readonly networkSettingsByGraphId: Record<string, { readonly baseUrl?: string; readonly authSecretRef?: string }>;
+  readonly networkSettingsByGraphId: Record<
+    string,
+    {
+      readonly baseUrl?: string;
+      readonly authSecretRef?: string;
+      readonly globalHeaders?: Readonly<Record<string, string>>;
+    }
+  >;
   readonly nodeMeta: Record<string, CompiledRuntimeNodeMeta>;
   readonly pageRouteById: Record<string, string>;
   readonly themeSlugById: Record<string, string>;
@@ -268,6 +279,33 @@ function extractNodeFill(node: DesignNode): string | undefined {
  * prevent drift in variable types, Scoped Pipeline metadata, variant maps,
  * theme slugs, animation classes, and Baked Logic Frames.
  */
+export function parseSafeRuntimeHeaders(
+  rawGlobalHeaders: string | undefined,
+): Record<string, string> | undefined {
+  if (!rawGlobalHeaders || !rawGlobalHeaders.trim()) return undefined;
+  const sanitized = sanitizeGlobalHeadersForPersistence(rawGlobalHeaders).trim();
+  if (!sanitized) return undefined;
+  try {
+    const parsed = JSON.parse(sanitized) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const out: Record<string, string> = {};
+    for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
+      const trimmedKey = key.trim();
+      if (!trimmedKey || trimmedKey === '__proto__' || trimmedKey === 'constructor' || trimmedKey === 'prototype') {
+        continue;
+      }
+      if (isSensitiveHeaderName(trimmedKey)) continue;
+      if (!/^[a-zA-Z0-9-]+$/.test(trimmedKey)) continue;
+      if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+        out[trimmedKey] = String(val).replace(/[\r\n\u0000]/g, '').slice(0, 1024);
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function compilePageLogicRuntimeConfig(
   project: FolioProject,
   page: FolioPage,
@@ -280,15 +318,26 @@ export function compilePageLogicRuntimeConfig(
   const variableNameToId: Record<string, string> = {};
   const variablePersist: Record<string, 'local' | 'session'> = {};
   const variableComputed: Record<string, string> = {};
-  const networkSettingsByGraphId: Record<string, { readonly baseUrl?: string; readonly authSecretRef?: string }> = {};
+  const networkSettingsByGraphId: Record<
+    string,
+    {
+      readonly baseUrl?: string;
+      readonly authSecretRef?: string;
+      readonly globalHeaders?: Readonly<Record<string, string>>;
+    }
+  > = {};
 
   for (const graph of graphs) {
     const isInstanceGraph = Boolean(getInstanceIdFromExpandedGraphId(graph.id));
-    if (graph.networkSettings && (graph.networkSettings.baseUrl || graph.networkSettings.authSecretRef)) {
-      networkSettingsByGraphId[graph.id] = {
-        ...(graph.networkSettings.baseUrl ? { baseUrl: graph.networkSettings.baseUrl } : {}),
-        ...(graph.networkSettings.authSecretRef ? { authSecretRef: graph.networkSettings.authSecretRef } : {}),
-      };
+    if (graph.networkSettings) {
+      const parsedHeaders = parseSafeRuntimeHeaders(graph.networkSettings.globalHeaders);
+      if (graph.networkSettings.baseUrl || graph.networkSettings.authSecretRef || parsedHeaders) {
+        networkSettingsByGraphId[graph.id] = {
+          ...(graph.networkSettings.baseUrl ? { baseUrl: graph.networkSettings.baseUrl } : {}),
+          ...(graph.networkSettings.authSecretRef ? { authSecretRef: graph.networkSettings.authSecretRef } : {}),
+          ...(parsedHeaders ? { globalHeaders: parsedHeaders } : {}),
+        };
+      }
     }
     for (const variable of graph.variables ?? []) {
       variableTypes[variable.id] = variable.valueType;
@@ -695,6 +744,9 @@ export function discoverDynamicReactTargets(
         (node.type === 'source.page' || node.type === 'source.context') &&
         (!node.data.pageId || node.data.pageId === page.id)
       ) {
+        hasPageLoad = true;
+      }
+      if (node.type === 'source.external') {
         hasPageLoad = true;
       }
 

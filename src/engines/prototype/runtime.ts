@@ -6,7 +6,11 @@
  * Flow & Timing, Network) plus 100% backward-compatible legacy v1 nodes.
  */
 
-import { sanitizeUrlCredentials } from '../../core/document/networkSecrets';
+import {
+  isSensitiveHeaderName,
+  sanitizeGlobalHeadersForPersistence,
+  sanitizeUrlCredentials,
+} from '../../core/document/networkSecrets';
 import { getActivePage } from '../../core/document/project';
 import { getProjectDesignTokens, isSafeCssColorValue } from '../../core/document/tokens';
 import type {
@@ -107,6 +111,34 @@ export interface PrototypeStorageBucket {
   clear?(): void;
 }
 
+export interface PrototypeHttpProxyRequest {
+  readonly url: string;
+  readonly method: string;
+  readonly headers?: Record<string, string>;
+  readonly body?: string;
+  readonly authSecretRef?: string;
+}
+
+export interface PrototypeHttpProxyResponse {
+  readonly status: number;
+  readonly ok: boolean;
+  readonly contentType?: string;
+  readonly data: unknown;
+  readonly durationMs?: number;
+  readonly error?: string;
+}
+
+export type PrototypeHttpProxyExecutor = (
+  payload: PrototypeHttpProxyRequest,
+) => Promise<PrototypeHttpProxyResponse>;
+
+export interface PrototypeAuthContext {
+  readonly isSignedIn?: boolean;
+  readonly name?: string;
+  readonly email?: string;
+  readonly role?: string;
+}
+
 export interface PrototypeRuntimeOptions {
   pageId?: string;
   maxSteps?: number;
@@ -115,11 +147,19 @@ export interface PrototypeRuntimeOptions {
     readonly local?: PrototypeStorageBucket;
     readonly session?: PrototypeStorageBucket;
   };
+  httpProxyExecutor?: PrototypeHttpProxyExecutor;
+  authContext?: PrototypeAuthContext;
 }
 
 export interface PrototypeRuntime {
   mount(): PrototypeRuntimeSnapshot;
+  mountAsync(): Promise<PrototypeRuntimeSnapshot>;
   dispatchNodeEvent(nodeId: string, event: LogicNodeEventKind, payload?: unknown): PrototypeRuntimeSnapshot;
+  dispatchNodeEventAsync(
+    nodeId: string,
+    event: LogicNodeEventKind,
+    payload?: unknown,
+  ): Promise<PrototypeRuntimeSnapshot>;
   setVariable(variableId: string, value: LogicVariableValue): PrototypeRuntimeSnapshot;
   reset(): PrototypeRuntimeSnapshot;
   getSnapshot(): PrototypeRuntimeSnapshot;
@@ -635,7 +675,14 @@ export function createPrototypeRuntime(
           }
           if (kind === 'theme') return (typeof node.data.themeId === 'string' && node.data.themeId) || activeThemeId;
           if (kind === 'viewport') return node.data.viewportMetric === 'height' ? 900 : 1440;
-          if (kind === 'user-auth') return node.data.authField === 'email' ? 'guest@folio.app' : false;
+          if (kind === 'user-auth') {
+            const field = String(node.data.authField ?? 'isSignedIn');
+            const auth = options.authContext;
+            if (field === 'email') return auth?.email ?? 'guest@folio.app';
+            if (field === 'name') return auth?.name ?? 'Guest';
+            if (field === 'role') return auth?.role ?? 'guest';
+            return Boolean(auth?.isSignedIn ?? false);
+          }
           if (kind === 'url-params') {
             const paramKey = typeof node.data.paramKey === 'string' ? node.data.paramKey.trim() : '';
             return paramKey && options.urlParams ? (options.urlParams[paramKey] ?? '') : '';
@@ -651,8 +698,23 @@ export function createPrototypeRuntime(
         }
 
         case 'source.external': {
+          const cachedExt = latestExternalData.get(node.id);
+          if (cachedExt) {
+            if (portId === 'count') return cachedExt.count;
+            return cachedExt.data;
+          }
           if (portId === 'count') return 0;
           return [];
+        }
+
+        case 'network.http': {
+          const cachedHttp = latestHttpResponses.get(node.id);
+          if (cachedHttp) {
+            if (portId === 'status') return cachedHttp.status;
+            if (portId === 'error') return cachedHttp.error ?? '';
+            return cachedHttp.data;
+          }
+          return portId === 'status' ? 0 : null;
         }
 
         case 'source.page': {
@@ -876,7 +938,131 @@ export function createPrototypeRuntime(
     readonly initialStepPayload?: PipelineStepOutput;
   }
 
-  const runExecutionQueue = (initialQueue: ExecutionQueueItem[]) => {
+  const latestHttpResponses = new Map<string, { readonly data: unknown; readonly status: number; readonly ok: boolean; readonly error?: string }>();
+  const latestExternalData = new Map<string, { readonly data: unknown[]; readonly count: number; readonly status: number; readonly ok: boolean; readonly error?: string }>();
+
+  const parseGraphSafeHeaders = (rawHeaders: string | undefined): Record<string, string> | undefined => {
+    if (!rawHeaders || !rawHeaders.trim()) return undefined;
+    const sanitized = sanitizeGlobalHeadersForPersistence(rawHeaders).trim();
+    if (!sanitized) return undefined;
+    try {
+      const parsed = JSON.parse(sanitized) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        const key = k.trim();
+        if (!key || key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+        if (isSensitiveHeaderName(key)) continue;
+        if (!/^[a-zA-Z0-9-]+$/.test(key)) continue;
+        if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+          out[key] = String(v).replace(/[\r\n\u0000]/g, '').slice(0, 1024);
+        }
+      }
+      return Object.keys(out).length > 0 ? out : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const resolveEndpointWithBaseUrl = (rawPathOrUrl: string, baseUrl: string | undefined): string => {
+    const trimmed = sanitizeUrlCredentials(rawPathOrUrl.trim());
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    const cleanBase = sanitizeUrlCredentials((baseUrl ?? '').trim());
+    if (cleanBase) {
+      return `${cleanBase.replace(/\/+$/, '')}/${trimmed.replace(/^\/+/, '')}`;
+    }
+    return trimmed;
+  };
+
+  const resolveExternalSourceUrl = (node: LogicNode, baseUrl: string | undefined): string => {
+    const sourceKind = node.data.sourceKind === 'cms' ? 'cms' : 'api';
+    const rawTarget =
+      sourceKind === 'cms'
+        ? (typeof node.data.endpoint === 'string' && node.data.endpoint.trim()
+            ? node.data.endpoint.trim()
+            : `/collections/${String(node.data.collection ?? '').trim().replace(/^\/+/, '')}`)
+        : String(node.data.endpoint ?? '').trim();
+    let fullUrl = resolveEndpointWithBaseUrl(rawTarget, baseUrl);
+    const query = typeof node.data.query === 'string' ? node.data.query.trim().replace(/^\?/, '') : '';
+    if (query && fullUrl) {
+      fullUrl += (fullUrl.includes('?') ? '&' : '?') + query;
+    }
+    return fullUrl;
+  };
+
+  const normalizeExternalListData = (raw: unknown): unknown[] => {
+    if (Array.isArray(raw)) return raw;
+    if (raw && typeof raw === 'object') {
+      const rec = raw as Record<string, unknown>;
+      if (Array.isArray(rec.items)) return rec.items;
+      if (Array.isArray(rec.data)) return rec.data;
+    }
+    if (raw !== null && raw !== undefined && raw !== '') return [raw];
+    return [];
+  };
+
+  const invokeLiveHttpProxy = async (
+    payload: PrototypeHttpProxyRequest,
+  ): Promise<PrototypeHttpProxyResponse> => {
+    if (options.httpProxyExecutor) {
+      return options.httpProxyExecutor(payload);
+    }
+    if (typeof globalThis.fetch !== 'function') {
+      return {
+        status: 0,
+        ok: false,
+        data: null,
+        error: 'Fetch API is unavailable in this environment for live HTTP requests.',
+      };
+    }
+    try {
+      const response = await globalThis.fetch('/api/logic/http-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const text = await response.text();
+      try {
+        const parsed = JSON.parse(text) as PrototypeHttpProxyResponse;
+        return {
+          status: typeof parsed.status === 'number' ? parsed.status : response.status,
+          ok: Boolean(parsed.ok),
+          contentType: parsed.contentType ?? response.headers.get('content-type') ?? 'application/json',
+          data: parsed.data ?? null,
+          durationMs: parsed.durationMs,
+          error: parsed.error,
+        };
+      } catch {
+        return {
+          status: response.status,
+          ok: false,
+          contentType: response.headers.get('content-type') ?? 'text/plain',
+          data: text,
+          error: `Proxy returned non-JSON HTTP ${response.status}.`,
+        };
+      }
+    } catch (err) {
+      return {
+        status: 0,
+        ok: false,
+        data: null,
+        error: err instanceof Error ? err.message : 'Network request failed.',
+      };
+    }
+  };
+
+  interface PendingLiveHttpJob {
+    readonly kind: 'network.http' | 'source.external';
+    readonly indexed: IndexedGraph;
+    readonly node: LogicNode;
+    readonly ctx: PipelineContext;
+    readonly request: PrototypeHttpProxyRequest;
+  }
+
+  const runExecutionQueue = (
+    initialQueue: ExecutionQueueItem[],
+    pendingAsyncJobs?: PendingLiveHttpJob[],
+  ) => {
     const queue: ExecutionQueueItem[] = [...initialQueue];
     let dispatchSteps = 0;
 
@@ -1000,14 +1186,11 @@ export function createPrototypeRuntime(
         case 'source.page':
         case 'source.component':
         case 'source.element':
-        case 'source.context':
-        case 'source.external': {
+        case 'source.context': {
           const defaultPort =
             node.type === 'source.page' || node.type === 'source.context'
               ? 'onLoad'
-              : node.type === 'source.external'
-                ? 'onReady'
-                : 'onClick';
+              : 'onClick';
           const outPort = next.outPortId ?? defaultPort;
           const stepPayload: PipelineStepOutput = {
             ...(next.initialStepPayload ?? {}),
@@ -1028,6 +1211,74 @@ export function createPrototypeRuntime(
             nodeId: node.id,
             nodeType: node.type,
             detail: `Triggered ${node.type}.${outPort}`,
+            originLayerId: ctx.origin?.layerId ?? null,
+            payload: stepPayload,
+          });
+          enqueueOutgoing(next.indexed, node.id, outPort, nextCtx);
+          break;
+        }
+
+        case 'source.external': {
+          const isLiveExternal = node.data.executionMode === 'live';
+          const netSettings = next.indexed.graph.networkSettings;
+          const resolvedUrl = resolveExternalSourceUrl(node, netSettings?.baseUrl);
+          if (isLiveExternal) {
+            if (pendingAsyncJobs) {
+              const safeHeaders = parseGraphSafeHeaders(netSettings?.globalHeaders);
+              const authSecretRef =
+                node.data.useAuth && netSettings?.authSecretRef ? netSettings.authSecretRef : undefined;
+              trace.push({
+                step: totalSteps,
+                graphId: next.indexed.graph.id,
+                nodeId: node.id,
+                nodeType: node.type,
+                detail: `External Data live fetch queued: GET ${resolvedUrl}`,
+                originLayerId: ctx.origin?.layerId ?? null,
+                payload: { url: resolvedUrl, mode: 'live' },
+              });
+              pendingAsyncJobs.push({
+                kind: 'source.external',
+                indexed: next.indexed,
+                node,
+                ctx,
+                request: {
+                  url: resolvedUrl,
+                  method: 'GET',
+                  ...(safeHeaders ? { headers: safeHeaders } : {}),
+                  ...(authSecretRef ? { authSecretRef } : {}),
+                },
+              });
+            } else {
+              warnings.push(
+                `External Data node "${node.id}" is in live mode; use mountAsync() for live HTTP requests.`,
+              );
+              trace.push({
+                step: totalSteps,
+                graphId: next.indexed.graph.id,
+                nodeId: node.id,
+                nodeType: node.type,
+                detail: `External Data live fetch skipped in synchronous mount (use mountAsync): ${resolvedUrl}`,
+                originLayerId: ctx.origin?.layerId ?? null,
+                payload: { url: resolvedUrl, mode: 'live', skipped: true },
+              });
+            }
+            break;
+          }
+          const outPort = next.outPortId ?? 'onReady';
+          const stepPayload: PipelineStepOutput = {
+            ...(next.initialStepPayload ?? {}),
+            data: [],
+            count: 0,
+            port: outPort,
+          };
+          latestExternalData.set(node.id, { data: [], count: 0, status: 200, ok: true });
+          const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
+          trace.push({
+            step: totalSteps,
+            graphId: next.indexed.graph.id,
+            nodeId: node.id,
+            nodeType: node.type,
+            detail: `Triggered source.external.${outPort} (simulated)`,
             originLayerId: ctx.origin?.layerId ?? null,
             payload: stepPayload,
           });
@@ -1795,10 +2046,78 @@ export function createPrototypeRuntime(
         }
 
         case 'network.http': {
-          const method = String(node.data.method ?? 'GET');
-          const url = sanitizeUrlCredentials(String(node.data.url ?? '/api/items'));
+          const method = String(node.data.method ?? 'GET').trim().toUpperCase();
+          const netSettings = next.indexed.graph.networkSettings;
+          const url = resolveEndpointWithBaseUrl(String(node.data.url ?? '/api/items'), netSettings?.baseUrl);
+          if (node.data.executionMode === 'live') {
+            const rawBody = resolveInputValue(next.indexed, node, 'body', node.data.body ?? '', visiting, ctx, 'pipelineRef');
+            const bodyStr =
+              typeof rawBody === 'string'
+                ? rawBody
+                : rawBody !== undefined && rawBody !== null && rawBody !== ''
+                  ? JSON.stringify(rawBody)
+                  : undefined;
+            const loadPayload: PipelineStepOutput = { loading: true, method, url };
+            const loadCtx = clonePipelineContextWithStep(ctx, node.id, loadPayload);
+            enqueueOutgoing(next.indexed, node.id, 'loading', loadCtx);
+            if (pendingAsyncJobs) {
+              const safeHeaders = parseGraphSafeHeaders(netSettings?.globalHeaders);
+              const authSecretRef =
+                node.data.useAuth && netSettings?.authSecretRef ? netSettings.authSecretRef : undefined;
+              trace.push({
+                step: totalSteps,
+                graphId: next.indexed.graph.id,
+                nodeId: node.id,
+                nodeType: node.type,
+                detail: `HTTP ${method} ${url} -> loading (live)`,
+                originLayerId: ctx.origin?.layerId ?? null,
+                payload: { method, url, mode: 'live' },
+              });
+              pendingAsyncJobs.push({
+                kind: 'network.http',
+                indexed: next.indexed,
+                node,
+                ctx,
+                request: {
+                  url,
+                  method,
+                  ...(safeHeaders ? { headers: safeHeaders } : {}),
+                  ...(bodyStr && method !== 'GET' && method !== 'HEAD' ? { body: bodyStr } : {}),
+                  ...(authSecretRef ? { authSecretRef } : {}),
+                },
+              });
+            } else {
+              warnings.push(
+                `HTTP Request node "${node.id}" is in live mode; use dispatchNodeEventAsync() for live HTTP execution.`,
+              );
+              const errPayload: PipelineStepOutput = {
+                data: null,
+                status: 0,
+                error: 'Live HTTP requires async execution (dispatchNodeEventAsync).',
+              };
+              latestHttpResponses.set(node.id, {
+                data: null,
+                status: 0,
+                ok: false,
+                error: 'Live HTTP requires async execution (dispatchNodeEventAsync).',
+              });
+              const errCtx = clonePipelineContextWithStep(ctx, node.id, errPayload);
+              trace.push({
+                step: totalSteps,
+                graphId: next.indexed.graph.id,
+                nodeId: node.id,
+                nodeType: node.type,
+                detail: `HTTP ${method} ${url} -> live execution requires async runtime`,
+                originLayerId: ctx.origin?.layerId ?? null,
+                payload: { method, url, status: 0, error: errPayload.error },
+              });
+              enqueueOutgoing(next.indexed, node.id, 'error', errCtx);
+            }
+            break;
+          }
           const simulatedPayload = { ok: true, method, url, data: { items: [] } };
           const stepPayload: PipelineStepOutput = { data: simulatedPayload, status: 200 };
+          latestHttpResponses.set(node.id, { data: simulatedPayload, status: 200, ok: true });
           const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
@@ -1817,14 +2136,19 @@ export function createPrototypeRuntime(
         case 'network.socket': {
           const action = String(node.data.action ?? 'listen');
           const channel = String(node.data.channel ?? 'updates');
-          const stepPayload: PipelineStepOutput = { action, channel, connected: true };
+          const stepPayload: PipelineStepOutput = {
+            action,
+            channel,
+            connected: false,
+            simulated: true,
+          };
           const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
           trace.push({
             step: totalSteps,
             graphId: next.indexed.graph.id,
             nodeId: node.id,
             nodeType: node.type,
-            detail: `Socket ${action} #${channel}`,
+            detail: `Socket ${action} #${channel} (simulated — live WebSocket unavailable)`,
             originLayerId: ctx.origin?.layerId ?? null,
             payload: stepPayload,
           });
@@ -1902,193 +2226,359 @@ export function createPrototypeRuntime(
     };
   };
 
-  return {
-    mount() {
-      if (mounted) return getSnapshot();
-      mounted = true;
-      const starters: ExecutionQueueItem[] = [];
-      for (const indexed of indexedGraphs) {
-        const mountOrigin = indexed.instanceId
-          ? buildPipelineOriginRef(
-              indexed.instanceId,
-              astNodesById,
-              componentsById,
-              project.animations,
-              tokens,
-            )
-          : null;
-        for (const node of indexed.graph.nodes) {
-          if (node.type === 'event.on-page-load') {
+  const collectOutgoingForPort = (
+    indexed: IndexedGraph,
+    nodeId: string,
+    portId: string,
+    nextCtx: PipelineContext,
+  ): ExecutionQueueItem[] => {
+    const items: ExecutionQueueItem[] = [];
+    const bakedEntry = indexed.compiledStepByNodeId.get(nodeId);
+    if (bakedEntry) {
+      const internalNext = bakedEntry.step.nextByPort[portId] ?? [];
+      for (const edge of internalNext) {
+        items.push({ indexed, nodeId: edge.targetNodeId, context: nextCtx });
+      }
+      const outgoingAll = indexed.outgoingBySource.get(`${nodeId}:${portId}`) ?? [];
+      for (const conn of outgoingAll) {
+        if (!bakedEntry.childSet.has(conn.targetNodeId)) {
+          items.push({ indexed, nodeId: conn.targetNodeId, context: nextCtx });
+        }
+      }
+      return items;
+    }
+    const connections = indexed.outgoingBySource.get(`${nodeId}:${portId}`) ?? [];
+    for (const conn of connections) {
+      items.push({ indexed, nodeId: conn.targetNodeId, context: nextCtx });
+    }
+    return items;
+  };
+
+  const runExecutionQueueAsync = async (initialQueue: ExecutionQueueItem[]) => {
+    let pending: PendingLiveHttpJob[] = [];
+    runExecutionQueue(initialQueue, pending);
+    let asyncDepth = 0;
+    while (pending.length > 0 && asyncDepth < 16) {
+      asyncDepth += 1;
+      const batch = pending;
+      pending = [];
+      for (const job of batch) {
+        const res = await invokeLiveHttpProxy(job.request);
+        if (job.kind === 'network.http') {
+          const ok = Boolean(res.ok);
+          const stepOut: PipelineStepOutput = {
+            data: res.data ?? null,
+            status: res.status ?? 0,
+            ok,
+            ...(res.error ? { error: res.error } : {}),
+          };
+          latestHttpResponses.set(job.node.id, {
+            data: res.data ?? null,
+            status: res.status ?? 0,
+            ok,
+            error: res.error,
+          });
+          totalSteps += 1;
+          trace.push({
+            step: totalSteps,
+            graphId: job.indexed.graph.id,
+            nodeId: job.node.id,
+            nodeType: job.node.type,
+            detail: `HTTP ${job.request.method} ${job.request.url} -> ${res.status ?? 0} (${ok ? 'live ok' : 'live error'})`,
+            originLayerId: job.ctx.origin?.layerId ?? null,
+            payload: {
+              method: job.request.method,
+              url: job.request.url,
+              status: res.status ?? 0,
+              ok,
+              ...(res.error ? { error: res.error } : {}),
+            },
+          });
+          const resCtx = clonePipelineContextWithStep(job.ctx, job.node.id, stepOut);
+          const nextItems = collectOutgoingForPort(
+            job.indexed,
+            job.node.id,
+            ok ? 'success' : 'error',
+            resCtx,
+          );
+          if (nextItems.length > 0) {
+            runExecutionQueue(nextItems, pending);
+          }
+        } else {
+          const ok = Boolean(res.ok);
+          const listData = ok ? normalizeExternalListData(res.data) : [];
+          const stepOut: PipelineStepOutput = {
+            data: listData,
+            count: listData.length,
+            status: res.status ?? 0,
+            ok,
+            ...(res.error ? { error: res.error } : {}),
+          };
+          latestExternalData.set(job.node.id, {
+            data: listData,
+            count: listData.length,
+            status: res.status ?? 0,
+            ok,
+            error: res.error,
+          });
+          totalSteps += 1;
+          trace.push({
+            step: totalSteps,
+            graphId: job.indexed.graph.id,
+            nodeId: job.node.id,
+            nodeType: job.node.type,
+            detail: `External Data GET ${job.request.url} -> ${res.status ?? 0} (${ok ? `${listData.length} items` : 'error'})`,
+            originLayerId: job.ctx.origin?.layerId ?? null,
+            payload: {
+              url: job.request.url,
+              status: res.status ?? 0,
+              count: listData.length,
+              ok,
+              ...(res.error ? { error: res.error } : {}),
+            },
+          });
+          if (!ok) {
+            warnings.push(
+              `External Data node "${job.node.id}" failed (${res.status ?? 0}): ${res.error ?? 'Request failed.'}`,
+            );
+          } else {
+            const resCtx = clonePipelineContextWithStep(job.ctx, job.node.id, stepOut);
+            const nextItems = collectOutgoingForPort(job.indexed, job.node.id, 'onReady', resCtx);
+            if (nextItems.length > 0) {
+              runExecutionQueue(nextItems, pending);
+            }
+          }
+        }
+      }
+    }
+  };
+
+  const buildMountStarters = (): ExecutionQueueItem[] => {
+    const starters: ExecutionQueueItem[] = [];
+    for (const indexed of indexedGraphs) {
+      const mountOrigin = indexed.instanceId
+        ? buildPipelineOriginRef(
+            indexed.instanceId,
+            astNodesById,
+            componentsById,
+            project.animations,
+            tokens,
+          )
+        : null;
+      for (const node of indexed.graph.nodes) {
+        if (node.type === 'event.on-page-load') {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            context: createPipelineContext(nextExecutionId('mount'), 'page-load', mountOrigin),
+          });
+        } else if (node.type === 'event.on-lifecycle' && (node.data.trigger === 'page-load' || !node.data.trigger)) {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            context: createPipelineContext(nextExecutionId('lifecycle'), 'page-load', mountOrigin),
+          });
+        } else if (node.type === 'source.page' && node.data.pageId === activePageId) {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            outPortId: 'onLoad',
+            context: createPipelineContext(nextExecutionId('page'), 'page-load', mountOrigin),
+          });
+        } else if (
+          node.type === 'source.context' &&
+          (node.data.contextKind === 'page' || !node.data.contextKind) &&
+          (!node.data.pageId || node.data.pageId === activePageId)
+        ) {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            outPortId: 'onLoad',
+            context: createPipelineContext(nextExecutionId('context'), 'page-load', mountOrigin),
+          });
+        } else if (node.type === 'source.external') {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            outPortId: 'onReady',
+            context: createPipelineContext(nextExecutionId('external'), 'page-load', mountOrigin),
+          });
+        }
+      }
+    }
+    return starters;
+  };
+
+  const buildNodeEventStarters = (
+    nodeId: string,
+    event: LogicNodeEventKind,
+    payload?: unknown,
+  ): ExecutionQueueItem[] => {
+    const targetAstNode = resolveAstNodeById(nodeId, astNodesById, componentsById, tokens);
+    const targetComponentId =
+      targetAstNode && targetAstNode.type === 'component-instance'
+        ? targetAstNode.componentId
+        : null;
+    const originRef = buildPipelineOriginRef(
+      nodeId,
+      astNodesById,
+      componentsById,
+      project.animations,
+      tokens,
+    );
+    const starters: ExecutionQueueItem[] = [];
+    for (const indexed of indexedGraphs) {
+      for (const node of indexed.graph.nodes) {
+        if (
+          (event === 'click' || event === 'double-click' || event === 'click-outside') &&
+          node.type === 'event.on-click' &&
+          node.data.targetNodeId === nodeId &&
+          String(node.data.mode ?? 'click') === event
+        ) {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            context: createPipelineContext(nextExecutionId(event), event, originRef),
+            initialStepPayload: { targetLayerId: nodeId, mode: event },
+          });
+        } else if (
+          event === 'hover-enter' &&
+          node.type === 'event.on-hover' &&
+          node.data.targetNodeId === nodeId &&
+          (node.data.phase === undefined || node.data.phase === 'enter')
+        ) {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            context: createPipelineContext(nextExecutionId('hover'), 'hover-enter', originRef),
+            initialStepPayload: { targetLayerId: nodeId, isHovered: true },
+          });
+        } else if (
+          event === 'hover-leave' &&
+          node.type === 'event.on-hover' &&
+          node.data.targetNodeId === nodeId &&
+          node.data.phase === 'leave'
+        ) {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            context: createPipelineContext(nextExecutionId('hover'), 'hover-leave', originRef),
+            initialStepPayload: { targetLayerId: nodeId, isHovered: false },
+          });
+        } else if (event === 'input' && node.type === 'event.on-input' && node.data.targetNodeId === nodeId) {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            context: createPipelineContext(nextExecutionId('input'), 'input', originRef),
+            initialStepPayload: { targetLayerId: nodeId, value: payload ?? '' },
+          });
+        } else if (event === 'key-press' && node.type === 'event.on-key-press') {
+          const expectedCombo = typeof node.data.keyCombo === 'string' ? node.data.keyCombo.trim().toLowerCase() : '';
+          const actualCombo = typeof payload === 'string' ? payload.trim().toLowerCase() : '';
+          if (actualCombo && expectedCombo && actualCombo !== expectedCombo) continue;
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            context: createPipelineContext(nextExecutionId('key'), 'key-press', originRef),
+            initialStepPayload: { key: payload ?? node.data.keyCombo ?? 'Enter' },
+          });
+        } else if (event === 'drag' && node.type === 'event.on-drag' && node.data.targetNodeId === nodeId) {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            context: createPipelineContext(nextExecutionId('drag'), 'drag', originRef),
+            initialStepPayload: { targetLayerId: nodeId, phase: String(node.data.phase ?? 'start') },
+          });
+        } else if (
+          event === 'scroll-view' &&
+          node.type === 'event.on-scroll-view' &&
+          (node.data.mode === 'page-scroll' || node.data.targetNodeId === nodeId)
+        ) {
+          starters.push({
+            indexed,
+            nodeId: node.id,
+            context: createPipelineContext(nextExecutionId('scroll'), 'scroll-view', originRef),
+            initialStepPayload: { progress: typeof payload === 'number' ? payload : 1 },
+          });
+        } else if (
+          node.type === 'source.element' &&
+          (node.data.targetNodeId === nodeId || (targetComponentId && node.data.componentId === targetComponentId))
+        ) {
+          if (event === 'click') {
             starters.push({
               indexed,
               nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('mount'), 'page-load', mountOrigin),
+              outPortId: 'onClick',
+              context: createPipelineContext(nextExecutionId('src-click'), 'click', originRef),
             });
-          } else if (node.type === 'event.on-lifecycle' && (node.data.trigger === 'page-load' || !node.data.trigger)) {
+          } else if (event === 'hover-enter') {
             starters.push({
               indexed,
               nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('lifecycle'), 'page-load', mountOrigin),
+              outPortId: 'onHover',
+              context: createPipelineContext(nextExecutionId('src-hover'), 'hover-enter', originRef),
             });
-          } else if (node.type === 'source.page' && node.data.pageId === activePageId) {
+          }
+        } else if (
+          node.type === 'source.component' &&
+          (typeof node.data.targetNodeId === 'string' && node.data.targetNodeId.trim().length > 0
+            ? node.data.targetNodeId.trim() === nodeId
+            : ((targetComponentId && node.data.componentId === targetComponentId) || node.data.componentId === nodeId))
+        ) {
+          if (event === 'click') {
             starters.push({
               indexed,
               nodeId: node.id,
-              outPortId: 'onLoad',
-              context: createPipelineContext(nextExecutionId('page'), 'page-load', mountOrigin),
+              outPortId: 'onClick',
+              context: createPipelineContext(nextExecutionId('comp-click'), 'click', originRef),
             });
-          } else if (
-            node.type === 'source.context' &&
-            (node.data.contextKind === 'page' || !node.data.contextKind) &&
-            (!node.data.pageId || node.data.pageId === activePageId)
-          ) {
+          } else if (event === 'hover-enter') {
             starters.push({
               indexed,
               nodeId: node.id,
-              outPortId: 'onLoad',
-              context: createPipelineContext(nextExecutionId('context'), 'page-load', mountOrigin),
+              outPortId: 'onHover',
+              context: createPipelineContext(nextExecutionId('comp-hover'), 'hover-enter', originRef),
             });
           }
         }
       }
+    }
+    return starters;
+  };
+
+  return {
+    mount() {
+      if (mounted) return getSnapshot();
+      mounted = true;
+      const starters = buildMountStarters();
       if (starters.length > 0) {
         runExecutionQueue(starters);
       }
       return getSnapshot();
     },
 
-    dispatchNodeEvent(nodeId: string, event: LogicNodeEventKind, payload?: unknown) {
-      const targetAstNode = resolveAstNodeById(nodeId, astNodesById, componentsById, tokens);
-      const targetComponentId =
-        targetAstNode && targetAstNode.type === 'component-instance'
-          ? targetAstNode.componentId
-          : null;
-      const originRef = buildPipelineOriginRef(
-        nodeId,
-        astNodesById,
-        componentsById,
-        project.animations,
-        tokens,
-      );
-      const starters: ExecutionQueueItem[] = [];
-      for (const indexed of indexedGraphs) {
-        for (const node of indexed.graph.nodes) {
-          if (
-            (event === 'click' || event === 'double-click' || event === 'click-outside') &&
-            node.type === 'event.on-click' &&
-            node.data.targetNodeId === nodeId &&
-            String(node.data.mode ?? 'click') === event
-          ) {
-            starters.push({
-              indexed,
-              nodeId: node.id,
-              context: createPipelineContext(nextExecutionId(event), event, originRef),
-              initialStepPayload: { targetLayerId: nodeId, mode: event },
-            });
-          } else if (
-            event === 'hover-enter' &&
-            node.type === 'event.on-hover' &&
-            node.data.targetNodeId === nodeId &&
-            (node.data.phase === undefined || node.data.phase === 'enter')
-          ) {
-            starters.push({
-              indexed,
-              nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('hover'), 'hover-enter', originRef),
-              initialStepPayload: { targetLayerId: nodeId, isHovered: true },
-            });
-          } else if (
-            event === 'hover-leave' &&
-            node.type === 'event.on-hover' &&
-            node.data.targetNodeId === nodeId &&
-            node.data.phase === 'leave'
-          ) {
-            starters.push({
-              indexed,
-              nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('hover'), 'hover-leave', originRef),
-              initialStepPayload: { targetLayerId: nodeId, isHovered: false },
-            });
-          } else if (event === 'input' && node.type === 'event.on-input' && node.data.targetNodeId === nodeId) {
-            starters.push({
-              indexed,
-              nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('input'), 'input', originRef),
-              initialStepPayload: { targetLayerId: nodeId, value: payload ?? '' },
-            });
-          } else if (event === 'key-press' && node.type === 'event.on-key-press') {
-            const expectedCombo = typeof node.data.keyCombo === 'string' ? node.data.keyCombo.trim().toLowerCase() : '';
-            const actualCombo = typeof payload === 'string' ? payload.trim().toLowerCase() : '';
-            if (actualCombo && expectedCombo && actualCombo !== expectedCombo) continue;
-            starters.push({
-              indexed,
-              nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('key'), 'key-press', originRef),
-              initialStepPayload: { key: payload ?? node.data.keyCombo ?? 'Enter' },
-            });
-          } else if (event === 'drag' && node.type === 'event.on-drag' && node.data.targetNodeId === nodeId) {
-            starters.push({
-              indexed,
-              nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('drag'), 'drag', originRef),
-              initialStepPayload: { targetLayerId: nodeId, phase: String(node.data.phase ?? 'start') },
-            });
-          } else if (
-            event === 'scroll-view' &&
-            node.type === 'event.on-scroll-view' &&
-            (node.data.mode === 'page-scroll' || node.data.targetNodeId === nodeId)
-          ) {
-            starters.push({
-              indexed,
-              nodeId: node.id,
-              context: createPipelineContext(nextExecutionId('scroll'), 'scroll-view', originRef),
-              initialStepPayload: { progress: typeof payload === 'number' ? payload : 1 },
-            });
-          } else if (
-            node.type === 'source.element' &&
-            (node.data.targetNodeId === nodeId || (targetComponentId && node.data.componentId === targetComponentId))
-          ) {
-            if (event === 'click') {
-              starters.push({
-                indexed,
-                nodeId: node.id,
-                outPortId: 'onClick',
-                context: createPipelineContext(nextExecutionId('src-click'), 'click', originRef),
-              });
-            } else if (event === 'hover-enter') {
-              starters.push({
-                indexed,
-                nodeId: node.id,
-                outPortId: 'onHover',
-                context: createPipelineContext(nextExecutionId('src-hover'), 'hover-enter', originRef),
-              });
-            }
-          } else if (
-            node.type === 'source.component' &&
-            (typeof node.data.targetNodeId === 'string' && node.data.targetNodeId.trim().length > 0
-              ? node.data.targetNodeId.trim() === nodeId
-              : ((targetComponentId && node.data.componentId === targetComponentId) || node.data.componentId === nodeId))
-          ) {
-            if (event === 'click') {
-              starters.push({
-                indexed,
-                nodeId: node.id,
-                outPortId: 'onClick',
-                context: createPipelineContext(nextExecutionId('comp-click'), 'click', originRef),
-              });
-            } else if (event === 'hover-enter') {
-              starters.push({
-                indexed,
-                nodeId: node.id,
-                outPortId: 'onHover',
-                context: createPipelineContext(nextExecutionId('comp-hover'), 'hover-enter', originRef),
-              });
-            }
-          }
-        }
+    async mountAsync() {
+      if (mounted) return getSnapshot();
+      mounted = true;
+      const starters = buildMountStarters();
+      if (starters.length > 0) {
+        await runExecutionQueueAsync(starters);
       }
+      return getSnapshot();
+    },
+
+    dispatchNodeEvent(nodeId: string, event: LogicNodeEventKind, payload?: unknown) {
+      const starters = buildNodeEventStarters(nodeId, event, payload);
       if (starters.length > 0) {
         runExecutionQueue(starters);
+      }
+      return getSnapshot();
+    },
+
+    async dispatchNodeEventAsync(nodeId: string, event: LogicNodeEventKind, payload?: unknown) {
+      const starters = buildNodeEventStarters(nodeId, event, payload);
+      if (starters.length > 0) {
+        await runExecutionQueueAsync(starters);
       }
       return getSnapshot();
     },
@@ -2144,6 +2634,8 @@ export function createPrototypeRuntime(
 
     reset() {
       const page = pagesById.get(initialPage.id) ?? initialPage;
+      latestHttpResponses.clear();
+      latestExternalData.clear();
       loadPageContext(page, false);
       resetState();
       return getSnapshot();

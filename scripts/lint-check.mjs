@@ -1,8 +1,8 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
 
 const ROOT_DIR = process.cwd();
-const SRC_DIR = join(ROOT_DIR, 'src');
+const SCAN_DIRS = [join(ROOT_DIR, 'src'), join(ROOT_DIR, 'functions')];
 
 const FORBIDDEN_RULES = [
   {
@@ -44,7 +44,12 @@ function collectSourceFiles(dir, out = []) {
   return out;
 }
 
-const files = collectSourceFiles(SRC_DIR);
+const files = [];
+for (const dir of SCAN_DIRS) {
+  if (existsSync(dir)) {
+    collectSourceFiles(dir, files);
+  }
+}
 const violations = [];
 
 for (const file of files) {

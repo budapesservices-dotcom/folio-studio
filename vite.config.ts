@@ -1,42 +1,68 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import preact from '@preact/preset-vite';
 import { executeServerHttpProxy } from './src/server/httpProxyHandler.ts';
 
-function folioHttpProxyPlugin(): Plugin {
+function folioHttpProxyPlugin(serverEnv: Readonly<Record<string, string | undefined>>): Plugin {
   const attachProxyMiddleware = (middlewares: {
     use: (
       path: string,
       handler: (
-        req: { method?: string; on: (ev: string, cb: (chunk?: unknown) => void) => void },
+        req: {
+          method?: string;
+          headers?: Record<string, string | string[] | undefined>;
+          on: (ev: string, cb: (chunk?: unknown) => void) => void;
+        },
         res: { statusCode: number; setHeader: (k: string, v: string) => void; end: (body: string) => void },
         next: () => void,
       ) => void,
     ) => void;
   }) => {
     middlewares.use('/api/logic/http-proxy', (req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
       if (req.method !== 'POST') {
         if (req.method === 'OPTIONS') {
           res.statusCode = 204;
+          res.setHeader('Allow', 'POST, OPTIONS');
           res.end('');
           return;
         }
         res.statusCode = 405;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ ok: false, error: 'Method Not Allowed. Use POST.' }));
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(
+          JSON.stringify({
+            status: 405,
+            ok: false,
+            contentType: 'application/json',
+            data: null,
+            durationMs: 0,
+            error: 'Method Not Allowed. Use POST.',
+          }),
+        );
         return;
       }
       const chunks: string[] = [];
-      let totalLen = 0;
+      let totalBytes = 0;
       let aborted = false;
+      const encoder = new TextEncoder();
       req.on('data', (chunk) => {
         if (aborted) return;
         const text = typeof chunk === 'string' ? chunk : String(chunk ?? '');
-        totalLen += text.length;
-        if (totalLen > 512 * 1024) {
+        totalBytes += encoder.encode(text).byteLength;
+        if (totalBytes > 512 * 1024) {
           aborted = true;
           res.statusCode = 413;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: false, error: 'Proxy request payload exceeds 512 KiB.' }));
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.end(
+            JSON.stringify({
+              status: 413,
+              ok: false,
+              contentType: 'application/json',
+              data: null,
+              durationMs: 0,
+              error: 'Proxy request payload exceeds 512 KiB.',
+            }),
+          );
           return;
         }
         chunks.push(text);
@@ -45,7 +71,11 @@ function folioHttpProxyPlugin(): Plugin {
         if (aborted) return;
         void (async () => {
           try {
-            const parsed = JSON.parse(chunks.join('') || '{}') as Record<string, unknown>;
+            const candidate = JSON.parse(chunks.join('') || '{}') as unknown;
+            if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+              throw new Error('Body must be a JSON object');
+            }
+            const parsed = candidate as Record<string, unknown>;
             const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
             const dnsSpec = 'node:dns/promises';
             const dnsMod = (await import(/* @vite-ignore */ dnsSpec)) as {
@@ -67,16 +97,26 @@ function folioHttpProxyPlugin(): Plugin {
               },
               {
                 dnsLookup: (hostname) => dnsMod.lookup(hostname, { all: true, verbatim: true }),
-                env: proc?.env ?? {},
+                env: { ...serverEnv, ...(proc?.env ?? {}) },
+                requestHeaders: req.headers ?? {},
               },
             );
             res.statusCode = result.httpStatus;
-            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
             res.end(JSON.stringify(result.body));
           } catch {
             res.statusCode = 400;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ ok: false, error: 'Invalid JSON request body.' }));
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.end(
+              JSON.stringify({
+                status: 400,
+                ok: false,
+                contentType: 'application/json',
+                data: null,
+                durationMs: 0,
+                error: 'Invalid JSON request body.',
+              }),
+            );
           }
         })();
       });
@@ -97,11 +137,12 @@ function folioHttpProxyPlugin(): Plugin {
   };
 }
 
-export default defineConfig(({ command }) => {
-  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+export default defineConfig(({ command, mode }) => {
+  const proc = (globalThis as { process?: { cwd?: () => string; env?: Record<string, string | undefined> } }).process;
   if (command === 'build' && proc?.env && proc.env.NODE_ENV !== 'production') {
     proc.env.NODE_ENV = 'production';
   }
+  const serverEnv = loadEnv(mode, proc?.cwd?.() ?? '.', '');
   const isServe = command === 'serve';
   // Cloudflare Pages serves at root '/'; GitHub Pages serves under '/folio-studio/'.
   const resolvedBase =
@@ -110,7 +151,7 @@ export default defineConfig(({ command }) => {
   return {
     base: resolvedBase,
     plugins: [
-      folioHttpProxyPlugin(),
+      folioHttpProxyPlugin(serverEnv),
       preact({
         devToolsEnabled: isServe,
         prefreshEnabled: isServe,

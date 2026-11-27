@@ -54,7 +54,83 @@ export function LivePreviewPane({
   onToggleFullscreen,
 }: LivePreviewPaneProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [stageSize, setStageSize] = useState({ width: 560, height: 520 });
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      const activeWin = iframeRef.current?.contentWindow;
+      if (!activeWin || event.source !== activeWin) return;
+      const msg = event.data as {
+        type?: string;
+        requestId?: string;
+        payload?: {
+          url?: string;
+          method?: string;
+          headers?: Record<string, string>;
+          body?: string;
+          authSecretRef?: string;
+        };
+      } | null;
+      if (!msg || msg.type !== 'folio:http-proxy-request' || typeof msg.requestId !== 'string') return;
+      const reqId = msg.requestId;
+      const payload = msg.payload ?? {};
+      void (async () => {
+        try {
+          const response = await fetch('/api/logic/http-proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: typeof payload.url === 'string' ? payload.url : '',
+              method: typeof payload.method === 'string' ? payload.method : 'GET',
+              ...(payload.headers && typeof payload.headers === 'object' && !Array.isArray(payload.headers)
+                ? { headers: payload.headers }
+                : {}),
+              ...(typeof payload.body === 'string' ? { body: payload.body } : {}),
+              ...(typeof payload.authSecretRef === 'string' && payload.authSecretRef
+                ? { authSecretRef: payload.authSecretRef }
+                : {}),
+            }),
+          });
+          const text = await response.text();
+          let result: Record<string, unknown>;
+          try {
+            result = JSON.parse(text) as Record<string, unknown>;
+          } catch {
+            result = {
+              status: response.status,
+              ok: false,
+              contentType: response.headers.get('content-type') ?? 'text/plain',
+              data: null,
+              error: `Proxy returned non-JSON HTTP ${response.status}.`,
+            };
+          }
+          iframeRef.current?.contentWindow?.postMessage(
+            { type: 'folio:http-proxy-response', requestId: reqId, result },
+            '*',
+          );
+        } catch (err) {
+          iframeRef.current?.contentWindow?.postMessage(
+            {
+              type: 'folio:http-proxy-response',
+              requestId: reqId,
+              result: {
+                status: 0,
+                ok: false,
+                contentType: 'application/json',
+                data: null,
+                error: err instanceof Error ? err.message : 'Proxy request failed.',
+              },
+            },
+            '*',
+          );
+        }
+      })();
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   useEffect(() => {
     const el = stageRef.current;
@@ -231,6 +307,7 @@ export function LivePreviewPane({
       <div class={`live-preview-stage${isDesktopFullBleed ? ' is-full-bleed' : ''}`} ref={stageRef}>
         {isDesktopFullBleed ? (
           <iframe
+            ref={iframeRef}
             key={refreshNonce}
             class="live-preview-iframe is-full-bleed"
             title="FOLIO Live Preview"
@@ -258,6 +335,7 @@ export function LivePreviewPane({
               style={{ width: `${scaledWidth}px`, height: `${scaledHeight}px` }}
             >
               <iframe
+                ref={iframeRef}
                 key={refreshNonce}
                 class="live-preview-iframe"
                 title="FOLIO Live Preview"
