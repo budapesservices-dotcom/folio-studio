@@ -597,7 +597,13 @@ export function useCodeWorkspace({
         anchor.click();
         anchor.remove();
         setTimeout(() => URL.revokeObjectURL(url), 60_000);
-        onNotice(`Exported ${bundle.fileName} (${bundle.entries.length} files).`);
+        const opt = bundle.optimization;
+        const optDetail = opt.savedBytes > 0
+          ? `, saved ${(opt.savedBytes / 1024).toFixed(1)} KB`
+          : '';
+        onNotice(
+          `Exported deploy-ready ${bundle.fileName} (${bundle.entries.length} files · Cloudflare Pages, Netlify & GitHub Pages${optDetail}).`,
+        );
       } catch (error) {
         const detail = error instanceof Error ? error.message : 'An unexpected error occurred.';
         onNotice(`Unable to export project ZIP: ${detail}`);

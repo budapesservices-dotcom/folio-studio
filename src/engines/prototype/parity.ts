@@ -113,8 +113,8 @@ export const RUNTIME_FEATURE_PARITY_MATRIX: readonly RuntimeFeatureParityEntry[]
     feature: 'motion.shape-morph',
     headless: 'full',
     livePreview: 'full',
-    reactCodegen: 'unsupported',
-    notes: 'Single-contour closed shape morphing runs natively in Canvas/Headless Motion Evaluator, Video/GIF/PNG Sequence export, and CSP-safe Live Preview/HTML5 runtime; React TSX export preserves base geometry + CSS tracks only and emits an explicit limitation notice',
+    reactCodegen: 'full',
+    notes: 'Single-contour and multi-contour (compound paths & holes) closed shape morphing runs natively across Canvas/Headless Motion Evaluator, Animated SVG SMIL, Video/GIF/PNG Sequence export, CSP-safe Live Preview/HTML5 runtime, and React TSX export (`useFolioShapeMorph` hook)',
   },
 ] as const;
 

@@ -276,8 +276,8 @@ export function CodeWorkspacePanel({
               onClick={onDownloadProjectZip}
               title={
                 outputTarget === 'react'
-                  ? 'Export runnable React + TypeScript + Vite project ZIP'
-                  : 'Export static HTML5 + CSS multi-page project ZIP'
+                  ? 'Export deploy-ready React + TypeScript + Vite ZIP (Cloudflare Pages, Netlify & GitHub Pages configs + asset optimization)'
+                  : 'Export deploy-ready static HTML5 + CSS multi-app ZIP (Cloudflare Pages, Netlify & GitHub Pages configs + asset optimization)'
               }
             >
               Export ZIP

@@ -229,7 +229,7 @@ function normalizeSnapshotToTargetBox(
   const hasExtraScale = Math.abs(relScaleX - 1) > 1e-4 || Math.abs(relScaleY - 1) > 1e-4;
   const hasExtraRot = Math.abs(relRotateDeg) > 1e-4;
 
-  const points = snapshot.points.map((pt) => {
+  const transformPoint = (pt: PathMorphPoint): PathMorphPoint => {
     const fitted = transformMorphPoint(pt, baseScaleX, baseScaleY);
     if (!hasExtraScale && !hasExtraRot) return fitted;
     // Scale around target center, then rotate around target center so animated
@@ -257,12 +257,24 @@ function normalizeSnapshotToTargetBox(
       out.cr = round2(fitted.cr * Math.sqrt(Math.max(1e-4, Math.abs(relScaleX * relScaleY))));
     }
     return out;
-  });
+  };
+
+  const points = snapshot.points.map(transformPoint);
+  const subpaths =
+    snapshot.subpaths && snapshot.subpaths.length > 0
+      ? snapshot.subpaths
+          .filter((sp) => sp.closed && sp.points.length >= 3)
+          .map((sp) => ({
+            closed: sp.closed,
+            points: sp.points.map(transformPoint),
+          }))
+      : undefined;
 
   const normalized: PathMorphSnapshot = {
     v: 1,
     closed: snapshot.closed,
     points,
+    ...(subpaths && subpaths.length > 0 ? { subpaths } : {}),
     label,
     w: round2(safeTargetW),
     h: round2(safeTargetH),
@@ -304,7 +316,9 @@ function selectComponentMorphSource(
       const validSnap = track.keyframes.some((kf) => {
         if (typeof kf.value !== 'string') return false;
         const parsed = parsePathMorphSnapshot(kf.value);
-        return Boolean(parsed && parsed.closed && parsed.points.length >= 3 && (!parsed.subpaths || parsed.subpaths.length === 0));
+        const subpathsClosed =
+          !parsed?.subpaths || parsed.subpaths.every((sp) => sp.closed && sp.points.length >= 3);
+        return Boolean(parsed && parsed.closed && parsed.points.length >= 3 && subpathsClosed);
       });
       return validSnap;
     });
@@ -382,10 +396,10 @@ function selectComponentMorphSource(
     return {
       source: null,
       reason:
-        firstIssue?.reason === 'multi-contour'
-          ? `Component “${component.name}” only contains compound multi-contour paths, which are not yet supported for Shape Morph.`
-          : firstIssue?.reason === 'open-path'
-            ? `Component “${component.name}” only contains open paths. Close the vector contour to morph from it.`
+        firstIssue?.reason === 'open-path'
+          ? `Component “${component.name}” only contains open paths. Close the vector contour to morph from it.`
+          : firstIssue?.reason === 'exceeds-point-budget'
+            ? `Component “${component.name}” exceeds the Shape Morph point or contour budget.`
             : `Component “${component.name}” has no closed vector shape (Circle, Rectangle, Frame, or closed Path) to morph into.`,
     };
   }
@@ -483,7 +497,9 @@ export function extractMorphSequenceFromComponent(
     for (const kf of sorted) {
       if (typeof kf.value !== 'string') continue;
       const parsed = parsePathMorphSnapshot(kf.value);
-      if (!parsed || !parsed.closed || parsed.points.length < 3 || (parsed.subpaths && parsed.subpaths.length > 0)) {
+      const subpathsClosed =
+        !parsed?.subpaths || parsed.subpaths.every((sp) => sp.closed && sp.points.length >= 3);
+      if (!parsed || !parsed.closed || parsed.points.length < 3 || !subpathsClosed) {
         continue;
       }
       const label = parsed.label

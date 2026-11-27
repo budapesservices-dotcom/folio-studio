@@ -413,7 +413,7 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
   const lines: string[] = ['/* Folio Motion Engine — Compiled @keyframes */'];
   if (morphNodeIds.size > 0) {
     lines.push(
-      '/* Note: Shape Morph (`pathMorph`) tracks require geometry interpolation and are rendered via the Folio Motion Runtime (Live Preview, HTML5 export, Video MP4/MOV/WebM, GIF, PNG Sequence). Pure CSS @keyframes preserves transform/style tracks only. */',
+      '/* Note: Shape Morph (`pathMorph`) tracks require geometry interpolation and are rendered via the Folio Motion Runtime (Live Preview, HTML5 export, React TSX `useFolioShapeMorph`, Video MP4/MOV/WebM, GIF, PNG Sequence, Animated SVG). Pure CSS @keyframes preserves transform/style tracks only. */',
     );
   }
 
@@ -1144,7 +1144,7 @@ export function buildLivePreviewAnimationPayload(
     }));
 }
 
-type CompiledMorphEasing =
+export type CompiledMorphEasing =
   | 'linear'
   | 'spring'
   | 'bounce-out'
@@ -1152,7 +1152,15 @@ type CompiledMorphEasing =
   | { t: 'cb'; b: readonly [number, number, number, number] }
   | { t: 'lut'; y: number[] };
 
-interface CompiledMorphSegment {
+export interface CompiledMorphContour {
+  n: number;
+  closed: boolean;
+  /** Interleaved [x, y, hiX, hiY, hoX, hoY] * n (6 numbers per anchor) */
+  from: number[];
+  to: number[];
+}
+
+export interface CompiledMorphSegment {
   t0: number;
   t1: number;
   easing: CompiledMorphEasing;
@@ -1161,15 +1169,17 @@ interface CompiledMorphSegment {
   /** Interleaved [x, y, hiX, hiY, hoX, hoY] * n (6 numbers per anchor) */
   from: number[];
   to: number[];
+  /** Optional matched subpath / hole contours for multi-contour morphing. */
+  subpaths?: CompiledMorphContour[];
 }
 
-interface CompiledMorphTrack {
+export interface CompiledMorphTrack {
   nodeId: string;
   kfName: string;
   segments: CompiledMorphSegment[];
 }
 
-interface CompiledMorphClip {
+export interface CompiledMorphClip {
   id: string;
   className: string;
   kfPrefix: string;
@@ -1213,16 +1223,14 @@ function packBuffer6(buf: Float64Array, flags: Uint8Array, count: number): numbe
 }
 
 /**
- * Generates a compact, zero-`eval`, CSP-safe inline `<script>` that drives real
- * cubic Bezier Native Shape Morph animations inside Live Preview and HTML5 exports,
- * with exact Folio easing parity (`cubic-bezier`, `spring`, `bounce-out`, `elastic-out`,
- * `multi-point`) and live Web Animations clock synchronization against CSS `@keyframes`.
- * Returns `''` when the page has no `pathMorph` tracks.
+ * Single canonical compiler for page + component-instance `pathMorph` animation clips.
+ * Shared by Live Preview, standalone HTML5 export, AND React TSX runtime export so
+ * all three targets produce 1:1 identical single-contour and multi-contour Bezier motion.
  */
-export function buildLivePreviewMorphScript(
+export function compilePageMorphClips(
   project: FolioProject,
   page: FolioPage,
-): string {
+): CompiledMorphClip[] {
   const pageClips = (project.animations ?? []).filter((clip) => clip.pageId === page.id);
   const { scopedClips } = collectPageComponentInstanceAnimations(project, page);
   const clips = [...pageClips, ...scopedClips];
@@ -1240,6 +1248,13 @@ export function buildLivePreviewMorphScript(
         const pair = prepareMorphPair(snapStr, snapStr);
         if (pair && pair.compatible && pair.pointCount >= 3) {
           const packed = packBuffer6(pair.fromBuf, pair.flags, pair.pointCount);
+          const subpaths: CompiledMorphContour[] | undefined =
+            pair.subpathPairs && pair.subpathPairs.length > 0
+              ? pair.subpathPairs.map((sp) => {
+                  const spPacked = packBuffer6(sp.fromBuf, sp.flags, sp.pointCount);
+                  return { n: sp.pointCount, closed: sp.closed, from: spPacked, to: spPacked };
+                })
+              : undefined;
           segments.push({
             t0: 0,
             t1: Math.max(1, clip.durationMs),
@@ -1248,6 +1263,7 @@ export function buildLivePreviewMorphScript(
             closed: pair.closed,
             from: packed,
             to: packed,
+            ...(subpaths ? { subpaths } : {}),
           });
         }
       } else {
@@ -1262,6 +1278,15 @@ export function buildLivePreviewMorphScript(
             if (!parsedA) continue;
             continue;
           }
+          const subpaths: CompiledMorphContour[] | undefined =
+            pair.subpathPairs && pair.subpathPairs.length > 0
+              ? pair.subpathPairs.map((sp) => ({
+                  n: sp.pointCount,
+                  closed: sp.closed,
+                  from: packBuffer6(sp.fromBuf, sp.flags, sp.pointCount),
+                  to: packBuffer6(sp.toBuf, sp.flags, sp.pointCount),
+                }))
+              : undefined;
           segments.push({
             t0: Math.round(a.timeMs),
             t1: Math.round(b.timeMs),
@@ -1270,6 +1295,7 @@ export function buildLivePreviewMorphScript(
             closed: pair.closed,
             from: packBuffer6(pair.fromBuf, pair.flags, pair.pointCount),
             to: packBuffer6(pair.toBuf, pair.flags, pair.pointCount),
+            ...(subpaths ? { subpaths } : {}),
           });
         }
       }
@@ -1296,6 +1322,22 @@ export function buildLivePreviewMorphScript(
     }
   }
 
+  return compiledClips;
+}
+
+/**
+ * Generates a compact, zero-`eval`, CSP-safe inline `<script>` that drives real
+ * cubic Bezier Native Shape Morph animations (single-contour and multi-contour/holes)
+ * inside Live Preview and HTML5 exports, with exact Folio easing parity
+ * (`cubic-bezier`, `spring`, `bounce-out`, `elastic-out`, `multi-point`) and live
+ * Web Animations clock synchronization against CSS `@keyframes`.
+ * Returns `''` when the page has no `pathMorph` tracks.
+ */
+export function buildLivePreviewMorphScript(
+  project: FolioProject,
+  page: FolioPage,
+): string {
+  const compiledClips = compilePageMorphClips(project, page);
   if (compiledClips.length === 0) return '';
 
   const serialized = JSON.stringify(compiledClips).replace(/</g, '\\u003c');
@@ -1344,19 +1386,29 @@ export function buildLivePreviewMorphScript(
     '    }',
     '    return x;',
     '  }',
-    '  function buildPathD(seg,t){',
-    '    var n=seg.n,a=seg.from,b=seg.to,parts=[];',
+    '  function appendContourD(parts,n,closed,a,b,t){',
+    '    if(n<2)return;',
     '    var x0=a[0]+(b[0]-a[0])*t,y0=a[1]+(b[1]-a[1])*t;',
     '    parts.push("M "+x0.toFixed(2)+" "+y0.toFixed(2));',
     '    for(var i=0;i<n;i++){',
-    '      var j=(i+1)%n;if(!seg.closed&&j===0)break;',
+    '      var j=(i+1)%n;if(!closed&&j===0)break;',
     '      var bi=i*6,bj=j*6;',
     '      var c1x=a[bi+4]+(b[bi+4]-a[bi+4])*t,c1y=a[bi+5]+(b[bi+5]-a[bi+5])*t;',
     '      var c2x=a[bj+2]+(b[bj+2]-a[bj+2])*t,c2y=a[bj+3]+(b[bj+3]-a[bj+3])*t;',
     '      var ex=a[bj]+(b[bj]-a[bj])*t,ey=a[bj+1]+(b[bj+1]-a[bj+1])*t;',
     '      parts.push("C "+c1x.toFixed(2)+" "+c1y.toFixed(2)+" "+c2x.toFixed(2)+" "+c2y.toFixed(2)+" "+ex.toFixed(2)+" "+ey.toFixed(2));',
     '    }',
-    '    if(seg.closed)parts.push("Z");',
+    '    if(closed)parts.push("Z");',
+    '  }',
+    '  function buildPathD(seg,t){',
+    '    var parts=[];',
+    '    appendContourD(parts,seg.n,seg.closed,seg.from,seg.to,t);',
+    '    if(seg.subpaths&&seg.subpaths.length){',
+    '      for(var s=0;s<seg.subpaths.length;s++){',
+    '        var sp=seg.subpaths[s];',
+    '        appendContourD(parts,sp.n,sp.closed,sp.from,sp.to,t);',
+    '      }',
+    '    }',
     '    return parts.join(" ");',
     '  }',
     '  function evalTrack(tr,timeMs){',
@@ -1413,6 +1465,10 @@ export function buildLivePreviewMorphScript(
     '  var states=CLIPS.map(function(clip){',
     '    return{clip:clip,playing:Boolean(clip.autoplay)&&!reduced,startAt:0,elapsed:0,reverse:false};',
     '  });',
+    '  function trackHasSubpaths(tr){',
+    '    for(var i=0;i<tr.segments.length;i++){if(tr.segments[i].subpaths&&tr.segments[i].subpaths.length)return true;}',
+    '    return false;',
+    '  }',
     '  function renderAt(st,timeMs){',
     '    var t=st.reverse?(st.clip.durationMs-timeMs):timeMs;',
     '    if(t<0)t=0;if(t>st.clip.durationMs)t=st.clip.durationMs;',
@@ -1421,7 +1477,8 @@ export function buildLivePreviewMorphScript(
     '      var els=findPathEls(tr.nodeId);',
     '      if(!els.length)continue;',
     '      var d=evalTrack(tr,t);',
-    '      if(d){for(var k=0;k<els.length;k++)els[k].setAttribute("d",d);}',
+    '      var multi=trackHasSubpaths(tr);',
+    '      if(d){for(var k=0;k<els.length;k++){els[k].setAttribute("d",d);if(multi&&!els[k].getAttribute("fill-rule"))els[k].setAttribute("fill-rule","evenodd");}}',
     '    }',
     '  }',
     '  function syncClassState(){',

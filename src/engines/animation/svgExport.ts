@@ -281,6 +281,41 @@ function serializeCubicSegmentsToSvgD(
   return parts.join(' ');
 }
 
+function serializeMultiContourCubicSegmentsToSvgD(
+  contours: readonly { segs: readonly CubicSegment[]; closed: boolean }[],
+  offsetX = 0,
+  offsetY = 0,
+): string {
+  const parts: string[] = [];
+  for (const contour of contours) {
+    const d = serializeCubicSegmentsToSvgD(contour.segs, contour.closed, offsetX, offsetY);
+    if (d) parts.push(d);
+  }
+  return parts.join(' ');
+}
+
+function buildCollapsedCubicSegments(segs: readonly CubicSegment[]): CubicSegment[] {
+  if (segs.length === 0) return [];
+  let sx = 0;
+  let sy = 0;
+  for (const s of segs) {
+    sx += s.p0x;
+    sy += s.p0y;
+  }
+  const cx = sx / segs.length;
+  const cy = sy / segs.length;
+  return segs.map(() => ({
+    p0x: cx,
+    p0y: cy,
+    c1x: cx,
+    c1y: cy,
+    c2x: cx,
+    c2y: cy,
+    p3x: cx,
+    p3y: cy,
+  }));
+}
+
 export interface SvgMorphTrackSmilResult {
   readonly initialD: string;
   readonly animateMarkup: string;
@@ -288,7 +323,8 @@ export interface SvgMorphTrackSmilResult {
 
 /**
  * Generates an initial `<path d="...">` string + SMIL `<animate attributeName="d">`
- * tag for a `pathMorph` track in node-global SVG coordinates (`+ node.x, + node.y`).
+ * tag for a `pathMorph` track (single-contour or multi-contour/holes) in
+ * node-global SVG coordinates (`+ node.x, + node.y`).
  */
 export function buildSvgPathMorphSmil(
   track: AnimationTrack,
@@ -304,21 +340,28 @@ export function buildSvgPathMorphSmil(
   const durStr = `${fmtNum(durationMs / 1000)}s`;
   const repeatAttr = clip.loop ? 'repeatCount="indefinite"' : 'repeatCount="1" fill="freeze"';
 
-  // Single keyframe -> static path
+  // Single keyframe -> static path (supports subpaths)
   if (sorted.length === 1) {
     const snap = parsePathMorphSnapshot(String(sorted[0].value));
     if (!snap || snap.points.length < 2) return null;
-    const segs = anchorsToCubicSegments(
-      snap.points.map((p) => ({
-        x: p.x,
-        y: p.y,
-        ...(p.hi ? { handleIn: { x: p.hi[0], y: p.hi[1] } } : {}),
-        ...(p.ho ? { handleOut: { x: p.ho[0], y: p.ho[1] } } : {}),
-      })),
-      snap.closed,
-    );
+    const toContour = (pts: typeof snap.points, closed: boolean) => ({
+      closed,
+      segs: anchorsToCubicSegments(
+        pts.map((p) => ({
+          x: p.x,
+          y: p.y,
+          ...(p.hi ? { handleIn: { x: p.hi[0], y: p.hi[1] } } : {}),
+          ...(p.ho ? { handleOut: { x: p.ho[0], y: p.ho[1] } } : {}),
+        })),
+        closed,
+      ),
+    });
+    const contours = [
+      toContour(snap.points, snap.closed),
+      ...(snap.subpaths ?? []).map((sp) => toContour(sp.points, sp.closed)),
+    ];
     return {
-      initialD: serializeCubicSegmentsToSvgD(segs, snap.closed, offsetX, offsetY),
+      initialD: serializeMultiContourCubicSegmentsToSvgD(contours, offsetX, offsetY),
       animateMarkup: '',
     };
   }
@@ -327,10 +370,28 @@ export function buildSvgPathMorphSmil(
   if (sorted.length === 2 && !needsSmilSampling(sorted[1].easing)) {
     const pair = prepareMorphPair(String(sorted[0].value), String(sorted[1].value));
     if (pair && pair.compatible) {
-      const fromSegs = preparedBufferToCubicSegments(pair.fromBuf, pair.flags, pair.pointCount, pair.closed);
-      const toSegs = preparedBufferToCubicSegments(pair.toBuf, pair.flags, pair.pointCount, pair.closed);
-      const d0 = serializeCubicSegmentsToSvgD(fromSegs, pair.closed, offsetX, offsetY);
-      const d1 = serializeCubicSegmentsToSvgD(toSegs, pair.closed, offsetX, offsetY);
+      const fromContours: Array<{ segs: CubicSegment[]; closed: boolean }> = [
+        {
+          closed: pair.closed,
+          segs: preparedBufferToCubicSegments(pair.fromBuf, pair.flags, pair.pointCount, pair.closed),
+        },
+        ...(pair.subpathPairs ?? []).map((sp) => ({
+          closed: sp.closed,
+          segs: preparedBufferToCubicSegments(sp.fromBuf, sp.flags, sp.pointCount, sp.closed),
+        })),
+      ];
+      const toContours: Array<{ segs: CubicSegment[]; closed: boolean }> = [
+        {
+          closed: pair.closed,
+          segs: preparedBufferToCubicSegments(pair.toBuf, pair.flags, pair.pointCount, pair.closed),
+        },
+        ...(pair.subpathPairs ?? []).map((sp) => ({
+          closed: sp.closed,
+          segs: preparedBufferToCubicSegments(sp.toBuf, sp.flags, sp.pointCount, sp.closed),
+        })),
+      ];
+      const d0 = serializeMultiContourCubicSegmentsToSvgD(fromContours, offsetX, offsetY);
+      const d1 = serializeMultiContourCubicSegmentsToSvgD(toContours, offsetX, offsetY);
       const t0 = Math.max(0, Math.min(1, sorted[0].timeMs / durationMs));
       const t1 = Math.max(t0, Math.min(1, sorted[1].timeMs / durationMs));
 
@@ -363,16 +424,14 @@ export function buildSvgPathMorphSmil(
   }
 
   // General path (3+ keyframes, or spring/bounce/elastic/overshoot/multi-point easing):
-  // Elevate every adjacent pair's `(fromSegs, toSegs)` simultaneously to ONE uniform
-  // segment count so every SMIL value has identical `M ... C ... Z` topology and
-  // locked 1-to-1 vertex correspondence with zero per-frame scrambling!
+  // Elevate every adjacent pair's `(fromContours, toContours)` simultaneously to ONE
+  // uniform contour count and segment count per contour so every SMIL value has
+  // identical `M ... C ... Z` topology across all contours.
   const rawPairs: Array<{
     t0: number;
     t1: number;
     easing: AnimationEasing;
-    closed: boolean;
-    fromSegs: CubicSegment[];
-    toSegs: CubicSegment[];
+    contours: Array<{ closed: boolean; fromSegs: CubicSegment[]; toSegs: CubicSegment[] }>;
   }> = [];
 
   for (let i = 0; i < sorted.length - 1; i += 1) {
@@ -382,25 +441,74 @@ export function buildSvgPathMorphSmil(
       t0: Math.max(0, Math.min(durationMs, sorted[i].timeMs)),
       t1: Math.max(0, Math.min(durationMs, sorted[i + 1].timeMs)),
       easing: sorted[i + 1].easing,
-      closed: prepared.closed,
-      fromSegs: preparedBufferToCubicSegments(prepared.fromBuf, prepared.flags, prepared.pointCount, prepared.closed),
-      toSegs: preparedBufferToCubicSegments(prepared.toBuf, prepared.flags, prepared.pointCount, prepared.closed),
+      contours: [
+        {
+          closed: prepared.closed,
+          fromSegs: preparedBufferToCubicSegments(prepared.fromBuf, prepared.flags, prepared.pointCount, prepared.closed),
+          toSegs: preparedBufferToCubicSegments(prepared.toBuf, prepared.flags, prepared.pointCount, prepared.closed),
+        },
+        ...(prepared.subpathPairs ?? []).map((sp) => ({
+          closed: sp.closed,
+          fromSegs: preparedBufferToCubicSegments(sp.fromBuf, sp.flags, sp.pointCount, sp.closed),
+          toSegs: preparedBufferToCubicSegments(sp.toBuf, sp.flags, sp.pointCount, sp.closed),
+        })),
+      ],
     });
   }
   if (rawPairs.length === 0) return null;
 
-  const closed = rawPairs[0].closed;
-  const maxSegs = Math.max(...rawPairs.map((p) => p.fromSegs.length));
+  const maxContourCount = Math.max(...rawPairs.map((p) => p.contours.length));
+  const maxSegsPerContour = new Array<number>(maxContourCount).fill(3);
+  for (const p of rawPairs) {
+    for (let c = 0; c < p.contours.length; c += 1) {
+      maxSegsPerContour[c] = Math.max(maxSegsPerContour[c], p.contours[c].fromSegs.length);
+    }
+  }
+
   const alignedPairs = rawPairs.map((p) => {
-    const elevated = elevateSegmentPairToCount(p.fromSegs, p.toSegs, maxSegs);
+    const alignedContours: Array<{ closed: boolean; fromSegs: CubicSegment[]; toSegs: CubicSegment[] }> = [];
+    for (let c = 0; c < maxContourCount; c += 1) {
+      const existing = p.contours[c];
+      if (existing) {
+        const elevated = elevateSegmentPairToCount(existing.fromSegs, existing.toSegs, maxSegsPerContour[c]);
+        alignedContours.push({
+          closed: existing.closed,
+          fromSegs: elevated.from,
+          toSegs: elevated.to,
+        });
+      } else {
+        // Synthesize collapsed zero-area contour matching primary center for consistent SMIL topology
+        const base = p.contours[0];
+        const collapsedFrom = elevateSegmentPairToCount(
+          buildCollapsedCubicSegments(base.fromSegs),
+          buildCollapsedCubicSegments(base.toSegs),
+          maxSegsPerContour[c],
+        );
+        alignedContours.push({
+          closed: true,
+          fromSegs: collapsedFrom.from,
+          toSegs: collapsedFrom.to,
+        });
+      }
+    }
     return {
       t0: p.t0,
       t1: p.t1,
       easing: p.easing,
-      fromSegs: elevated.from,
-      toSegs: elevated.to,
+      contours: alignedContours,
     };
   });
+
+  const serializeAlignedFrame = (
+    contours: readonly { closed: boolean; fromSegs: CubicSegment[]; toSegs: CubicSegment[] }[],
+    t: number,
+  ): string => {
+    const evaluated = contours.map((c) => ({
+      closed: c.closed,
+      segs: t <= 0 ? c.fromSegs : t >= 1 ? c.toSegs : lerpCubicSegments(c.fromSegs, c.toSegs, t),
+    }));
+    return serializeMultiContourCubicSegmentsToSvgD(evaluated, offsetX, offsetY);
+  };
 
   const values: string[] = [];
   const keyTimes: number[] = [];
@@ -411,8 +519,6 @@ export function buildSvgPathMorphSmil(
       const prev = keyTimes[keyTimes.length - 1];
       if (clamped <= prev) {
         if (values[values.length - 1] === d) return;
-        // Ultra-short 0.0001 (~0.1ms) handoff ensures strictly increasing keyTimes
-        // in all SVG renderers while switching aligned topology invisibly at exact keyframes.
         const nudged = Math.min(1, Math.round((prev + 0.0001) * 10000) / 10000);
         if (nudged > prev) {
           keyTimes.push(nudged);
@@ -427,8 +533,7 @@ export function buildSvgPathMorphSmil(
     values.push(d);
   };
 
-  // Hold initial shape if first keyframe starts after t=0
-  const firstD = serializeCubicSegmentsToSvgD(alignedPairs[0].fromSegs, closed, offsetX, offsetY);
+  const firstD = serializeAlignedFrame(alignedPairs[0].contours, 0);
   if (alignedPairs[0].t0 > 0) {
     pushFrame(0, firstD);
   }
@@ -436,11 +541,11 @@ export function buildSvgPathMorphSmil(
   for (let pIdx = 0; pIdx < alignedPairs.length; pIdx += 1) {
     const seg = alignedPairs[pIdx];
     const spanMs = Math.max(0, seg.t1 - seg.t0);
-    const startD = serializeCubicSegmentsToSvgD(seg.fromSegs, closed, offsetX, offsetY);
+    const startD = serializeAlignedFrame(seg.contours, 0);
 
     if (spanMs <= 0) {
       pushFrame(seg.t0 / durationMs, startD);
-      const endD = serializeCubicSegmentsToSvgD(seg.toSegs, closed, offsetX, offsetY);
+      const endD = serializeAlignedFrame(seg.contours, 1);
       pushFrame(seg.t1 / durationMs, endD);
       continue;
     }
@@ -453,7 +558,6 @@ export function buildSvgPathMorphSmil(
         ? Math.max(2, Math.min(8, Math.round((spanMs / 1000) * 6)))
         : Math.max(10, Math.min(28, Math.round((spanMs / 1000) * 20)));
 
-    // Emit start frame of this pair (handles invisible topology handoff if pIdx > 0)
     pushFrame(seg.t0 / durationMs, startD);
     const actualStartRatio = keyTimes[keyTimes.length - 1];
     const targetEndRatio = Math.max(actualStartRatio, seg.t1 / durationMs);
@@ -462,16 +566,13 @@ export function buildSvgPathMorphSmil(
       const raw = s / steps;
       const eased = evaluateEasing(seg.easing, raw);
       const ratio = actualStartRatio + (targetEndRatio - actualStartRatio) * raw;
-      const frameSegs = lerpCubicSegments(seg.fromSegs, seg.toSegs, eased);
-      pushFrame(ratio, serializeCubicSegmentsToSvgD(frameSegs, closed, offsetX, offsetY));
+      pushFrame(ratio, serializeAlignedFrame(seg.contours, eased));
     }
   }
 
-  // Hold final shape through t=1 if last keyframe ends early
   if (keyTimes[keyTimes.length - 1] < 1) {
     pushFrame(1, values[values.length - 1]);
   }
-  // Ensure exact 0 start and 1 end strings
   if (keyTimes[0] !== 0) {
     keyTimes[0] = 0;
   }

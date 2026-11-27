@@ -1,4 +1,9 @@
+import { getPageApplicationId, getProjectApplications } from '../../core/document/applications';
 import { sanitizeProjectNetworkSecrets } from '../../core/document/networkSecrets';
+import {
+  applyMorphGeometryToDesignNode,
+  extractMorphSnapshotFromNode,
+} from '../../core/document/pathMorph';
 import { getActivePage } from '../../core/document/project';
 import { getProjectDesignTokens } from '../../core/document/tokens';
 import type {
@@ -14,6 +19,11 @@ import type {
 import { isSafeHtmlClassName, isSafeHtmlId } from '../../core/document/cssUnits';
 import { serializePathPointsToSvgD } from '../../core/document/vector';
 import { getAssetBundlePath } from '../../core/persistence/assetStore';
+import {
+  collectPageInitialMorphSnapshots,
+  collectPageMorphNodeIds,
+  compilePageMorphClips,
+} from '../animation/codegen';
 import {
   buildArrowheadPoints,
   buildChildrenMap,
@@ -84,6 +94,11 @@ function buildInlineJsxSvgLines(
   tokens: DesignTokenCollection,
   indent: string,
   dynamicFillExpr?: string,
+  options?: {
+    readonly isMorphTarget?: boolean;
+    readonly asBackdrop?: boolean;
+    readonly forceEvenOdd?: boolean;
+  },
 ): string[] {
   const d = serializePathPointsToSvgD(node.points, node.closed, node.subpaths);
   const w = Math.max(1, roundCss(node.width));
@@ -105,15 +120,22 @@ function buildInlineJsxSvgLines(
     `strokeLinecap=${escapeTsString(node.style.strokeLinecap ?? 'round')}`,
     `strokeLinejoin=${escapeTsString(node.style.strokeLinejoin ?? 'round')}`,
   ];
-  if (node.style.fillRule === 'evenodd') {
+  if (options?.forceEvenOdd || node.style.fillRule === 'evenodd' || (node.subpaths && node.subpaths.length > 0)) {
     pathAttrs.push('fillRule="evenodd"');
   }
   if (node.style.strokeDasharray) {
     pathAttrs.push(`strokeDasharray=${escapeTsString(node.style.strokeDasharray)}`);
   }
+  if (options?.isMorphTarget) {
+    pathAttrs.push('data-folio-morph-path="true"');
+  }
+
+  const svgStyle = options?.asBackdrop
+    ? '{ position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", pointerEvents: "none" }'
+    : '{ display: "block", width: "100%", height: "100%" }';
 
   const svgLines: string[] = [
-    `${indent}<svg width={${w}} height={${h}} viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style={{ display: "block", width: "100%", height: "100%" }} aria-hidden="true">`,
+    `${indent}<svg width={${w}} height={${h}} viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style={${svgStyle}} aria-hidden="true">`,
     `${indent}  <path ${pathAttrs.join(' ')} />`,
   ];
 
@@ -889,6 +911,19 @@ function buildPageReactFile(
     }
   }
 
+  const morphClips = compilePageMorphClips(project, page);
+  const morphNodeIds = collectPageMorphNodeIds(project, page);
+  const initialMorphSnapshots = collectPageInitialMorphSnapshots(project, page);
+  const multiContourMorphNodeIds = new Set<string>();
+  for (const clip of morphClips) {
+    for (const tr of clip.tracks) {
+      if (tr.segments.some((seg) => seg.subpaths && seg.subpaths.length > 0)) {
+        multiContourMorphNodeIds.add(tr.nodeId);
+      }
+    }
+  }
+  const hasShapeMorphTracks = morphClips.length > 0;
+
   const reactImport = logicPlan.hasLogic
     ? `import React, { useState${logicPlan.needsUseEffect ? ', useEffect' : ''} } from 'react';`
     : "import React from 'react';";
@@ -906,25 +941,20 @@ function buildPageReactFile(
     lines.push(`import { ${compName} } from '../components/${compName}';`);
   }
 
+  if (hasShapeMorphTracks) {
+    lines.push("import { useFolioShapeMorph, type FolioMorphClip } from '../motion/useFolioShapeMorph';");
+  }
+
   lines.push(`import '../styles/${slug}.css';`);
 
   const animatedNodeIds = new Set<string>();
-  let hasShapeMorphTracks = false;
   for (const clip of project.animations ?? []) {
     if (clip.pageId !== page.id) continue;
     for (const track of clip.tracks) {
       if (track.keyframes.length > 0) {
         animatedNodeIds.add(track.targetNodeId);
-        if (track.property === 'pathMorph') {
-          hasShapeMorphTracks = true;
-        }
       }
     }
-  }
-  if (hasShapeMorphTracks) {
-    lines.push(
-      '// Note: This page contains FOLIO Shape Morph (`pathMorph`) animation tracks. React TSX export currently preserves static base geometry and CSS transform/style animations; use Live Preview, HTML5 export, Video (MP4/MOV/WebM), GIF, PNG Sequence, or Motion JSON for full Shape Morph playback.',
-    );
   }
 
   for (const mod of project.codeModules ?? []) {
@@ -935,11 +965,20 @@ function buildPageReactFile(
     }
   }
 
+  if (hasShapeMorphTracks) {
+    lines.push('');
+    lines.push('// FOLIO Native Shape Morph (`pathMorph`) compiled clip data (single & multi-contour)');
+    lines.push(`const FOLIO_MORPH_CLIPS: readonly FolioMorphClip[] = ${JSON.stringify(morphClips)};`);
+  }
+
   lines.push('');
   const pageSignature = logicPlan.hasNavigation
     ? `export function ${pageComponentName}({ onNavigate }: { onNavigate?: (route: string) => void } = {}) {`
     : `export function ${pageComponentName}() {`;
   lines.push(pageSignature);
+  if (hasShapeMorphTracks) {
+    lines.push('  useFolioShapeMorph(FOLIO_MORPH_CLIPS);');
+  }
   if (logicPlan.hasLogic) {
     lines.push(...logicPlan.hookLines);
   }
@@ -1230,8 +1269,53 @@ function buildPageReactFile(
       const dynamicPathFill = logicPlan.hasDynamicFill(node.id)
         ? `logicOverrides[${escapeTsString(node.id)}]?.fill`
         : undefined;
+      const isMorph = morphNodeIds.has(node.id);
+      const initialSnap = isMorph ? initialMorphSnapshots.get(node.id) : undefined;
+      const renderedNode = initialSnap ? applyMorphGeometryToDesignNode(node, initialSnap) : node;
       lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
-      lines.push(...buildInlineJsxSvgLines(node, tokens, `${indent}  `, dynamicPathFill));
+      lines.push(
+        ...buildInlineJsxSvgLines(
+          renderedNode.type === 'path' ? renderedNode : node,
+          tokens,
+          `${indent}  `,
+          dynamicPathFill,
+          {
+            isMorphTarget: isMorph,
+            forceEvenOdd: multiContourMorphNodeIds.has(node.id),
+          },
+        ),
+      );
+      lines.push(`${indent}</${wrapperTag}>`);
+    } else if (
+      (node.type === 'ellipse' || node.type === 'rect' || node.type === 'frame') &&
+      morphNodeIds.has(node.id)
+    ) {
+      const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+      const children = node.type === 'frame' ? (childrenByParent.get(node.id) ?? []) : [];
+      const dynamicPathFill = logicPlan.hasDynamicFill(node.id)
+        ? `logicOverrides[${escapeTsString(node.id)}]?.fill`
+        : undefined;
+      const snap = initialMorphSnapshots.get(node.id) ?? extractMorphSnapshotFromNode(node);
+      const projected = snap ? applyMorphGeometryToDesignNode(node, snap) : null;
+      lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
+      if (projected && projected.type === 'path') {
+        lines.push(
+          ...buildInlineJsxSvgLines(
+            projected,
+            tokens,
+            `${indent}  `,
+            dynamicPathFill,
+            {
+              isMorphTarget: true,
+              asBackdrop: children.length > 0,
+              forceEvenOdd: multiContourMorphNodeIds.has(node.id),
+            },
+          ),
+        );
+      }
+      for (const child of children) {
+        emitJsx(child, depth + 1);
+      }
       lines.push(`${indent}</${wrapperTag}>`);
     } else {
       const children = childrenByParent.get(node.id) ?? [];
@@ -1298,16 +1382,370 @@ function buildPageReactFile(
   };
 }
 
+function buildFolioShapeMorphHookFile(): CompiledCodeFile {
+  const content = [
+    '// Generated by FOLIO Code Engine — Native Shape Morph Runtime Hook (Single & Multi-Contour)',
+    '// Zero-eval, CSP-safe cubic Bezier morph engine with Web Animations clock sync and prefers-reduced-motion.',
+    "import { useEffect } from 'react';",
+    '',
+    'export type FolioMorphEasing =',
+    "  | 'linear'",
+    "  | 'spring'",
+    "  | 'bounce-out'",
+    "  | 'elastic-out'",
+    "  | { readonly t: 'cb'; readonly b: readonly [number, number, number, number] }",
+    "  | { readonly t: 'lut'; readonly y: readonly number[] };",
+    '',
+    'export interface FolioMorphContour {',
+    '  readonly n: number;',
+    '  readonly closed: boolean;',
+    '  readonly from: readonly number[];',
+    '  readonly to: readonly number[];',
+    '}',
+    '',
+    'export interface FolioMorphSegment {',
+    '  readonly t0: number;',
+    '  readonly t1: number;',
+    '  readonly easing: FolioMorphEasing;',
+    '  readonly n: number;',
+    '  readonly closed: boolean;',
+    '  readonly from: readonly number[];',
+    '  readonly to: readonly number[];',
+    '  readonly subpaths?: readonly FolioMorphContour[];',
+    '}',
+    '',
+    'export interface FolioMorphTrack {',
+    '  readonly nodeId: string;',
+    '  readonly kfName: string;',
+    '  readonly segments: readonly FolioMorphSegment[];',
+    '}',
+    '',
+    'export interface FolioMorphClip {',
+    '  readonly id: string;',
+    '  readonly className: string;',
+    '  readonly kfPrefix: string;',
+    '  readonly durationMs: number;',
+    '  readonly loop: boolean;',
+    '  readonly autoplay: boolean;',
+    '  readonly tracks: readonly FolioMorphTrack[];',
+    '}',
+    '',
+    'function solveBezier(b: readonly [number, number, number, number], x: number): number {',
+    '  if (x <= 0) return 0;',
+    '  if (x >= 1) return 1;',
+    '  const x1 = Math.max(0, Math.min(1, b[0]));',
+    '  const y1 = b[1];',
+    '  const x2 = Math.max(0, Math.min(1, b[2]));',
+    '  const y2 = b[3];',
+    '  if (Math.abs(x1 - y1) < 1e-6 && Math.abs(x2 - y2) < 1e-6) return x;',
+    '  const cx = 3 * x1;',
+    '  const bx = 3 * (x2 - x1) - cx;',
+    '  const ax = 1 - cx - bx;',
+    '  const cy = 3 * y1;',
+    '  const by = 3 * (y2 - y1) - cy;',
+    '  const ay = 1 - cy - by;',
+    '  let u = x;',
+    '  for (let i = 0; i < 8; i += 1) {',
+    '    const xe = ((ax * u + bx) * u + cx) * u - x;',
+    '    if (Math.abs(xe) < 1e-6) return ((ay * u + by) * u + cy) * u;',
+    '    const dx = (3 * ax * u + 2 * bx) * u + cx;',
+    '    if (Math.abs(dx) < 1e-6) break;',
+    '    u -= xe / dx;',
+    '  }',
+    '  let lo = 0;',
+    '  let hi = 1;',
+    '  u = x;',
+    '  for (let k = 0; k < 18; k += 1) {',
+    '    const xv = ((ax * u + bx) * u + cx) * u;',
+    '    if (Math.abs(xv - x) < 1e-6) break;',
+    '    if (x > xv) lo = u; else hi = u;',
+    '    u = 0.5 * (lo + hi);',
+    '  }',
+    '  return ((ay * u + by) * u + cy) * u;',
+    '}',
+    '',
+    'function evalEasing(e: FolioMorphEasing, x: number): number {',
+    '  if (x <= 0) return 0;',
+    '  if (x >= 1) return 1;',
+    "  if (e === 'linear') return x;",
+    "  if (e === 'spring') return 1 - Math.exp(-6 * x) * Math.cos(x * Math.PI * 2.5);",
+    "  if (e === 'elastic-out') return Math.pow(2, -10 * x) * Math.sin((x * 10 - 0.75) * ((2 * Math.PI) / 3)) + 1;",
+    "  if (e === 'bounce-out') {",
+    '    const n1 = 7.5625;',
+    '    const d1 = 2.75;',
+    '    let t = x;',
+    '    if (t < 1 / d1) return n1 * t * t;',
+    '    if (t < 2 / d1) { t -= 1.5 / d1; return n1 * t * t + 0.75; }',
+    '    if (t < 2.5 / d1) { t -= 2.25 / d1; return n1 * t * t + 0.9375; }',
+    '    t -= 2.625 / d1;',
+    '    return n1 * t * t + 0.984375;',
+    '  }',
+    "  if (e.t === 'cb') return solveBezier(e.b, x);",
+    "  if (e.t === 'lut' && e.y.length > 1) {",
+    '    const idx = x * (e.y.length - 1);',
+    '    const lo = Math.floor(idx);',
+    '    const hi = Math.min(e.y.length - 1, lo + 1);',
+    '    const frac = idx - lo;',
+    '    return e.y[lo] + (e.y[hi] - e.y[lo]) * frac;',
+    '  }',
+    '  return x;',
+    '}',
+    '',
+    'function appendContourD(',
+    '  parts: string[],',
+    '  n: number,',
+    '  closed: boolean,',
+    '  a: readonly number[],',
+    '  b: readonly number[],',
+    '  t: number,',
+    '): void {',
+    '  if (n < 2) return;',
+    '  const x0 = a[0] + (b[0] - a[0]) * t;',
+    '  const y0 = a[1] + (b[1] - a[1]) * t;',
+    '  parts.push(`M ${x0.toFixed(2)} ${y0.toFixed(2)}`);',
+    '  for (let i = 0; i < n; i += 1) {',
+    '    const j = (i + 1) % n;',
+    '    if (!closed && j === 0) break;',
+    '    const bi = i * 6;',
+    '    const bj = j * 6;',
+    '    const c1x = a[bi + 4] + (b[bi + 4] - a[bi + 4]) * t;',
+    '    const c1y = a[bi + 5] + (b[bi + 5] - a[bi + 5]) * t;',
+    '    const c2x = a[bj + 2] + (b[bj + 2] - a[bj + 2]) * t;',
+    '    const c2y = a[bj + 3] + (b[bj + 3] - a[bj + 3]) * t;',
+    '    const ex = a[bj] + (b[bj] - a[bj]) * t;',
+    '    const ey = a[bj + 1] + (b[bj + 1] - a[bj + 1]) * t;',
+    '    parts.push(`C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${ex.toFixed(2)} ${ey.toFixed(2)}`);',
+    '  }',
+    "  if (closed) parts.push('Z');",
+    '}',
+    '',
+    'export function buildFolioMorphPathD(seg: FolioMorphSegment, t: number): string {',
+    '  const parts: string[] = [];',
+    '  appendContourD(parts, seg.n, seg.closed, seg.from, seg.to, t);',
+    '  if (seg.subpaths && seg.subpaths.length > 0) {',
+    '    for (const sp of seg.subpaths) {',
+    '      appendContourD(parts, sp.n, sp.closed, sp.from, sp.to, t);',
+    '    }',
+    '  }',
+    "  return parts.join(' ');",
+    '}',
+    '',
+    'export function evaluateFolioMorphTrack(track: FolioMorphTrack, timeMs: number): string | null {',
+    '  const segs = track.segments;',
+    '  if (segs.length === 0) return null;',
+    '  if (timeMs <= segs[0].t0) return buildFolioMorphPathD(segs[0], 0);',
+    '  const last = segs[segs.length - 1];',
+    '  if (timeMs >= last.t1) return buildFolioMorphPathD(last, 1);',
+    '  for (const seg of segs) {',
+    '    if (timeMs >= seg.t0 && timeMs <= seg.t1) {',
+    '      const span = seg.t1 - seg.t0;',
+    '      const raw = span > 0 ? (timeMs - seg.t0) / span : 1;',
+    '      return buildFolioMorphPathD(seg, evalEasing(seg.easing, raw));',
+    '    }',
+    '  }',
+    '  return buildFolioMorphPathD(last, 1);',
+    '}',
+    '',
+    'interface MorphClipState {',
+    '  clip: FolioMorphClip;',
+    '  playing: boolean;',
+    '  startAt: number;',
+    '  elapsed: number;',
+    '  reverse: boolean;',
+    '}',
+    '',
+    'export function useFolioShapeMorph(clips: readonly FolioMorphClip[]): void {',
+    '  useEffect(() => {',
+    "    if (clips.length === 0 || typeof document === 'undefined' || typeof window === 'undefined') return;",
+    "    const reduced = Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);",
+    '    let rafId = 0;',
+    '    let disposed = false;',
+    '',
+    '    const findWrapEl = (nodeId: string): Element | null => {',
+    '      const esc = nodeId.replace(/"/g, \'\\\\"\');',
+    '      return document.querySelector(`[data-folio-id="${esc}"]`);',
+    '    };',
+    '',
+    '    const findPathEls = (nodeId: string): Element[] => {',
+    '      const wrap = findWrapEl(nodeId);',
+    '      if (!wrap) return [];',
+    '      const tagged = wrap.querySelectorAll(\'svg path[data-folio-morph-path]\');',
+    '      if (tagged.length > 0) return Array.from(tagged);',
+    "      const first = wrap.querySelector('svg path');",
+    '      return first ? [first] : [];',
+    '    };',
+    '',
+    '    const readSyncedCssTime = (st: MorphClipState): { time: number; state: string } | null => {',
+    '      for (const tr of st.clip.tracks) {',
+    '        const wrap = findWrapEl(tr.nodeId);',
+    "        if (!wrap || typeof wrap.getAnimations !== 'function') continue;",
+    '        for (const anim of wrap.getAnimations()) {',
+    '          const cssAnim = anim as CSSAnimation;',
+    '          if (cssAnim.animationName === tr.kfName && typeof cssAnim.currentTime === \'number\' && Number.isFinite(cssAnim.currentTime)) {',
+    '            return { time: cssAnim.currentTime, state: cssAnim.playState };',
+    '          }',
+    '        }',
+    '      }',
+    "      if (st.clip.kfPrefix && typeof document.getAnimations === 'function') {",
+    '        for (const anim of document.getAnimations()) {',
+    '          const cssAnim = anim as CSSAnimation;',
+    "          if (typeof cssAnim.animationName === 'string' && cssAnim.animationName.startsWith(st.clip.kfPrefix) && typeof cssAnim.currentTime === 'number' && Number.isFinite(cssAnim.currentTime)) {",
+    '            return { time: cssAnim.currentTime, state: cssAnim.playState };',
+    '          }',
+    '        }',
+    '      }',
+    '      return null;',
+    '    };',
+    '',
+    '    const states: MorphClipState[] = clips.map((clip) => ({',
+    '      clip,',
+    '      playing: Boolean(clip.autoplay) && !reduced,',
+    '      startAt: 0,',
+    '      elapsed: 0,',
+    '      reverse: false,',
+    '    }));',
+    '',
+    '    const renderAt = (st: MorphClipState, timeMs: number) => {',
+    '      let t = st.reverse ? st.clip.durationMs - timeMs : timeMs;',
+    '      if (t < 0) t = 0;',
+    '      if (t > st.clip.durationMs) t = st.clip.durationMs;',
+    '      for (const tr of st.clip.tracks) {',
+    '        const els = findPathEls(tr.nodeId);',
+    '        if (els.length === 0) continue;',
+    '        const d = evaluateFolioMorphTrack(tr, t);',
+    '        const hasSubpaths = tr.segments.some((s) => Boolean(s.subpaths && s.subpaths.length > 0));',
+    '        if (d) {',
+    '          for (const el of els) {',
+    "            el.setAttribute('d', d);",
+    "            if (hasSubpaths && !el.getAttribute('fill-rule')) el.setAttribute('fill-rule', 'evenodd');",
+    '          }',
+    '        }',
+    '      }',
+    '    };',
+    '',
+    '    const syncClassState = () => {',
+    '      const root = document.documentElement;',
+    '      if (!root) return;',
+    '      for (const st of states) {',
+    '        const cls = st.clip.className;',
+    '        const hasPlay = root.classList.contains(cls);',
+    '        const hasRev = root.classList.contains(`${cls}--reverse`);',
+    '        const hasPause = root.classList.contains(`${cls}--paused`);',
+    '        const hasStop = root.classList.contains(`${cls}--stopped`);',
+    '        st.reverse = hasRev;',
+    '        if (hasStop) { st.playing = false; st.elapsed = 0; renderAt(st, 0); continue; }',
+    '        if (hasPause) { st.playing = false; continue; }',
+    '        if ((hasPlay || st.clip.autoplay) && !reduced && !st.playing) {',
+    '          st.playing = true;',
+    '          st.startAt = performance.now() - st.elapsed;',
+    '        }',
+    '      }',
+    '    };',
+    '',
+    '    const tick = (now: number) => {',
+    '      if (disposed) return;',
+    '      let anyActive = false;',
+    '      for (const st of states) {',
+    '        if (!st.playing) continue;',
+    '        const synced = readSyncedCssTime(st);',
+    '        let elapsed: number;',
+    '        if (synced) {',
+    '          const ct = synced.time;',
+    '          if (st.clip.loop) {',
+    '            elapsed = ((ct % st.clip.durationMs) + st.clip.durationMs) % st.clip.durationMs;',
+    '            anyActive = true;',
+    "          } else if (ct >= st.clip.durationMs || synced.state === 'finished') {",
+    '            elapsed = st.clip.durationMs;',
+    '            st.playing = false;',
+    '          } else {',
+    '            elapsed = Math.max(0, ct);',
+    '            anyActive = true;',
+    '          }',
+    '        } else {',
+    '          if (!st.startAt) st.startAt = now;',
+    '          elapsed = now - st.startAt;',
+    '          if (st.clip.loop) {',
+    '            elapsed = elapsed % st.clip.durationMs;',
+    '            anyActive = true;',
+    '          } else if (elapsed >= st.clip.durationMs) {',
+    '            elapsed = st.clip.durationMs;',
+    '            st.playing = false;',
+    '          } else {',
+    '            anyActive = true;',
+    '          }',
+    '        }',
+    '        st.elapsed = elapsed;',
+    '        renderAt(st, elapsed);',
+    '      }',
+    '      if (anyActive) {',
+    '        rafId = window.requestAnimationFrame(tick);',
+    '      }',
+    '    };',
+    '',
+    '    for (const st of states) renderAt(st, 0);',
+    '    syncClassState();',
+    '    if (!reduced && states.some((s) => s.playing)) {',
+    '      rafId = window.requestAnimationFrame(tick);',
+    '    }',
+    '',
+    '    let observer: MutationObserver | null = null;',
+    "    if (typeof MutationObserver !== 'undefined' && document.documentElement) {",
+    '      observer = new MutationObserver(() => {',
+    '        const wasPlaying = states.some((s) => s.playing);',
+    '        syncClassState();',
+    '        if (!wasPlaying && !reduced && states.some((s) => s.playing)) {',
+    '          rafId = window.requestAnimationFrame(tick);',
+    '        }',
+    '      });',
+    "      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });",
+    '    }',
+    '',
+    '    return () => {',
+    '      disposed = true;',
+    '      if (rafId) window.cancelAnimationFrame(rafId);',
+    '      observer?.disconnect();',
+    '    };',
+    '  }, [clips]);',
+    '}',
+    '',
+  ].join('\n');
+
+  return {
+    id: 'generated:react:shape-morph-hook',
+    path: 'src/motion/useFolioShapeMorph.ts',
+    language: 'ts',
+    category: 'generated',
+    readOnly: true,
+    content,
+    description: 'Generated React hook driving single & multi-contour FOLIO Native Shape Morph animations.',
+    mappings: [],
+  };
+}
+
 function buildAppEntryFile(
   project: FolioProject,
   activePage: FolioPage,
   pageNamesById: ReadonlyMap<string, string>,
   pagesWithNavigation: ReadonlySet<string>,
 ): CompiledCodeFile {
-  const hasAnyNavigation = pagesWithNavigation.size > 0;
+  const applications = getProjectApplications(project);
+  const appRoutesManifest = applications.map((app) => ({
+    id: app.id,
+    name: app.name,
+    slug: app.slug,
+    basePath: app.basePath,
+    pages: project.pages
+      .filter((p) => getPageApplicationId(project, p) === app.id)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        route: p.route,
+      })),
+  }));
+
   const lines: string[] = [
-    '// Generated by FOLIO Code Engine — Application Entry',
-    hasAnyNavigation ? "import React, { useState } from 'react';" : "import React from 'react';",
+    '// Generated by FOLIO Code Engine — Multi-App SPA Application Entry',
+    "import React, { useEffect, useState } from 'react';",
     "import './styles/tokens.css';",
   ];
 
@@ -1317,21 +1755,83 @@ function buildAppEntryFile(
   }
 
   lines.push('');
-  lines.push('export function App({ route = ' + escapeTsString(activePage.route) + ' }: { route?: string }) {');
-  if (hasAnyNavigation) {
-    lines.push('  const [currentRoute, setCurrentRoute] = useState(route);');
-    lines.push('  switch (currentRoute) {');
-  } else {
-    lines.push('  switch (route) {');
-  }
+  lines.push('export interface FolioAppRouteManifestEntry {');
+  lines.push('  readonly id: string;');
+  lines.push('  readonly name: string;');
+  lines.push('  readonly slug: string;');
+  lines.push('  readonly basePath: string;');
+  lines.push('  readonly pages: ReadonlyArray<{ readonly id: string; readonly name: string; readonly route: string }>;');
+  lines.push('}');
+  lines.push('');
+  lines.push(`export const FOLIO_APP_ROUTES: readonly FolioAppRouteManifestEntry[] = ${JSON.stringify(appRoutesManifest, null, 2)};`);
+  lines.push('');
+  lines.push('function readBasePath(): string {');
+  lines.push("  if (typeof document === 'undefined') return '';");
+  lines.push('  const meta = document.querySelector(\'meta[name="folio-base-path"]\');');
+  lines.push("  const raw = meta?.getAttribute('content') ?? '/';");
+  lines.push("  if (!raw || raw === '/' || raw === './' || raw.includes('%BASE_URL%')) return '';");
+  lines.push("  const trimmed = raw.replace(/\\/+$/, '');");
+  lines.push("  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;");
+  lines.push('}');
+  lines.push('');
+  lines.push('function normalizeRoutePath(rawRoute: string): string {');
+  lines.push("  const stripped = rawRoute.split('?')[0].split('#')[0].trim() || '/';");
+  lines.push("  const withLeading = stripped.startsWith('/') ? stripped : `/${stripped}`;");
+  lines.push("  return withLeading.length > 1 ? withLeading.replace(/\\/+$/, '') : '/';");
+  lines.push('}');
+  lines.push('');
+  lines.push('function resolveBrowserRoute(fallbackRoute: string): string {');
+  lines.push("  if (typeof window === 'undefined' || !window.location) return normalizeRoutePath(fallbackRoute);");
+  lines.push('  const base = readBasePath();');
+  lines.push('  let pathname = window.location.pathname || fallbackRoute;');
+  lines.push('  if (base && pathname.startsWith(base)) {');
+  lines.push("    pathname = pathname.slice(base.length) || '/';");
+  lines.push('  }');
+  lines.push('  return normalizeRoutePath(pathname);');
+  lines.push('}');
+  lines.push('');
+  lines.push(`export function App({ route }: { route?: string } = {}) {`);
+  lines.push(`  const fallbackRoute = ${escapeTsString(activePage.route)};`);
+  lines.push('  const [currentRoute, setCurrentRoute] = useState<string>(() =>');
+  lines.push('    route !== undefined ? normalizeRoutePath(route) : resolveBrowserRoute(fallbackRoute),');
+  lines.push('  );');
+  lines.push('');
+  lines.push('  useEffect(() => {');
+  lines.push('    if (route !== undefined) {');
+  lines.push('      setCurrentRoute(normalizeRoutePath(route));');
+  lines.push('      return;');
+  lines.push('    }');
+  lines.push("    if (typeof window === 'undefined') return;");
+  lines.push('    const handlePopState = () => setCurrentRoute(resolveBrowserRoute(fallbackRoute));');
+  lines.push("    window.addEventListener('popstate', handlePopState);");
+  lines.push("    return () => window.removeEventListener('popstate', handlePopState);");
+  lines.push('  }, [route, fallbackRoute]);');
+  lines.push('');
+  lines.push('  const handleNavigate = (nextRoute: string) => {');
+  lines.push('    const normalized = normalizeRoutePath(nextRoute);');
+  lines.push('    setCurrentRoute(normalized);');
+  lines.push("    if (route === undefined && typeof window !== 'undefined' && window.history?.pushState) {");
+  lines.push('      const base = readBasePath();');
+  lines.push("      const targetUrl = base ? `${base}${normalized === '/' ? '/' : normalized}` : normalized;");
+  lines.push('      window.history.pushState({}, "", targetUrl);');
+  lines.push('    }');
+  lines.push('  };');
+  lines.push('');
+  lines.push('  const activeRoute = route !== undefined ? normalizeRoutePath(route) : currentRoute;');
+  lines.push('  switch (activeRoute) {');
+
+  const seenRoutes = new Set<string>();
   for (const page of project.pages) {
+    const normalizedRoute = page.route.length > 1 ? page.route.replace(/\/+$/, '') : (page.route || '/');
+    if (seenRoutes.has(normalizedRoute)) continue;
+    seenRoutes.add(normalizedRoute);
     const pageComp = pageNamesById.get(page.id) ?? `${toPascalCase(page.name, 'Page')}Page`;
-    const navAttr = pagesWithNavigation.has(page.id) ? ' onNavigate={setCurrentRoute}' : '';
-    lines.push(`    case ${escapeTsString(page.route)}:`);
+    const navAttr = pagesWithNavigation.has(page.id) ? ' onNavigate={handleNavigate}' : '';
+    lines.push(`    case ${escapeTsString(normalizedRoute)}:`);
     lines.push(`      return <${pageComp}${navAttr} />;`);
   }
   const activeComp = pageNamesById.get(activePage.id) ?? `${toPascalCase(activePage.name, 'Page')}Page`;
-  const activeNavAttr = pagesWithNavigation.has(activePage.id) ? ' onNavigate={setCurrentRoute}' : '';
+  const activeNavAttr = pagesWithNavigation.has(activePage.id) ? ' onNavigate={handleNavigate}' : '';
   lines.push('    default:');
   lines.push(`      return <${activeComp}${activeNavAttr} />;`);
   lines.push('  }');
@@ -1345,7 +1845,7 @@ function buildAppEntryFile(
     category: 'generated',
     readOnly: true,
     content: lines.join('\n'),
-    description: 'Generated React application entry mapping Folio page routes.',
+    description: 'Generated React multi-application SPA router mapping all Folio applications and page routes.',
     mappings: [],
   };
 }
@@ -1387,11 +1887,15 @@ export function compileReactProjectFiles(
     }
   }
 
+  let hasAnyShapeMorph = false;
   for (const page of project.pages) {
     const plan = buildReactPageLogicPlan(project, page);
     pageLogicPlans.set(page.id, plan);
     if (plan.hasNavigation) {
       pagesWithNavigation.add(page.id);
+    }
+    if (!hasAnyShapeMorph && compilePageMorphClips(project, page).length > 0) {
+      hasAnyShapeMorph = true;
     }
     for (const node of page.document.nodes) {
       if (node.type === 'component-instance' && plan.hasScopedChildLogic(node.id)) {
@@ -1428,6 +1932,7 @@ export function compileReactProjectFiles(
 
   const files: CompiledCodeFile[] = [
     buildAppEntryFile(project, activePage, pageNamesById, pagesWithNavigation),
+    ...(hasAnyShapeMorph ? [buildFolioShapeMorphHookFile()] : []),
     ...pageFiles,
   ];
   const componentsById = new Map(project.components.map((c) => [c.id, c]));

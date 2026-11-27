@@ -354,7 +354,7 @@ describe('Native Shape Morph — Import From Component & Animated SVG', () => {
     expect(firstDiffersFromMid).toBe(true);
   });
 
-  it('rejects unsupported components (text-only, open-path, compound multi-contour) cleanly with diagnostic messages', () => {
+  it('supports closed compound multi-contour components and rejects text-only or open-path components cleanly', () => {
     const textNode = {
       ...createTextNode(0),
       id: 't1',
@@ -416,9 +416,14 @@ describe('Native Shape Morph — Import From Component & Animated SVG', () => {
     expect(openRes.ok).toBe(false);
     if (!openRes.ok) expect(openRes.message.toLowerCase()).toContain('open');
 
-    expect(inspectComponentMorphSource(compoundPath).supported).toBe(false);
+    // Phase 3: closed compound multi-contour shapes with holes are supported!
+    expect(inspectComponentMorphSource(compoundPath).supported).toBe(true);
     const compoundRes = extractMorphSequenceFromComponent(compoundPath, 120, 120);
-    expect(compoundRes.ok).toBe(false);
-    if (!compoundRes.ok) expect(compoundRes.message.toLowerCase()).toContain('multi-contour');
+    expect(compoundRes.ok).toBe(true);
+    if (compoundRes.ok) {
+      expect(compoundRes.keyframes.length).toBeGreaterThanOrEqual(1);
+      const parsed = parsePathMorphSnapshot(compoundRes.keyframes[0].value);
+      expect(parsed?.subpaths?.length).toBe(1);
+    }
   });
 });

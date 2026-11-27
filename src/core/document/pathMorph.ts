@@ -2,23 +2,25 @@
  * FOLIO Native Shape Morph Geometry Engine.
  *
  * Allows a single canonical vector object (`EllipseNode`, `RectNode`, `FrameNode`,
- * or single-contour closed `PathNode`) to transform smoothly across arbitrary
- * geometry keyframes while preserving one stable `nodeId`.
+ * or single-contour / multi-contour closed `PathNode` including shapes with holes)
+ * to transform smoothly across arbitrary geometry keyframes while preserving one
+ * stable `nodeId`.
  *
- * Pipeline (Phases 1 & 2):
+ * Pipeline (Phases 1, 2 & 3):
  *   1. Topology & capability validation (`checkNodeMorphSupport`, `checkMorphPairCompatibility`)
- *   2. Canonical cubic Bezier extraction from primitive shapes & presets
- *   3. Winding-direction normalization (clockwise in screen coordinates)
- *   4. Arc-length-aware exact de Casteljau cubic Bezier subdivision (point-budget guarded)
- *   5. Optimal cyclic start-anchor alignment (minimizes rotational twist) + user overrides
- *   6. Cached `PreparedMorphPair` with flat `Float64Array` buffers so playback hot-path
+ *   2. Canonical cubic Bezier extraction from primitive shapes, presets & compound paths
+ *   3. Multi-contour spatial matching + centroid-collapse synthesis when contour counts differ
+ *   4. Winding-direction normalization per contour pair
+ *   5. Arc-length-aware exact de Casteljau cubic Bezier subdivision (point-budget guarded)
+ *   6. Optimal cyclic start-anchor alignment (minimizes rotational twist) + user overrides
+ *   7. Cached `PreparedMorphPair` with flat `Float64Array` buffers so playback hot-path
  *      performs pure numeric lerp with zero JSON parsing or subdivision per frame.
  *
- * Explicitly classified as unsupported in Phase 1/2 (fail loudly & cleanly):
- *   - Multi-contour / compound paths & holes (`subpaths.length > 0`) — deferred to Phase 3
- *   - Open paths (non-closed contours)
+ * Explicitly classified as unsupported (fail loudly & cleanly):
+ *   - Open paths (non-closed primary or hole contours)
  *   - Non-vector/non-shape nodes (`text`, `image`, `group`, `component-instance`)
  *   - Degenerate contours (`< 3` vertices, collapsed zero perimeter, non-finite coordinates)
+ *   - Excessive contour/point budgets (`> MAX_MORPH_CONTOURS` contours or `> MAX_MORPH_POINTS` per contour)
  */
 
 import type {
@@ -33,6 +35,7 @@ import type {
 } from './types';
 
 export const MAX_MORPH_POINTS = 256;
+export const MAX_MORPH_CONTOURS = 32;
 export const MAX_PREPARED_MORPH_CACHE = 128;
 
 const KAPPA = 0.5522847498307936;
@@ -141,6 +144,26 @@ export interface MorphCacheStats {
  *   [i*7 + 5] = handleOut.y
  *   [i*7 + 6] = cornerRadius
  */
+export interface PreparedMorphContourPair {
+  pointCount: number;
+  closed: boolean;
+  cyclicShift: number;
+  reversed: boolean;
+  flags: Uint8Array;
+  fromTypes: ReadonlyArray<'c' | 's' | 'y'>;
+  toTypes: ReadonlyArray<'c' | 's' | 'y'>;
+  fromBuf: Float64Array;
+  toBuf: Float64Array;
+  fromPoints: readonly PathMorphPoint[];
+  toPoints: readonly PathMorphPoint[];
+}
+
+export interface EvaluatedMorphGeometry {
+  points: VectorAnchorPoint[];
+  closed: boolean;
+  subpaths?: VectorSubpath[];
+}
+
 export interface PreparedMorphPair {
   compatible: boolean;
   reason: MorphTopologyReason;
@@ -157,6 +180,8 @@ export interface PreparedMorphPair {
   toTypes: ReadonlyArray<'c' | 's' | 'y'>;
   fromBuf: Float64Array;
   toBuf: Float64Array;
+  /** Matched subpath / hole contour pairs (Phase 3 multi-contour morph). */
+  subpathPairs?: readonly PreparedMorphContourPair[];
   fromSnapshot: PathMorphSnapshot;
   toSnapshot: PathMorphSnapshot;
 }
@@ -323,15 +348,27 @@ export function checkNodeMorphSupport(node: DesignNode | null | undefined): Morp
   }
 
   if (node.type === 'path') {
+    const primaryCheck = validateContourPoints(encodeAnchors(node.points), Boolean(node.closed));
+    if (!primaryCheck.supported) return primaryCheck;
     if (node.subpaths && node.subpaths.length > 0) {
+      if (node.subpaths.length + 1 > MAX_MORPH_CONTOURS) {
+        return {
+          supported: false,
+          reason: 'exceeds-point-budget',
+          message: `Shape Morph supports up to ${MAX_MORPH_CONTOURS} contours per path (found ${node.subpaths.length + 1}).`,
+        };
+      }
+      for (const sp of node.subpaths) {
+        const spCheck = validateContourPoints(encodeAnchors(sp.points), Boolean(sp.closed));
+        if (!spCheck.supported) return spCheck;
+      }
       return {
-        supported: false,
-        reason: 'multi-contour',
-        message: 'Multi-contour compound paths and shapes with holes are not supported in Shape Morph yet.',
+        supported: true,
+        reason: 'supported',
+        message: `Supported multi-contour closed path (${node.subpaths.length + 1} contours).`,
       };
     }
-    const encoded = encodeAnchors(node.points);
-    return validateContourPoints(encoded, Boolean(node.closed));
+    return primaryCheck;
   }
 
   return {
@@ -342,7 +379,8 @@ export function checkNodeMorphSupport(node: DesignNode | null | undefined): Morp
 }
 
 /**
- * Classifies whether two `PathMorphSnapshot` keyframes can be cleanly morphed.
+ * Classifies whether two `PathMorphSnapshot` keyframes can be cleanly morphed
+ * (supports both single closed contours and multi-contour compound paths/holes).
  */
 export function checkMorphPairCompatibility(
   from: PathMorphSnapshot | null,
@@ -355,22 +393,36 @@ export function checkMorphPairCompatibility(
       message: 'One or both morph keyframes contain invalid geometry data.',
     };
   }
-  if ((from.subpaths && from.subpaths.length > 0) || (to.subpaths && to.subpaths.length > 0)) {
-    return {
-      supported: false,
-      reason: 'multi-contour',
-      message: 'Multi-contour compound paths and shapes with holes are not supported in Shape Morph yet.',
-    };
-  }
   const fromCheck = validateContourPoints(from.points, from.closed);
   if (!fromCheck.supported) return fromCheck;
   const toCheck = validateContourPoints(to.points, to.closed);
   if (!toCheck.supported) return toCheck;
 
+  const fromSubpaths = from.subpaths ?? [];
+  const toSubpaths = to.subpaths ?? [];
+  if (fromSubpaths.length + 1 > MAX_MORPH_CONTOURS || toSubpaths.length + 1 > MAX_MORPH_CONTOURS) {
+    return {
+      supported: false,
+      reason: 'exceeds-point-budget',
+      message: `Shape Morph supports up to ${MAX_MORPH_CONTOURS} contours per shape.`,
+    };
+  }
+  for (const sp of fromSubpaths) {
+    const spCheck = validateContourPoints(sp.points, sp.closed);
+    if (!spCheck.supported) return spCheck;
+  }
+  for (const sp of toSubpaths) {
+    const spCheck = validateContourPoints(sp.points, sp.closed);
+    if (!spCheck.supported) return spCheck;
+  }
+
+  const isMulti = fromSubpaths.length > 0 || toSubpaths.length > 0;
   return {
     supported: true,
     reason: 'supported',
-    message: 'Compatible single closed contour morph pair.',
+    message: isMulti
+      ? 'Compatible multi-contour closed morph pair.'
+      : 'Compatible single closed contour morph pair.',
   };
 }
 
@@ -699,11 +751,23 @@ export function extractMorphSnapshotFromNode(node: DesignNode): string | null {
   }
 
   if (node.type === 'path') {
+    const encodedSubpaths: PathMorphSubpath[] | undefined =
+      node.subpaths && node.subpaths.length > 0
+        ? node.subpaths.map((sp) => ({
+            closed: Boolean(sp.closed),
+            points: encodeAnchors(sp.points),
+          }))
+        : undefined;
     const snapshot: PathMorphSnapshot = {
       v: 1,
       closed: Boolean(node.closed),
       points: encodeAnchors(node.points),
-      label: node.points.length === 3 ? 'Triangle' : 'Path',
+      ...(encodedSubpaths ? { subpaths: encodedSubpaths } : {}),
+      label: encodedSubpaths
+        ? 'Compound Path'
+        : node.points.length === 3
+          ? 'Triangle'
+          : 'Path',
       w: round2(w),
       h: round2(h),
     };
@@ -1335,9 +1399,216 @@ export function clearMorphPairCache(): void {
   cacheMisses = 0;
 }
 
+function computeContourCentroid(points: readonly PathMorphPoint[]): { x: number; y: number } {
+  if (points.length === 0) return { x: 0, y: 0 };
+  let sx = 0;
+  let sy = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    sx += points[i].x;
+    sy += points[i].y;
+  }
+  return { x: sx / points.length, y: sy / points.length };
+}
+
+/**
+ * Synthesizes a zero-radius collapsed closed partner contour centered at the
+ * partner's centroid so extra contours/holes open out of or shrink into their
+ * center cleanly when morphing between shapes with different contour counts.
+ */
+function buildCollapsedPartnerContour(contour: readonly PathMorphPoint[]): PathMorphPoint[] {
+  const { x, y } = computeContourCentroid(contour);
+  const cx = round2(x);
+  const cy = round2(y);
+  return contour.map((pt) => {
+    const out: PathMorphPoint = { x: cx, y: cy, pt: pt.pt };
+    if (pt.hi) out.hi = [cx, cy];
+    if (pt.ho) out.ho = [cx, cy];
+    return out;
+  });
+}
+
+function prepareSingleContourPair(
+  rawFromPts: readonly PathMorphPoint[],
+  rawToPts: readonly PathMorphPoint[],
+  matchMode: MorphMatchMode,
+  manualReverse: boolean,
+  manualOffset: number,
+  skipWindingAlign = false,
+): PreparedMorphContourPair {
+  let fromPts = rawFromPts.slice();
+  let toPts = rawToPts.slice();
+  let reversed = false;
+
+  // Step 1: Winding normalization (ensure both contours traverse in the same direction)
+  if (matchMode === 'auto' && !skipWindingAlign) {
+    const areaA = computeContourSignedArea(fromPts);
+    const areaB = computeContourSignedArea(toPts);
+    if ((areaA > 1e-4 && areaB < -1e-4) || (areaA < -1e-4 && areaB > 1e-4)) {
+      toPts = reverseMorphContour(toPts);
+      reversed = !reversed;
+    }
+  }
+  if (manualReverse) {
+    toPts = reverseMorphContour(toPts);
+    reversed = !reversed;
+  }
+
+  // Step 2: Determine target point count with symmetry-preserving subdivision
+  const nA = fromPts.length;
+  const nB = toPts.length;
+  const hasCornerRadiusEdit =
+    nA === nB &&
+    (fromPts.some((p) => (p.cr ?? 0) > 0) || toPts.some((p) => (p.cr ?? 0) > 0));
+
+  let targetCount = Math.max(nA, nB);
+  if (matchMode === 'auto' && !hasCornerRadiusEdit && !skipWindingAlign) {
+    if (nA === nB && nA <= 6) {
+      const rawAlign = findBestCyclicShift(fromPts, toPts);
+      if (rawAlign.meanSqError > 0.16) {
+        const doubledA = resampleMorphPoints(fromPts, true, nA * 2);
+        const doubledB = resampleMorphPoints(toPts, true, nB * 2);
+        const doubledAlign = findBestCyclicShift(doubledA, doubledB);
+        if (doubledAlign.meanSqError < rawAlign.meanSqError * 0.72) {
+          targetCount = nA * 2;
+        }
+      }
+    } else if (nA !== nB) {
+      const minSmooth = Math.max(nA, nB) < 8 ? 12 : Math.max(nA, nB);
+      targetCount = Math.min(MAX_MORPH_POINTS, minSmooth);
+    }
+  }
+
+  if (fromPts.length < targetCount) {
+    fromPts = resampleMorphPoints(fromPts, true, targetCount);
+  }
+  if (toPts.length < targetCount) {
+    toPts = resampleMorphPoints(toPts, true, targetCount);
+  }
+
+  // Step 3: Optimal cyclic start-anchor alignment (or manual offset / index mode)
+  let cyclicShift = 0;
+  if (matchMode === 'auto' && !skipWindingAlign) {
+    const autoAlign = findBestCyclicShift(fromPts, toPts);
+    cyclicShift = autoAlign.shift;
+  }
+  if (manualOffset !== 0) {
+    cyclicShift = ((cyclicShift + manualOffset) % toPts.length + toPts.length) % toPts.length;
+  }
+  if (cyclicShift !== 0) {
+    toPts = rotateMorphContour(toPts, cyclicShift);
+  }
+
+  const packed = packMatchedContours(fromPts, toPts);
+  return {
+    pointCount: packed.flags.length,
+    closed: true,
+    cyclicShift,
+    reversed,
+    flags: packed.flags,
+    fromTypes: packed.fromTypes,
+    toTypes: packed.toTypes,
+    fromBuf: packed.fromBuf,
+    toBuf: packed.toBuf,
+    fromPoints: rawFromPts,
+    toPoints: rawToPts,
+  };
+}
+
+/**
+ * Matches subpath/hole contours across two snapshots by spatial proximity
+ * (centroid distance + area similarity). Any unmatched extra contour on either
+ * side is paired with a collapsed zero-radius contour at its centroid so holes
+ * emerge or vanish smoothly without popping.
+ */
+function prepareSubpathPairs(
+  fromSubpaths: readonly PathMorphSubpath[],
+  toSubpaths: readonly PathMorphSubpath[],
+  matchMode: MorphMatchMode,
+): PreparedMorphContourPair[] {
+  if (fromSubpaths.length === 0 && toSubpaths.length === 0) return [];
+
+  const fromMeta = fromSubpaths.map((sp, idx) => ({
+    idx,
+    points: sp.points,
+    centroid: computeContourCentroid(sp.points),
+    area: Math.abs(computeContourSignedArea(sp.points)),
+  }));
+  const toMeta = toSubpaths.map((sp, idx) => ({
+    idx,
+    points: sp.points,
+    centroid: computeContourCentroid(sp.points),
+    area: Math.abs(computeContourSignedArea(sp.points)),
+  }));
+
+  const usedFrom = new Set<number>();
+  const usedTo = new Set<number>();
+  const matchedPairs: Array<{ fromPts: readonly PathMorphPoint[]; toPts: readonly PathMorphPoint[]; collapsed: boolean }> = [];
+
+  // Greedy nearest-centroid assignment for shared contour count
+  const pairCount = Math.min(fromMeta.length, toMeta.length);
+  for (let p = 0; p < pairCount; p += 1) {
+    let bestFrom = -1;
+    let bestTo = -1;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const fm of fromMeta) {
+      if (usedFrom.has(fm.idx)) continue;
+      for (const tm of toMeta) {
+        if (usedTo.has(tm.idx)) continue;
+        const dx = fm.centroid.x - tm.centroid.x;
+        const dy = fm.centroid.y - tm.centroid.y;
+        const dist = dx * dx + dy * dy;
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestFrom = fm.idx;
+          bestTo = tm.idx;
+        }
+      }
+    }
+    if (bestFrom >= 0 && bestTo >= 0) {
+      usedFrom.add(bestFrom);
+      usedTo.add(bestTo);
+      matchedPairs.push({
+        fromPts: fromMeta[bestFrom].points,
+        toPts: toMeta[bestTo].points,
+        collapsed: false,
+      });
+    }
+  }
+
+  for (const fm of fromMeta) {
+    if (!usedFrom.has(fm.idx)) {
+      matchedPairs.push({
+        fromPts: fm.points,
+        toPts: buildCollapsedPartnerContour(fm.points),
+        collapsed: true,
+      });
+    }
+  }
+  for (const tm of toMeta) {
+    if (!usedTo.has(tm.idx)) {
+      matchedPairs.push({
+        fromPts: buildCollapsedPartnerContour(tm.points),
+        toPts: tm.points,
+        collapsed: true,
+      });
+    }
+  }
+
+  return matchedPairs.map((item) =>
+    prepareSingleContourPair(
+      item.fromPts,
+      item.toPts,
+      item.collapsed ? 'index' : matchMode,
+      false,
+      0,
+      item.collapsed,
+    ),
+  );
+}
+
 /**
  * Prepares and caches a normalized, winding-aligned, start-anchor-matched contour
- * pair between two serialized `PathMorphSnapshot` keyframes.
+ * pair between two serialized `PathMorphSnapshot` keyframes (single or multi-contour).
  */
 export function prepareMorphPair(fromStr: string, toStr: string): PreparedMorphPair | null {
   const cacheKey = `${fromStr}\u0000${toStr}`;
@@ -1382,88 +1653,37 @@ export function prepareMorphPair(fromStr: string, toStr: string): PreparedMorphP
   const manualReverse = Boolean(options.reverse);
   const manualOffset = options.startOffset ?? 0;
 
-  let fromPts = from.points.slice();
-  let toPts = to.points.slice();
-  let reversed = false;
+  const primary = prepareSingleContourPair(
+    from.points,
+    to.points,
+    matchMode,
+    manualReverse,
+    manualOffset,
+  );
 
-  // Step 1: Winding normalization (ensure both contours traverse in the same direction)
-  if (matchMode === 'auto') {
-    const areaA = computeContourSignedArea(fromPts);
-    const areaB = computeContourSignedArea(toPts);
-    // If signs differ (one CW, one CCW), reverse `toPts` to match `fromPts` winding
-    if ((areaA > 1e-4 && areaB < -1e-4) || (areaA < -1e-4 && areaB > 1e-4)) {
-      toPts = reverseMorphContour(toPts);
-      reversed = !reversed;
-    }
-  }
-  if (manualReverse) {
-    toPts = reverseMorphContour(toPts);
-    reversed = !reversed;
-  }
+  const fromSubpaths = from.subpaths ?? [];
+  const toSubpaths = to.subpaths ?? [];
+  const subpathPairs =
+    fromSubpaths.length > 0 || toSubpaths.length > 0
+      ? prepareSubpathPairs(fromSubpaths, toSubpaths, matchMode)
+      : undefined;
 
-  // Step 2: Determine target point count with symmetry-preserving subdivision
-  const nA = fromPts.length;
-  const nB = toPts.length;
-  const hasCornerRadiusEdit =
-    nA === nB &&
-    (fromPts.some((p) => (p.cr ?? 0) > 0) || toPts.some((p) => (p.cr ?? 0) > 0));
-
-  let targetCount = Math.max(nA, nB);
-  if (matchMode === 'auto' && !hasCornerRadiusEdit) {
-    if (nA === nB && nA <= 6) {
-      // Detect angular phase mismatch (e.g. 4-pt Circle at 0/90/180/270 vs 4-pt Square at 45/135/225/315).
-      // Subdividing both to 2*n places anchors at shared angles, eliminating 45-deg twist!
-      const rawAlign = findBestCyclicShift(fromPts, toPts);
-      if (rawAlign.meanSqError > 0.16) {
-        const doubledA = resampleMorphPoints(fromPts, true, nA * 2);
-        const doubledB = resampleMorphPoints(toPts, true, nB * 2);
-        const doubledAlign = findBestCyclicShift(doubledA, doubledB);
-        if (doubledAlign.meanSqError < rawAlign.meanSqError * 0.72) {
-          targetCount = nA * 2;
-        }
-      }
-    } else if (nA !== nB) {
-      // For mismatched shapes (e.g. Circle 4 -> Triangle 3, Rounded Rect 8 -> Triangle 3),
-      // pick a clean shared count >= max(nA, nB, 12) when small so edges subdivide evenly.
-      const minSmooth = Math.max(nA, nB) < 8 ? 12 : Math.max(nA, nB);
-      targetCount = Math.min(MAX_MORPH_POINTS, minSmooth);
-    }
-  }
-
-  if (fromPts.length < targetCount) {
-    fromPts = resampleMorphPoints(fromPts, true, targetCount);
-  }
-  if (toPts.length < targetCount) {
-    toPts = resampleMorphPoints(toPts, true, targetCount);
-  }
-
-  // Step 3: Optimal cyclic start-anchor alignment (or manual offset / index mode)
-  let cyclicShift = 0;
-  if (matchMode === 'auto') {
-    const autoAlign = findBestCyclicShift(fromPts, toPts);
-    cyclicShift = autoAlign.shift;
-  }
-  if (manualOffset !== 0) {
-    cyclicShift = ((cyclicShift + manualOffset) % toPts.length + toPts.length) % toPts.length;
-  }
-  if (cyclicShift !== 0) {
-    toPts = rotateMorphContour(toPts, cyclicShift);
-  }
-
-  const packed = packMatchedContours(fromPts, toPts);
   const prepared: PreparedMorphPair = {
     compatible: true,
     reason: 'supported',
-    message: 'Prepared single-contour morph pair.',
-    pointCount: packed.flags.length,
+    message: subpathPairs && subpathPairs.length > 0
+      ? `Prepared multi-contour morph pair (${subpathPairs.length + 1} contours).`
+      : 'Prepared single-contour morph pair.',
+    pointCount: primary.pointCount,
     closed: true,
-    cyclicShift,
-    reversed,
-    flags: packed.flags,
-    fromTypes: packed.fromTypes,
-    toTypes: packed.toTypes,
-    fromBuf: packed.fromBuf,
-    toBuf: packed.toBuf,
+    cyclicShift: primary.cyclicShift,
+    reversed: primary.reversed,
+    flags: primary.flags,
+    fromTypes: primary.fromTypes,
+    toTypes: primary.toTypes,
+    fromBuf: primary.fromBuf,
+    toBuf: primary.toBuf,
+    ...(subpathPairs && subpathPairs.length > 0 ? { subpathPairs } : {}),
     fromSnapshot: from,
     toSnapshot: to,
   };
@@ -1481,35 +1701,20 @@ function storePreparedPair(key: string, value: PreparedMorphPair): void {
   preparedPairCache.set(key, value);
 }
 
-/**
- * Evaluates a cached `PreparedMorphPair` directly into `VectorAnchorPoint[]`
- * with zero JSON serialization or parsing on playback frames.
- */
-export function evaluatePreparedMorphPairToAnchors(
-  pair: PreparedMorphPair,
+function lerpContourBuffersToAnchors(
+  fromBuf: Float64Array,
+  toBuf: Float64Array,
+  flags: Uint8Array,
+  fromTypes: ReadonlyArray<'c' | 's' | 'y'>,
+  toTypes: ReadonlyArray<'c' | 's' | 'y'>,
+  pointCount: number,
   t: number,
   templateAnchors?: readonly VectorAnchorPoint[],
   idPrefix = 'morph',
 ): VectorAnchorPoint[] {
-  if (!pair.compatible || pair.pointCount === 0) {
-    const fallback = t < 0.5 ? pair.fromSnapshot : pair.toSnapshot;
-    return decodeAnchors(fallback.points, templateAnchors, idPrefix);
-  }
-  if (t <= 0) {
-    return decodeAnchors(pair.fromSnapshot.points, templateAnchors, idPrefix);
-  }
-  if (t >= 1) {
-    return decodeAnchors(pair.toSnapshot.points, templateAnchors, idPrefix);
-  }
-
-  const n = pair.pointCount;
-  const fromBuf = pair.fromBuf;
-  const toBuf = pair.toBuf;
-  const flags = pair.flags;
   const useToType = t >= 0.5;
-  const out: VectorAnchorPoint[] = new Array(n);
-
-  for (let i = 0; i < n; i += 1) {
+  const out: VectorAnchorPoint[] = new Array(pointCount);
+  for (let i = 0; i < pointCount; i += 1) {
     const base = i * STRIDE;
     const f = flags[i];
     const template = templateAnchors?.[i];
@@ -1517,7 +1722,7 @@ export function evaluatePreparedMorphPairToAnchors(
       id: template?.id ?? `${idPrefix}-${i}`,
       x: round2(fromBuf[base] + (toBuf[base] - fromBuf[base]) * t),
       y: round2(fromBuf[base + 1] + (toBuf[base + 1] - fromBuf[base + 1]) * t),
-      pointType: decodePointType(useToType ? pair.toTypes[i] : pair.fromTypes[i]),
+      pointType: decodePointType(useToType ? toTypes[i] : fromTypes[i]),
     };
     if (f & FLAG_HI) {
       pt.handleIn = {
@@ -1537,74 +1742,27 @@ export function evaluatePreparedMorphPairToAnchors(
     }
     out[i] = pt;
   }
-
   return out;
 }
 
-/**
- * Evaluates a morph pair between two serialized snapshots directly into `VectorAnchorPoint[]`
- * using the cached `PreparedMorphPair`.
- */
-export function evaluateMorphSnapshotsToAnchors(
-  fromStr: string,
-  toStr: string,
+function lerpContourBuffersToMorphPoints(
+  fromBuf: Float64Array,
+  toBuf: Float64Array,
+  flags: Uint8Array,
+  fromTypes: ReadonlyArray<'c' | 's' | 'y'>,
+  toTypes: ReadonlyArray<'c' | 's' | 'y'>,
+  pointCount: number,
   t: number,
-  templateAnchors?: readonly VectorAnchorPoint[],
-  idPrefix = 'morph',
-): { points: VectorAnchorPoint[]; closed: boolean } | null {
-  if (fromStr === toStr || t <= 0) {
-    const snap = parsePathMorphSnapshot(fromStr);
-    if (!snap) return null;
-    return {
-      points: decodeAnchors(snap.points, templateAnchors, idPrefix),
-      closed: snap.closed,
-    };
-  }
-  if (t >= 1) {
-    const snap = parsePathMorphSnapshot(toStr);
-    if (!snap) return null;
-    return {
-      points: decodeAnchors(snap.points, templateAnchors, idPrefix),
-      closed: snap.closed,
-    };
-  }
-  const pair = prepareMorphPair(fromStr, toStr);
-  if (!pair) return null;
-  return {
-    points: evaluatePreparedMorphPairToAnchors(pair, t, templateAnchors, idPrefix),
-    closed: pair.closed,
-  };
-}
-
-/**
- * Smoothly interpolates two serialized `PathMorphSnapshot` JSON strings at eased progress `t`.
- * Uses the cached `PreparedMorphPair` pipeline (winding normalization, arc-length subdivision,
- * and cyclic start-anchor alignment).
- */
-export function interpolatePathMorph(fromStr: string, toStr: string, t: number): string {
-  if (t <= 0 || fromStr === toStr) return fromStr;
-  if (t >= 1) return toStr;
-
-  const pair = prepareMorphPair(fromStr, toStr);
-  if (!pair || !pair.compatible) {
-    // Explicit fail-clean fallback for incompatible topologies (open paths, multi-contour, degenerate)
-    return t < 0.5 ? fromStr : toStr;
-  }
-
-  const n = pair.pointCount;
-  const fromBuf = pair.fromBuf;
-  const toBuf = pair.toBuf;
-  const flags = pair.flags;
+): PathMorphPoint[] {
   const useToType = t >= 0.5;
-  const points: PathMorphPoint[] = new Array(n);
-
-  for (let i = 0; i < n; i += 1) {
+  const points: PathMorphPoint[] = new Array(pointCount);
+  for (let i = 0; i < pointCount; i += 1) {
     const base = i * STRIDE;
     const f = flags[i];
     const point: PathMorphPoint = {
       x: round2(fromBuf[base] + (toBuf[base] - fromBuf[base]) * t),
       y: round2(fromBuf[base + 1] + (toBuf[base + 1] - fromBuf[base + 1]) * t),
-      pt: useToType ? pair.toTypes[i] : pair.fromTypes[i],
+      pt: useToType ? toTypes[i] : fromTypes[i],
     };
     if (f & FLAG_HI) {
       point.hi = [
@@ -1624,11 +1782,208 @@ export function interpolatePathMorph(fromStr: string, toStr: string, t: number):
     }
     points[i] = point;
   }
+  return points;
+}
+
+function decodeSubpathsFromSnapshot(
+  snapshot: PathMorphSnapshot,
+  idPrefix: string,
+): VectorSubpath[] | undefined {
+  if (!snapshot.subpaths || snapshot.subpaths.length === 0) return undefined;
+  return snapshot.subpaths.map((sp, spIdx) => ({
+    closed: sp.closed,
+    points: decodeAnchors(sp.points, undefined, `${idPrefix}-sp${spIdx}`),
+  }));
+}
+
+/**
+ * Evaluates a cached `PreparedMorphPair` directly into primary `VectorAnchorPoint[]`
+ * with zero JSON serialization or parsing on playback frames.
+ */
+export function evaluatePreparedMorphPairToAnchors(
+  pair: PreparedMorphPair,
+  t: number,
+  templateAnchors?: readonly VectorAnchorPoint[],
+  idPrefix = 'morph',
+): VectorAnchorPoint[] {
+  if (!pair.compatible || pair.pointCount === 0) {
+    const fallback = t < 0.5 ? pair.fromSnapshot : pair.toSnapshot;
+    return decodeAnchors(fallback.points, templateAnchors, idPrefix);
+  }
+  if (t <= 0) {
+    return decodeAnchors(pair.fromSnapshot.points, templateAnchors, idPrefix);
+  }
+  if (t >= 1) {
+    return decodeAnchors(pair.toSnapshot.points, templateAnchors, idPrefix);
+  }
+  return lerpContourBuffersToAnchors(
+    pair.fromBuf,
+    pair.toBuf,
+    pair.flags,
+    pair.fromTypes,
+    pair.toTypes,
+    pair.pointCount,
+    t,
+    templateAnchors,
+    idPrefix,
+  );
+}
+
+/**
+ * Evaluates a cached `PreparedMorphPair` into full geometry including any
+ * multi-contour `subpaths` (holes/compound contours).
+ */
+export function evaluatePreparedMorphPairToGeometry(
+  pair: PreparedMorphPair,
+  t: number,
+  templateAnchors?: readonly VectorAnchorPoint[],
+  idPrefix = 'morph',
+): EvaluatedMorphGeometry {
+  if (!pair.compatible || pair.pointCount === 0) {
+    const fallback = t < 0.5 ? pair.fromSnapshot : pair.toSnapshot;
+    const subpaths = decodeSubpathsFromSnapshot(fallback, idPrefix);
+    return {
+      points: decodeAnchors(fallback.points, templateAnchors, idPrefix),
+      closed: fallback.closed,
+      ...(subpaths ? { subpaths } : {}),
+    };
+  }
+  if (t <= 0) {
+    const subpaths = decodeSubpathsFromSnapshot(pair.fromSnapshot, idPrefix);
+    return {
+      points: decodeAnchors(pair.fromSnapshot.points, templateAnchors, idPrefix),
+      closed: pair.fromSnapshot.closed,
+      ...(subpaths ? { subpaths } : {}),
+    };
+  }
+  if (t >= 1) {
+    const subpaths = decodeSubpathsFromSnapshot(pair.toSnapshot, idPrefix);
+    return {
+      points: decodeAnchors(pair.toSnapshot.points, templateAnchors, idPrefix),
+      closed: pair.toSnapshot.closed,
+      ...(subpaths ? { subpaths } : {}),
+    };
+  }
+
+  const points = lerpContourBuffersToAnchors(
+    pair.fromBuf,
+    pair.toBuf,
+    pair.flags,
+    pair.fromTypes,
+    pair.toTypes,
+    pair.pointCount,
+    t,
+    templateAnchors,
+    idPrefix,
+  );
+
+  const subpaths: VectorSubpath[] | undefined =
+    pair.subpathPairs && pair.subpathPairs.length > 0
+      ? pair.subpathPairs.map((spPair, spIdx) => ({
+          closed: spPair.closed,
+          points: lerpContourBuffersToAnchors(
+            spPair.fromBuf,
+            spPair.toBuf,
+            spPair.flags,
+            spPair.fromTypes,
+            spPair.toTypes,
+            spPair.pointCount,
+            t,
+            undefined,
+            `${idPrefix}-sp${spIdx}`,
+          ),
+        }))
+      : undefined;
+
+  return {
+    points,
+    closed: pair.closed,
+    ...(subpaths ? { subpaths } : {}),
+  };
+}
+
+/**
+ * Evaluates a morph pair between two serialized snapshots directly into
+ * `EvaluatedMorphGeometry` (`points`, `closed`, optional `subpaths`) using the
+ * cached `PreparedMorphPair`.
+ */
+export function evaluateMorphSnapshotsToAnchors(
+  fromStr: string,
+  toStr: string,
+  t: number,
+  templateAnchors?: readonly VectorAnchorPoint[],
+  idPrefix = 'morph',
+): EvaluatedMorphGeometry | null {
+  if (fromStr === toStr || t <= 0) {
+    const snap = parsePathMorphSnapshot(fromStr);
+    if (!snap) return null;
+    const subpaths = decodeSubpathsFromSnapshot(snap, idPrefix);
+    return {
+      points: decodeAnchors(snap.points, templateAnchors, idPrefix),
+      closed: snap.closed,
+      ...(subpaths ? { subpaths } : {}),
+    };
+  }
+  if (t >= 1) {
+    const snap = parsePathMorphSnapshot(toStr);
+    if (!snap) return null;
+    const subpaths = decodeSubpathsFromSnapshot(snap, idPrefix);
+    return {
+      points: decodeAnchors(snap.points, templateAnchors, idPrefix),
+      closed: snap.closed,
+      ...(subpaths ? { subpaths } : {}),
+    };
+  }
+  const pair = prepareMorphPair(fromStr, toStr);
+  if (!pair) return null;
+  return evaluatePreparedMorphPairToGeometry(pair, t, templateAnchors, idPrefix);
+}
+
+/**
+ * Smoothly interpolates two serialized `PathMorphSnapshot` JSON strings at eased progress `t`.
+ * Supports both single-contour and multi-contour compound shapes & holes.
+ */
+export function interpolatePathMorph(fromStr: string, toStr: string, t: number): string {
+  if (t <= 0 || fromStr === toStr) return fromStr;
+  if (t >= 1) return toStr;
+
+  const pair = prepareMorphPair(fromStr, toStr);
+  if (!pair || !pair.compatible) {
+    // Explicit fail-clean fallback for incompatible topologies (open paths, degenerate)
+    return t < 0.5 ? fromStr : toStr;
+  }
+
+  const points = lerpContourBuffersToMorphPoints(
+    pair.fromBuf,
+    pair.toBuf,
+    pair.flags,
+    pair.fromTypes,
+    pair.toTypes,
+    pair.pointCount,
+    t,
+  );
+
+  const subpaths: PathMorphSubpath[] | undefined =
+    pair.subpathPairs && pair.subpathPairs.length > 0
+      ? pair.subpathPairs.map((spPair) => ({
+          closed: spPair.closed,
+          points: lerpContourBuffersToMorphPoints(
+            spPair.fromBuf,
+            spPair.toBuf,
+            spPair.flags,
+            spPair.fromTypes,
+            spPair.toTypes,
+            spPair.pointCount,
+            t,
+          ),
+        }))
+      : undefined;
 
   const blended: PathMorphSnapshot = {
     v: 1,
     closed: pair.closed,
     points,
+    ...(subpaths ? { subpaths } : {}),
   };
   return JSON.stringify(blended);
 }
@@ -1655,20 +2010,23 @@ export function applyPathMorphSnapshotToNode(node: PathNode, snapshotJson: strin
     points: nextPoints,
     closed: snapshot.closed,
     ...(nextSubpaths ? { subpaths: nextSubpaths } : {}),
+    ...(nextSubpaths && !node.style.fillRule
+      ? { style: { ...node.style, fillRule: 'evenodd' } }
+      : {}),
   };
 }
 
 /**
  * Transiently projects ANY morph-supported `DesignNode` (`EllipseNode`, `RectNode`,
  * `FrameNode`, or `PathNode`) into a rendering `PathNode` using pre-evaluated anchors
- * while preserving the EXACT canonical `node.id`, transforms, visual styles, effects,
- * filters, parent links, and clip masks.
+ * (including multi-contour `subpaths` / holes) while preserving the EXACT canonical
+ * `node.id`, transforms, visual styles, effects, filters, parent links, and clip masks.
  *
  * Canonical base geometry in the project document is NEVER mutated.
  */
 export function applyMorphGeometryToDesignNode(
   node: DesignNode,
-  geometry: { points: VectorAnchorPoint[]; closed: boolean } | string,
+  geometry: EvaluatedMorphGeometry | string,
 ): DesignNode {
   if (
     node.type !== 'path' &&
@@ -1702,6 +2060,9 @@ export function applyMorphGeometryToDesignNode(
   } else {
     points = geometry.points;
     closed = geometry.closed;
+    if (geometry.subpaths && geometry.subpaths.length > 0) {
+      nextSubpaths = geometry.subpaths;
+    }
   }
 
   if (node.type === 'path') {
@@ -1709,7 +2070,10 @@ export function applyMorphGeometryToDesignNode(
       ...node,
       points,
       closed,
-      ...(nextSubpaths ? { subpaths: nextSubpaths } : {}),
+      ...(nextSubpaths ? { subpaths: nextSubpaths } : { subpaths: undefined }),
+      ...(nextSubpaths && !node.style.fillRule
+        ? { style: { ...node.style, fillRule: 'evenodd' } }
+        : {}),
     };
   }
 
@@ -1753,9 +2117,11 @@ export function applyMorphGeometryToDesignNode(
       strokeWidth: shapeNode.style.strokeWidth,
       strokeAlign: shapeNode.style.strokeAlign,
       strokeDasharray: shapeNode.style.strokeDasharray,
+      ...(nextSubpaths ? { fillRule: 'evenodd' as const } : {}),
     },
     points,
     closed,
+    ...(nextSubpaths ? { subpaths: nextSubpaths } : {}),
   };
   return projected;
 }

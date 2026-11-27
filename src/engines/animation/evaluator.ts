@@ -9,7 +9,6 @@ import type {
   FolioPage,
   NodeCssFilters,
   VisualEffect,
-  VectorAnchorPoint,
 } from '../../core/document/types';
 import {
   formatColorWithAlpha,
@@ -22,6 +21,7 @@ import {
   evaluateMorphSnapshotsToAnchors,
   extractMorphSnapshotFromNode,
   interpolatePathMorph,
+  type EvaluatedMorphGeometry,
 } from '../../core/document/pathMorph';
 import { evaluateEasing } from './easing';
 
@@ -102,7 +102,7 @@ export interface AnimatedNodePose {
   strokeWidth?: number;
   pathMorph?: string;
   /** Pre-evaluated morph geometry produced directly from cached PreparedMorphPair (zero JSON overhead). */
-  pathMorphGeometry?: { points: VectorAnchorPoint[]; closed: boolean };
+  pathMorphGeometry?: EvaluatedMorphGeometry;
   layerBlur?: number;
   backdropBlur?: number;
   shadowOffsetX?: number;
@@ -302,7 +302,7 @@ export function evaluateTrackAtTime(
 function evaluateMorphTrackToGeometry(
   track: AnimationTrack,
   timeMs: number,
-): { points: VectorAnchorPoint[]; closed: boolean } | null {
+): EvaluatedMorphGeometry | null {
   if (track.keyframes.length === 0) return null;
   const sorted = sortKeyframes(track.keyframes);
   const idPrefix = `${track.targetNodeId}-pt`;

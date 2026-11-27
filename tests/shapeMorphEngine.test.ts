@@ -203,7 +203,7 @@ describe('FOLIO Native Shape Morph Engine', () => {
       expect(checkNodeMorphSupport(openPath).supported).toBe(false);
       expect(checkNodeMorphSupport(openPath).reason).toBe('open-path');
 
-      // Multi-contour / compound path with hole (Phase 3)
+      // Multi-contour / compound path with closed hole (Phase 3 supported)
       const compoundPath: PathNode = {
         ...createTriangleNode(0, 0, 100, 100),
         id: 'compound-path',
@@ -218,8 +218,21 @@ describe('FOLIO Native Shape Morph Engine', () => {
           },
         ],
       };
-      expect(checkNodeMorphSupport(compoundPath).supported).toBe(false);
-      expect(checkNodeMorphSupport(compoundPath).reason).toBe('multi-contour');
+      expect(checkNodeMorphSupport(compoundPath).supported).toBe(true);
+
+      // Compound path with an OPEN hole subpath must still be rejected cleanly
+      const openSubpathCompound: PathNode = {
+        ...compoundPath,
+        id: 'compound-open-subpath',
+        subpaths: [
+          {
+            closed: false,
+            points: compoundPath.subpaths![0].points,
+          },
+        ],
+      };
+      expect(checkNodeMorphSupport(openSubpathCompound).supported).toBe(false);
+      expect(checkNodeMorphSupport(openSubpathCompound).reason).toBe('open-path');
 
       // Degenerate < 3 points
       const tooFewPath: PathNode = {
@@ -568,18 +581,25 @@ describe('FOLIO Native Shape Morph Engine', () => {
       const css = compilePageAnimationsCss(project, page);
       expect(css).toContain('Shape Morph (`pathMorph`)');
 
-      // 5. React TSX export emits explicit limitation comment rather than silently claiming full parity
+      // 5. React TSX export emits full useFolioShapeMorph runtime hook + inline SVG morph target
       const reactFiles = compileReactProjectFiles(project);
+      const morphHookFile = reactFiles.find((f) => f.path === 'src/motion/useFolioShapeMorph.ts');
+      expect(morphHookFile).toBeDefined();
+      expect(morphHookFile!.content).toContain('export function useFolioShapeMorph');
+      expect(morphHookFile!.content).toContain('prefers-reduced-motion');
+      expect(morphHookFile!.content).not.toContain('eval(');
+
       const pageTsx = reactFiles.find((f) => f.path.endsWith('.tsx') && f.path.startsWith('src/pages/'));
       expect(pageTsx).toBeDefined();
-      expect(pageTsx!.content).toContain('Shape Morph (`pathMorph`)');
+      expect(pageTsx!.content).toContain('useFolioShapeMorph(FOLIO_MORPH_CLIPS)');
+      expect(pageTsx!.content).toContain('data-folio-morph-path="true"');
 
-      // 6. Parity matrix explicitly declares motion.shape-morph
+      // 6. Parity matrix declares full motion.shape-morph across all 3 runtimes
       const morphParity = RUNTIME_FEATURE_PARITY_MATRIX.find((e) => e.feature === 'motion.shape-morph');
       expect(morphParity).toBeDefined();
       expect(morphParity!.headless).toBe('full');
       expect(morphParity!.livePreview).toBe('full');
-      expect(morphParity!.reactCodegen).toBe('unsupported');
+      expect(morphParity!.reactCodegen).toBe('full');
     });
   });
 

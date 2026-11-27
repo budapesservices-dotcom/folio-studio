@@ -682,9 +682,10 @@ describe('Node Logic v1 — Live Preview & React Codegen Integration', () => {
     expect(pageTsx!.content).toContain('/^(?:https?:\\/\\/|mailto:|\\/(?!\\/)|#)/i.test(nextRoute)');
     expect(pageTsx!.content).toContain('logicOverrides["node-card-inst"]?.variants?.["axis-state"]');
 
-    // 2. App.tsx manages currentRoute state when any page triggers navigation
+    // 2. App.tsx manages currentRoute state + browser history when any page triggers navigation
     expect(appTsx!.content).toContain('useState');
-    expect(appTsx!.content).toContain('onNavigate={setCurrentRoute}');
+    expect(appTsx!.content).toContain('onNavigate={handleNavigate}');
+    expect(appTsx!.content).toContain('setCurrentRoute(normalized)');
 
     // 3. Every generated TSX file transpiles cleanly under strict TypeScript with zero syntax diagnostics
     const tsxFiles = reactFiles.filter((f) => f.language === 'tsx');

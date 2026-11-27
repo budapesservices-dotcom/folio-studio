@@ -41,7 +41,10 @@ import {
 } from './a11yAudit';
 import {
   buildCompiledProjectBundle,
+  optimizeSvgBytes,
+  type BundleOptimizationSummary,
   type CompiledProjectBundle,
+  type FreeStaticDeployTarget,
 } from './projectBundle';
 import {
   buildZipArchive,
@@ -58,12 +61,14 @@ export type {
   A11yIssueCode,
   A11yIssueSeverity,
   A11yQuickFix,
+  BundleOptimizationSummary,
   CodegenOptions,
   CodeMappingEntry,
   CodeOutputTarget,
   CompiledCodeFile,
   CompiledProjectBundle,
   CompiledProjectOutput,
+  FreeStaticDeployTarget,
   LivePreviewOptions,
   MappedEditResult,
   MappedNodeEditPatch,
@@ -80,6 +85,7 @@ export {
   computeContrastRatio,
   computeCrc32,
   normalizeArchiveEntryPath,
+  optimizeSvgBytes,
   parseCssColorToRgba,
   parseZipArchive,
   resolveSemanticTag,
