@@ -135,6 +135,7 @@ export function NodeLogicNodeFields({
     setLiveTestState({ nodeId: node.id, loading: true, authMode });
     try {
       const response = await fetch('/api/logic/http-proxy', {
+        credentials: 'same-origin',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
