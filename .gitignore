@@ -7,3 +7,5 @@ coverage/
 Thumbs.db
 .vitest/
 tsconfig.tsbuildinfo
+bun.lock
+bun.lockb
