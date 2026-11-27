@@ -194,14 +194,13 @@ describe('FOLIO Native Shape Morph Engine', () => {
       };
       expect(checkNodeMorphSupport(groupNode).reason).toBe('unsupported-node-type');
 
-      // Open path
+      // Open path (now supported by FOLIO Path Studio)
       const openPath: PathNode = {
         ...createTriangleNode(0, 0, 100, 100),
         id: 'open-path',
         closed: false,
       };
-      expect(checkNodeMorphSupport(openPath).supported).toBe(false);
-      expect(checkNodeMorphSupport(openPath).reason).toBe('open-path');
+      expect(checkNodeMorphSupport(openPath).supported).toBe(true);
 
       // Multi-contour / compound path with closed hole (Phase 3 supported)
       const compoundPath: PathNode = {
@@ -220,7 +219,7 @@ describe('FOLIO Native Shape Morph Engine', () => {
       };
       expect(checkNodeMorphSupport(compoundPath).supported).toBe(true);
 
-      // Compound path with an OPEN hole subpath must still be rejected cleanly
+      // Compound path with an open subpath is now supported by FOLIO Path Studio
       const openSubpathCompound: PathNode = {
         ...compoundPath,
         id: 'compound-open-subpath',
@@ -231,13 +230,13 @@ describe('FOLIO Native Shape Morph Engine', () => {
           },
         ],
       };
-      expect(checkNodeMorphSupport(openSubpathCompound).supported).toBe(false);
-      expect(checkNodeMorphSupport(openSubpathCompound).reason).toBe('open-path');
+      expect(checkNodeMorphSupport(openSubpathCompound).supported).toBe(true);
 
-      // Degenerate < 3 points
+      // Degenerate < 3 points on closed path
       const tooFewPath: PathNode = {
         ...createTriangleNode(0, 0, 100, 100),
         id: 'few-pts',
+        closed: true,
         points: [
           { id: 'p0', x: 0, y: 0, pointType: 'corner' },
           { id: 'p1', x: 50, y: 50, pointType: 'corner' },

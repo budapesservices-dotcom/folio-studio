@@ -101,6 +101,17 @@ export function findCrossStudioNodeReferences(
         });
       }
     }
+    for (const mp of clip.motionPaths ?? []) {
+      if (expandedIds.has(mp.targetNodeId)) {
+        animationTracks.push({
+          clipId: clip.id,
+          clipName: clip.name,
+          trackId: mp.id,
+          property: 'motionPath',
+          targetNodeId: mp.targetNodeId,
+        });
+      }
+    }
   }
 
   const codeExtensions: CrossStudioCodeExtensionReference[] = [];
@@ -182,15 +193,26 @@ export function cleanupDeletedNodeReferences(
     ? currentAnimations.map((clip) => {
       if (clip.pageId !== pageId) return clip;
       const filteredTracks = clip.tracks.filter((track) => !removedNodeIds.has(track.targetNodeId));
-      const delta = clip.tracks.length - filteredTracks.length;
-      if (delta === 0) return clip;
-      removedTrackCount += delta;
+      const trackDelta = clip.tracks.length - filteredTracks.length;
+      const prevMotionPaths = clip.motionPaths ?? [];
+      const filteredMotionPaths = prevMotionPaths.filter((mp) => !removedNodeIds.has(mp.targetNodeId));
+      const motionPathDelta = prevMotionPaths.length - filteredMotionPaths.length;
+      if (trackDelta === 0 && motionPathDelta === 0) return clip;
+      removedTrackCount += trackDelta + motionPathDelta;
       animationsChanged = true;
-      return {
+      const updated: AnimationClip = {
         ...clip,
         tracks: filteredTracks,
         updatedAt: now,
       };
+      if (clip.motionPaths !== undefined) {
+        if (filteredMotionPaths.length > 0) {
+          updated.motionPaths = filteredMotionPaths;
+        } else {
+          delete updated.motionPaths;
+        }
+      }
+      return updated;
     })
     : undefined;
 

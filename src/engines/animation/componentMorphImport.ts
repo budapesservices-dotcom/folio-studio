@@ -263,7 +263,7 @@ function normalizeSnapshotToTargetBox(
   const subpaths =
     snapshot.subpaths && snapshot.subpaths.length > 0
       ? snapshot.subpaths
-          .filter((sp) => sp.closed && sp.points.length >= 3)
+          .filter((sp) => (sp.closed ? sp.points.length >= 3 : sp.points.length >= 2))
           .map((sp) => ({
             closed: sp.closed,
             points: sp.points.map(transformPoint),
@@ -316,9 +316,11 @@ function selectComponentMorphSource(
       const validSnap = track.keyframes.some((kf) => {
         if (typeof kf.value !== 'string') return false;
         const parsed = parsePathMorphSnapshot(kf.value);
-        const subpathsClosed =
-          !parsed?.subpaths || parsed.subpaths.every((sp) => sp.closed && sp.points.length >= 3);
-        return Boolean(parsed && parsed.closed && parsed.points.length >= 3 && subpathsClosed);
+        const minPts = parsed?.closed ? 3 : 2;
+        const subpathsValid =
+          !parsed?.subpaths ||
+          parsed.subpaths.every((sp) => (sp.closed ? sp.points.length >= 3 : sp.points.length >= 2));
+        return Boolean(parsed && parsed.points.length >= minPts && subpathsValid);
       });
       return validSnap;
     });
@@ -396,11 +398,9 @@ function selectComponentMorphSource(
     return {
       source: null,
       reason:
-        firstIssue?.reason === 'open-path'
-          ? `Component “${component.name}” only contains open paths. Close the vector contour to morph from it.`
-          : firstIssue?.reason === 'exceeds-point-budget'
-            ? `Component “${component.name}” exceeds the Shape Morph point or contour budget.`
-            : `Component “${component.name}” has no closed vector shape (Circle, Rectangle, Frame, or closed Path) to morph into.`,
+        firstIssue?.reason === 'exceeds-point-budget'
+          ? `Component “${component.name}” exceeds the Shape Morph point or contour budget.`
+          : `Component “${component.name}” has no supported vector shape (Circle, Rectangle, Frame, or Path) to morph into.`,
     };
   }
 
@@ -497,9 +497,11 @@ export function extractMorphSequenceFromComponent(
     for (const kf of sorted) {
       if (typeof kf.value !== 'string') continue;
       const parsed = parsePathMorphSnapshot(kf.value);
-      const subpathsClosed =
-        !parsed?.subpaths || parsed.subpaths.every((sp) => sp.closed && sp.points.length >= 3);
-      if (!parsed || !parsed.closed || parsed.points.length < 3 || !subpathsClosed) {
+      const minPts = parsed?.closed ? 3 : 2;
+      const subpathsValid =
+        !parsed?.subpaths ||
+        parsed.subpaths.every((sp) => (sp.closed ? sp.points.length >= 3 : sp.points.length >= 2));
+      if (!parsed || parsed.points.length < minPts || !subpathsValid) {
         continue;
       }
       const label = parsed.label
@@ -565,7 +567,7 @@ export function extractMorphSequenceFromComponent(
       const rawSnap = extractMorphSnapshotFromNode(evalNode);
       if (!rawSnap) continue;
       const parsed = parsePathMorphSnapshot(rawSnap);
-      if (!parsed || !parsed.closed || parsed.points.length < 3) continue;
+      if (!parsed || parsed.points.length < (parsed.closed ? 3 : 2)) continue;
 
       const relScaleX = Math.max(0.05, evalNode.width / baseW);
       const relScaleY = Math.max(0.05, evalNode.height / baseH);
@@ -618,16 +620,16 @@ export function extractMorphSequenceFromComponent(
     }
   }
 
-  // Case C: Static closed vector component -> single normalized Shape Morph keyframe.
+  // Case C: Static vector component (open or closed) -> single normalized Shape Morph keyframe.
   const rawStaticSnap = extractMorphSnapshotFromNode(source.node);
   const parsedStatic = rawStaticSnap ? parsePathMorphSnapshot(rawStaticSnap) : null;
-  if (!parsedStatic || !parsedStatic.closed || parsedStatic.points.length < 3) {
+  if (!parsedStatic || parsedStatic.points.length < (parsedStatic.closed ? 3 : 2)) {
     return {
       ok: false,
       componentId: component.id,
       componentName: component.name,
       reason: 'snapshot-extraction-failed',
-      message: `Could not extract a closed vector contour from component “${component.name}”.`,
+      message: `Could not extract a vector contour from component “${component.name}”.`,
     };
   }
 

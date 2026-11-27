@@ -327,9 +327,18 @@ export function useMotionPlayback({
 
   const updateClip = useCallback(
     (nextClip: AnimationClip, description = 'Update animation clip', coalesceKey?: string) => {
+      const exists = (project.animations ?? []).some((c) => c.id === nextClip.id);
+      if (!exists) {
+        const result = commandClient.createAnimationClip(nextClip, description);
+        if (result.status === 'applied') {
+          setActiveClipId(nextClip.id);
+          setPreviewActive(true);
+        }
+        return;
+      }
       commandClient.updateAnimationClip(nextClip, description, coalesceKey);
     },
-    [commandClient],
+    [project.animations, commandClient],
   );
 
   const updateCustomEasings = useCallback(

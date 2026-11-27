@@ -1,9 +1,10 @@
 import { createPortal, lazy, Suspense } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { AssetReference, BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument, FolioProject } from '../../core/document/types';
+import type { AssetReference, BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument, FolioProject, MotionPathBinding } from '../../core/document/types';
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { CanvasToolId, CanvasToolOptions } from '../../core/tools/operationContract';
 import { Canvas, type CanvasContextMenuActions } from '../../engines/canvas/Canvas';
+import type { MotionPathPointSelection } from '../../engines/canvas/MotionPathOverlay';
 import type { GpuSceneMetrics, ViewportRendererMode } from '../../engines/canvas/gpu/types';
 import type { Alignment, DistributionAxis } from '../../engines/canvas/geometry';
 import type { ValidatedToolOperation } from '../../engines/canvas/geometryEngine';
@@ -410,6 +411,13 @@ export interface MainCanvasWindowProps {
   onToggleComponentAnimPlaying?: () => void;
   studioActions?: StudioVectorActions;
   canvasContextMenuExtras?: Partial<CanvasContextMenuActions>;
+  motionPaths?: readonly MotionPathBinding[];
+  selectedMotionPathPoint?: MotionPathPointSelection | null;
+  onSelectMotionPathPoint?: (selection: MotionPathPointSelection | null) => void;
+  onUpdateMotionPath?: (
+    binding: MotionPathBinding,
+    options?: { coalesceKey?: string; description?: string },
+  ) => void;
 }
 
 export function MainCanvasWindow({
@@ -469,6 +477,10 @@ export function MainCanvasWindow({
   onToggleComponentAnimPlaying,
   studioActions,
   canvasContextMenuExtras,
+  motionPaths,
+  selectedMotionPathPoint,
+  onSelectMotionPathPoint,
+  onUpdateMotionPath,
 }: MainCanvasWindowProps) {
   const [rendererMode, setRendererMode] = useState<ViewportRendererMode>('auto');
   const [gpuMetrics, setGpuMetrics] = useState<GpuSceneMetrics | null>(null);
@@ -634,6 +646,10 @@ export function MainCanvasWindow({
               onGpuMetrics={setGpuMetrics}
               animationTimeMs={animationTimeMs}
               contextMenuActions={mergedContextMenuActions}
+              motionPaths={motionPaths}
+              selectedMotionPathPoint={selectedMotionPathPoint}
+              onSelectMotionPathPoint={onSelectMotionPathPoint}
+              onUpdateMotionPath={onUpdateMotionPath}
             />
           </div>
         </FloatingWindow>
@@ -734,6 +750,13 @@ export interface ComponentCanvasWindowProps {
   onResizeDocument?: (width: number, height: number) => void;
   studioActions?: StudioVectorActions;
   canvasContextMenuExtras?: Partial<CanvasContextMenuActions>;
+  motionPaths?: readonly MotionPathBinding[];
+  selectedMotionPathPoint?: MotionPathPointSelection | null;
+  onSelectMotionPathPoint?: (selection: MotionPathPointSelection | null) => void;
+  onUpdateMotionPath?: (
+    binding: MotionPathBinding,
+    options?: { coalesceKey?: string; description?: string },
+  ) => void;
 }
 
 export function ComponentCanvasWindow({
@@ -799,6 +822,10 @@ export function ComponentCanvasWindow({
   onResizeDocument,
   studioActions,
   canvasContextMenuExtras,
+  motionPaths,
+  selectedMotionPathPoint,
+  onSelectMotionPathPoint,
+  onUpdateMotionPath,
 }: ComponentCanvasWindowProps) {
   const safeDocument = normalizeCanvasDocument(document);
   const safeNodes = safeDocument?.nodes ?? [];
@@ -1004,6 +1031,10 @@ export function ComponentCanvasWindow({
                 onLayerDrop={onLayerDrop}
                 onDropImageFiles={onDropImageFiles}
                 contextMenuActions={mergedComponentContextMenuActions}
+                motionPaths={motionPaths}
+                selectedMotionPathPoint={selectedMotionPathPoint}
+                onSelectMotionPathPoint={onSelectMotionPathPoint}
+                onUpdateMotionPath={onUpdateMotionPath}
               />
             ) : (
               <div class="component-canvas-empty" role="status">

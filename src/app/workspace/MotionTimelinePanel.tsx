@@ -50,6 +50,8 @@ import {
   type MotionPresetDefinition,
 } from '../../engines/animation';
 import { EasingCurveMiniSvg, MotionGraphEditor } from './MotionGraphEditor';
+import { PathStudioControls } from './PathStudioControls';
+import type { MotionPathPointSelection } from '../../engines/canvas/MotionPathOverlay';
 import { StudioContextMenu, clampContextMenuPosition, type StudioContextMenuEntry } from './StudioContextMenu';
 import { StudioIcon } from './StudioIcon';
 
@@ -87,6 +89,8 @@ export interface MotionTimelinePanelProps {
   onOpenMotionExport?: () => void;
   onSelectCanvasNode: (nodeId: string) => void;
   onFocusStudio?: () => void;
+  selectedMotionPathPoint?: MotionPathPointSelection | null;
+  onSelectMotionPathPoint?: (selection: MotionPathPointSelection | null) => void;
   onClose: () => void;
 }
 
@@ -144,6 +148,8 @@ export function MotionTimelinePanel({
   onOpenMotionExport,
   onSelectCanvasNode,
   onFocusStudio,
+  selectedMotionPathPoint = null,
+  onSelectMotionPathPoint,
   onClose,
 }: MotionTimelinePanelProps) {
   const nodes = activePage.document.nodes;
@@ -167,7 +173,7 @@ export function MotionTimelinePanel({
     if (selectedNodes.length === 0) {
       return {
         supported: false,
-        message: 'Select a closed vector shape (Circle, Rectangle, Frame, or closed Path) to enable Shape Morph.',
+        message: 'Select a vector shape (Circle, Rectangle, Frame, or open/closed Path) to enable Shape Morph.',
       };
     }
     const supportedNode = selectedNodes.find((n) => checkNodeMorphSupport(n).supported);
@@ -186,6 +192,7 @@ export function MotionTimelinePanel({
 
   const [selection, setSelection] = useState<TimelineSelection | null>(null);
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
+  const [pathStudioOpen, setPathStudioOpen] = useState(false);
   const [expandedOverrides, setExpandedOverrides] = useState<Readonly<Record<string, boolean>>>(() => ({}));
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -1150,6 +1157,27 @@ export function MotionTimelinePanel({
         </div>
 
         <div class="mt-header-group mt-header-actions">
+          <button
+            type="button"
+            class={`mt-btn mt-path-studio-btn${pathStudioOpen ? ' active' : ''}`}
+            aria-pressed={pathStudioOpen}
+            data-testid="timeline-path-studio-btn"
+            title="Open FOLIO Path Studio (Motion Path, Shape Morph, Trim Path)"
+            onClick={() => setPathStudioOpen((open) => !open)}
+          >
+            Path Studio
+            {Boolean(
+              activeClip &&
+                ((activeClip.motionPaths && activeClip.motionPaths.length > 0) ||
+                  activeClip.tracks.some(
+                    (t) =>
+                      t.property === 'pathMorph' ||
+                      t.property === 'trimStart' ||
+                      t.property === 'trimEnd' ||
+                      t.property === 'trimOffset',
+                  )),
+            ) && <span class="ps-header-dot" aria-hidden="true" />}
+          </button>
           {onKeyframePathMorph && (
             <button
               type="button"
@@ -1196,7 +1224,7 @@ export function MotionTimelinePanel({
                   title={info.reason}
                 >
                   {!info.supported
-                    ? `${component.name} (no closed vector)`
+                    ? `${component.name} (no vector shape)`
                     : info.isAnimated
                       ? `✦ ${component.name} (Anim SVG · ${info.keyframeCount} kf)`
                       : `◇ ${component.name}`}
@@ -1318,6 +1346,40 @@ export function MotionTimelinePanel({
           </button>
         </div>
       </header>
+
+      {pathStudioOpen && (
+        <PathStudioControls
+          workspaceScope={workspaceScope}
+          activePage={activePage}
+          activeClip={activeClip}
+          pageClipsCount={pageClips.length}
+          selectedNodeIds={selectedNodeIds}
+          playheadMs={playheadMs}
+          components={components}
+          designTokens={designTokens}
+          selectedMotionPathPoint={selectedMotionPathPoint}
+          onSelectMotionPathPoint={onSelectMotionPathPoint}
+          onUpdateClip={onUpdateClip}
+          onKeyframePathMorph={onKeyframePathMorph}
+          onImportMorphFromComponent={onImportMorphFromComponent}
+          onEditMorphPoints={onEditMorphPoints}
+          onOpenSpeedCurve={(nodeId) => {
+            if (!activeClip) return;
+            const progTrack = activeClip.tracks.find(
+              (t) => t.targetNodeId === nodeId && t.property === 'motionPathProgress',
+            );
+            const targetKf =
+              progTrack && progTrack.keyframes.length >= 2
+                ? progTrack.keyframes[progTrack.keyframes.length - 1]
+                : progTrack?.keyframes[0];
+            if (progTrack && targetKf) {
+              setSelection({ kind: 'track', trackId: progTrack.id, keyframeId: targetKf.id });
+              setGraphEditorOpen(true);
+            }
+          }}
+          onSeek={onSeek}
+        />
+      )}
 
       <div class="mt-body">
         <div class="mt-grid-header">

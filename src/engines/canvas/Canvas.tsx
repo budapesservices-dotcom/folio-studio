@@ -8,9 +8,19 @@ import type {
   DesignNode,
   DesignTokenCollection,
   FolioDocument,
+  MotionPathBinding,
   PathNode,
   TextNode,
+  VectorPointType,
 } from '../../core/document/types';
+import {
+  insertMotionPathPointOnSegment,
+  moveMotionPathAnchor,
+  moveMotionPathHandle,
+  projectPointOntoMotionPath,
+  removeMotionPathPoint,
+  setMotionPathPointType,
+} from '../../core/document/pathStudio';
 import { buildFrameClipAncestorMap, buildLayerClipMaskMap, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
 import { getAssetCacheRevision, subscribeAssetCacheUpdates } from '../../core/persistence/assetStore';
 import { computeAutoLayoutNodes, getBreakpointCanvasWidth } from '../layout/autoLayout';
@@ -36,6 +46,7 @@ import {
 } from './canvasHelpers';
 import { hitTestNodesAtPoint } from './hitTest';
 import { CanvasInteractiveOverlays, type HoveredAutoLayoutHandle } from './CanvasOverlays';
+import { MotionPathOverlay, type MotionPathPointSelection } from './MotionPathOverlay';
 import { isAutoLayoutContainer } from './autoLayoutHandles';
 import { CanvasSceneLayer, type LiveEraserPreview } from './CanvasSceneLayer';
 import {
@@ -134,6 +145,13 @@ interface CanvasProps {
   onGpuMetrics?: (metrics: GpuSceneMetrics | null) => void;
   contextMenuActions?: CanvasContextMenuActions;
   animationTimeMs?: number;
+  motionPaths?: readonly MotionPathBinding[];
+  selectedMotionPathPoint?: MotionPathPointSelection | null;
+  onSelectMotionPathPoint?: (selection: MotionPathPointSelection | null) => void;
+  onUpdateMotionPath?: (
+    binding: MotionPathBinding,
+    options?: { coalesceKey?: string; description?: string },
+  ) => void;
 }
 
 interface PanSession {
@@ -189,6 +207,10 @@ export function Canvas({
   onGpuMetrics,
   contextMenuActions,
   animationTimeMs,
+  motionPaths,
+  selectedMotionPathPoint,
+  onSelectMotionPathPoint,
+  onUpdateMotionPath,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -219,6 +241,14 @@ export function Canvas({
   });
   const lastActivePointerInputRef = useRef<CanvasToolPointerInput | null>(null);
   const capturedPointerRef = useRef<{ svg: SVGSVGElement; pointerId: number } | null>(null);
+  const motionPathDragRef = useRef<{
+    kind: 'anchor' | 'handle-in' | 'handle-out';
+    nodeId: string;
+    pointIndex: number;
+    binding: MotionPathBinding;
+    coalesceKey: string;
+    pointerId: number;
+  } | null>(null);
   const pendingInlineEditRef = useRef<InlineTextEditState | null>(null);
   const prevDocumentIdRef = useRef<string>(document.id);
   const [renderedSvgWidth, setRenderedSvgWidth] = useState<number>(0);
@@ -424,6 +454,7 @@ export function Canvas({
       setAltHeld(false);
       setShiftHeld(false);
       panRef.current = null;
+      motionPathDragRef.current = null;
       lastActivePointerInputRef.current = null;
       releaseCapturedPointer();
       updateToolSession(null);
@@ -1207,6 +1238,93 @@ export function Canvas({
     if (spaceHeld && !toolSessionRef.current) return;
     if ((event.target as Element)?.closest('.canvas-inline-text-editor')) return;
     if (inlineTextEdit) commitInlineText();
+
+    // Direct Motion Path editing (works live even during Motion playback/scrubbing)
+    if (event.button === 0 && onUpdateMotionPath && motionPaths && motionPaths.length > 0) {
+      const targetEl = event.target as Element | null;
+      const anchorEl = targetEl?.closest('[data-motion-path-anchor]');
+      const handleEl = targetEl?.closest('[data-motion-path-handle]');
+      const curveEl = targetEl?.closest('[data-motion-path-curve]');
+
+      if (anchorEl) {
+        const nodeId = anchorEl.getAttribute('data-motion-path-node-id');
+        const pointIndex = Number(anchorEl.getAttribute('data-motion-path-point-index'));
+        const binding = nodeId ? motionPaths.find((mp) => mp.targetNodeId === nodeId) : undefined;
+        if (binding && Number.isInteger(pointIndex) && pointIndex >= 0 && pointIndex < binding.points.length) {
+          onSelectMotionPathPoint?.({ nodeId: binding.targetNodeId, pointIndex });
+          motionPathDragRef.current = {
+            kind: 'anchor',
+            nodeId: binding.targetNodeId,
+            pointIndex,
+            binding,
+            coalesceKey: `motion-path-anchor:${binding.id}:${Date.now()}`,
+            pointerId: event.pointerId,
+          };
+          try {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            capturedPointerRef.current = { svg: event.currentTarget, pointerId: event.pointerId };
+          } catch {
+            // Pointer capture optional in headless environments.
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
+
+      if (handleEl) {
+        const nodeId = handleEl.getAttribute('data-motion-path-node-id');
+        const handleType = handleEl.getAttribute('data-motion-path-handle');
+        const pointIndex = Number(handleEl.getAttribute('data-motion-path-point-index'));
+        const binding = nodeId ? motionPaths.find((mp) => mp.targetNodeId === nodeId) : undefined;
+        if (
+          binding &&
+          (handleType === 'in' || handleType === 'out') &&
+          Number.isInteger(pointIndex) &&
+          pointIndex >= 0 &&
+          pointIndex < binding.points.length
+        ) {
+          onSelectMotionPathPoint?.({ nodeId: binding.targetNodeId, pointIndex });
+          motionPathDragRef.current = {
+            kind: handleType === 'in' ? 'handle-in' : 'handle-out',
+            nodeId: binding.targetNodeId,
+            pointIndex,
+            binding,
+            coalesceKey: `motion-path-handle:${binding.id}:${Date.now()}`,
+            pointerId: event.pointerId,
+          };
+          try {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            capturedPointerRef.current = { svg: event.currentTarget, pointerId: event.pointerId };
+          } catch {
+            // Pointer capture optional in headless environments.
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
+
+      if (curveEl && event.altKey) {
+        const nodeId = curveEl.getAttribute('data-motion-path-node-id');
+        const binding = nodeId ? motionPaths.find((mp) => mp.targetNodeId === nodeId) : undefined;
+        if (binding) {
+          const canvasPt = toCanvasPoint(event.currentTarget, event.clientX, event.clientY);
+          const proj = projectPointOntoMotionPath(binding, canvasPt);
+          if (proj) {
+            const inserted = insertMotionPathPointOnSegment(binding, proj.segmentIndex, proj.t);
+            if (inserted.insertedIndex >= 0) {
+              onUpdateMotionPath(inserted.binding, { description: 'Insert motion path point' });
+              onSelectMotionPathPoint?.({ nodeId: binding.targetNodeId, pointIndex: inserted.insertedIndex });
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+        }
+      }
+    }
+
     const input = createPointerInput(event);
     if (needsHoverTracking) {
       setHoverPoint(input.point);
@@ -1262,6 +1380,30 @@ export function Canvas({
   const handlePointerMove = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
     const svg = event.currentTarget;
     const pointerId = event.pointerId;
+
+    if (motionPathDragRef.current && onUpdateMotionPath) {
+      const drag = motionPathDragRef.current;
+      const canvasPt = toCanvasPoint(svg, event.clientX, event.clientY);
+      const next =
+        drag.kind === 'anchor'
+          ? moveMotionPathAnchor(drag.binding, drag.pointIndex, canvasPt.x, canvasPt.y)
+          : moveMotionPathHandle(
+              drag.binding,
+              drag.pointIndex,
+              drag.kind === 'handle-in' ? 'in' : 'out',
+              canvasPt.x,
+              canvasPt.y,
+              event.altKey,
+            );
+      drag.binding = next;
+      onUpdateMotionPath(next, {
+        coalesceKey: drag.coalesceKey,
+        description: drag.kind === 'anchor' ? 'Move motion path point' : 'Adjust motion path handle',
+      });
+      event.preventDefault();
+      return;
+    }
+
     const isFreehandActive = toolSessionRef.current?.kind === 'freehand';
     if (toolSessionRef.current) {
       event.preventDefault();
@@ -1321,6 +1463,11 @@ export function Canvas({
   };
 
   const finishPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    if (motionPathDragRef.current) {
+      motionPathDragRef.current = null;
+      releaseCapturedPointer();
+      return;
+    }
     flushPendingPointerMove();
     const input = createPointerInput(event);
     const transition = activeTool.onPointerUp(input, createToolContext());
@@ -1332,6 +1479,11 @@ export function Canvas({
   };
 
   const cancelPointer = (event: JSX.TargetedPointerEvent<SVGSVGElement>) => {
+    if (motionPathDragRef.current) {
+      motionPathDragRef.current = null;
+      releaseCapturedPointer();
+      return;
+    }
     if (pointerMoveRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
       cancelAnimationFrame(pointerMoveRafRef.current);
       pointerMoveRafRef.current = null;
@@ -1361,9 +1513,50 @@ export function Canvas({
   };
 
   const handleDoubleClick = (event: JSX.TargetedMouseEvent<SVGSVGElement>) => {
+    const target = event.target as Element;
+
+    // Direct Motion Path double-click: cycle anchor point type OR insert point on curve
+    if (onUpdateMotionPath && motionPaths && motionPaths.length > 0) {
+      const anchorEl = target.closest('[data-motion-path-anchor]');
+      if (anchorEl) {
+        const nodeId = anchorEl.getAttribute('data-motion-path-node-id');
+        const pointIndex = Number(anchorEl.getAttribute('data-motion-path-point-index'));
+        const binding = nodeId ? motionPaths.find((mp) => mp.targetNodeId === nodeId) : undefined;
+        if (binding && Number.isInteger(pointIndex) && pointIndex >= 0 && pointIndex < binding.points.length) {
+          const currentType = binding.points[pointIndex].pointType;
+          const nextType: VectorPointType =
+            currentType === 'corner' ? 'smooth' : currentType === 'smooth' ? 'symmetric' : 'corner';
+          const next = setMotionPathPointType(binding, pointIndex, nextType);
+          onUpdateMotionPath(next, { description: `Set motion path point to ${nextType}` });
+          onSelectMotionPathPoint?.({ nodeId: binding.targetNodeId, pointIndex });
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
+      const curveEl = target.closest('[data-motion-path-curve]');
+      if (curveEl) {
+        const nodeId = curveEl.getAttribute('data-motion-path-node-id');
+        const binding = nodeId ? motionPaths.find((mp) => mp.targetNodeId === nodeId) : undefined;
+        if (binding) {
+          const canvasPt = toCanvasPoint(event.currentTarget, event.clientX, event.clientY);
+          const proj = projectPointOntoMotionPath(binding, canvasPt);
+          if (proj) {
+            const inserted = insertMotionPathPointOnSegment(binding, proj.segmentIndex, proj.t);
+            if (inserted.insertedIndex >= 0) {
+              onUpdateMotionPath(inserted.binding, { description: 'Insert motion path point' });
+              onSelectMotionPathPoint?.({ nodeId: binding.targetNodeId, pointIndex: inserted.insertedIndex });
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+        }
+      }
+    }
+
     if (!canEditInlineText) return;
     if (toolId !== 'select' && toolId !== 'direct-selection') return;
-    const target = event.target as Element;
     if (target.closest('[data-smart-handle]')) return;
     const svgRect = event.currentTarget.getBoundingClientRect();
     let nodeId = svgRect.width > 1 && svgRect.height > 1
@@ -1381,6 +1574,27 @@ export function Canvas({
   const toolKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
   toolKeyDownRef.current = (event: KeyboardEvent) => {
     if (inlineTextEdit) return;
+
+    if (
+      (event.key === 'Backspace' || event.key === 'Delete') &&
+      selectedMotionPathPoint &&
+      onUpdateMotionPath &&
+      motionPaths &&
+      motionPaths.length > 0
+    ) {
+      const binding = motionPaths.find((mp) => mp.targetNodeId === selectedMotionPathPoint.nodeId);
+      if (binding && binding.points.length > 2) {
+        const next = removeMotionPathPoint(binding, selectedMotionPathPoint.pointIndex);
+        onUpdateMotionPath(next, { description: 'Remove motion path point' });
+        onSelectMotionPathPoint?.({
+          nodeId: binding.targetNodeId,
+          pointIndex: Math.max(0, Math.min(selectedMotionPathPoint.pointIndex - 1, next.points.length - 1)),
+        });
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
 
     if (event.key === 'Escape') {
       if (panRef.current) {
@@ -1747,6 +1961,15 @@ export function Canvas({
             hoverPoint={hoverPoint}
             eyedropperLoupe={eyedropperLoupe}
             guides={guides}
+          />
+
+          <MotionPathOverlay
+            motionPaths={motionPaths}
+            canvasNodes={canvasNodes}
+            selectedNodeIds={selectedNodeIds}
+            selectedPoint={selectedMotionPathPoint}
+            invZoom={invZoom}
+            interactive={Boolean(onUpdateMotionPath)}
           />
 
           {inlineEditNode && inlineTextEdit && (

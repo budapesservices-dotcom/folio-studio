@@ -15,6 +15,9 @@ import {
   type CanvasToolId,
   type CanvasToolOptions,
 } from '../engines/canvas/tools/types';
+import type { MotionPathBinding } from '../core/document/types';
+import type { MotionPathPointSelection } from '../engines/canvas/MotionPathOverlay';
+import { upsertMotionPathInClip } from '../engines/animation';
 import { InspectorPanel } from './InspectorPanel';
 import type { StudioClipboardPayload } from './nodeClipboard';
 import { createEditorState } from './editorReducer';
@@ -136,6 +139,7 @@ export function App() {
   const [workspaceTools, setWorkspaceTools] = useState<Record<EditorTarget, CanvasToolId>>({ main: 'select', component: 'select' });
   const [toolOptions, setToolOptions] = useState<CanvasToolOptions>(DEFAULT_CANVAS_TOOL_OPTIONS);
   const [componentRackSearch, setComponentRackSearch] = useState('');
+  const [selectedMotionPathPoint, setSelectedMotionPathPoint] = useState<MotionPathPointSelection | null>(null);
   const selectionSourceRef = useRef<'layers' | 'canvas'>('canvas');
   const clipboardRef = useRef<StudioClipboardPayload | null>(null);
   const setProjectNameEditingRef = useRef<(editing: boolean) => void>(() => {});
@@ -582,6 +586,25 @@ export function App() {
     setCodeWorkspaceOpen(true);
   }, []);
 
+  const activeCanvasMotionPaths = useMemo(
+    () =>
+      motion.motionOpen && motion.activeClip?.motionPaths && motion.activeClip.motionPaths.length > 0
+        ? motion.activeClip.motionPaths
+        : undefined,
+    [motion.motionOpen, motion.activeClip?.motionPaths],
+  );
+
+  const handleUpdateCanvasMotionPath = useCallback(
+    (binding: MotionPathBinding, options?: { coalesceKey?: string; description?: string }) => {
+      if (!motion.activeClip) return;
+      const nextClip = upsertMotionPathInClip(motion.activeClip, binding, {
+        ensureProgressTrack: true,
+      });
+      motion.updateClip(nextClip, options?.description ?? 'Edit Motion Path', options?.coalesceKey);
+    },
+    [motion.activeClip, motion.updateClip],
+  );
+
   return (
     <div
       ref={appShellRef}
@@ -804,6 +827,10 @@ export function App() {
         onToggleComponentAnimPlaying={toggleComponentAnimPlaying}
         studioActions={selectionActions.createStudioActionsForTarget('main')}
         canvasContextMenuExtras={mainCanvasContextMenuExtras}
+        motionPaths={activeEditorId === 'main' ? activeCanvasMotionPaths : undefined}
+        selectedMotionPathPoint={activeEditorId === 'main' ? selectedMotionPathPoint : null}
+        onSelectMotionPathPoint={setSelectedMotionPathPoint}
+        onUpdateMotionPath={activeEditorId === 'main' ? handleUpdateCanvasMotionPath : undefined}
       />
 
       <ComponentCanvasWindow
@@ -879,6 +906,10 @@ export function App() {
         }}
         studioActions={selectionActions.createStudioActionsForTarget('component')}
         canvasContextMenuExtras={componentCanvasContextMenuExtras}
+        motionPaths={activeEditorId === 'component' ? activeCanvasMotionPaths : undefined}
+        selectedMotionPathPoint={activeEditorId === 'component' ? selectedMotionPathPoint : null}
+        onSelectMotionPathPoint={setSelectedMotionPathPoint}
+        onUpdateMotionPath={activeEditorId === 'component' ? handleUpdateCanvasMotionPath : undefined}
       />
 
       <NodeLogicWindow
@@ -1089,6 +1120,8 @@ export function App() {
         onChooseTool={chooseCanvasTool}
         onOpenLivePreview={openLivePreviewForPage}
         onOpenMotionExport={() => setMotionExportOpen(true)}
+        selectedMotionPathPoint={selectedMotionPathPoint}
+        onSelectMotionPathPoint={setSelectedMotionPathPoint}
         onCloseMotion={motion.closeMotion}
         onNotice={setNotice}
       />

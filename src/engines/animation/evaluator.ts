@@ -7,7 +7,9 @@ import type {
   DesignNode,
   FolioDocument,
   FolioPage,
+  MotionPathBinding,
   NodeCssFilters,
+  TrimPathMode,
   VisualEffect,
 } from '../../core/document/types';
 import {
@@ -23,6 +25,10 @@ import {
   interpolatePathMorph,
   type EvaluatedMorphGeometry,
 } from '../../core/document/pathMorph';
+import {
+  createDefaultMotionPathForNode,
+  evaluateMotionPathAtProgress,
+} from '../../core/document/pathStudio';
 import { evaluateEasing } from './easing';
 
 export const MODERN_EFFECT_ANIMATABLE_PROPERTIES: readonly AnimatableProperty[] = Object.freeze([
@@ -52,6 +58,10 @@ export const ANIMATABLE_PROPERTIES: readonly AnimatableProperty[] = Object.freez
   'stroke',
   'strokeWidth',
   'pathMorph',
+  'motionPathProgress',
+  'trimStart',
+  'trimEnd',
+  'trimOffset',
   ...MODERN_EFFECT_ANIMATABLE_PROPERTIES,
 ]);
 
@@ -75,6 +85,10 @@ export const ANIMATABLE_PROPERTY_META: Readonly<Record<AnimatableProperty, {
   stroke: { label: 'Stroke', unit: '', step: 0, kind: 'color' },
   strokeWidth: { label: 'Stroke W', unit: 'px', step: 0.5, min: 0, max: 200, kind: 'number' },
   pathMorph: { label: 'Shape Points & Curves', unit: '', step: 0, kind: 'morph' },
+  motionPathProgress: { label: 'Path Progress', unit: '%', step: 1, min: -1000, max: 1000, kind: 'number' },
+  trimStart: { label: 'Trim Start', unit: '%', step: 1, min: 0, max: 100, kind: 'number' },
+  trimEnd: { label: 'Trim End', unit: '%', step: 1, min: 0, max: 100, kind: 'number' },
+  trimOffset: { label: 'Trim Offset', unit: '%', step: 1, min: -1000, max: 1000, kind: 'number' },
   layerBlur: { label: 'Layer Blur', unit: 'px', step: 1, min: 0, max: 200, kind: 'number' },
   backdropBlur: { label: 'Backdrop Blur', unit: 'px', step: 1, min: 0, max: 200, kind: 'number' },
   shadowOffsetX: { label: 'Shadow X', unit: 'px', step: 1, min: -500, max: 500, kind: 'number' },
@@ -103,6 +117,15 @@ export interface AnimatedNodePose {
   pathMorph?: string;
   /** Pre-evaluated morph geometry produced directly from cached PreparedMorphPair (zero JSON overhead). */
   pathMorphGeometry?: EvaluatedMorphGeometry;
+  motionPathProgress?: number;
+  motionPathCenterX?: number;
+  motionPathCenterY?: number;
+  motionPathAutoOrient?: boolean;
+  motionPathRotationDeg?: number;
+  trimStart?: number;
+  trimEnd?: number;
+  trimOffset?: number;
+  trimMode?: TrimPathMode;
   layerBlur?: number;
   backdropBlur?: number;
   shadowOffsetX?: number;
@@ -117,7 +140,7 @@ export interface AnimatedNodePose {
 }
 
 export interface MotionPresetDefinition {
-  id: 'hero-entrance' | 'orbit-float' | 'pulse-glow';
+  id: 'hero-entrance' | 'orbit-float' | 'pulse-glow' | 'motion-path-cruise' | 'trim-logo-reveal';
   name: string;
   description: string;
   durationMs: number;
@@ -145,6 +168,20 @@ export const MOTION_PRESETS: readonly MotionPresetDefinition[] = Object.freeze([
     description: 'Rhythmic scale and opacity breath loop',
     durationMs: 1600,
     loop: true,
+  },
+  {
+    id: 'motion-path-cruise',
+    name: 'Motion Path Cruise',
+    description: 'Follows an editable cubic Bézier trajectory with constant speed and auto-orient',
+    durationMs: 2400,
+    loop: true,
+  },
+  {
+    id: 'trim-logo-reveal',
+    name: 'Trim Path Reveal',
+    description: 'Progressively draws vector and shape strokes from 0% to 100%',
+    durationMs: 1400,
+    loop: false,
   },
 ]);
 
@@ -238,6 +275,12 @@ export function evaluateTrackAtTime(
     if (track.property === 'opacity' || track.property === 'shadowOpacity') {
       return roundTo3(clamp(Number(val), 0, 1));
     }
+    if (track.property === 'trimStart' || track.property === 'trimEnd') {
+      return roundTo2(clamp(Number(val), 0, 100));
+    }
+    if (track.property === 'trimOffset' || track.property === 'motionPathProgress') {
+      return roundTo2(clamp(Number(val), -1000, 1000));
+    }
     return val;
   }
   const last = sorted[sorted.length - 1];
@@ -245,6 +288,12 @@ export function evaluateTrackAtTime(
     const val = last.value;
     if (track.property === 'opacity' || track.property === 'shadowOpacity') {
       return roundTo3(clamp(Number(val), 0, 1));
+    }
+    if (track.property === 'trimStart' || track.property === 'trimEnd') {
+      return roundTo2(clamp(Number(val), 0, 100));
+    }
+    if (track.property === 'trimOffset' || track.property === 'motionPathProgress') {
+      return roundTo2(clamp(Number(val), -1000, 1000));
     }
     return val;
   }
@@ -274,6 +323,10 @@ export function evaluateTrackAtTime(
       if (track.property === 'scale') return roundTo3(clamp(interpolated, 0.05, 10));
       if (track.property === 'width' || track.property === 'height') return roundTo2(clamp(interpolated, 1, 20000));
       if (track.property === 'radius' || track.property === 'strokeWidth') return roundTo2(clamp(interpolated, 0, 2000));
+      if (track.property === 'trimStart' || track.property === 'trimEnd') return roundTo2(clamp(interpolated, 0, 100));
+      if (track.property === 'trimOffset' || track.property === 'motionPathProgress') {
+        return roundTo2(clamp(interpolated, -1000, 1000));
+      }
       if (track.property === 'layerBlur' || track.property === 'backdropBlur' || track.property === 'shadowBlur') {
         return roundTo2(clamp(interpolated, 0, 200));
       }
@@ -372,7 +425,34 @@ export function evaluateClipAtTime(
     } else {
       pose[track.property] = Number(value);
     }
+    if (
+      (track.property === 'trimStart' || track.property === 'trimEnd' || track.property === 'trimOffset') &&
+      track.trimMode
+    ) {
+      pose.trimMode = track.trimMode;
+    }
   }
+
+  // Evaluate Motion Path bindings (using keyed motionPathProgress or normalized clip time)
+  if (clip.motionPaths && clip.motionPaths.length > 0) {
+    const defaultProgressPct = clip.durationMs > 0 ? (effectiveTime / clip.durationMs) * 100 : 0;
+    for (const binding of clip.motionPaths) {
+      if (binding.points.length < 2) continue;
+      const pose = poses[binding.targetNodeId] ?? (poses[binding.targetNodeId] = {});
+      const progressPct = pose.motionPathProgress !== undefined
+        ? pose.motionPathProgress
+        : defaultProgressPct;
+      const sample = evaluateMotionPathAtProgress(binding, progressPct);
+      if (!sample) continue;
+      pose.motionPathCenterX = roundTo2(sample.x);
+      pose.motionPathCenterY = roundTo2(sample.y);
+      if (binding.autoOrient) {
+        pose.motionPathAutoOrient = true;
+        pose.motionPathRotationDeg = roundTo2(sample.tangentAngleDeg + (binding.orientOffsetDeg ?? 0));
+      }
+    }
+  }
+
   return poses;
 }
 
@@ -419,18 +499,29 @@ export function applyAnimatedPosesToDocument(
     for (const anc of ancestors) {
       const ancPose = poses[anc.id];
       if (!ancPose) continue;
-      if (inheritedDx === 0 && ancPose.x !== undefined) {
-        inheritedDx = ancPose.x - anc.x;
+      const ancW = ancPose.width !== undefined ? Math.max(1, roundTo2(ancPose.width)) : anc.width;
+      const ancH = ancPose.height !== undefined ? Math.max(1, roundTo2(ancPose.height)) : anc.height;
+      const ancX = ancPose.motionPathCenterX !== undefined
+        ? roundTo2(ancPose.motionPathCenterX - ancW / 2)
+        : ancPose.x;
+      const ancY = ancPose.motionPathCenterY !== undefined
+        ? roundTo2(ancPose.motionPathCenterY - ancH / 2)
+        : ancPose.y;
+      if (inheritedDx === 0 && ancX !== undefined) {
+        inheritedDx = ancX - anc.x;
       }
-      if (inheritedDy === 0 && ancPose.y !== undefined) {
-        inheritedDy = ancPose.y - anc.y;
+      if (inheritedDy === 0 && ancY !== undefined) {
+        inheritedDy = ancY - anc.y;
       }
-      if (!hasOrbit && anc.type !== 'group' && ancPose.rotation !== undefined) {
-        const dRot = ancPose.rotation - (anc.rotation || 0);
+      const ancEffectiveRot = ancPose.motionPathAutoOrient && ancPose.motionPathRotationDeg !== undefined
+        ? roundTo2(ancPose.motionPathRotationDeg + (ancPose.rotation !== undefined ? ancPose.rotation - (anc.rotation || 0) : 0))
+        : ancPose.rotation;
+      if (!hasOrbit && anc.type !== 'group' && ancEffectiveRot !== undefined) {
+        const dRot = ancEffectiveRot - (anc.rotation || 0);
         if (Math.abs(dRot) > 0.001) {
           inheritedRotDelta = dRot;
-          orbitOriginX = (ancPose.x ?? anc.x) + anc.width / 2;
-          orbitOriginY = (ancPose.y ?? anc.y) + anc.height / 2;
+          orbitOriginX = (ancX ?? anc.x) + ancW / 2;
+          orbitOriginY = (ancY ?? anc.y) + ancH / 2;
           hasOrbit = true;
         }
       }
@@ -445,13 +536,27 @@ export function applyAnimatedPosesToDocument(
     if (!pose && !hasInheritedTransform) return node;
     changed = true;
 
-    let baseX = pose?.x !== undefined ? pose.x : roundTo2(node.x + inheritedDx);
-    let baseY = pose?.y !== undefined ? pose.y : roundTo2(node.y + inheritedDy);
     const baseWidth = pose?.width !== undefined ? Math.max(1, roundTo2(pose.width)) : node.width;
     const baseHeight = pose?.height !== undefined ? Math.max(1, roundTo2(pose.height)) : node.height;
+    let baseX = pose?.motionPathCenterX !== undefined
+      ? roundTo2(pose.motionPathCenterX - baseWidth / 2)
+      : pose?.x !== undefined
+        ? pose.x
+        : roundTo2(node.x + inheritedDx);
+    let baseY = pose?.motionPathCenterY !== undefined
+      ? roundTo2(pose.motionPathCenterY - baseHeight / 2)
+      : pose?.y !== undefined
+        ? pose.y
+        : roundTo2(node.y + inheritedDy);
 
     // Orbit un-keyed child center around animated rotated Frame parent's center to match CSS DOM nesting
-    if (hasOrbit && pose?.x === undefined && pose?.y === undefined) {
+    if (
+      hasOrbit &&
+      pose?.motionPathCenterX === undefined &&
+      pose?.motionPathCenterY === undefined &&
+      pose?.x === undefined &&
+      pose?.y === undefined
+    ) {
       const childCx = baseX + baseWidth / 2;
       const childCy = baseY + baseHeight / 2;
       const rad = (inheritedRotDelta * Math.PI) / 180;
@@ -472,9 +577,11 @@ export function applyAnimatedPosesToDocument(
     const centeredY = scale !== 1 ? roundTo2(baseY + (baseHeight - scaledHeight) / 2) : baseY;
 
     const effectiveRotation =
-      pose?.rotation !== undefined
-        ? pose.rotation
-        : roundTo2((node.rotation || 0) + (hasOrbit ? inheritedRotDelta : 0));
+      pose?.motionPathAutoOrient && pose.motionPathRotationDeg !== undefined
+        ? roundTo2(pose.motionPathRotationDeg + (pose.rotation !== undefined ? pose.rotation - (node.rotation || 0) : 0))
+        : pose?.rotation !== undefined
+          ? pose.rotation
+          : roundTo2((node.rotation || 0) + (hasOrbit ? inheritedRotDelta : 0));
     const effectiveOpacity =
       pose?.opacity !== undefined
         ? roundTo3(clamp(pose.opacity, 0, 1))
@@ -526,7 +633,11 @@ export function applyAnimatedPosesToDocument(
         pose.fill !== undefined ||
         pose.stroke !== undefined ||
         pose.strokeWidth !== undefined ||
-        pose.radius !== undefined
+        pose.radius !== undefined ||
+        pose.trimStart !== undefined ||
+        pose.trimEnd !== undefined ||
+        pose.trimOffset !== undefined ||
+        pose.trimMode !== undefined
       ),
     );
 
@@ -551,6 +662,20 @@ export function applyAnimatedPosesToDocument(
         nextStyle.radius = Math.max(0, roundTo2(pose.radius));
         if ('cornerRadii' in nextStyle) {
           delete nextStyle.cornerRadii;
+        }
+      }
+      if ('stroke' in nextNode.style) {
+        if (pose.trimStart !== undefined) {
+          nextStyle.trimStart = clamp(roundTo2(pose.trimStart), 0, 100);
+        }
+        if (pose.trimEnd !== undefined) {
+          nextStyle.trimEnd = clamp(roundTo2(pose.trimEnd), 0, 100);
+        }
+        if (pose.trimOffset !== undefined) {
+          nextStyle.trimOffset = clamp(roundTo2(pose.trimOffset), -1000, 1000);
+        }
+        if (pose.trimMode !== undefined) {
+          nextStyle.trimMode = pose.trimMode;
         }
       }
       nextNode = {
@@ -774,6 +899,20 @@ export function getDefaultNodePropertyValue(node: DesignNode, property: Animatab
         : 0;
     case 'pathMorph':
       return extractMorphSnapshotFromNode(node) ?? '';
+    case 'motionPathProgress':
+      return 0;
+    case 'trimStart':
+      return 'style' in node && 'trimStart' in node.style && typeof node.style.trimStart === 'number'
+        ? clamp(roundTo2(node.style.trimStart), 0, 100)
+        : 0;
+    case 'trimEnd':
+      return 'style' in node && 'trimEnd' in node.style && typeof node.style.trimEnd === 'number'
+        ? clamp(roundTo2(node.style.trimEnd), 0, 100)
+        : 100;
+    case 'trimOffset':
+      return 'style' in node && 'trimOffset' in node.style && typeof node.style.trimOffset === 'number'
+        ? clamp(roundTo2(node.style.trimOffset), -1000, 1000)
+        : 0;
     case 'layerBlur': {
       const fx = (node.effects ?? []).find(
         (item): item is Extract<VisualEffect, { type: 'layer-blur' }> =>
@@ -906,17 +1045,31 @@ export function addTrackToClip(
         ? 0.92
         : property === 'rotation'
           ? roundTo2(Number(baseValue) - 6)
-          : baseValue;
+          : property === 'motionPathProgress' || property === 'trimEnd' || property === 'trimStart' || property === 'trimOffset'
+            ? 0
+            : baseValue;
+  const endValue: number | string =
+    property === 'motionPathProgress' ||
+    property === 'trimEnd' ||
+    property === 'trimStart' ||
+    property === 'trimOffset'
+      ? 100
+      : baseValue;
 
   const trackId = createMotionId('track');
-  const endTime = Math.min(clip.durationMs, Math.max(200, Math.round(clip.durationMs * 0.75)));
+  const endTime =
+    property === 'motionPathProgress' || property === 'trimOffset'
+      ? clip.durationMs
+      : Math.min(clip.durationMs, Math.max(200, Math.round(clip.durationMs * 0.75)));
+  const endEasing: AnimationEasing =
+    property === 'motionPathProgress' || property === 'trimOffset' ? 'linear' : 'ease-out';
   const newTrack: AnimationTrack = {
     id: trackId,
     targetNodeId: node.id,
     property,
     keyframes: [
       { id: createMotionId('kf'), timeMs: 0, value: startValue, easing: 'linear' },
-      { id: createMotionId('kf'), timeMs: endTime, value: baseValue, easing: 'ease-out' },
+      { id: createMotionId('kf'), timeMs: endTime, value: endValue, easing: endEasing },
     ],
   };
 
@@ -1274,6 +1427,11 @@ export function groupClipTracksByNode(clip: AnimationClip): GroupedAnimationLaye
       map.set(track.targetNodeId, [track]);
     }
   }
+  for (const mp of clip.motionPaths ?? []) {
+    if (!map.has(mp.targetNodeId)) {
+      map.set(mp.targetNodeId, []);
+    }
+  }
 
   const groups: GroupedAnimationLayer[] = [];
   for (const [targetNodeId, tracks] of map.entries()) {
@@ -1354,9 +1512,192 @@ export function deleteLayerKeyframesAtTimeInClip(
  * Removes all animation tracks belonging to `targetNodeId` from the clip.
  */
 export function removeLayerTracksFromClip(clip: AnimationClip, targetNodeId: string): AnimationClip {
+  const nextMotionPaths = clip.motionPaths
+    ? clip.motionPaths.filter((mp) => mp.targetNodeId !== targetNodeId)
+    : undefined;
   return {
     ...clip,
     tracks: clip.tracks.filter((track) => track.targetNodeId !== targetNodeId),
+    ...(nextMotionPaths && nextMotionPaths.length > 0 ? { motionPaths: nextMotionPaths } : { motionPaths: undefined }),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+// ============================================================================
+// FOLIO PATH STUDIO — MOTION PATH & TRIM PATH CLIP HELPERS
+// ============================================================================
+
+/**
+ * Adds or updates a `MotionPathBinding` for `binding.targetNodeId` in `clip`.
+ * Optionally seeds a `motionPathProgress` track (0% -> 100%) so speed/easing
+ * can be customized directly in the Motion Timeline and Graph Editor.
+ */
+export function upsertMotionPathInClip(
+  clip: AnimationClip,
+  binding: MotionPathBinding,
+  options?: { ensureProgressTrack?: boolean },
+): AnimationClip {
+  const existingPaths = clip.motionPaths ?? [];
+  const idx = existingPaths.findIndex((mp) => mp.targetNodeId === binding.targetNodeId);
+  const nextMotionPaths = idx >= 0
+    ? existingPaths.map((mp, i) => (i === idx ? binding : mp))
+    : [...existingPaths, binding];
+
+  let nextTracks = clip.tracks;
+  if (options?.ensureProgressTrack) {
+    const hasProgress = clip.tracks.some(
+      (t) => t.targetNodeId === binding.targetNodeId && t.property === 'motionPathProgress',
+    );
+    if (!hasProgress) {
+      nextTracks = [
+        ...clip.tracks,
+        {
+          id: createMotionId('track'),
+          targetNodeId: binding.targetNodeId,
+          property: 'motionPathProgress',
+          keyframes: [
+            { id: createMotionId('kf'), timeMs: 0, value: 0, easing: 'linear' },
+            { id: createMotionId('kf'), timeMs: clip.durationMs, value: 100, easing: 'linear' },
+          ],
+        },
+      ];
+    }
+  }
+
+  return {
+    ...clip,
+    tracks: nextTracks,
+    motionPaths: nextMotionPaths,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Removes a node's `MotionPathBinding` (and optionally its `motionPathProgress` track).
+ */
+export function removeMotionPathFromClip(
+  clip: AnimationClip,
+  targetNodeId: string,
+  options?: { removeProgressTrack?: boolean },
+): AnimationClip {
+  const nextMotionPaths = (clip.motionPaths ?? []).filter(
+    (mp) => mp.targetNodeId !== targetNodeId,
+  );
+  const nextTracks = options?.removeProgressTrack !== false
+    ? clip.tracks.filter(
+        (t) => !(t.targetNodeId === targetNodeId && t.property === 'motionPathProgress'),
+      )
+    : clip.tracks;
+
+  return {
+    ...clip,
+    tracks: nextTracks,
+    motionPaths: nextMotionPaths.length > 0 ? nextMotionPaths : undefined,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Applies a ready-to-play Trim Path animation preset (`draw-in`, `draw-out`,
+ * or `traveling-dash`) to `node` inside `clip`.
+ */
+export function enableTrimPathInClip(
+  clip: AnimationClip,
+  node: DesignNode,
+  preset: 'draw-in' | 'draw-out' | 'traveling-dash' = 'draw-in',
+  trimMode: TrimPathMode = 'simultaneous',
+): AnimationClip {
+  const withoutOldTrim = clip.tracks.filter(
+    (t) =>
+      !(
+        t.targetNodeId === node.id &&
+        (t.property === 'trimStart' || t.property === 'trimEnd' || t.property === 'trimOffset')
+      ),
+  );
+  const dur = clip.durationMs;
+  const created: AnimationTrack[] = [];
+
+  if (preset === 'draw-in') {
+    created.push({
+      id: createMotionId('track'),
+      targetNodeId: node.id,
+      property: 'trimEnd',
+      trimMode,
+      keyframes: [
+        { id: createMotionId('kf'), timeMs: 0, value: 0, easing: 'linear' },
+        { id: createMotionId('kf'), timeMs: dur, value: 100, easing: 'ease-in-out' },
+      ],
+    });
+  } else if (preset === 'draw-out') {
+    created.push({
+      id: createMotionId('track'),
+      targetNodeId: node.id,
+      property: 'trimStart',
+      trimMode,
+      keyframes: [
+        { id: createMotionId('kf'), timeMs: 0, value: 0, easing: 'linear' },
+        { id: createMotionId('kf'), timeMs: dur, value: 100, easing: 'ease-in-out' },
+      ],
+    });
+  } else {
+    // Traveling dash: fixed 28% stroke window gliding continuously around the path
+    created.push(
+      {
+        id: createMotionId('track'),
+        targetNodeId: node.id,
+        property: 'trimStart',
+        trimMode,
+        keyframes: [{ id: createMotionId('kf'), timeMs: 0, value: 0, easing: 'linear' }],
+      },
+      {
+        id: createMotionId('track'),
+        targetNodeId: node.id,
+        property: 'trimEnd',
+        trimMode,
+        keyframes: [{ id: createMotionId('kf'), timeMs: 0, value: 28, easing: 'linear' }],
+      },
+      {
+        id: createMotionId('track'),
+        targetNodeId: node.id,
+        property: 'trimOffset',
+        trimMode,
+        keyframes: [
+          { id: createMotionId('kf'), timeMs: 0, value: 0, easing: 'linear' },
+          { id: createMotionId('kf'), timeMs: dur, value: 100, easing: 'linear' },
+        ],
+      },
+    );
+  }
+
+  return {
+    ...clip,
+    tracks: [...withoutOldTrim, ...created],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Sets `trimMode` (`simultaneous` | `sequential`) across all Trim Path tracks
+ * targeting `targetNodeId` in `clip`.
+ */
+export function setNodeTrimModeInClip(
+  clip: AnimationClip,
+  targetNodeId: string,
+  trimMode: TrimPathMode,
+): AnimationClip {
+  return {
+    ...clip,
+    tracks: clip.tracks.map((track) => {
+      if (
+        track.targetNodeId === targetNodeId &&
+        (track.property === 'trimStart' ||
+          track.property === 'trimEnd' ||
+          track.property === 'trimOffset')
+      ) {
+        return { ...track, trimMode };
+      }
+      return track;
+    }),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1484,6 +1825,74 @@ export function buildPresetClipForPage(
     };
   }
 
+  if (presetId === 'motion-path-cruise') {
+    const primary = fallbackNodes[0];
+    const motionPaths: MotionPathBinding[] = [];
+    const tracks: AnimationTrack[] = [];
+    if (primary) {
+      const binding = createDefaultMotionPathForNode(
+        primary,
+        page.document.width,
+        page.document.height,
+      );
+      motionPaths.push(binding);
+      tracks.push({
+        id: `track-mp-prog-${primary.id}`,
+        targetNodeId: primary.id,
+        property: 'motionPathProgress',
+        keyframes: [
+          { id: `kf-mp-0-${primary.id}`, timeMs: 0, value: 0, easing: 'linear' },
+          { id: `kf-mp-1-${primary.id}`, timeMs: 2400, value: 100, easing: 'ease-in-out' },
+        ],
+      });
+    }
+    return {
+      id: clipId ?? createMotionId('clip'),
+      name: 'Motion Path Cruise',
+      pageId: page.id,
+      durationMs: 2400,
+      loop: true,
+      autoplay: false,
+      tracks,
+      motionPaths,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  if (presetId === 'trim-logo-reveal') {
+    const trimTargets = fallbackNodes.filter(
+      (n) => n.type === 'path' || n.type === 'rect' || n.type === 'frame' || n.type === 'ellipse',
+    );
+    const tracks: AnimationTrack[] = [];
+    trimTargets.forEach((node, idx) => {
+      const delay = Math.min(400, idx * 160);
+      const end = Math.min(1400, delay + 900);
+      tracks.push({
+        id: `track-trim-end-${node.id}`,
+        targetNodeId: node.id,
+        property: 'trimEnd',
+        trimMode: 'sequential',
+        keyframes: [
+          ...(delay > 0 ? [{ id: `kf-te-pre-${idx}`, timeMs: 0, value: 0, easing: 'linear' as const }] : []),
+          { id: `kf-te-0-${idx}`, timeMs: delay, value: 0, easing: 'linear' },
+          { id: `kf-te-1-${idx}`, timeMs: end, value: 100, easing: 'ease-in-out' },
+        ],
+      });
+    });
+    return {
+      id: clipId ?? createMotionId('clip'),
+      name: 'Trim Path Reveal',
+      pageId: page.id,
+      durationMs: 1400,
+      loop: false,
+      autoplay: false,
+      tracks,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
   // Default: Hero Entrance (staggered fade-up + spring lift)
   const tracks: AnimationTrack[] = [];
   fallbackNodes.forEach((node, idx) => {
@@ -1553,8 +1962,14 @@ export function evaluateComponentDocumentAtTime(
   timeMs: number,
 ): FolioDocument {
   if (!animations || animations.length === 0) return document;
-  const clip = animations.find((c) => c.tracks.length > 0) ?? animations[0];
-  if (!clip || clip.tracks.length === 0 || clip.durationMs <= 0) return document;
+  const clip =
+    animations.find(
+      (c) => c.tracks.length > 0 || (c.motionPaths !== undefined && c.motionPaths.length > 0),
+    ) ?? animations[0];
+  const hasAnim =
+    clip &&
+    (clip.tracks.length > 0 || (clip.motionPaths !== undefined && clip.motionPaths.length > 0));
+  if (!clip || !hasAnim || clip.durationMs <= 0) return document;
   const effectiveTime = clip.loop ? timeMs % clip.durationMs : timeMs % clip.durationMs;
   const poses = evaluateClipAtTime(clip, effectiveTime);
   return applyAnimatedPosesToDocument(document, poses);

@@ -18,6 +18,7 @@ import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
 import type { CodeWorkspaceViewMode } from './useCodeWorkspace';
 import { LayerColorPalette, LayerContextMenu } from './LayerPopovers';
 import type { LayerContextMenuCapabilities, LayerContextMenuState } from './layerOperations';
+import type { MotionPathPointSelection } from '../../engines/canvas/MotionPathOverlay';
 
 // Lazy-loaded feature bundles kept outside Folio's critical startup chunk.
 const LazyCodeWorkspace = lazy(() => import('./LazyCodeWorkspace'));
@@ -83,7 +84,7 @@ export interface WorkspaceStudioOverlaysProps {
   onCreateClip: () => void;
   onApplyPreset: (presetId: MotionPresetDefinition['id']) => void;
   onDeleteClip: () => void;
-  onUpdateClip: (clip: AnimationClip, description?: string) => void;
+  onUpdateClip: (clip: AnimationClip, description?: string, coalesceKey?: string) => void;
   onUpdateCustomEasings: (easings: readonly CustomEasingPreset[], description?: string) => void;
   onTogglePlay: () => void;
   onStop: () => void;
@@ -97,6 +98,8 @@ export interface WorkspaceStudioOverlaysProps {
   onChooseTool: (toolId: CanvasToolId, target: EditorTarget) => void;
   onOpenLivePreview: (pageId?: string) => void;
   onOpenMotionExport: () => void;
+  selectedMotionPathPoint?: MotionPathPointSelection | null;
+  onSelectMotionPathPoint?: (selection: MotionPathPointSelection | null) => void;
   onCloseMotion: () => void;
   onNotice: (message: string) => void;
 }
@@ -172,6 +175,8 @@ export function WorkspaceStudioOverlays(props: WorkspaceStudioOverlaysProps) {
     onChooseTool,
     onOpenLivePreview,
     onOpenMotionExport,
+    selectedMotionPathPoint,
+    onSelectMotionPathPoint,
     onCloseMotion,
     onNotice,
   } = props;
@@ -308,6 +313,8 @@ export function WorkspaceStudioOverlays(props: WorkspaceStudioOverlaysProps) {
             onOpenLivePreview={onOpenLivePreview}
             onOpenMotionExport={onOpenMotionExport}
             onSelectCanvasNode={(nodeId) => { focusedCommandClient.selectNodes([nodeId], 'Select animated layer'); }}
+            selectedMotionPathPoint={selectedMotionPathPoint}
+            onSelectMotionPathPoint={onSelectMotionPathPoint}
             onClose={onCloseMotion}
           />
         </Suspense>

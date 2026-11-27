@@ -29,11 +29,17 @@ import type {
   FolioDocument,
   FolioPage,
   FolioProject,
+  TrimPathMode,
 } from '../../core/document/types';
 import {
   parsePathMorphSnapshot,
   prepareMorphPair,
 } from '../../core/document/pathMorph';
+import {
+  computeContourTrimIntervals,
+  getNodeContourLengths,
+  intervalsToSvgStrokeDash,
+} from '../../core/document/pathStudio';
 import { formatColorWithAlpha, isTransparentColor, parseColorWithAlpha } from '../../core/document/styling';
 import { easingToCubicBezier, evaluateEasing, isMultiPointEasing } from './easing';
 import {
@@ -458,7 +464,7 @@ export function buildSvgPathMorphSmil(
   if (rawPairs.length === 0) return null;
 
   const maxContourCount = Math.max(...rawPairs.map((p) => p.contours.length));
-  const maxSegsPerContour = new Array<number>(maxContourCount).fill(3);
+  const maxSegsPerContour = new Array<number>(maxContourCount).fill(1);
   for (const p of rawPairs) {
     for (let c = 0; c < p.contours.length; c += 1) {
       maxSegsPerContour[c] = Math.max(maxSegsPerContour[c], p.contours[c].fromSegs.length);
@@ -800,15 +806,21 @@ export function buildNodeSvgSmilAnimations(
   clip: AnimationClip | null | undefined,
   allNodes?: readonly DesignNode[],
 ): NodeSvgAnimationBundle | null {
-  if (!clip || clip.tracks.length === 0) return null;
+  if (!clip || (clip.tracks.length === 0 && (!clip.motionPaths || clip.motionPaths.length === 0))) return null;
   const nodeTracks = clip.tracks.filter((t) => t.targetNodeId === node.id && t.keyframes.length > 0);
+  const nodeMotionPath = (clip.motionPaths ?? []).find(
+    (mp) => mp.targetNodeId === node.id && mp.points.length >= 2,
+  );
   const ancestors = collectAncestorChain(node, allNodes);
   const ancestorIdSet = new Set(ancestors.map((a) => a.id));
   const ancestorTracks = ancestors.length > 0
     ? clip.tracks.filter((t) => ancestorIdSet.has(t.targetNodeId) && t.keyframes.length > 0)
     : [];
+  const hasAncestorMotionPath = ancestors.length > 0
+    ? (clip.motionPaths ?? []).some((mp) => ancestorIdSet.has(mp.targetNodeId) && mp.points.length >= 2)
+    : false;
 
-  if (nodeTracks.length === 0 && ancestorTracks.length === 0) return null;
+  if (nodeTracks.length === 0 && !nodeMotionPath && ancestorTracks.length === 0 && !hasAncestorMotionPath) return null;
 
   const trackByProp = new Map<AnimatableProperty, AnimationTrack>();
   for (const tr of nodeTracks) {
@@ -867,6 +879,8 @@ export function buildNodeSvgSmilAnimations(
     (t): t is AnimationTrack => Boolean(t),
   );
   const transformNeedsEvaluatorSampling =
+    Boolean(nodeMotionPath) ||
+    hasAncestorMotionPath ||
     hasAnimatedAncestorTransformOrOpacity ||
     hasNonRectResize ||
     (hasStaticRotation && hasTransformTracks) ||
@@ -1099,6 +1113,56 @@ export function buildNodeSvgSmilAnimations(
     }
   }
 
+  // 7. Trim Path SMIL (`stroke-dasharray`, `stroke-dashoffset`, `stroke-opacity`)
+  const trimStartTrack = trackByProp.get('trimStart');
+  const trimEndTrack = trackByProp.get('trimEnd');
+  const trimOffsetTrack = trackByProp.get('trimOffset');
+  if (
+    (trimStartTrack || trimEndTrack || trimOffsetTrack) &&
+    (node.type === 'path' || node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse')
+  ) {
+    const contourLengths = getNodeContourLengths(node);
+    const totalLen = contourLengths.reduce((acc, l) => acc + l, 0);
+    if (totalLen > 0.01) {
+      const trimMode: TrimPathMode =
+        trimStartTrack?.trimMode ??
+        trimEndTrack?.trimMode ??
+        trimOffsetTrack?.trimMode ??
+        ('style' in node && 'trimMode' in node.style ? node.style.trimMode : undefined) ??
+        'simultaneous';
+      const trimExtraTimes: number[] = [];
+      for (const tr of [trimStartTrack, trimEndTrack, trimOffsetTrack]) {
+        if (!tr) continue;
+        for (const kf of tr.keyframes) trimExtraTimes.push(kf.timeMs);
+      }
+      const trimTimestamps = buildSampledTimestamps(durationMs, trimExtraTimes, 30);
+      const baseS = 'style' in node && 'trimStart' in node.style ? (node.style.trimStart ?? 0) : 0;
+      const baseE = 'style' in node && 'trimEnd' in node.style ? (node.style.trimEnd ?? 100) : 100;
+      const baseO = 'style' in node && 'trimOffset' in node.style ? (node.style.trimOffset ?? 0) : 0;
+      const dashVals: string[] = [];
+      const offsetVals: string[] = [];
+      const opVals: string[] = [];
+      const ktVals: string[] = [];
+      for (const t of trimTimestamps) {
+        const sVal = trimStartTrack ? Number(evaluateTrackAtTime(trimStartTrack, t) ?? baseS) : baseS;
+        const eVal = trimEndTrack ? Number(evaluateTrackAtTime(trimEndTrack, t) ?? baseE) : baseE;
+        const oVal = trimOffsetTrack ? Number(evaluateTrackAtTime(trimOffsetTrack, t) ?? baseO) : baseO;
+        const intervals = computeContourTrimIntervals([totalLen], sVal, eVal, oVal, trimMode)[0] ?? [];
+        const dash = intervalsToSvgStrokeDash(totalLen, intervals);
+        dashVals.push(dash.full ? `${fmtNum(totalLen)} ${fmtNum(totalLen + 4)}` : (dash.dasharray ?? `0 ${fmtNum(totalLen + 4)}`));
+        offsetVals.push(fmtNum(dash.full ? 0 : (dash.dashoffset ?? 0)));
+        opVals.push(dash.visible ? '1' : '0');
+        ktVals.push(fmtKeyTime(t / durationMs));
+      }
+      const ktStr = ktVals.join(';');
+      shapeTags.push(
+        buildSmilAttrTag('animate', 'attributeName="stroke-dasharray"', { values: dashVals.join(';'), keyTimes: ktStr, calcMode: 'linear' }, clip),
+        buildSmilAttrTag('animate', 'attributeName="stroke-dashoffset"', { values: offsetVals.join(';'), keyTimes: ktStr, calcMode: 'linear' }, clip),
+        buildSmilAttrTag('animate', 'attributeName="stroke-opacity"', { values: opVals.join(';'), keyTimes: ktStr, calcMode: 'linear' }, clip),
+      );
+    }
+  }
+
   if (wrapperTags.length === 0 && shapeTags.length === 0 && !morphSmil) return null;
 
   return {
@@ -1121,7 +1185,9 @@ export function getEffectivePageAnimationDurationMs(
   page: FolioPage,
   selectedClip: AnimationClip | null,
 ): number {
-  let maxDuration = selectedClip && selectedClip.tracks.length > 0 ? selectedClip.durationMs : 0;
+  const clipHasAnim = (c: AnimationClip | null) =>
+    Boolean(c && (c.tracks.length > 0 || (c.motionPaths !== undefined && c.motionPaths.length > 0)));
+  let maxDuration = clipHasAnim(selectedClip) ? selectedClip!.durationMs : 0;
   const componentById = new Map<string, ComponentDefinition>(
     project.components.map((c) => [c.id, c]),
   );
@@ -1135,7 +1201,7 @@ export function getEffectivePageAnimationDurationMs(
       if (!comp) continue;
       if (comp.animations && comp.animations.length > 0) {
         for (const cClip of comp.animations) {
-          if (cClip.tracks.length > 0 && cClip.durationMs > maxDuration) {
+          if (clipHasAnim(cClip) && cClip.durationMs > maxDuration) {
             maxDuration = cClip.durationMs;
           }
         }
@@ -1159,7 +1225,13 @@ export function documentHasAnyAnimations(
   components: readonly ComponentDefinition[],
   pageClip?: AnimationClip | null,
 ): boolean {
-  if (pageClip && pageClip.tracks.some((t) => t.keyframes.length >= 2)) return true;
+  const clipIsAnimated = (c: AnimationClip | null | undefined) =>
+    Boolean(
+      c &&
+        (c.tracks.some((t) => t.keyframes.length >= 2) ||
+          (c.motionPaths !== undefined && c.motionPaths.some((mp) => mp.points.length >= 2))),
+    );
+  if (clipIsAnimated(pageClip)) return true;
   const componentById = new Map(components.map((c) => [c.id, c]));
   const visit = (list: readonly DesignNode[], visited: Set<string>, depth: number): boolean => {
     if (depth > 12) return false;
@@ -1168,7 +1240,7 @@ export function documentHasAnyAnimations(
       if (visited.has(node.componentId)) continue;
       const comp = componentById.get(node.componentId);
       if (!comp) continue;
-      if (comp.animations?.some((clip) => clip.tracks.some((t) => t.keyframes.length >= 2))) {
+      if (comp.animations?.some((clip) => clipIsAnimated(clip))) {
         return true;
       }
       const next = new Set(visited);

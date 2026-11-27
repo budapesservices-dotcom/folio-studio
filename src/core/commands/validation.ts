@@ -403,10 +403,21 @@ const LINK_TARGET_VALUES = new Set(['_self', '_blank']);
 const FONT_SIZE_UNITS = new Set(['px', 'rem', 'em']);
 const LETTER_SPACING_UNITS = new Set(['px', 'em']);
 const LINE_HEIGHT_UNITS = new Set(['', 'px', '%']);
+const TRIM_PATH_MODE_VALUES = new Set(['simultaneous', 'sequential']);
 const SHAPE_STYLE_KEYS = [
   'fill', 'fills', 'stroke', 'strokeWidth', 'strokeWidthUnit', 'strokeStyle',
   'strokeDasharray', 'strokeAlign', 'borderSides', 'radius', 'radiusUnit', 'cornerRadii',
+  'trimStart', 'trimEnd', 'trimOffset', 'trimMode',
 ] as const;
+
+function isValidCommandTrimFields(style: Record<string, unknown>): boolean {
+  return (
+    (style.trimStart === undefined || (isFiniteNumber(style.trimStart) && style.trimStart >= 0 && style.trimStart <= 100)) &&
+    (style.trimEnd === undefined || (isFiniteNumber(style.trimEnd) && style.trimEnd >= 0 && style.trimEnd <= 100)) &&
+    (style.trimOffset === undefined || (isFiniteNumber(style.trimOffset) && style.trimOffset >= -1000 && style.trimOffset <= 1000)) &&
+    (style.trimMode === undefined || TRIM_PATH_MODE_VALUES.has(String(style.trimMode)))
+  );
+}
 const ASSET_SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 
 function isValidFillsList(value: unknown): boolean {
@@ -482,6 +493,7 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
       (style.radiusUnit === undefined || isCssLengthUnit(style.radiusUnit)) &&
       (style.cornerRadii === undefined || isCornerRadiiConfig(style.cornerRadii)) &&
+      isValidCommandTrimFields(style) &&
       (value.clipContent === undefined || typeof value.clipContent === 'boolean') &&
       (value.isSection === undefined || typeof value.isSection === 'boolean')
     );
@@ -503,7 +515,8 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       (style.borderSides === undefined || isBorderSidesConfig(style.borderSides)) &&
       (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
       (style.radiusUnit === undefined || isCssLengthUnit(style.radiusUnit)) &&
-      (style.cornerRadii === undefined || isCornerRadiiConfig(style.cornerRadii))
+      (style.cornerRadii === undefined || isCornerRadiiConfig(style.cornerRadii)) &&
+      isValidCommandTrimFields(style)
     );
   }
 
@@ -579,6 +592,7 @@ function isDesignNodeData(value: unknown): value is DesignNode {
     if (!hasOnlyKeys(style, [
       'fill', 'fills', 'stroke', 'strokeWidth', 'strokeLinecap', 'strokeLinejoin',
       'strokeDasharray', 'strokeAlign', 'fillRule', 'arrowStart', 'arrowEnd',
+      'trimStart', 'trimEnd', 'trimOffset', 'trimMode',
     ])) return false;
     return (
       typeof style.fill === 'string' && style.fill.length <= 128 &&
@@ -591,7 +605,8 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       (style.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(style.strokeAlign))) &&
       (style.fillRule === undefined || style.fillRule === 'nonzero' || style.fillRule === 'evenodd') &&
       (style.arrowStart === undefined || typeof style.arrowStart === 'boolean') &&
-      (style.arrowEnd === undefined || typeof style.arrowEnd === 'boolean')
+      (style.arrowEnd === undefined || typeof style.arrowEnd === 'boolean') &&
+      isValidCommandTrimFields(style)
     );
   }
 

@@ -411,10 +411,14 @@ describe('Native Shape Morph — Import From Component & Animated SVG', () => {
     expect(inspectComponentMorphSource(textOnly).supported).toBe(false);
     expect(extractMorphSequenceFromComponent(textOnly, 120, 120).ok).toBe(false);
 
-    expect(inspectComponentMorphSource(openPath).supported).toBe(false);
+    // FOLIO Path Studio supports open-path components for open ↔ open and open ↔ closed morphs
+    expect(inspectComponentMorphSource(openPath).supported).toBe(true);
     const openRes = extractMorphSequenceFromComponent(openPath, 120, 120);
-    expect(openRes.ok).toBe(false);
-    if (!openRes.ok) expect(openRes.message.toLowerCase()).toContain('open');
+    expect(openRes.ok).toBe(true);
+    if (openRes.ok) {
+      const parsedOpen = parsePathMorphSnapshot(openRes.keyframes[0].value);
+      expect(parsedOpen?.closed).toBe(false);
+    }
 
     // Phase 3: closed compound multi-contour shapes with holes are supported!
     expect(inspectComponentMorphSource(compoundPath).supported).toBe(true);

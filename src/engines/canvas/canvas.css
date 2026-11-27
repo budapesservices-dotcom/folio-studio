@@ -988,3 +988,76 @@
   margin: 5px 6px;
   background: var(--line, rgba(255, 255, 255, 0.08));
 }
+
+/* FOLIO Path Studio — On-Canvas Motion Path Overlay */
+.canvas-motion-path-backdrop {
+  stroke: rgba(10, 14, 22, 0.42);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.canvas-motion-path-curve {
+  stroke: rgba(56, 189, 248, 0.56);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.canvas-motion-path-curve.is-active {
+  stroke: #06b6d4;
+}
+.canvas-motion-path-hit {
+  cursor: copy;
+}
+.canvas-motion-path-chevron {
+  stroke: rgba(56, 189, 248, 0.65);
+}
+.canvas-motion-path-chevron.is-active {
+  stroke: #0891b2;
+}
+.canvas-motion-path-offset-line {
+  stroke: #f59e0b;
+  stroke-opacity: 0.85;
+}
+.canvas-motion-path-offset-dot {
+  fill: #f59e0b;
+}
+.canvas-motion-path-range-dot {
+  fill: #ffffff;
+  stroke: #06b6d4;
+}
+.canvas-motion-path-range-dot.is-start {
+  stroke: #10b981;
+}
+.canvas-motion-path-range-dot.is-end {
+  stroke: #f43f5e;
+}
+.canvas-motion-path-handle-line {
+  stroke: rgba(6, 182, 212, 0.72);
+}
+.canvas-motion-path-handle {
+  fill: #ffffff;
+  stroke: #0891b2;
+  cursor: grab;
+}
+.canvas-motion-path-handle:hover,
+.canvas-motion-path-handle.is-selected {
+  fill: #22d3ee;
+  stroke: #0f172a;
+}
+.canvas-motion-path-anchor {
+  fill: #ffffff;
+  stroke: #06b6d4;
+  cursor: move;
+}
+.canvas-motion-path-anchor.is-start {
+  stroke: #10b981;
+}
+.canvas-motion-path-anchor.is-end {
+  stroke: #f43f5e;
+}
+.canvas-motion-path-anchor.is-selected {
+  fill: #06b6d4;
+  stroke: #ffffff;
+}
+.canvas-motion-path-anchor-ring {
+  stroke: rgba(6, 182, 212, 0.75);
+}
+

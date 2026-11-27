@@ -377,6 +377,8 @@ export type StrokeAlign = 'inside' | 'center' | 'outside';
 export type ClipMaskMode = 'inside' | 'outside';
 export type DrawMaskMode = 'normal' | 'inside' | 'outside';
 
+export type TrimPathMode = 'simultaneous' | 'sequential';
+
 export interface ShapeStyle {
   fill: string;
   stroke: string;
@@ -393,6 +395,14 @@ export interface ShapeStyle {
   cornerRadii?: CornerRadiiConfig;
   /** Optional ordered multi-fill paint stack (bottom-to-top; falls back to `fill` when omitted). */
   fills?: FillPaint[];
+  /** Optional Trim Path start percentage (0..100, default 0). */
+  trimStart?: number;
+  /** Optional Trim Path end percentage (0..100, default 100). */
+  trimEnd?: number;
+  /** Optional Trim Path offset percentage (-1000..1000, wraps modulo 100, default 0). */
+  trimOffset?: number;
+  /** How Trim Path distributes across contours (`simultaneous` or `sequential`). */
+  trimMode?: TrimPathMode;
 }
 
 export interface VectorPointHandle {
@@ -435,6 +445,14 @@ export interface PathStyle {
   arrowEnd?: boolean;
   /** Optional ordered multi-fill paint stack (bottom-to-top; falls back to `fill` when omitted). */
   fills?: FillPaint[];
+  /** Optional Trim Path start percentage (0..100, default 0). */
+  trimStart?: number;
+  /** Optional Trim Path end percentage (0..100, default 100). */
+  trimEnd?: number;
+  /** Optional Trim Path offset percentage (-1000..1000, wraps modulo 100, default 0). */
+  trimOffset?: number;
+  /** How Trim Path distributes across multi-contour paths (`simultaneous` or `sequential`). */
+  trimMode?: TrimPathMode;
 }
 
 export type VectorPathKind =
@@ -1015,6 +1033,10 @@ export type AnimatableProperty =
   | 'stroke'
   | 'strokeWidth'
   | 'pathMorph'
+  | 'motionPathProgress'
+  | 'trimStart'
+  | 'trimEnd'
+  | 'trimOffset'
   | 'layerBlur'
   | 'backdropBlur'
   | 'shadowOffsetX'
@@ -1027,11 +1049,47 @@ export type AnimatableProperty =
   | 'saturate'
   | 'grayscale';
 
+export type MotionPathLoopMode = 'none' | 'loop' | 'ping-pong';
+
+/**
+ * Motion Path binding stored inside an `AnimationClip` for a target node.
+ * Anchor points and handles are stored in world/document coordinates so the
+ * path stays anchored in space while the node travels along it.
+ */
+export interface MotionPathBinding {
+  id: string;
+  targetNodeId: string;
+  /** Cubic Bézier anchors in world/document coordinates (min 2 points). */
+  points: VectorAnchorPoint[];
+  /** Whether the last anchor connects back to the first anchor. */
+  closed: boolean;
+  /** Optional source `PathNode.id` if created from an existing vector layer. */
+  sourcePathNodeId?: string;
+  /** Automatically rotate the object to align with the curve tangent. */
+  autoOrient: boolean;
+  /** Additional rotation offset in degrees applied when `autoOrient` is true. */
+  orientOffsetDeg?: number;
+  /** Traverse the path from end to start. */
+  reverse: boolean;
+  /** Start window along the path (0..100%). */
+  startPct: number;
+  /** End window along the path (0..100%). */
+  endPct: number;
+  /** Perpendicular offset from the path in px (along the curve normal). */
+  offsetPx: number;
+  /** Reparameterize by arc length for uniform constant speed along curves. */
+  constantSpeed: boolean;
+  /** Repetition mode along the path (`none`, `loop`, or `ping-pong`). */
+  loopMode: MotionPathLoopMode;
+  /** Whether the motion path guide curve is shown on Canvas (default: true). */
+  visible?: boolean;
+}
+
 export interface AnimationKeyframe {
   id: string;
   /** Time offset in milliseconds within [0, clip.durationMs]. */
   timeMs: number;
-  /** Numeric value for geometry/opacity/scale/rotation/radius/strokeWidth/effects, CSS color string for fill/stroke, or serialized PathMorphSnapshot JSON for pathMorph. */
+  /** Numeric value for geometry/opacity/scale/rotation/radius/strokeWidth/effects/path studio, CSS color string for fill/stroke, or serialized PathMorphSnapshot JSON for pathMorph. */
   value: number | string;
   easing: AnimationEasing;
 }
@@ -1040,6 +1098,8 @@ export interface AnimationTrack {
   id: string;
   targetNodeId: string;
   property: AnimatableProperty;
+  /** Optional Trim Path distribution mode for Trim Path tracks (`simultaneous` or `sequential`). */
+  trimMode?: TrimPathMode;
   keyframes: AnimationKeyframe[];
 }
 
@@ -1051,6 +1111,8 @@ export interface AnimationClip {
   loop: boolean;
   autoplay: boolean;
   tracks: AnimationTrack[];
+  /** Optional FOLIO Path Studio Motion Path bindings scoped to this clip. */
+  motionPaths?: MotionPathBinding[];
   createdAt: string;
   updatedAt: string;
 }

@@ -164,10 +164,18 @@ export interface EvaluatedMorphGeometry {
   subpaths?: VectorSubpath[];
 }
 
+export type MorphTopologyTransition =
+  | 'closed-to-closed'
+  | 'open-to-open'
+  | 'open-to-closed'
+  | 'closed-to-open';
+
 export interface PreparedMorphPair {
   compatible: boolean;
   reason: MorphTopologyReason;
   message: string;
+  /** Deterministic topology transition mode applied to this morph pair. */
+  topologyTransition?: MorphTopologyTransition;
   pointCount: number;
   closed: boolean;
   /** Optimal cyclic shift applied to `to` contour during preparation. */
@@ -261,18 +269,14 @@ function validateContourPoints(
   points: readonly PathMorphPoint[],
   closed: boolean,
 ): MorphSupportResult {
-  if (!closed) {
-    return {
-      supported: false,
-      reason: 'open-path',
-      message: 'Open paths cannot be shape-morphed yet. Close the contour to enable Shape Morph.',
-    };
-  }
-  if (points.length < 3) {
+  const minPoints = closed ? 3 : 2;
+  if (points.length < minPoints) {
     return {
       supported: false,
       reason: 'too-few-points',
-      message: 'Shape Morph requires a closed contour with at least 3 anchor points.',
+      message: closed
+        ? 'Shape Morph requires a closed contour with at least 3 anchor points.'
+        : 'Shape Morph requires an open path with at least 2 anchor points.',
     };
   }
   if (points.length > MAX_MORPH_POINTS) {
@@ -305,7 +309,7 @@ function validateContourPoints(
       };
     }
   }
-  const perimeter = computeContourPerimeter(points, true);
+  const perimeter = computeContourPerimeter(points, closed);
   if (!Number.isFinite(perimeter) || perimeter < MIN_CONTOUR_PERIMETER) {
     return {
       supported: false,
@@ -316,7 +320,7 @@ function validateContourPoints(
   return {
     supported: true,
     reason: 'supported',
-    message: 'Supported single closed contour.',
+    message: closed ? 'Supported single closed contour.' : 'Supported open Bezier path.',
   };
 }
 
@@ -417,12 +421,19 @@ export function checkMorphPairCompatibility(
   }
 
   const isMulti = fromSubpaths.length > 0 || toSubpaths.length > 0;
+  const openClosedBridge = from.closed !== to.closed;
   return {
     supported: true,
     reason: 'supported',
-    message: isMulti
-      ? 'Compatible multi-contour closed morph pair.'
-      : 'Compatible single closed contour morph pair.',
+    message: openClosedBridge
+      ? 'Compatible open/closed morph pair (bridged closure transition).'
+      : !from.closed && !to.closed
+        ? isMulti
+          ? 'Compatible multi-contour open path morph pair.'
+          : 'Compatible open path morph pair.'
+        : isMulti
+          ? 'Compatible multi-contour closed morph pair.'
+          : 'Compatible single closed contour morph pair.',
   };
 }
 
@@ -1317,6 +1328,7 @@ function findBestCyclicShift(
 function packMatchedContours(
   fromPts: readonly PathMorphPoint[],
   toPts: readonly PathMorphPoint[],
+  closed = true,
 ): {
   fromBuf: Float64Array;
   toBuf: Float64Array;
@@ -1334,10 +1346,12 @@ function packMatchedContours(
   for (let i = 0; i < n; i += 1) {
     const a = fromPts[i];
     const b = toPts[i];
-    const prevA = fromPts[(i - 1 + n) % n];
-    const nextA = fromPts[(i + 1) % n];
-    const prevB = toPts[(i - 1 + n) % n];
-    const nextB = toPts[(i + 1) % n];
+    const hasPrev = closed || i > 0;
+    const hasNext = closed || i < n - 1;
+    const prevA = hasPrev ? fromPts[(i - 1 + n) % n] : a;
+    const nextA = hasNext ? fromPts[(i + 1) % n] : a;
+    const prevB = hasPrev ? toPts[(i - 1 + n) % n] : b;
+    const nextB = hasNext ? toPts[(i + 1) % n] : b;
 
     const base = i * STRIDE;
     fromBuf[base] = a.x;
@@ -1349,14 +1363,14 @@ function packMatchedContours(
     toTypes[i] = b.pt;
 
     let f = 0;
-    if (a.hi || b.hi) {
+    if (hasPrev && (a.hi || b.hi)) {
       f |= FLAG_HI;
       fromBuf[base + 2] = a.hi ? a.hi[0] : a.x + (prevA.x - a.x) / 3;
       fromBuf[base + 3] = a.hi ? a.hi[1] : a.y + (prevA.y - a.y) / 3;
       toBuf[base + 2] = b.hi ? b.hi[0] : b.x + (prevB.x - b.x) / 3;
       toBuf[base + 3] = b.hi ? b.hi[1] : b.y + (prevB.y - b.y) / 3;
     }
-    if (a.ho || b.ho) {
+    if (hasNext && (a.ho || b.ho)) {
       f |= FLAG_HO;
       fromBuf[base + 4] = a.ho ? a.ho[0] : a.x + (nextA.x - a.x) / 3;
       fromBuf[base + 5] = a.ho ? a.ho[1] : a.y + (nextA.y - a.y) / 3;
@@ -1427,6 +1441,20 @@ function buildCollapsedPartnerContour(contour: readonly PathMorphPoint[]): PathM
   });
 }
 
+function computeOpenPathDirectionCost(
+  fromPts: readonly PathMorphPoint[],
+  toPts: readonly PathMorphPoint[],
+): number {
+  const n = Math.min(fromPts.length, toPts.length);
+  let cost = 0;
+  for (let i = 0; i < n; i += 1) {
+    const dx = fromPts[i].x - toPts[i].x;
+    const dy = fromPts[i].y - toPts[i].y;
+    cost += dx * dx + dy * dy;
+  }
+  return cost;
+}
+
 function prepareSingleContourPair(
   rawFromPts: readonly PathMorphPoint[],
   rawToPts: readonly PathMorphPoint[],
@@ -1434,11 +1462,60 @@ function prepareSingleContourPair(
   manualReverse: boolean,
   manualOffset: number,
   skipWindingAlign = false,
+  fromClosed = true,
+  toClosed = true,
 ): PreparedMorphContourPair {
+  const effectiveClosed = fromClosed || toClosed;
   let fromPts = rawFromPts.slice();
   let toPts = rawToPts.slice();
   let reversed = false;
 
+  if (!effectiveClosed) {
+    // Open <-> Open morphing:
+    // Resample open curves across (n - 1) segments and pick forward vs reversed
+    // endpoint alignment without cyclic wrapping across the open gap.
+    const nA = fromPts.length;
+    const nB = toPts.length;
+    let targetCount = Math.max(nA, nB);
+    if (matchMode === 'auto' && nA !== nB) {
+      targetCount = Math.min(MAX_MORPH_POINTS, Math.max(targetCount, 8));
+    }
+    if (fromPts.length < targetCount) {
+      fromPts = resampleMorphPoints(fromPts, false, targetCount);
+    }
+    if (toPts.length < targetCount) {
+      toPts = resampleMorphPoints(toPts, false, targetCount);
+    }
+    if (matchMode === 'auto' && !skipWindingAlign) {
+      const forwardCost = computeOpenPathDirectionCost(fromPts, toPts);
+      const revCandidate = reverseMorphContour(toPts);
+      const reverseCost = computeOpenPathDirectionCost(fromPts, revCandidate);
+      if (reverseCost + 1e-3 < forwardCost) {
+        toPts = revCandidate;
+        reversed = !reversed;
+      }
+    }
+    if (manualReverse) {
+      toPts = reverseMorphContour(toPts);
+      reversed = !reversed;
+    }
+    const packed = packMatchedContours(fromPts, toPts, false);
+    return {
+      pointCount: packed.flags.length,
+      closed: false,
+      cyclicShift: 0,
+      reversed,
+      flags: packed.flags,
+      fromTypes: packed.fromTypes,
+      toTypes: packed.toTypes,
+      fromBuf: packed.fromBuf,
+      toBuf: packed.toBuf,
+      fromPoints: rawFromPts,
+      toPoints: rawToPts,
+    };
+  }
+
+  // Closed <-> Closed OR Open <-> Closed (open contour promoted via deterministic closing bridge)
   // Step 1: Winding normalization (ensure both contours traverse in the same direction)
   if (matchMode === 'auto' && !skipWindingAlign) {
     const areaA = computeContourSignedArea(fromPts);
@@ -1462,7 +1539,7 @@ function prepareSingleContourPair(
 
   let targetCount = Math.max(nA, nB);
   if (matchMode === 'auto' && !hasCornerRadiusEdit && !skipWindingAlign) {
-    if (nA === nB && nA <= 6) {
+    if (nA === nB && nA <= 6 && nA >= 3) {
       const rawAlign = findBestCyclicShift(fromPts, toPts);
       if (rawAlign.meanSqError > 0.16) {
         const doubledA = resampleMorphPoints(fromPts, true, nA * 2);
@@ -1472,7 +1549,7 @@ function prepareSingleContourPair(
           targetCount = nA * 2;
         }
       }
-    } else if (nA !== nB) {
+    } else if (nA !== nB || nA < 3 || nB < 3) {
       const minSmooth = Math.max(nA, nB) < 8 ? 12 : Math.max(nA, nB);
       targetCount = Math.min(MAX_MORPH_POINTS, minSmooth);
     }
@@ -1498,7 +1575,7 @@ function prepareSingleContourPair(
     toPts = rotateMorphContour(toPts, cyclicShift);
   }
 
-  const packed = packMatchedContours(fromPts, toPts);
+  const packed = packMatchedContours(fromPts, toPts, true);
   return {
     pointCount: packed.flags.length,
     closed: true,
@@ -1530,19 +1607,27 @@ function prepareSubpathPairs(
   const fromMeta = fromSubpaths.map((sp, idx) => ({
     idx,
     points: sp.points,
+    closed: sp.closed,
     centroid: computeContourCentroid(sp.points),
     area: Math.abs(computeContourSignedArea(sp.points)),
   }));
   const toMeta = toSubpaths.map((sp, idx) => ({
     idx,
     points: sp.points,
+    closed: sp.closed,
     centroid: computeContourCentroid(sp.points),
     area: Math.abs(computeContourSignedArea(sp.points)),
   }));
 
   const usedFrom = new Set<number>();
   const usedTo = new Set<number>();
-  const matchedPairs: Array<{ fromPts: readonly PathMorphPoint[]; toPts: readonly PathMorphPoint[]; collapsed: boolean }> = [];
+  const matchedPairs: Array<{
+    fromPts: readonly PathMorphPoint[];
+    toPts: readonly PathMorphPoint[];
+    fromClosed: boolean;
+    toClosed: boolean;
+    collapsed: boolean;
+  }> = [];
 
   // Greedy nearest-centroid assignment for shared contour count
   const pairCount = Math.min(fromMeta.length, toMeta.length);
@@ -1570,6 +1655,8 @@ function prepareSubpathPairs(
       matchedPairs.push({
         fromPts: fromMeta[bestFrom].points,
         toPts: toMeta[bestTo].points,
+        fromClosed: fromMeta[bestFrom].closed,
+        toClosed: toMeta[bestTo].closed,
         collapsed: false,
       });
     }
@@ -1580,6 +1667,8 @@ function prepareSubpathPairs(
       matchedPairs.push({
         fromPts: fm.points,
         toPts: buildCollapsedPartnerContour(fm.points),
+        fromClosed: fm.closed,
+        toClosed: fm.closed,
         collapsed: true,
       });
     }
@@ -1589,6 +1678,8 @@ function prepareSubpathPairs(
       matchedPairs.push({
         fromPts: buildCollapsedPartnerContour(tm.points),
         toPts: tm.points,
+        fromClosed: tm.closed,
+        toClosed: tm.closed,
         collapsed: true,
       });
     }
@@ -1602,6 +1693,8 @@ function prepareSubpathPairs(
       false,
       0,
       item.collapsed,
+      item.fromClosed,
+      item.toClosed,
     ),
   );
 }
@@ -1659,6 +1752,9 @@ export function prepareMorphPair(fromStr: string, toStr: string): PreparedMorphP
     matchMode,
     manualReverse,
     manualOffset,
+    false,
+    from.closed,
+    to.closed,
   );
 
   const fromSubpaths = from.subpaths ?? [];
@@ -1668,14 +1764,24 @@ export function prepareMorphPair(fromStr: string, toStr: string): PreparedMorphP
       ? prepareSubpathPairs(fromSubpaths, toSubpaths, matchMode)
       : undefined;
 
+  const topologyTransition: MorphTopologyTransition =
+    from.closed && to.closed
+      ? 'closed-to-closed'
+      : !from.closed && !to.closed
+        ? 'open-to-open'
+        : !from.closed && to.closed
+          ? 'open-to-closed'
+          : 'closed-to-open';
+
   const prepared: PreparedMorphPair = {
     compatible: true,
     reason: 'supported',
+    topologyTransition,
     message: subpathPairs && subpathPairs.length > 0
-      ? `Prepared multi-contour morph pair (${subpathPairs.length + 1} contours).`
-      : 'Prepared single-contour morph pair.',
+      ? `Prepared multi-contour morph pair (${subpathPairs.length + 1} contours, ${topologyTransition}).`
+      : `Prepared single-contour morph pair (${topologyTransition}).`,
     pointCount: primary.pointCount,
-    closed: true,
+    closed: primary.closed,
     cyclicShift: primary.cyclicShift,
     reversed: primary.reversed,
     flags: primary.flags,
@@ -2117,6 +2223,10 @@ export function applyMorphGeometryToDesignNode(
       strokeWidth: shapeNode.style.strokeWidth,
       strokeAlign: shapeNode.style.strokeAlign,
       strokeDasharray: shapeNode.style.strokeDasharray,
+      ...(shapeNode.style.trimStart !== undefined ? { trimStart: shapeNode.style.trimStart } : {}),
+      ...(shapeNode.style.trimEnd !== undefined ? { trimEnd: shapeNode.style.trimEnd } : {}),
+      ...(shapeNode.style.trimOffset !== undefined ? { trimOffset: shapeNode.style.trimOffset } : {}),
+      ...(shapeNode.style.trimMode !== undefined ? { trimMode: shapeNode.style.trimMode } : {}),
       ...(nextSubpaths ? { fillRule: 'evenodd' as const } : {}),
     },
     points,

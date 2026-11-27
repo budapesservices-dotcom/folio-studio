@@ -4,6 +4,13 @@ import {
   applyMorphGeometryToDesignNode,
   extractMorphSnapshotFromNode,
 } from '../../core/document/pathMorph';
+import {
+  computeContourTrimIntervals,
+  getNodeContourLengths,
+  getPathNodeContours,
+  hasActiveTrimPath,
+  intervalsToSvgStrokeDash,
+} from '../../core/document/pathStudio';
 import { getActivePage } from '../../core/document/project';
 import { getProjectDesignTokens } from '../../core/document/tokens';
 import type {
@@ -22,6 +29,7 @@ import { getAssetBundlePath } from '../../core/persistence/assetStore';
 import {
   collectPageInitialMorphSnapshots,
   collectPageMorphNodeIds,
+  collectPageTrimNodeIds,
   compilePageMorphClips,
 } from '../animation/codegen';
 import {
@@ -96,6 +104,7 @@ function buildInlineJsxSvgLines(
   dynamicFillExpr?: string,
   options?: {
     readonly isMorphTarget?: boolean;
+    readonly isTrimTarget?: boolean;
     readonly asBackdrop?: boolean;
     readonly forceEvenOdd?: boolean;
   },
@@ -109,26 +118,8 @@ function buildInlineJsxSvgLines(
   const baseStroke = strokeVar ?? sanitizeCssValue(node.style.stroke || 'none', 'none');
   const strokeWidth = Math.max(0, roundCss(node.style.strokeWidth));
   const effectiveDynamicFill = fillVar ? undefined : dynamicFillExpr;
-
-  const pathAttrs: string[] = [
-    `d=${escapeTsString(d)}`,
-    effectiveDynamicFill
-      ? `fill={${effectiveDynamicFill} ?? ${escapeTsString(baseFill)}}`
-      : `fill=${escapeTsString(baseFill)}`,
-    `stroke=${escapeTsString(baseStroke)}`,
-    `strokeWidth={${strokeWidth}}`,
-    `strokeLinecap=${escapeTsString(node.style.strokeLinecap ?? 'round')}`,
-    `strokeLinejoin=${escapeTsString(node.style.strokeLinejoin ?? 'round')}`,
-  ];
-  if (options?.forceEvenOdd || node.style.fillRule === 'evenodd' || (node.subpaths && node.subpaths.length > 0)) {
-    pathAttrs.push('fillRule="evenodd"');
-  }
-  if (node.style.strokeDasharray) {
-    pathAttrs.push(`strokeDasharray=${escapeTsString(node.style.strokeDasharray)}`);
-  }
-  if (options?.isMorphTarget) {
-    pathAttrs.push('data-folio-morph-path="true"');
-  }
+  const hasStaticTrim = hasActiveTrimPath(node.style);
+  const useTrimContours = Boolean(options?.isTrimTarget) || hasStaticTrim;
 
   const svgStyle = options?.asBackdrop
     ? '{ position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", pointerEvents: "none" }'
@@ -136,8 +127,83 @@ function buildInlineJsxSvgLines(
 
   const svgLines: string[] = [
     `${indent}<svg width={${w}} height={${h}} viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style={${svgStyle}} aria-hidden="true">`,
-    `${indent}  <path ${pathAttrs.join(' ')} />`,
   ];
+
+  if (useTrimContours) {
+    const fillAttr = effectiveDynamicFill
+      ? `fill={${effectiveDynamicFill} ?? ${escapeTsString(baseFill)}}`
+      : `fill=${escapeTsString(baseFill)}`;
+    if (baseFill !== 'none' || effectiveDynamicFill) {
+      const fillAttrs = [
+        `d=${escapeTsString(d)}`,
+        fillAttr,
+        'stroke="none"',
+        ...(options?.forceEvenOdd || node.style.fillRule === 'evenodd' || (node.subpaths && node.subpaths.length > 0)
+          ? ['fillRule="evenodd"']
+          : []),
+        ...(options?.isMorphTarget ? ['data-folio-morph-path="true"'] : []),
+      ];
+      svgLines.push(`${indent}  <path ${fillAttrs.join(' ')} />`);
+    }
+    if (strokeWidth > 0 && baseStroke !== 'none') {
+      const contours = getPathNodeContours(node);
+      const lengths = getNodeContourLengths(node);
+      const perContour = hasStaticTrim
+        ? computeContourTrimIntervals(
+            lengths,
+            node.style.trimStart ?? 0,
+            node.style.trimEnd ?? 100,
+            node.style.trimOffset ?? 0,
+            node.style.trimMode ?? 'simultaneous',
+          )
+        : null;
+      contours.forEach((contour, cIdx) => {
+        const contourD = serializePathPointsToSvgD(contour.points, contour.closed);
+        const sAttrs: string[] = [
+          ...(options?.isMorphTarget ? ['data-folio-morph-path="true"'] : []),
+          `data-folio-trim-contour="${cIdx}"`,
+          `d=${escapeTsString(contourD)}`,
+          'fill="none"',
+          `stroke=${escapeTsString(baseStroke)}`,
+          `strokeWidth={${strokeWidth}}`,
+          `strokeLinecap=${escapeTsString(node.style.strokeLinecap ?? 'round')}`,
+          `strokeLinejoin=${escapeTsString(node.style.strokeLinejoin ?? 'round')}`,
+        ];
+        if (perContour) {
+          const res = intervalsToSvgStrokeDash(lengths[cIdx] ?? 0, perContour[cIdx] ?? []);
+          if (!res.visible) sAttrs.push('strokeOpacity={0}');
+          if (!res.full && res.dasharray) {
+            sAttrs.push(`strokeDasharray=${escapeTsString(res.dasharray)}`);
+            if (res.dashoffset !== undefined) sAttrs.push(`strokeDashoffset={${roundCss(res.dashoffset)}}`);
+          }
+        } else if (node.style.strokeDasharray) {
+          sAttrs.push(`strokeDasharray=${escapeTsString(node.style.strokeDasharray)}`);
+        }
+        svgLines.push(`${indent}  <path ${sAttrs.join(' ')} />`);
+      });
+    }
+  } else {
+    const pathAttrs: string[] = [
+      `d=${escapeTsString(d)}`,
+      effectiveDynamicFill
+        ? `fill={${effectiveDynamicFill} ?? ${escapeTsString(baseFill)}}`
+        : `fill=${escapeTsString(baseFill)}`,
+      `stroke=${escapeTsString(baseStroke)}`,
+      `strokeWidth={${strokeWidth}}`,
+      `strokeLinecap=${escapeTsString(node.style.strokeLinecap ?? 'round')}`,
+      `strokeLinejoin=${escapeTsString(node.style.strokeLinejoin ?? 'round')}`,
+    ];
+    if (options?.forceEvenOdd || node.style.fillRule === 'evenodd' || (node.subpaths && node.subpaths.length > 0)) {
+      pathAttrs.push('fillRule="evenodd"');
+    }
+    if (node.style.strokeDasharray) {
+      pathAttrs.push(`strokeDasharray=${escapeTsString(node.style.strokeDasharray)}`);
+    }
+    if (options?.isMorphTarget) {
+      pathAttrs.push('data-folio-morph-path="true"');
+    }
+    svgLines.push(`${indent}  <path ${pathAttrs.join(' ')} />`);
+  }
 
   if (!node.closed && node.points.length >= 2 && (node.style.arrowStart || node.style.arrowEnd)) {
     const arrowColor =
@@ -161,6 +227,46 @@ function buildInlineJsxSvgLines(
 
   svgLines.push(`${indent}</svg>`);
   return svgLines;
+}
+
+function buildShapeTrimOverlayJsxLines(
+  node: Extract<DesignNode, { type: 'rect' | 'frame' | 'ellipse' }>,
+  tokens: DesignTokenCollection,
+  indent: string,
+): string[] {
+  const sw = Math.max(0, roundCss(node.style.strokeWidth));
+  const strokeVar = resolveTokenCssVar(tokens, node.tokenBindings?.stroke);
+  const stroke = strokeVar ?? sanitizeCssValue(node.style.stroke || 'none', 'none');
+  if (sw <= 0 || !stroke || stroke === 'none') return [];
+  const w = Math.max(1, roundCss(node.width));
+  const h = Math.max(1, roundCss(node.height));
+  const extraAttrs: string[] = [];
+  if (hasActiveTrimPath(node.style)) {
+    const len = getNodeContourLengths(node)[0] ?? 0;
+    const intervals = computeContourTrimIntervals(
+      [len],
+      node.style.trimStart ?? 0,
+      node.style.trimEnd ?? 100,
+      node.style.trimOffset ?? 0,
+      node.style.trimMode ?? 'simultaneous',
+    )[0] ?? [];
+    const res = intervalsToSvgStrokeDash(len, intervals);
+    if (!res.visible) extraAttrs.push('strokeOpacity={0}');
+    if (!res.full && res.dasharray) {
+      extraAttrs.push(`strokeDasharray=${escapeTsString(res.dasharray)}`);
+      if (res.dashoffset !== undefined) extraAttrs.push(`strokeDashoffset={${roundCss(res.dashoffset)}}`);
+    }
+  }
+  const extraStr = extraAttrs.length > 0 ? ` ${extraAttrs.join(' ')}` : '';
+  const shapeEl =
+    node.type === 'ellipse'
+      ? `<ellipse data-folio-trim-contour="0" cx={${roundCss(w / 2)}} cy={${roundCss(h / 2)}} rx={${roundCss(w / 2)}} ry={${roundCss(h / 2)}} fill="none" stroke=${escapeTsString(stroke)} strokeWidth={${sw}} strokeLinecap="round"${extraStr} />`
+      : `<rect data-folio-trim-contour="0" x={0} y={0} width={${w}} height={${h}}${(node.style.radius ?? 0) > 0 ? ` rx={${roundCss(node.style.radius ?? 0)}}` : ''} fill="none" stroke=${escapeTsString(stroke)} strokeWidth={${sw}} strokeLinecap="round"${extraStr} />`;
+  return [
+    `${indent}<svg width={${w}} height={${h}} viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style={{ position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", pointerEvents: "none" }} aria-hidden="true">`,
+    `${indent}  ${shapeEl}`,
+    `${indent}</svg>`,
+  ];
 }
 
 interface VariantAxisMeta {
@@ -913,6 +1019,7 @@ function buildPageReactFile(
 
   const morphClips = compilePageMorphClips(project, page);
   const morphNodeIds = collectPageMorphNodeIds(project, page);
+  const trimNodeIds = collectPageTrimNodeIds(project, page);
   const initialMorphSnapshots = collectPageInitialMorphSnapshots(project, page);
   const multiContourMorphNodeIds = new Set<string>();
   for (const clip of morphClips) {
@@ -953,6 +1060,11 @@ function buildPageReactFile(
     for (const track of clip.tracks) {
       if (track.keyframes.length > 0) {
         animatedNodeIds.add(track.targetNodeId);
+      }
+    }
+    for (const mp of clip.motionPaths ?? []) {
+      if (mp.points.length >= 2) {
+        animatedNodeIds.add(mp.targetNodeId);
       }
     }
   }
@@ -1270,6 +1382,7 @@ function buildPageReactFile(
         ? `logicOverrides[${escapeTsString(node.id)}]?.fill`
         : undefined;
       const isMorph = morphNodeIds.has(node.id);
+      const isTrim = trimNodeIds.has(node.id);
       const initialSnap = isMorph ? initialMorphSnapshots.get(node.id) : undefined;
       const renderedNode = initialSnap ? applyMorphGeometryToDesignNode(node, initialSnap) : node;
       lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
@@ -1281,6 +1394,7 @@ function buildPageReactFile(
           dynamicPathFill,
           {
             isMorphTarget: isMorph,
+            isTrimTarget: isTrim,
             forceEvenOdd: multiContourMorphNodeIds.has(node.id),
           },
         ),
@@ -1297,6 +1411,7 @@ function buildPageReactFile(
         : undefined;
       const snap = initialMorphSnapshots.get(node.id) ?? extractMorphSnapshotFromNode(node);
       const projected = snap ? applyMorphGeometryToDesignNode(node, snap) : null;
+      const isTrim = trimNodeIds.has(node.id);
       lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
       if (projected && projected.type === 'path') {
         lines.push(
@@ -1307,6 +1422,7 @@ function buildPageReactFile(
             dynamicPathFill,
             {
               isMorphTarget: true,
+              isTrimTarget: isTrim,
               asBackdrop: children.length > 0,
               forceEvenOdd: multiContourMorphNodeIds.has(node.id),
             },
@@ -1319,7 +1435,12 @@ function buildPageReactFile(
       lines.push(`${indent}</${wrapperTag}>`);
     } else {
       const children = childrenByParent.get(node.id) ?? [];
-      if (children.length === 0) {
+      const trimOverlayLines =
+        (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') &&
+        (trimNodeIds.has(node.id) || hasActiveTrimPath(node.style))
+          ? buildShapeTrimOverlayJsxLines(node, tokens, `${indent}  `)
+          : [];
+      if (children.length === 0 && trimOverlayLines.length === 0) {
         if (tag === 'input') {
           lines.push(`${indent}<input ${attrs.join(' ')} type="text" />`);
         } else if (tag === 'img') {
@@ -1330,6 +1451,9 @@ function buildPageReactFile(
       } else {
         const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
         lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
+        if (trimOverlayLines.length > 0) {
+          lines.push(...trimOverlayLines);
+        }
         for (const child of children) {
           emitJsx(child, depth + 1);
         }

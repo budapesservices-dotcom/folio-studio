@@ -510,6 +510,18 @@ function isCommonNode(value: Record<string, unknown>): boolean {
   );
 }
 
+const TRIM_PATH_MODES = new Set(['simultaneous', 'sequential']);
+const MOTION_PATH_LOOP_MODES = new Set(['none', 'loop', 'ping-pong']);
+
+function isValidTrimFields(value: Record<string, unknown>): boolean {
+  return (
+    (value.trimStart === undefined || (isFiniteNumber(value.trimStart) && value.trimStart >= 0 && value.trimStart <= 100)) &&
+    (value.trimEnd === undefined || (isFiniteNumber(value.trimEnd) && value.trimEnd >= 0 && value.trimEnd <= 100)) &&
+    (value.trimOffset === undefined || (isFiniteNumber(value.trimOffset) && value.trimOffset >= -1000 && value.trimOffset <= 1000)) &&
+    (value.trimMode === undefined || TRIM_PATH_MODES.has(String(value.trimMode)))
+  );
+}
+
 function isShapeStyle(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
@@ -524,7 +536,8 @@ function isShapeStyle(value: unknown): boolean {
     (value.radius === undefined || (isFiniteNumber(value.radius) && value.radius >= 0)) &&
     (value.radiusUnit === undefined || isCssLengthUnit(value.radiusUnit)) &&
     (value.cornerRadii === undefined || isCornerRadiiConfig(value.cornerRadii)) &&
-    (value.fills === undefined || (Array.isArray(value.fills) && value.fills.length <= 16 && value.fills.every(isFillPaint)))
+    (value.fills === undefined || (Array.isArray(value.fills) && value.fills.length <= 16 && value.fills.every(isFillPaint))) &&
+    isValidTrimFields(value)
   );
 }
 
@@ -568,7 +581,8 @@ function isPathStyle(value: unknown): boolean {
     (value.fillRule === undefined || value.fillRule === 'nonzero' || value.fillRule === 'evenodd') &&
     (value.arrowStart === undefined || typeof value.arrowStart === 'boolean') &&
     (value.arrowEnd === undefined || typeof value.arrowEnd === 'boolean') &&
-    (value.fills === undefined || (Array.isArray(value.fills) && value.fills.length <= 16 && value.fills.every(isFillPaint)))
+    (value.fills === undefined || (Array.isArray(value.fills) && value.fills.length <= 16 && value.fills.every(isFillPaint))) &&
+    isValidTrimFields(value)
   );
 }
 
@@ -1379,6 +1393,10 @@ const ANIMATABLE_PROPERTIES_SET = new Set([
   'stroke',
   'strokeWidth',
   'pathMorph',
+  'motionPathProgress',
+  'trimStart',
+  'trimEnd',
+  'trimOffset',
   'layerBlur',
   'backdropBlur',
   'shadowOffsetX',
@@ -1486,6 +1504,7 @@ export function isAnimationClip(value: unknown): value is import('./types').Anim
       !isString(track.id) || track.id.trim().length === 0 || track.id.length > 128 ||
       !isString(track.targetNodeId) || track.targetNodeId.trim().length === 0 || track.targetNodeId.length > 128 ||
       !isString(track.property) || !ANIMATABLE_PROPERTIES_SET.has(track.property) ||
+      (track.trimMode !== undefined && !TRIM_PATH_MODES.has(String(track.trimMode))) ||
       !Array.isArray(track.keyframes) || track.keyframes.length > 256
     ) {
       return false;
@@ -1518,12 +1537,46 @@ export function isAnimationClip(value: unknown): value is import('./types').Anim
         if (track.property === 'scale' && (kf.value < 0.05 || kf.value > 10)) return false;
         if ((track.property === 'width' || track.property === 'height') && (kf.value < 1 || kf.value > 20000)) return false;
         if ((track.property === 'radius' || track.property === 'strokeWidth') && (kf.value < 0 || kf.value > 2000)) return false;
+        if ((track.property === 'trimStart' || track.property === 'trimEnd') && (kf.value < 0 || kf.value > 100)) return false;
+        if (track.property === 'trimOffset' && (kf.value < -1000 || kf.value > 1000)) return false;
+        if (track.property === 'motionPathProgress' && (kf.value < -1000 || kf.value > 1000)) return false;
         if ((track.property === 'layerBlur' || track.property === 'backdropBlur' || track.property === 'shadowBlur') && (kf.value < 0 || kf.value > 200)) return false;
         if ((track.property === 'shadowOffsetX' || track.property === 'shadowOffsetY') && (kf.value < -500 || kf.value > 500)) return false;
         if (track.property === 'shadowSpread' && (kf.value < -100 || kf.value > 100)) return false;
         if ((track.property === 'brightness' || track.property === 'contrast' || track.property === 'saturate') && (kf.value < 0 || kf.value > 300)) return false;
         if (track.property === 'grayscale' && (kf.value < 0 || kf.value > 100)) return false;
       }
+    }
+  }
+
+  if (value.motionPaths !== undefined) {
+    if (!Array.isArray(value.motionPaths) || value.motionPaths.length > 64) return false;
+    const mpIds = new Set<string>();
+    const mpTargets = new Set<string>();
+    for (const mp of value.motionPaths) {
+      if (
+        !isRecord(mp) ||
+        !isString(mp.id) || mp.id.trim().length === 0 || mp.id.length > 128 ||
+        !isString(mp.targetNodeId) || mp.targetNodeId.trim().length === 0 || mp.targetNodeId.length > 128 ||
+        !Array.isArray(mp.points) || mp.points.length < 2 || mp.points.length > 500 ||
+        !mp.points.every(isVectorAnchorPoint) ||
+        typeof mp.closed !== 'boolean' ||
+        (mp.sourcePathNodeId !== undefined && (!isString(mp.sourcePathNodeId) || mp.sourcePathNodeId.trim().length === 0 || mp.sourcePathNodeId.length > 128)) ||
+        typeof mp.autoOrient !== 'boolean' ||
+        (mp.orientOffsetDeg !== undefined && (!isFiniteNumber(mp.orientOffsetDeg) || mp.orientOffsetDeg < -3600 || mp.orientOffsetDeg > 3600)) ||
+        typeof mp.reverse !== 'boolean' ||
+        !isFiniteNumber(mp.startPct) || mp.startPct < 0 || mp.startPct > 100 ||
+        !isFiniteNumber(mp.endPct) || mp.endPct < 0 || mp.endPct > 100 ||
+        !isFiniteNumber(mp.offsetPx) || mp.offsetPx < -2000 || mp.offsetPx > 2000 ||
+        typeof mp.constantSpeed !== 'boolean' ||
+        !MOTION_PATH_LOOP_MODES.has(String(mp.loopMode)) ||
+        (mp.visible !== undefined && typeof mp.visible !== 'boolean')
+      ) {
+        return false;
+      }
+      if (mpIds.has(mp.id) || mpTargets.has(mp.targetNodeId)) return false;
+      mpIds.add(mp.id);
+      mpTargets.add(mp.targetNodeId);
     }
   }
   return true;

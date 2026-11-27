@@ -29,6 +29,13 @@ import {
 } from '../../core/document/styling';
 import { computeTextVerticalOffset, getSvgTextAnchorAndX, wrapTextLines } from '../../core/document/typography';
 import { buildRoundedRectSvgPath, serializePathPointsToSvgD } from '../../core/document/vector';
+import {
+  computeContourTrimIntervals,
+  getNodeContourLengths,
+  getPathNodeContours,
+  hasActiveTrimPath,
+  intervalsToSvgStrokeDash,
+} from '../../core/document/pathStudio';
 import { resolveAssetDisplayUrl } from '../../core/persistence/assetStore';
 import { evaluateComponentDocumentAtTime } from '../animation/evaluator';
 import { computeAutoLayoutNodes } from '../layout/autoLayout';
@@ -435,6 +442,44 @@ function renderPerSideBorders(
   return lines.length > 0 ? <g pointer-events="none">{lines}</g> : null;
 }
 
+function resolveSingleContourTrimStroke(
+  node: PrimitiveNode,
+  mask: boolean,
+  hasStroke: boolean,
+  fallbackDash: string | undefined,
+): {
+  active: boolean;
+  visible: boolean;
+  dasharray: string | undefined;
+  dashoffset: number | undefined;
+} {
+  if (
+    mask ||
+    !hasStroke ||
+    (node.type !== 'rect' && node.type !== 'frame' && node.type !== 'ellipse' && node.type !== 'path') ||
+    !hasActiveTrimPath(node.style)
+  ) {
+    return { active: false, visible: true, dasharray: fallbackDash, dashoffset: undefined };
+  }
+  const lengths = getNodeContourLengths(node);
+  const len = lengths[0] ?? 0;
+  const intervals = computeContourTrimIntervals(
+    [len],
+    node.style.trimStart ?? 0,
+    node.style.trimEnd ?? 100,
+    node.style.trimOffset ?? 0,
+    node.style.trimMode ?? 'simultaneous',
+  )[0] ?? [];
+  const dash = intervalsToSvgStrokeDash(len, intervals);
+  if (!dash.visible) {
+    return { active: true, visible: false, dasharray: dash.dasharray, dashoffset: dash.dashoffset };
+  }
+  if (dash.full) {
+    return { active: true, visible: true, dasharray: fallbackDash, dashoffset: undefined };
+  }
+  return { active: true, visible: true, dasharray: dash.dasharray, dashoffset: dash.dashoffset };
+}
+
 export function NodeShape({
   node,
   mask = false,
@@ -489,14 +534,17 @@ export function NodeShape({
         const fills = getVisibleFillPaints(node);
         const rx = node.style.radius ?? 0;
         const cornerRadii = node.style.cornerRadii;
-        const dash = !mask
+        const baseDash = !mask
           ? (node.style.strokeDasharray || (node.isSection ? '6 4' : undefined))
           : undefined;
         const sw = node.style.strokeWidth;
         const strokeAlign = node.style.strokeAlign ?? 'center';
         const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
+        const trimStroke = resolveSingleContourTrimStroke(node, mask, hasStroke, baseDash);
+        const dash = trimStroke.dasharray;
+        const dashOffset = trimStroke.dashoffset;
         const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
-        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
+        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center' || trimStroke.active);
         const renderBox = (
           key: string | undefined,
           x: number,
@@ -555,6 +603,7 @@ export function NodeShape({
                 stroke: node.style.borderSides && !mask ? 'none' : (mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke),
                 'stroke-width': node.style.borderSides && !mask ? 0 : sw,
                 'stroke-dasharray': dash,
+                'stroke-dashoffset': dashOffset,
               })
             ) : (
               <>
@@ -566,7 +615,7 @@ export function NodeShape({
                     stroke: 'none',
                   });
                 })}
-                {hasStroke && !node.style.borderSides &&
+                {hasStroke && !node.style.borderSides && trimStroke.visible &&
                   renderBox(
                     undefined,
                     node.x + strokeDelta,
@@ -580,6 +629,8 @@ export function NodeShape({
                       stroke: node.style.stroke,
                       'stroke-width': sw,
                       'stroke-dasharray': dash,
+                      'stroke-dashoffset': dashOffset,
+                      'stroke-linecap': trimStroke.active ? 'round' : undefined,
                     },
                   )}
               </>
@@ -592,12 +643,15 @@ export function NodeShape({
         const fills = getVisibleFillPaints(node);
         const rx = node.style.radius ?? 0;
         const cornerRadii = node.style.cornerRadii;
-        const dash = !mask ? (node.style.strokeDasharray || undefined) : undefined;
+        const baseDash = !mask ? (node.style.strokeDasharray || undefined) : undefined;
         const sw = node.style.strokeWidth;
         const strokeAlign = node.style.strokeAlign ?? 'center';
         const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
+        const trimStroke = resolveSingleContourTrimStroke(node, mask, hasStroke, baseDash);
+        const dash = trimStroke.dasharray;
+        const dashOffset = trimStroke.dashoffset;
         const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
-        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
+        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center' || trimStroke.active);
         const renderBox = (
           key: string | undefined,
           x: number,
@@ -635,6 +689,7 @@ export function NodeShape({
                 stroke: node.style.borderSides && !mask ? 'none' : (mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke),
                 'stroke-width': node.style.borderSides && !mask ? 0 : sw,
                 'stroke-dasharray': dash,
+                'stroke-dashoffset': dashOffset,
               })
             ) : (
               <>
@@ -646,7 +701,7 @@ export function NodeShape({
                     stroke: 'none',
                   });
                 })}
-                {hasStroke && !node.style.borderSides &&
+                {hasStroke && !node.style.borderSides && trimStroke.visible &&
                   renderBox(
                     undefined,
                     node.x + strokeDelta,
@@ -660,6 +715,8 @@ export function NodeShape({
                       stroke: node.style.stroke,
                       'stroke-width': sw,
                       'stroke-dasharray': dash,
+                      'stroke-dashoffset': dashOffset,
+                      'stroke-linecap': trimStroke.active ? 'round' : undefined,
                     },
                   )}
               </>
@@ -672,12 +729,15 @@ export function NodeShape({
         const fills = getVisibleFillPaints(node);
         const cx = node.x + node.width / 2;
         const cy = node.y + node.height / 2;
-        const dash = !mask ? (node.style.strokeDasharray || undefined) : undefined;
+        const baseDash = !mask ? (node.style.strokeDasharray || undefined) : undefined;
         const sw = node.style.strokeWidth;
         const strokeAlign = node.style.strokeAlign ?? 'center';
         const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
+        const trimStroke = resolveSingleContourTrimStroke(node, mask, hasStroke, baseDash);
+        const dash = trimStroke.dasharray;
+        const dashOffset = trimStroke.dashoffset;
         const strokeDelta = strokeAlign === 'inside' ? sw * 0.5 : strokeAlign === 'outside' ? -sw * 0.5 : 0;
-        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
+        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center' || trimStroke.active);
         return (
           <>
             {renderBackdropBlurOverlay(node, mask, 0, true)}
@@ -698,6 +758,7 @@ export function NodeShape({
                 stroke={mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke}
                 stroke-width={sw}
                 stroke-dasharray={dash}
+                stroke-dashoffset={dashOffset}
               />
             ) : (
               <>
@@ -716,7 +777,7 @@ export function NodeShape({
                     />
                   );
                 })}
-                {hasStroke && (
+                {hasStroke && trimStroke.visible && (
                   <ellipse
                     cx={cx}
                     cy={cy}
@@ -726,6 +787,8 @@ export function NodeShape({
                     stroke={node.style.stroke}
                     stroke-width={sw}
                     stroke-dasharray={dash}
+                    stroke-dashoffset={dashOffset}
+                    stroke-linecap={trimStroke.active ? 'round' : undefined}
                   />
                 )}
               </>
@@ -739,22 +802,59 @@ export function NodeShape({
         const sw = node.style.strokeWidth;
         const strokeAlign = node.style.strokeAlign ?? 'center';
         const hasStroke = sw > 0 && node.style.stroke !== 'none' && node.style.stroke !== 'transparent';
-        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center');
+        const isTrimActive = !mask && hasStroke && hasActiveTrimPath(node.style);
+        const needsSeparateStroke = !mask && hasStroke && (fills.length > 1 || strokeAlign !== 'center' || isTrimActive);
         const insideClipAttr = strokeAlign === 'inside'
           ? `url(#${maskPrefix}--pathclip--${sanitizeMaskIdSegment(node.id)})`
           : undefined;
-        const strokeEl = hasStroke ? (
-          <path
-            d={pathD}
-            fill="none"
-            stroke={node.style.stroke}
-            stroke-width={strokeAlign === 'center' ? sw : sw * 2}
-            stroke-linecap={node.style.strokeLinecap ?? 'round'}
-            stroke-linejoin={node.style.strokeLinejoin ?? 'round'}
-            stroke-dasharray={node.style.strokeDasharray || undefined}
-            clip-path={insideClipAttr}
-          />
-        ) : null;
+        const strokeEl = hasStroke
+          ? isTrimActive
+            ? (() => {
+                const contours = getPathNodeContours(node);
+                const lengths = getNodeContourLengths(node);
+                const perContour = computeContourTrimIntervals(
+                  lengths,
+                  node.style.trimStart ?? 0,
+                  node.style.trimEnd ?? 100,
+                  node.style.trimOffset ?? 0,
+                  node.style.trimMode ?? 'simultaneous',
+                );
+                return (
+                  <g clip-path={insideClipAttr}>
+                    {contours.map((contour, cIdx) => {
+                      const dash = intervalsToSvgStrokeDash(lengths[cIdx] ?? 0, perContour[cIdx] ?? []);
+                      if (!dash.visible) return null;
+                      const contourD = serializePathPointsToSvgD(contour.points, contour.closed);
+                      return (
+                        <path
+                          key={`${node.id}-trim-c-${cIdx}`}
+                          d={contourD}
+                          fill="none"
+                          stroke={node.style.stroke}
+                          stroke-width={strokeAlign === 'center' ? sw : sw * 2}
+                          stroke-linecap={node.style.strokeLinecap ?? 'round'}
+                          stroke-linejoin={node.style.strokeLinejoin ?? 'round'}
+                          stroke-dasharray={dash.full ? (node.style.strokeDasharray || undefined) : dash.dasharray}
+                          stroke-dashoffset={dash.full ? undefined : dash.dashoffset}
+                        />
+                      );
+                    })}
+                  </g>
+                );
+              })()
+            : (
+              <path
+                d={pathD}
+                fill="none"
+                stroke={node.style.stroke}
+                stroke-width={strokeAlign === 'center' ? sw : sw * 2}
+                stroke-linecap={node.style.strokeLinecap ?? 'round'}
+                stroke-linejoin={node.style.strokeLinejoin ?? 'round'}
+                stroke-dasharray={node.style.strokeDasharray || undefined}
+                clip-path={insideClipAttr}
+              />
+            )
+          : null;
         return (
           <g transform={`translate(${node.x} ${node.y})`}>
             {!mask && !node.closed && (

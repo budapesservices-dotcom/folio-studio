@@ -6,6 +6,8 @@ import type {
   DesignNode,
   FolioPage,
   FolioProject,
+  MotionPathBinding,
+  TrimPathMode,
   VisualEffect,
 } from '../../core/document/types';
 import { resolveComponentInstanceNodes } from '../../core/document/components';
@@ -23,6 +25,12 @@ import {
   parsePathMorphSnapshot,
   prepareMorphPair,
 } from '../../core/document/pathMorph';
+import {
+  computeContourTrimIntervals,
+  evaluateMotionPathAtProgress,
+  getNodeContourLengths,
+  intervalsToSvgStrokeDash,
+} from '../../core/document/pathStudio';
 
 function slugifyMotionId(input: string): string {
   const slug = input
@@ -320,7 +328,14 @@ function collectPageComponentInstanceAnimations(
               id: `${childPrefix}${track.id}`,
               targetNodeId: `${childPrefix}${track.targetNodeId}`,
             }));
-          if (mappedTracks.length > 0) {
+          const mappedMotionPaths = (clip.motionPaths ?? [])
+            .filter((mp) => mp.points.length >= 2 && childIdSet.has(mp.targetNodeId))
+            .map((mp) => ({
+              ...mp,
+              id: `${childPrefix}${mp.id}`,
+              targetNodeId: `${childPrefix}${mp.targetNodeId}`,
+            }));
+          if (mappedTracks.length > 0 || mappedMotionPaths.length > 0) {
             scopedClips.push({
               ...clip,
               id: `${emittedInstanceId}__${clip.id}`,
@@ -330,6 +345,7 @@ function collectPageComponentInstanceAnimations(
               autoplay: true,
               loop: true,
               tracks: mappedTracks,
+              ...(mappedMotionPaths.length > 0 ? { motionPaths: mappedMotionPaths } : {}),
             });
           }
         }
@@ -392,8 +408,34 @@ export function collectPageInitialMorphSnapshots(
   return result;
 }
 
+export function collectPageTrimNodeIds(
+  project: FolioProject,
+  page: FolioPage,
+): Set<string> {
+  const result = new Set<string>();
+  const pageClips = (project.animations ?? []).filter((clip) => clip.pageId === page.id);
+  const { scopedClips } = collectPageComponentInstanceAnimations(project, page);
+  for (const clip of [...pageClips, ...scopedClips]) {
+    for (const track of clip.tracks) {
+      if (
+        (track.property === 'trimStart' ||
+          track.property === 'trimEnd' ||
+          track.property === 'trimOffset') &&
+        track.keyframes.length > 0
+      ) {
+        result.add(track.targetNodeId);
+      }
+    }
+  }
+  return result;
+}
+
 export function compilePageAnimationsCss(project: FolioProject, page: FolioPage): string {
-  const pageClips = (project.animations ?? []).filter((clip) => clip.pageId === page.id && clip.tracks.length > 0);
+  const pageClips = (project.animations ?? []).filter(
+    (clip) =>
+      clip.pageId === page.id &&
+      (clip.tracks.length > 0 || (clip.motionPaths !== undefined && clip.motionPaths.length > 0)),
+  );
   const { scopedClips, scopedNodesById } = collectPageComponentInstanceAnimations(project, page);
   const clips = [...pageClips, ...scopedClips];
   if (clips.length === 0) return '';
@@ -428,6 +470,7 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
   const autoplayWrapperSpecs = new Map<string, string[]>();
   const autoplaySvgPathSpecs = new Map<string, string[]>();
   const autoplaySvgPolySpecs = new Map<string, string[]>();
+  const autoplayTrimSpecs = new Map<string, string[]>();
 
   for (const clip of clips) {
     const tracksByNode = new Map<string, AnimationTrack[]>();
@@ -437,6 +480,16 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       const list = tracksByNode.get(track.targetNodeId) ?? [];
       list.push(track);
       tracksByNode.set(track.targetNodeId, list);
+    }
+
+    const motionPathByNode = new Map<string, MotionPathBinding>();
+    for (const mp of clip.motionPaths ?? []) {
+      if (mp.points.length < 2) continue;
+      if (!nodesById.has(mp.targetNodeId)) continue;
+      motionPathByNode.set(mp.targetNodeId, mp);
+      if (!tracksByNode.has(mp.targetNodeId)) {
+        tracksByNode.set(mp.targetNodeId, []);
+      }
     }
 
     if (tracksByNode.size === 0) continue;
@@ -515,18 +568,32 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
         node.points.length >= 2 &&
         Boolean(node.style.arrowStart || node.style.arrowEnd);
 
+      const nodeMotionPath = motionPathByNode.get(nodeId);
+      const trimTracks = nodeTracks.filter(
+        (t) => t.property === 'trimStart' || t.property === 'trimEnd' || t.property === 'trimOffset',
+      );
+
       // Partition tracks into wrapper-CSS tracks vs SVG-element tracks (`> svg path` / `polygon`)
       // so SVG color/stroke animations do not pollute wrapper transform timing or vice versa!
       const svgTargetedProps = new Set<AnimationTrack['property']>(
         isPathNode ? ['fill', 'stroke', 'strokeWidth'] : [],
       );
       const wrapperTracks = nodeTracks.filter(
-        (t) => t.property !== 'pathMorph' && !svgTargetedProps.has(t.property),
+        (t) =>
+          t.property !== 'pathMorph' &&
+          t.property !== 'trimStart' &&
+          t.property !== 'trimEnd' &&
+          t.property !== 'trimOffset' &&
+          !svgTargetedProps.has(t.property),
       );
       const svgTracks = nodeTracks.filter((t) => svgTargetedProps.has(t.property));
 
       const ancestorTracksForWrapper: AnimationTrack[] = [];
+      let hasMotionPathAncestor = false;
       for (const anc of animatedAncestors) {
+        if (motionPathByNode.has(anc.id)) {
+          hasMotionPathAncestor = true;
+        }
         for (const ancTrack of tracksByNode.get(anc.id) ?? []) {
           if (
             ancTrack.property === 'x' ||
@@ -535,7 +602,8 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
             ancTrack.property === 'height' ||
             ancTrack.property === 'rotation' ||
             ancTrack.property === 'scale' ||
-            ancTrack.property === 'opacity'
+            ancTrack.property === 'opacity' ||
+            ancTrack.property === 'motionPathProgress'
           ) {
             ancestorTracksForWrapper.push(ancTrack);
           }
@@ -545,7 +613,8 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
       const directParentHasAnimRot = Boolean(
         directParent &&
           directParent.type !== 'group' &&
-          tracksByNode.get(directParent.id)?.some((t) => t.property === 'rotation' && trackValuesVary(t)),
+          (tracksByNode.get(directParent.id)?.some((t) => t.property === 'rotation' && trackValuesVary(t)) ||
+            Boolean(motionPathByNode.get(directParent.id)?.autoOrient)),
       );
 
       // Build wrapper stop timestamps
@@ -561,12 +630,15 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
         }
       }
       const rawWrapperStops = [...wrapperStopSet].sort((a, b) => a - b);
-      const useDenseWrapperLinear = tracksRequireDenseLinearSampling(
-        wrapperTracks,
-        clip.durationMs,
-        ancestorTracksForWrapper,
-        directParentHasAnimRot,
-      );
+      const useDenseWrapperLinear =
+        Boolean(nodeMotionPath) ||
+        hasMotionPathAncestor ||
+        tracksRequireDenseLinearSampling(
+          wrapperTracks,
+          clip.durationMs,
+          ancestorTracksForWrapper,
+          directParentHasAnimRot,
+        );
       const stops = useDenseWrapperLinear
         ? buildDenseTimestamps(clip.durationMs, rawWrapperStops)
         : rawWrapperStops;
@@ -777,6 +849,29 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
             stopSaturate = Math.max(0, roundCssNum(Number(val)));
           } else if (track.property === 'grayscale') {
             stopGrayscale = Math.max(0, roundCssNum(Number(val)));
+          }
+        }
+
+        if (nodeMotionPath) {
+          const progressVal = evalProp(nodeId, 'motionPathProgress', stopMs);
+          const progressPct = progressVal !== undefined
+            ? Number(progressVal)
+            : clip.durationMs > 0
+              ? (stopMs / clip.durationMs) * 100
+              : 0;
+          const mpSample = evaluateMotionPathAtProgress(nodeMotionPath, progressPct);
+          if (mpSample) {
+            const effW = evalWidth ?? node.width;
+            const effH = evalHeight ?? node.height;
+            rawWorldDx = mpSample.x - effW / 2 - node.x;
+            rawWorldDy = mpSample.y - effH / 2 - node.y;
+            hasXTrack = true;
+            hasYTrack = true;
+            hasTransform = true;
+            if (nodeMotionPath.autoOrient) {
+              const rotDelta = rotationVal !== undefined ? rotationVal - (node.rotation || 0) : 0;
+              rotationVal = roundCssNum(mpSample.tangentAngleDeg + (nodeMotionPath.orientOffsetDeg ?? 0) + rotDelta);
+            }
           }
         }
 
@@ -1092,6 +1187,74 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
           );
         }
       }
+
+      // Build Trim Path per-contour CSS @keyframes (`stroke-dasharray`, `stroke-dashoffset`, `stroke-opacity`)
+      if (
+        trimTracks.length > 0 &&
+        (node.type === 'path' || node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse')
+      ) {
+        const contourLengths = getNodeContourLengths(node);
+        const trimMode: TrimPathMode =
+          trimTracks.find((t) => t.trimMode)?.trimMode ??
+          ('style' in node && 'trimMode' in node.style ? node.style.trimMode : undefined) ??
+          'simultaneous';
+        const trimStopSet = new Set<number>([0, clip.durationMs]);
+        for (const tr of trimTracks) {
+          for (const kf of tr.keyframes) {
+            trimStopSet.add(Math.max(0, Math.min(clip.durationMs, Math.round(kf.timeMs))));
+          }
+        }
+        const trimStops = buildDenseTimestamps(clip.durationMs, [...trimStopSet]);
+        const trimStartTrack = trimTracks.find((t) => t.property === 'trimStart');
+        const trimEndTrack = trimTracks.find((t) => t.property === 'trimEnd');
+        const trimOffsetTrack = trimTracks.find((t) => t.property === 'trimOffset');
+        const baseTrimStart = 'style' in node && 'trimStart' in node.style ? (node.style.trimStart ?? 0) : 0;
+        const baseTrimEnd = 'style' in node && 'trimEnd' in node.style ? (node.style.trimEnd ?? 100) : 100;
+        const baseTrimOffset = 'style' in node && 'trimOffset' in node.style ? (node.style.trimOffset ?? 0) : 0;
+
+        for (let cIdx = 0; cIdx < contourLengths.length; cIdx += 1) {
+          const cLen = contourLengths[cIdx];
+          if (cLen <= 0.01) continue;
+          const trimKfName = `${kfName}--trim-${cIdx}`;
+          const trimSel = `${attrSelector} [data-folio-trim-contour="${cIdx}"]`;
+          lines.push(`@keyframes ${trimKfName} {`);
+          for (const stopMs of trimStops) {
+            const sVal = trimStartTrack ? Number(evaluateTrackAtTime(trimStartTrack, stopMs) ?? baseTrimStart) : baseTrimStart;
+            const eVal = trimEndTrack ? Number(evaluateTrackAtTime(trimEndTrack, stopMs) ?? baseTrimEnd) : baseTrimEnd;
+            const oVal = trimOffsetTrack ? Number(evaluateTrackAtTime(trimOffsetTrack, stopMs) ?? baseTrimOffset) : baseTrimOffset;
+            const intervals = computeContourTrimIntervals(contourLengths, sVal, eVal, oVal, trimMode)[cIdx] ?? [];
+            const dash = intervalsToSvgStrokeDash(cLen, intervals);
+            const dashStr = dash.full
+              ? `${roundCssNum(cLen)} ${roundCssNum(cLen + 4)}`
+              : dash.dasharray ?? `0 ${roundCssNum(cLen + 4)}`;
+            const offsetNum = dash.full ? 0 : (dash.dashoffset ?? 0);
+            const opacityDecl = dash.visible ? 'stroke-opacity: 1;' : 'stroke-opacity: 0;';
+            lines.push(
+              `  ${formatPct(stopMs, clip.durationMs)} { stroke-dasharray: ${dashStr}; stroke-dashoffset: ${roundCssNum(offsetNum)}; ${opacityDecl} }`,
+            );
+          }
+          lines.push('}');
+          const trimAnimSpec = `${trimKfName} ${clip.durationMs}ms linear ${iteration} ${fillMode}`;
+          if (clip.autoplay) {
+            const key = `${nodeId}::${cIdx}`;
+            const list = autoplayTrimSpecs.get(key) ?? [];
+            list.push(trimAnimSpec);
+            autoplayTrimSpecs.set(key, list);
+          }
+          lines.push(
+            `.${playClass} ${trimSel}, ${attrSelector}.${playClass} [data-folio-trim-contour="${cIdx}"] { animation: ${trimAnimSpec}; }`,
+          );
+          lines.push(
+            `.${playClass}--reverse ${trimSel}, ${attrSelector}.${playClass}--reverse [data-folio-trim-contour="${cIdx}"] { animation-direction: reverse; }`,
+          );
+          lines.push(
+            `.${playClass}--paused ${trimSel}, ${attrSelector}.${playClass}--paused [data-folio-trim-contour="${cIdx}"] { animation-play-state: paused; }`,
+          );
+          lines.push(
+            `.${playClass}--stopped ${trimSel}, ${attrSelector}.${playClass}--stopped [data-folio-trim-contour="${cIdx}"] { animation: none; }`,
+          );
+        }
+      }
     }
   }
 
@@ -1109,9 +1272,16 @@ export function compilePageAnimationsCss(project: FolioProject, page: FolioPage)
     const attrSelector = `[data-folio-id="${escapeAttrValue(nodeId)}"]`;
     lines.push(`${attrSelector} > svg polygon { animation: ${specs.join(', ')}; }`);
   }
+  for (const [key, specs] of autoplayTrimSpecs.entries()) {
+    const splitIdx = key.lastIndexOf('::');
+    const nodeId = key.slice(0, splitIdx);
+    const cIdx = key.slice(splitIdx + 2);
+    const attrSelector = `[data-folio-id="${escapeAttrValue(nodeId)}"]`;
+    lines.push(`${attrSelector} [data-folio-trim-contour="${cIdx}"] { animation: ${specs.join(', ')}; }`);
+  }
 
   lines.push('@media (prefers-reduced-motion: reduce) {');
-  lines.push('  [data-folio-id], [data-folio-id] > svg path, [data-folio-id] > svg polygon { animation: none !important; transition: none !important; }');
+  lines.push('  [data-folio-id], [data-folio-id] > svg path, [data-folio-id] > svg polygon, [data-folio-id] [data-folio-trim-contour] { animation: none !important; transition: none !important; }');
   lines.push('}');
 
   return lines.join('\n');
@@ -1140,7 +1310,12 @@ export function buildLivePreviewAnimationPayload(
       durationMs: clip.durationMs,
       loop: clip.loop,
       autoplay: clip.autoplay,
-      targetNodeIds: [...new Set(clip.tracks.map((track) => track.targetNodeId))],
+      targetNodeIds: [
+        ...new Set([
+          ...clip.tracks.map((track) => track.targetNodeId),
+          ...(clip.motionPaths ?? []).map((mp) => mp.targetNodeId),
+        ]),
+      ],
     }));
 }
 
@@ -1246,7 +1421,7 @@ export function compilePageMorphClips(
       if (sorted.length === 1) {
         const snapStr = String(sorted[0].value);
         const pair = prepareMorphPair(snapStr, snapStr);
-        if (pair && pair.compatible && pair.pointCount >= 3) {
+        if (pair && pair.compatible && pair.pointCount >= 2) {
           const packed = packBuffer6(pair.fromBuf, pair.flags, pair.pointCount);
           const subpaths: CompiledMorphContour[] | undefined =
             pair.subpathPairs && pair.subpathPairs.length > 0
@@ -1273,7 +1448,7 @@ export function compilePageMorphClips(
           const fromStr = String(a.value);
           const toStr = String(b.value);
           const pair = prepareMorphPair(fromStr, toStr);
-          if (!pair || !pair.compatible || pair.pointCount < 3) {
+          if (!pair || !pair.compatible || pair.pointCount < 2) {
             const parsedA = parsePathMorphSnapshot(fromStr);
             if (!parsedA) continue;
             continue;

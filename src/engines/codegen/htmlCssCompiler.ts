@@ -50,6 +50,13 @@ import {
   applyMorphGeometryToDesignNode,
   extractMorphSnapshotFromNode,
 } from '../../core/document/pathMorph';
+import {
+  computeContourTrimIntervals,
+  getNodeContourLengths,
+  getPathNodeContours,
+  hasActiveTrimPath,
+  intervalsToSvgStrokeDash,
+} from '../../core/document/pathStudio';
 import { getAssetBundlePath, resolveAssetDisplayUrl, resolvePortableAssetUrl } from '../../core/persistence/assetStore';
 import {
   escapeAttr,
@@ -69,6 +76,7 @@ import {
   buildLivePreviewMorphScript,
   collectPageInitialMorphSnapshots,
   collectPageMorphNodeIds,
+  collectPageTrimNodeIds,
   compilePageAnimationsCss,
 } from '../animation/codegen';
 import { applyAutoLayoutToNodes } from '../layout/autoLayout';
@@ -235,6 +243,7 @@ function buildInlineSvgMarkup(
   isMorphTarget = false,
   paintPrefix = 'folio-svg',
   asBackgroundOverlay = false,
+  isTrimTarget = false,
 ): string[] {
   const d = serializePathPointsToSvgD(node.points, node.closed, node.subpaths);
   const w = Math.max(1, roundCss(node.width));
@@ -255,6 +264,9 @@ function buildInlineSvgMarkup(
     ? 'position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none'
     : 'display:block;width:100%;height:100%';
 
+  const hasStaticTrim = hasActiveTrimPath(node.style);
+  const useTrimContours = isTrimTarget || hasStaticTrim;
+
   const visibleFills = getVisibleFillPaints(node);
   const hasGradientOrMultiFill =
     !fillVar &&
@@ -267,6 +279,42 @@ function buildInlineSvgMarkup(
   const svgLines: string[] = [
     `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style="${svgStyle}" aria-hidden="true">`,
   ];
+
+  const emitTrimContourStrokes = () => {
+    if (strokeWidth <= 0 || !stroke || stroke === 'none') return;
+    const contours = getPathNodeContours(node);
+    const lengths = getNodeContourLengths(node);
+    const perContour = hasStaticTrim
+      ? computeContourTrimIntervals(
+          lengths,
+          node.style.trimStart ?? 0,
+          node.style.trimEnd ?? 100,
+          node.style.trimOffset ?? 0,
+          node.style.trimMode ?? 'simultaneous',
+        )
+      : null;
+    contours.forEach((contour, cIdx) => {
+      const contourD = serializePathPointsToSvgD(contour.points, contour.closed);
+      let trimDashAttr = dash;
+      let trimOffsetAttr = '';
+      let trimOpacityAttr = '';
+      if (perContour) {
+        const res = intervalsToSvgStrokeDash(lengths[cIdx] ?? 0, perContour[cIdx] ?? []);
+        if (!res.visible) {
+          trimOpacityAttr = ' stroke-opacity="0"';
+        }
+        if (!res.full && res.dasharray) {
+          trimDashAttr = ` stroke-dasharray="${escapeAttr(res.dasharray)}"`;
+          if (res.dashoffset !== undefined) {
+            trimOffsetAttr = ` stroke-dashoffset="${roundCss(res.dashoffset)}"`;
+          }
+        }
+      }
+      svgLines.push(
+        `${indent}  <path${morphAttr} data-folio-trim-contour="${cIdx}" d="${escapeAttr(contourD)}" fill="none" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${linecap}${linejoin}${trimDashAttr}${trimOffsetAttr}${trimOpacityAttr} />`,
+      );
+    });
+  };
 
   if (hasGradientOrMultiFill) {
     const paintDefs = serializeNodeSvgPaintDefs(node, paintPrefix);
@@ -286,11 +334,20 @@ function buildInlineSvgMarkup(
         `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="${escapeAttr(paintFill)}"${fillOpacityAttr} stroke="none"${fillRule} />`,
       );
     });
-    if (strokeWidth > 0 && stroke && stroke !== 'none') {
+    if (useTrimContours) {
+      emitTrimContourStrokes();
+    } else if (strokeWidth > 0 && stroke && stroke !== 'none') {
       svgLines.push(
         `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="none" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${linecap}${linejoin}${dash} />`,
       );
     }
+  } else if (useTrimContours) {
+    if (fill && fill !== 'none') {
+      svgLines.push(
+        `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="none"${fillRule} />`,
+      );
+    }
+    emitTrimContourStrokes();
   } else {
     svgLines.push(
       `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${fillRule}${linecap}${linejoin}${dash} />`,
@@ -319,6 +376,47 @@ function buildInlineSvgMarkup(
 
   svgLines.push(`${indent}</svg>`);
   return svgLines;
+}
+
+function buildShapeTrimOverlaySvgMarkup(
+  node: Extract<DesignNode, { type: 'rect' | 'frame' | 'ellipse' }>,
+  tokens: DesignTokenCollection,
+  indent: string,
+): string[] {
+  const sw = Math.max(0, roundCss(node.style.strokeWidth));
+  const strokeVar = resolveTokenCssVar(tokens, node.tokenBindings?.stroke);
+  const stroke = strokeVar ?? sanitizeCssValue(node.style.stroke || 'none', 'none');
+  if (sw <= 0 || !stroke || stroke === 'none') return [];
+  const w = Math.max(1, roundCss(node.width));
+  const h = Math.max(1, roundCss(node.height));
+  let dashAttr = '';
+  let offsetAttr = '';
+  let opacityAttr = '';
+  if (hasActiveTrimPath(node.style)) {
+    const len = getNodeContourLengths(node)[0] ?? 0;
+    const intervals = computeContourTrimIntervals(
+      [len],
+      node.style.trimStart ?? 0,
+      node.style.trimEnd ?? 100,
+      node.style.trimOffset ?? 0,
+      node.style.trimMode ?? 'simultaneous',
+    )[0] ?? [];
+    const res = intervalsToSvgStrokeDash(len, intervals);
+    if (!res.visible) opacityAttr = ' stroke-opacity="0"';
+    if (!res.full && res.dasharray) {
+      dashAttr = ` stroke-dasharray="${escapeAttr(res.dasharray)}"`;
+      if (res.dashoffset !== undefined) offsetAttr = ` stroke-dashoffset="${roundCss(res.dashoffset)}"`;
+    }
+  }
+  const shapeTag =
+    node.type === 'ellipse'
+      ? `<ellipse data-folio-trim-contour="0" cx="${roundCss(w / 2)}" cy="${roundCss(h / 2)}" rx="${roundCss(w / 2)}" ry="${roundCss(h / 2)}" fill="none" stroke="${escapeAttr(stroke)}" stroke-width="${sw}" stroke-linecap="round"${dashAttr}${offsetAttr}${opacityAttr} />`
+      : `<rect data-folio-trim-contour="0" x="0" y="0" width="${w}" height="${h}"${(node.style.radius ?? 0) > 0 ? ` rx="${roundCss(node.style.radius ?? 0)}"` : ''} fill="none" stroke="${escapeAttr(stroke)}" stroke-width="${sw}" stroke-linecap="round"${dashAttr}${offsetAttr}${opacityAttr} />`;
+  return [
+    `${indent}<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style="position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none" aria-hidden="true">`,
+    `${indent}  ${shapeTag}`,
+    `${indent}</svg>`,
+  ];
 }
 
 function resolveCssBorderStyle(strokeDasharray?: string): 'solid' | 'dashed' | 'dotted' {
@@ -656,6 +754,7 @@ export function buildNodeCssDeclarations(
     nodeById?: ReadonlyMap<string, DesignNode>;
     maskPrefix?: string;
     morphNodeIds?: ReadonlySet<string>;
+    trimNodeIds?: ReadonlySet<string>;
     emittedId?: string;
   },
 ): string[] {
@@ -668,6 +767,7 @@ export function buildNodeCssDeclarations(
     nodeById,
     maskPrefix,
     morphNodeIds,
+    trimNodeIds,
     emittedId,
   } = options;
   const declarations: string[] = [];
@@ -1023,10 +1123,12 @@ export function buildNodeCssDeclarations(
     if (fillVal && fillVal !== 'none') {
       declarations.push(`background: ${fillVal};`);
     }
+    const isTrimRenderedAsSvgStroke =
+      Boolean(trimNodeIds?.has(emittedId ?? node.id)) || hasActiveTrimPath(node.style);
     const emittedPerSide = node.style.borderSides
       ? emitBorderSidesCss(node.style.borderSides, declarations)
       : false;
-    if (!emittedPerSide && node.style.strokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
+    if (!emittedPerSide && !isTrimRenderedAsSvgStroke && node.style.strokeWidth > 0 && node.style.stroke && node.style.stroke !== 'none') {
       const strokeVal = strokeVar ?? sanitizeCssValue(node.style.stroke, 'transparent');
       const borderStyle = node.style.strokeStyle ?? resolveCssBorderStyle(node.style.strokeDasharray);
       const sw = roundCss(node.style.strokeWidth);
@@ -1221,6 +1323,7 @@ export function compilePageHtmlCss(
   const assetMode = options.assetMode ?? 'bundle';
   const tokens = getProjectDesignTokens(project);
   const morphNodeIds = collectPageMorphNodeIds(project, page);
+  const trimNodeIds = collectPageTrimNodeIds(project, page);
   const initialMorphSnapshots = collectPageInitialMorphSnapshots(project, page);
   const slug = toPageFileSlug(page.route, page.name);
   const componentsById = new Map<string, ComponentDefinition>(
@@ -1315,6 +1418,7 @@ export function compilePageHtmlCss(
       nodeById: activeNodeById,
       maskPrefix,
       morphNodeIds,
+      trimNodeIds,
       emittedId,
     });
 
@@ -1486,6 +1590,7 @@ export function compilePageHtmlCss(
     } else if (node.type === 'path') {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
       const isMorph = morphNodeIds.has(emittedId);
+      const isTrim = trimNodeIds.has(emittedId);
       const initialSnap = isMorph ? initialMorphSnapshots.get(emittedId) : undefined;
       const renderedNode = initialSnap ? applyMorphGeometryToDesignNode(node, initialSnap) : node;
       htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
@@ -1496,6 +1601,8 @@ export function compilePageHtmlCss(
           `${indent}  `,
           isMorph,
           maskPrefix,
+          false,
+          isTrim,
         ),
       );
       htmlBodyLines.push(`${indent}</${wrapperTag}>`);
@@ -1508,6 +1615,7 @@ export function compilePageHtmlCss(
       const selfIsAutoLayout = Boolean(node.layout && node.layout.mode !== 'none');
       const snap = initialMorphSnapshots.get(emittedId) ?? extractMorphSnapshotFromNode(node);
       const projected = snap ? applyMorphGeometryToDesignNode(node, snap) : null;
+      const isTrim = trimNodeIds.has(emittedId);
       htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
       if (projected && projected.type === 'path') {
         htmlBodyLines.push(
@@ -1518,6 +1626,7 @@ export function compilePageHtmlCss(
             true,
             maskPrefix,
             children.length > 0,
+            isTrim,
           ),
         );
       }
@@ -1624,7 +1733,12 @@ export function compilePageHtmlCss(
     } else {
       const children = activeChildrenByParent.get(node.id) ?? [];
       const selfIsAutoLayout = Boolean(node.layout && node.layout.mode !== 'none');
-      if (children.length === 0) {
+      const trimOverlayLines =
+        (node.type === 'rect' || node.type === 'frame' || node.type === 'ellipse') &&
+        (trimNodeIds.has(emittedId) || hasActiveTrimPath(node.style))
+          ? buildShapeTrimOverlaySvgMarkup(node, tokens, `${indent}  `)
+          : [];
+      if (children.length === 0 && trimOverlayLines.length === 0) {
         if (tag === 'input') {
           htmlBodyLines.push(`${indent}<input ${attrs.join(' ')} type="text" />`);
         } else if (tag === 'img') {
@@ -1637,6 +1751,9 @@ export function compilePageHtmlCss(
       } else {
         const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
         htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
+        if (trimOverlayLines.length > 0) {
+          htmlBodyLines.push(...trimOverlayLines);
+        }
         const borderInset = getNodeBorderInset(node);
         const nextOrigin = { x: node.x + borderInset.left, y: node.y + borderInset.top };
         for (const child of children) {
