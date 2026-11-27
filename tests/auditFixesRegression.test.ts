@@ -5,6 +5,7 @@ import type { DesignTokenDefinition } from '../src/core/document/types';
 import { createTokenId } from '../src/app/workspace/TokensPanel';
 import { resolveOpaqueExportBackground } from '../src/engines/animation/videoExport';
 import appSource from '../src/app/App.tsx?raw';
+import storesSource from '../src/app/useWorkspaceStores.ts?raw';
 import shortcutsSource from '../src/app/workspace/useWorkspaceShortcuts.ts?raw';
 import chromeSource from '../src/app/workspace/useWorkspaceChromeActions.ts?raw';
 
@@ -53,10 +54,10 @@ describe('Audit fixes regression suite', () => {
   });
 
   it('preserves Component Canvas 420x280 startup dimensions, modal shortcut guards, and exclusive rack panel toggles', () => {
-    expect(appSource).toContain('page.document.width = 420;');
-    expect(appSource).toContain('page.document.height = 280;');
+    expect(storesSource).toContain('page.document.width = 420;');
+    expect(storesSource).toContain('page.document.height = 280;');
     expect(appSource).toContain('diagnosticsModalOpen: dialogs.diagnosticsModalOpen');
-    expect(appSource).toContain('motionExportOpen,');
+    expect(appSource).toContain('motionExportOpen: toolShell.motionExportOpen');
 
     expect(shortcutsSource).toContain('|| diagnosticsModalOpen');
     expect(shortcutsSource).toContain('|| motionExportOpen');

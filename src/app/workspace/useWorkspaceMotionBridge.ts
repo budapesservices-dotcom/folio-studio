@@ -102,6 +102,7 @@ export function useWorkspaceMotionBridge(options: UseWorkspaceMotionBridgeOption
     activeEditorId,
     motion,
     inspectorSelectedNode,
+    inspectorSelectedNodes,
     mainToolOperationExecutor,
     componentToolOperationExecutor,
     onUpdateSelectedFallback,

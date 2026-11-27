@@ -1,13 +1,43 @@
-import type { DesignNode } from '../../core/document/types';
+import type { DesignNode, PathNode } from '../../core/document/types';
 import { hasActiveMotionPathForNode } from '../../engines/animation';
 import type { ValidatedToolOperation } from '../../engines/canvas/geometryEngine';
 import type { ToolOperationExecutor } from '../toolOperationExecutor';
 import type { MotionPlaybackController } from './useMotionPlayback';
 
+function havePathGeometryChanged(nextNode: PathNode, canonical: PathNode): boolean {
+  if (nextNode.closed !== canonical.closed) return true;
+  if (nextNode.points.length !== canonical.points.length) return true;
+  for (let i = 0; i < nextNode.points.length; i += 1) {
+    const a = nextNode.points[i];
+    const b = canonical.points[i];
+    if (
+      Math.abs(a.x - b.x) > 0.01 ||
+      Math.abs(a.y - b.y) > 0.01 ||
+      a.pointType !== b.pointType ||
+      Boolean(a.handleIn) !== Boolean(b.handleIn) ||
+      Boolean(a.handleOut) !== Boolean(b.handleOut) ||
+      (a.handleIn && b.handleIn && (Math.abs(a.handleIn.x - b.handleIn.x) > 0.01 || Math.abs(a.handleIn.y - b.handleIn.y) > 0.01)) ||
+      (a.handleOut && b.handleOut && (Math.abs(a.handleOut.x - b.handleOut.x) > 0.01 || Math.abs(a.handleOut.y - b.handleOut.y) > 0.01))
+    ) {
+      return true;
+    }
+  }
+  const nextSubs = nextNode.subpaths ?? [];
+  const canonSubs = canonical.subpaths ?? [];
+  if (nextSubs.length !== canonSubs.length) return true;
+  for (let s = 0; s < nextSubs.length; s += 1) {
+    if (nextSubs[s].closed !== canonSubs[s].closed || nextSubs[s].points.length !== canonSubs[s].points.length) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export interface MotionAutoKeyBridgeOptions {
   activeEditorId: 'main' | 'component';
   motion: MotionPlaybackController;
   inspectorSelectedNode: DesignNode | null;
+  inspectorSelectedNodes?: readonly DesignNode[];
   mainToolOperationExecutor: ToolOperationExecutor;
   componentToolOperationExecutor: ToolOperationExecutor;
   onUpdateSelectedFallback: (patch: Partial<DesignNode>) => void;
@@ -23,6 +53,7 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
     activeEditorId,
     motion,
     inspectorSelectedNode,
+    inspectorSelectedNodes = [],
     mainToolOperationExecutor,
     componentToolOperationExecutor,
     onUpdateSelectedFallback,
@@ -47,9 +78,10 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
 
   const sanitizeMotionPathTransformOperations = (
     operations: readonly ValidatedToolOperation[],
-  ): { sanitized: ValidatedToolOperation[]; blockedPositionOnly: boolean } => {
+  ): { sanitized: ValidatedToolOperation[]; blockedPositionOnly: boolean; blockedAnyPosition: boolean } => {
     const sanitized: ValidatedToolOperation[] = [];
     let blockedPositionOnly = false;
+    let blockedAnyPosition = false;
 
     for (const op of operations) {
       if (op.payload.kind !== 'transform-nodes' || op.payload.nodes.length === 0) {
@@ -73,32 +105,37 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
         }
         const canonical =
           getCanonicalNodeById?.(n.id) ??
-          (inspectorSelectedNode?.id === n.id ? inspectorSelectedNode : undefined);
+          (inspectorSelectedNode?.id === n.id
+            ? inspectorSelectedNode
+            : inspectorSelectedNodes.find((item) => item.id === n.id));
 
         if (!canonical) {
           // Cannot verify non-position deltas safely without baseline; treat pure transform as blocked
           blockedInOp += 1;
+          blockedAnyPosition = true;
           continue;
         }
 
-        const sizeOrRotChanged =
+        const pathPointsChanged =
+          n.type === 'path' && canonical.type === 'path' && havePathGeometryChanged(n, canonical);
+
+        const nonPositionChanged =
           Math.abs(n.width - canonical.width) > 0.01 ||
           Math.abs(n.height - canonical.height) > 0.01 ||
           Math.abs((n.rotation ?? 0) - (canonical.rotation ?? 0)) > 0.01 ||
-          Math.abs((n.opacity ?? 1) - (canonical.opacity ?? 1)) > 0.001;
+          Math.abs((n.opacity ?? 1) - (canonical.opacity ?? 1)) > 0.001 ||
+          pathPointsChanged;
 
-        if (!sizeOrRotChanged) {
-          // Pure X/Y drag on a Motion Path layer -> block to preserve canonical origin
+        if (!nonPositionChanged) {
+          // Pure X/Y drag on a Motion Path layer (single or multi-selection) -> block to preserve canonical origin
           blockedInOp += 1;
+          blockedAnyPosition = true;
           continue;
         }
 
-        // Non-position transform (resize / rotate) on a Motion Path layer: keep canonical x/y fixed
-        if (n.type !== 'path') {
-          nextNodes.push({ ...n, x: canonical.x, y: canonical.y } as DesignNode);
-        } else {
-          nextNodes.push(n);
-        }
+        // Non-position transform (resize / rotate / path point edit) on a Motion Path layer:
+        // keep canonical x/y fixed so multi-select scaling/rotating never drifts canonical position.
+        nextNodes.push({ ...n, x: canonical.x, y: canonical.y } as DesignNode);
       }
 
       if (nextNodes.length === 0 && blockedInOp > 0) {
@@ -119,7 +156,7 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
       }
     }
 
-    return { sanitized, blockedPositionOnly };
+    return { sanitized, blockedPositionOnly, blockedAnyPosition };
   };
 
   const createWorkspaceExecutor = (
@@ -129,8 +166,8 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
     const autoKeyActiveHere = activeEditorId === targetScope && motion.motionOpen && motion.autoKeyEnabled;
     if (!autoKeyActiveHere) {
       if (activeEditorId === targetScope && motion.motionOpen) {
-        const { sanitized, blockedPositionOnly } = sanitizeMotionPathTransformOperations(operations);
-        if (blockedPositionOnly) {
+        const { sanitized, blockedPositionOnly, blockedAnyPosition } = sanitizeMotionPathTransformOperations(operations);
+        if (blockedPositionOnly || blockedAnyPosition) {
           notifyMotionPathPositionLock();
           onCanvasInteraction();
         }
@@ -154,6 +191,7 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
 
     if (motion.playheadMs > 0) {
       const remaining: ValidatedToolOperation[] = [];
+      let notifiedPositionLock = false;
       for (const operation of operations) {
         const payload = operation.payload;
         if (payload.kind === 'transform-nodes' && payload.nodes.length > 0) {
@@ -161,18 +199,23 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
             payload.nodes,
             operation.metadata.description ?? 'Auto-keyframe canvas transform',
           );
+          const { sanitized, blockedAnyPosition } = sanitizeMotionPathTransformOperations([operation]);
+          if (blockedAnyPosition && !notifiedPositionLock) {
+            notifyMotionPathPositionLock();
+            notifiedPositionLock = true;
+          }
           if (captured.captured && captured.keepCanonicalUnchanged) {
             onCanvasInteraction();
             continue;
           }
-          // If every transformed node is controlled by a Motion Path and no non-position
-          // property changed (e.g., user dragged X/Y on Canvas), block position mutation
-          // so X/Y never conflicts with the Motion Path trajectory.
-          if (payload.nodes.every((n) => isNodePositionLockedByMotionPath(n.id))) {
-            notifyMotionPathPositionLock();
+          // Never allow locked Motion Path X/Y mutations (even in mixed multi-selection)
+          // to leak through to canonical document execution.
+          if (sanitized.length === 0) {
             onCanvasInteraction();
             continue;
           }
+          remaining.push(...sanitized);
+          continue;
         } else if (payload.kind === 'sample-color' && payload.resolvedNodesToUpdate.length > 0) {
           const captured = motion.recordAutoKeyNodes(
             payload.resolvedNodesToUpdate,
@@ -191,8 +234,8 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
 
     // Playhead is at 0ms with Auto-Key ON: still enforce Motion Path X/Y lock so canonical position
     // cannot be dragged off the trajectory before syncing 0.00s keyframes.
-    const { sanitized, blockedPositionOnly } = sanitizeMotionPathTransformOperations(operations);
-    if (blockedPositionOnly) {
+    const { sanitized, blockedPositionOnly, blockedAnyPosition } = sanitizeMotionPathTransformOperations(operations);
+    if (blockedPositionOnly || blockedAnyPosition) {
       notifyMotionPathPositionLock();
       onCanvasInteraction();
     }
@@ -219,11 +262,10 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
 
   const handleInspectorUpdateSelected = (patch: Partial<DesignNode>, coalesceKey?: string) => {
     let effectivePatch = patch;
-    if (
-      inspectorSelectedNode &&
-      isNodePositionLockedByMotionPath(inspectorSelectedNode.id) &&
-      ('x' in patch || 'y' in patch)
-    ) {
+    const anySelectedLockedByMotionPath = inspectorSelectedNode
+      ? isNodePositionLockedByMotionPath(inspectorSelectedNode.id)
+      : inspectorSelectedNodes.some((node) => isNodePositionLockedByMotionPath(node.id));
+    if (anySelectedLockedByMotionPath && ('x' in patch || 'y' in patch)) {
       const rest = { ...patch };
       delete rest.x;
       delete rest.y;

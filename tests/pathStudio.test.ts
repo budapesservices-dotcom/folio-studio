@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createEllipseNode, createInitialProject, createRectNode } from '../src/core/document/factory';
 import { getActivePage } from '../src/core/document/project';
-import type { MotionPathBinding, PathNode, VectorAnchorPoint } from '../src/core/document/types';
+import type { DesignNode, MotionPathBinding, PathNode, VectorAnchorPoint } from '../src/core/document/types';
 import { validateProject } from '../src/core/document/validation';
 import { cleanupDeletedNodeReferences } from '../src/core/document/nodeReferenceCleanup';
 import {
@@ -1118,6 +1118,196 @@ describe('FOLIO Path Studio — Pro Upgrade (Morphing Paths, Channels, Stagger, 
       expect(payload.nodes[0].x).toBe(box.x);
       expect(payload.nodes[0].y).toBe(box.y);
     }
+  });
+
+  it('Multi-selection Motion Path transform lock prevents X/Y leaks on mixed selections, preserves PathNode canonical origin, and guards Inspector multi-select patches', () => {
+    const project = createInitialProject('Multi-Select Motion Path Lock Test');
+    const page = getActivePage(project);
+    const lockedRect = { ...createRectNode(1), id: 'rect-locked', x: 100, y: 120, width: 80, height: 60 };
+    const freeRect = { ...createRectNode(2), id: 'rect-free', x: 260, y: 180, width: 90, height: 70 };
+    const lockedPath: PathNode = {
+      id: 'path-locked',
+      type: 'path',
+      name: 'Locked Vector',
+      x: 40,
+      y: 50,
+      width: 100,
+      height: 100,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      onCanvas: true,
+      closed: true,
+      points: [
+        { id: 'lp-0', x: 0, y: 0, pointType: 'corner' },
+        { id: 'lp-1', x: 100, y: 0, pointType: 'corner' },
+        { id: 'lp-2', x: 50, y: 100, pointType: 'corner' },
+      ],
+      style: { fill: '#6366F1', stroke: '#312E81', strokeWidth: 2 },
+    };
+    page.document.nodes.push(lockedRect, freeRect, lockedPath);
+
+    let clip = createAnimationClip({ pageId: page.id, name: 'Multi-Select Clip', durationMs: 1200 });
+    clip = upsertMotionPathInClip(clip, createDefaultMotionPathForNode(lockedRect), { ensureProgressTrack: true });
+    clip = upsertMotionPathInClip(clip, createDefaultMotionPathForNode(lockedPath), { ensureProgressTrack: true });
+
+    const canonicalById = new Map<string, DesignNode>([
+      [lockedRect.id, lockedRect],
+      [freeRect.id, freeRect],
+      [lockedPath.id, lockedPath],
+    ]);
+
+    const executedOps: ValidatedToolOperation[][] = [];
+    const notices: string[] = [];
+    const fallbackPatches: Array<Partial<DesignNode>> = [];
+
+    const fakeExecutor = {
+      executeBatch: (ops: readonly ValidatedToolOperation[]) => {
+        executedOps.push([...ops]);
+        return ops.map(() => ({ status: 'applied' as const }));
+      },
+    };
+
+    const makeMultiTransformOp = (nodes: ReadonlyArray<typeof lockedRect | PathNode>): ValidatedToolOperation => ({
+      category: 'document-mutation',
+      payload: { kind: 'transform-nodes', nodes },
+      metadata: { description: 'Multi-select transform' },
+    } as unknown as ValidatedToolOperation);
+
+    // 1. Mixed multi-selection [lockedRect, freeRect] pure X/Y drag (Auto-Key OFF):
+    //    freeRect MUST move, lockedRect MUST be stripped, user MUST be notified.
+    const bridgeAutoKeyOff = createMotionAutoKeyBridge({
+      activeEditorId: 'main',
+      motion: {
+        motionOpen: true,
+        autoKeyEnabled: false,
+        playheadMs: 400,
+        isPlaying: false,
+        previewActive: false,
+        activeClip: clip,
+        pause: () => {},
+        exitPreview: () => {},
+        recordAutoKeyNodes: () => ({ captured: false, keepCanonicalUnchanged: false }),
+      } as never,
+      inspectorSelectedNode: null,
+      inspectorSelectedNodes: [lockedRect, freeRect],
+      mainToolOperationExecutor: fakeExecutor as never,
+      componentToolOperationExecutor: fakeExecutor as never,
+      onUpdateSelectedFallback: (patch) => fallbackPatches.push(patch),
+      onUpdateSelectedStyleFallback: () => {},
+      onSampledColorOption: () => {},
+      onCanvasInteraction: () => {},
+      onNotice: (msg) => notices.push(msg),
+      getCanonicalNodeById: (id) => canonicalById.get(id),
+    });
+
+    bridgeAutoKeyOff.executeMainToolOperations([
+      makeMultiTransformOp([
+        { ...lockedRect, x: 300, y: 320 },
+        { ...freeRect, x: 460, y: 380 },
+      ]),
+    ]);
+    expect(executedOps.length).toBe(1);
+    const payload1 = executedOps[0][0].payload;
+    expect(payload1.kind).toBe('transform-nodes');
+    if (payload1.kind === 'transform-nodes') {
+      expect(payload1.nodes.map((n) => n.id)).toEqual([freeRect.id]);
+      expect(payload1.nodes[0].x).toBe(460);
+      expect(payload1.nodes[0].y).toBe(380);
+    }
+    expect(notices.some((m) => m.includes('Motion Path'))).toBe(true);
+
+    // 2. Mixed multi-selection at playheadMs > 0 with Auto-Key ON when recordAutoKeyNodes does NOT consume op:
+    //    lockedRect MUST NEVER leak raw X/Y into executeBatch!
+    executedOps.length = 0;
+    notices.length = 0;
+    const bridgeAutoKeyMid = createMotionAutoKeyBridge({
+      activeEditorId: 'main',
+      motion: {
+        motionOpen: true,
+        autoKeyEnabled: true,
+        playheadMs: 600,
+        isPlaying: false,
+        previewActive: true,
+        activeClip: clip,
+        pause: () => {},
+        exitPreview: () => {},
+        recordAutoKeyNodes: () => ({ captured: false, keepCanonicalUnchanged: false }),
+      } as never,
+      inspectorSelectedNode: null,
+      inspectorSelectedNodes: [lockedRect, freeRect],
+      mainToolOperationExecutor: fakeExecutor as never,
+      componentToolOperationExecutor: fakeExecutor as never,
+      onUpdateSelectedFallback: (patch) => fallbackPatches.push(patch),
+      onUpdateSelectedStyleFallback: () => {},
+      onSampledColorOption: () => {},
+      onCanvasInteraction: () => {},
+      onNotice: (msg) => notices.push(msg),
+      getCanonicalNodeById: (id) => canonicalById.get(id),
+    });
+
+    bridgeAutoKeyMid.executeMainToolOperations([
+      makeMultiTransformOp([
+        { ...lockedRect, x: 520, y: 540 },
+        { ...freeRect, x: 680, y: 600 },
+      ]),
+    ]);
+    expect(executedOps.length).toBe(1);
+    const payload2 = executedOps[0][0].payload;
+    if (payload2.kind === 'transform-nodes') {
+      expect(payload2.nodes.map((n) => n.id)).toEqual([freeRect.id]);
+      expect(payload2.nodes[0].x).toBe(680);
+    }
+    expect(notices.some((m) => m.includes('Motion Path'))).toBe(true);
+
+    // 3. Multi-selection scale/rotate containing a PathNode on a Motion Path:
+    //    canonical x/y MUST stay pinned for PathNode while width/height/rotation/points update!
+    executedOps.length = 0;
+    notices.length = 0;
+    bridgeAutoKeyOff.executeMainToolOperations([
+      makeMultiTransformOp([
+        {
+          ...lockedPath,
+          x: 240,
+          y: 250,
+          width: 160,
+          height: 140,
+          rotation: 25,
+          points: [
+            { id: 'lp-0', x: 0, y: 0, pointType: 'corner' },
+            { id: 'lp-1', x: 160, y: 0, pointType: 'corner' },
+            { id: 'lp-2', x: 80, y: 140, pointType: 'corner' },
+          ],
+        },
+        { ...freeRect, x: 310, y: 210, width: 130 },
+      ]),
+    ]);
+    expect(executedOps.length).toBe(1);
+    const payload3 = executedOps[0][0].payload;
+    if (payload3.kind === 'transform-nodes') {
+      expect(payload3.nodes.length).toBe(2);
+      const updatedPath = payload3.nodes.find((n) => n.id === lockedPath.id) as PathNode;
+      expect(updatedPath.x).toBe(lockedPath.x);
+      expect(updatedPath.y).toBe(lockedPath.y);
+      expect(updatedPath.width).toBe(160);
+      expect(updatedPath.rotation).toBe(25);
+      expect(updatedPath.points[1].x).toBe(160);
+      const updatedFree = payload3.nodes.find((n) => n.id === freeRect.id)!;
+      expect(updatedFree.x).toBe(310);
+      expect(updatedFree.width).toBe(130);
+    }
+
+    // 4. Multi-selection Inspector X/Y patch (inspectorSelectedNode: null, inspectorSelectedNodes has lockedRect):
+    //    Pure X/Y patch blocked & notified; mixed { x, opacity } strips x and applies { opacity }.
+    fallbackPatches.length = 0;
+    notices.length = 0;
+    bridgeAutoKeyOff.handleInspectorUpdateSelected({ x: 400, y: 420 });
+    expect(fallbackPatches.length).toBe(0);
+    expect(notices.some((m) => m.includes('Motion Path'))).toBe(true);
+
+    bridgeAutoKeyOff.handleInspectorUpdateSelected({ x: 400, opacity: 0.65 });
+    expect(fallbackPatches).toEqual([{ opacity: 0.65 }]);
   });
 });
 
