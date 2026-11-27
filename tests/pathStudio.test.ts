@@ -24,8 +24,10 @@ import {
   removeMotionPathShapeKeyframe,
   resolveMotionPathLoopProgress,
   reverseMotionPathPoints,
+  sampleMotionPathVelocityDots,
   serializeMotionPathToSvgD,
   setMotionPathPointType,
+  updateMotionPathShapeKeyframe,
   upsertMotionPathShapeKeyframe,
 } from '../src/core/document/pathStudio';
 import {
@@ -39,19 +41,26 @@ import {
   addTrackToClip,
   applyAnimatedPosesToDocument,
   applyAutoKeyFromNodeChange,
+  applyMorphPresetInClip,
   applyStaggeredMotionPathInClip,
   applyStaggeredTrimPathInClip,
   buildNodeSvgSmilAnimations,
   buildPresetClipForPage,
+  canConvertXYTracksToMotionPath,
   captureNodeKeyframeSnapshot,
   compilePageAnimationsCss,
   createAnimationClip,
+  createMotionPathFromXYTracks,
+  deleteLayerKeyframesAtTimeInClip,
   enableTrimPathInClip,
   evaluateClipAtTime,
   evaluateEasing,
+  groupClipTracksByNode,
   hasActiveMotionPathForNode,
   isPropertyLockedByMotionPath,
+  moveLayerKeyframesInClip,
   setNodeTrimModeInClip,
+  setSingleChannelKeyframeInClip,
   togglePropertyKeyframeInClip,
   upsertKeyframeInClip,
   upsertMotionPathInClip,
@@ -61,6 +70,8 @@ import { compileReactProjectFiles } from '../src/engines/codegen/reactCompiler';
 import { createEditorState } from '../src/app/editorReducer';
 import { createCanonicalEditorStore } from '../src/app/editorStore';
 import { createMainCanvasCommandClient } from '../src/app/mainCanvasCommandClient';
+import { createMotionAutoKeyBridge } from '../src/app/workspace/motionAutoKeyBridge';
+import type { ValidatedToolOperation } from '../src/engines/canvas/geometryEngine';
 
 function makePathNode(
   id: string,
@@ -877,6 +888,364 @@ describe('FOLIO Path Studio — Pro Upgrade (Morphing Paths, Channels, Stagger, 
     expect(smil).not.toBeNull();
     expect(smil!.wrapperSmilMarkup).not.toContain('899');
   });
+
+  // ==========================================================================
+  // GELOMBANG 1 STABILITY REGRESSION TESTS (ALL 7 AUDIT BUGS)
+  // ==========================================================================
+
+  it('Bug 3: applyMorphPresetInClip creates 0ms -> durationMs morph with NO dead 75% freeze keyframe', () => {
+    const project = createInitialProject('Morph Preset Clean Test');
+    const page = getActivePage(project);
+    const box = { ...createRectNode(1), x: 80, y: 80, width: 120, height: 120 };
+    page.document.nodes.push(box);
+
+    const clip = createAnimationClip({ pageId: page.id, name: 'Clean Morph', durationMs: 1200 });
+    const applied = applyMorphPresetInClip(clip, box, 'star', 0, 'ease-in-out');
+    const morphTrack = applied.clip.tracks.find((t) => t.id === applied.trackId);
+
+    expect(morphTrack).toBeDefined();
+    expect(morphTrack!.keyframes.length).toBe(2);
+    expect(morphTrack!.keyframes[0].timeMs).toBe(0);
+    expect(morphTrack!.keyframes[1].timeMs).toBe(1200);
+    // Midpoint (600ms) MUST differ from 0ms base shape (no 0%-75% freeze!)
+    const pose0 = evaluateClipAtTime(applied.clip, 0)[box.id];
+    const poseMid = evaluateClipAtTime(applied.clip, 600)[box.id];
+    expect(pose0.pathMorphGeometry).toBeDefined();
+    expect(poseMid.pathMorphGeometry).toBeDefined();
+    expect(poseMid.pathMorphGeometry).not.toEqual(pose0.pathMorphGeometry);
+  });
+
+  it('Bug 4 & 5: Channel keyframe toggling stamps live values without phantom 75% keys, and blocked X/Y returns action="blocked"', () => {
+    const project = createInitialProject('Channel Keying Integrity Test');
+    const page = getActivePage(project);
+    const box = { ...createRectNode(1), x: 100, y: 100, width: 80, height: 80 };
+    page.document.nodes.push(box);
+
+    let clip = createAnimationClip({ pageId: page.id, name: 'Channels', durationMs: 1200 });
+    const mp = createDefaultMotionPathForNode(box);
+    clip = upsertMotionPathInClip(clip, { ...mp, startPct: 15, endPct: 85 }, { ensureProgressTrack: true });
+
+    // Bug 5: toggling x or y returns action: 'blocked' without mutating clip
+    const blockedX = togglePropertyKeyframeInClip(clip, box, 'x', 400, { baselineNode: box });
+    const blockedY = togglePropertyKeyframeInClip(clip, box, 'y', 400, { baselineNode: box });
+    expect(blockedX.action).toBe('blocked');
+    expect(blockedY.action).toBe('blocked');
+    expect(blockedX.clip).toBe(clip);
+
+    // Bug 4a: toggling motionPathStart at 400ms with live value 15 stamps 0ms=15, 400ms=15 (NO phantom 900ms keyframe!)
+    const keyedStart = togglePropertyKeyframeInClip(clip, box, 'motionPathStart', 400, {
+      baselineNode: box,
+      easing: 'ease-in-out',
+      valueOverride: 28,
+      baselineValueOverride: 15,
+    });
+    expect(keyedStart.action).toBe('added');
+    const startTrack = keyedStart.clip.tracks.find((t) => t.property === 'motionPathStart');
+    expect(startTrack).toBeDefined();
+    expect(startTrack!.keyframes.map((k) => [k.timeMs, k.value])).toEqual([
+      [0, 15],
+      [400, 28],
+    ]);
+
+    // Bug 4b: adding another keyframe at 800ms on EXISTING track stamps live value 44 (NOT static default 0!)
+    const keyedStart2 = togglePropertyKeyframeInClip(keyedStart.clip, box, 'motionPathStart', 800, {
+      baselineNode: box,
+      easing: 'ease-in-out',
+      valueOverride: 44,
+      baselineValueOverride: 15,
+    });
+    expect(keyedStart2.action).toBe('added');
+    const startTrack2 = keyedStart2.clip.tracks.find((t) => t.property === 'motionPathStart');
+    expect(startTrack2!.keyframes.map((k) => [k.timeMs, k.value])).toEqual([
+      [0, 15],
+      [400, 28],
+      [800, 44],
+    ]);
+
+    // Bug 4c: setSingleChannelKeyframeInClip on trimEnd at 600ms creates ONLY [0ms: 100, 600ms: 42] (NO phantom 900ms keyframe!)
+    const trimSet = setSingleChannelKeyframeInClip(keyedStart2.clip, box, 'trimEnd', 600, 42, {
+      baselineValue: 100,
+      easing: 'ease-in-out',
+    });
+    const trimTrack = trimSet.clip.tracks.find((t) => t.property === 'trimEnd');
+    expect(trimTrack).toBeDefined();
+    expect(trimTrack!.keyframes.map((k) => [k.timeMs, k.value])).toEqual([
+      [0, 100],
+      [600, 42],
+    ]);
+  });
+
+  it('Bug 6: pathKeyframes are exposed in groupClipTracksByNode, retimeable, ease-editable, and synced with master layer moves/deletes', () => {
+    const project = createInitialProject('Path Shape Timeline Sync Test');
+    const page = getActivePage(project);
+    const box = { ...createRectNode(1), x: 100, y: 100, width: 60, height: 60 };
+    page.document.nodes.push(box);
+
+    let clip = createAnimationClip({ pageId: page.id, name: 'Shape Keys', durationMs: 1200 });
+    let mp = createDefaultMotionPathForNode(box);
+    const shiftedPts = mp.points.map((p, idx) => (idx === 1 ? { ...p, y: p.y - 80 } : p));
+    const added = upsertMotionPathShapeKeyframe(mp, 500, shiftedPts, 'ease-in-out', evaluateEasing);
+    mp = added.binding;
+    clip = upsertMotionPathInClip(clip, mp, { ensureProgressTrack: true });
+
+    // 1. Timeline grouping exposes motionPath and includes 500ms in keyframeTimes
+    const groups = groupClipTracksByNode(clip);
+    expect(groups.length).toBe(1);
+    expect(groups[0].motionPath?.pathKeyframes?.length).toBe(2);
+    expect(groups[0].keyframeTimes).toContain(0);
+    expect(groups[0].keyframeTimes).toContain(500);
+    expect(groups[0].keyframeTimes).toContain(1200);
+
+    // 2. Direct updateMotionPathShapeKeyframe retimes & changes easing
+    const retimedBinding = updateMotionPathShapeKeyframe(
+      mp,
+      added.keyframeId,
+      { timeMs: 700, easing: 'ease-out' },
+      clip.durationMs,
+    );
+    const movedKf = retimedBinding.pathKeyframes?.find((k) => k.id === added.keyframeId);
+    expect(movedKf?.timeMs).toBe(700);
+    expect(movedKf?.easing).toBe('ease-out');
+    clip = upsertMotionPathInClip(clip, retimedBinding, { ensureProgressTrack: false });
+
+    // 3. Moving layer pose from 700ms -> 850ms moves matching pathKeyframe too
+    clip = moveLayerKeyframesInClip(clip, box.id, 700, 850);
+    expect(clip.motionPaths![0].pathKeyframes?.some((k) => k.timeMs === 850)).toBe(true);
+    expect(clip.motionPaths![0].pathKeyframes?.some((k) => k.timeMs === 700)).toBe(false);
+
+    // 4. Deleting layer pose at 850ms removes matching pathKeyframe cleanly
+    clip = deleteLayerKeyframesAtTimeInClip(clip, box.id, 850);
+    expect(clip.motionPaths![0].pathKeyframes?.length).toBe(1);
+    expect(clip.motionPaths![0].pathKeyframes?.[0].timeMs).toBe(0);
+  });
+
+  it('Bug 2: createMotionAutoKeyBridge blocks pure X/Y Canvas drag on Motion Path layers at playheadMs === 0 AND when Auto-Key is OFF, while permitting resize/rotation', () => {
+    const project = createInitialProject('Bridge Position Lock Test');
+    const page = getActivePage(project);
+    const box = { ...createRectNode(1), x: 100, y: 120, width: 80, height: 60 };
+    page.document.nodes.push(box);
+
+    let clip = createAnimationClip({ pageId: page.id, name: 'Bridge Clip', durationMs: 1200 });
+    clip = upsertMotionPathInClip(clip, createDefaultMotionPathForNode(box), { ensureProgressTrack: true });
+
+    const executedOps: ValidatedToolOperation[][] = [];
+    const notices: string[] = [];
+    let exitPreviewCalls = 0;
+
+    const fakeExecutor = {
+      executeBatch: (ops: readonly ValidatedToolOperation[]) => {
+        executedOps.push([...ops]);
+        return ops.map(() => ({ status: 'applied' as const }));
+      },
+    };
+
+    const makeTransformOp = (node: typeof box): ValidatedToolOperation => ({
+      category: 'document-mutation',
+      payload: { kind: 'transform-nodes', nodes: [node] },
+      metadata: { description: 'Move layer' },
+    } as unknown as ValidatedToolOperation);
+
+    // Case A: Auto-Key ON, playheadMs === 0 -> pure X/Y drag MUST be blocked!
+    const bridgeAtZero = createMotionAutoKeyBridge({
+      activeEditorId: 'main',
+      motion: {
+        motionOpen: true,
+        autoKeyEnabled: true,
+        playheadMs: 0,
+        isPlaying: false,
+        previewActive: true,
+        activeClip: clip,
+        pause: () => {},
+        exitPreview: () => { exitPreviewCalls += 1; },
+        recordAutoKeyNodes: () => ({ captured: false, keepCanonicalUnchanged: false }),
+      } as never,
+      inspectorSelectedNode: box,
+      mainToolOperationExecutor: fakeExecutor as never,
+      componentToolOperationExecutor: fakeExecutor as never,
+      onUpdateSelectedFallback: () => {},
+      onUpdateSelectedStyleFallback: () => {},
+      onSampledColorOption: () => {},
+      onCanvasInteraction: () => {},
+      onNotice: (msg) => notices.push(msg),
+      getCanonicalNodeById: (id) => (id === box.id ? box : undefined),
+    });
+
+    bridgeAtZero.executeMainToolOperations([makeTransformOp({ ...box, x: 350, y: 400 })]);
+    expect(executedOps.length).toBe(0);
+    expect(notices.some((m) => m.includes('Motion Path'))).toBe(true);
+
+    // Case B: Auto-Key OFF -> pure X/Y drag MUST be blocked AND preview must NOT exit!
+    notices.length = 0;
+    const bridgeAutoKeyOff = createMotionAutoKeyBridge({
+      activeEditorId: 'main',
+      motion: {
+        motionOpen: true,
+        autoKeyEnabled: false,
+        playheadMs: 300,
+        isPlaying: false,
+        previewActive: true,
+        activeClip: clip,
+        pause: () => {},
+        exitPreview: () => { exitPreviewCalls += 1; },
+        recordAutoKeyNodes: () => ({ captured: false, keepCanonicalUnchanged: false }),
+      } as never,
+      inspectorSelectedNode: box,
+      mainToolOperationExecutor: fakeExecutor as never,
+      componentToolOperationExecutor: fakeExecutor as never,
+      onUpdateSelectedFallback: () => {},
+      onUpdateSelectedStyleFallback: () => {},
+      onSampledColorOption: () => {},
+      onCanvasInteraction: () => {},
+      onNotice: (msg) => notices.push(msg),
+      getCanonicalNodeById: (id) => (id === box.id ? box : undefined),
+    });
+
+    bridgeAutoKeyOff.executeMainToolOperations([makeTransformOp({ ...box, x: 500, y: 500 })]);
+    expect(executedOps.length).toBe(0);
+    expect(exitPreviewCalls).toBe(0);
+    expect(notices.some((m) => m.includes('Motion Path'))).toBe(true);
+
+    // Case C: Resize + shift at 0ms -> width/height/rotation allowed, canonical x/y preserved!
+    bridgeAtZero.executeMainToolOperations([
+      makeTransformOp({ ...box, x: 999, y: 888, width: 140, rotation: 35 }),
+    ]);
+    expect(executedOps.length).toBe(1);
+    const payload = executedOps[0][0].payload;
+    expect(payload.kind).toBe('transform-nodes');
+    if (payload.kind === 'transform-nodes') {
+      expect(payload.nodes[0].width).toBe(140);
+      expect(payload.nodes[0].rotation).toBe(35);
+      expect(payload.nodes[0].x).toBe(box.x);
+      expect(payload.nodes[0].y).toBe(box.y);
+    }
+  });
 });
+
+describe('FOLIO Path Studio — Gelombang 2 UX & Workflow Engine', () => {
+  it('converts existing X/Y keyframes into a smooth Bézier Motion Path while preserving timing on motionPathProgress', () => {
+    const project = createInitialProject('XY Convert Test');
+    const page = getActivePage(project);
+    const box = { ...createRectNode(1), x: 100, y: 100, width: 80, height: 60 };
+    page.document.nodes.push(box);
+
+    let clip = createAnimationClip({ pageId: page.id, name: 'XY Move', durationMs: 1200 });
+    expect(canConvertXYTracksToMotionPath(clip, box)).toBe(false);
+
+    clip = {
+      ...clip,
+      tracks: [
+        {
+          id: 'trk-x',
+          targetNodeId: box.id,
+          property: 'x',
+          keyframes: [
+            { id: 'kx0', timeMs: 0, value: 100, easing: 'linear' },
+            { id: 'kx1', timeMs: 600, value: 300, easing: 'ease-out' },
+            { id: 'kx2', timeMs: 1200, value: 500, easing: 'ease-in-out' },
+          ],
+        },
+        {
+          id: 'trk-y',
+          targetNodeId: box.id,
+          property: 'y',
+          keyframes: [
+            { id: 'ky0', timeMs: 0, value: 100, easing: 'linear' },
+            { id: 'ky1', timeMs: 600, value: 250, easing: 'ease-out' },
+            { id: 'ky2', timeMs: 1200, value: 100, easing: 'ease-in-out' },
+          ],
+        },
+      ],
+    };
+
+    expect(canConvertXYTracksToMotionPath(clip, box)).toBe(true);
+    const converted = createMotionPathFromXYTracks(clip, box);
+    expect(converted).not.toBeNull();
+    expect(converted!.binding.points.length).toBe(3);
+
+    // Points are in node-center coordinates (x + width/2 = x + 40, y + height/2 = y + 30)
+    expect(converted!.binding.points[0].x).toBeCloseTo(140, 1);
+    expect(converted!.binding.points[0].y).toBeCloseTo(130, 1);
+    expect(converted!.binding.points[1].x).toBeCloseTo(340, 1);
+    expect(converted!.binding.points[1].y).toBeCloseTo(280, 1);
+    expect(converted!.binding.points[2].x).toBeCloseTo(540, 1);
+    expect(converted!.binding.points[2].y).toBeCloseTo(130, 1);
+
+    // Middle waypoint gets smooth Catmull-Rom handles
+    expect(converted!.binding.points[1].pointType).toBe('smooth');
+    expect(converted!.binding.points[1].handleIn).toBeDefined();
+    expect(converted!.binding.points[1].handleOut).toBeDefined();
+
+    // Progress keyframes preserve 0ms / 600ms / 1200ms timestamps and easings
+    const pKfs = converted!.progressKeyframes ?? [];
+    expect(pKfs.map((k) => k.timeMs)).toEqual([0, 600, 1200]);
+    expect(pKfs[0]?.value).toBe(0);
+    expect(pKfs[1]?.value).toBeCloseTo(50, 1);
+    expect(pKfs[2]?.value).toBe(100);
+    expect(pKfs[1]?.easing).toBe('ease-out');
+
+    // Upserting into clip removes legacy x/y tracks and preserves converted progress keyframes
+    const nextClip = upsertMotionPathInClip(clip, converted!.binding, {
+      ensureProgressTrack: true,
+      initialProgressKeyframes: converted!.progressKeyframes,
+    });
+    expect(nextClip.tracks.some((t) => t.property === 'x' || t.property === 'y')).toBe(false);
+    const progressTrack = nextClip.tracks.find((t) => t.property === 'motionPathProgress');
+    expect(progressTrack?.keyframes.map((k) => k.timeMs)).toEqual([0, 600, 1200]);
+
+    // Evaluating at 0ms and 1200ms lands on original start & end top-left positions
+    const doc0 = applyAnimatedPosesToDocument(page.document, evaluateClipAtTime(nextClip, 0));
+    const docEnd = applyAnimatedPosesToDocument(page.document, evaluateClipAtTime(nextClip, 1200));
+    const node0 = doc0.nodes.find((n) => n.id === box.id)!;
+    const nodeEnd = docEnd.nodes.find((n) => n.id === box.id)!;
+    expect(node0.x).toBeCloseTo(100, 1);
+    expect(node0.y).toBeCloseTo(100, 1);
+    expect(nodeEnd.x).toBeCloseTo(500, 1);
+    expect(nodeEnd.y).toBeCloseTo(100, 1);
+  });
+
+  it('samples velocity spacing dots reflecting easing speed (tight at slow ends, wide at fast middle)', () => {
+    const binding: MotionPathBinding = {
+      id: 'mp-vdot-test',
+      targetNodeId: 'rect-1',
+      points: [
+        { id: 'vp-0', x: 0, y: 0, pointType: 'corner' },
+        { id: 'vp-1', x: 400, y: 0, pointType: 'corner' },
+      ],
+      closed: false,
+      autoOrient: false,
+      orientOffsetDeg: 0,
+      reverse: false,
+      constantSpeed: true,
+      loopMode: 'none',
+      startPct: 0,
+      endPct: 100,
+      offsetPx: 0,
+      visible: true,
+    };
+
+    // Linear progress -> uniform spacing between adjacent dots
+    const linearDots = sampleMotionPathVelocityDots(binding, {
+      durationMs: 1000,
+      sampleCount: 10,
+      evaluateProgressAtTime: (t) => (t / 1000) * 100,
+    });
+    expect(linearDots.length).toBe(10);
+    const firstLinearGap = Math.hypot(linearDots[1].x - linearDots[0].x, linearDots[1].y - linearDots[0].y);
+    const midLinearGap = Math.hypot(linearDots[5].x - linearDots[4].x, linearDots[5].y - linearDots[4].y);
+    expect(firstLinearGap).toBeCloseTo(midLinearGap, 1);
+
+    // Ease-in-out progress -> tight spacing near start/end, much wider spacing near midpoint
+    const easedDots = sampleMotionPathVelocityDots(binding, {
+      durationMs: 1000,
+      sampleCount: 10,
+      evaluateProgressAtTime: (t) => evaluateEasing('ease-in-out', t / 1000) * 100,
+    });
+    expect(easedDots.length).toBe(10);
+    const firstEasedGap = Math.hypot(easedDots[1].x - easedDots[0].x, easedDots[1].y - easedDots[0].y);
+    const midEasedGap = Math.hypot(easedDots[5].x - easedDots[4].x, easedDots[5].y - easedDots[4].y);
+    expect(midEasedGap).toBeGreaterThan(firstEasedGap * 2);
+  });
+});
+
 
 

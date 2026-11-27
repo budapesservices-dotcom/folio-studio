@@ -17,7 +17,15 @@ import type {
   DesignNode,
   DesignTokenCollection,
   FolioPage,
+  MotionPathBinding,
+  MotionPathShapeKeyframe,
 } from '../../core/document/types';
+import {
+  evaluateMotionPathBindingAtTime,
+  removeMotionPathShapeKeyframe,
+  updateMotionPathShapeKeyframe,
+  upsertMotionPathShapeKeyframe,
+} from '../../core/document/pathStudio';
 import {
   MORPH_SHAPE_PRESETS,
   checkNodeMorphSupport,
@@ -35,6 +43,7 @@ import {
   captureNodeKeyframeSnapshot,
   deleteKeyframeFromClip,
   deleteLayerKeyframesAtTimeInClip,
+  evaluateEasing,
   evaluateTrackAtTime,
   formatEasingLabel,
   getDefaultNodePropertyValue,
@@ -48,6 +57,7 @@ import {
   updateKeyframeInClip,
   updateLayerKeyframesEasingInClip,
   upsertKeyframeInClip,
+  upsertMotionPathInClip,
   type MotionPresetDefinition,
 } from '../../engines/animation';
 import { EasingCurveMiniSvg, MotionGraphEditor, type MotionGraphViewMode } from './MotionGraphEditor';
@@ -99,7 +109,8 @@ export interface MotionTimelinePanelProps {
 
 type TimelineSelection =
   | { kind: 'track'; trackId: string; keyframeId: string }
-  | { kind: 'layer'; targetNodeId: string; timeMs: number };
+  | { kind: 'layer'; targetNodeId: string; timeMs: number }
+  | { kind: 'path-shape'; targetNodeId: string; keyframeId: string };
 
 function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`;
@@ -224,7 +235,8 @@ export function MotionTimelinePanel({
       | { kind: 'layer'; targetNodeId: string }
       | { kind: 'track'; track: AnimationTrack }
       | { kind: 'keyframe'; track: AnimationTrack; keyframe: AnimationKeyframe }
-      | { kind: 'master-keyframe'; targetNodeId: string; timeMs: number };
+      | { kind: 'master-keyframe'; targetNodeId: string; timeMs: number }
+      | { kind: 'path-shape-keyframe'; binding: MotionPathBinding; keyframe: MotionPathShapeKeyframe };
   } | null>(null);
 
   const rulerRef = useRef<HTMLDivElement | null>(null);
@@ -370,6 +382,18 @@ export function MotionTimelinePanel({
     const keyframe = track.keyframes.find((k) => k.id === selection.keyframeId);
     if (!keyframe) return null;
     return { track, keyframe };
+  }, [activeClip, selection]);
+
+  const activePathShapeSelection = useMemo<{
+    binding: MotionPathBinding;
+    keyframe: MotionPathShapeKeyframe;
+  } | null>(() => {
+    if (!activeClip || !selection || selection.kind !== 'path-shape') return null;
+    const binding = activeClip.motionPaths?.find((mp) => mp.targetNodeId === selection.targetNodeId);
+    if (!binding?.pathKeyframes) return null;
+    const keyframe = binding.pathKeyframes.find((k) => k.id === selection.keyframeId);
+    if (!keyframe) return null;
+    return { binding, keyframe };
   }, [activeClip, selection]);
 
   const activeLayerSelection = useMemo<{
@@ -558,6 +582,81 @@ export function MotionTimelinePanel({
     window.addEventListener('pointerup', handleUp);
   };
 
+  const handlePathShapeKeyframePointerDown = (
+    event: JSX.TargetedPointerEvent<HTMLButtonElement>,
+    binding: MotionPathBinding,
+    pkf: MotionPathShapeKeyframe,
+  ) => {
+    event.stopPropagation();
+    setSelection({ kind: 'path-shape', targetNodeId: binding.targetNodeId, keyframeId: pkf.id });
+    onSeek(pkf.timeMs);
+
+    const startClip = activeClipRef.current;
+    if (!startClip) return;
+    const laneEl = (event.currentTarget as HTMLElement).parentElement;
+    if (!laneEl) return;
+    const rect = laneEl.getBoundingClientRect();
+    const startX = event.clientX;
+    const origTimeMs = pkf.timeMs;
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      const currentClip = activeClipRef.current;
+      if (!currentClip || rect.width <= 0) return;
+      const dx = moveEvent.clientX - startX;
+      if (Math.abs(dx) < 3) return;
+      const deltaMs = (dx / rect.width) * currentClip.durationMs;
+      const nextTime = Math.max(
+        0,
+        Math.min(currentClip.durationMs, Math.round((origTimeMs + deltaMs) / 10) * 10),
+      );
+      const currentBinding = currentClip.motionPaths?.find((mp) => mp.targetNodeId === binding.targetNodeId);
+      if (!currentBinding) return;
+      const nextBinding = updateMotionPathShapeKeyframe(
+        currentBinding,
+        pkf.id,
+        { timeMs: nextTime },
+        currentClip.durationMs,
+      );
+      const updated = upsertMotionPathInClip(currentClip, nextBinding, { ensureProgressTrack: false });
+      onUpdateClip(updated, 'Move Motion Path shape keyframe', `move-path-shape-kf:${pkf.id}`);
+      onSeek(nextTime);
+    };
+
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  };
+
+  const handleQuickKeyframePathShape = (binding: MotionPathBinding, atTimeMs = playheadMs) => {
+    if (!activeClip) return;
+    const evaluated = evaluateMotionPathBindingAtTime(binding, atTimeMs, evaluateEasing);
+    const { binding: nextBinding, keyframeId } = upsertMotionPathShapeKeyframe(
+      binding,
+      atTimeMs,
+      evaluated.points,
+      'ease-in-out',
+      evaluateEasing,
+    );
+    const nextClip = upsertMotionPathInClip(activeClip, nextBinding, { ensureProgressTrack: false });
+    onUpdateClip(nextClip, `Insert Motion Path shape keyframe at ${Math.round(atTimeMs)}ms`);
+    setSelection({ kind: 'path-shape', targetNodeId: binding.targetNodeId, keyframeId });
+  };
+
+  const handleClearPathShapeKeyframes = (binding: MotionPathBinding) => {
+    if (!activeClip) return;
+    const nextBinding: MotionPathBinding = { ...binding };
+    delete nextBinding.pathKeyframes;
+    const nextClip = upsertMotionPathInClip(activeClip, nextBinding, { ensureProgressTrack: false });
+    if (selection?.kind === 'path-shape' && selection.targetNodeId === binding.targetNodeId) {
+      setSelection(null);
+    }
+    onUpdateClip(nextClip, 'Clear Motion Path shape keyframes');
+  };
+
   const handleLaneDoubleClick = (
     event: JSX.TargetedMouseEvent<HTMLDivElement>,
     track: AnimationTrack,
@@ -711,6 +810,21 @@ export function MotionTimelinePanel({
       );
       return;
     }
+    if (activePathShapeSelection) {
+      const nextBinding = updateMotionPathShapeKeyframe(
+        activePathShapeSelection.binding,
+        activePathShapeSelection.keyframe.id,
+        { easing: nextEasing },
+        activeClip.durationMs,
+      );
+      const nextClip = upsertMotionPathInClip(activeClip, nextBinding, { ensureProgressTrack: false });
+      onUpdateClip(
+        nextClip,
+        'Update Motion Path shape keyframe easing',
+        coalesceKey ? `easing-path-shape:${activePathShapeSelection.keyframe.id}:${coalesceKey}` : undefined,
+      );
+      return;
+    }
     if (activeLayerSelection) {
       const nextClip = updateLayerKeyframesEasingInClip(
         activeClip,
@@ -736,6 +850,16 @@ export function MotionTimelinePanel({
       );
       setSelection(null);
       onUpdateClip(nextClip, 'Delete keyframe');
+      return;
+    }
+    if (activePathShapeSelection) {
+      const nextBinding = removeMotionPathShapeKeyframe(
+        activePathShapeSelection.binding,
+        activePathShapeSelection.keyframe.id,
+      );
+      const nextClip = upsertMotionPathInClip(activeClip, nextBinding, { ensureProgressTrack: false });
+      setSelection(null);
+      onUpdateClip(nextClip, 'Delete Motion Path shape keyframe');
       return;
     }
     if (activeLayerSelection) {
@@ -841,6 +965,63 @@ export function MotionTimelinePanel({
       ];
     }
 
+    if (target.kind === 'path-shape-keyframe' && activeClip) {
+      const layerName = nodeById.get(target.binding.targetNodeId)?.name ?? 'Layer';
+      const currentEasing = target.keyframe.easing ?? 'ease-in-out';
+      return [
+        { kind: 'header', id: 'hdr-pskf', label: `${layerName} · Path Shape`, meta: `${target.keyframe.timeMs}ms` },
+        {
+          kind: 'item',
+          id: 'pskf-graph',
+          label: 'Open Easing Graph Editor',
+          onSelect: () => {
+            setSelection({
+              kind: 'path-shape',
+              targetNodeId: target.binding.targetNodeId,
+              keyframeId: target.keyframe.id,
+            });
+            setGraphEditorOpen(true);
+          },
+        },
+        { kind: 'divider', id: 'div-pskf-ease' },
+        { kind: 'header', id: 'hdr-pskf-ease', label: 'Easing Curve' },
+        ...presetEasings.map((item) => ({
+          kind: 'item' as const,
+          id: `pskf-ease-${String(item.id)}`,
+          label: item.label,
+          active: currentEasing === item.id,
+          onSelect: () => {
+            const nextBinding = updateMotionPathShapeKeyframe(
+              target.binding,
+              target.keyframe.id,
+              { easing: item.id },
+              activeClip.durationMs,
+            );
+            onUpdateClip(
+              upsertMotionPathInClip(activeClip, nextBinding, { ensureProgressTrack: false }),
+              'Update Motion Path shape keyframe easing',
+            );
+          },
+        })),
+        { kind: 'divider', id: 'div-pskf-del' },
+        {
+          kind: 'item',
+          id: 'pskf-del',
+          label: 'Delete Path Shape Key',
+          shortcut: ['Delete'],
+          tone: 'danger',
+          onSelect: () => {
+            const nextBinding = removeMotionPathShapeKeyframe(target.binding, target.keyframe.id);
+            setSelection(null);
+            onUpdateClip(
+              upsertMotionPathInClip(activeClip, nextBinding, { ensureProgressTrack: false }),
+              'Delete Motion Path shape keyframe',
+            );
+          },
+        },
+      ];
+    }
+
     if (target.kind === 'track') {
       const layerName = nodeById.get(target.track.targetNodeId)?.name ?? 'Layer';
       const propLabel = ANIMATABLE_PROPERTY_META[target.track.property].label;
@@ -872,6 +1053,9 @@ export function MotionTimelinePanel({
     if (target.kind === 'layer') {
       const targetNode = nodeById.get(target.targetNodeId);
       const isPath = targetNode?.type === 'path';
+      const layerMp = activeClip?.motionPaths?.find(
+        (mp) => mp.targetNodeId === target.targetNodeId && mp.points.length >= 2,
+      );
       return [
         { kind: 'header', id: 'hdr-lyr', label: targetNode?.name ?? 'Layer Track' },
         {
@@ -881,6 +1065,38 @@ export function MotionTimelinePanel({
           shortcut: ['K'],
           onSelect: () => handleQuickKeyframeLayer(target.targetNodeId),
         },
+        ...(layerMp && activeClip
+          ? [
+              {
+                kind: 'item' as const,
+                id: 'lyr-path-shape-key',
+                label: `Capture Path Shape Key at ${formatSeconds(playheadMs)}`,
+                onSelect: () => {
+                  const evaluated = evaluateMotionPathBindingAtTime(layerMp, playheadMs, evaluateEasing);
+                  const { binding: nextBinding, keyframeId } = upsertMotionPathShapeKeyframe(
+                    layerMp,
+                    playheadMs,
+                    evaluated.points,
+                    'ease-in-out',
+                    evaluateEasing,
+                  );
+                  const nextClip = upsertMotionPathInClip(activeClip, nextBinding, {
+                    ensureProgressTrack: true,
+                  });
+                  onUpdateClip(nextClip, `Capture Motion Path shape key at ${Math.round(playheadMs)}ms`);
+                  setExpandedOverrides((prev) => ({
+                    ...prev,
+                    [`${activeClip.id}:${target.targetNodeId}`]: true,
+                  }));
+                  setSelection({
+                    kind: 'path-shape',
+                    targetNodeId: target.targetNodeId,
+                    keyframeId,
+                  });
+                },
+              },
+            ]
+          : []),
         ...(isPath && onKeyframePathMorph
           ? [
               {
@@ -1400,6 +1616,13 @@ export function MotionTimelinePanel({
               setGraphEditorOpen(true);
             }
           }}
+          onPathShapeKeyAdded={(nodeId) => {
+            if (!activeClip) return;
+            setExpandedOverrides((prev) => ({
+              ...prev,
+              [`${activeClip.id}:${nodeId}`]: true,
+            }));
+          }}
           onSeek={onSeek}
         />
       )}
@@ -1529,9 +1752,12 @@ export function MotionTimelinePanel({
               </div>
               {groupedLayers.map((group) => {
                 const targetNode = nodeById.get(group.targetNodeId);
-                const isExpanded = isLayerGroupExpanded(group.targetNodeId, group.tracks.length);
+                const pathShapeKeyframes = group.motionPath?.pathKeyframes ?? [];
+                const totalSubRowCount = group.tracks.length + (pathShapeKeyframes.length > 0 ? 1 : 0);
+                const isExpanded = isLayerGroupExpanded(group.targetNodeId, totalSubRowCount);
                 const isLayerSelected =
                   activeLayerSelection?.targetNodeId === group.targetNodeId
+                  || activePathShapeSelection?.binding.targetNodeId === group.targetNodeId
                   || selectedNodeIds.includes(group.targetNodeId);
 
                 return (
@@ -1556,7 +1782,7 @@ export function MotionTimelinePanel({
                           aria-expanded={isExpanded}
                           aria-label={`${isExpanded ? 'Collapse' : 'Expand'} property tracks for ${targetNode?.name ?? group.targetNodeId}`}
                           title={isExpanded ? 'Collapse property tracks' : 'Expand individual property tracks'}
-                          onClick={() => toggleExpandLayer(group.targetNodeId, group.tracks.length)}
+                          onClick={() => toggleExpandLayer(group.targetNodeId, totalSubRowCount)}
                         >
                           {isExpanded ? '▾' : '▸'}
                         </button>
@@ -1577,7 +1803,7 @@ export function MotionTimelinePanel({
                             </span>
                           )}
                           <span class="mt-layer-prop-count" title="Animated properties in this layer">
-                            {group.tracks.length} {group.tracks.length === 1 ? 'prop' : 'props'}
+                            {totalSubRowCount} {totalSubRowCount === 1 ? 'prop' : 'props'}
                           </span>
                         </button>
                         <button
@@ -1688,6 +1914,15 @@ export function MotionTimelinePanel({
                               title={targetNode ? `Select "${targetNode.name}" on canvas` : 'Missing layer'}
                             >
                               <span class="mt-track-prop-code">{ANIMATABLE_PROPERTY_META[track.property].label}</span>
+                              {track.property === 'rotation' && group.motionPath?.autoOrient && (
+                                <span
+                                  class="mt-rot-auto-orient-tag"
+                                  data-testid="mt-rot-auto-orient-badge"
+                                  title="Additive offset on top of Motion Path Auto-Orient angle"
+                                >
+                                  +Auto
+                                </span>
+                              )}
                             </button>
                             <span class="mt-track-value" title="Evaluated value at playhead">
                               {formatTrackValue(track.property, liveValue)}
@@ -1774,6 +2009,126 @@ export function MotionTimelinePanel({
                         </div>
                       );
                     })}
+                    {isExpanded && group.motionPath && pathShapeKeyframes.length > 0 && (() => {
+                      const mpBinding = group.motionPath!;
+                      const isSelectedPathShape =
+                        activePathShapeSelection?.binding.targetNodeId === mpBinding.targetNodeId;
+                      return (
+                        <div
+                          key={`path-shape-${mpBinding.id}`}
+                          role="listitem"
+                          class={`mt-track-grid-row mt-subtrack-row mt-path-shape-subtrack ${isSelectedPathShape ? 'selected' : ''}`}
+                          data-testid="mt-path-shape-subtrack"
+                        >
+                          <div class="mt-track-row mt-subtrack-label-cell">
+                            <button
+                              type="button"
+                              class="mt-track-target"
+                              onClick={() => targetNode && onSelectCanvasNode(targetNode.id)}
+                              title="Animated Motion Path geometry keyframes"
+                            >
+                              <span class="mt-track-prop-code mt-path-shape-prop-label">Path Shape</span>
+                            </button>
+                            <span class="mt-track-value" title="Number of Motion Path shape keyframes">
+                              {pathShapeKeyframes.length} {pathShapeKeyframes.length === 1 ? 'key' : 'keys'}
+                            </span>
+                            <button
+                              type="button"
+                              class="mt-mini-btn"
+                              aria-label={`Insert Motion Path shape keyframe for ${targetNode?.name ?? group.targetNodeId}`}
+                              title={`Capture Motion Path shape key at ${formatSeconds(playheadMs)}`}
+                              onClick={() => handleQuickKeyframePathShape(mpBinding)}
+                            >
+                              ◆
+                            </button>
+                            <button
+                              type="button"
+                              class="mt-mini-btn mt-danger-btn"
+                              aria-label={`Clear Motion Path shape keyframes for ${targetNode?.name ?? group.targetNodeId}`}
+                              title="Clear all Motion Path shape keyframes"
+                              onClick={() => handleClearPathShapeKeyframes(mpBinding)}
+                            >
+                              ×
+                            </button>
+                          </div>
+
+                          <div
+                            class="mt-lane"
+                            onDblClick={(event) => {
+                              const laneTrackEl = event.currentTarget.querySelector<HTMLElement>('.mt-lane-track');
+                              const clickedMs = computeTimeForElement(event.clientX, event.currentTarget, laneTrackEl);
+                              handleQuickKeyframePathShape(mpBinding, clickedMs);
+                              onSeek(clickedMs);
+                            }}
+                            title="Double-click to insert a Motion Path shape keyframe"
+                          >
+                            <div class="mt-lane-track">
+                              {pathShapeKeyframes.length >= 2 &&
+                                pathShapeKeyframes.slice(0, -1).map((startKf, segIdx) => {
+                                  const endKf = pathShapeKeyframes[segIdx + 1];
+                                  const segLeft = (startKf.timeMs / Math.max(1, durationMs)) * 100;
+                                  const segWidth = ((endKf.timeMs - startKf.timeMs) / Math.max(1, durationMs)) * 100;
+                                  const isSegSelected =
+                                    graphEditorOpen &&
+                                    activePathShapeSelection?.binding.targetNodeId === mpBinding.targetNodeId &&
+                                    activePathShapeSelection.keyframe.id === endKf.id;
+                                  return (
+                                    <button
+                                      key={`pseg-${startKf.id}-${endKf.id}`}
+                                      type="button"
+                                      class={`mt-lane-segment mt-lane-segment-path-shape${isSegSelected ? ' is-active' : ''}`}
+                                      style={{ left: `${segLeft}%`, width: `${segWidth}%` }}
+                                      aria-label={`Edit Path Shape easing curve from ${startKf.timeMs}ms to ${endKf.timeMs}ms (${formatEasingLabel(endKf.easing ?? 'ease-in-out')})`}
+                                      title={`Path Shape easing: ${formatEasingLabel(endKf.easing ?? 'ease-in-out')} — click to open Graph Editor`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setSelection({
+                                          kind: 'path-shape',
+                                          targetNodeId: mpBinding.targetNodeId,
+                                          keyframeId: endKf.id,
+                                        });
+                                        setGraphEditorOpen(true);
+                                      }}
+                                    />
+                                  );
+                                })}
+                              {pathShapeKeyframes.map((pkf) => {
+                                const leftPct = (pkf.timeMs / Math.max(1, durationMs)) * 100;
+                                const isSelected =
+                                  activePathShapeSelection?.binding.targetNodeId === mpBinding.targetNodeId &&
+                                  activePathShapeSelection.keyframe.id === pkf.id;
+                                return (
+                                  <button
+                                    key={pkf.id}
+                                    type="button"
+                                    class={`mt-keyframe mt-keyframe-path-shape ${isSelected ? 'selected' : ''}`}
+                                    data-testid="mt-path-shape-keyframe"
+                                    style={{ left: `${leftPct}%` }}
+                                    aria-label={`Path Shape keyframe ${targetNode?.name ?? mpBinding.targetNodeId} at ${pkf.timeMs}ms (${pkf.points.length} anchors)`}
+                                    title={`Path Shape (${pkf.points.length} pts) @ ${pkf.timeMs}ms (${formatEasingLabel(pkf.easing ?? 'ease-in-out')}) — drag to re-time`}
+                                    onPointerDown={(event) => handlePathShapeKeyframePointerDown(event, mpBinding, pkf)}
+                                    onContextMenu={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      setSelection({
+                                        kind: 'path-shape',
+                                        targetNodeId: mpBinding.targetNodeId,
+                                        keyframeId: pkf.id,
+                                      });
+                                      setContextMenu({
+                                        x: event.clientX,
+                                        y: event.clientY,
+                                        target: { kind: 'path-shape-keyframe', binding: mpBinding, keyframe: pkf },
+                                      });
+                                    }}
+                                  />
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}
@@ -2076,6 +2431,65 @@ export function MotionTimelinePanel({
               Delete Pose
             </button>
           </>
+        ) : activePathShapeSelection && activeClip ? (
+          <>
+            <span class="mt-inspector-target">
+              <strong>{nodeById.get(activePathShapeSelection.binding.targetNodeId)?.name ?? 'Layer'}</strong>
+              <span>· Path Shape ({activePathShapeSelection.keyframe.points.length} pts)</span>
+            </span>
+
+            <label class="mt-inspector-field">
+              <span>Time</span>
+              <input
+                type="number"
+                min={0}
+                max={durationMs}
+                step={10}
+                aria-label="Path Shape keyframe time (ms)"
+                value={activePathShapeSelection.keyframe.timeMs}
+                onChange={(event) => {
+                  const val = Number.parseInt(event.currentTarget.value, 10);
+                  if (!Number.isFinite(val)) return;
+                  const nextBinding = updateMotionPathShapeKeyframe(
+                    activePathShapeSelection.binding,
+                    activePathShapeSelection.keyframe.id,
+                    { timeMs: val },
+                    durationMs,
+                  );
+                  onUpdateClip(
+                    upsertMotionPathInClip(activeClip, nextBinding, { ensureProgressTrack: false }),
+                    'Re-time Motion Path shape keyframe',
+                  );
+                  onSeek(Math.max(0, Math.min(durationMs, val)));
+                }}
+              />
+              <span>ms</span>
+            </label>
+
+            <div class="mt-inspector-field">
+              <span>Easing</span>
+              <button
+                type="button"
+                class={`mt-easing-curve-btn${graphEditorOpen ? ' is-active' : ''}`}
+                aria-label="Path Shape keyframe easing curve"
+                title="Open Easing Graph Editor"
+                aria-expanded={graphEditorOpen}
+                data-testid="motion-easing-curve-btn"
+                onClick={() => setGraphEditorOpen((open) => !open)}
+              >
+                <EasingCurveMiniSvg easing={activePathShapeSelection.keyframe.easing ?? 'ease-in-out'} width={28} height={18} />
+                <span>{formatEasingLabel(activePathShapeSelection.keyframe.easing ?? 'ease-in-out')}</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              class="mt-btn mt-danger-btn mt-inspector-delete"
+              onClick={handleDeleteSelectedKeyframe}
+            >
+              Delete Path Key
+            </button>
+          </>
         ) : (
           <span class="mt-inspector-hint">
             {autoKeyEnabled
@@ -2085,17 +2499,21 @@ export function MotionTimelinePanel({
         )}
       </footer>
 
-      {graphEditorOpen && activeClip && (activeTrackSelection || activeLayerSelection) && (
+      {graphEditorOpen && activeClip && (activeTrackSelection || activeLayerSelection || activePathShapeSelection) && (
         <MotionGraphEditor
           value={
             activeTrackSelection
               ? activeTrackSelection.keyframe.easing
-              : (activeLayerSelection?.easing ?? 'ease-out')
+              : activePathShapeSelection
+                ? (activePathShapeSelection.keyframe.easing ?? 'ease-in-out')
+                : (activeLayerSelection?.easing ?? 'ease-out')
           }
           title={
             activeTrackSelection
               ? `${nodeById.get(activeTrackSelection.track.targetNodeId)?.name ?? 'Layer'} · ${ANIMATABLE_PROPERTY_META[activeTrackSelection.track.property].label}`
-              : `${nodeById.get(activeLayerSelection?.targetNodeId ?? '')?.name ?? 'Layer'} · Pose @ ${activeLayerSelection?.timeMs ?? 0}ms`
+              : activePathShapeSelection
+                ? `${nodeById.get(activePathShapeSelection.binding.targetNodeId)?.name ?? 'Layer'} · Path Shape @ ${activePathShapeSelection.keyframe.timeMs}ms`
+                : `${nodeById.get(activeLayerSelection?.targetNodeId ?? '')?.name ?? 'Layer'} · Pose @ ${activeLayerSelection?.timeMs ?? 0}ms`
           }
           customEasings={customEasings}
           track={activeTrackSelection?.track}

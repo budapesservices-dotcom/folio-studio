@@ -15,6 +15,7 @@ export interface MotionAutoKeyBridgeOptions {
   onSampledColorOption: (color: string, target: 'fill' | 'stroke') => void;
   onCanvasInteraction: () => void;
   onNotice?: (message: string) => void;
+  getCanonicalNodeById?: (nodeId: string) => DesignNode | undefined;
 }
 
 export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
@@ -29,6 +30,7 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
     onSampledColorOption,
     onCanvasInteraction,
     onNotice,
+    getCanonicalNodeById,
   } = options;
 
   const isNodePositionLockedByMotionPath = (nodeId: string): boolean =>
@@ -43,6 +45,83 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
   const isDocumentMutatingOperation = (op: ValidatedToolOperation): boolean =>
     op.category === 'document-mutation';
 
+  const sanitizeMotionPathTransformOperations = (
+    operations: readonly ValidatedToolOperation[],
+  ): { sanitized: ValidatedToolOperation[]; blockedPositionOnly: boolean } => {
+    const sanitized: ValidatedToolOperation[] = [];
+    let blockedPositionOnly = false;
+
+    for (const op of operations) {
+      if (op.payload.kind !== 'transform-nodes' || op.payload.nodes.length === 0) {
+        sanitized.push(op);
+        continue;
+      }
+
+      const hasLockedNode = op.payload.nodes.some((n) => isNodePositionLockedByMotionPath(n.id));
+      if (!hasLockedNode) {
+        sanitized.push(op);
+        continue;
+      }
+
+      const nextNodes: DesignNode[] = [];
+      let blockedInOp = 0;
+
+      for (const n of op.payload.nodes) {
+        if (!isNodePositionLockedByMotionPath(n.id)) {
+          nextNodes.push(n);
+          continue;
+        }
+        const canonical =
+          getCanonicalNodeById?.(n.id) ??
+          (inspectorSelectedNode?.id === n.id ? inspectorSelectedNode : undefined);
+
+        if (!canonical) {
+          // Cannot verify non-position deltas safely without baseline; treat pure transform as blocked
+          blockedInOp += 1;
+          continue;
+        }
+
+        const sizeOrRotChanged =
+          Math.abs(n.width - canonical.width) > 0.01 ||
+          Math.abs(n.height - canonical.height) > 0.01 ||
+          Math.abs((n.rotation ?? 0) - (canonical.rotation ?? 0)) > 0.01 ||
+          Math.abs((n.opacity ?? 1) - (canonical.opacity ?? 1)) > 0.001;
+
+        if (!sizeOrRotChanged) {
+          // Pure X/Y drag on a Motion Path layer -> block to preserve canonical origin
+          blockedInOp += 1;
+          continue;
+        }
+
+        // Non-position transform (resize / rotate) on a Motion Path layer: keep canonical x/y fixed
+        if (n.type !== 'path') {
+          nextNodes.push({ ...n, x: canonical.x, y: canonical.y } as DesignNode);
+        } else {
+          nextNodes.push(n);
+        }
+      }
+
+      if (nextNodes.length === 0 && blockedInOp > 0) {
+        blockedPositionOnly = true;
+        continue;
+      }
+
+      if (nextNodes.length !== op.payload.nodes.length || blockedInOp > 0 || hasLockedNode) {
+        sanitized.push({
+          ...op,
+          payload: {
+            ...op.payload,
+            nodes: nextNodes,
+          },
+        } as ValidatedToolOperation);
+      } else {
+        sanitized.push(op);
+      }
+    }
+
+    return { sanitized, blockedPositionOnly };
+  };
+
   const createWorkspaceExecutor = (
     targetScope: 'main' | 'component',
     executor: ToolOperationExecutor,
@@ -50,12 +129,21 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
     const autoKeyActiveHere = activeEditorId === targetScope && motion.motionOpen && motion.autoKeyEnabled;
     if (!autoKeyActiveHere) {
       if (activeEditorId === targetScope && motion.motionOpen) {
-        const mutatesDocument = operations.some(isDocumentMutatingOperation);
+        const { sanitized, blockedPositionOnly } = sanitizeMotionPathTransformOperations(operations);
+        if (blockedPositionOnly) {
+          notifyMotionPathPositionLock();
+          onCanvasInteraction();
+        }
+        if (sanitized.length === 0) {
+          return [];
+        }
+        const mutatesDocument = sanitized.some(isDocumentMutatingOperation);
         if (mutatesDocument && (motion.previewActive || motion.isPlaying)) {
           motion.exitPreview?.();
         } else if (motion.isPlaying) {
           motion.pause();
         }
+        return executor.executeBatch(sanitized);
       }
       return executor.executeBatch(operations);
     }
@@ -101,11 +189,22 @@ export function createMotionAutoKeyBridge(options: MotionAutoKeyBridgeOptions) {
       return remaining.length > 0 ? executor.executeBatch(remaining) : [];
     }
 
-    const reports = executor.executeBatch(operations);
-    for (let i = 0; i < operations.length; i += 1) {
+    // Playhead is at 0ms with Auto-Key ON: still enforce Motion Path X/Y lock so canonical position
+    // cannot be dragged off the trajectory before syncing 0.00s keyframes.
+    const { sanitized, blockedPositionOnly } = sanitizeMotionPathTransformOperations(operations);
+    if (blockedPositionOnly) {
+      notifyMotionPathPositionLock();
+      onCanvasInteraction();
+    }
+    if (sanitized.length === 0) {
+      return [];
+    }
+
+    const reports = executor.executeBatch(sanitized);
+    for (let i = 0; i < sanitized.length; i += 1) {
       const status = reports[i]?.status;
       if (status === 'rejected') continue;
-      const payload = operations[i].payload;
+      const payload = sanitized[i].payload;
       if (payload.kind === 'transform-nodes' && payload.nodes.length > 0) {
         motion.recordAutoKeyNodes(payload.nodes, 'Sync 0.00s keyframe');
       } else if (payload.kind === 'sample-color' && payload.resolvedNodesToUpdate.length > 0) {

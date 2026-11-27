@@ -336,7 +336,13 @@ export function useMotionPlayback({
         }
         return;
       }
-      commandClient.updateAnimationClip(nextClip, description, coalesceKey);
+      const result = commandClient.updateAnimationClip(nextClip, description, coalesceKey);
+      if (
+        result.status === 'applied' &&
+        ((nextClip.motionPaths && nextClip.motionPaths.length > 0) || nextClip.tracks.length > 0)
+      ) {
+        setPreviewActive(true);
+      }
     },
     [project.animations, commandClient],
   );
@@ -381,6 +387,13 @@ export function useMotionPlayback({
         easing: 'ease-out',
       });
 
+      if (toggled.action === 'blocked') {
+        onNotice(
+          'Position (X/Y) is controlled by Motion Path. Edit path anchors on Canvas, or keyframe rotation, size, color, and effects.',
+        );
+        return;
+      }
+
       const actionLabel = toggled.action === 'added'
         ? `Add ${property} keyframe at ${(playheadMs / 1000).toFixed(2)}s`
         : `Remove ${property} keyframe at ${(playheadMs / 1000).toFixed(2)}s`;
@@ -396,7 +409,7 @@ export function useMotionPlayback({
         onNotice(`${toggled.action === 'added' ? 'Keyframed' : 'Removed keyframe for'} ${property} at ${(playheadMs / 1000).toFixed(2)}s.`);
       }
     },
-    [animatedMainDocument.nodes, activePage, activeClip, pageClips.length, playheadMs, commandClient, onNotice],
+    [animatedMainDocument.nodes, activePage, activeClip, pageClips.length, playheadMs, commandClient, onNotice, workspaceScope],
   );
 
   const keyframeSelectedLayers = useCallback((properties?: readonly AnimatableProperty[]) => {

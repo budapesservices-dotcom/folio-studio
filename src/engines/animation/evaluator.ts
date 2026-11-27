@@ -10,6 +10,7 @@ import type {
   MotionPathBinding,
   NodeCssFilters,
   TrimPathMode,
+  VectorAnchorPoint,
   VisualEffect,
 } from '../../core/document/types';
 import {
@@ -20,10 +21,12 @@ import {
 import { scalePathNodeGeometry } from '../../core/document/vector';
 import {
   applyMorphGeometryToDesignNode,
+  createMorphPresetSnapshot,
   evaluateMorphSnapshotsToAnchors,
   extractMorphSnapshotFromNode,
   interpolatePathMorph,
   type EvaluatedMorphGeometry,
+  type MorphShapePresetId,
 } from '../../core/document/pathMorph';
 import {
   cloneVectorAnchorPoints,
@@ -1399,18 +1402,26 @@ export function hasKeyframeAtTime(
 }
 
 /**
- * Toggles a single property keyframe at `timeMs` (used by Inspector diamond icons).
+ * Toggles a single property keyframe at `timeMs` (used by Inspector & Path Studio diamond icons).
  * - If a keyframe already exists within 15ms of `timeMs`, removes it (and prunes the track if empty).
- * - Otherwise inserts/upserts a keyframe with the node's current property value (auto-seeding
- *   a 0ms baseline from `baselineNode` if creating a new track at `timeMs > 0`).
+ * - If the property is locked by an active Motion Path (`x` or `y`), returns `action: 'blocked'`
+ *   without modifying the clip.
+ * - Otherwise inserts/upserts a keyframe using `valueOverride` (when provided, e.g. for live
+ *   track-only Path Studio channels) or the node's current property value, auto-seeding a `0ms`
+ *   baseline only when creating a brand-new track at `timeMs > 0` (never planting a phantom 75% keyframe).
  */
 export function togglePropertyKeyframeInClip(
   clip: AnimationClip,
   node: DesignNode,
   property: AnimatableProperty,
   timeMs: number,
-  options?: { baselineNode?: DesignNode; easing?: AnimationEasing },
-): { clip: AnimationClip; action: 'added' | 'removed' } {
+  options?: {
+    baselineNode?: DesignNode;
+    easing?: AnimationEasing;
+    valueOverride?: number | string;
+    baselineValueOverride?: number | string;
+  },
+): { clip: AnimationClip; action: 'added' | 'removed' | 'blocked' } {
   const clampedTime = clamp(Math.round(timeMs), 0, clip.durationMs);
   const existingTrack = clip.tracks.find((t) => t.targetNodeId === node.id && t.property === property);
   const nearKf = existingTrack?.keyframes.find((kf) => Math.abs(kf.timeMs - clampedTime) <= 15);
@@ -1432,8 +1443,26 @@ export function togglePropertyKeyframeInClip(
 
   if (isPropertyLockedByMotionPath(clip, node.id, property)) {
     return {
-      action: 'removed',
+      action: 'blocked',
       clip,
+    };
+  }
+
+  if (options?.valueOverride !== undefined) {
+    const nextClip = setSingleChannelKeyframeInClip(
+      clip,
+      node,
+      property,
+      clampedTime,
+      options.valueOverride,
+      {
+        baselineValue: options.baselineValueOverride,
+        easing: options.easing ?? 'ease-out',
+      },
+    ).clip;
+    return {
+      action: 'added',
+      clip: nextClip,
     };
   }
 
@@ -1446,6 +1475,107 @@ export function togglePropertyKeyframeInClip(
     action: 'added',
     clip: nextClip,
   };
+}
+
+/**
+ * Sets or inserts a single channel keyframe at `timeMs` with an explicit `value`.
+ * Unlike `addTrackToClip`, this never fabricates a phantom 75%-duration keyframe;
+ * when creating a brand-new track at `timeMs > 0`, it optionally seeds `0ms` with
+ * `baselineValue` so interpolation starts cleanly from the baseline.
+ */
+export function setSingleChannelKeyframeInClip(
+  clip: AnimationClip,
+  node: DesignNode,
+  property: AnimatableProperty,
+  timeMs: number,
+  value: number | string,
+  options?: {
+    baselineValue?: number | string;
+    easing?: AnimationEasing;
+  },
+): { clip: AnimationClip; trackId: string; keyframeId: string } {
+  if (isPropertyLockedByMotionPath(clip, node.id, property)) {
+    return { clip, trackId: '', keyframeId: '' };
+  }
+  const clampedTime = clamp(Math.round(timeMs), 0, clip.durationMs);
+  const easing = options?.easing ?? 'ease-in-out';
+  const existingTrack = clip.tracks.find((t) => t.targetNodeId === node.id && t.property === property);
+
+  if (existingTrack) {
+    const upserted = upsertKeyframeInClip(clip, existingTrack.id, clampedTime, value, easing);
+    return {
+      clip: upserted.clip,
+      trackId: existingTrack.id,
+      keyframeId: upserted.keyframeId,
+    };
+  }
+
+  const trackId = createMotionId('track');
+  const keyframes: AnimationKeyframe[] = [];
+  if (clampedTime > 25 && options?.baselineValue !== undefined) {
+    keyframes.push({
+      id: createMotionId('kf'),
+      timeMs: 0,
+      value: options.baselineValue,
+      easing: 'linear',
+    });
+  }
+  const createdKfId = createMotionId('kf');
+  keyframes.push({
+    id: createdKfId,
+    timeMs: clampedTime,
+    value,
+    easing: clampedTime === 0 ? 'linear' : easing,
+  });
+
+  const newTrack: AnimationTrack = {
+    id: trackId,
+    targetNodeId: node.id,
+    property,
+    keyframes: sortKeyframes(keyframes),
+  };
+
+  return {
+    trackId,
+    keyframeId: createdKfId,
+    clip: {
+      ...clip,
+      tracks: [...clip.tracks, newTrack],
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+/**
+ * Applies a built-in Shape Morph preset cleanly without seeding a dead 0%-75%
+ * freeze keyframe: creates `[0ms: baseShape, targetTime: presetShape]` on a new
+ * `pathMorph` track, or upserts `presetShape` at `targetTime` on an existing track.
+ */
+export function applyMorphPresetInClip(
+  clip: AnimationClip,
+  node: DesignNode,
+  presetId: MorphShapePresetId,
+  playheadMs: number,
+  easing: AnimationEasing = 'ease-in-out',
+): { clip: AnimationClip; trackId: string; keyframeId: string } {
+  const targetTime = playheadMs > 0 ? clamp(Math.round(playheadMs), 0, clip.durationMs) : clip.durationMs;
+  const presetSnap = createMorphPresetSnapshot(presetId, node.width, node.height);
+  const existingTrack = clip.tracks.find((t) => t.targetNodeId === node.id && t.property === 'pathMorph');
+
+  if (existingTrack) {
+    const upserted = upsertKeyframeInClip(clip, existingTrack.id, targetTime, presetSnap, easing);
+    return {
+      clip: upserted.clip,
+      trackId: existingTrack.id,
+      keyframeId: upserted.keyframeId,
+    };
+  }
+
+  const baseSnap = extractMorphSnapshotFromNode(node);
+  return setSingleChannelKeyframeInClip(clip, node, 'pathMorph', targetTime, presetSnap, {
+    baselineValue: baseSnap ?? undefined,
+    easing,
+  });
 }
 
 /**
@@ -1544,15 +1674,17 @@ export interface GroupedAnimationLayer {
   readonly targetNodeId: string;
   readonly tracks: readonly AnimationTrack[];
   readonly keyframeTimes: readonly number[];
+  readonly motionPath?: MotionPathBinding;
 }
 
 /**
  * Groups flat AnimationTracks by `targetNodeId` in stable order so the Motion
  * Timeline can render one clean master row per animated object with expandable
- * per-property sub-tracks.
+ * per-property sub-tracks and Motion Path shape keyframes.
  */
 export function groupClipTracksByNode(clip: AnimationClip): GroupedAnimationLayer[] {
   const map = new Map<string, AnimationTrack[]>();
+  const motionPathByNodeId = new Map<string, MotionPathBinding>();
   for (const track of clip.tracks) {
     const existing = map.get(track.targetNodeId);
     if (existing) {
@@ -1562,6 +1694,7 @@ export function groupClipTracksByNode(clip: AnimationClip): GroupedAnimationLaye
     }
   }
   for (const mp of clip.motionPaths ?? []) {
+    motionPathByNodeId.set(mp.targetNodeId, mp);
     if (!map.has(mp.targetNodeId)) {
       map.set(mp.targetNodeId, []);
     }
@@ -1569,23 +1702,31 @@ export function groupClipTracksByNode(clip: AnimationClip): GroupedAnimationLaye
 
   const groups: GroupedAnimationLayer[] = [];
   for (const [targetNodeId, tracks] of map.entries()) {
+    const motionPath = motionPathByNodeId.get(targetNodeId);
     const timeSet = new Set<number>();
     for (const track of tracks) {
       for (const kf of track.keyframes) {
         timeSet.add(Math.round(kf.timeMs));
       }
     }
+    if (motionPath?.pathKeyframes) {
+      for (const pkf of motionPath.pathKeyframes) {
+        timeSet.add(Math.round(pkf.timeMs));
+      }
+    }
     groups.push({
       targetNodeId,
       tracks,
       keyframeTimes: [...timeSet].sort((a, b) => a - b),
+      ...(motionPath ? { motionPath } : {}),
     });
   }
   return groups;
 }
 
 /**
- * Moves all keyframes belonging to `targetNodeId` at `fromTimeMs` together to `toTimeMs`.
+ * Moves all keyframes belonging to `targetNodeId` at `fromTimeMs` together to `toTimeMs`
+ * (including any Motion Path shape keyframes at that timestamp).
  */
 export function moveLayerKeyframesInClip(
   clip: AnimationClip,
@@ -1596,6 +1737,30 @@ export function moveLayerKeyframesInClip(
   const clampedTo = clamp(Math.round(toTimeMs), 0, clip.durationMs);
   const roundedFrom = Math.round(fromTimeMs);
   if (clampedTo === roundedFrom) return clip;
+
+  const nextMotionPaths = clip.motionPaths?.map((mp) => {
+    if (mp.targetNodeId !== targetNodeId || !mp.pathKeyframes || mp.pathKeyframes.length === 0) {
+      return mp;
+    }
+    const moved = mp.pathKeyframes.map((pkf) =>
+      Math.abs(pkf.timeMs - roundedFrom) <= 1 ? { ...pkf, timeMs: clampedTo } : pkf,
+    );
+    const sorted = [...moved].sort((a, b) => a.timeMs - b.timeMs);
+    const deduped: typeof sorted = [];
+    for (const pkf of sorted) {
+      const last = deduped[deduped.length - 1];
+      if (last && Math.abs(last.timeMs - pkf.timeMs) <= 1) {
+        deduped[deduped.length - 1] = pkf;
+      } else {
+        deduped.push(pkf);
+      }
+    }
+    return {
+      ...mp,
+      points: deduped[0] ? cloneVectorAnchorPoints(deduped[0].points) : mp.points,
+      pathKeyframes: deduped,
+    };
+  });
 
   return {
     ...clip,
@@ -1616,12 +1781,14 @@ export function moveLayerKeyframesInClip(
       }
       return { ...track, keyframes: deduped };
     }),
+    ...(nextMotionPaths ? { motionPaths: nextMotionPaths } : {}),
     updatedAt: new Date().toISOString(),
   };
 }
 
 /**
- * Deletes every keyframe at `timeMs` across all tracks for `targetNodeId`.
+ * Deletes every keyframe at `timeMs` across all tracks (and Motion Path shape keyframes)
+ * for `targetNodeId`.
  */
 export function deleteLayerKeyframesAtTimeInClip(
   clip: AnimationClip,
@@ -1629,6 +1796,23 @@ export function deleteLayerKeyframesAtTimeInClip(
   timeMs: number,
 ): AnimationClip {
   const roundedTime = Math.round(timeMs);
+  const nextMotionPaths = clip.motionPaths?.map((mp) => {
+    if (mp.targetNodeId !== targetNodeId || !mp.pathKeyframes || mp.pathKeyframes.length === 0) {
+      return mp;
+    }
+    const remaining = mp.pathKeyframes.filter((pkf) => Math.abs(pkf.timeMs - roundedTime) > 1);
+    if (remaining.length === 0) {
+      const next = { ...mp };
+      delete next.pathKeyframes;
+      return next;
+    }
+    return {
+      ...mp,
+      points: cloneVectorAnchorPoints(remaining[0].points),
+      pathKeyframes: remaining,
+    };
+  });
+
   return {
     ...clip,
     tracks: clip.tracks.map((track) => {
@@ -1638,6 +1822,7 @@ export function deleteLayerKeyframesAtTimeInClip(
         keyframes: track.keyframes.filter((kf) => Math.abs(kf.timeMs - roundedTime) > 1),
       };
     }),
+    ...(nextMotionPaths ? { motionPaths: nextMotionPaths } : {}),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1669,7 +1854,10 @@ export function removeLayerTracksFromClip(clip: AnimationClip, targetNodeId: str
 export function upsertMotionPathInClip(
   clip: AnimationClip,
   binding: MotionPathBinding,
-  options?: { ensureProgressTrack?: boolean },
+  options?: {
+    ensureProgressTrack?: boolean;
+    initialProgressKeyframes?: readonly AnimationKeyframe[];
+  },
 ): AnimationClip {
   const existingPaths = clip.motionPaths ?? [];
   const idx = existingPaths.findIndex((mp) => mp.targetNodeId === binding.targetNodeId);
@@ -1689,16 +1877,20 @@ export function upsertMotionPathInClip(
       (t) => t.targetNodeId === binding.targetNodeId && t.property === 'motionPathProgress',
     );
     if (!hasProgress) {
+      const seededKeyframes: AnimationKeyframe[] =
+        options.initialProgressKeyframes && options.initialProgressKeyframes.length >= 2
+          ? sortKeyframes([...options.initialProgressKeyframes])
+          : [
+              { id: createMotionId('kf'), timeMs: 0, value: 0, easing: 'linear' },
+              { id: createMotionId('kf'), timeMs: clip.durationMs, value: 100, easing: 'linear' },
+            ];
       nextTracks = [
         ...nextTracks,
         {
           id: createMotionId('track'),
           targetNodeId: binding.targetNodeId,
           property: 'motionPathProgress',
-          keyframes: [
-            { id: createMotionId('kf'), timeMs: 0, value: 0, easing: 'linear' },
-            { id: createMotionId('kf'), timeMs: clip.durationMs, value: 100, easing: 'linear' },
-          ],
+          keyframes: seededKeyframes,
         },
       ];
     }
@@ -1709,6 +1901,152 @@ export function upsertMotionPathInClip(
     tracks: nextTracks,
     motionPaths: nextMotionPaths,
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function collectDistinctXYWaypoints(
+  clip: AnimationClip,
+  node: DesignNode,
+): Array<{ timeMs: number; cx: number; cy: number; easing: AnimationEasing }> {
+  const xTrack = clip.tracks.find((t) => t.targetNodeId === node.id && t.property === 'x');
+  const yTrack = clip.tracks.find((t) => t.targetNodeId === node.id && t.property === 'y');
+  if (!xTrack && !yTrack) return [];
+
+  const timeSet = new Set<number>();
+  for (const kf of xTrack?.keyframes ?? []) timeSet.add(Math.round(kf.timeMs));
+  for (const kf of yTrack?.keyframes ?? []) timeSet.add(Math.round(kf.timeMs));
+  const sortedTimes = [...timeSet].sort((a, b) => a - b);
+  if (sortedTimes.length < 2) return [];
+
+  const halfW = node.width / 2;
+  const halfH = node.height / 2;
+  const waypoints: Array<{ timeMs: number; cx: number; cy: number; easing: AnimationEasing }> = [];
+
+  for (const timeMs of sortedTimes) {
+    const xVal = xTrack ? evaluateTrackAtTime(xTrack, timeMs) : undefined;
+    const yVal = yTrack ? evaluateTrackAtTime(yTrack, timeMs) : undefined;
+    const wx = typeof xVal === 'number' ? xVal : node.x;
+    const wy = typeof yVal === 'number' ? yVal : node.y;
+    const cx = roundTo2(wx + halfW);
+    const cy = roundTo2(wy + halfH);
+
+    const exactX = xTrack?.keyframes.find((k) => Math.abs(k.timeMs - timeMs) <= 2);
+    const exactY = yTrack?.keyframes.find((k) => Math.abs(k.timeMs - timeMs) <= 2);
+    const easing: AnimationEasing = exactX?.easing ?? exactY?.easing ?? 'ease-in-out';
+
+    const prev = waypoints[waypoints.length - 1];
+    if (!prev || Math.hypot(cx - prev.cx, cy - prev.cy) >= 1) {
+      waypoints.push({ timeMs, cx, cy, easing });
+    }
+  }
+  return waypoints;
+}
+
+/**
+ * Returns true if `nodeId` has existing X/Y position keyframes in `clip`
+ * representing at least 2 distinct spatial positions that can be upgraded
+ * directly into a Bézier Motion Path in one click.
+ */
+export function canConvertXYTracksToMotionPath(
+  clip: AnimationClip | null | undefined,
+  node: DesignNode | null | undefined,
+): boolean {
+  if (!clip || !node) return false;
+  if (hasActiveMotionPathForNode(clip, node.id)) return false;
+  return collectDistinctXYWaypoints(clip, node).length >= 2;
+}
+
+/**
+ * Converts a node's existing X/Y position keyframes into a smooth Bézier
+ * `MotionPathBinding` plus matching arc-length-timed `motionPathProgress`
+ * keyframes so prior position authoring is upgraded without data loss.
+ */
+export function createMotionPathFromXYTracks(
+  clip: AnimationClip,
+  node: DesignNode,
+): {
+  binding: MotionPathBinding;
+  progressKeyframes?: AnimationKeyframe[];
+  convertedFromXY: boolean;
+} {
+  const waypoints = collectDistinctXYWaypoints(clip, node);
+  if (waypoints.length < 2) {
+    return {
+      binding: createDefaultMotionPathForNode(node),
+      convertedFromXY: false,
+    };
+  }
+
+  const n = waypoints.length;
+  const points: VectorAnchorPoint[] = waypoints.map((wp, idx) => {
+    const prev = waypoints[Math.max(0, idx - 1)];
+    const next = waypoints[Math.min(n - 1, idx + 1)];
+    if (n === 2) {
+      // Gentle smooth handles along the segment for immediate editable Bézier curves
+      const dx = next.cx - prev.cx;
+      const dy = next.cy - prev.cy;
+      return {
+        id: createMotionId('mppt'),
+        x: wp.cx,
+        y: wp.cy,
+        pointType: 'smooth',
+        ...(idx === 0
+          ? { handleOut: { x: roundTo2(wp.cx + dx * 0.33), y: roundTo2(wp.cy + dy * 0.33) } }
+          : { handleIn: { x: roundTo2(wp.cx - dx * 0.33), y: roundTo2(wp.cy - dy * 0.33) } }),
+      };
+    }
+
+    // Catmull-Rom tangents (tension = 0.22) for natural smooth curves across 3+ waypoints
+    const tx = (next.cx - prev.cx) * 0.22;
+    const ty = (next.cy - prev.cy) * 0.22;
+    return {
+      id: createMotionId('mppt'),
+      x: wp.cx,
+      y: wp.cy,
+      pointType: idx === 0 || idx === n - 1 ? 'corner' : 'smooth',
+      ...(idx > 0
+        ? { handleIn: { x: roundTo2(wp.cx - tx), y: roundTo2(wp.cy - ty) } }
+        : {}),
+      ...(idx < n - 1
+        ? { handleOut: { x: roundTo2(wp.cx + tx), y: roundTo2(wp.cy + ty) } }
+        : {}),
+    };
+  });
+
+  // Compute cumulative chord-length progress % for each waypoint timestamp
+  const cumDist: number[] = [0];
+  let totalDist = 0;
+  for (let i = 1; i < n; i += 1) {
+    totalDist += Math.hypot(waypoints[i].cx - waypoints[i - 1].cx, waypoints[i].cy - waypoints[i - 1].cy);
+    cumDist.push(totalDist);
+  }
+  const progressKeyframes: AnimationKeyframe[] = waypoints.map((wp, idx) => ({
+    id: createMotionId('kf'),
+    timeMs: clamp(wp.timeMs, 0, clip.durationMs),
+    value: totalDist > 0 ? roundTo2((cumDist[idx] / totalDist) * 100) : roundTo2((idx / (n - 1)) * 100),
+    easing: idx === 0 ? 'linear' : wp.easing,
+  }));
+
+  const binding: MotionPathBinding = {
+    id: createMotionId('mpath'),
+    targetNodeId: node.id,
+    points,
+    closed: false,
+    autoOrient: false,
+    orientOffsetDeg: 0,
+    reverse: false,
+    constantSpeed: true,
+    startPct: 0,
+    endPct: 100,
+    offsetPx: 0,
+    loopMode: 'none',
+    visible: true,
+  };
+
+  return {
+    binding,
+    progressKeyframes,
+    convertedFromXY: true,
   };
 }
 

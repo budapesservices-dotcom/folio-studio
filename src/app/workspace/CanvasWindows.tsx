@@ -1,6 +1,7 @@
 import { createPortal, lazy, Suspense } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { AssetReference, BreakpointId, ComponentDefinition, DesignNode, DesignTokenCollection, FolioDocument, FolioProject, MotionPathBinding } from '../../core/document/types';
+import type { MotionPathSpacingDot } from '../../core/document/pathStudio';
 import type { PathfinderOperation } from '../../core/document/vector';
 import type { CanvasToolId, CanvasToolOptions } from '../../core/tools/operationContract';
 import { Canvas, type CanvasContextMenuActions } from '../../engines/canvas/Canvas';
@@ -412,6 +413,7 @@ export interface MainCanvasWindowProps {
   studioActions?: StudioVectorActions;
   canvasContextMenuExtras?: Partial<CanvasContextMenuActions>;
   motionPaths?: readonly MotionPathBinding[];
+  motionPathSpacingDotsByNodeId?: Readonly<Record<string, readonly MotionPathSpacingDot[]>>;
   selectedMotionPathPoint?: MotionPathPointSelection | null;
   onSelectMotionPathPoint?: (selection: MotionPathPointSelection | null) => void;
   onUpdateMotionPath?: (
@@ -420,6 +422,7 @@ export interface MainCanvasWindowProps {
   ) => void;
   showMorphCorrespondence?: boolean;
   morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
+  onPickMorphStartVertex?: (nodeId: string, shiftDelta: number, vertexCount: number) => void;
 }
 
 export function MainCanvasWindow({
@@ -480,11 +483,13 @@ export function MainCanvasWindow({
   studioActions,
   canvasContextMenuExtras,
   motionPaths,
+  motionPathSpacingDotsByNodeId,
   selectedMotionPathPoint,
   onSelectMotionPathPoint,
   onUpdateMotionPath,
   showMorphCorrespondence,
   morphCorrespondenceMetaByNodeId,
+  onPickMorphStartVertex,
 }: MainCanvasWindowProps) {
   const [rendererMode, setRendererMode] = useState<ViewportRendererMode>('auto');
   const [gpuMetrics, setGpuMetrics] = useState<GpuSceneMetrics | null>(null);
@@ -651,11 +656,13 @@ export function MainCanvasWindow({
               animationTimeMs={animationTimeMs}
               contextMenuActions={mergedContextMenuActions}
               motionPaths={motionPaths}
+              motionPathSpacingDotsByNodeId={motionPathSpacingDotsByNodeId}
               selectedMotionPathPoint={selectedMotionPathPoint}
               onSelectMotionPathPoint={onSelectMotionPathPoint}
               onUpdateMotionPath={onUpdateMotionPath}
               showMorphCorrespondence={showMorphCorrespondence}
               morphCorrespondenceMetaByNodeId={morphCorrespondenceMetaByNodeId}
+              onPickMorphStartVertex={onPickMorphStartVertex}
             />
           </div>
         </FloatingWindow>
@@ -757,6 +764,7 @@ export interface ComponentCanvasWindowProps {
   studioActions?: StudioVectorActions;
   canvasContextMenuExtras?: Partial<CanvasContextMenuActions>;
   motionPaths?: readonly MotionPathBinding[];
+  motionPathSpacingDotsByNodeId?: Readonly<Record<string, readonly MotionPathSpacingDot[]>>;
   selectedMotionPathPoint?: MotionPathPointSelection | null;
   onSelectMotionPathPoint?: (selection: MotionPathPointSelection | null) => void;
   onUpdateMotionPath?: (
@@ -765,6 +773,7 @@ export interface ComponentCanvasWindowProps {
   ) => void;
   showMorphCorrespondence?: boolean;
   morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
+  onPickMorphStartVertex?: (nodeId: string, shiftDelta: number, vertexCount: number) => void;
 }
 
 export function ComponentCanvasWindow({
@@ -831,11 +840,13 @@ export function ComponentCanvasWindow({
   studioActions,
   canvasContextMenuExtras,
   motionPaths,
+  motionPathSpacingDotsByNodeId,
   selectedMotionPathPoint,
   onSelectMotionPathPoint,
   onUpdateMotionPath,
   showMorphCorrespondence,
   morphCorrespondenceMetaByNodeId,
+  onPickMorphStartVertex,
 }: ComponentCanvasWindowProps) {
   const safeDocument = normalizeCanvasDocument(document);
   const safeNodes = safeDocument?.nodes ?? [];
@@ -1042,11 +1053,13 @@ export function ComponentCanvasWindow({
                 onDropImageFiles={onDropImageFiles}
                 contextMenuActions={mergedComponentContextMenuActions}
                 motionPaths={motionPaths}
+                motionPathSpacingDotsByNodeId={motionPathSpacingDotsByNodeId}
                 selectedMotionPathPoint={selectedMotionPathPoint}
                 onSelectMotionPathPoint={onSelectMotionPathPoint}
                 onUpdateMotionPath={onUpdateMotionPath}
                 showMorphCorrespondence={showMorphCorrespondence}
                 morphCorrespondenceMetaByNodeId={morphCorrespondenceMetaByNodeId}
+                onPickMorphStartVertex={onPickMorphStartVertex}
               />
             ) : (
               <div class="component-canvas-empty" role="status">

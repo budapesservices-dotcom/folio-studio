@@ -61,6 +61,7 @@ export interface InspectorPanelProps {
   onTogglePropertyKeyframe?: (nodeId: string, property: AnimatableProperty) => void;
   isPropertyKeyedAtPlayhead?: (nodeId: string, property: AnimatableProperty) => boolean;
   positionLockedByMotionPath?: boolean;
+  autoOrientByMotionPath?: boolean;
   onApplyAutoLayout: (containerId: string) => void;
   onConvertFrameLayoutMode?: (containerId: string, mode: LayoutMode) => void;
   onSwitchBreakpoint?: (bp: BreakpointId) => void;

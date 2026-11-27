@@ -1022,6 +1022,35 @@ export function removeMotionPathShapeKeyframe(
   };
 }
 
+export function updateMotionPathShapeKeyframe(
+  binding: MotionPathBinding,
+  keyframeId: string,
+  patch: { timeMs?: number; easing?: AnimationEasing },
+  maxDurationMs?: number,
+): MotionPathBinding {
+  if (!binding.pathKeyframes || binding.pathKeyframes.length === 0) return binding;
+  let changed = false;
+  const updated = binding.pathKeyframes.map((kf) => {
+    if (kf.id !== keyframeId) return kf;
+    changed = true;
+    const rawTime = patch.timeMs !== undefined ? Math.max(0, Math.round(patch.timeMs)) : kf.timeMs;
+    const clampedTime =
+      maxDurationMs !== undefined ? Math.min(Math.max(0, Math.round(maxDurationMs)), rawTime) : rawTime;
+    return {
+      ...kf,
+      timeMs: clampedTime,
+      ...(patch.easing !== undefined ? { easing: patch.easing } : {}),
+    };
+  });
+  if (!changed) return binding;
+  const sorted = sortMotionPathShapeKeyframes(updated);
+  return {
+    ...binding,
+    points: sorted[0] ? cloneVectorAnchorPoints(sorted[0].points) : binding.points,
+    pathKeyframes: sorted,
+  };
+}
+
 /**
  * Applies a direct canvas geometry edit (`nextPoints`) to `binding` at `timeMs`.
  * If `binding` already has `pathKeyframes`, writes directly into the shape keyframe
@@ -1093,6 +1122,57 @@ export function sampleMotionPathChevrons(
     }
   }
   return chevrons;
+}
+
+export interface MotionPathSpacingDot {
+  readonly x: number;
+  readonly y: number;
+  readonly timeMs: number;
+  readonly progressPct: number;
+}
+
+/**
+ * Samples evenly-spaced time slices along a Motion Path using the active
+ * `motionPathProgress` curve so velocity and easing are directly visible on
+ * Canvas (tightly clustered dots = slower speed, wider gaps = faster speed).
+ */
+export function sampleMotionPathVelocityDots(
+  binding: MotionPathBinding,
+  options: {
+    durationMs: number;
+    sampleCount?: number;
+    evaluateProgressAtTime?: (timeMs: number) => number;
+  },
+): MotionPathSpacingDot[] {
+  if (binding.points.length < 2) return [];
+  const durationMs = Math.max(1, options.durationMs);
+  const table = buildPathArcLengthTable(binding.points, binding.closed, 36);
+  if (table.totalLength < 20) return [];
+
+  const count = Math.max(6, Math.min(40, Math.round(options.sampleCount ?? 20)));
+  const evalBinding: MotionPathBinding = {
+    ...binding,
+    offsetPx: 0,
+  };
+  const dots: MotionPathSpacingDot[] = [];
+  for (let i = 1; i <= count; i += 1) {
+    const t = i / (count + 1);
+    const timeMs = t * durationMs;
+    const rawProgress = options.evaluateProgressAtTime
+      ? options.evaluateProgressAtTime(timeMs)
+      : t * 100;
+    const progressPct = Number.isFinite(rawProgress) ? rawProgress : t * 100;
+    const sample = evaluateMotionPathAtProgress(evalBinding, progressPct, table);
+    if (sample) {
+      dots.push({
+        x: sample.baseX,
+        y: sample.baseY,
+        timeMs: round2(timeMs),
+        progressPct: round2(progressPct),
+      });
+    }
+  }
+  return dots;
 }
 
 /**

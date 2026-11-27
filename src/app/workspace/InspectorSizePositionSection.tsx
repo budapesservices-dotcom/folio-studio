@@ -168,6 +168,7 @@ export interface InspectorSizePositionSectionProps {
   parentNode: DesignNode | null;
   studioActions?: StudioVectorActions;
   positionLockedByMotionPath?: boolean;
+  autoOrientByMotionPath?: boolean;
   onUpdateSelected: (patch: Partial<DesignNode>) => void;
   onApplyAutoLayout: (containerId: string) => void;
   onCommitEdit: () => void;
@@ -178,6 +179,7 @@ export function InspectorSizePositionSection({
   parentNode,
   studioActions,
   positionLockedByMotionPath = false,
+  autoOrientByMotionPath = false,
   onUpdateSelected,
   onApplyAutoLayout,
   onCommitEdit,
@@ -648,22 +650,33 @@ export function InspectorSizePositionSection({
         </div>
 
         <div class="folio-dual-grid">
-          <NumericUnitInput
-            label="Rot"
-            ariaLabel="Rotation angle"
-            value={Math.round(selectedNode.rotation)}
-            unit="deg"
-            units={ROTATION_UNITS}
-            min={-360}
-            max={360}
-            step={1}
-            allowNegative
-            onPreview={(p) => onUpdateSelected({ rotation: p.value })}
-            onChange={(p) => {
-              onUpdateSelected({ rotation: p.value });
-              onCommitEdit();
-            }}
-          />
+          <div class="inspector-rot-cell">
+            <NumericUnitInput
+              label="Rot"
+              ariaLabel="Rotation angle"
+              value={Math.round(selectedNode.rotation)}
+              unit="deg"
+              units={ROTATION_UNITS}
+              min={-360}
+              max={360}
+              step={1}
+              allowNegative
+              onPreview={(p) => onUpdateSelected({ rotation: p.value })}
+              onChange={(p) => {
+                onUpdateSelected({ rotation: p.value });
+                onCommitEdit();
+              }}
+            />
+            {autoOrientByMotionPath && (
+              <div
+                class="inspector-auto-orient-badge"
+                data-testid="inspector-auto-orient-badge"
+                title="Motion Path Auto-Orient is active. Rotation keyframes apply as an additive offset on top of the curve tangent angle."
+              >
+                AUTO-ORIENT + OFFSET
+              </div>
+            )}
+          </div>
           <NumericUnitInput
             label="Z"
             ariaLabel="Z-Index"

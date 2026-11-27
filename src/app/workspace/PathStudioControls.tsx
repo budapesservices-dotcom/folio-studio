@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { JSX } from 'preact';
 import type {
   AnimatableProperty,
   AnimationClip,
@@ -27,17 +28,18 @@ import {
 import {
   MORPH_SHAPE_PRESETS,
   checkNodeMorphSupport,
-  createMorphPresetSnapshot,
   extractMorphSnapshotFromNode,
   parsePathMorphSnapshot,
   updateMorphSnapshotOptions,
   type MorphShapePresetId,
 } from '../../core/document/pathMorph';
 import {
-  addTrackToClip,
+  applyMorphPresetInClip,
   applyStaggeredMotionPathInClip,
   applyStaggeredTrimPathInClip,
+  canConvertXYTracksToMotionPath,
   createAnimationClip,
+  createMotionPathFromXYTracks,
   enableTrimPathInClip,
   evaluateEasing,
   evaluateTrackAtTime,
@@ -46,6 +48,7 @@ import {
   inspectComponentMorphSource,
   removeMotionPathFromClip,
   setNodeTrimModeInClip,
+  setSingleChannelKeyframeInClip,
   togglePropertyKeyframeInClip,
   updateKeyframeInClip,
   upsertKeyframeInClip,
@@ -80,6 +83,7 @@ export interface PathStudioControlsProps {
   ) => void;
   showMorphCorrespondence?: boolean;
   onToggleMorphCorrespondence?: () => void;
+  onPathShapeKeyAdded?: (nodeId: string) => void;
   onSeek?: (ms: number) => void;
 }
 
@@ -106,10 +110,54 @@ export function PathStudioControls({
   onOpenSpeedCurve,
   showMorphCorrespondence = false,
   onToggleMorphCorrespondence,
+  onPathShapeKeyAdded,
 }: PathStudioControlsProps) {
   const [activeTab, setActiveTab] = useState<PathStudioTab>('motion-path');
   const [staggerMs, setStaggerMs] = useState<number>(120);
   const [staggerOrder, setStaggerOrder] = useState<'selection' | 'reverse'>('selection');
+  const prevTargetNodeIdRef = useRef<string | null>(null);
+
+  const startLabelScrub = (
+    event: JSX.TargetedPointerEvent<HTMLSpanElement>,
+    options: {
+      value: number;
+      min: number;
+      max: number;
+      step: number;
+      pixelsPerStep?: number;
+      onValue: (nextVal: number) => void;
+    },
+  ) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startVal = options.value;
+    const pxPerStep = options.pixelsPerStep ?? 6;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.cursor = 'ew-resize';
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      const dx = moveEvent.clientX - startX;
+      const precisionScale = moveEvent.shiftKey ? 0.2 : 1;
+      const steps = Math.round((dx * precisionScale) / pxPerStep);
+      const raw = startVal + steps * options.step;
+      const clamped = Math.max(options.min, Math.min(options.max, raw));
+      const rounded = Math.round(clamped * 10) / 10;
+      options.onValue(rounded);
+    };
+
+    const handleUp = () => {
+      document.body.style.cursor = prevCursor;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
+  };
 
   const nodes = activePage.document.nodes;
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
@@ -169,6 +217,37 @@ export function PathStudioControls({
     if (!activeClip || !targetNode) return null;
     return activeClip.motionPaths?.find((mp) => mp.targetNodeId === targetNode.id) ?? null;
   }, [activeClip, targetNode]);
+
+  const canConvertFromXY = useMemo(
+    () => !motionBinding && canConvertXYTracksToMotionPath(activeClip, targetNode),
+    [motionBinding, activeClip, targetNode],
+  );
+
+  // Smart auto-switch tab ONLY when the selected layer changes (never overrides manual tab switches)
+  useEffect(() => {
+    const nextId = targetNode?.id ?? null;
+    if (nextId === prevTargetNodeIdRef.current) return;
+    prevTargetNodeIdRef.current = nextId;
+    if (!nextId || !activeClip) return;
+    const hasMp = Boolean(activeClip.motionPaths?.some((mp) => mp.targetNodeId === nextId && mp.points.length >= 2));
+    if (hasMp) {
+      setActiveTab('motion-path');
+      return;
+    }
+    const hasMorph = activeClip.tracks.some((t) => t.targetNodeId === nextId && t.property === 'pathMorph' && t.keyframes.length > 0);
+    if (hasMorph) {
+      setActiveTab('shape-morph');
+      return;
+    }
+    const hasTrim = activeClip.tracks.some(
+      (t) =>
+        t.targetNodeId === nextId &&
+        (t.property === 'trimStart' || t.property === 'trimEnd' || t.property === 'trimOffset'),
+    );
+    if (hasTrim) {
+      setActiveTab('trim-path');
+    }
+  }, [targetNode?.id, activeClip]);
 
   const evaluatedMotionBinding: MotionPathBinding | null = useMemo(() => {
     if (!motionBinding) return null;
@@ -248,6 +327,18 @@ export function PathStudioControls({
 
   const handleAddMotionPath = () => {
     if (!targetNode) return;
+    if (canConvertFromXY && activeClip) {
+      const converted = createMotionPathFromXYTracks(activeClip, targetNode);
+      if (converted) {
+        const nextClip = upsertMotionPathInClip(activeClip, converted.binding, {
+          ensureProgressTrack: true,
+          initialProgressKeyframes: converted.progressKeyframes,
+        });
+        onUpdateClip(nextClip, `Convert X/Y keyframes to Motion Path on ${targetNode.name}`);
+        onSelectMotionPathPoint?.({ nodeId: targetNode.id, pointIndex: 0 });
+        return;
+      }
+    }
     const binding = createDefaultMotionPathForNode(targetNode);
     commitMotionBinding(binding, `Add Motion Path to ${targetNode.name}`);
     onSelectMotionPathPoint?.({ nodeId: targetNode.id, pointIndex: 0 });
@@ -286,6 +377,7 @@ export function PathStudioControls({
         ? `Update Motion Path shape key at ${Math.round(playheadMs)}ms`
         : `Add Motion Path shape key at ${Math.round(playheadMs)}ms`,
     );
+    onPathShapeKeyAdded?.(motionBinding.targetNodeId);
   };
 
   const handleRemovePathShapeKey = () => {
@@ -332,39 +424,27 @@ export function PathStudioControls({
     property: 'motionPathStart' | 'motionPathEnd' | 'motionPathOffset',
   ) => {
     if (!motionBinding || !targetNode) return;
-    let clip = ensureClip();
-    const existingTrack = clip.tracks.find(
-      (t) => t.targetNodeId === targetNode.id && t.property === property,
-    );
+    const clip = ensureClip();
     const liveVal =
       property === 'motionPathStart'
         ? liveMpStartVal
         : property === 'motionPathEnd'
           ? liveMpEndVal
           : liveMpOffsetVal;
-
-    if (!existingTrack) {
-      const added = addTrackToClip(clip, targetNode, property);
-      clip = added.clip;
-      // Seed t=0 with base binding value when keying at a later timestamp
-      if (playheadMs > 25) {
-        const baseVal =
-          property === 'motionPathStart'
-            ? motionBinding.startPct
-            : property === 'motionPathEnd'
-              ? motionBinding.endPct
-              : motionBinding.offsetPx;
-        clip = upsertKeyframeInClip(clip, added.trackId, 0, baseVal, 'ease-in-out').clip;
-      }
-      clip = upsertKeyframeInClip(clip, added.trackId, playheadMs, liveVal, 'ease-in-out').clip;
-      onUpdateClip(clip, `Keyframe ${property} on ${targetNode.name}`);
-      return;
-    }
+    const baseVal =
+      property === 'motionPathStart'
+        ? motionBinding.startPct
+        : property === 'motionPathEnd'
+          ? motionBinding.endPct
+          : motionBinding.offsetPx;
 
     const toggled = togglePropertyKeyframeInClip(clip, targetNode, property, playheadMs, {
       baselineNode: targetNode,
       easing: 'ease-in-out',
+      valueOverride: liveVal,
+      baselineValueOverride: baseVal,
     });
+    if (toggled.action === 'blocked') return;
     onUpdateClip(toggled.clip, `Toggle ${property} keyframe on ${targetNode.name}`);
   };
 
@@ -486,20 +566,9 @@ export function PathStudioControls({
 
   const handleApplyMorphPreset = (presetId: MorphShapePresetId) => {
     if (!targetNode || !morphSupport.supported) return;
-    let clip = ensureClip();
-    const added = addTrackToClip(clip, targetNode, 'pathMorph');
-    clip = added.clip;
-    const track = clip.tracks.find((t) => t.id === added.trackId);
-    const snap = createMorphPresetSnapshot(presetId, targetNode.width, targetNode.height);
-    if (track && track.keyframes.length === 0) {
-      const baseSnap = extractMorphSnapshotFromNode(targetNode);
-      if (baseSnap) {
-        clip = upsertKeyframeInClip(clip, track.id, 0, baseSnap, 'ease-in-out').clip;
-      }
-    }
-    const targetTime = playheadMs > 0 ? playheadMs : clip.durationMs;
-    clip = upsertKeyframeInClip(clip, added.trackId, targetTime, snap, 'ease-in-out').clip;
-    onUpdateClip(clip, `Morph ${targetNode.name} to ${presetId}`);
+    const baseClip = ensureClip();
+    const applied = applyMorphPresetInClip(baseClip, targetNode, presetId, playheadMs, 'ease-in-out');
+    onUpdateClip(applied.clip, `Morph ${targetNode.name} to ${presetId}`);
   };
 
   const handleUpdateMorphOptions = (patch: {
@@ -620,10 +689,12 @@ export function PathStudioControls({
       property === 'trimOffset'
         ? Math.max(-1000, Math.min(1000, rawValue))
         : Math.max(0, Math.min(100, rawValue));
+    const defaultBaseline = getDefaultNodePropertyValue(targetNode, property);
     let clip = ensureClip();
-    const added = addTrackToClip(clip, targetNode, property);
-    clip = added.clip;
-    clip = upsertKeyframeInClip(clip, added.trackId, playheadMs, clamped, 'ease-in-out').clip;
+    clip = setSingleChannelKeyframeInClip(clip, targetNode, property, playheadMs, clamped, {
+      baselineValue: defaultBaseline,
+      easing: 'ease-in-out',
+    }).clip;
     clip = setNodeTrimModeInClip(clip, targetNode.id, activeTrimMode);
     onUpdateClip(clip, `Update ${property} on ${targetNode.name}`, coalesceKey);
   };
@@ -631,10 +702,25 @@ export function PathStudioControls({
   const handleToggleTrimKeyframe = (property: AnimatableProperty) => {
     if (!targetNode) return;
     const clip = ensureClip();
+    const isTrimChannel =
+      property === 'trimStart' || property === 'trimEnd' || property === 'trimOffset';
+    const liveVal =
+      property === 'trimStart'
+        ? trimStartVal
+        : property === 'trimEnd'
+          ? trimEndVal
+          : property === 'trimOffset'
+            ? trimOffsetVal
+            : undefined;
+    const defaultBaseline = isTrimChannel
+      ? getDefaultNodePropertyValue(targetNode, property)
+      : undefined;
     const toggled = togglePropertyKeyframeInClip(clip, targetNode, property, playheadMs, {
       baselineNode: targetNode,
       easing: 'ease-in-out',
+      ...(isTrimChannel ? { valueOverride: liveVal, baselineValueOverride: defaultBaseline } : {}),
     });
+    if (toggled.action === 'blocked') return;
     onUpdateClip(toggled.clip, `Toggle ${property} keyframe on ${targetNode.name}`);
   };
 
@@ -655,15 +741,18 @@ export function PathStudioControls({
     }
     if (activeTab === 'motion-path') {
       if (!motionBinding) {
+        if (canConvertFromXY) {
+          return 'Existing X/Y keyframes detected · Click "Convert X/Y → Path" to turn them into a smooth Bézier Motion Path while preserving timing.';
+        }
         return 'Step 1: Add a Motion Path or pick an existing Path layer. Select 2+ layers to animate with sequential Stagger.';
       }
-      return 'Motion Path drives X/Y (no position conflicts) · Rotation, size, color & effects remain keyframeable · Drag anchors on Canvas or "+ Path Key".';
+      return 'Motion Path drives X/Y (no position conflicts) · Velocity dots show easing speed · Drag numeric labels to scrub · Rotation, size & style remain active.';
     }
     if (activeTab === 'shape-morph') {
-      return 'Move playhead & pick a target shape or "+ Morph Key" · Toggle "Vertex #" to inspect start point (#1) and winding direction on Canvas.';
+      return 'Move playhead & pick a target shape or "+ Morph Key" · Toggle "Vertex #" and click any #N badge on Canvas to set start vertex (#1).';
     }
-    return 'Choose a Trim preset or keyframe Start / End / Offset channels · Open Speed or Value Graph for silky draw-in velocity.';
-  }, [targetNode, activeTab, motionBinding]);
+    return 'Choose a Trim preset or drag Start / End / Offset labels to scrub · Open Speed or Value Graph for silky draw-in velocity.';
+  }, [targetNode, activeTab, motionBinding, canConvertFromXY]);
 
   const startOffsetVal = activeMorphSnap?.morph?.startOffset ?? 0;
 
@@ -735,10 +824,15 @@ export function PathStudioControls({
                     type="button"
                     class="ps-btn ps-btn-accent"
                     data-testid="ps-add-motion-path-btn"
+                    data-convert-xy={canConvertFromXY ? 'true' : undefined}
                     onClick={handleAddMotionPath}
-                    title="Attach an editable Bézier Motion Path directly on Canvas"
+                    title={
+                      canConvertFromXY
+                        ? 'Convert existing X/Y position keyframes into an editable Bézier Motion Path while preserving timing'
+                        : 'Attach an editable Bézier Motion Path directly on Canvas'
+                    }
                   >
-                    + Add Motion Path
+                    {canConvertFromXY ? '✦ Convert X/Y → Path' : '+ Add Motion Path'}
                   </button>
                   {pathLayerSources.length > 0 && (
                     <select
@@ -868,8 +962,28 @@ export function PathStudioControls({
                   </button>
 
                   {motionBinding.autoOrient && (
-                    <label class="ps-field" title="Rotation angle offset in degrees">
-                      <span>Rot</span>
+                    <label class="ps-field" title="Rotation angle offset in degrees (drag label to scrub)">
+                      <span
+                        class="ps-scrub-label"
+                        data-testid="ps-scrub-orient-offset"
+                        onPointerDown={(event) =>
+                          startLabelScrub(event, {
+                            value: Math.round(motionBinding.orientOffsetDeg ?? 0),
+                            min: -360,
+                            max: 360,
+                            step: 5,
+                            pixelsPerStep: 5,
+                            onValue: (val) =>
+                              commitMotionBinding(
+                                { ...motionBinding, orientOffsetDeg: val },
+                                'Update Auto Orient offset',
+                                `mp-orient:${motionBinding.id}`,
+                              ),
+                          })
+                        }
+                      >
+                        Rot
+                      </span>
                       <input
                         type="number"
                         class="ps-num"
@@ -978,8 +1092,24 @@ export function PathStudioControls({
                 <div class="ps-group">
                   <span class="ps-group-label">Range &amp; Offset</span>
 
-                  <label class="ps-field" title="Start percent along path (0–100%). Click ◆ to animate independently.">
-                    <span>Start</span>
+                  <label class="ps-field" title="Start percent along path (0–100%). Drag label to scrub or click ◆ to animate.">
+                    <span
+                      class="ps-scrub-label"
+                      data-testid="ps-scrub-mp-start"
+                      onPointerDown={(event) =>
+                        startLabelScrub(event, {
+                          value: liveMpStartVal,
+                          min: 0,
+                          max: 100,
+                          step: 1,
+                          pixelsPerStep: 3,
+                          onValue: (val) =>
+                            handleSetMotionPathChannelValue('motionPathStart', val, `mp-start:${motionBinding.id}`),
+                        })
+                      }
+                    >
+                      Start
+                    </span>
                     <input
                       type="number"
                       class="ps-num"
@@ -1009,8 +1139,24 @@ export function PathStudioControls({
                     </button>
                   </label>
 
-                  <label class="ps-field" title="End percent along path (0–100%). Click ◆ to animate independently.">
-                    <span>End</span>
+                  <label class="ps-field" title="End percent along path (0–100%). Drag label to scrub or click ◆ to animate.">
+                    <span
+                      class="ps-scrub-label"
+                      data-testid="ps-scrub-mp-end"
+                      onPointerDown={(event) =>
+                        startLabelScrub(event, {
+                          value: liveMpEndVal,
+                          min: 0,
+                          max: 100,
+                          step: 1,
+                          pixelsPerStep: 3,
+                          onValue: (val) =>
+                            handleSetMotionPathChannelValue('motionPathEnd', val, `mp-end:${motionBinding.id}`),
+                        })
+                      }
+                    >
+                      End
+                    </span>
                     <input
                       type="number"
                       class="ps-num"
@@ -1040,8 +1186,24 @@ export function PathStudioControls({
                     </button>
                   </label>
 
-                  <label class="ps-field" title="Perpendicular offset from path in pixels. Click ◆ to animate independently.">
-                    <span>Offset</span>
+                  <label class="ps-field" title="Perpendicular offset from path in pixels. Drag label to scrub or click ◆ to animate.">
+                    <span
+                      class="ps-scrub-label"
+                      data-testid="ps-scrub-mp-offset"
+                      onPointerDown={(event) =>
+                        startLabelScrub(event, {
+                          value: liveMpOffsetVal,
+                          min: -1000,
+                          max: 1000,
+                          step: 2,
+                          pixelsPerStep: 3,
+                          onValue: (val) =>
+                            handleSetMotionPathChannelValue('motionPathOffset', val, `mp-offset:${motionBinding.id}`),
+                        })
+                      }
+                    >
+                      Offset
+                    </span>
                     <input
                       type="number"
                       class="ps-num"
@@ -1161,8 +1323,23 @@ export function PathStudioControls({
                 <span class="ps-status-tag" data-testid="ps-mp-stagger-count">
                   {selectedDesignNodes.length} layers
                 </span>
-                <label class="ps-field" title="Sequential delay between each layer in milliseconds">
-                  <span>Step</span>
+                <label class="ps-field" title="Sequential delay between each layer in milliseconds (drag label to scrub)">
+                  <span
+                    class="ps-scrub-label"
+                    data-testid="ps-scrub-mp-stagger"
+                    onPointerDown={(event) =>
+                      startLabelScrub(event, {
+                        value: staggerMs,
+                        min: 0,
+                        max: 5000,
+                        step: 20,
+                        pixelsPerStep: 5,
+                        onValue: (v) => setStaggerMs(Math.round(v)),
+                      })
+                    }
+                  >
+                    Step
+                  </span>
                   <input
                     type="number"
                     class="ps-num"
@@ -1448,8 +1625,23 @@ export function PathStudioControls({
                 <div class="ps-group">
                   <span class="ps-group-label">Trim Channels</span>
 
-                  <label class="ps-field" title="Trim Start percentage (0–100%)">
-                    <span>Start</span>
+                  <label class="ps-field" title="Trim Start percentage (0–100%). Drag label to scrub.">
+                    <span
+                      class="ps-scrub-label"
+                      data-testid="ps-scrub-trim-start"
+                      onPointerDown={(event) =>
+                        startLabelScrub(event, {
+                          value: trimStartVal,
+                          min: 0,
+                          max: 100,
+                          step: 1,
+                          pixelsPerStep: 3,
+                          onValue: (val) => handleSetTrimValue('trimStart', val, `trim-start:${targetNode.id}`),
+                        })
+                      }
+                    >
+                      Start
+                    </span>
                     <input
                       type="number"
                       class="ps-num"
@@ -1478,8 +1670,23 @@ export function PathStudioControls({
                     </button>
                   </label>
 
-                  <label class="ps-field" title="Trim End percentage (0–100%)">
-                    <span>End</span>
+                  <label class="ps-field" title="Trim End percentage (0–100%). Drag label to scrub.">
+                    <span
+                      class="ps-scrub-label"
+                      data-testid="ps-scrub-trim-end"
+                      onPointerDown={(event) =>
+                        startLabelScrub(event, {
+                          value: trimEndVal,
+                          min: 0,
+                          max: 100,
+                          step: 1,
+                          pixelsPerStep: 3,
+                          onValue: (val) => handleSetTrimValue('trimEnd', val, `trim-end:${targetNode.id}`),
+                        })
+                      }
+                    >
+                      End
+                    </span>
                     <input
                       type="number"
                       class="ps-num"
@@ -1508,8 +1715,23 @@ export function PathStudioControls({
                     </button>
                   </label>
 
-                  <label class="ps-field" title="Trim Offset shift (-1000% to 1000%)">
-                    <span>Offset</span>
+                  <label class="ps-field" title="Trim Offset shift (-1000% to 1000%). Drag label to scrub.">
+                    <span
+                      class="ps-scrub-label"
+                      data-testid="ps-scrub-trim-offset"
+                      onPointerDown={(event) =>
+                        startLabelScrub(event, {
+                          value: trimOffsetVal,
+                          min: -1000,
+                          max: 1000,
+                          step: 5,
+                          pixelsPerStep: 3,
+                          onValue: (val) => handleSetTrimValue('trimOffset', val, `trim-offset:${targetNode.id}`),
+                        })
+                      }
+                    >
+                      Offset
+                    </span>
                     <input
                       type="number"
                       class="ps-num"
@@ -1594,8 +1816,23 @@ export function PathStudioControls({
                 <span class="ps-status-tag" data-testid="ps-trim-stagger-count">
                   {trimCapableSelection.length} shapes
                 </span>
-                <label class="ps-field" title="Sequential delay between each shape in milliseconds">
-                  <span>Step</span>
+                <label class="ps-field" title="Sequential delay between each shape in milliseconds (drag label to scrub)">
+                  <span
+                    class="ps-scrub-label"
+                    data-testid="ps-scrub-trim-stagger"
+                    onPointerDown={(event) =>
+                      startLabelScrub(event, {
+                        value: staggerMs,
+                        min: 0,
+                        max: 5000,
+                        step: 20,
+                        pixelsPerStep: 5,
+                        onValue: (v) => setStaggerMs(Math.round(v)),
+                      })
+                    }
+                  >
+                    Step
+                  </span>
                   <input
                     type="number"
                     class="ps-num"

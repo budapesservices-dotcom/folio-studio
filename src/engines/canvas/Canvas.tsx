@@ -20,6 +20,7 @@ import {
   projectPointOntoMotionPath,
   removeMotionPathPoint,
   setMotionPathPointType,
+  type MotionPathSpacingDot,
 } from '../../core/document/pathStudio';
 import { buildFrameClipAncestorMap, buildLayerClipMaskMap, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
 import { getAssetCacheRevision, subscribeAssetCacheUpdates } from '../../core/persistence/assetStore';
@@ -150,6 +151,7 @@ interface CanvasProps {
   contextMenuActions?: CanvasContextMenuActions;
   animationTimeMs?: number;
   motionPaths?: readonly MotionPathBinding[];
+  motionPathSpacingDotsByNodeId?: Readonly<Record<string, readonly MotionPathSpacingDot[]>>;
   selectedMotionPathPoint?: MotionPathPointSelection | null;
   onSelectMotionPathPoint?: (selection: MotionPathPointSelection | null) => void;
   onUpdateMotionPath?: (
@@ -158,6 +160,7 @@ interface CanvasProps {
   ) => void;
   showMorphCorrespondence?: boolean;
   morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
+  onPickMorphStartVertex?: (nodeId: string, shiftDelta: number, vertexCount: number) => void;
 }
 
 interface PanSession {
@@ -214,11 +217,13 @@ export function Canvas({
   contextMenuActions,
   animationTimeMs,
   motionPaths,
+  motionPathSpacingDotsByNodeId,
   selectedMotionPathPoint,
   onSelectMotionPathPoint,
   onUpdateMotionPath,
   showMorphCorrespondence,
   morphCorrespondenceMetaByNodeId,
+  onPickMorphStartVertex,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -1247,6 +1252,23 @@ export function Canvas({
     if ((event.target as Element)?.closest('.canvas-inline-text-editor')) return;
     if (inlineTextEdit) commitInlineText();
 
+    // Direct Shape Morph start-vertex picker on Canvas (#1..#N badges)
+    if (event.button === 0 && onPickMorphStartVertex && showMorphCorrespondence) {
+      const targetEl = event.target as Element | null;
+      const vertexPickEl = targetEl?.closest('[data-morph-vertex-pick]');
+      if (vertexPickEl) {
+        const nodeId = vertexPickEl.getAttribute('data-morph-node-id');
+        const shiftDelta = Number(vertexPickEl.getAttribute('data-morph-vertex-shift'));
+        const vertexCount = Number(vertexPickEl.getAttribute('data-morph-vertex-count'));
+        if (nodeId && Number.isInteger(shiftDelta) && Number.isInteger(vertexCount) && vertexCount > 0) {
+          onPickMorphStartVertex(nodeId, shiftDelta, vertexCount);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
+    }
+
     // Direct Motion Path editing (works live even during Motion playback/scrubbing)
     if (event.button === 0 && onUpdateMotionPath && motionPaths && motionPaths.length > 0) {
       const targetEl = event.target as Element | null;
@@ -1582,6 +1604,13 @@ export function Canvas({
   const toolKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
   toolKeyDownRef.current = (event: KeyboardEvent) => {
     if (inlineTextEdit) return;
+    const targetEl = event.target instanceof Element ? event.target : null;
+    if (
+      (targetEl instanceof HTMLElement && targetEl.isContentEditable) ||
+      targetEl?.matches('input, textarea, select, [contenteditable="true"]')
+    ) {
+      return;
+    }
 
     if (
       (event.key === 'Backspace' || event.key === 'Delete') &&
@@ -1973,6 +2002,7 @@ export function Canvas({
 
           <MotionPathOverlay
             motionPaths={motionPaths}
+            motionPathSpacingDotsByNodeId={motionPathSpacingDotsByNodeId}
             canvasNodes={canvasNodes}
             selectedNodeIds={selectedNodeIds}
             selectedPoint={selectedMotionPathPoint}
@@ -1980,6 +2010,7 @@ export function Canvas({
             interactive={Boolean(onUpdateMotionPath)}
             showMorphCorrespondence={showMorphCorrespondence}
             morphCorrespondenceMetaByNodeId={morphCorrespondenceMetaByNodeId}
+            morphVertexInteractive={Boolean(onPickMorphStartVertex)}
           />
 
           {inlineEditNode && inlineTextEdit && (

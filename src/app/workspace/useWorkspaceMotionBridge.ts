@@ -87,6 +87,17 @@ export function useWorkspaceMotionBridge(options: UseWorkspaceMotionBridgeOption
     ? selectedNodes.map((node) => animatedActiveNodesById.get(node.id) ?? node)
     : selectedNodes;
 
+  const canonicalActiveNodesById = useMemo(
+    () =>
+      new Map(
+        (activeEditorId === 'component' ? componentDocument : activeDocument).nodes.map((node) => [
+          node.id,
+          node,
+        ]),
+      ),
+    [activeEditorId, activeDocument.nodes, componentDocument.nodes],
+  );
+
   const motionAutoKeyBridge = createMotionAutoKeyBridge({
     activeEditorId,
     motion,
@@ -98,6 +109,7 @@ export function useWorkspaceMotionBridge(options: UseWorkspaceMotionBridgeOption
     onSampledColorOption,
     onCanvasInteraction,
     onNotice,
+    getCanonicalNodeById: (nodeId) => canonicalActiveNodesById.get(nodeId),
   });
 
   const {

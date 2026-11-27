@@ -7183,3 +7183,100 @@ textarea:focus-visible {
   background: #22d3ee;
   flex-shrink: 0;
 }
+
+.mt-path-shape-prop-label {
+  color: #22d3ee;
+}
+
+.mt-lane-segment-path-shape {
+  background: rgba(34, 211, 238, 0.24);
+}
+
+.mt-lane-segment-path-shape:hover,
+.mt-lane-segment-path-shape.is-active {
+  background: rgba(34, 211, 238, 0.48);
+}
+
+.mt-keyframe-path-shape {
+  background: #22d3ee;
+  border-color: #083344;
+}
+
+.mt-keyframe-path-shape.selected {
+  background: #67e8f9;
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.45);
+}
+
+/* --- Gelombang 2: Velocity Spacing Dots, Clickable Morph Vertices, Scrub Labels & Auto-Orient Tags --- */
+.canvas-motion-path-spacing-dot {
+  fill: #67e8f9;
+  stroke: #083344;
+  stroke-width: 0.75;
+  opacity: 0.85;
+}
+
+.canvas-morph-corr-vertex-hit {
+  cursor: pointer;
+}
+
+.canvas-morph-corr-vertex-hit:hover .canvas-morph-corr-badge {
+  fill: #0ea5e9;
+  stroke: #ffffff;
+}
+
+.canvas-morph-corr-vertex-hit:hover .canvas-morph-corr-badge.is-start {
+  fill: #16a34a;
+}
+
+.ps-scrub-label {
+  cursor: ew-resize;
+  user-select: none;
+  -webkit-user-select: none;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.45);
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.ps-scrub-label:hover {
+  color: #38bdf8;
+  border-bottom-color: #38bdf8;
+}
+
+.inspector-rot-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.inspector-auto-orient-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+
+.mt-rot-auto-orient-tag {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 5px;
+  padding: 0 4px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+

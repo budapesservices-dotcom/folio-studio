@@ -5,6 +5,7 @@ import {
   projectPointOntoMotionPath,
   sampleMotionPathChevrons,
   serializeMotionPathToSvgD,
+  type MotionPathSpacingDot,
 } from '../../core/document/pathStudio';
 import {
   extractMorphSnapshotFromNode,
@@ -23,6 +24,7 @@ export interface MorphCorrespondenceMeta {
 
 interface MotionPathOverlayProps {
   motionPaths?: readonly MotionPathBinding[];
+  motionPathSpacingDotsByNodeId?: Readonly<Record<string, readonly MotionPathSpacingDot[]>>;
   canvasNodes: readonly DesignNode[];
   selectedNodeIds: readonly string[];
   selectedPoint?: MotionPathPointSelection | null;
@@ -30,6 +32,7 @@ interface MotionPathOverlayProps {
   interactive: boolean;
   showMorphCorrespondence?: boolean;
   morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
+  morphVertexInteractive?: boolean;
 }
 
 function toNodeWorldPoint(
@@ -58,6 +61,7 @@ function toNodeWorldPoint(
 
 export function MotionPathOverlay({
   motionPaths,
+  motionPathSpacingDotsByNodeId,
   canvasNodes,
   selectedNodeIds,
   selectedPoint,
@@ -65,6 +69,7 @@ export function MotionPathOverlay({
   interactive,
   showMorphCorrespondence = false,
   morphCorrespondenceMetaByNodeId,
+  morphVertexInteractive = false,
 }: MotionPathOverlayProps) {
   const hasMotionPaths = Boolean(motionPaths && motionPaths.length > 0);
   if (!hasMotionPaths && !showMorphCorrespondence) return null;
@@ -198,6 +203,27 @@ export function MotionPathOverlay({
                 />
               </g>
             )}
+
+            {/* Velocity spacing dots (evenly spaced in time, visually revealing speed/easing) */}
+            {isActive && (() => {
+              const dots = motionPathSpacingDotsByNodeId?.[binding.targetNodeId];
+              if (!dots || dots.length === 0) return null;
+              const dotR = 2.05 * invZoom;
+              return (
+                <g class="canvas-motion-path-spacing-dots" pointer-events="none">
+                  {dots.map((dot, idx) => (
+                    <circle
+                      key={`vdot-${idx}`}
+                      class="canvas-motion-path-spacing-dot"
+                      cx={dot.x}
+                      cy={dot.y}
+                      r={dotR}
+                      data-testid="motion-path-spacing-dot"
+                    />
+                  ))}
+                </g>
+              );
+            })()}
 
             {/* Directional travel chevrons */}
             {chevrons.map((chev, idx) => (
@@ -464,15 +490,29 @@ export function MotionPathOverlay({
                       const isStart = vIdx === 0;
                       const isLast = vIdx === worldPts.length - 1;
                       if (!isStart && !isLast && vIdx % step !== 0) return null;
+                      const isPickable = morphVertexInteractive && cIdx === 0 && contour.closed;
                       return (
                         <g
                           key={`v-${cIdx}-${vIdx}`}
+                          class={isPickable ? 'canvas-morph-corr-vertex-hit' : undefined}
+                          pointer-events={isPickable ? 'auto' : 'none'}
+                          data-morph-vertex-pick={isPickable ? 'true' : undefined}
+                          data-morph-node-id={isPickable ? node.id : undefined}
+                          data-morph-vertex-shift={isPickable ? String(vIdx) : undefined}
+                          data-morph-vertex-count={isPickable ? String(worldPts.length) : undefined}
                           data-testid={
                             cIdx === 0 && isStart
                               ? 'morph-corr-start-vertex'
                               : `morph-corr-vertex-${cIdx}-${vIdx + 1}`
                           }
                         >
+                          {isPickable && (
+                            <title>
+                              {isStart
+                                ? 'Vertex #1 (Active Morph Start Point)'
+                                : `Click to set vertex #${vIdx + 1} as Morph start point (#1)`}
+                            </title>
+                          )}
                           {isStart && (
                             <circle
                               class="canvas-morph-corr-start-ring"
