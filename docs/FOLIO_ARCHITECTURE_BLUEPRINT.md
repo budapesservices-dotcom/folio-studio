@@ -4,7 +4,7 @@
 **Version:** 0.2 — Working Draft  
 **Status:** In progress  
 **Product:** FOLIO Studio  
-**Positioning:** The Visual-First Web Development Studio  
+**Positioning:** The Unified Creative Development Studio  
 **Native project format:** \`.flop\`
 
 > This document is the canonical reference for FOLIO's agreed target architecture. Product identity, founding purpose, vision, mission, and durable product outcomes are defined in the linked product charter documents below. This blueprint is not evidence that every described capability has already been implemented.
@@ -17,6 +17,7 @@ The product intent behind this architecture is documented in four companion docu
 - [Folio Vision](FOLIO_VISION.md) — the desired future product.
 - [Folio Mission](FOLIO_MISSION.md) — how Folio pursues that future.
 - [Folio Product Goals](FOLIO_PRODUCT_GOALS.md) — durable outcomes, experience principles, and boundaries.
+- [FOLIO Creative Studio Direction](FOLIO_CREATIVE_STUDIO_DIRECTION.md) — cross-discipline workspace boundaries, Morph direction, media editing direction, and staged integration.
 
 These documents define product intent; this blueprint translates that intent into target system architecture. The current [Architecture](ARCHITECTURE.md) remains the record of implementation reality. All AI agents and contributors must read the product charter before proposing or implementing material product or architecture changes.
 
@@ -36,20 +37,25 @@ Never label a proposal as implemented, or an implementation as verified, based o
 
 ## 2. Product definition
 
-FOLIO is a **Visual-First Full-Stack Web Development Studio**. It unifies visual design, interactive behavior, source code, backend integration, preview, build, and deployment in one project environment.
+FOLIO is a **Unified Creative Development Studio**: one visual-first environment for design, vector creation, code and full-stack development, interactive behavior, motion and animation, and the long-term addition of non-destructive video and media editing.
 
-FOLIO is not simply a design application placed beside a code editor. It is one native system with multiple specialized workspaces operating on the same project.
+FOLIO is not a collection of unrelated applications placed behind one launcher. It is one native project environment with multiple specialized workspaces and engines operating on shared project truth. The product should feel like a creative instrument while retaining the precision, transparency, and control expected from professional engineering software.
 
-**Product promise:** Design visually. Develop freely. Collaborate seamlessly.
+**Product promise:** Create visually. Develop freely. Animate expressively. Produce media. Keep everything connected.
 
-FOLIO must enable:
-1. Designers to create sophisticated web interfaces visually without first needing to write code.
-2. Developers to work directly with source code while retaining control over implementation details.
-3. Visual structure, behavior, and code to remain connected wherever FOLIO-compatible structures are used.
-4. Changes in one workspace to propagate to other relevant workspaces without silently discarding work.
-5. One project to contain multiple applications, pages, reusable components, shared resources, and backend connections.
-6. Portable, editable projects through the native \`.flop\` format.
+FOLIO must enable, over its staged roadmap:
+
+1. Designers and visual creators to compose interfaces, vector artwork, typography, layouts, design systems, and reusable components.
+2. Developers to work directly with source code, application structure, behavior, backend integrations, runtime, and deployment.
+3. Animators to create expressive timelines, keyframes, easing, and eventually geometry Morph where one object changes shape while retaining its identity.
+4. Video and media creators to arrange source assets on non-destructive video and audio timelines, apply effects and transitions, and produce final media.
+5. Users to move supported objects, assets, and outputs between disciplines without rebuilding the same work or losing declared relationships.
+6. One project to contain applications, pages, reusable components, logic, motion, media assets, code modules, and shared resources through explicit contracts.
 7. AI and collaboration to operate on the actual project model, not merely generate disconnected suggestions.
+
+**All-in-one does not mean monolithic.** Each discipline may have its own editor, timeline, data model, rendering strategy, and specialist engine. The shared project layer provides identity, asset references, commands, history, versioning, and interoperability contracts. Specialized engines remain modular and are loaded or used when needed.
+
+The detailed workspace and engine boundaries are recorded in [FOLIO Creative Studio Direction](FOLIO_CREATIVE_STUDIO_DIRECTION.md). This blueprint describes the target architecture; it is not evidence that every capability has already been implemented.
 
 ## 3. Core architectural principles
 
@@ -92,18 +98,34 @@ Project formats, AST schemas, component contracts, and engine capabilities must 
 
 ## 4. Workspace model
 
-FOLIO workspaces are different views and tools over the same project—not separate projects.
+FOLIO workspaces are different views and specialist tools over the same project—not separate projects.
 
 | Workspace | Main responsibility |
 |---|---|
-| **Design** | Visual composition, Canvas, vector editing, layers, responsive layout, typography, design system |
-| **Node Logic** | Events, conditions, variables, state, interactions, API requests, data binding, user-facing effects and animation authoring |
-| **Code** | HTML/CSS/JS/TS and supported framework code, debugging, terminal, Git |
+| **Design & Vector** | Visual composition, Canvas, vector geometry, shape editing, layers, responsive layout, typography, reusable components, design system |
+| **Node Logic** | Events, conditions, variables, state, interactions, API requests, data binding, user-facing behavior and animation triggers |
+| **Code & Full-Stack** | HTML/CSS/JS/TS and supported framework code, application structure, debugging, terminal, Git, backend integration |
+| **Motion & Animation** | Motion timelines, keyframes, easing, playback, interaction-driven animation, and the future geometry Morph workflow |
+| **Video & Media** | Long-term dedicated media editing: source media, video/audio tracks, clips, trimming, transitions, effects, compositing, preview, and export |
 | **Backend** | API connections, authentication, database access, CRUD, server functions, environment configuration |
-| **Runtime & Deployment** | Preview, responsive testing, build, optimization, export, deployment |
+| **Runtime & Deployment** | Preview, responsive testing, build, optimization, project export, deployment |
 | **AI & Collaboration** | Project-aware assistance, shared presence, comments, coordinated editing, history |
 
-A workspace may own its own presentation and specialized interaction model. Anything expected to appear, run, or remain editable elsewhere must use shared FOLIO project contracts.
+A workspace may own its own presentation and specialized interaction model. Anything expected to appear, run, or remain editable elsewhere must use shared FOLIO project contracts. Not every workspace or engine is implemented today; see the current Architecture and the creative studio direction document for status.
+
+### 4.1 Shared creative foundation
+
+The shared layer is responsible for project identity, stable object and asset IDs, asset references, typed native commands, history and undo/redo semantics, project versioning, synchronization, and cross-workspace capability metadata.
+
+Where an object is represented natively in more than one workspace, those representations must refer to the same canonical identity or to an explicit derived relationship. A workspace must not silently clone an object and pretend the clone remains linked to its source.
+
+### 4.2 Specialist engines and timelines
+
+FOLIO should share useful infrastructure—time units, playhead transport, markers, scheduling, keyframe primitives, media asset references, cache interfaces, and history integration—without forcing every timeline into one universal track model.
+
+Motion and animation timelines primarily describe changes to FOLIO objects and their properties over time. A video/media timeline describes editorial arrangements of source footage, audio, clips, tracks, transitions, and effects. They may interoperate through explicit references and renderable outputs, but their specialist semantics remain separate.
+
+The detailed Morph and video/media editing direction, including current implementation boundaries, is documented in [FOLIO Creative Studio Direction](FOLIO_CREATIVE_STUDIO_DIRECTION.md).
 
 ## 5. High-level system architecture
 
@@ -113,7 +135,7 @@ The target architecture is:
 2. **Native Project APIs & Commands** validate project queries and mutations.
 3. **Unified Project Model** owns in-memory project state and relationships.
 4. **Native AST & Identity Graph** own canonical semantic structure for editable interface content.
-5. **Specialized models** represent Design System, Components, Logic, Motion, Code Modules, Applications, Documents, Assets, and Configuration.
+5. **Specialized models** represent Design System, Components, Logic, Motion, Video/Media, Code Modules, Applications, Documents, Assets, and Configuration.
 6. **Synchronization & Change Coordination** maintain mappings, propagate changes, and surface conflicts.
 7. **Compiler / Build Orchestration** converts project state into runnable application output.
 8. **Runtime / Preview / Deployment** execute and publish built applications.
@@ -286,6 +308,9 @@ Realtime collaboration should eventually support presence, shared selection, syn
 - Multi-Document and Multi-Application projects.
 - Global and application-local components.
 - Node Logic is the authoring home for user-facing effects, filters, animation, events, conditions, variables, state, API requests, and data binding.
+- Motion & Animation and Video & Media are distinct creative disciplines that integrate through shared project identity and asset contracts; their specialized timelines and engines must not be collapsed into one monolith.
+- Geometry Morph is an agreed product direction for Motion: one object changes its geometry across keyframes while retaining its stable identity. The matching/interpolation algorithm and full path-topology support remain open design work, and Morph is not currently implemented.
+- A dedicated non-destructive multitrack Video & Media Editing workspace is an agreed long-term product direction. Current motion/video export functionality must not be mistaken for a full source-media editing timeline.
 - Canvas interaction tools focus on direct SVG Canvas interaction.
 
 ### Required architecture specifications
@@ -313,6 +338,11 @@ Realtime collaboration should eventually support presence, shared selection, syn
 10. Full-Stack integrations, AI, Collaboration, and Deployment.
 
 Milestones must be implemented and verified incrementally. Do not begin a later implementation wave merely because it appears in this roadmap; follow the task authorization and acceptance gates for the repository.
+
+### Creative media and advanced Morph direction
+
+- **Native geometry Morph — Agreed product direction / detailed design Open:** Morph must animate geometry on one stable object identity. Automatic path correspondence, topology changes, Bézier interpolation, manual point correction, and runtime/export parity require dedicated specifications and acceptance tests. Morph is not currently implemented.
+- **Video & Media Editing — Agreed Roadmap:** A dedicated non-destructive source-media editor with multitrack video/audio clips, trimming, transitions, effects, compositing, audio mixing, proxy/cache management, and editorial rendering is not currently implemented as a full editor. Existing Motion Export encodes rendered animation; it is not equivalent to editing source footage on a multitrack timeline.
 
 ## 13. Current implementation reality
 
