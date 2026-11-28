@@ -1069,6 +1069,14 @@ export function NodeLogicNodeFields({
       const allowedOps = UPDATE_OPERATIONS_BY_TYPE[varType];
       const currentOp = typeof node.data.operation === 'string' ? node.data.operation : allowedOps[0].value;
       const effectiveOp = allowedOps.some((op) => op.value === currentOp) ? currentOp : allowedOps[0].value;
+      const removeMode: 'value' | 'index' =
+        node.data.removeMode === 'index'
+          ? 'index'
+          : node.data.removeMode === 'value'
+            ? 'value'
+            : typeof node.data.value === 'number'
+              ? 'index'
+              : 'value';
 
       return (
         <>
@@ -1110,13 +1118,54 @@ export function NodeLogicNodeFields({
               class="select-field"
               aria-label="Update operation"
               value={effectiveOp}
-              onChange={(event) => onUpdateNodeData(node.id, { operation: event.currentTarget.value })}
+              onChange={(event) => {
+                const nextOp = event.currentTarget.value;
+                if (nextOp === 'remove' && varType === 'list') {
+                  onUpdateNodeData(node.id, { operation: nextOp, removeMode });
+                  return;
+                }
+                onUpdateNodeData(node.id, { operation: nextOp });
+              }}
             >
               {allowedOps.map((op) => (
                 <option key={op.value} value={op.value}>{op.label}</option>
               ))}
             </select>
           </label>
+
+          {effectiveOp === 'remove' && varType === 'list' && (
+            <label class="nl-field">
+              <span>Remove mode</span>
+              <select
+                class="select-field"
+                aria-label="List remove mode"
+                value={removeMode}
+                onChange={(event) => {
+                  const nextMode = event.currentTarget.value === 'index' ? 'index' : 'value';
+                  if (nextMode === 'index') {
+                    const cur = node.data.value;
+                    let nextIndex: number | null = null;
+                    if (typeof cur === 'number' && Number.isInteger(cur) && cur >= 0) {
+                      nextIndex = cur;
+                    } else if (typeof cur === 'string' && /^\d+$/.test(cur.trim())) {
+                      const parsed = Number(cur.trim());
+                      if (Number.isSafeInteger(parsed) && parsed >= 0) nextIndex = parsed;
+                    }
+                    onUpdateNodeData(node.id, { removeMode: 'index', value: nextIndex });
+                  } else {
+                    const cur = node.data.value;
+                    onUpdateNodeData(node.id, {
+                      removeMode: 'value',
+                      value: cur === null || cur === undefined ? '' : String(cur),
+                    });
+                  }
+                }}
+              >
+                <option value="value">Remove by Value</option>
+                <option value="index">Remove by Index</option>
+              </select>
+            </label>
+          )}
 
           {effectiveOp === 'increment' && (
             <div class="nl-field-grid">
@@ -1195,7 +1244,9 @@ export function NodeLogicNodeFields({
                 {effectiveOp === 'push'
                   ? 'Item to push (fallback if Value unwired)'
                   : effectiveOp === 'remove'
-                    ? 'Value or index to remove'
+                    ? removeMode === 'index'
+                      ? 'Index to remove (0-based, fallback if Value unwired)'
+                      : 'Value to remove (fallback if Value unwired)'
                     : effectiveOp === 'set-property'
                       ? 'New property value (fallback)'
                       : 'Fallback value (when Value port is unwired)'}
@@ -1219,13 +1270,44 @@ export function NodeLogicNodeFields({
                     onUpdateNodeData(node.id, { value: Number.isFinite(next) ? next : 0 });
                   }}
                 />
+              ) : varType === 'list' && effectiveOp === 'remove' && removeMode === 'index' ? (
+                <input
+                  class="nl-input nl-tabular"
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  aria-label="Index to remove"
+                  placeholder="0"
+                  value={typeof node.data.value === 'number' && Number.isFinite(node.data.value) ? node.data.value : ''}
+                  onInput={(event) => {
+                    const raw = event.currentTarget.value.trim();
+                    if (raw === '') {
+                      onUpdateNodeData(node.id, { removeMode: 'index', value: null });
+                      return;
+                    }
+                    const next = Number(raw);
+                    onUpdateNodeData(node.id, {
+                      removeMode: 'index',
+                      value: Number.isFinite(next) ? next : null,
+                    });
+                  }}
+                />
               ) : (
                 <input
                   class="nl-input"
                   type="text"
+                  aria-label={effectiveOp === 'remove' ? 'Value to remove' : undefined}
                   placeholder={varType === 'list' && effectiveOp === 'set' ? '["a","b"]' : varType === 'object' && effectiveOp === 'set' ? '{"key":"val"}' : ''}
                   value={node.data.value === null || node.data.value === undefined ? '' : String(node.data.value)}
-                  onInput={(event) => onUpdateNodeData(node.id, { value: event.currentTarget.value })}
+                  onInput={(event) =>
+                    onUpdateNodeData(
+                      node.id,
+                      effectiveOp === 'remove' && varType === 'list'
+                        ? { removeMode: 'value', value: event.currentTarget.value }
+                        : { value: event.currentTarget.value },
+                    )
+                  }
                 />
               )}
             </label>

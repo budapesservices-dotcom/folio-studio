@@ -241,6 +241,61 @@ function parseListValue(raw: unknown): unknown[] {
   return [];
 }
 
+export type ListRemoveMode = 'value' | 'index';
+
+function parseValidListIndex(raw: unknown, length: number): number | null {
+  if (typeof raw === 'number') {
+    return Number.isInteger(raw) && raw >= 0 && raw < length ? raw : null;
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed || !/^\d+$/.test(trimmed)) return null;
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) && parsed >= 0 && parsed < length ? parsed : null;
+  }
+  return null;
+}
+
+export function applyListRemove(
+  list: readonly unknown[],
+  incomingVal: unknown,
+  rawRemoveMode?: unknown,
+): { readonly next: unknown[]; readonly changed: boolean } {
+  const mode: ListRemoveMode | undefined =
+    rawRemoveMode === 'index' || rawRemoveMode === 'value' ? rawRemoveMode : undefined;
+
+  if (mode === 'index') {
+    const idx = parseValidListIndex(incomingVal, list.length);
+    if (idx === null) {
+      return { next: [...list], changed: false };
+    }
+    const next = [...list];
+    next.splice(idx, 1);
+    return { next, changed: true };
+  }
+
+  if (mode === 'value') {
+    const next = list.filter((item) => item !== incomingVal);
+    return { next, changed: next.length !== list.length };
+  }
+
+  // Legacy compatibility when `removeMode` is not specified:
+  // numbers are strictly treated as indices (invalid indices do NOT fall back to value removal),
+  // while non-numbers are treated as values.
+  if (typeof incomingVal === 'number') {
+    const idx = parseValidListIndex(incomingVal, list.length);
+    if (idx === null) {
+      return { next: [...list], changed: false };
+    }
+    const next = [...list];
+    next.splice(idx, 1);
+    return { next, changed: true };
+  }
+
+  const next = list.filter((item) => item !== incomingVal);
+  return { next, changed: next.length !== list.length };
+}
+
 function parseObjectValue(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     return { ...(raw as Record<string, unknown>) };
@@ -1465,11 +1520,8 @@ export function createPrototypeRuntime(
             nextVal = [...parseListValue(prevVal), incomingVal];
           } else if (op === 'remove' && expectedType === 'list') {
             const list = parseListValue(prevVal);
-            if (typeof incomingVal === 'number' && Number.isInteger(incomingVal)) {
-              nextVal = list.filter((_item, idx) => idx !== incomingVal);
-            } else {
-              nextVal = list.filter((item) => item !== incomingVal);
-            }
+            const removed = applyListRemove(list, incomingVal, node.data.removeMode);
+            nextVal = removed.changed ? removed.next : (Array.isArray(prevVal) ? prevVal : list);
           } else if (op === 'set-property' && expectedType === 'object') {
             const path = typeof node.data.propertyPath === 'string' ? node.data.propertyPath : '';
             nextVal = setNestedField(parseObjectValue(prevVal), path, incomingVal);
