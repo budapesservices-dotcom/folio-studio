@@ -26,6 +26,7 @@ import type {
   CanvasToolOverlay,
   CanvasToolSession,
 } from './tools/types';
+import type { PrototypeNodeOverride } from '../prototype/runtime';
 
 const HANDLE_SIZE = 10;
 const ROTATE_ZONE_OFFSET = 14;
@@ -405,6 +406,7 @@ export interface CanvasInteractiveOverlaysProps {
   readonly hoverPoint: { x: number; y: number } | null;
   readonly eyedropperLoupe: EyedropperLoupeState | null;
   readonly guides: SnapGuide[];
+  readonly nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
 }
 
 export function CanvasInteractiveOverlays({
@@ -448,6 +450,7 @@ export function CanvasInteractiveOverlays({
   hoverPoint,
   eyedropperLoupe,
   guides,
+  nodeOverrides,
 }: CanvasInteractiveOverlaysProps) {
   const isAutoLayoutDirectActive =
     toolOverlay?.kind === 'autolayout-reorder' ||
@@ -554,6 +557,7 @@ export function CanvasInteractiveOverlays({
               componentById={componentById}
               assetById={assetById}
               tokens={designTokens}
+              nodeOverrides={nodeOverrides}
             />
           ))}
         </g>
@@ -592,6 +596,7 @@ export function CanvasInteractiveOverlays({
               componentById={componentById}
               assetById={assetById}
               tokens={designTokens}
+              nodeOverrides={nodeOverrides}
             />
           ))}
         </g>

@@ -39,6 +39,7 @@ import type {
   DesignTokenCollection,
   FolioPage,
   FolioProject,
+  LogicGraph,
   NodeLayoutConfig,
   NodePadding,
   PathNode,
@@ -72,6 +73,7 @@ import {
 } from './sanitize';
 import type { CodeMappingEntry, CompiledCodeFile } from './types';
 import { buildLivePreviewLogicScript } from '../prototype/codegen';
+import { getApplicableGraphsForPage } from '../prototype/runtime';
 import {
   buildLivePreviewMorphScript,
   collectPageInitialMorphSnapshots,
@@ -429,11 +431,114 @@ function resolveCssBorderStyle(strokeDasharray?: string): 'solid' | 'dashed' | '
   return 'dashed';
 }
 
-export function needsSvgMaskForClip(node: DesignNode, base: DesignNode): boolean {
+export interface DynamicTransformTargets {
+  readonly ids: ReadonlySet<string>;
+  readonly hasWildcard: boolean;
+}
+
+export function collectDynamicTransformTargets(graphs: readonly LogicGraph[]): DynamicTransformTargets {
+  const ids = new Set<string>();
+  let hasWildcard = false;
+  for (const graph of graphs) {
+    for (const node of graph.nodes) {
+      if (node.type !== 'action.set-layer') continue;
+      if (String(node.data?.property ?? '') !== 'transform') continue;
+      if (node.data?.targetMode === 'pipeline') {
+        hasWildcard = true;
+        continue;
+      }
+      const targetId = typeof node.data?.targetNodeId === 'string' ? node.data.targetNodeId.trim() : '';
+      if (targetId) {
+        ids.add(targetId);
+      } else {
+        hasWildcard = true;
+      }
+    }
+  }
+  return { ids, hasWildcard };
+}
+
+function getNonSharedContainerAncestors(
+  node: DesignNode,
+  base: DesignNode,
+  nodeById: ReadonlyMap<string, DesignNode>,
+): DesignNode[] {
+  const nodeAncestors = new Set<string>([node.id]);
+  let curNodeParent = node.parentId ? nodeById.get(node.parentId) : undefined;
+  while (curNodeParent && !nodeAncestors.has(curNodeParent.id)) {
+    nodeAncestors.add(curNodeParent.id);
+    curNodeParent = curNodeParent.parentId ? nodeById.get(curNodeParent.parentId) : undefined;
+  }
+
+  const chain: DesignNode[] = [];
+  const visited = new Set<string>([base.id]);
+  let curBaseParent = base.parentId ? nodeById.get(base.parentId) : undefined;
+  while (curBaseParent && !visited.has(curBaseParent.id)) {
+    visited.add(curBaseParent.id);
+    if (
+      (curBaseParent.type === 'group' || curBaseParent.type === 'frame')
+      && !nodeAncestors.has(curBaseParent.id)
+    ) {
+      chain.push(curBaseParent);
+    }
+    curBaseParent = curBaseParent.parentId ? nodeById.get(curBaseParent.parentId) : undefined;
+  }
+  chain.reverse();
+  return chain;
+}
+
+export function isMaskBaseDynamicallyTransformed(
+  node: DesignNode,
+  base: DesignNode,
+  nodeById: ReadonlyMap<string, DesignNode>,
+  allNodes?: readonly DesignNode[],
+  idPrefix = '',
+  dynamicTargets?: DynamicTransformTargets,
+): boolean {
+  if (!dynamicTargets) return false;
+  if (dynamicTargets.hasWildcard) return true;
+  if (dynamicTargets.ids.size === 0) return false;
+
+  const matchesId = (id: string): boolean => {
+    const emitted = idPrefix ? `${idPrefix}${id}` : id;
+    return dynamicTargets.ids.has(emitted) || dynamicTargets.ids.has(id);
+  };
+
+  if (matchesId(base.id)) return true;
+
+  for (const anc of getNonSharedContainerAncestors(node, base, nodeById)) {
+    if (matchesId(anc.id)) return true;
+  }
+
+  if (base.type === 'group' && allNodes) {
+    const queue: string[] = [base.id];
+    const seen = new Set<string>([base.id]);
+    while (queue.length > 0) {
+      const parentId = queue.shift()!;
+      for (const candidate of allNodes) {
+        if (candidate.parentId !== parentId || seen.has(candidate.id) || candidate.onCanvas === false) continue;
+        seen.add(candidate.id);
+        if (matchesId(candidate.id)) return true;
+        if (candidate.type === 'group') {
+          queue.push(candidate.id);
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+export function needsSvgMaskForClip(
+  node: DesignNode,
+  base: DesignNode,
+  options?: { readonly isDynamicTransform?: boolean },
+): boolean {
   if (node.clipMaskMode === 'outside') return true;
-  if (base.type === 'path') return true;
+  if (base.type === 'path' || base.type === 'group') return true;
   if (Math.abs(base.rotation) > 0.01) return true;
   if (Math.abs(node.rotation) > 0.01) return true;
+  if (options?.isDynamicTransform) return true;
   return false;
 }
 
@@ -443,59 +548,174 @@ export function buildVectorMaskId(prefix: string, nodeId: string, mode: 'inside'
   return `folio-mask-${safePrefix}-${mode}-${safeId}`;
 }
 
+export interface VectorMaskDefsOptions {
+  readonly idPrefix?: string;
+  readonly dynamicTransformTargets?: DynamicTransformTargets;
+  readonly jsxTransformExpr?: (params: {
+    readonly localNodeId: string;
+    readonly emittedNodeId: string;
+    readonly cx: number;
+    readonly cy: number;
+    readonly width: number;
+    readonly height: number;
+    readonly staticTransform: string;
+  }) => string | undefined;
+  readonly jsxMaskBaseIdExpr?: (localNodeId: string) => string;
+}
+
 export function buildVectorMaskDefsLines(
   nodes: readonly DesignNode[],
   prefix: string,
   jsxMode: boolean,
   indent: string,
+  options: VectorMaskDefsOptions = {},
 ): string[] {
+  const { idPrefix = '', dynamicTransformTargets, jsxTransformExpr, jsxMaskBaseIdExpr } = options;
   const nodeById = new Map<string, DesignNode>();
-  for (const item of nodes) nodeById.set(item.id, item);
+  const childrenByParent = new Map<string, DesignNode[]>();
+  for (const item of nodes) {
+    nodeById.set(item.id, item);
+    if (item.parentId && item.onCanvas !== false) {
+      const list = childrenByParent.get(item.parentId) ?? [];
+      list.push(item);
+      childrenByParent.set(item.parentId, list);
+    }
+  }
+
+  const wrapMaskTransformGroup = (
+    targetNode: DesignNode,
+    anchorNode: DesignNode,
+    innerMarkup: string,
+    includeStaticRotation: boolean,
+  ): string => {
+    const emittedTargetId = idPrefix ? `${idPrefix}${targetNode.id}` : targetNode.id;
+    const dx = roundCss(targetNode.x - anchorNode.x);
+    const dy = roundCss(targetNode.y - anchorNode.y);
+    const w = roundCss(Math.max(1, targetNode.width));
+    const h = roundCss(Math.max(1, targetNode.height));
+    const cx = roundCss(dx + targetNode.width / 2);
+    const cy = roundCss(dy + targetNode.height / 2);
+    const staticTransform =
+      includeStaticRotation && targetNode.type !== 'group' && Math.abs(targetNode.rotation) > 0.01
+        ? `rotate(${roundCss(targetNode.rotation)} ${cx} ${cy})`
+        : '';
+
+    const attrs: string[] = [];
+    if (jsxMode && jsxMaskBaseIdExpr) {
+      attrs.push(`data-folio-mask-base={${jsxMaskBaseIdExpr(targetNode.id)}}`);
+    } else {
+      attrs.push(`data-folio-mask-base="${escapeAttr(emittedTargetId)}"`);
+    }
+    attrs.push(
+      `data-folio-mask-cx="${cx}"`,
+      `data-folio-mask-cy="${cy}"`,
+      `data-folio-mask-w="${w}"`,
+      `data-folio-mask-h="${h}"`,
+    );
+    if (staticTransform) {
+      attrs.push(`data-folio-mask-static-transform="${escapeAttr(staticTransform)}"`);
+    }
+
+    if (jsxMode && jsxTransformExpr) {
+      const dynExpr = jsxTransformExpr({
+        localNodeId: targetNode.id,
+        emittedNodeId: emittedTargetId,
+        cx,
+        cy,
+        width: w,
+        height: h,
+        staticTransform,
+      });
+      if (dynExpr) {
+        attrs.push(`transform={${dynExpr}}`);
+      } else if (staticTransform) {
+        attrs.push(`transform="${escapeAttr(staticTransform)}"`);
+      }
+    } else if (staticTransform) {
+      attrs.push(`transform="${escapeAttr(staticTransform)}"`);
+    }
+
+    return `<g ${attrs.join(' ')}>${innerMarkup}</g>`;
+  };
+
+  const renderMaskTargetShape = (
+    targetNode: DesignNode,
+    anchorNode: DesignNode,
+    baseFill: string,
+    visited: Set<string>,
+  ): string => {
+    if (visited.has(targetNode.id)) return '';
+    visited.add(targetNode.id);
+
+    const dx = roundCss(targetNode.x - anchorNode.x);
+    const dy = roundCss(targetNode.y - anchorNode.y);
+    const w = roundCss(Math.max(1, targetNode.width));
+    const h = roundCss(Math.max(1, targetNode.height));
+    const cx = roundCss(dx + targetNode.width / 2);
+    const cy = roundCss(dy + targetNode.height / 2);
+
+    if (targetNode.type === 'group') {
+      const directChildren = (childrenByParent.get(targetNode.id) ?? []).filter((child) => child.visible);
+      const renderedChildren = directChildren
+        .map((child) => renderMaskTargetShape(child, anchorNode, baseFill, visited))
+        .filter(Boolean);
+      if (renderedChildren.length > 0) {
+        return wrapMaskTransformGroup(targetNode, anchorNode, renderedChildren.join(''), false);
+      }
+      const fallbackRect = `<rect x="${dx}" y="${dy}" width="${w}" height="${h}" fill="${baseFill}" />`;
+      return wrapMaskTransformGroup(targetNode, anchorNode, fallbackRect, false);
+    }
+
+    let primitiveEl = '';
+    if (targetNode.type === 'ellipse') {
+      const rx = roundCss(Math.max(0.5, targetNode.width / 2));
+      const ry = roundCss(Math.max(0.5, targetNode.height / 2));
+      primitiveEl = `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${baseFill}" />`;
+    } else if (targetNode.type === 'path') {
+      const d = serializePathPointsToSvgD(targetNode.points, targetNode.closed, targetNode.subpaths);
+      const fillRuleAttr =
+        targetNode.style.fillRule === 'evenodd'
+          ? jsxMode
+            ? ' fillRule="evenodd"'
+            : ' fill-rule="evenodd"'
+          : '';
+      primitiveEl = `<path d="${escapeAttr(d)}" transform="${escapeAttr(`translate(${dx} ${dy})`)}" fill="${baseFill}"${fillRuleAttr} />`;
+    } else {
+      const radius =
+        (targetNode.type === 'rect' || targetNode.type === 'frame' || targetNode.type === 'image') && targetNode.style.radius
+          ? roundCss(Math.max(0, targetNode.style.radius))
+          : 0;
+      const rxAttr = radius > 0 ? ` rx="${radius}"` : '';
+      primitiveEl = `<rect x="${dx}" y="${dy}" width="${w}" height="${h}"${rxAttr} fill="${baseFill}" />`;
+    }
+
+    return wrapMaskTransformGroup(targetNode, anchorNode, primitiveEl, true);
+  };
 
   const maskBlocks: string[] = [];
   for (const node of nodes) {
     if (!node.clipMaskBaseId || node.onCanvas === false) continue;
     const base = nodeById.get(node.clipMaskBaseId);
-    if (!base || !needsSvgMaskForClip(node, base)) continue;
+    if (!base) continue;
+    const isDynamicTransform = isMaskBaseDynamicallyTransformed(
+      node,
+      base,
+      nodeById,
+      nodes,
+      idPrefix,
+      dynamicTransformTargets,
+    );
+    if (!needsSvgMaskForClip(node, base, { isDynamicTransform })) continue;
 
     const mode: 'inside' | 'outside' = node.clipMaskMode === 'outside' ? 'outside' : 'inside';
     const maskId = buildVectorMaskId(prefix, node.id, mode);
-    const dx = roundCss(base.x - node.x);
-    const dy = roundCss(base.y - node.y);
     const baseFill = mode === 'outside' ? '#000000' : '#ffffff';
     const bgFill = mode === 'outside' ? '#ffffff' : '#000000';
-    const cx = roundCss(dx + base.width / 2);
-    const cy = roundCss(dy + base.height / 2);
-    const rotTransform = Math.abs(base.rotation) > 0.01 ? `rotate(${roundCss(base.rotation)} ${cx} ${cy})` : '';
 
-    let shapeEl = '';
-    if (base.type === 'ellipse') {
-      const rx = roundCss(Math.max(0.5, base.width / 2));
-      const ry = roundCss(Math.max(0.5, base.height / 2));
-      const transformAttr = rotTransform ? ` transform="${escapeAttr(rotTransform)}"` : '';
-      shapeEl = `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${baseFill}"${transformAttr} />`;
-    } else if (base.type === 'path') {
-      const d = serializePathPointsToSvgD(base.points, base.closed, base.subpaths);
-      const fullTransform = rotTransform
-        ? `${rotTransform} translate(${dx} ${dy})`
-        : `translate(${dx} ${dy})`;
-      const fillRuleAttr =
-        base.style.fillRule === 'evenodd'
-          ? jsxMode
-            ? ' fillRule="evenodd"'
-            : ' fill-rule="evenodd"'
-          : '';
-      shapeEl = `<path d="${escapeAttr(d)}" transform="${escapeAttr(fullTransform)}" fill="${baseFill}"${fillRuleAttr} />`;
-    } else {
-      const w = roundCss(Math.max(1, base.width));
-      const h = roundCss(Math.max(1, base.height));
-      const radius =
-        (base.type === 'rect' || base.type === 'frame' || base.type === 'image') && base.style.radius
-          ? roundCss(Math.max(0, base.style.radius))
-          : 0;
-      const rxAttr = radius > 0 ? ` rx="${radius}"` : '';
-      const transformAttr = rotTransform ? ` transform="${escapeAttr(rotTransform)}"` : '';
-      shapeEl = `<rect x="${dx}" y="${dy}" width="${w}" height="${h}"${rxAttr} fill="${baseFill}"${transformAttr} />`;
+    let shapeEl = renderMaskTargetShape(base, node, baseFill, new Set<string>());
+    const nonSharedAncestors = getNonSharedContainerAncestors(node, base, nodeById);
+    for (let i = nonSharedAncestors.length - 1; i >= 0; i -= 1) {
+      shapeEl = wrapMaskTransformGroup(nonSharedAncestors[i], node, shapeEl, false);
     }
 
     const nodeRot = node.type === 'group' ? 0 : (node.rotation || 0);
@@ -752,7 +972,10 @@ export function buildNodeCssDeclarations(
     hasRootAutoLayout: boolean;
     originOffset: { x: number; y: number };
     nodeById?: ReadonlyMap<string, DesignNode>;
+    allNodes?: readonly DesignNode[];
     maskPrefix?: string;
+    idPrefix?: string;
+    dynamicTransformTargets?: DynamicTransformTargets;
     morphNodeIds?: ReadonlySet<string>;
     trimNodeIds?: ReadonlySet<string>;
     emittedId?: string;
@@ -765,7 +988,10 @@ export function buildNodeCssDeclarations(
     hasRootAutoLayout,
     originOffset,
     nodeById,
+    allNodes,
     maskPrefix,
+    idPrefix,
+    dynamicTransformTargets,
     morphNodeIds,
     trimNodeIds,
     emittedId,
@@ -1239,7 +1465,15 @@ export function buildNodeCssDeclarations(
     const base = nodeById.get(node.clipMaskBaseId);
     if (base) {
       const mode: 'inside' | 'outside' = node.clipMaskMode === 'outside' ? 'outside' : 'inside';
-      if (needsSvgMaskForClip(node, base)) {
+      const isDynamicTransform = isMaskBaseDynamicallyTransformed(
+        node,
+        base,
+        nodeById,
+        allNodes,
+        idPrefix ?? '',
+        dynamicTransformTargets,
+      );
+      if (needsSvgMaskForClip(node, base, { isDynamicTransform })) {
         const maskId = buildVectorMaskId(maskPrefix ?? 'page', node.id, mode);
         declarations.push(`mask: url(#${maskId});`);
         declarations.push(`-webkit-mask: url(#${maskId});`);
@@ -1325,6 +1559,9 @@ export function compilePageHtmlCss(
   const morphNodeIds = collectPageMorphNodeIds(project, page);
   const trimNodeIds = collectPageTrimNodeIds(project, page);
   const initialMorphSnapshots = collectPageInitialMorphSnapshots(project, page);
+  const dynamicTransformTargets = collectDynamicTransformTargets(
+    getApplicableGraphsForPage(project, page.id),
+  );
   const slug = toPageFileSlug(page.route, page.name);
   const componentsById = new Map<string, ComponentDefinition>(
     project.components.map((component) => [component.id, component]),
@@ -1405,7 +1642,9 @@ export function compilePageHtmlCss(
     isInstanceChild: boolean,
     originOffset: { x: number; y: number },
     activeNodeById: ReadonlyMap<string, DesignNode>,
+    activeAllNodes: readonly DesignNode[],
     maskPrefix: string,
+    idPrefix: string,
     emittedId: string,
   ) => {
     const selector = `.${className}`;
@@ -1416,7 +1655,10 @@ export function compilePageHtmlCss(
       hasRootAutoLayout,
       originOffset,
       nodeById: activeNodeById,
+      allNodes: activeAllNodes,
       maskPrefix,
+      idPrefix,
+      dynamicTransformTargets,
       morphNodeIds,
       trimNodeIds,
       emittedId,
@@ -1510,6 +1752,7 @@ export function compilePageHtmlCss(
     htmlLineOffset: number,
     activeChildrenByParent: Map<string, DesignNode[]>,
     activeNodeById: ReadonlyMap<string, DesignNode>,
+    activeAllNodes: readonly DesignNode[],
     idPrefix: string,
     visitedComponentIds: ReadonlySet<string>,
     componentDepth: number,
@@ -1526,7 +1769,9 @@ export function compilePageHtmlCss(
       isInstanceChild,
       originOffset,
       activeNodeById,
+      activeAllNodes,
       maskPrefix,
+      idPrefix,
       emittedId,
     );
 
@@ -1644,6 +1889,7 @@ export function compilePageHtmlCss(
             htmlLineOffset,
             activeChildrenByParent,
             activeNodeById,
+            activeAllNodes,
             idPrefix,
             visitedComponentIds,
             componentDepth,
@@ -1673,6 +1919,10 @@ export function compilePageHtmlCss(
           `${slug}-${childPrefix}`,
           false,
           needsScale ? `${indent}    ` : `${indent}  `,
+          {
+            idPrefix: childPrefix,
+            dynamicTransformTargets,
+          },
         );
         htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
         if (needsScale) {
@@ -1699,6 +1949,7 @@ export function compilePageHtmlCss(
               htmlLineOffset,
               childMap.childrenByParent,
               childMap.nodeById,
+              resolvedChildren,
               childPrefix,
               nextVisited,
               componentDepth + 1,
@@ -1720,6 +1971,7 @@ export function compilePageHtmlCss(
               htmlLineOffset,
               childMap.childrenByParent,
               childMap.nodeById,
+              resolvedChildren,
               childPrefix,
               nextVisited,
               componentDepth + 1,
@@ -1767,6 +2019,7 @@ export function compilePageHtmlCss(
             htmlLineOffset,
             activeChildrenByParent,
             activeNodeById,
+            activeAllNodes,
             idPrefix,
             visitedComponentIds,
             componentDepth,
@@ -1826,7 +2079,9 @@ export function compilePageHtmlCss(
   );
 
   const htmlLineOffset = htmlPreambleLines.length;
-  const pageMaskDefs = buildVectorMaskDefsLines(solvedNodes, slug, false, '    ');
+  const pageMaskDefs = buildVectorMaskDefsLines(solvedNodes, slug, false, '    ', {
+    dynamicTransformTargets,
+  });
   if (pageMaskDefs.length > 0) {
     htmlBodyLines.push(...pageMaskDefs);
   }
@@ -1842,6 +2097,7 @@ export function compilePageHtmlCss(
       htmlLineOffset,
       childrenByParent,
       nodeById,
+      solvedNodes,
       '',
       emptyVisited,
       0,

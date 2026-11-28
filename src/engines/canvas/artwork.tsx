@@ -48,6 +48,11 @@ import {
   getLayerFrameClipAncestorIds,
   getLayerRenderOrder,
 } from '../../core/document/layers';
+import type { PrototypeNodeOverride } from '../prototype/runtime';
+import {
+  getAncestorGroupSvgTransforms,
+  resolveNodeEffectiveSvgTransform,
+} from './transformUtils';
 
 export type PrimitiveNode = Exclude<DesignNode, ComponentInstanceNode>;
 
@@ -486,15 +491,24 @@ export function NodeShape({
   maskFill = '#fff',
   maskPrefix = 'folio',
   assetById,
+  nodeOverrides,
+  overrideIdPrefix = '',
 }: {
   node: PrimitiveNode;
   mask?: boolean;
   maskFill?: string;
   maskPrefix?: string;
   assetById?: ReadonlyMap<string, AssetReference>;
+  nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
+  overrideIdPrefix?: string;
 }) {
-  const transform = node.rotation
-    ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
+  const { svgTransform: transform } = resolveNodeEffectiveSvgTransform(
+    node,
+    nodeOverrides,
+    overrideIdPrefix,
+  );
+  const scopedMaskBaseId = mask
+    ? (overrideIdPrefix ? `${overrideIdPrefix}${node.id}` : node.id)
     : undefined;
   const filterAttr = !mask && hasSvgFilterEffects(node)
     ? `url(#${buildSvgFilterId(maskPrefix, node.id)})`
@@ -514,6 +528,7 @@ export function NodeShape({
 
   return (
     <g
+      data-mask-base-id={scopedMaskBaseId}
       transform={transform}
       opacity={node.opacity}
       filter={combinedCssFilter ? undefined : filterAttr}
@@ -1081,6 +1096,8 @@ export function ClipMaskArtwork({
   visitedComponentIds,
   depth = 0,
   animationTimeMs,
+  nodeOverrides,
+  overrideIdPrefix = '',
 }: {
   node: DesignNode;
   nodes: DesignNode[];
@@ -1094,19 +1111,48 @@ export function ClipMaskArtwork({
   visitedComponentIds?: ReadonlySet<string>;
   depth?: number;
   animationTimeMs?: number;
+  nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
+  overrideIdPrefix?: string;
 }) {
+  const scopedMaskBaseId = overrideIdPrefix ? `${overrideIdPrefix}${node.id}` : node.id;
+
   if (node.type === 'group') {
     const resolvedNodeById = nodeById ?? new Map(nodes.map((item) => [item.id, item]));
     const states = getEffectiveLayerStates(nodes);
-    const descendants = [...getLayerDescendantIds(nodes, node.id)]
+    const { svgTransform: groupTransform } = resolveNodeEffectiveSvgTransform(
+      node,
+      nodeOverrides,
+      overrideIdPrefix,
+    );
+    const visibleLeafDescendants = [...getLayerDescendantIds(nodes, node.id)]
       .map((id) => resolvedNodeById.get(id))
       .filter((item): item is DesignNode => item !== undefined && item.type !== 'group' && Boolean(states.get(item.id)?.visible));
-    if (descendants.length === 0) {
-      return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill={maskFill} opacity={node.opacity} />;
+    if (visibleLeafDescendants.length === 0) {
+      return (
+        <rect
+          data-mask-base-id={scopedMaskBaseId}
+          x={node.x}
+          y={node.y}
+          width={node.width}
+          height={node.height}
+          fill={maskFill}
+          opacity={node.opacity}
+          transform={groupTransform}
+        />
+      );
     }
+    const visibleLeafSet = new Set(visibleLeafDescendants.map((item) => item.id));
+    const directChildren = nodes.filter((item) => {
+      if (item.parentId !== node.id || !states.get(item.id)?.visible) return false;
+      if (item.type !== 'group') return true;
+      for (const descId of getLayerDescendantIds(nodes, item.id)) {
+        if (visibleLeafSet.has(descId)) return true;
+      }
+      return false;
+    });
     return (
-      <g>
-        {descendants.map((child) => (
+      <g data-mask-base-id={scopedMaskBaseId} transform={groupTransform}>
+        {directChildren.map((child) => (
           <ClipMaskArtwork
             key={child.id}
             node={child}
@@ -1121,6 +1167,8 @@ export function ClipMaskArtwork({
             visitedComponentIds={visitedComponentIds}
             depth={depth}
             animationTimeMs={animationTimeMs}
+            nodeOverrides={nodeOverrides}
+            overrideIdPrefix={overrideIdPrefix}
           />
         ))}
       </g>
@@ -1131,19 +1179,29 @@ export function ClipMaskArtwork({
     const resolvedComponents = getComponentById(components, componentById);
     const component = resolvedComponents.get(node.componentId);
     const visited = visitedComponentIds ?? new Set<string>();
+    const { svgTransform: transform } = resolveNodeEffectiveSvgTransform(
+      node,
+      nodeOverrides,
+      overrideIdPrefix,
+    );
     if (!component || visited.has(node.componentId) || depth >= MAX_COMPONENT_RECURSION_DEPTH) {
-      const transform = node.rotation
-        ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
-        : undefined;
-      return <rect x={node.x} y={node.y} width={node.width} height={node.height} fill={maskFill} opacity={node.opacity} transform={transform} />;
+      return (
+        <rect
+          data-mask-base-id={scopedMaskBaseId}
+          x={node.x}
+          y={node.y}
+          width={node.width}
+          height={node.height}
+          fill={maskFill}
+          opacity={node.opacity}
+          transform={transform}
+        />
+      );
     }
     const nextVisited = new Set(visited);
     nextVisited.add(node.componentId);
     const scaleX = node.width / Math.max(1, component.document.width);
     const scaleY = node.height / Math.max(1, component.document.height);
-    const transform = node.rotation
-      ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
-      : undefined;
     const resolvedBase = resolveComponentInstanceNodes(node, component, tokens);
     const animatedDoc = animationTimeMs !== undefined && component.animations && component.animations.length > 0
       ? evaluateComponentDocumentAtTime({ ...component.document, nodes: resolvedBase }, component.animations, animationTimeMs)
@@ -1158,8 +1216,9 @@ export function ClipMaskArtwork({
     const childFrameClipMap = buildFrameClipAncestorMap(visibleChildren, childNodeById);
     const states = getEffectiveLayerStates(visibleChildren);
     const instanceMaskPrefix = `${maskPrefix}-instmask-${sanitizeMaskIdSegment(node.id)}`;
+    const childOverridePrefix = `${scopedMaskBaseId}__`;
     return (
-      <g transform={transform} opacity={node.opacity}>
+      <g data-mask-base-id={scopedMaskBaseId} transform={transform} opacity={node.opacity}>
         <g transform={`translate(${node.x} ${node.y}) scale(${scaleX} ${scaleY})`}>
           <defs>
             <DocumentMaskDefs
@@ -1177,6 +1236,8 @@ export function ClipMaskArtwork({
               visitedComponentIds={nextVisited}
               depth={depth + 1}
               animationTimeMs={animationTimeMs}
+              nodeOverrides={nodeOverrides}
+              overrideIdPrefix={childOverridePrefix}
             />
           </defs>
           {getLayerRenderOrder(visibleChildren)
@@ -1188,7 +1249,13 @@ export function ClipMaskArtwork({
             .map((child) => {
               const maskIds = childClipMaskMap.get(child.id) ?? [];
               const frameIds = childFrameClipMap.get(child.id) ?? [];
-              const shape = child.type === 'component-instance'
+              const childAncestorTransforms = getAncestorGroupSvgTransforms(
+                child,
+                childNodeById,
+                nodeOverrides,
+                childOverridePrefix,
+              );
+              const rawShape = child.type === 'component-instance'
                 ? (
                   <ClipMaskArtwork
                     key={child.id}
@@ -1204,9 +1271,26 @@ export function ClipMaskArtwork({
                     visitedComponentIds={nextVisited}
                     depth={depth + 1}
                     animationTimeMs={animationTimeMs}
+                    nodeOverrides={nodeOverrides}
+                    overrideIdPrefix={childOverridePrefix}
                   />
                 )
-                : <NodeShape key={child.id} node={child as PrimitiveNode} mask maskFill={maskFill} maskPrefix={instanceMaskPrefix} assetById={assetById} />;
+                : (
+                  <NodeShape
+                    key={child.id}
+                    node={child as PrimitiveNode}
+                    mask
+                    maskFill={maskFill}
+                    maskPrefix={instanceMaskPrefix}
+                    assetById={assetById}
+                    nodeOverrides={nodeOverrides}
+                    overrideIdPrefix={childOverridePrefix}
+                  />
+                );
+              const shape = childAncestorTransforms.reduceRight(
+                (artwork, groupTransform) => <g transform={groupTransform}>{artwork}</g>,
+                rawShape,
+              );
               const clipped = frameIds.reduceRight(
                 (artwork, frameId) => <g clip-path={`url(#${buildFrameClipElementId(instanceMaskPrefix, frameId)})`}>{artwork}</g>,
                 shape,
@@ -1221,7 +1305,17 @@ export function ClipMaskArtwork({
     );
   }
 
-  return <NodeShape node={node as PrimitiveNode} mask maskFill={maskFill} maskPrefix={maskPrefix} assetById={assetById} />;
+  return (
+    <NodeShape
+      node={node as PrimitiveNode}
+      mask
+      maskFill={maskFill}
+      maskPrefix={maskPrefix}
+      assetById={assetById}
+      nodeOverrides={nodeOverrides}
+      overrideIdPrefix={overrideIdPrefix}
+    />
+  );
 }
 
 export function DocumentMaskDefs({
@@ -1239,6 +1333,8 @@ export function DocumentMaskDefs({
   visitedComponentIds,
   depth = 0,
   animationTimeMs,
+  nodeOverrides,
+  overrideIdPrefix = '',
 }: {
   nodes: DesignNode[];
   width: number;
@@ -1254,6 +1350,8 @@ export function DocumentMaskDefs({
   visitedComponentIds?: ReadonlySet<string>;
   depth?: number;
   animationTimeMs?: number;
+  nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
+  overrideIdPrefix?: string;
 }) {
   const resolvedNodeById = nodeById ?? new Map(nodes.map((node) => [node.id, node]));
   const resolvedClipMaskMap = clipMaskMap ?? buildLayerClipMaskMap(nodes, resolvedNodeById);
@@ -1285,18 +1383,15 @@ export function DocumentMaskDefs({
       {referencedBaseIds.map((baseId) => {
         const base = resolvedNodeById.get(baseId);
         if (!base) return null;
-        return (
-          <mask
-            key={`mask-${baseId}`}
-            id={buildMaskElementId(maskPrefix, baseId)}
-            maskUnits="userSpaceOnUse"
-            maskContentUnits="userSpaceOnUse"
-            x="0"
-            y="0"
-            width={width}
-            height={height}
-          >
-            <rect x="0" y="0" width={width} height={height} fill="#000" />
+        const ancestorTransforms = getAncestorGroupSvgTransforms(
+          base,
+          resolvedNodeById,
+          nodeOverrides,
+          overrideIdPrefix,
+        );
+        const maskSilhouette = ancestorTransforms.reduceRight(
+          (artwork, groupTransform) => <g transform={groupTransform}>{artwork}</g>,
+          (
             <ClipMaskArtwork
               node={base}
               nodes={nodes}
@@ -1309,17 +1404,15 @@ export function DocumentMaskDefs({
               visitedComponentIds={visitedComponentIds}
               depth={depth}
               animationTimeMs={animationTimeMs}
+              nodeOverrides={nodeOverrides}
+              overrideIdPrefix={overrideIdPrefix}
             />
-          </mask>
+          ),
         );
-      })}
-      {referencedOutsideBaseIds.map((baseId) => {
-        const base = resolvedNodeById.get(baseId);
-        if (!base) return null;
         return (
           <mask
-            key={`mask-outside-${baseId}`}
-            id={buildOutsideMaskElementId(maskPrefix, baseId)}
+            key={`mask-${baseId}`}
+            id={buildMaskElementId(maskPrefix, baseId)}
             maskUnits="userSpaceOnUse"
             maskContentUnits="userSpaceOnUse"
             x="0"
@@ -1327,7 +1420,23 @@ export function DocumentMaskDefs({
             width={width}
             height={height}
           >
-            <rect x="0" y="0" width={width} height={height} fill="#fff" />
+            <rect x="0" y="0" width={width} height={height} fill="#000" />
+            {maskSilhouette}
+          </mask>
+        );
+      })}
+      {referencedOutsideBaseIds.map((baseId) => {
+        const base = resolvedNodeById.get(baseId);
+        if (!base) return null;
+        const ancestorTransforms = getAncestorGroupSvgTransforms(
+          base,
+          resolvedNodeById,
+          nodeOverrides,
+          overrideIdPrefix,
+        );
+        const maskSilhouette = ancestorTransforms.reduceRight(
+          (artwork, groupTransform) => <g transform={groupTransform}>{artwork}</g>,
+          (
             <ClipMaskArtwork
               node={base}
               nodes={nodes}
@@ -1341,7 +1450,24 @@ export function DocumentMaskDefs({
               visitedComponentIds={visitedComponentIds}
               depth={depth}
               animationTimeMs={animationTimeMs}
+              nodeOverrides={nodeOverrides}
+              overrideIdPrefix={overrideIdPrefix}
             />
+          ),
+        );
+        return (
+          <mask
+            key={`mask-outside-${baseId}`}
+            id={buildOutsideMaskElementId(maskPrefix, baseId)}
+            maskUnits="userSpaceOnUse"
+            maskContentUnits="userSpaceOnUse"
+            x="0"
+            y="0"
+            width={width}
+            height={height}
+          >
+            <rect x="0" y="0" width={width} height={height} fill="#fff" />
+            {maskSilhouette}
           </mask>
         );
       })}
@@ -1349,9 +1475,19 @@ export function DocumentMaskDefs({
         const candidate = resolvedNodeById.get(frameId);
         if (!candidate || candidate.type !== 'frame') return null;
         const frame = candidate as FrameNode;
-        const transform = frame.rotation
-          ? `rotate(${frame.rotation} ${frame.x + frame.width / 2} ${frame.y + frame.height / 2})`
-          : undefined;
+        const { svgTransform: transform } = resolveNodeEffectiveSvgTransform(
+          frame,
+          nodeOverrides,
+          overrideIdPrefix,
+        );
+        const ancestorTransforms = getAncestorGroupSvgTransforms(
+          frame,
+          resolvedNodeById,
+          nodeOverrides,
+          overrideIdPrefix,
+        );
+        const combinedTransform =
+          [...ancestorTransforms, ...(transform ? [transform] : [])].join(' ') || undefined;
         return (
           <clipPath
             key={`frameclip-${frameId}`}
@@ -1364,7 +1500,7 @@ export function DocumentMaskDefs({
               width={frame.width}
               height={frame.height}
               rx={frame.style.radius ?? 0}
-              transform={transform}
+              transform={combinedTransform}
             />
           </clipPath>
         );
@@ -1385,6 +1521,8 @@ export function NodeArtwork({
   visitedComponentIds,
   depth = 0,
   animationTimeMs,
+  nodeOverrides,
+  overrideIdPrefix = '',
 }: {
   node: DesignNode;
   components?: ComponentDefinition[];
@@ -1397,6 +1535,8 @@ export function NodeArtwork({
   visitedComponentIds?: ReadonlySet<string>;
   depth?: number;
   animationTimeMs?: number;
+  nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
+  overrideIdPrefix?: string;
 }) {
   const resolvedAssets = getAssetById(assets, assetById);
 
@@ -1407,9 +1547,13 @@ export function NodeArtwork({
     const blockedByCycle = !component || visited.has(node.componentId) || depth >= MAX_COMPONENT_RECURSION_DEPTH;
     const scaleX = component ? node.width / Math.max(1, component.document.width) : 1;
     const scaleY = component ? node.height / Math.max(1, component.document.height) : 1;
-    const transform = node.rotation
-      ? `rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})`
-      : undefined;
+    const { svgTransform: transform } = resolveNodeEffectiveSvgTransform(
+      node,
+      nodeOverrides,
+      overrideIdPrefix,
+    );
+    const scopedInstanceId = overrideIdPrefix ? `${overrideIdPrefix}${node.id}` : node.id;
+    const childOverridePrefix = `${scopedInstanceId}__`;
     const filterAttr = hasSvgFilterEffects(node)
       ? `url(#${buildSvgFilterId(maskPrefix, node.id)})`
       : undefined;
@@ -1464,6 +1608,8 @@ export function NodeArtwork({
                 visitedComponentIds={nextVisited}
                 depth={depth + 1}
                 animationTimeMs={animationTimeMs}
+                nodeOverrides={nodeOverrides}
+                overrideIdPrefix={childOverridePrefix}
               />
             </defs>
             <rect
@@ -1489,6 +1635,7 @@ export function NodeArtwork({
                   assets={assets}
                   maskPrefix={instanceMaskPrefix}
                   emitNodeId={false}
+                  nodeById={childNodeById}
                   clipMaskMap={childClipMaskMap}
                   frameClipMap={childFrameClipMap}
                   componentById={resolvedComponents}
@@ -1497,6 +1644,8 @@ export function NodeArtwork({
                   visitedComponentIds={nextVisited}
                   depth={depth + 1}
                   animationTimeMs={animationTimeMs}
+                  nodeOverrides={nodeOverrides}
+                  overrideIdPrefix={childOverridePrefix}
                 />
               ))}
           </g>
@@ -1519,7 +1668,13 @@ export function NodeArtwork({
 
   return (
     <g data-node-id={emitNodeId ? node.id : undefined}>
-      <NodeShape node={node as PrimitiveNode} maskPrefix={maskPrefix} assetById={resolvedAssets} />
+      <NodeShape
+        node={node as PrimitiveNode}
+        maskPrefix={maskPrefix}
+        assetById={resolvedAssets}
+        nodeOverrides={nodeOverrides}
+        overrideIdPrefix={overrideIdPrefix}
+      />
     </g>
   );
 }
@@ -1531,6 +1686,7 @@ export function MaskedNodeArtwork({
   assets,
   maskPrefix,
   emitNodeId = true,
+  nodeById,
   clipMaskMap,
   frameClipMap,
   componentById,
@@ -1539,6 +1695,8 @@ export function MaskedNodeArtwork({
   visitedComponentIds,
   depth = 0,
   animationTimeMs,
+  nodeOverrides,
+  overrideIdPrefix = '',
 }: {
   node: DesignNode;
   nodes: DesignNode[];
@@ -1546,6 +1704,7 @@ export function MaskedNodeArtwork({
   assets?: readonly AssetReference[];
   maskPrefix: string;
   emitNodeId?: boolean;
+  nodeById?: ReadonlyMap<string, DesignNode>;
   clipMaskMap?: ReadonlyMap<string, string[]>;
   frameClipMap?: ReadonlyMap<string, string[]>;
   componentById?: ReadonlyMap<string, ComponentDefinition>;
@@ -1554,9 +1713,18 @@ export function MaskedNodeArtwork({
   visitedComponentIds?: ReadonlySet<string>;
   depth?: number;
   animationTimeMs?: number;
+  nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
+  overrideIdPrefix?: string;
 }) {
-  const maskIds = clipMaskMap ? (clipMaskMap.get(node.id) ?? []) : getLayerClipMaskBaseIds(nodes, node.id);
-  const frameIds = frameClipMap ? (frameClipMap.get(node.id) ?? []) : getLayerFrameClipAncestorIds(nodes, node.id);
+  const resolvedNodeById = nodeById ?? new Map(nodes.map((item) => [item.id, item]));
+  const maskIds = clipMaskMap ? (clipMaskMap.get(node.id) ?? []) : getLayerClipMaskBaseIds(nodes, node.id, resolvedNodeById);
+  const frameIds = frameClipMap ? (frameClipMap.get(node.id) ?? []) : getLayerFrameClipAncestorIds(nodes, node.id, resolvedNodeById);
+  const ancestorGroupTransforms = getAncestorGroupSvgTransforms(
+    node,
+    resolvedNodeById,
+    nodeOverrides,
+    overrideIdPrefix,
+  );
   const baseArtwork = (
     <NodeArtwork
       node={node}
@@ -1570,11 +1738,17 @@ export function MaskedNodeArtwork({
       visitedComponentIds={visitedComponentIds}
       depth={depth}
       animationTimeMs={animationTimeMs}
+      nodeOverrides={nodeOverrides}
+      overrideIdPrefix={overrideIdPrefix}
     />
+  );
+  const groupTransformed = ancestorGroupTransforms.reduceRight(
+    (artwork, groupTransform) => <g transform={groupTransform}>{artwork}</g>,
+    baseArtwork,
   );
   const frameClipped = frameIds.reduceRight(
     (artwork, frameId) => <g clip-path={`url(#${buildFrameClipElementId(maskPrefix, frameId)})`}>{artwork}</g>,
-    baseArtwork,
+    groupTransformed,
   );
   return maskIds.reduceRight(
     (artwork, maskId) => {
@@ -1594,12 +1768,14 @@ export function DocumentArtworkContent({
   assets = [],
   maskPrefix,
   tokens,
+  nodeOverrides,
 }: {
   document: FolioDocument;
   components?: ComponentDefinition[];
   assets?: readonly AssetReference[];
   maskPrefix: string;
   tokens?: DesignTokenCollection;
+  nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
 }) {
   const resolvedNodes = computeAutoLayoutNodes(document.nodes, {
     breakpoint: 'desktop',
@@ -1628,6 +1804,7 @@ export function DocumentArtworkContent({
           componentById={componentById}
           assetById={assetById}
           tokens={tokens}
+          nodeOverrides={nodeOverrides}
         />
       </defs>
       {document.background !== '#00000000' && document.background !== 'transparent' && (
@@ -1648,11 +1825,13 @@ export function DocumentArtworkContent({
             components={components}
             assets={assets}
             maskPrefix={maskPrefix}
+            nodeById={nodeById}
             clipMaskMap={clipMaskMap}
             frameClipMap={frameClipMap}
             componentById={componentById}
             assetById={assetById}
             tokens={tokens}
+            nodeOverrides={nodeOverrides}
           />
         ))}
     </>

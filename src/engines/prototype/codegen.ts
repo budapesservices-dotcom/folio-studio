@@ -75,6 +75,62 @@ function graphsUseLiveHttp(graphs: LogicGraph[]): boolean {
 }
 
 /**
+ * Emits a pure, zero-`eval` CSS-to-SVG transform converter matching `transformUtils.ts`
+ * (`cssTransformToSvgTransform`) so Live Preview JS and exported React TSX synchronize
+ * SVG `<mask>` `<g data-folio-mask-base="...">` geometry with CSS `transform` around `(cx, cy)`.
+ */
+export function emitCssTransformToSvgHelperLines(mode: 'js' | 'ts', indent: string): string[] {
+  const isTs = mode === 'ts';
+  const sig = isTs
+    ? `${indent}function folioCssTransformToSvg(cssTransform: string | undefined, cx: number, cy: number, width: number, height: number, fallbackStatic?: string): string | undefined {`
+    : `${indent}function folioCssTransformToSvg(cssTransform, cx, cy, width, height, fallbackStatic) {`;
+  const v = isTs ? 'const' : 'var';
+  const l = isTs ? 'let' : 'var';
+  const numT = isTs ? ': number' : '';
+  const strT = isTs ? ': string' : '';
+  const numOrNull = isTs ? ': number | null' : '';
+  const strArr = isTs ? ': string[]' : '';
+
+  return [
+    sig,
+    `${indent}  ${v} fallback = fallbackStatic || undefined;`,
+    `${indent}  if (typeof cssTransform !== "string") return fallback;`,
+    `${indent}  ${v} trimmed = cssTransform.trim();`,
+    `${indent}  if (!trimmed || trimmed.toLowerCase() === "none") return fallback;`,
+    `${indent}  ${v} rnd = (val${numT})${numT} => { if (!Number.isFinite(val)) return 0; ${v} r = Math.round(val * 10000) / 10000; return Object.is(r, -0) ? 0 : r; };`,
+    `${indent}  ${v} parseLen = (raw${strT}, ref${numT})${numOrNull} => { ${v} m = /^([+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?)(px|%|em|rem|vw|vh)?$/i.exec(raw.trim()); if (!m) return null; ${v} n = Number(m[1]); if (!Number.isFinite(n)) return null; ${v} u = (m[2] || "").toLowerCase(); if (u === "%") return (n / 100) * ref; if (u === "em" || u === "rem") return n * 16; return n; };`,
+    `${indent}  ${v} parseAng = (raw${strT})${numOrNull} => { ${v} m = /^([+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?)(deg|rad|grad|turn)?$/i.exec(raw.trim()); if (!m) return null; ${v} n = Number(m[1]); if (!Number.isFinite(n)) return null; ${v} u = (m[2] || "deg").toLowerCase(); if (u === "rad") return (n * 180) / Math.PI; if (u === "grad") return n * 0.9; if (u === "turn") return n * 360; return n; };`,
+    `${indent}  ${v} parseSc = (raw${strT})${numOrNull} => { ${v} m = /^([+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?)(%)?$/i.exec(raw.trim()); if (!m) return null; ${v} n = Number(m[1]); if (!Number.isFinite(n)) return null; return m[2] === "%" ? n / 100 : n; };`,
+    `${indent}  ${v} re = /([a-zA-Z0-9_-]+)\\s*\\(([^)]*)\\)/g;`,
+    `${indent}  ${v} ops${strArr} = [];`,
+    `${indent}  ${l} onlyTrans = true;`,
+    `${indent}  ${l} m${isTs ? ': RegExpExecArray | null' : ''};`,
+    `${indent}  while ((m = re.exec(trimmed)) !== null) {`,
+    `${indent}    ${v} fn = m[1].toLowerCase();`,
+    `${indent}    ${v} args = m[2].split(/[\\s,]+/).map((p) => p.trim()).filter(Boolean);`,
+    `${indent}    if (!args.length) continue;`,
+    `${indent}    if (fn === "translate" || fn === "translate3d") { ${v} tx = parseLen(args[0], width); ${v} ty = args.length >= 2 ? parseLen(args[1], height) : 0; if (tx !== null && ty !== null) ops.push("translate(" + rnd(tx) + " " + rnd(ty) + ")"); }`,
+    `${indent}    else if (fn === "translatex") { ${v} tx = parseLen(args[0], width); if (tx !== null) ops.push("translate(" + rnd(tx) + " 0)"); }`,
+    `${indent}    else if (fn === "translatey") { ${v} ty = parseLen(args[0], height); if (ty !== null) ops.push("translate(0 " + rnd(ty) + ")"); }`,
+    `${indent}    else if (fn === "rotate" || fn === "rotatez") { ${v} deg = parseAng(args[0]); if (deg !== null) { onlyTrans = false; ops.push("rotate(" + rnd(deg) + ")"); } }`,
+    `${indent}    else if (fn === "scale" || fn === "scale3d") { ${v} sx = parseSc(args[0]); ${v} sy = args.length >= 2 ? parseSc(args[1]) : sx; if (sx !== null && sy !== null) { onlyTrans = false; ops.push("scale(" + rnd(sx) + " " + rnd(sy) + ")"); } }`,
+    `${indent}    else if (fn === "scalex") { ${v} sx = parseSc(args[0]); if (sx !== null) { onlyTrans = false; ops.push("scale(" + rnd(sx) + " 1)"); } }`,
+    `${indent}    else if (fn === "scaley") { ${v} sy = parseSc(args[0]); if (sy !== null) { onlyTrans = false; ops.push("scale(1 " + rnd(sy) + ")"); } }`,
+    `${indent}    else if (fn === "skewx") { ${v} deg = parseAng(args[0]); if (deg !== null) { onlyTrans = false; ops.push("skewX(" + rnd(deg) + ")"); } }`,
+    `${indent}    else if (fn === "skewy") { ${v} deg = parseAng(args[0]); if (deg !== null) { onlyTrans = false; ops.push("skewY(" + rnd(deg) + ")"); } }`,
+    `${indent}    else if (fn === "skew") { ${v} ax = parseAng(args[0]); ${v} ay = args.length >= 2 ? parseAng(args[1]) : 0; if (ax !== null && ay !== null) { onlyTrans = false; ops.push("matrix(1 " + rnd(Math.tan((ay * Math.PI) / 180)) + " " + rnd(Math.tan((ax * Math.PI) / 180)) + " 1 0 0)"); } }`,
+    `${indent}    else if (fn === "matrix" && args.length >= 6) { ${v} ns = args.slice(0, 6).map(Number); if (ns.every(Number.isFinite)) { onlyTrans = false; ops.push("matrix(" + ns.map(rnd).join(" ") + ")"); } }`,
+    `${indent}  }`,
+    `${indent}  if (!ops.length) return fallback;`,
+    `${indent}  if (onlyTrans) return ops.join(" ");`,
+    `${indent}  ${v} rcx = rnd(cx); ${v} rcy = rnd(cy);`,
+    `${indent}  if (rcx === 0 && rcy === 0) return ops.join(" ");`,
+    `${indent}  return "translate(" + rcx + " " + rcy + ") " + ops.join(" ") + " translate(" + rnd(-cx) + " " + rnd(-cy) + ")";`,
+    `${indent}}`,
+  ];
+}
+
+/**
  * Emits the ReDoS-hardened `safeRegexTest` helper for both Live Preview JS and
  * exported React TSX so all three runtimes (Headless, Live Preview, React)
  * maintain exact parity with `analyzeRegexPattern`/`safeRegexTest` in `sanitize.ts`.
@@ -435,6 +491,26 @@ export function buildLivePreviewLogicScript(
     '    var cleaned = val.replace(/[\\u0000-\\u001F\\u007F\\r\\n;{}<>\\\\]/g, "").trim();',
     '    if (!cleaned || UNSAFE_CSS_EXPR.test(cleaned)) return "";',
     '    return cleaned;',
+    '  }',
+    ...emitCssTransformToSvgHelperLines('js', '  '),
+    '  function syncMaskBaseTransform(targetId, cssTransform) {',
+    '    if (!targetId) return;',
+    '    var list = document.querySelectorAll("[data-folio-mask-base]");',
+    '    for (var i = 0; i < list.length; i++) {',
+    '      var maskEl = list[i];',
+    '      if (maskEl.getAttribute("data-folio-mask-base") !== targetId) continue;',
+    '      var cx = Number(maskEl.getAttribute("data-folio-mask-cx") || "0");',
+    '      var cy = Number(maskEl.getAttribute("data-folio-mask-cy") || "0");',
+    '      var w = Number(maskEl.getAttribute("data-folio-mask-w") || "0");',
+    '      var h = Number(maskEl.getAttribute("data-folio-mask-h") || "0");',
+    '      var staticTr = maskEl.getAttribute("data-folio-mask-static-transform") || "";',
+    '      var nextSvg = folioCssTransformToSvg(cssTransform, cx, cy, w, h, staticTr);',
+    '      if (nextSvg) {',
+    '        maskEl.setAttribute("transform", nextSvg);',
+    '      } else {',
+    '        maskEl.removeAttribute("transform");',
+    '      }',
+    '    }',
     '  }',
     '  function findEl(id) {',
     '    if (!id) return null;',
@@ -1159,6 +1235,7 @@ export function buildLivePreviewLogicScript(
     '            if (!rawTr || safeTr) {',
     '              appliedVal = safeTr;',
     '              slEl.style.transform = safeTr;',
+    '              syncMaskBaseTransform(slTarget, safeTr);',
     '            }',
     '          } else if (slProp === "image") {',
     '            var imgUrl = String(hasSlVal ? (slVal || "") : (n.data.imageUrl || "")).replace(/[\\u0000-\\u001F\\u007F]/g, "").trim();',

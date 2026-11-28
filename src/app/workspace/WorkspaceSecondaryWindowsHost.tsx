@@ -14,6 +14,7 @@ import type { useSelectionAndVectorActions } from './useSelectionAndVectorAction
 import type { useWorkspaceMotionBridge } from './useWorkspaceMotionBridge';
 import type { useWorkspaceToolState } from './useWorkspaceToolState';
 import type { useWorkspaceWindows } from './useWorkspaceWindows';
+import type { PrototypeNodeOverride, PrototypeRuntimeSnapshot } from '../../engines/prototype/runtime';
 
 export interface WorkspaceSecondaryWindowsHostProps {
   project: FolioProject;
@@ -47,6 +48,12 @@ export interface WorkspaceSecondaryWindowsHostProps {
     dropPoint?: { x: number; y: number },
   ) => Promise<void>;
   onNotice: (message: string) => void;
+  componentNodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
+  onRuntimeSnapshotChange?: (
+    snapshot: PrototypeRuntimeSnapshot | null,
+    scope: 'page' | 'component' | 'project',
+    targetId?: string,
+  ) => void;
 }
 
 export function WorkspaceSecondaryWindowsHost({
@@ -77,6 +84,8 @@ export function WorkspaceSecondaryWindowsHost({
   onSetActiveEditorId,
   onInsertImageFiles,
   onNotice,
+  componentNodeOverrides,
+  onRuntimeSnapshotChange,
 }: WorkspaceSecondaryWindowsHostProps) {
   return (
     <>
@@ -194,6 +203,7 @@ export function WorkspaceSecondaryWindowsHost({
         showMorphCorrespondence={activeEditorId === 'component' && motion.motionOpen && pathStudio.showMorphCorrespondence}
         morphCorrespondenceMetaByNodeId={activeEditorId === 'component' ? pathStudio.morphCorrespondenceMetaByNodeId : undefined}
         onPickMorphStartVertex={activeEditorId === 'component' && motion.motionOpen ? pathStudio.handlePickMorphStartVertex : undefined}
+        nodeOverrides={componentNodeOverrides}
       />
 
       <NodeLogicWindow
@@ -241,6 +251,7 @@ export function WorkspaceSecondaryWindowsHost({
           windows.setNodeLogicClosed(true);
           windows.setNodeLogicMinimized(false);
         }}
+        onRuntimeSnapshotChange={onRuntimeSnapshotChange}
       />
     </>
   );

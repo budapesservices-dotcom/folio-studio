@@ -107,6 +107,11 @@ export interface NodeLogicWorkspaceProps {
   } | null;
   autoArrangeRequestNonce?: number;
   onActiveGraphNodeCountChange?: (nodeCount: number) => void;
+  onRuntimeSnapshotChange?: (
+    snapshot: PrototypeRuntimeSnapshot | null,
+    scope: 'page' | 'component' | 'project',
+    targetId?: string,
+  ) => void;
 }
 
 interface WirePatchState {
@@ -202,6 +207,7 @@ export default function NodeLogicWorkspace({
   focusRequest = null,
   autoArrangeRequestNonce = 0,
   onActiveGraphNodeCountChange,
+  onRuntimeSnapshotChange,
 }: NodeLogicWorkspaceProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const topbarRef = useRef<HTMLDivElement | null>(null);
@@ -485,12 +491,34 @@ export default function NodeLogicWorkspace({
     activeGraph?.scope === 'page' && activeGraph.targetId
       ? activeGraph.targetId
       : activePage.id;
+  const targetComponentIdForRuntime =
+    activeGraph?.scope === 'component' && activeGraph.targetId
+      ? activeGraph.targetId
+      : undefined;
 
   useEffect(() => {
-    const nextRuntime = createPrototypeRuntime(project, { pageId: targetPageIdForRuntime });
+    const nextRuntime = createPrototypeRuntime(project, {
+      pageId: targetPageIdForRuntime,
+      ...(targetComponentIdForRuntime ? { componentId: targetComponentIdForRuntime } : {}),
+    });
     runtimeRef.current = nextRuntime;
     setRuntimeSnapshot(nextRuntime.getSnapshot());
-  }, [project, targetPageIdForRuntime]);
+  }, [project, targetPageIdForRuntime, targetComponentIdForRuntime]);
+
+  useEffect(() => {
+    const scope = activeGraph?.scope ?? 'page';
+    const targetId =
+      scope === 'component'
+        ? targetComponentIdForRuntime
+        : scope === 'page'
+          ? targetPageIdForRuntime
+          : undefined;
+    onRuntimeSnapshotChange?.(runtimeSnapshot, scope, targetId);
+  }, [runtimeSnapshot, activeGraph?.scope, targetComponentIdForRuntime, targetPageIdForRuntime, onRuntimeSnapshotChange]);
+
+  useEffect(() => () => {
+    onRuntimeSnapshotChange?.(null, 'page', undefined);
+  }, [onRuntimeSnapshotChange]);
 
   const commitGraphUpdate = useCallback(
     (nextGraph: LogicGraph, description: string) => {

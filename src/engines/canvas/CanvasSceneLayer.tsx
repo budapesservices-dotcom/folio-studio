@@ -8,6 +8,7 @@ import type {
 } from '../../core/document/types';
 import { DocumentMaskDefs, MaskedNodeArtwork } from './artwork';
 import { buildSmoothSvgTrailPath } from './canvasHelpers';
+import type { PrototypeNodeOverride } from '../prototype/runtime';
 
 export interface LiveEraserPreview {
   readonly points: ReadonlyArray<{ x: number; y: number }>;
@@ -40,6 +41,8 @@ export interface CanvasSceneLayerProps {
   readonly assetCacheRevision?: number;
   /** Active animation playback clock (ms) for live embedded ComponentInstance animations. */
   readonly animationTimeMs?: number;
+  /** Active Node Logic runtime node overrides (e.g. transform) for real-time Canvas & clip-mask sync. */
+  readonly nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
 }
 
 /**
@@ -67,6 +70,7 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
   hiddenNodeIds,
   liveEraserPreview,
   animationTimeMs,
+  nodeOverrides,
 }: CanvasSceneLayerProps) {
   const artboardClipId = `${maskPrefix}--artboard-clip`;
   const checkerboardId = `${maskPrefix}--checkerboard`;
@@ -143,6 +147,7 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
           assetById={assetById}
           tokens={tokens}
           animationTimeMs={animationTimeMs}
+          nodeOverrides={nodeOverrides}
         />
       </defs>
       <rect
@@ -165,12 +170,14 @@ export const CanvasSceneLayer = memo(function CanvasSceneLayer({
               components={components as ComponentDefinition[]}
               assets={assets}
               maskPrefix={maskPrefix}
+              nodeById={nodeById as Map<string, DesignNode>}
               clipMaskMap={clipMaskMap as Map<string, string[]>}
               frameClipMap={frameClipMap as Map<string, string[]>}
               componentById={componentById as Map<string, ComponentDefinition>}
               assetById={assetById}
               tokens={tokens}
               animationTimeMs={animationTimeMs}
+              nodeOverrides={nodeOverrides}
             />
           );
           if (hasLiveSliceMask && isEraserTarget) {

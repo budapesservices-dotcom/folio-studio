@@ -18,6 +18,7 @@ import { StudioIcon } from './StudioIcon';
 import { isTransparentColor, parseColorWithAlpha } from '../../core/document/styling';
 import type { StudioVectorActions } from './inspectorVectorHelpers';
 import type { ComponentRecoveryStatus } from './useComponentMasterLifecycle';
+import type { PrototypeNodeOverride, PrototypeRuntimeSnapshot } from '../../engines/prototype/runtime';
 
 const CANVAS_BG_PRESETS = ['#FFFFFF', '#111827'] as const;
 const COMPONENT_SIZE_PRESETS = [
@@ -423,6 +424,7 @@ export interface MainCanvasWindowProps {
   showMorphCorrespondence?: boolean;
   morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
   onPickMorphStartVertex?: (nodeId: string, shiftDelta: number, vertexCount: number) => void;
+  nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
 }
 
 export function MainCanvasWindow({
@@ -490,6 +492,7 @@ export function MainCanvasWindow({
   showMorphCorrespondence,
   morphCorrespondenceMetaByNodeId,
   onPickMorphStartVertex,
+  nodeOverrides,
 }: MainCanvasWindowProps) {
   const [rendererMode, setRendererMode] = useState<ViewportRendererMode>('auto');
   const [gpuMetrics, setGpuMetrics] = useState<GpuSceneMetrics | null>(null);
@@ -663,6 +666,7 @@ export function MainCanvasWindow({
               showMorphCorrespondence={showMorphCorrespondence}
               morphCorrespondenceMetaByNodeId={morphCorrespondenceMetaByNodeId}
               onPickMorphStartVertex={onPickMorphStartVertex}
+              nodeOverrides={nodeOverrides}
             />
           </div>
         </FloatingWindow>
@@ -774,6 +778,7 @@ export interface ComponentCanvasWindowProps {
   showMorphCorrespondence?: boolean;
   morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
   onPickMorphStartVertex?: (nodeId: string, shiftDelta: number, vertexCount: number) => void;
+  nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
 }
 
 export function ComponentCanvasWindow({
@@ -847,6 +852,7 @@ export function ComponentCanvasWindow({
   showMorphCorrespondence,
   morphCorrespondenceMetaByNodeId,
   onPickMorphStartVertex,
+  nodeOverrides,
 }: ComponentCanvasWindowProps) {
   const safeDocument = normalizeCanvasDocument(document);
   const safeNodes = safeDocument?.nodes ?? [];
@@ -1060,6 +1066,7 @@ export function ComponentCanvasWindow({
                 showMorphCorrespondence={showMorphCorrespondence}
                 morphCorrespondenceMetaByNodeId={morphCorrespondenceMetaByNodeId}
                 onPickMorphStartVertex={onPickMorphStartVertex}
+                nodeOverrides={nodeOverrides}
               />
             ) : (
               <div class="component-canvas-empty" role="status">
@@ -1124,6 +1131,11 @@ export interface NodeLogicWindowProps {
   onToggleFloating: () => void;
   onClose: () => void;
   onCloseMinimized: () => void;
+  onRuntimeSnapshotChange?: (
+    snapshot: PrototypeRuntimeSnapshot | null,
+    scope: 'page' | 'component' | 'project',
+    targetId?: string,
+  ) => void;
 }
 
 export function NodeLogicWindow({
@@ -1150,6 +1162,7 @@ export function NodeLogicWindow({
   onToggleFloating,
   onClose,
   onCloseMinimized,
+  onRuntimeSnapshotChange,
 }: NodeLogicWindowProps) {
   const [autoArrangeRequestNonce, setAutoArrangeRequestNonce] = useState(0);
   const [activeGraphNodeCount, setActiveGraphNodeCount] = useState<number | null>(null);
@@ -1227,6 +1240,7 @@ export function NodeLogicWindow({
                 focusRequest={focusRequest}
                 autoArrangeRequestNonce={autoArrangeRequestNonce}
                 onActiveGraphNodeCountChange={setActiveGraphNodeCount}
+                onRuntimeSnapshotChange={onRuntimeSnapshotChange}
               />
             </Suspense>
           </div>

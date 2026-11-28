@@ -141,6 +141,8 @@ export interface PrototypeAuthContext {
 
 export interface PrototypeRuntimeOptions {
   pageId?: string;
+  /** Optional master Component ID for simulating component-scoped Node Logic directly on Component Canvas. */
+  componentId?: string;
   maxSteps?: number;
   urlParams?: Readonly<Record<string, string>>;
   storage?: {
@@ -627,6 +629,59 @@ export function createPrototypeRuntime(
     recomputeComputedVariables();
   };
 
+  const targetComponent = options.componentId
+    ? componentsById.get(options.componentId)
+    : undefined;
+
+  const loadComponentContext = (component: ComponentDefinition, preserveVariables: boolean) => {
+    activePageId = component.id;
+    activeRoute = initialPage.route;
+    astNodesById = new Map(component.document.nodes.map((node) => [node.id, node]));
+    const applicable = project.logicGraphs.filter(
+      (graph) =>
+        graph.scope === 'project' ||
+        (graph.scope === 'component' && graph.targetId === component.id),
+    );
+    indexedGraphs = applicable.map(indexGraph);
+
+    if (!preserveVariables) {
+      variables = {};
+      variableTypes = new Map();
+      variableInitialValues = new Map();
+      variableNameToId = new Map();
+      variablePersist = new Map();
+      variableComputed = new Map();
+    }
+
+    for (const entry of indexedGraphs) {
+      for (const variable of entry.graph.variables ?? []) {
+        variableTypes.set(variable.id, variable.valueType);
+        const normalizedInitial = coerceVariableValue(
+          variable.initialValue,
+          variable.valueType,
+          variable.initialValue,
+        );
+        variableInitialValues.set(variable.id, normalizedInitial);
+        variableNameToId.set(variable.name, variable.id);
+        variableNameToId.set(variable.name.toLowerCase(), variable.id);
+        if (variable.persist === 'local' || variable.persist === 'session') {
+          variablePersist.set(variable.id, variable.persist);
+        }
+        if (variable.computed && typeof variable.computedExpression === 'string' && variable.computedExpression.trim()) {
+          variableComputed.set(variable.id, variable.computedExpression.trim());
+        }
+        if (!Object.prototype.hasOwnProperty.call(variables, variable.id)) {
+          const persisted =
+            variable.persist === 'local' || variable.persist === 'session'
+              ? readPersistedVariable(variable.id, variable.persist, variable.valueType, normalizedInitial)
+              : undefined;
+          variables[variable.id] = persisted !== undefined ? persisted : normalizedInitial;
+        }
+      }
+    }
+    recomputeComputedVariables();
+  };
+
   const resetState = () => {
     activeThemeId = tokens.activeThemeId;
     mounted = false;
@@ -640,7 +695,11 @@ export function createPrototypeRuntime(
     warnings = [];
     firedOnceEvents = new Set();
     executionCounter = 0;
-    loadPageContext(initialPage, false);
+    if (targetComponent) {
+      loadComponentContext(targetComponent, false);
+    } else {
+      loadPageContext(initialPage, false);
+    }
   };
 
   resetState();

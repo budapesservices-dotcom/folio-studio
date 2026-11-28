@@ -37,10 +37,34 @@ import { StatusBar } from './workspace/StatusBar';
 import { WorkspaceInspectorHost } from './workspace/WorkspaceInspectorHost';
 import { WorkspaceSecondaryWindowsHost } from './workspace/WorkspaceSecondaryWindowsHost';
 import { WorkspaceShellOverlays } from './workspace/WorkspaceShellOverlays';
+import type { PrototypeNodeOverride, PrototypeRuntimeSnapshot } from '../engines/prototype/runtime';
 
 export function App() {
   const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
   const [notice, setNotice] = useState('');
+  const [logicRuntimeState, setLogicRuntimeState] = useState<{
+    readonly scope: 'page' | 'component' | 'project';
+    readonly targetId?: string;
+    readonly nodeOverrides: Readonly<Record<string, PrototypeNodeOverride>>;
+  } | null>(null);
+  const handleLogicRuntimeSnapshotChange = useCallback(
+    (
+      snapshot: PrototypeRuntimeSnapshot | null,
+      scope: 'page' | 'component' | 'project',
+      targetId?: string,
+    ) => {
+      if (!snapshot || Object.keys(snapshot.nodeOverrides).length === 0) {
+        setLogicRuntimeState(null);
+        return;
+      }
+      setLogicRuntimeState({
+        scope,
+        targetId,
+        nodeOverrides: snapshot.nodeOverrides,
+      });
+    },
+    [],
+  );
   const appShellRef = useRef<HTMLDivElement | null>(null);
   const selectionSourceRef = useRef<'layers' | 'canvas'>('canvas');
   const clipboardRef = useRef<StudioClipboardPayload | null>(null);
@@ -649,6 +673,14 @@ export function App() {
         showMorphCorrespondence={activeEditorId === 'main' && motion.motionOpen && pathStudio.showMorphCorrespondence}
         morphCorrespondenceMetaByNodeId={activeEditorId === 'main' ? pathStudio.morphCorrespondenceMetaByNodeId : undefined}
         onPickMorphStartVertex={activeEditorId === 'main' && motion.motionOpen ? pathStudio.handlePickMorphStartVertex : undefined}
+        nodeOverrides={
+          logicRuntimeState &&
+          (logicRuntimeState.scope === 'project' ||
+            (logicRuntimeState.scope === 'page' &&
+              (!logicRuntimeState.targetId || logicRuntimeState.targetId === activePageId)))
+            ? logicRuntimeState.nodeOverrides
+            : undefined
+        }
       />
 
       <WorkspaceSecondaryWindowsHost
@@ -679,6 +711,15 @@ export function App() {
         onSetActiveEditorId={setActiveEditorId}
         onInsertImageFiles={handleInsertImageFiles}
         onNotice={setNotice}
+        componentNodeOverrides={
+          logicRuntimeState &&
+          logicRuntimeState.scope === 'component' &&
+          componentMaster.editingComponent &&
+          componentMaster.editingComponent.id === logicRuntimeState.targetId
+            ? logicRuntimeState.nodeOverrides
+            : undefined
+        }
+        onRuntimeSnapshotChange={handleLogicRuntimeSnapshotChange}
       />
 
       <WorkspaceInspectorHost

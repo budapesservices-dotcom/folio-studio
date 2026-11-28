@@ -38,6 +38,8 @@ import {
   type ToolOperation,
 } from '../../core/tools/operationContract';
 import { sanitizeMaskIdSegment } from './artwork';
+import { hasActiveTransformOverrides } from './transformUtils';
+import type { PrototypeNodeOverride } from '../prototype/runtime';
 import {
   buildCanvasPointerInput,
   buildSpatialIndexForNodes,
@@ -161,6 +163,7 @@ interface CanvasProps {
   showMorphCorrespondence?: boolean;
   morphCorrespondenceMetaByNodeId?: Readonly<Record<string, MorphCorrespondenceMeta>>;
   onPickMorphStartVertex?: (nodeId: string, shiftDelta: number, vertexCount: number) => void;
+  nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>;
 }
 
 interface PanSession {
@@ -224,6 +227,7 @@ export function Canvas({
   showMorphCorrespondence,
   morphCorrespondenceMetaByNodeId,
   onPickMorphStartVertex,
+  nodeOverrides,
 }: CanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
@@ -698,8 +702,14 @@ export function Canvas({
     [animationTimeMs, sceneCanvasNodes, components],
   );
 
+  const hasRuntimeTransformOverrides = useMemo(
+    () => hasActiveTransformOverrides(nodeOverrides),
+    [nodeOverrides],
+  );
+
   const gpuHybridActive =
     !hasAnimatedComponentInstance &&
+    !hasRuntimeTransformOverrides &&
     (rendererMode === 'gpu-hybrid' ||
       (rendererMode === 'auto' && sceneCanvasNodes.length >= GPU_HYBRID_AUTO_THRESHOLD));
 
@@ -1954,6 +1964,7 @@ export function Canvas({
                 liveEraserPreview={liveEraserPreview}
                 assetCacheRevision={assetCacheRevision}
                 animationTimeMs={animationTimeMs}
+                nodeOverrides={nodeOverrides}
               />
             )}
 
@@ -1998,6 +2009,7 @@ export function Canvas({
             hoverPoint={hoverPoint}
             eyedropperLoupe={eyedropperLoupe}
             guides={guides}
+            nodeOverrides={nodeOverrides}
           />
 
           <MotionPathOverlay
