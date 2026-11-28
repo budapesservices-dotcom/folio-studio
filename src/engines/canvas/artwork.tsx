@@ -1202,7 +1202,17 @@ export function ClipMaskArtwork({
     nextVisited.add(node.componentId);
     const scaleX = node.width / Math.max(1, component.document.width);
     const scaleY = node.height / Math.max(1, component.document.height);
-    const resolvedBase = resolveComponentInstanceNodes(node, component, tokens);
+    const instanceVariantOverride = nodeOverrides?.[scopedMaskBaseId]?.variantSelection;
+    const effectiveInstanceNode = instanceVariantOverride
+      ? {
+          ...node,
+          variantSelection: {
+            ...(node.variantSelection ?? {}),
+            ...instanceVariantOverride,
+          },
+        }
+      : node;
+    const resolvedBase = resolveComponentInstanceNodes(effectiveInstanceNode, component, tokens);
     const animatedDoc = animationTimeMs !== undefined && component.animations && component.animations.length > 0
       ? evaluateComponentDocumentAtTime({ ...component.document, nodes: resolvedBase }, component.animations, animationTimeMs)
       : null;
@@ -1562,9 +1572,19 @@ export function NodeArtwork({
       : undefined;
     const nextVisited = new Set(visited);
     nextVisited.add(node.componentId);
+    const instanceVariantOverride = nodeOverrides?.[scopedInstanceId]?.variantSelection;
+    const effectiveInstanceNode = instanceVariantOverride
+      ? {
+          ...node,
+          variantSelection: {
+            ...(node.variantSelection ?? {}),
+            ...instanceVariantOverride,
+          },
+        }
+      : node;
     const resolvedChildren = component && !blockedByCycle
       ? (() => {
-          const resolvedBase = resolveComponentInstanceNodes(node, component, tokens);
+          const resolvedBase = resolveComponentInstanceNodes(effectiveInstanceNode, component, tokens);
           const animatedDoc = animationTimeMs !== undefined && component.animations && component.animations.length > 0
             ? evaluateComponentDocumentAtTime({ ...component.document, nodes: resolvedBase }, component.animations, animationTimeMs)
             : null;

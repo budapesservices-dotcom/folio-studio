@@ -38,7 +38,7 @@ import {
   type ToolOperation,
 } from '../../core/tools/operationContract';
 import { sanitizeMaskIdSegment } from './artwork';
-import { hasActiveTransformOverrides } from './transformUtils';
+import { hasActiveTransformOverrides, hasActiveVariantOverrides } from './transformUtils';
 import type { PrototypeNodeOverride } from '../prototype/runtime';
 import {
   buildCanvasPointerInput,
@@ -702,14 +702,14 @@ export function Canvas({
     [animationTimeMs, sceneCanvasNodes, components],
   );
 
-  const hasRuntimeTransformOverrides = useMemo(
-    () => hasActiveTransformOverrides(nodeOverrides),
+  const hasRuntimeOverrides = useMemo(
+    () => hasActiveTransformOverrides(nodeOverrides) || hasActiveVariantOverrides(nodeOverrides),
     [nodeOverrides],
   );
 
   const gpuHybridActive =
     !hasAnimatedComponentInstance &&
-    !hasRuntimeTransformOverrides &&
+    !hasRuntimeOverrides &&
     (rendererMode === 'gpu-hybrid' ||
       (rendererMode === 'auto' && sceneCanvasNodes.length >= GPU_HYBRID_AUTO_THRESHOLD));
 

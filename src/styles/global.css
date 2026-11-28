@@ -3710,7 +3710,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .contract-options-list {
   display: flex;
   flex-direction: column;
+  gap: 6px;
+}
+
+.contract-option-card {
+  display: flex;
+  flex-direction: column;
   gap: 4px;
+  padding: 4px 6px 6px;
+  border: 1px solid #262f42;
+  border-radius: 5px;
+  background: #1c2332;
 }
 
 .contract-option-row {
@@ -3718,14 +3728,97 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 3px 6px;
-  border-radius: 4px;
-  background: #1c2332;
+  padding: 2px 0;
 }
 
 .contract-option-label {
   color: #cfd7e7;
   font-size: 10.5px;
+  font-weight: 600;
+}
+
+.contract-option-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.contract-option-layer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(15, 20, 30, 0.55);
+}
+
+.contract-option-layer-row.is-hidden-layer .contract-option-layer-label {
+  color: #7c879d;
+  text-decoration: line-through;
+}
+
+.contract-option-layer-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.contract-option-layer-type {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(139, 124, 246, 0.14);
+  color: #aeb8cc;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+.contract-option-layer-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #d6deed;
+  font-size: 10px;
+}
+
+.contract-layer-vis-btn {
+  flex: 0 0 auto;
+  min-width: 50px;
+  padding: 2px 6px;
+  border: 1px solid #334059;
+  border-radius: 4px;
+  background: #1a2233;
+  color: #c8d3e8;
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.contract-layer-vis-btn:hover {
+  border-color: #6b7fa6;
+  color: #ffffff;
+}
+
+.contract-layer-vis-btn.is-visible.has-override {
+  border-color: rgba(45, 212, 191, 0.55);
+  background: rgba(45, 212, 191, 0.14);
+  color: #99f6e4;
+}
+
+.contract-layer-vis-btn.is-hidden {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fca5a5;
 }
 
 .contract-mini-swatch {

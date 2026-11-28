@@ -4,12 +4,75 @@ import type {
   ComponentInstanceNode,
   ComponentSlotDefinition,
   ComponentVariantAxis,
+  ComponentVariantOption,
+  DesignNode,
 } from '../../core/document/types';
 import {
   createComponentSlot,
   createComponentVariantAxis,
   getEffectiveVariantSelection,
+  isOverrideFieldCompatibleWithNodeType,
 } from '../../core/document/components';
+import { getLayerPanelRows } from '../../core/document/layers';
+
+export function getEffectiveVariantOptionLayerVisibility(
+  option: Pick<ComponentVariantOption, 'overrides'>,
+  node: Pick<DesignNode, 'id' | 'visible'>,
+): boolean {
+  const overrideVisible = option.overrides[node.id]?.visible;
+  return overrideVisible !== undefined ? overrideVisible : node.visible;
+}
+
+export function updateVariantOptionLayerVisibility(
+  variants: readonly ComponentVariantAxis[],
+  axisId: string,
+  optionId: string,
+  targetNodeId: string,
+  visible: boolean,
+): ComponentVariantAxis[] {
+  return variants.map((axis) => {
+    if (axis.id !== axisId) return axis;
+    return {
+      ...axis,
+      options: axis.options.map((opt) => {
+        if (opt.id !== optionId) return opt;
+        return {
+          ...opt,
+          overrides: {
+            ...opt.overrides,
+            [targetNodeId]: {
+              ...(opt.overrides[targetNodeId] ?? {}),
+              visible,
+            },
+          },
+        };
+      }),
+    };
+  });
+}
+
+function getLayerTypeBadge(type: DesignNode['type']): string {
+  switch (type) {
+    case 'frame':
+      return 'Frame';
+    case 'rect':
+      return 'Rect';
+    case 'ellipse':
+      return 'Ellipse';
+    case 'path':
+      return 'Path';
+    case 'text':
+      return 'Text';
+    case 'group':
+      return 'Group';
+    case 'image':
+      return 'Image';
+    case 'component-instance':
+      return 'Instance';
+    default:
+      return type;
+  }
+}
 
 export interface InspectorComponentContractSectionProps {
   /** Present when inspecting a Component Instance on Main Canvas. */
@@ -164,6 +227,9 @@ export function InspectorComponentContractSection({
     const masterNodes = Array.isArray(editingMasterComponent.document?.nodes)
       ? editingMasterComponent.document.nodes
       : [];
+    const visibleOverrideLayerRows = getLayerPanelRows(masterNodes).filter((row) =>
+      isOverrideFieldCompatibleWithNodeType(row.node.type, 'visible'),
+    );
     const variants = editingMasterComponent.variants ?? [];
     const slots = editingMasterComponent.slots ?? [];
     const primaryStylableNode = masterNodes.find(
@@ -224,6 +290,22 @@ export function InspectorComponentContractSection({
       onUpdateMasterContract(editingMasterComponent, { variants: nextVariants });
     };
 
+    const handleSetOptionLayerVisibility = (
+      axisId: string,
+      optionId: string,
+      targetNodeId: string,
+      visible: boolean,
+    ) => {
+      const nextVariants = updateVariantOptionLayerVisibility(
+        variants,
+        axisId,
+        optionId,
+        targetNodeId,
+        visible,
+      );
+      onUpdateMasterContract(editingMasterComponent, { variants: nextVariants });
+    };
+
     const handleAddSlot = () => {
       if (!defaultSlotTarget) return;
       const targetNode = masterNodes.find((n) => n.id === defaultSlotTarget);
@@ -275,19 +357,64 @@ export function InspectorComponentContractSection({
                     ? (opt.overrides[targetId]?.fill ?? (primaryStylableNode && 'style' in primaryStylableNode ? primaryStylableNode.style.fill : '#8B7CF6'))
                     : '#8B7CF6';
                   return (
-                    <div class="contract-option-row" key={opt.id}>
-                      <span class="contract-option-label">
-                        {opt.label}{opt.id === axis.defaultOptionId ? ' (default)' : ''}
-                      </span>
-                      {targetId && (
-                        <input
-                          type="color"
-                          class="contract-mini-swatch"
-                          title={`Fill override for ${opt.label}`}
-                          aria-label={`Fill override for ${axis.name} ${opt.label}`}
-                          value={fillVal.startsWith('#') && fillVal.length >= 7 ? fillVal.slice(0, 7) : '#8B7CF6'}
-                          onInput={(event) => handleSetOptionFill(axis.id, opt.id, targetId, event.currentTarget.value)}
-                        />
+                    <div class="contract-option-card" key={opt.id} data-variant-option-id={opt.id}>
+                      <div class="contract-option-row">
+                        <span class="contract-option-label">
+                          {opt.label}{opt.id === axis.defaultOptionId ? ' (default)' : ''}
+                        </span>
+                        {targetId && (
+                          <input
+                            type="color"
+                            class="contract-mini-swatch"
+                            title={`Fill override for ${opt.label}`}
+                            aria-label={`Fill override for ${axis.name} ${opt.label}`}
+                            value={fillVal.startsWith('#') && fillVal.length >= 7 ? fillVal.slice(0, 7) : '#8B7CF6'}
+                            onInput={(event) => handleSetOptionFill(axis.id, opt.id, targetId, event.currentTarget.value)}
+                          />
+                        )}
+                      </div>
+                      {visibleOverrideLayerRows.length > 0 && (
+                        <div
+                          class="contract-option-layers"
+                          role="group"
+                          aria-label={`Layer visibility for ${axis.name} ${opt.label}`}
+                        >
+                          {visibleOverrideLayerRows.map(({ node, depth }) => {
+                            const isVisible = getEffectiveVariantOptionLayerVisibility(opt, node);
+                            const hasExplicitOverride = opt.overrides[node.id]?.visible !== undefined;
+                            return (
+                              <div
+                                class={`contract-option-layer-row${isVisible ? '' : ' is-hidden-layer'}`}
+                                key={node.id}
+                                data-variant-axis-id={axis.id}
+                                data-variant-option-id={opt.id}
+                                data-layer-id={node.id}
+                                style={depth > 0 ? { paddingLeft: `${Math.min(depth, 4) * 10}px` } : undefined}
+                              >
+                                <span class="contract-option-layer-name" title={`${node.name} (${getLayerTypeBadge(node.type)})`}>
+                                  <span class="contract-option-layer-type">{getLayerTypeBadge(node.type)}</span>
+                                  <span class="contract-option-layer-label">{node.name}</span>
+                                </span>
+                                <button
+                                  type="button"
+                                  class={`contract-layer-vis-btn${isVisible ? ' is-visible' : ' is-hidden'}${hasExplicitOverride ? ' has-override' : ''}`}
+                                  aria-pressed={isVisible}
+                                  aria-label={`Toggle visibility for ${node.name} in ${axis.name} ${opt.label}`}
+                                  title={
+                                    isVisible
+                                      ? `Visible in ${opt.label} — click to hide`
+                                      : `Hidden in ${opt.label} — click to show`
+                                  }
+                                  onClick={() =>
+                                    handleSetOptionLayerVisibility(axis.id, opt.id, node.id, !isVisible)
+                                  }
+                                >
+                                  {isVisible ? 'Visible' : 'Hidden'}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
                   );

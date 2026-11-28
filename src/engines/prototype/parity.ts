@@ -187,20 +187,25 @@ export interface CompiledRuntimeNodeMeta {
   readonly children?: readonly CompiledOriginChildMeta[];
   readonly baseText?: string;
   readonly baseFill?: string;
+  readonly baseStroke?: string;
   readonly baseVisible?: boolean;
   readonly lockText?: boolean;
   readonly lockFill?: boolean;
+  readonly lockStroke?: boolean;
   readonly lockVisible?: boolean;
+  readonly variantSelection?: Readonly<Record<string, string>>;
 }
 
 export interface CompiledVariantPatch {
   readonly fill?: string;
+  readonly stroke?: string;
   readonly text?: string;
   readonly visible?: boolean;
 }
 
 export interface CompiledVariantAxisMap {
   readonly dataAttr: string;
+  readonly defaultOptionId: string;
   readonly options: Record<string, { readonly label: string; readonly overrides: Record<string, CompiledVariantPatch> }>;
 }
 
@@ -269,6 +274,13 @@ export function sanitizeNodeDataForRuntime(node: LogicNode): Record<string, unkn
 function extractNodeFill(node: DesignNode): string | undefined {
   if ('style' in node && node.style && 'fill' in node.style && typeof node.style.fill === 'string') {
     return node.style.fill;
+  }
+  return undefined;
+}
+
+function extractNodeStroke(node: DesignNode): string | undefined {
+  if ('style' in node && node.style && 'stroke' in node.style && typeof node.style.stroke === 'string') {
+    return node.style.stroke;
   }
   return undefined;
 }
@@ -381,6 +393,9 @@ export function compilePageLogicRuntimeConfig(
       ...(fill !== undefined ? { fill } : {}),
       opacity: node.opacity,
       ...(node.type === 'component-instance' ? { componentId: node.componentId } : {}),
+      ...(node.type === 'component-instance' && node.variantSelection
+        ? { variantSelection: { ...node.variantSelection } }
+        : {}),
       ...(originRef?.instanceId ? { instanceId: originRef.instanceId } : {}),
       ...(originRef && originRef.animationIds.length > 0 ? { animationIds: originRef.animationIds } : {}),
       ...(originRef?.children && originRef.children.length > 0
@@ -415,8 +430,10 @@ export function compilePageLogicRuntimeConfig(
       const slotAssign = slotDef ? instance.instanceNode.slotAssignments?.[slotDef.id] : undefined;
       const localOv = instance.instanceNode.overrides?.[resolvedChild.id];
       const hasTokenFill = Boolean(masterNode?.tokenBindings?.fill);
+      const hasTokenStroke = Boolean(masterNode?.tokenBindings?.stroke);
       const lockText = localOv?.text !== undefined || slotAssign?.text !== undefined;
       const lockFill = hasTokenFill || localOv?.fill !== undefined || slotAssign?.fill !== undefined;
+      const lockStroke = hasTokenStroke;
       const lockVisible = slotAssign?.visible !== undefined;
       const baseText =
         slotDef?.defaultText !== undefined
@@ -425,6 +442,7 @@ export function compilePageLogicRuntimeConfig(
             ? masterNode.text
             : undefined;
       const baseFill = masterNode ? extractNodeFill(masterNode) : undefined;
+      const baseStroke = masterNode ? extractNodeStroke(masterNode) : undefined;
       const baseVisible = masterNode?.visible ?? resolvedChild.visible;
       nodeMeta[scopedId] = {
         name: resolvedChild.name,
@@ -440,6 +458,9 @@ export function compilePageLogicRuntimeConfig(
         ...(childFill !== undefined ? { fill: childFill } : {}),
         opacity: resolvedChild.opacity,
         ...(resolvedChild.type === 'component-instance' ? { componentId: resolvedChild.componentId } : {}),
+        ...(resolvedChild.type === 'component-instance' && resolvedChild.variantSelection
+          ? { variantSelection: { ...resolvedChild.variantSelection } }
+          : {}),
         instanceId: childOrigin?.instanceId ?? instance.instanceId,
         ...(childOrigin && childOrigin.animationIds.length > 0 ? { animationIds: childOrigin.animationIds } : {}),
         ...(childOrigin?.children && childOrigin.children.length > 0
@@ -453,9 +474,11 @@ export function compilePageLogicRuntimeConfig(
           : {}),
         ...(baseText !== undefined ? { baseText } : {}),
         ...(baseFill !== undefined ? { baseFill } : {}),
+        ...(baseStroke !== undefined ? { baseStroke } : {}),
         baseVisible,
         ...(lockText ? { lockText: true } : {}),
         ...(lockFill ? { lockFill: true } : {}),
+        ...(lockStroke ? { lockStroke: true } : {}),
         ...(lockVisible ? { lockVisible: true } : {}),
       };
     }
@@ -481,6 +504,7 @@ export function compilePageLogicRuntimeConfig(
         for (const [childId, patch] of Object.entries(opt.overrides)) {
           cleanedOverrides[childId] = {
             ...(patch.fill !== undefined ? { fill: patch.fill } : {}),
+            ...(patch.stroke !== undefined ? { stroke: patch.stroke } : {}),
             ...(patch.text !== undefined ? { text: patch.text } : {}),
             ...(patch.visible !== undefined ? { visible: patch.visible } : {}),
           };
@@ -490,6 +514,7 @@ export function compilePageLogicRuntimeConfig(
       }
       axisMap[axis.id] = {
         dataAttr: `data-variant-${toKebabCase(axis.name, 'variant')}`,
+        defaultOptionId: axis.defaultOptionId,
         options,
       };
       labelAxisMap[axis.id] = optLabels;

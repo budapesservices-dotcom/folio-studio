@@ -1,8 +1,14 @@
 import type { JSX } from 'preact';
-import type { ComponentDefinition, DesignNode } from '../../core/document/types';
+import type {
+  ComponentDefinition,
+  ComponentSlotDefinition,
+  ComponentVariantAxis,
+  DesignNode,
+} from '../../core/document/types';
 import type { ShapeColorBlendMode } from '../../core/document/colorBlend';
 import type { EditorTarget } from '../editorContext';
 import type { StudioVectorActions } from './inspectorVectorHelpers';
+import { InspectorComponentContractSection } from './InspectorComponentContractSection';
 import {
   InspectorAlignDistributeSection,
   InspectorTransformActions,
@@ -151,6 +157,14 @@ export interface InspectorEmptyStateViewProps {
   activeEditorId: EditorTarget;
   editingMasterComponent: ComponentDefinition | null;
   renderIcon: (name: 'trash' | 'layers' | 'cursor') => JSX.Element;
+  onUpdateMasterContract?: (
+    component: ComponentDefinition,
+    patch: {
+      variants?: ComponentVariantAxis[];
+      slots?: ComponentSlotDefinition[];
+      nodeLogicEnabled?: boolean;
+    },
+  ) => void;
   onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
   onQuickAdd: (type: 'rect' | 'text') => void;
   hasImageInsert: boolean;
@@ -161,6 +175,7 @@ export function InspectorEmptyStateView({
   activeEditorId,
   editingMasterComponent,
   renderIcon,
+  onUpdateMasterContract,
   onToggleComponentNodeLogic,
   onQuickAdd,
   hasImageInsert,
@@ -173,7 +188,7 @@ export function InspectorEmptyStateView({
           <div class="empty-icon">{renderIcon('cursor')}</div>
           <strong>Master: {editingMasterComponent.name}</strong>
           <p>Select a layer inside Component Canvas to edit its properties.</p>
-          {onToggleComponentNodeLogic && (
+          {onToggleComponentNodeLogic && !onUpdateMasterContract && (
             <label class="toggle-row" style={{ width: '100%', marginBottom: '8px' }}>
               <span>Node Logic Enabled</span>
               <input
@@ -193,6 +208,17 @@ export function InspectorEmptyStateView({
             )}
           </div>
         </div>
+        {onUpdateMasterContract && (
+          <InspectorComponentContractSection
+            instanceNode={null}
+            instanceComponent={null}
+            editingMasterComponent={editingMasterComponent}
+            onUpdateInstanceVariant={() => {}}
+            onUpdateInstanceSlot={() => {}}
+            onUpdateMasterContract={onUpdateMasterContract}
+            onToggleComponentNodeLogic={onToggleComponentNodeLogic}
+          />
+        )}
       </div>
     );
   }

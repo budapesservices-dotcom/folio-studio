@@ -413,7 +413,7 @@ function buildComponentStylesheet(
         const decls: string[] = [];
         if (patch.visible === false) {
           decls.push('display: none;');
-        } else if (patch.visible === true && !targetNode.visible) {
+        } else if (patch.visible === true) {
           const shownDisplay =
             targetNode.layout?.mode === 'flex'
               ? 'flex'

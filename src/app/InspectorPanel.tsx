@@ -552,6 +552,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
           activeEditorId,
           editingMasterComponent,
           renderIcon,
+          onUpdateMasterContract: props.onUpdateMasterContract,
           onToggleComponentNodeLogic,
           onQuickAdd,
           hasImageInsert: Boolean(onInsertImageFiles),

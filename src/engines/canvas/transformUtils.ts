@@ -265,3 +265,15 @@ export function hasActiveTransformOverrides(
   }
   return false;
 }
+
+export function hasActiveVariantOverrides(
+  nodeOverrides?: Readonly<Record<string, PrototypeNodeOverride>>,
+): boolean {
+  if (!nodeOverrides) return false;
+  for (const override of Object.values(nodeOverrides)) {
+    if (override?.variantSelection && Object.keys(override.variantSelection).length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
