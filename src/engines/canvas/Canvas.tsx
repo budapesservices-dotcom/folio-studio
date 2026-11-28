@@ -65,7 +65,7 @@ import {
 const LazyGpuViewportLayer = lazy(() =>
   import('./gpu/GpuViewportLayer').then((m) => ({ default: m.GpuViewportLayer })),
 );
-import { computeSpacingRedlines, getBounds, type Bounds, type SnapGuide } from './geometry';
+import { areSnapGuidesEqual, computeSpacingRedlines, getBounds, type Bounds, type SnapGuide } from './geometry';
 import {
   evaluateToolOperation,
   evaluateToolOperationBatch,
@@ -327,6 +327,11 @@ export function Canvas({
     }
   };
 
+  const effectiveDocWidth = useMemo(
+    () => (workspace === 'main' ? getBreakpointCanvasWidth(document.width, activeBreakpoint) : document.width),
+    [workspace, document.width, activeBreakpoint],
+  );
+
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -381,10 +386,10 @@ export function Canvas({
       }
       window.removeEventListener('resize', scheduleWidthUpdate);
     };
-  }, [document.width, zoom]);
+  }, [effectiveDocWidth, zoom]);
 
   const rawCanvasUnitsPerPixel = renderedSvgWidth > 10
-    ? document.width / renderedSvgWidth
+    ? effectiveDocWidth / renderedSvgWidth
     : 1 / Math.max(0.05, zoom);
   const canvasUnitsPerPixel = Math.min(20, Math.max(0.05, rawCanvasUnitsPerPixel));
   const invZoom = canvasUnitsPerPixel;
@@ -492,11 +497,6 @@ export function Canvas({
     previewRef.current = nodes;
     setPreviewNodes(nodes);
   };
-
-  const effectiveDocWidth = useMemo(
-    () => (workspace === 'main' ? getBreakpointCanvasWidth(document.width, activeBreakpoint) : document.width),
-    [workspace, document.width, activeBreakpoint],
-  );
 
   const [assetCacheRevision, setAssetCacheRevision] = useState(() => getAssetCacheRevision());
 
@@ -813,8 +813,12 @@ export function Canvas({
     selectionBounds,
     zoom,
     canvasUnitsPerPixel,
+    effectiveDocWidth,
+    spatialIndex: staticSceneData.spatialIndex,
+    staticNodeById: staticSceneData.nodeById,
+    layerStates: staticSceneData.layerStates,
     pan,
-    viewportWidth: scrollAreaRef.current?.clientWidth ?? document.width,
+    viewportWidth: scrollAreaRef.current?.clientWidth ?? effectiveDocWidth,
     session: toolSessionRef.current,
     toolOptions,
     workspace,
@@ -1224,7 +1228,10 @@ export function Canvas({
     if ('previewCreateNodes' in transition) setPreviewCreateNodes(transition.previewCreateNodes ?? null);
     if ('customPivot' in transition) setCustomPivot(transition.customPivot ?? null);
     if ('activeAnchor' in transition) setActiveAnchor(transition.activeAnchor ?? null);
-    if (transition.guides) setGuides(transition.guides);
+    if (transition.guides) {
+      const nextGuides = transition.guides;
+      setGuides((prev) => (areSnapGuidesEqual(prev, nextGuides) ? prev : nextGuides));
+    }
     if (transition.capturePointer && svg && pointerId !== undefined) capturePointer(svg, pointerId);
     if (transition.preventDefault) sourceEvent?.preventDefault();
 
@@ -1778,9 +1785,9 @@ export function Canvas({
     const hoveredVisible = hoveredNode && layerStates.get(hoveredNode.id)?.visible;
     const targetBounds: Bounds = hoveredVisible
       ? { x: hoveredNode.x, y: hoveredNode.y, width: hoveredNode.width, height: hoveredNode.height }
-      : { x: 0, y: 0, width: document.width, height: document.height };
+      : { x: 0, y: 0, width: effectiveDocWidth, height: document.height };
     return computeSpacingRedlines(selectionBounds, targetBounds);
-  }, [altHeld, toolSession, selectionBounds, toolId, selectedNodeIds, hoverNodeId, nodeById, layerStates, document.width, document.height]);
+  }, [altHeld, toolSession, selectionBounds, toolId, selectedNodeIds, hoverNodeId, nodeById, layerStates, effectiveDocWidth, document.height]);
 
   const pathSnapWorldPoint = useMemo(() => {
     if (!hoverPoint || toolSession) return null;

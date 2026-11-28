@@ -26,8 +26,8 @@ import {
   resizeNodes,
   rotateNodesAroundPivot,
   snapPointToTargets,
-  snapResizeBounds,
-  snapTranslation,
+  solveResizeSnap,
+  solveTranslationSnap,
 } from '../geometry';
 import type { CanvasToolHandler, CanvasToolId, CanvasToolTransition } from './types';
 import { getCanvasUnitsPerPixel, rectangleBounds } from './geometry';
@@ -714,7 +714,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
         const roundedDelta = Math.round(deltaAngle * 10) / 10;
         const previewNodes = rotateNodesAroundPivot(session.nodes, roundedDelta, pivot);
         return {
-          session: { ...session, currentAngle: roundedDelta, previewNodes },
+          session: { ...session, currentAngle: roundedDelta, previewNodes, snapLock: null },
           previewNodes,
           guides: [],
           preventDefault: true,
@@ -727,7 +727,9 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       if (Math.abs(dx) + Math.abs(dy) < deadzone && !session.previewNodes) return {};
 
       const bypassSnap = event.ctrlKey || event.metaKey;
-      const snapTolerance = bypassSnap ? 0 : 8 * unitsPerPx;
+      const artboardWidth = context.effectiveDocWidth ?? context.document.width;
+      const artboard = { x: 0, y: 0, width: artboardWidth, height: context.document.height };
+      const snapProfile = context.workspace === 'component' ? 'component' : 'main';
 
       if (session.mode === 'resize' && session.handle) {
         const isCorner =
@@ -737,17 +739,26 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           session.handle === 'sw';
         const nodeLocksAspect = session.nodes.some((node) => Boolean(node.aspectRatioLocked));
         const lockAspect = isCorner || Boolean(session.uniformScale) || event.shiftKey || nodeLocksAspect;
-        const resizeTargets = context.otherNodes.filter((node) => !session.ids.includes(node.id));
-        const snappedResize = snapResizeBounds(
-          session.bounds,
-          session.handle,
+        const snappedResize = solveResizeSnap({
+          bounds: session.bounds,
+          handle: session.handle,
           dx,
           dy,
-          { x: 0, y: 0, width: context.document.width, height: context.document.height },
-          resizeTargets,
-          snapTolerance,
-          { lockAspect, fromCenter: event.altKey },
-        );
+          artboard,
+          movingNodes: session.nodes,
+          profile: snapProfile,
+          canvasUnitsPerPixel: unitsPerPx,
+          bypass: bypassSnap,
+          lockAspect,
+          fromCenter: event.altKey,
+          spatialIndex: context.spatialIndex,
+          nodeById: context.staticNodeById,
+          layerStates: context.layerStates,
+          otherNodes: context.otherNodes,
+          allNodes: context.canvasNodes,
+          excludeIds: session.ids,
+          previousLock: bypassSnap ? null : session.snapLock,
+        });
         const resizedRaw = resizeNodes(
           session.nodes,
           session.bounds,
@@ -797,6 +808,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           session: {
             ...session,
             previewNodes,
+            snapLock: snappedResize.nextLock,
             hudLabel: nextBounds ? `${Math.round(nextBounds.width)} × ${Math.round(nextBounds.height)}` : undefined,
           },
           previewNodes,
@@ -806,23 +818,36 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
       }
 
       // Shift locks Move strictly to dominant horizontal or vertical axis
+      let lockAxis: 'x' | 'y' | null = null;
       if (event.shiftKey) {
-        if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
-        else dx = 0;
+        if (Math.abs(dx) >= Math.abs(dy)) {
+          dy = 0;
+          lockAxis = 'x';
+        } else {
+          dx = 0;
+          lockAxis = 'y';
+        }
       }
 
       const cloneMode = Boolean(event.altKey);
-      const snapTargets = cloneMode
-        ? context.otherNodes
-        : context.otherNodes.filter((node) => !session.ids.includes(node.id));
-      const snapped = snapTranslation(
-        session.nodes,
+      const snapped = solveTranslationSnap({
+        movingNodes: session.nodes,
         dx,
         dy,
-        { x: 0, y: 0, width: context.document.width, height: context.document.height },
-        snapTargets,
-        snapTolerance,
-      );
+        artboard,
+        profile: snapProfile,
+        canvasUnitsPerPixel: unitsPerPx,
+        bypass: bypassSnap,
+        lockAxis,
+        spatialIndex: context.spatialIndex,
+        nodeById: context.staticNodeById,
+        layerStates: context.layerStates,
+        otherNodes: context.otherNodes,
+        allNodes: context.canvasNodes,
+        excludeIds: cloneMode ? undefined : session.ids,
+        includeSelfAsTargets: cloneMode,
+        previousLock: bypassSnap ? null : session.snapLock,
+      });
 
       if (cloneMode) {
         const cloneIdMap = getOrCreateCloneIdMap(session.nodes, session.cloneIdMap);
@@ -833,6 +858,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
             cloneMode: true,
             cloneIdMap,
             previewNodes: clonedPreview,
+            snapLock: snapped.nextLock,
             hudLabel: `Clone · ΔX ${Math.round(snapped.dx)} · ΔY ${Math.round(snapped.dy)}`,
             ...(session.autoLayoutReorder
               ? { autoLayoutReorder: { ...session.autoLayoutReorder, slot: null } }
@@ -868,7 +894,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
               ghostRoot,
               reorderSlot,
               context.designTokens,
-              context.document.width,
+              artboardWidth,
             );
             // Offset any nested children of `dragRoot` along with `ghostRoot`
             const liveById = new Map(liveSiblings.map((n) => [n.id, n]));
@@ -887,6 +913,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
                 ...session,
                 cloneMode: false,
                 previewNodes,
+                snapLock: null,
                 hudLabel: undefined,
                 autoLayoutReorder: {
                   ...session.autoLayoutReorder,
@@ -918,6 +945,7 @@ function createSelectTool(id: CanvasToolId, exactLayer: boolean, uniformScale = 
           ...session,
           cloneMode: false,
           previewNodes,
+          snapLock: snapped.nextLock,
           hudLabel: undefined,
           ...(session.autoLayoutReorder
             ? { autoLayoutReorder: { ...session.autoLayoutReorder, slot: null } }

@@ -1479,11 +1479,119 @@ export function CanvasInteractiveOverlays({
         );
       })()}
 
-      {guides.map((guide, index) => (
-        guide.axis === 'x'
-          ? <line key={'guide-x-' + index} class="canvas-guide" x1={guide.position} x2={guide.position} y1="0" y2={docHeight} />
-          : <line key={'guide-y-' + index} class="canvas-guide" x1="0" x2={docWidth} y1={guide.position} y2={guide.position} />
-      ))}
+      {guides.length > 0 && (
+        <g class="canvas-guides-layer" pointer-events="none">
+          {guides.map((guide, index) => {
+            const kindClass = guide.kind ? ` is-${guide.kind}` : '';
+            const x1 = guide.axis === 'x'
+              ? (guide.x1 ?? guide.position)
+              : guide.axis === 'y'
+                ? (guide.x1 ?? 0)
+                : (guide.x1 ?? 0);
+            const y1 = guide.axis === 'x'
+              ? (guide.y1 ?? 0)
+              : guide.axis === 'y'
+                ? (guide.y1 ?? guide.position)
+                : (guide.y1 ?? 0);
+            const x2 = guide.axis === 'x'
+              ? (guide.x2 ?? guide.position)
+              : guide.axis === 'y'
+                ? (guide.x2 ?? docWidth)
+                : (guide.x2 ?? docWidth);
+            const y2 = guide.axis === 'x'
+              ? (guide.y2 ?? docHeight)
+              : guide.axis === 'y'
+                ? (guide.y2 ?? guide.position)
+                : (guide.y2 ?? docHeight);
+
+            const tickHalf = 4 * invZoom;
+            const markerRadius = 3.2 * invZoom;
+
+            return (
+              <g key={`guide-${guide.axis}-${guide.kind ?? 'base'}-${index}`} pointer-events="none">
+                <line
+                  class={`canvas-guide${kindClass}`}
+                  data-guide-axis={guide.axis}
+                  data-guide-kind={guide.kind ?? 'alignment'}
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  vector-effect="non-scaling-stroke"
+                  pointer-events="none"
+                />
+
+                {guide.marker && (
+                  <circle
+                    class="canvas-guide-marker"
+                    cx={guide.marker.x}
+                    cy={guide.marker.y}
+                    r={markerRadius}
+                    vector-effect="non-scaling-stroke"
+                    pointer-events="none"
+                  />
+                )}
+
+                {guide.kind === 'fractional' && guide.label && (
+                  <g
+                    class="canvas-guide-chip is-fractional"
+                    transform={`translate(${guide.axis === 'x' ? x1 : x1 + 18 * invZoom} ${guide.axis === 'x' ? y1 + 12 * invZoom : y1}) scale(${invZoom})`}
+                    pointer-events="none"
+                  >
+                    <rect x="-14" y="-7.5" width="28" height="15" rx="3" />
+                    <text x="0" y="0.5" text-anchor="middle" dominant-baseline="middle">
+                      {guide.label}
+                    </text>
+                  </g>
+                )}
+
+                {guide.spacingSegments && guide.spacingSegments.map((seg, segIndex) => {
+                  const midX = (seg.x1 + seg.x2) * 0.5;
+                  const midY = (seg.y1 + seg.y2) * 0.5;
+                  const labelText = `${seg.value}`;
+                  const chipWidth = Math.max(22, labelText.length * 6.5 + 8);
+                  return (
+                    <g key={`guide-seg-${index}-${segIndex}`} pointer-events="none">
+                      <line
+                        class="canvas-guide-spacing-line"
+                        x1={seg.x1}
+                        y1={seg.y1}
+                        x2={seg.x2}
+                        y2={seg.y2}
+                        vector-effect="non-scaling-stroke"
+                        pointer-events="none"
+                      />
+                      {seg.orientation === 'horizontal' ? (
+                        <>
+                          <line class="canvas-guide-spacing-tick" x1={seg.x1} y1={seg.y1 - tickHalf} x2={seg.x1} y2={seg.y1 + tickHalf} vector-effect="non-scaling-stroke" pointer-events="none" />
+                          <line class="canvas-guide-spacing-tick" x1={seg.x2} y1={seg.y2 - tickHalf} x2={seg.x2} y2={seg.y2 + tickHalf} vector-effect="non-scaling-stroke" pointer-events="none" />
+                        </>
+                      ) : (
+                        <>
+                          <line class="canvas-guide-spacing-tick" x1={seg.x1 - tickHalf} y1={seg.y1} x2={seg.x1 + tickHalf} y2={seg.y1} vector-effect="non-scaling-stroke" pointer-events="none" />
+                          <line class="canvas-guide-spacing-tick" x1={seg.x2 - tickHalf} y1={seg.y2} x2={seg.x2 + tickHalf} y2={seg.y2} vector-effect="non-scaling-stroke" pointer-events="none" />
+                        </>
+                      )}
+                      {seg.value > 0 && (
+                        <g
+                          class="canvas-guide-chip"
+                          transform={`translate(${midX} ${midY}) scale(${invZoom})`}
+                          pointer-events="none"
+                        >
+                          <rect x={-chipWidth * 0.5} y="-7.5" width={chipWidth} height="15" rx="3" />
+                          <text x="0" y="0.5" text-anchor="middle" dominant-baseline="middle">
+                            {labelText}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })}
+        </g>
+      )}
     </>
   );
 }

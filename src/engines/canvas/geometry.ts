@@ -1,5 +1,38 @@
 import type { DesignNode } from '../../core/document/types';
 import { scalePathNodeGeometry } from '../../core/document/vector';
+import {
+  areSnapGuidesEqual,
+  getNodeWorldGeometry,
+  getWorldBounds,
+  solveResizeSnap,
+  solveTranslationSnap,
+  type NodeWorldGeometry,
+  type SnapGuide,
+  type SnapLayerKind,
+  type SnapLockState,
+  type SnapPointMarker,
+  type SnapProfile,
+  type SnapSpacingSegment,
+  type SnapTelemetry,
+  type WorldSegment,
+} from './snappingEngine';
+
+export {
+  areSnapGuidesEqual,
+  getNodeWorldGeometry,
+  getWorldBounds,
+  solveResizeSnap,
+  solveTranslationSnap,
+  type NodeWorldGeometry,
+  type SnapGuide,
+  type SnapLayerKind,
+  type SnapLockState,
+  type SnapPointMarker,
+  type SnapProfile,
+  type SnapSpacingSegment,
+  type SnapTelemetry,
+  type WorldSegment,
+};
 
 export interface Bounds {
   x: number;
@@ -18,11 +51,6 @@ export type Alignment =
 
 export type ResizeHandle = 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw';
 
-export interface SnapGuide {
-  axis: 'x' | 'y';
-  position: number;
-}
-
 export interface SnapResult {
   dx: number;
   dy: number;
@@ -38,32 +66,6 @@ export function getBounds(nodes: readonly Pick<DesignNode, 'x' | 'y' | 'width' |
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
-function anchors(start: number, size: number): number[] {
-  return [start, start + size / 2, start + size];
-}
-
-function findSnap(
-  movingAnchors: number[],
-  targetAnchors: number[],
-  tolerance: number,
-): { adjustment: number; position: number } | null {
-  let bestDistance = tolerance + 0.0001;
-  let best: { adjustment: number; position: number } | null = null;
-
-  for (const moving of movingAnchors) {
-    for (const target of targetAnchors) {
-      const adjustment = target - moving;
-      const distance = Math.abs(adjustment);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        best = { adjustment, position: target };
-      }
-    }
-  }
-
-  return best;
-}
-
 export function snapTranslation(
   nodes: readonly DesignNode[],
   dx: number,
@@ -72,37 +74,15 @@ export function snapTranslation(
   otherNodes: readonly DesignNode[],
   tolerance: number,
 ): SnapResult {
-  const movingBounds = getBounds(nodes);
-  if (!movingBounds || tolerance <= 0) return { dx, dy, guides: [] };
-
-  const targets = [canvas, ...otherNodes.map((node) => ({
-    x: node.x,
-    y: node.y,
-    width: node.width,
-    height: node.height,
-  }))];
-
-  const targetX = targets.flatMap((bounds) => anchors(bounds.x, bounds.width));
-  const targetY = targets.flatMap((bounds) => anchors(bounds.y, bounds.height));
-  const snapX = findSnap(
-    anchors(movingBounds.x + dx, movingBounds.width),
-    targetX,
-    tolerance,
-  );
-  const snapY = findSnap(
-    anchors(movingBounds.y + dy, movingBounds.height),
-    targetY,
-    tolerance,
-  );
-
-  return {
-    dx: dx + (snapX?.adjustment ?? 0),
-    dy: dy + (snapY?.adjustment ?? 0),
-    guides: [
-      ...(snapX ? [{ axis: 'x' as const, position: snapX.position }] : []),
-      ...(snapY ? [{ axis: 'y' as const, position: snapY.position }] : []),
-    ],
-  };
+  const solved = solveTranslationSnap({
+    movingNodes: nodes,
+    dx,
+    dy,
+    artboard: canvas,
+    otherNodes,
+    toleranceOverride: tolerance,
+  });
+  return { dx: solved.dx, dy: solved.dy, guides: solved.guides };
 }
 
 export function snapResizeBounds(
@@ -115,73 +95,18 @@ export function snapResizeBounds(
   tolerance: number,
   options: { lockAspect?: boolean; fromCenter?: boolean } = {},
 ): SnapResult {
-  if (tolerance <= 0 || options.fromCenter) return { dx, dy, guides: [] };
-
-  const targets = [canvas, ...otherNodes.map((node) => ({
-    x: node.x,
-    y: node.y,
-    width: node.width,
-    height: node.height,
-  }))];
-  const targetX = targets.flatMap((b) => anchors(b.x, b.width));
-  const targetY = targets.flatMap((b) => anchors(b.y, b.height));
-
-  let snappedDx = dx;
-  let snappedDy = dy;
-  const guides: SnapGuide[] = [];
-
-  const snapXEdge = (): { adjustment: number; position: number } | null => {
-    if (handle.includes('e')) {
-      return findSnap([bounds.x + bounds.width + dx], targetX, tolerance);
-    }
-    if (handle.includes('w')) {
-      return findSnap([bounds.x + dx], targetX, tolerance);
-    }
-    return null;
-  };
-
-  const snapYEdge = (): { adjustment: number; position: number } | null => {
-    if (handle.includes('s')) {
-      return findSnap([bounds.y + bounds.height + dy], targetY, tolerance);
-    }
-    if (handle.includes('n')) {
-      return findSnap([bounds.y + dy], targetY, tolerance);
-    }
-    return null;
-  };
-
-  if (options.lockAspect && (handle.includes('e') || handle.includes('w')) && (handle.includes('n') || handle.includes('s'))) {
-    // For aspect-locked corners, snap only the dominant drag axis so proportions stay exact.
-    const widthRatio = Math.abs(dx) / Math.max(1, bounds.width);
-    const heightRatio = Math.abs(dy) / Math.max(1, bounds.height);
-    if (widthRatio >= heightRatio) {
-      const snapX = snapXEdge();
-      if (snapX) {
-        snappedDx = dx + snapX.adjustment;
-        guides.push({ axis: 'x', position: snapX.position });
-      }
-    } else {
-      const snapY = snapYEdge();
-      if (snapY) {
-        snappedDy = dy + snapY.adjustment;
-        guides.push({ axis: 'y', position: snapY.position });
-      }
-    }
-    return { dx: snappedDx, dy: snappedDy, guides };
-  }
-
-  const snapX = snapXEdge();
-  if (snapX) {
-    snappedDx = dx + snapX.adjustment;
-    guides.push({ axis: 'x', position: snapX.position });
-  }
-  const snapY = snapYEdge();
-  if (snapY) {
-    snappedDy = dy + snapY.adjustment;
-    guides.push({ axis: 'y', position: snapY.position });
-  }
-
-  return { dx: snappedDx, dy: snappedDy, guides };
+  const solved = solveResizeSnap({
+    bounds,
+    handle,
+    dx,
+    dy,
+    artboard: canvas,
+    otherNodes,
+    toleranceOverride: tolerance,
+    lockAspect: options.lockAspect,
+    fromCenter: options.fromCenter,
+  });
+  return { dx: solved.dx, dy: solved.dy, guides: solved.guides };
 }
 
 function roundGeom(value: number): number {

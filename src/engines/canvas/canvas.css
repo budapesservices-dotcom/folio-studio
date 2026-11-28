@@ -63,13 +63,81 @@
 }
 .canvas-guide {
   stroke: var(--accent, #4c8dff);
-  stroke-width: 1.35;
+  stroke-width: 1.25;
   stroke-dasharray: 5 4;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
+.canvas-guide.is-geometry {
+  stroke: #22d3ee;
+  stroke-width: 1.35;
+  stroke-dasharray: none;
+}
+.canvas-guide.is-diagonal {
+  stroke: #a855f7;
+  stroke-width: 1.35;
+  stroke-dasharray: 6 3;
+}
+.canvas-guide.is-fractional {
+  stroke: rgba(76, 141, 255, 0.72);
+  stroke-width: 1.1;
+  stroke-dasharray: 4 4;
+}
+.canvas-guide.is-spacing,
+.canvas-guide.is-mirror-padding {
+  stroke: #f43f5e;
+  stroke-width: 1.25;
+  stroke-dasharray: 3 3;
+}
 .artboard[data-workspace="component"] .canvas-guide {
   stroke: var(--studio-amber, #e09834);
+}
+.artboard[data-workspace="component"] .canvas-guide.is-geometry {
+  stroke: #38bdf8;
+}
+.artboard[data-workspace="component"] .canvas-guide.is-diagonal {
+  stroke: #c084fc;
+}
+.artboard[data-workspace="component"] .canvas-guide.is-spacing,
+.artboard[data-workspace="component"] .canvas-guide.is-mirror-padding {
+  stroke: #f43f5e;
+}
+.canvas-guide-marker {
+  fill: #ffffff;
+  stroke: #22d3ee;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.canvas-guide-spacing-line {
+  stroke: #f43f5e;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.canvas-guide-spacing-tick {
+  stroke: #f43f5e;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.canvas-guide-chip {
+  pointer-events: none;
+}
+.canvas-guide-chip rect {
+  fill: #e11d48;
+}
+.canvas-guide-chip.is-fractional rect {
+  fill: rgba(30, 41, 59, 0.92);
+  stroke: rgba(76, 141, 255, 0.75);
+  stroke-width: 0.9;
+}
+.canvas-guide-chip text {
+  fill: #ffffff;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
 }
 .alignment-tools {
   display: flex;

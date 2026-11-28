@@ -196,7 +196,7 @@ describe('P0.1 Studio Tools Stabilization', () => {
         makePointer({ point: { x: 246, y: 180 } }),
         makeContext(nodes, ['a', 'b'], { session: down.session ?? null }),
       );
-      expect(snappedMove.guides).toEqual([{ axis: 'x', position: 250 }]);
+      expect(snappedMove.guides).toEqual([expect.objectContaining({ axis: 'x', position: 250 })]);
       expect(snappedMove.previewNodes?.[0].width).toBe(150);
       expect(snappedMove.previewNodes?.[1].width).toBe(150);
 
@@ -580,7 +580,7 @@ describe('P0.1 Studio Tools Stabilization', () => {
         { lockAspect: true },
       );
       expect(snapRes.dx).toBe(50);
-      expect(snapRes.guides).toEqual([{ axis: 'x', position: 250 }]);
+      expect(snapRes.guides).toEqual([expect.objectContaining({ axis: 'x', position: 250 })]);
     });
   });
 });

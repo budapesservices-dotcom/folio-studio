@@ -1,5 +1,7 @@
 import type { DesignNode, FolioDocument, PathNode, VectorAnchorPoint } from '../../../core/document/types';
+import type { EffectiveLayerState } from '../../../core/document/layers';
 import type { PlanarArrangement } from '../../../core/document/vector';
+import type { SpatialIndexHandle } from '../../../core/kernels/types';
 import {
   DEFAULT_CANVAS_TOOL_OPTIONS,
   type CanvasToolGroupId,
@@ -15,7 +17,7 @@ import type {
   GapAxis,
   PaddingEdge,
 } from '../autoLayoutHandles';
-import type { Bounds, ResizeHandle, SnapGuide } from '../geometry';
+import type { Bounds, ResizeHandle, SnapGuide, SnapLockState } from '../geometry';
 
 export {
   DEFAULT_CANVAS_TOOL_OPTIONS,
@@ -87,6 +89,7 @@ export interface SelectTransformSession {
   cloneIdMap?: Record<string, string>;
   previewNodes?: DesignNode[];
   hudLabel?: string;
+  snapLock?: SnapLockState | null;
   autoLayoutReorder?: {
     containerId: string;
     containerBounds: Bounds;
@@ -239,6 +242,10 @@ export interface CanvasToolContext {
   selectionBounds: Bounds | null;
   zoom: number;
   canvasUnitsPerPixel?: number;
+  effectiveDocWidth?: number;
+  spatialIndex?: SpatialIndexHandle | null;
+  staticNodeById?: ReadonlyMap<string, DesignNode> | null;
+  layerStates?: ReadonlyMap<string, EffectiveLayerState> | null;
   pan: { x: number; y: number };
   viewportWidth: number;
   session: CanvasToolSession | null;
