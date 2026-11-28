@@ -156,6 +156,11 @@ export function WorkspaceInspectorHost({
       onOpenInteractionInNodeGraph={quickInteractions.openInteractionInNodeGraph}
       colorBlendMode={toolOptions.colorBlendMode}
       onChangeColorBlendMode={(colorBlendMode) => onUpdateToolOptions({ colorBlendMode })}
+      onPromoteSelectionToComponent={
+        inspectorSelectedNode
+          ? () => componentMaster.saveNodesAsComponent([inspectorSelectedNode], focusedDocument.nodes)
+          : undefined
+      }
       studioActions={activeStudioActions}
     />
   );

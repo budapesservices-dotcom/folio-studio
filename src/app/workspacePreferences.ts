@@ -43,6 +43,7 @@ export interface WorkspaceWindowRecord {
   presentation: WorkspacePresentation;
   geometry: WorkspaceGeometry;
   maximized: false;
+  locked?: boolean;
   stackOrder: number;
 }
 
@@ -404,6 +405,15 @@ export function normalizeWorkspaceLayout(
       continue;
     }
 
+    let locked: boolean | undefined;
+    if (candidate.locked !== undefined) {
+      if (typeof candidate.locked === "boolean") {
+        locked = candidate.locked ? true : undefined;
+      } else {
+        addRecoveryWarning(recoveryWarnings, "Ignored invalid lock flag for " + workspace);
+      }
+    }
+
     const record: WorkspaceWindowRecord = {
       windowInstanceId: candidate.windowInstanceId,
       workspace,
@@ -417,6 +427,7 @@ export function normalizeWorkspaceLayout(
         recoveryWarnings,
       ),
       maximized: false,
+      ...(locked ? { locked: true } : {}),
       stackOrder: candidate.stackOrder,
     };
     recordsByWorkspace.set(workspace, record);
@@ -708,6 +719,7 @@ function isStrictSaveLayout(
         !isVisibility(candidate.visibility) ||
         !isPresentation(candidate.presentation) ||
         candidate.maximized !== false ||
+        (candidate.locked !== undefined && typeof candidate.locked !== "boolean") ||
         !Number.isInteger(candidate.stackOrder) ||
         typeof candidate.stackOrder !== "number" ||
         candidate.stackOrder < 0 ||

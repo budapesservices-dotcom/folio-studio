@@ -178,12 +178,20 @@ function hasTypeSpecificExtendedChange(before: DesignNode, after: DesignNode): b
 
     case 'rect': {
       if (before.type !== 'rect') return true;
-      return shapeStyleChanged(before.style, after.style);
+      return (
+        before.isContainer !== after.isContainer ||
+        before.clipContent !== after.clipContent ||
+        shapeStyleChanged(before.style, after.style)
+      );
     }
 
     case 'ellipse': {
       if (before.type !== 'ellipse') return true;
-      return shapeStyleChanged(before.style, after.style);
+      return (
+        before.isContainer !== after.isContainer ||
+        before.clipContent !== after.clipContent ||
+        shapeStyleChanged(before.style, after.style)
+      );
     }
 
     case 'text': {
@@ -233,6 +241,8 @@ function hasTypeSpecificExtendedChange(before: DesignNode, after: DesignNode): b
       const beforePath: PathNode = before;
       return (
         beforePath.closed !== after.closed ||
+        beforePath.isContainer !== after.isContainer ||
+        beforePath.clipContent !== after.clipContent ||
         beforePath.pathKind !== after.pathKind ||
         pathStyleChanged(beforePath.style, after.style) ||
         shapeMetaChanged(beforePath.shapeMeta, after.shapeMeta) ||

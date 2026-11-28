@@ -22,7 +22,15 @@ import {
   setMotionPathPointType,
   type MotionPathSpacingDot,
 } from '../../core/document/pathStudio';
-import { buildFrameClipAncestorMap, buildLayerClipMaskMap, getEffectiveLayerStates, getLayerRenderOrder } from '../../core/document/layers';
+import {
+  buildFrameClipAncestorMap,
+  buildLayerClipMaskMap,
+  doesNodeClipChildren,
+  getEffectiveLayerStates,
+  getLayerRenderOrder,
+  isShapeContainerCapable,
+  isShapeContainerNode,
+} from '../../core/document/layers';
 import { getAssetCacheRevision, subscribeAssetCacheUpdates } from '../../core/persistence/assetStore';
 import { computeAutoLayoutNodes, getBreakpointCanvasWidth } from '../layout/autoLayout';
 import {
@@ -113,6 +121,7 @@ export interface CanvasContextMenuActions {
   readonly onRemoveFromCanvas?: () => void;
   readonly onSaveAsComponent?: () => void;
   readonly onUnpackComponent?: (nodeId: string) => void;
+  readonly onToggleShapeContainer?: (nodeId: string, nextContainer: boolean) => void;
   readonly onResetView?: () => void;
   readonly onChangeBackground?: (background: string) => void;
   readonly onQuickAdd?: (kind: 'rect' | 'ellipse' | 'triangle' | 'text' | 'frame') => void;
@@ -558,7 +567,7 @@ export function Canvas({
     const previewIds = new Set(previewNodes.map((node) => node.id));
     for (const node of previewNodes) {
       if (staticSceneData.clipMaskBaseIds.has(node.id)) return false;
-      if (node.type === 'frame' && node.clipContent) return false;
+      if (doesNodeClipChildren(node)) return false;
     }
     for (const node of staticCanvasNodes) {
       if (!previewIds.has(node.id) && node.parentId && previewIds.has(node.parentId)) {
@@ -2145,6 +2154,17 @@ export function Canvas({
               label: 'Unpack Component to Layers',
               tone: 'accent',
               onSelect: () => contextMenuActions.onUnpackComponent!(primarySelected.id),
+            });
+          }
+          if (primarySelected && isShapeContainerCapable(primarySelected) && contextMenuActions.onToggleShapeContainer) {
+            const alreadyContainer = isShapeContainerNode(primarySelected);
+            entries.push({
+              kind: 'item',
+              id: 'toggle-shape-container',
+              label: alreadyContainer ? 'Release Container' : 'Set as Container',
+              tone: alreadyContainer ? undefined : 'accent',
+              testId: 'canvas-context-shape-container-btn',
+              onSelect: () => contextMenuActions.onToggleShapeContainer!(primarySelected.id, !alreadyContainer),
             });
           }
           if (contextMenuActions.onSaveAsComponent) {

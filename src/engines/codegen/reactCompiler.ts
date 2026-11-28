@@ -38,6 +38,7 @@ import {
   buildChildrenMap,
   buildNodeCssDeclarations,
   buildNodePseudoStateCssRules,
+  buildShapeContainerClipId,
   buildVectorMaskDefsLines,
   collectDynamicTransformTargets,
   getNodeBorderInset,
@@ -115,6 +116,7 @@ function buildInlineJsxSvgLines(
     readonly isTrimTarget?: boolean;
     readonly asBackdrop?: boolean;
     readonly forceEvenOdd?: boolean;
+    readonly containerClipId?: string;
   },
 ): string[] {
   const d = serializePathPointsToSvgD(node.points, node.closed, node.subpaths);
@@ -136,6 +138,16 @@ function buildInlineJsxSvgLines(
   const svgLines: string[] = [
     `${indent}<svg width={${w}} height={${h}} viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" fill="none" overflow="visible" style={${svgStyle}} aria-hidden="true">`,
   ];
+
+  if (options?.containerClipId) {
+    const clipRuleProp =
+      node.style.fillRule === 'evenodd' || (node.subpaths && node.subpaths.length > 0)
+        ? ' clipRule="evenodd"'
+        : '';
+    svgLines.push(
+      `${indent}  <defs><clipPath id=${escapeTsString(options.containerClipId)} clipPathUnits="userSpaceOnUse"><path d=${escapeTsString(d)}${clipRuleProp} /></clipPath></defs>`,
+    );
+  }
 
   if (useTrimContours) {
     const fillAttr = effectiveDynamicFill
@@ -983,23 +995,36 @@ function buildComponentFiles(
       }
     } else if (node.type === 'path') {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+      const children = childrenByParent.get(node.id) ?? [];
       const isMorph = compMorphNodeIds.has(node.id);
       const isTrim = compTrimNodeIds.has(node.id) || hasActiveTrimPath(node.style);
+      const containerClipId =
+        node.isContainer === true && node.clipContent === true
+          ? buildShapeContainerClipId(toKebabCase(componentName, 'comp'), node.id)
+          : undefined;
       lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
       lines.push(
         ...buildInlineJsxSvgLines(node, tokens, `${indent}  `, effectiveFillExpr, {
           isMorphTarget: isMorph,
           isTrimTarget: isTrim,
+          asBackdrop: children.length > 0 || node.isContainer === true,
           forceEvenOdd: compMultiContourMorphNodeIds.has(node.id),
+          containerClipId,
         }),
       );
+      for (const child of children) {
+        emitMasterJsx(child, depth + 1);
+      }
       lines.push(`${indent}</${wrapperTag}>`);
     } else if (
       (node.type === 'ellipse' || node.type === 'rect' || node.type === 'frame') &&
       compMorphNodeIds.has(node.id)
     ) {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
-      const children = node.type === 'frame' ? (childrenByParent.get(node.id) ?? []) : [];
+      const children =
+        node.type === 'frame' || ((node.type === 'rect' || node.type === 'ellipse') && node.isContainer === true)
+          ? (childrenByParent.get(node.id) ?? [])
+          : [];
       const snap = compInitialMorphSnapshots.get(node.id) ?? extractMorphSnapshotFromNode(node);
       const projected = snap ? applyMorphGeometryToDesignNode(node, snap) : null;
       const isTrim = compTrimNodeIds.has(node.id) || hasActiveTrimPath(node.style);
@@ -1512,6 +1537,7 @@ function buildPageReactFile(
       lines.push(`${indent}<img ${attrs.join(' ')} ${srcAttr} alt=${escapeTsString(alt)} />`);
     } else if (node.type === 'path') {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+      const children = childrenByParent.get(node.id) ?? [];
       const dynamicPathFill = logicPlan.hasDynamicFill(node.id)
         ? `logicOverrides[${escapeTsString(node.id)}]?.fill`
         : undefined;
@@ -1519,6 +1545,10 @@ function buildPageReactFile(
       const isTrim = trimNodeIds.has(node.id);
       const initialSnap = isMorph ? initialMorphSnapshots.get(node.id) : undefined;
       const renderedNode = initialSnap ? applyMorphGeometryToDesignNode(node, initialSnap) : node;
+      const containerClipId =
+        node.isContainer === true && node.clipContent === true
+          ? buildShapeContainerClipId(slug, node.id)
+          : undefined;
       lines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
       lines.push(
         ...buildInlineJsxSvgLines(
@@ -1529,17 +1559,25 @@ function buildPageReactFile(
           {
             isMorphTarget: isMorph,
             isTrimTarget: isTrim,
+            asBackdrop: children.length > 0 || node.isContainer === true,
             forceEvenOdd: multiContourMorphNodeIds.has(node.id),
+            containerClipId,
           },
         ),
       );
+      for (const child of children) {
+        emitJsx(child, depth + 1);
+      }
       lines.push(`${indent}</${wrapperTag}>`);
     } else if (
       (node.type === 'ellipse' || node.type === 'rect' || node.type === 'frame') &&
       morphNodeIds.has(node.id)
     ) {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
-      const children = node.type === 'frame' ? (childrenByParent.get(node.id) ?? []) : [];
+      const children =
+        node.type === 'frame' || ((node.type === 'rect' || node.type === 'ellipse') && node.isContainer === true)
+          ? (childrenByParent.get(node.id) ?? [])
+          : [];
       const dynamicPathFill = logicPlan.hasDynamicFill(node.id)
         ? `logicOverrides[${escapeTsString(node.id)}]?.fill`
         : undefined;

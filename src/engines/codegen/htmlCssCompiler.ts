@@ -238,6 +238,12 @@ export function buildArrowheadPoints(
   return `${roundCss(tip.x)},${roundCss(tip.y)} ${roundCss(backX + px * wing)},${roundCss(backY + py * wing)} ${roundCss(backX - px * wing)},${roundCss(backY - py * wing)}`;
 }
 
+export function buildShapeContainerClipId(maskPrefix: string, nodeId: string): string {
+  const safePrefix = maskPrefix.replace(/[^a-zA-Z0-9_-]/g, '-');
+  const safeId = nodeId.replace(/[^a-zA-Z0-9_-]/g, '-');
+  return `${safePrefix}--shapeclip--${safeId}`;
+}
+
 function buildInlineSvgMarkup(
   node: PathNode,
   tokens: DesignTokenCollection,
@@ -246,6 +252,7 @@ function buildInlineSvgMarkup(
   paintPrefix = 'folio-svg',
   asBackgroundOverlay = false,
   isTrimTarget = false,
+  containerClipId?: string,
 ): string[] {
   const d = serializePathPointsToSvgD(node.points, node.closed, node.subpaths);
   const w = Math.max(1, roundCss(node.width));
@@ -318,10 +325,19 @@ function buildInlineSvgMarkup(
     });
   };
 
+  const clipRuleAttr =
+    node.style.fillRule === 'evenodd' || (node.subpaths && node.subpaths.length > 0)
+      ? ' clip-rule="evenodd"'
+      : '';
+  const containerClipDef = containerClipId
+    ? `<clipPath id="${escapeAttr(containerClipId)}" clipPathUnits="userSpaceOnUse"><path d="${escapeAttr(d)}"${clipRuleAttr} /></clipPath>`
+    : '';
+
   if (hasGradientOrMultiFill) {
     const paintDefs = serializeNodeSvgPaintDefs(node, paintPrefix);
-    if (paintDefs) {
-      svgLines.push(`${indent}  <defs>${paintDefs}</defs>`);
+    const combinedDefs = `${paintDefs}${containerClipDef}`;
+    if (combinedDefs) {
+      svgLines.push(`${indent}  <defs>${combinedDefs}</defs>`);
     }
     visibleFills.forEach((paint, idx) => {
       const paintFill =
@@ -344,6 +360,9 @@ function buildInlineSvgMarkup(
       );
     }
   } else if (useTrimContours) {
+    if (containerClipDef) {
+      svgLines.push(`${indent}  <defs>${containerClipDef}</defs>`);
+    }
     if (fill && fill !== 'none') {
       svgLines.push(
         `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="none"${fillRule} />`,
@@ -351,6 +370,9 @@ function buildInlineSvgMarkup(
     }
     emitTrimContourStrokes();
   } else {
+    if (containerClipDef) {
+      svgLines.push(`${indent}  <defs>${containerClipDef}</defs>`);
+    }
     svgLines.push(
       `${indent}  <path${morphAttr} d="${escapeAttr(d)}" fill="${escapeAttr(fill)}" stroke="${escapeAttr(stroke)}" stroke-width="${strokeWidth}"${fillRule}${linecap}${linejoin}${dash} />`,
     );
@@ -1378,12 +1400,25 @@ export function buildNodeCssDeclarations(
     } else if (node.style.radius !== undefined && node.style.radius > 0) {
       declarations.push(`border-radius: ${roundCss(node.style.radius)}${node.style.radiusUnit ?? 'px'};`);
     }
+    const isShapeContainer = (node.type === 'rect' || node.type === 'ellipse') && node.isContainer === true;
     const frameClipsChildren =
-      node.type === 'frame'
+      (node.type === 'frame' || isShapeContainer)
       && !node.layout?.overflow
       && node.clipContent === true;
     if (frameClipsChildren) {
       declarations.push('overflow: hidden;');
+    }
+    if (isShapeContainer && node.pointerEvents !== 'none') {
+      declarations.push('pointer-events: auto;');
+    }
+  } else if (node.type === 'path' && node.isContainer === true) {
+    if (node.clipContent === true) {
+      const clipId = buildShapeContainerClipId(maskPrefix ?? 'page', node.id);
+      declarations.push(`clip-path: url(#${clipId});`);
+      declarations.push(`-webkit-clip-path: url(#${clipId});`);
+    }
+    if (node.pointerEvents !== 'none') {
+      declarations.push('pointer-events: auto;');
     }
   } else if (node.type === 'image') {
     const strokeVar = resolveTokenCssVar(tokens, node.tokenBindings?.stroke);
@@ -1836,10 +1871,16 @@ export function compilePageHtmlCss(
       );
     } else if (node.type === 'path') {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
+      const children = activeChildrenByParent.get(node.id) ?? [];
+      const selfIsAutoLayout = Boolean(node.layout && node.layout.mode !== 'none');
       const isMorph = morphNodeIds.has(emittedId);
       const isTrim = trimNodeIds.has(emittedId);
       const initialSnap = isMorph ? initialMorphSnapshots.get(emittedId) : undefined;
       const renderedNode = initialSnap ? applyMorphGeometryToDesignNode(node, initialSnap) : node;
+      const containerClipId =
+        node.isContainer === true && node.clipContent === true
+          ? buildShapeContainerClipId(maskPrefix, node.id)
+          : undefined;
       htmlBodyLines.push(`${indent}<${wrapperTag} ${attrs.join(' ')}>`);
       htmlBodyLines.push(
         ...buildInlineSvgMarkup(
@@ -1848,17 +1889,41 @@ export function compilePageHtmlCss(
           `${indent}  `,
           isMorph,
           maskPrefix,
-          false,
+          children.length > 0 || node.isContainer === true,
           isTrim,
+          containerClipId,
         ),
       );
+      if (children.length > 0) {
+        const nextOrigin = { x: node.x, y: node.y };
+        for (const child of children) {
+          emitNodeHtml(
+            child,
+            node,
+            depth + 1,
+            selfIsAutoLayout,
+            isInstanceChild,
+            nextOrigin,
+            htmlLineOffset,
+            activeChildrenByParent,
+            activeNodeById,
+            activeAllNodes,
+            idPrefix,
+            visitedComponentIds,
+            componentDepth,
+          );
+        }
+      }
       htmlBodyLines.push(`${indent}</${wrapperTag}>`);
     } else if (
       (node.type === 'ellipse' || node.type === 'rect' || node.type === 'frame') &&
       morphNodeIds.has(emittedId)
     ) {
       const wrapperTag = isVoidHtmlTag(tag) ? 'div' : tag;
-      const children = node.type === 'frame' ? (activeChildrenByParent.get(node.id) ?? []) : [];
+      const children =
+        node.type === 'frame' || ((node.type === 'rect' || node.type === 'ellipse') && node.isContainer === true)
+          ? (activeChildrenByParent.get(node.id) ?? [])
+          : [];
       const selfIsAutoLayout = Boolean(node.layout && node.layout.mode !== 'none');
       const snap = initialMorphSnapshots.get(emittedId) ?? extractMorphSnapshotFromNode(node);
       const projected = snap ? applyMorphGeometryToDesignNode(node, snap) : null;

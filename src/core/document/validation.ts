@@ -600,7 +600,11 @@ function isDesignNode(value: unknown): value is DesignNode {
   }
 
   if (value.type === 'rect' || value.type === 'ellipse') {
-    return isShapeStyle(value.style);
+    return (
+      isShapeStyle(value.style) &&
+      (value.isContainer === undefined || typeof value.isContainer === 'boolean') &&
+      (value.clipContent === undefined || typeof value.clipContent === 'boolean')
+    );
   }
 
   if (value.type === 'path') {
@@ -628,6 +632,8 @@ function isDesignNode(value: unknown): value is DesignNode {
       (value.pathKind === undefined ||
         ['pen', 'curvature', 'pencil', 'line', 'arrow', 'triangle', 'polygon', 'star', 'boolean', 'outline'].includes(String(value.pathKind))) &&
       (value.subpaths === undefined || (Array.isArray(value.subpaths) && value.subpaths.every(isVectorSubpath))) &&
+      (value.isContainer === undefined || typeof value.isContainer === 'boolean') &&
+      (value.clipContent === undefined || typeof value.clipContent === 'boolean') &&
       validShapeMeta
     );
   }

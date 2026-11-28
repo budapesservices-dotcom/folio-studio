@@ -17,12 +17,15 @@ import {
   getSessionNetworkTestToken,
   getUpstreamPipelineOrigins,
   LOGIC_COMPARE_OPERATORS,
+  parseCssTransformForVisual,
   parsePipelineRef,
   parseSafeRuntimeHeaders,
   resolveAstNodeById,
+  serializeVisualTransformToCss,
   type LogicPortDataType,
   type PipelineOriginChildRef,
   type PipelineTargetMode,
+  type TransformVisualValues,
 } from '../../engines/prototype';
 import { analyzeRegexPattern } from '../../engines/codegen/sanitize';
 import { getUsedSourceReferenceIds } from './nodeLogicGraphHelpers';
@@ -40,6 +43,8 @@ export interface NodeLogicNodeFieldsProps {
   onChangeTab: (tab: NodeLogicInspectorTab) => void;
   onUpdateNodeData: (nodeId: string, patch: Record<string, string | number | boolean | null>) => void;
   onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
+  activeTransformPreviewNodeId?: string | null;
+  onToggleTransformPreview?: (logicNodeId: string | null) => void;
 }
 
 const UPDATE_OPERATIONS_BY_TYPE: Record<LogicValueType, readonly { value: string; label: string }[]> = {
@@ -91,7 +96,10 @@ export function NodeLogicNodeFields({
   onChangeTab,
   onUpdateNodeData,
   onToggleComponentNodeLogic,
+  activeTransformPreviewNodeId = null,
+  onToggleTransformPreview,
 }: NodeLogicNodeFieldsProps) {
+  const [transformModeByNodeId, setTransformModeByNodeId] = useState<Record<string, 'visual' | 'css'>>({});
   const [liveTestState, setLiveTestState] = useState<{
     readonly nodeId: string;
     readonly loading: boolean;
@@ -1805,18 +1813,212 @@ export function NodeLogicNodeFields({
             </label>
           )}
 
-          {property === 'transform' && (
-            <label class="nl-field">
-              <span>CSS Transform</span>
-              <input
-                class="nl-input"
-                type="text"
-                placeholder="e.g. scale(1.05) translateY(-4px)"
-                value={typeof node.data.transform === 'string' ? node.data.transform : 'scale(1)'}
-                onInput={(event) => onUpdateNodeData(node.id, { transform: event.currentTarget.value })}
-              />
-            </label>
-          )}
+          {property === 'transform' && (() => {
+            const rawTransform = typeof node.data.transform === 'string' ? node.data.transform : 'scale(1)';
+            const parsedTransform = parseCssTransformForVisual(rawTransform);
+            const preferredMode = transformModeByNodeId[node.id] ?? (parsedTransform.supported ? 'visual' : 'css');
+            const effectiveMode = !parsedTransform.supported && preferredMode === 'visual' ? 'css' : preferredMode;
+            const visualVals = parsedTransform.values;
+            const previewOpen = activeTransformPreviewNodeId === node.id;
+
+            const commitVisualTransform = (patch: Partial<TransformVisualValues>) => {
+              const next: TransformVisualValues = {
+                ...visualVals,
+                ...patch,
+              };
+              onUpdateNodeData(node.id, {
+                transform: serializeVisualTransformToCss(next),
+              });
+            };
+
+            return (
+              <div class="nl-transform-editor" data-testid="nl-transform-editor">
+                <div class="nl-transform-header">
+                  <span class="nl-transform-label">Transform</span>
+                  <div class="nl-transform-mode-toggle" role="group" aria-label="Transform editing mode">
+                    <button
+                      type="button"
+                      class={`nl-transform-mode-btn${effectiveMode === 'visual' ? ' is-active' : ''}`}
+                      data-testid="nl-transform-mode-visual"
+                      aria-pressed={effectiveMode === 'visual'}
+                      title={
+                        parsedTransform.supported
+                          ? 'Edit Move, Rotate, and Scale visually'
+                          : 'Switch to Visual Mode (replaces custom CSS transform on edit)'
+                      }
+                      onClick={() => {
+                        setTransformModeByNodeId((prev) => ({ ...prev, [node.id]: 'visual' }));
+                        if (!parsedTransform.supported) {
+                          onUpdateNodeData(node.id, { transform: 'scale(1)' });
+                        }
+                      }}
+                    >
+                      Visual
+                    </button>
+                    <button
+                      type="button"
+                      class={`nl-transform-mode-btn${effectiveMode === 'css' ? ' is-active' : ''}`}
+                      data-testid="nl-transform-mode-css"
+                      aria-pressed={effectiveMode === 'css'}
+                      title="Edit raw CSS transform string manually"
+                      onClick={() =>
+                        setTransformModeByNodeId((prev) => ({ ...prev, [node.id]: 'css' }))
+                      }
+                    >
+                      CSS
+                    </button>
+                  </div>
+                </div>
+
+                {effectiveMode === 'visual' ? (
+                  <div class="nl-transform-visual-body" data-testid="nl-transform-visual-panel">
+                    {onToggleTransformPreview && (
+                      <button
+                        type="button"
+                        class={`nl-transform-canvas-btn${previewOpen ? ' is-active' : ''}`}
+                        data-testid="nl-transform-set-in-canvas-btn"
+                        aria-pressed={previewOpen}
+                        onClick={() => onToggleTransformPreview(previewOpen ? null : node.id)}
+                      >
+                        {previewOpen ? 'Close Canvas Preview' : 'Set in Canvas'}
+                      </button>
+                    )}
+
+                    <div class="nl-field-grid nl-field-grid-2">
+                      <label class="nl-field">
+                        <span>Move X (px)</span>
+                        <input
+                          class="nl-input nl-tabular"
+                          type="number"
+                          step={1}
+                          data-testid="nl-transform-move-x"
+                          value={visualVals.translateX}
+                          onInput={(event) => {
+                            const val = Number(event.currentTarget.value);
+                            commitVisualTransform({ translateX: Number.isFinite(val) ? val : 0 });
+                          }}
+                        />
+                      </label>
+                      <label class="nl-field">
+                        <span>Move Y (px)</span>
+                        <input
+                          class="nl-input nl-tabular"
+                          type="number"
+                          step={1}
+                          data-testid="nl-transform-move-y"
+                          value={visualVals.translateY}
+                          onInput={(event) => {
+                            const val = Number(event.currentTarget.value);
+                            commitVisualTransform({ translateY: Number.isFinite(val) ? val : 0 });
+                          }}
+                        />
+                      </label>
+                    </div>
+
+                    <div class="nl-field-grid nl-field-grid-2">
+                      <label class="nl-field">
+                        <span>Rotate (deg)</span>
+                        <input
+                          class="nl-input nl-tabular"
+                          type="number"
+                          step={1}
+                          data-testid="nl-transform-rotate"
+                          value={visualVals.rotate}
+                          onInput={(event) => {
+                            const val = Number(event.currentTarget.value);
+                            commitVisualTransform({ rotate: Number.isFinite(val) ? val : 0 });
+                          }}
+                        />
+                      </label>
+                      <label class="nl-field">
+                        <span>{visualVals.uniformScale ? 'Scale' : 'Scale X'}</span>
+                        <input
+                          class="nl-input nl-tabular"
+                          type="number"
+                          step={0.05}
+                          data-testid="nl-transform-scale-x"
+                          value={visualVals.scaleX}
+                          onInput={(event) => {
+                            const val = Number(event.currentTarget.value);
+                            const safe = Number.isFinite(val) ? val : 1;
+                            commitVisualTransform(
+                              visualVals.uniformScale
+                                ? { scaleX: safe, scaleY: safe }
+                                : { scaleX: safe },
+                            );
+                          }}
+                        />
+                      </label>
+                    </div>
+
+                    {!visualVals.uniformScale && (
+                      <label class="nl-field">
+                        <span>Scale Y</span>
+                        <input
+                          class="nl-input nl-tabular"
+                          type="number"
+                          step={0.05}
+                          data-testid="nl-transform-scale-y"
+                          value={visualVals.scaleY}
+                          onInput={(event) => {
+                            const val = Number(event.currentTarget.value);
+                            commitVisualTransform({ scaleY: Number.isFinite(val) ? val : 1 });
+                          }}
+                        />
+                      </label>
+                    )}
+
+                    <div class="nl-transform-footer-row">
+                      <label class="nl-checkbox-row">
+                        <input
+                          type="checkbox"
+                          data-testid="nl-transform-uniform-scale"
+                          checked={visualVals.uniformScale}
+                          onChange={(event) => {
+                            const nextUniform = event.currentTarget.checked;
+                            commitVisualTransform({
+                              uniformScale: nextUniform,
+                              ...(nextUniform ? { scaleY: visualVals.scaleX } : {}),
+                            });
+                          }}
+                        />
+                        <span>Lock X/Y scale</span>
+                      </label>
+                      <button
+                        type="button"
+                        class="nl-inline-reset-btn"
+                        data-testid="nl-transform-reset-btn"
+                        onClick={() => onUpdateNodeData(node.id, { transform: 'scale(1)' })}
+                      >
+                        Reset
+                      </button>
+                    </div>
+
+                    <div class="nl-transform-css-preview nl-tabular" data-testid="nl-transform-css-readout">
+                      {rawTransform || 'scale(1)'}
+                    </div>
+                  </div>
+                ) : (
+                  <label class="nl-field">
+                    <span>CSS Transform</span>
+                    <input
+                      class="nl-input"
+                      type="text"
+                      data-testid="nl-transform-css-input"
+                      placeholder="e.g. translate(40px, -20px) rotate(15deg) scale(1.05)"
+                      value={rawTransform}
+                      onInput={(event) => onUpdateNodeData(node.id, { transform: event.currentTarget.value })}
+                    />
+                    {!parsedTransform.supported && (
+                      <span class="nl-field-hint">
+                        Custom CSS syntax detected · preserved directly in CSS Mode.
+                      </span>
+                    )}
+                  </label>
+                )}
+              </div>
+            );
+          })()}
 
           {property === 'text' && (
             <label class="nl-field">

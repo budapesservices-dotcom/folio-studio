@@ -363,7 +363,7 @@ function evaluateDetailedNodeHit(
       if (visibleStroke && onStroke) {
         return { hitKind: 'stroke', visualArea, strokeDistance: 0 };
       }
-      if (filled || sw === 0) {
+      if (filled || sw === 0 || node.isContainer === true) {
         if (isPointInEllipse(local.x, local.y, node.width, node.height, outPad + 1)) {
           return { hitKind: 'fill', visualArea, strokeDistance: Infinity };
         }
@@ -410,7 +410,7 @@ function evaluateDetailedNodeHit(
       if (visibleStroke && onBorderRing) {
         return { hitKind: 'stroke', visualArea, strokeDistance: 0 };
       }
-      if (filled) {
+      if (filled || (node.type === 'rect' && node.isContainer === true)) {
         if (isPointInRoundedRect(local.x, local.y, node.width, node.height, radius, outPad + 1, cornerRadii)) {
           return { hitKind: 'fill', visualArea, strokeDistance: Infinity };
         }
@@ -452,8 +452,11 @@ function evaluateDetailedNodeHit(
         return { hitKind: 'stroke', visualArea, strokeDistance: dist };
       }
       const filled = node.closed && hasVisibleFill(node);
-      if (filled && isPointInClosedContours(contours, local.x, local.y, node.style.fillRule ?? 'nonzero')) {
+      if ((filled || (node.isContainer === true && node.closed)) && isPointInClosedContours(contours, local.x, local.y, node.style.fillRule ?? 'nonzero')) {
         return { hitKind: 'fill', visualArea, strokeDistance: dist };
+      }
+      if (node.isContainer === true && !node.closed && local.x >= 0 && local.x <= node.width && local.y >= 0 && local.y <= node.height) {
+        return { hitKind: 'fill', visualArea: Math.max(1, node.width * node.height), strokeDistance: dist };
       }
       if (!filled && dist <= strokeHitDist) {
         return { hitKind: 'stroke', visualArea, strokeDistance: dist };

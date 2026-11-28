@@ -24,6 +24,7 @@ export interface WorkspaceSecondaryWindowsHostProps {
   componentAssets?: readonly AssetReference[];
   nodeLogicOwnerContext?: NodeLogicOwnerContext | null;
   onNodeLogicOwnerContextChange?: (next: NodeLogicOwnerContext) => void;
+  onOpenNodeLogicOwner?: (owner: NodeLogicOwnerContext) => void;
   componentDocument: FolioDocument | null;
   componentCanvasDocument: FolioDocument;
   componentSelectedNodeIds: string[];
@@ -67,6 +68,7 @@ export function WorkspaceSecondaryWindowsHost({
   componentAssets,
   nodeLogicOwnerContext = null,
   onNodeLogicOwnerContextChange,
+  onOpenNodeLogicOwner,
   componentDocument,
   componentCanvasDocument,
   componentSelectedNodeIds,
@@ -101,6 +103,7 @@ export function WorkspaceSecondaryWindowsHost({
         minimized={windows.componentCanvasMinimized}
         closed={windows.componentCanvasClosed}
         floating={windows.componentCanvasFloating}
+        locked={windows.componentCanvasLocked}
         position={windows.componentCanvasPosition}
         size={windows.componentCanvasSize}
         zIndex={getWindowZIndex(windows.windowOrder, 'component-canvas')}
@@ -172,6 +175,9 @@ export function WorkspaceSecondaryWindowsHost({
         onToggleFloating={() =>
           windows.setComponentCanvasWindowMode(windows.componentCanvasFloating ? 'docked' : 'floating')
         }
+        onToggleLocked={() =>
+          windows.setComponentCanvasLocked((prev) => !prev)
+        }
         onClose={() => {
           windows.setComponentCanvasClosed(true);
           windows.setComponentCanvasMinimized(false);
@@ -230,6 +236,7 @@ export function WorkspaceSecondaryWindowsHost({
         focusRequest={quickInteractions.nodeLogicFocusRequest}
         ownerContext={nodeLogicOwnerContext}
         onOwnerContextChange={onNodeLogicOwnerContextChange}
+        onOpenOwner={onOpenNodeLogicOwner}
         onPositionChange={windows.setNodeLogicPosition}
         onSizeChange={windows.setNodeLogicSize}
         onFocus={() => {

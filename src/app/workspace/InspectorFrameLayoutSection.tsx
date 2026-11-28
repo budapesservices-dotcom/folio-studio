@@ -20,6 +20,7 @@ import type {
   ScrollSnapAlign,
   ScrollSnapType,
 } from '../../core/document/types';
+import { isShapeContainerNode } from '../../core/document/layers';
 import { NumericUnitInput, type NumericUnitPreset } from './NumericUnitInput';
 
 const SPACING_UNITS: readonly CssUnitOption[] = ['px', 'rem', 'em', '%'];
@@ -112,6 +113,9 @@ function getEffectiveOverflow(node: DesignNode): LayoutOverflow {
   if (node.type === 'frame') {
     return node.clipContent === false ? 'visible' : 'hidden';
   }
+  if (isShapeContainerNode(node)) {
+    return node.clipContent === true ? 'hidden' : 'visible';
+  }
   return 'visible';
 }
 
@@ -155,7 +159,8 @@ export function InspectorFrameLayoutSection({
   const [customRowsDraft, setCustomRowsDraft] = useState<string | null>(null);
   const [customRowsInvalid, setCustomRowsInvalid] = useState(false);
 
-  const isContainer = selectedNode.type === 'frame' || selectedNode.type === 'group';
+  const isShapeContainer = isShapeContainerNode(selectedNode);
+  const isContainer = selectedNode.type === 'frame' || selectedNode.type === 'group' || isShapeContainer;
   const parentLayout = parentNode?.layout;
   const isInsideAutoLayout = Boolean(parentLayout && parentLayout.mode !== 'none');
 
@@ -243,7 +248,7 @@ export function InspectorFrameLayoutSection({
 
   const handleOverflowChange = (nextOverflow: LayoutOverflow) => {
     const clipPatch =
-      selectedNode.type === 'frame'
+      selectedNode.type === 'frame' || isShapeContainer
         ? ({ clipContent: nextOverflow !== 'visible' } as Partial<DesignNode>)
         : undefined;
     commitContainerLayout({ overflow: nextOverflow }, clipPatch, true);
@@ -959,7 +964,7 @@ export function InspectorFrameLayoutSection({
           )}
 
           {/* OVERFLOW & CSS SCROLL SNAP */}
-          {selectedNode.type === 'frame' && (
+          {(selectedNode.type === 'frame' || isShapeContainer) && (
             <>
               <div class="framer-subcontrol">
                 <span class="framer-mini-kicker">Overflow</span>

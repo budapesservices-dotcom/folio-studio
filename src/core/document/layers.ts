@@ -1,4 +1,31 @@
-import type { DesignNode } from './types';
+import type { DesignNode, EllipseNode, PathNode, RectNode, ShapeContainerNode } from './types';
+
+export function isShapeContainerCapable(node: DesignNode): node is RectNode | EllipseNode | PathNode {
+  return node.type === 'rect' || node.type === 'ellipse' || node.type === 'path';
+}
+
+export function isShapeContainerNode(node: DesignNode): node is ShapeContainerNode {
+  return isShapeContainerCapable(node) && node.isContainer === true;
+}
+
+export function isContainerNode(node: DesignNode): boolean {
+  return node.type === 'frame' || node.type === 'group' || isShapeContainerNode(node);
+}
+
+export function doesNodeClipChildren(node: DesignNode): boolean {
+  if (node.onCanvas === false) return false;
+  if (node.type === 'frame') {
+    return node.layout?.overflow
+      ? node.layout.overflow !== 'visible'
+      : node.clipContent !== false;
+  }
+  if (isShapeContainerNode(node)) {
+    return node.layout?.overflow
+      ? node.layout.overflow !== 'visible'
+      : node.clipContent === true;
+  }
+  return false;
+}
 
 export type LayerDropPosition = 'before' | 'inside' | 'after';
 
@@ -149,13 +176,7 @@ function resolveFrameClipAncestorIdsFromMap(
   const result: string[] = [];
   for (let i = chain.length - 1; i >= 0; i -= 1) {
     const ancestor = chain[i];
-    const clipsChildren =
-      ancestor.type === 'frame' &&
-      ancestor.onCanvas !== false &&
-      (ancestor.layout?.overflow
-        ? ancestor.layout.overflow !== 'visible'
-        : ancestor.clipContent !== false);
-    if (clipsChildren) {
+    if (doesNodeClipChildren(ancestor)) {
       result.push(ancestor.id);
     }
   }

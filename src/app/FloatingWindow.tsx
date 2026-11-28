@@ -19,6 +19,7 @@ interface FloatingWindowProps {
   floating?: boolean;
   minimized?: boolean;
   draggable?: boolean;
+  locked?: boolean;
   position: WindowPosition;
   size: WindowSize;
   zIndex: number;
@@ -61,6 +62,7 @@ export function FloatingWindow({
   floating = false,
   minimized = false,
   draggable = false,
+  locked = false,
   position,
   size,
   zIndex,
@@ -83,7 +85,7 @@ export function FloatingWindow({
 
   const handlePointerDown = (event: JSX.TargetedPointerEvent<HTMLElement>) => {
     onFocus?.();
-    if (event.button !== 0 || !event.isPrimary) return;
+    if (locked || event.button !== 0 || !event.isPrimary) return;
 
     const target = event.target as HTMLElement;
     const resizeHandle = target.closest('[data-window-resize]') as HTMLElement | null;
@@ -223,7 +225,7 @@ export function FloatingWindow({
 
   return (
     <Root
-      class={className}
+      class={locked ? `${className} window-locked` : className}
       style={rootStyle}
       onPointerDown={handlePointerDown}
       onFocusCapture={(event) => {
@@ -235,9 +237,10 @@ export function FloatingWindow({
       data-window-id={id}
       data-window-floating={floating ? 'true' : 'false'}
       data-window-minimized={minimized ? 'true' : 'false'}
+      data-window-locked={locked ? 'true' : 'false'}
     >
       {children}
-      {floating && RESIZE_DIRECTIONS.map((direction) => (
+      {floating && !locked && RESIZE_DIRECTIONS.map((direction) => (
         <div
           key={direction}
           data-window-resize={direction}

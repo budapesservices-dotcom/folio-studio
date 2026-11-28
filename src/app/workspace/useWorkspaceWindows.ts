@@ -163,6 +163,9 @@ export function useWorkspaceWindows({
   );
   const [componentCanvasWindowMode, setComponentCanvasWindowMode] =
     useState<'docked' | 'floating'>(() => initialComponentWindow.presentation);
+  const [componentCanvasLocked, setComponentCanvasLocked] = useState(
+    () => Boolean(initialComponentWindow.locked),
+  );
   const componentCanvasFloating = componentCanvasWindowMode === 'floating';
   const componentCanvasOpen = !componentCanvasClosed && !componentCanvasMinimized;
   const [componentCanvasSize, setComponentCanvasSize] = useState(() => ({
@@ -259,6 +262,7 @@ export function useWorkspaceWindows({
           ? 'closed'
           : componentCanvasMinimized ? 'minimized' : 'open',
         presentation: componentCanvasWindowMode,
+        ...(componentCanvasLocked ? { locked: true } : { locked: undefined }),
         geometry: {
           x: componentCanvasPosition.x,
           y: componentCanvasPosition.y,
@@ -330,6 +334,7 @@ export function useWorkspaceWindows({
     componentCanvasClosed,
     componentCanvasMinimized,
     componentCanvasWindowMode,
+    componentCanvasLocked,
     componentCanvasPosition,
     componentCanvasSize,
     nodeLogicClosed,
@@ -490,6 +495,7 @@ export function useWorkspaceWindows({
     setCanvasSize(layouts['main-canvas'].size);
     setComponentCanvasPosition(layouts['component-canvas'].position);
     setComponentCanvasSize(layouts['component-canvas'].size);
+    setComponentCanvasLocked(false);
     setNodeLogicPosition(layouts['node-logic'].position);
     setNodeLogicSize(layouts['node-logic'].size);
     setWindowOrder(['node-logic', 'component-canvas', 'pages', 'main-canvas']);
@@ -543,6 +549,8 @@ export function useWorkspaceWindows({
     setComponentCanvasMinimized,
     componentCanvasWindowMode,
     setComponentCanvasWindowMode,
+    componentCanvasLocked,
+    setComponentCanvasLocked,
     componentCanvasFloating,
     componentCanvasOpen,
     componentCanvasSize,

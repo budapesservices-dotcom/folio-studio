@@ -89,6 +89,8 @@ export interface NodeLogicInspectorProps {
   onResetRuntime: () => void;
   onUpgradeLegacyNode?: (nodeId: string) => void;
   onToggleComponentNodeLogic?: (component: ComponentDefinition, enabled?: boolean) => void;
+  activeTransformPreviewNodeId?: string | null;
+  onToggleTransformPreview?: (logicNodeId: string | null) => void;
 }
 
 function parseLiteralForType(raw: string, valueType: LogicValueType): LogicVariableValue {
@@ -152,6 +154,8 @@ export function NodeLogicInspector({
   onResetRuntime,
   onUpgradeLegacyNode,
   onToggleComponentNodeLogic,
+  activeTransformPreviewNodeId = null,
+  onToggleTransformPreview,
 }: NodeLogicInspectorProps) {
   const [newVarName, setNewVarName] = useState('');
   const [newVarType, setNewVarType] = useState<LogicValueType>('number');
@@ -445,6 +449,8 @@ export function NodeLogicInspector({
                     onChangeTab={onChangeTab}
                     onUpdateNodeData={onUpdateNodeData}
                     onToggleComponentNodeLogic={onToggleComponentNodeLogic}
+                    activeTransformPreviewNodeId={activeTransformPreviewNodeId}
+                    onToggleTransformPreview={onToggleTransformPreview}
                   />
                 </div>
 

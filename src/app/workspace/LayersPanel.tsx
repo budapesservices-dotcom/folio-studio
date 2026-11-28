@@ -1,6 +1,6 @@
 import type { JSX, RefObject } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { EffectiveLayerState, LayerDropPosition, LayerPanelRow } from '../../core/document/layers';
+import { isShapeContainerNode, type EffectiveLayerState, type LayerDropPosition, type LayerPanelRow } from '../../core/document/layers';
 import type { ComponentDefinition, DesignNode } from '../../core/document/types';
 import type { EditorTarget } from '../editorContext';
 import { PANEL_RESIZE_CONSTRAINTS, type ResizablePanelId } from '../panelResize';
@@ -505,6 +505,15 @@ export function LayersPanel({
                 ) : (
                   <span class="layer-name-group">
                     <span class={'layer-name ' + (isMaskBase ? 'layer-mask-base-name' : '')}>{node.name}</span>
+                    {isShapeContainerNode(node) && (
+                      <span
+                        class="layer-anim-badge layer-container-badge"
+                        data-testid="layer-shape-container-badge"
+                        title={node.clipContent ? 'Shape Container (clips children)' : 'Shape Container'}
+                      >
+                        {node.clipContent ? 'CLIP' : 'BOX'}
+                      </span>
+                    )}
                     {hasComponentAnimation && (
                       <span
                         class="layer-anim-badge"

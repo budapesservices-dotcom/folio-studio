@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
+import { isShapeContainerNode } from '../core/document/layers';
 import type { DesignNode, InteractiveStateId } from '../core/document/types';
 import { PANEL_RESIZE_CONSTRAINTS } from './panelResize';
 import {
@@ -9,6 +10,7 @@ import {
   InspectorInteractiveStateSection,
   InspectorQuickHeaderActions,
 } from './workspace/InspectorInteractiveStateSection';
+import { InspectorObjectRoleSection } from './workspace/InspectorObjectRoleSection';
 import { InspectorFrameLayoutSection } from './workspace/InspectorFrameLayoutSection';
 import { InspectorSizePositionSection } from './workspace/InspectorSizePositionSection';
 import { InspectorAppearanceSection } from './workspace/InspectorAppearanceSection';
@@ -89,6 +91,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
     onDeleteQuickInteraction,
     onOpenInteractionInNodeGraph,
     onImportFontFiles,
+    onPromoteSelectionToComponent,
     studioActions,
   } = panel;
 
@@ -107,6 +110,9 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
   }, [selectedNode.type]);
 
   const isTextNode = selectedNode.type === 'text';
+  const isGroupNode = selectedNode.type === 'group';
+  const isShapeContainer = isShapeContainerNode(selectedNode);
+  const directChildCount = scopedNodes.filter((n) => n.parentId === selectedNode.id).length;
   const isConvertibleVector =
     selectedNode.type === 'rect' || selectedNode.type === 'ellipse' || selectedNode.type === 'frame';
   const isPathNode = selectedNode.type === 'path';
@@ -128,7 +134,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
 
   const visibleSectionIds: InspectorAccordionSectionId[] = [
     'size-position',
-    'appearance',
+    ...(!isGroupNode ? (['appearance'] as const) : []),
     ...(isTextNode ? (['text'] as const) : []),
     'layout-frame',
     'modern-effects',
@@ -195,6 +201,7 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
     onCommitEdit,
     onSetAllSectionsOpen: setAllSectionsOpen,
     onRemoveFromCanvas,
+    onPromoteSelectionToComponent,
   });
 
   return (
@@ -225,7 +232,13 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
             value={selectedNode.name}
             onInput={(event) => onUpdateSelected({ name: event.currentTarget.value })}
           />
-          <span class="inspector-type-tag">{selectedNode.type.toUpperCase()}</span>
+          <span class="inspector-type-tag" data-testid="inspector-object-type-tag">
+            {selectedNode.type === 'component-instance'
+              ? 'COMPONENT'
+              : isShapeContainer
+                ? 'SHAPE CONTAINER'
+                : selectedNode.type.toUpperCase()}
+          </span>
         </div>
 
         <InspectorQuickHeaderActions
@@ -234,6 +247,15 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
           onUpdateSelected={onUpdateSelected}
           onDuplicateSelection={onDuplicateSelection}
           onCommitEdit={onCommitEdit}
+        />
+
+        <InspectorObjectRoleSection
+          selectedNode={selectedNode}
+          directChildCount={directChildCount}
+          onUpdateSelected={onUpdateSelected}
+          onCommitEdit={onCommitEdit}
+          onUngroupSelection={studioActions?.onUngroupSelection}
+          onPromoteSelectionToComponent={onPromoteSelectionToComponent}
         />
 
         <InspectorInteractiveStateSection
@@ -265,25 +287,27 @@ function InspectorSelectedNodeBody({ panel, selectedNode }: InspectorSelectedNod
         />
       </InspectorAccordionSection>
 
-      {/* SECTION 3 — FILL, BORDER & RADIUS */}
-      <InspectorAccordionSection
-        id="appearance"
-        title="Fill, Border & Radius"
-        badge={isPseudoState ? `:${activeState}` : undefined}
-        isOpen={openSections.appearance}
-        onToggle={toggleSection}
-      >
-        <InspectorAppearanceSection
-          selectedNode={selectedNode}
-          activeState={activeState}
-          designTokens={designTokens}
-          defaultFillColor={defaultFillColor}
-          onUpdateSelected={onUpdateSelected}
-          onUpdateSelectedStyle={handleUpdateExtendedStyle}
-          onConvertToPath={() => onConvertToPath(activeEditorId)}
-          onCommitEdit={onCommitEdit}
-        />
-      </InspectorAccordionSection>
+      {/* SECTION 3 — FILL, BORDER & RADIUS (HIDDEN FOR PURE STRUCTURAL GROUPS) */}
+      {!isGroupNode && (
+        <InspectorAccordionSection
+          id="appearance"
+          title="Fill, Border & Radius"
+          badge={isPseudoState ? `:${activeState}` : undefined}
+          isOpen={openSections.appearance}
+          onToggle={toggleSection}
+        >
+          <InspectorAppearanceSection
+            selectedNode={selectedNode}
+            activeState={activeState}
+            designTokens={designTokens}
+            defaultFillColor={defaultFillColor}
+            onUpdateSelected={onUpdateSelected}
+            onUpdateSelectedStyle={handleUpdateExtendedStyle}
+            onConvertToPath={() => onConvertToPath(activeEditorId)}
+            onCommitEdit={onCommitEdit}
+          />
+        </InspectorAccordionSection>
+      )}
 
       {/* SECTION 4 — TEXT & PARAGRAPH (TEXT NODES ONLY) */}
       {isTextNode && (

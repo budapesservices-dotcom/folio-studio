@@ -9,7 +9,6 @@ import type {
   DesignTokenCollection,
   FillPaint,
   FolioDocument,
-  FrameNode,
   ImageFitMode,
   ImageNode,
   PathNode,
@@ -47,6 +46,7 @@ import {
   getLayerDescendantIds,
   getLayerFrameClipAncestorIds,
   getLayerRenderOrder,
+  isShapeContainerNode,
 } from '../../core/document/layers';
 import type { PrototypeNodeOverride } from '../prototype/runtime';
 import {
@@ -699,12 +699,13 @@ export function NodeShape({
                   ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
                   : fills.length === 1
                     ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
-                    : 'none',
+                    : (node.isContainer ? 'transparent' : 'none'),
                 'fill-opacity': !mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined,
                 stroke: node.style.borderSides && !mask ? 'none' : (mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke),
                 'stroke-width': node.style.borderSides && !mask ? 0 : sw,
                 'stroke-dasharray': dash,
                 'stroke-dashoffset': dashOffset,
+                'pointer-events': !mask && node.isContainer ? 'all' : undefined,
               })
             ) : (
               <>
@@ -767,13 +768,14 @@ export function NodeShape({
                     ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
                     : fills.length === 1
                       ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
-                      : 'none'
+                      : (node.isContainer ? 'transparent' : 'none')
                 }
                 fill-opacity={!mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined}
                 stroke={mask ? (node.style.stroke === 'none' ? 'none' : maskFill) : node.style.stroke}
                 stroke-width={sw}
                 stroke-dasharray={dash}
                 stroke-dashoffset={dashOffset}
+                pointer-events={!mask && node.isContainer ? 'all' : undefined}
               />
             ) : (
               <>
@@ -891,7 +893,7 @@ export function NodeShape({
                     ? (node.style.fill === 'none' && fills.length === 0 ? 'none' : maskFill)
                     : fills.length === 1
                       ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fill
-                      : 'none'
+                      : (node.isContainer ? 'transparent' : 'none')
                 }
                 fill-opacity={!mask && fills.length === 1 ? resolveFillAttribute(fills[0], node.id, 0, maskPrefix).fillOpacity : undefined}
                 fill-rule={node.style.fillRule ?? 'nonzero'}
@@ -900,6 +902,7 @@ export function NodeShape({
                 stroke-linecap={node.style.strokeLinecap ?? 'round'}
                 stroke-linejoin={node.style.strokeLinejoin ?? 'round'}
                 stroke-dasharray={node.style.strokeDasharray || undefined}
+                pointer-events={!mask && node.isContainer ? 'all' : undefined}
               />
             ) : (
               <>
@@ -1483,35 +1486,76 @@ export function DocumentMaskDefs({
       })}
       {referencedFrameIds.map((frameId) => {
         const candidate = resolvedNodeById.get(frameId);
-        if (!candidate || candidate.type !== 'frame') return null;
-        const frame = candidate as FrameNode;
+        if (!candidate || (candidate.type !== 'frame' && !isShapeContainerNode(candidate))) return null;
         const { svgTransform: transform } = resolveNodeEffectiveSvgTransform(
-          frame,
+          candidate,
           nodeOverrides,
           overrideIdPrefix,
         );
         const ancestorTransforms = getAncestorGroupSvgTransforms(
-          frame,
+          candidate,
           resolvedNodeById,
           nodeOverrides,
           overrideIdPrefix,
         );
         const combinedTransform =
           [...ancestorTransforms, ...(transform ? [transform] : [])].join(' ') || undefined;
+        let clipGeometry: JSX.Element;
+        if (candidate.type === 'ellipse') {
+          clipGeometry = (
+            <ellipse
+              cx={candidate.x + candidate.width / 2}
+              cy={candidate.y + candidate.height / 2}
+              rx={candidate.width / 2}
+              ry={candidate.height / 2}
+              transform={combinedTransform}
+            />
+          );
+        } else if (candidate.type === 'path') {
+          const pathD = serializePathPointsToSvgD(candidate.points, candidate.closed, candidate.subpaths);
+          const pathTransform = [combinedTransform, `translate(${candidate.x} ${candidate.y})`]
+            .filter(Boolean)
+            .join(' ');
+          const clipRule = candidate.style.fillRule ?? (candidate.subpaths && candidate.subpaths.length > 0 ? 'evenodd' : 'nonzero');
+          clipGeometry = (
+            <path
+              d={pathD}
+              clip-rule={clipRule}
+              transform={pathTransform}
+            />
+          );
+        } else if (candidate.style.cornerRadii) {
+          clipGeometry = (
+            <path
+              d={buildRoundedRectSvgPath(
+                candidate.x,
+                candidate.y,
+                candidate.width,
+                candidate.height,
+                candidate.style.cornerRadii,
+              )}
+              transform={combinedTransform}
+            />
+          );
+        } else {
+          clipGeometry = (
+            <rect
+              x={candidate.x}
+              y={candidate.y}
+              width={candidate.width}
+              height={candidate.height}
+              rx={candidate.style.radius ?? 0}
+              transform={combinedTransform}
+            />
+          );
+        }
         return (
           <clipPath
             key={`frameclip-${frameId}`}
             id={buildFrameClipElementId(maskPrefix, frameId)}
             clipPathUnits="userSpaceOnUse"
           >
-            <rect
-              x={frame.x}
-              y={frame.y}
-              width={frame.width}
-              height={frame.height}
-              rx={frame.style.radius ?? 0}
-              transform={combinedTransform}
-            />
+            {clipGeometry}
           </clipPath>
         );
       })}

@@ -90,7 +90,9 @@ import {
   type NodeLogicOwnerContext,
   type SnapLogicPortMatch,
 } from './nodeLogicGraphHelpers';
+import { NodeLogicBrowser } from './NodeLogicBrowser';
 import { NodeLogicInspector, type NodeLogicInspectorTab } from './NodeLogicInspector';
+import { NodeLogicTransformPreview } from './NodeLogicTransformPreview';
 import {
   NodeLogicPresetsMenu,
   computePresetsMenuLayout,
@@ -104,6 +106,7 @@ export interface NodeLogicWorkspaceProps {
   activePageId: string;
   ownerContext?: NodeLogicOwnerContext | null;
   onOwnerContextChange?: (next: NodeLogicOwnerContext) => void;
+  onOpenOwner?: (owner: NodeLogicOwnerContext) => void;
   mainCommandClient: MainCanvasCommandClient;
   onNotice: (message: string) => void;
   onOpenLivePreview: (pageId?: string) => void;
@@ -210,6 +213,7 @@ export default function NodeLogicWorkspace({
   activePageId,
   ownerContext = null,
   onOwnerContextChange,
+  onOpenOwner,
   mainCommandClient,
   onNotice,
   onOpenLivePreview,
@@ -269,6 +273,8 @@ export default function NodeLogicWorkspace({
   const [paletteSearch, setPaletteSearch] = useState('');
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [presetsMenuPos, setPresetsMenuPos] = useState<PresetsMenuLayout | null>(null);
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [transformPreviewNodeId, setTransformPreviewNodeId] = useState<string | null>(null);
   const [renamingGraph, setRenamingGraph] = useState(false);
   const [graphNameDraft, setGraphNameDraft] = useState('');
   const [viewport, setViewport] = useState<LogicViewportTransform>({ panX: 32, panY: 32, zoom: 0.85 });
@@ -435,7 +441,10 @@ export default function NodeLogicWorkspace({
     if (openGuideNodeId && !validIds.has(openGuideNodeId)) {
       setOpenGuideNodeId(null);
     }
-  }, [activeGraph, selectedNodeId, selectedNodeIds, selectedFrameId, selectedConnectionId, openGuideNodeId]);
+    if (transformPreviewNodeId && !validIds.has(transformPreviewNodeId)) {
+      setTransformPreviewNodeId(null);
+    }
+  }, [activeGraph, selectedNodeId, selectedNodeIds, selectedFrameId, selectedConnectionId, openGuideNodeId, transformPreviewNodeId]);
 
   // Fit view when switching to a different graph
   const fittedGraphIdRef = useRef<string | null>(null);
@@ -515,6 +524,29 @@ export default function NodeLogicWorkspace({
       ?? activePage.document.nodes
     );
   }, [activeGraph, effectiveOwnerContext, ownerComponent, project.pages, project.components, activePage.document.nodes]);
+
+  const scopedPreviewDocument = useMemo(() => {
+    if (activeGraph?.scope === 'component') {
+      return project.components.find((c) => c.id === activeGraph.targetId)?.document ?? activePage.document;
+    }
+    if (activeGraph?.scope === 'page') {
+      return project.pages.find((p) => p.id === activeGraph.targetId)?.document ?? activePage.document;
+    }
+    if (effectiveOwnerContext.scope === 'component') {
+      return ownerComponent?.document ?? activePage.document;
+    }
+    if (effectiveOwnerContext.scope === 'page') {
+      return project.pages.find((p) => p.id === effectiveOwnerContext.pageId)?.document ?? activePage.document;
+    }
+    return activePage.document;
+  }, [activeGraph, effectiveOwnerContext, ownerComponent, project.components, project.pages, activePage.document]);
+
+  const activeTransformPreviewNode: LogicNode | null = useMemo(() => {
+    if (!transformPreviewNodeId || !activeGraph) return null;
+    const found = activeGraph.nodes.find((n) => n.id === transformPreviewNodeId);
+    if (!found || found.type !== 'action.set-layer' || found.data.property !== 'transform') return null;
+    return found;
+  }, [transformPreviewNodeId, activeGraph]);
 
   const availableVariables: readonly LogicVariableDefinition[] = useMemo(() => {
     if (!activeGraph) return [];
@@ -1851,6 +1883,18 @@ export default function NodeLogicWorkspace({
       {/* Top Graph Control & Live Preview Bridge Bar */}
       <div ref={topbarRef} class="nl-topbar">
         <div class="nl-topbar-left">
+          <button
+            type="button"
+            class={`nl-bar-btn ${browserOpen ? 'is-active' : ''}`}
+            data-testid="nl-browser-toggle"
+            aria-expanded={browserOpen}
+            title="Browse all Project, Page, and Component logic graphs"
+            onClick={() => setBrowserOpen((open) => !open)}
+          >
+            <StudioIcon name="layers" />
+            <span>Graphs ({project.logicGraphs.length})</span>
+          </button>
+
           <div
             class="nl-owner-breadcrumb"
             data-testid="nl-owner-breadcrumb"
@@ -1863,6 +1907,18 @@ export default function NodeLogicWorkspace({
             <span class="nl-owner-sep" aria-hidden="true">&gt;</span>
             <span class="nl-owner-leaf">Node Logic</span>
           </div>
+
+          {onOpenOwner && (
+            <button
+              type="button"
+              class="nl-bar-btn"
+              data-testid="nl-open-active-owner-btn"
+              title={`Open ${ownerBreadcrumb.scopeLabel} “${ownerBreadcrumb.ownerName}” in Canvas`}
+              onClick={() => onOpenOwner(effectiveOwnerContext)}
+            >
+              Open Owner
+            </button>
+          )}
 
           {effectiveOwnerContext.scope !== 'component' && (
             <select
@@ -2047,8 +2103,29 @@ export default function NodeLogicWorkspace({
         />
       )}
 
-      {/* Main 3-Column Node Logic Studio Body */}
+      {/* Main Node Logic Studio Body */}
       <div class="nl-body">
+        {browserOpen && (
+          <NodeLogicBrowser
+            project={project}
+            activePageId={activePageId}
+            activeOwnerContext={effectiveOwnerContext}
+            activeGraphId={activeGraph?.id ?? null}
+            onOpenLogic={(nextOwner, graphId) => {
+              fittedGraphIdRef.current = null;
+              setOwnerContext(nextOwner);
+              setActiveGraphId(graphId);
+              setSelectedNodeId(null);
+              setSelectedNodeIds([]);
+              setSelectedFrameId(null);
+              setSelectedConnectionId(null);
+              setTransformPreviewNodeId(null);
+            }}
+            onOpenOwner={onOpenOwner}
+            onClose={() => setBrowserOpen(false)}
+          />
+        )}
+
         {/* Left Node Catalog Palette */}
         <aside class="nl-palette" aria-label="Node catalog">
           <div class="nl-palette-search-wrap">
@@ -2917,6 +2994,21 @@ export default function NodeLogicWorkspace({
           )}
         </div>
 
+        {activeTransformPreviewNode && activeGraph && (
+          <NodeLogicTransformPreview
+            document={scopedPreviewDocument}
+            components={project.components}
+            assets={project.assets}
+            tokens={designTokens}
+            logicNode={activeTransformPreviewNode}
+            ownerLabel={ownerBreadcrumb.ownerName}
+            onUpdateNodeData={(nodeId, patch) => {
+              commitGraphUpdate(updateNodeDataInGraph(activeGraph, nodeId, patch), 'Update transform visually in canvas preview');
+            }}
+            onClose={() => setTransformPreviewNodeId(null)}
+          />
+        )}
+
         {/* Right Node, Variables & Simulation Inspector */}
         <NodeLogicInspector
           activeTab={inspectorTab}
@@ -3042,6 +3134,8 @@ export default function NodeLogicWorkspace({
             onNotice(`Upgraded legacy node to “${upgradedDef?.label ?? 'modern node'}”.`);
           }}
           onToggleComponentNodeLogic={onToggleComponentNodeLogic}
+          activeTransformPreviewNodeId={activeTransformPreviewNode?.id ?? null}
+          onToggleTransformPreview={(logicNodeId) => setTransformPreviewNodeId(logicNodeId)}
         />
       </div>
       {stageContextMenu && (

@@ -747,6 +747,28 @@ export function App() {
         componentAssets={mergedWorkspaceAssets}
         nodeLogicOwnerContext={nodeLogicOwnerContext}
         onNodeLogicOwnerContextChange={setNodeLogicOwnerContext}
+        onOpenNodeLogicOwner={(owner) => {
+          if (owner.scope === 'component') {
+            const comp = state.project.components.find((c) => c.id === owner.componentId);
+            if (comp) {
+              componentMaster.openMasterComponent(comp);
+              setNotice(`Opened Component Master “${comp.name}”.`);
+            } else {
+              setNotice('Owning component was not found.');
+            }
+            return;
+          }
+          if (owner.scope === 'page') {
+            const targetPage = state.project.pages.find((p) => p.id === owner.pageId);
+            if (targetPage && targetPage.id !== activePageId) {
+              pageActions.switchPage(targetPage);
+            }
+            windows.openMainCanvas();
+            if (targetPage) setNotice(`Opened Page “${targetPage.name}”.`);
+            return;
+          }
+          windows.openMainCanvas();
+        }}
         componentDocument={componentDocument}
         componentCanvasDocument={componentCanvasDocument}
         componentSelectedNodeIds={componentState.selectedNodeIds}

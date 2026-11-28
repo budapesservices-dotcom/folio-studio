@@ -500,7 +500,7 @@ function isDesignNodeData(value: unknown): value is DesignNode {
   }
 
   if (value.type === 'rect' || value.type === 'ellipse') {
-    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'style']) || !isRecord(value.style)) return false;
+    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'style', 'isContainer', 'clipContent']) || !isRecord(value.style)) return false;
     const style = value.style;
     if (!hasOnlyKeys(style, SHAPE_STYLE_KEYS)) return false;
     return (
@@ -516,12 +516,14 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
       (style.radiusUnit === undefined || isCssLengthUnit(style.radiusUnit)) &&
       (style.cornerRadii === undefined || isCornerRadiiConfig(style.cornerRadii)) &&
-      isValidCommandTrimFields(style)
+      isValidCommandTrimFields(style) &&
+      (value.isContainer === undefined || typeof value.isContainer === 'boolean') &&
+      (value.clipContent === undefined || typeof value.clipContent === 'boolean')
     );
   }
 
   if (value.type === 'path') {
-    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'points', 'closed', 'style', 'pathKind', 'subpaths', 'shapeMeta'])) return false;
+    if (!hasOnlyKeys(value, [...COMMON_NODE_KEYS, 'points', 'closed', 'style', 'pathKind', 'subpaths', 'shapeMeta', 'isContainer', 'clipContent'])) return false;
     if (!isRecord(value.style) || !Array.isArray(value.points) || value.points.length === 0 || value.points.length > 500) {
       return false;
     }
@@ -606,7 +608,9 @@ function isDesignNodeData(value: unknown): value is DesignNode {
       (style.fillRule === undefined || style.fillRule === 'nonzero' || style.fillRule === 'evenodd') &&
       (style.arrowStart === undefined || typeof style.arrowStart === 'boolean') &&
       (style.arrowEnd === undefined || typeof style.arrowEnd === 'boolean') &&
-      isValidCommandTrimFields(style)
+      isValidCommandTrimFields(style) &&
+      (value.isContainer === undefined || typeof value.isContainer === 'boolean') &&
+      (value.clipContent === undefined || typeof value.clipContent === 'boolean')
     );
   }
 

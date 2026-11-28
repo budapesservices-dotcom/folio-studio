@@ -1,4 +1,5 @@
 import type { DesignNode } from '../../core/document/types';
+import { isContainerNode } from '../../core/document/layers';
 import type { PrototypeNodeOverride } from '../prototype/runtime';
 
 const TRANSFORM_FUNC_RE = /([a-zA-Z0-9_-]+)\s*\(([^)]*)\)/g;
@@ -236,7 +237,7 @@ export function getAncestorGroupSvgTransforms(
   while (current && !visited.has(current.id)) {
     if (stopAtAncestorId && current.id === stopAtAncestorId) break;
     visited.add(current.id);
-    if (current.type === 'group' || current.type === 'frame') {
+    if (isContainerNode(current)) {
       chain.push(current);
     }
     current = current.parentId ? nodeById.get(current.parentId) : undefined;

@@ -16,6 +16,7 @@ import type {
   RectNode,
   TextNode,
 } from '../../core/document/types';
+import { isShapeContainerCapable, isShapeContainerNode } from '../../core/document/layers';
 import type { CanvasToolId, ShapeColorBlendMode } from '../../core/tools/operationContract';
 import type { EditorTarget } from '../editorContext';
 import type { ResizablePanelId } from '../panelResize';
@@ -104,6 +105,7 @@ export interface InspectorPanelProps {
   onOpenInteractionInNodeGraph?: (graphId: string, nodeIds: readonly string[]) => void;
   colorBlendMode?: ShapeColorBlendMode;
   onChangeColorBlendMode?: (mode: ShapeColorBlendMode) => void;
+  onPromoteSelectionToComponent?: () => void;
   studioActions?: StudioVectorActions;
 }
 
@@ -135,9 +137,12 @@ export function resolveInspectorLayoutBadge(
   parentNode: DesignNode | null,
 ): string {
   const parentLayout = parentNode?.layout;
-  if (selectedNode.type === 'frame' || selectedNode.type === 'group') {
+  if (selectedNode.type === 'frame' || selectedNode.type === 'group' || isShapeContainerNode(selectedNode)) {
     if (selectedNode.layout?.mode === 'flex') return 'STACK';
     if (selectedNode.layout?.mode === 'grid') return 'GRID';
+    if (isShapeContainerNode(selectedNode)) {
+      return selectedNode.clipContent ? 'CLIP' : 'BOX';
+    }
     return 'FREE';
   }
   if (parentLayout?.mode === 'grid') return 'GRID ITEM';
@@ -156,6 +161,7 @@ export interface BuildInspectorContextEntriesOptions {
   onCommitEdit: () => void;
   onSetAllSectionsOpen: (open: boolean) => void;
   onRemoveFromCanvas: (nodeId: string) => void;
+  onPromoteSelectionToComponent?: () => void;
 }
 
 export function buildInspectorContextEntries(
@@ -172,10 +178,19 @@ export function buildInspectorContextEntries(
     onCommitEdit,
     onSetAllSectionsOpen,
     onRemoveFromCanvas,
+    onPromoteSelectionToComponent,
   } = options;
 
+  const isShapeContainer = isShapeContainerNode(selectedNode);
+  const canBeShapeContainer = isShapeContainerCapable(selectedNode);
+
   return [
-    { kind: 'header', id: 'hdr-node', label: selectedNode.name, meta: selectedNode.type.toUpperCase() },
+    {
+      kind: 'header',
+      id: 'hdr-node',
+      label: selectedNode.name,
+      meta: isShapeContainer ? 'SHAPE CONTAINER' : selectedNode.type.toUpperCase(),
+    },
     {
       kind: 'item',
       id: 'dup',
@@ -190,6 +205,34 @@ export function buildInspectorContextEntries(
       shortcut: ['Mod', 'C'],
       onSelect: onCopySelection,
     },
+    ...(canBeShapeContainer
+      ? [
+          {
+            kind: 'item' as const,
+            id: 'toggle-shape-container',
+            label: isShapeContainer ? 'Release Container' : 'Set as Container',
+            onSelect: () => {
+              onUpdateSelected(
+                (isShapeContainer
+                  ? { isContainer: false, clipContent: false }
+                  : { isContainer: true, clipContent: false }) as Partial<DesignNode>,
+              );
+              onCommitEdit();
+            },
+          },
+        ]
+      : []),
+    ...(onPromoteSelectionToComponent && (selectedNode.type === 'group' || isShapeContainer)
+      ? [
+          {
+            kind: 'item' as const,
+            id: 'promote-component',
+            label: 'Promote to Component',
+            tone: 'accent' as const,
+            onSelect: onPromoteSelectionToComponent,
+          },
+        ]
+      : []),
     { kind: 'divider', id: 'div-1' },
     {
       kind: 'item',

@@ -69,6 +69,17 @@ export function buildCanvasContextMenuExtras(
         }
       : {}),
     onUnpackComponent: (nodeId) => onUnpackComponent(workspace, nodeId),
+    onToggleShapeContainer: (nodeId, nextContainer) => {
+      const target = documentNodes.find((n) => n.id === nodeId);
+      if (!target || (target.type !== 'rect' && target.type !== 'ellipse' && target.type !== 'path')) return;
+      const updated: DesignNode = nextContainer
+        ? { ...target, isContainer: true, clipContent: Boolean(target.clipContent) }
+        : { ...target, isContainer: false, clipContent: false };
+      commandClient.replaceNode(
+        updated,
+        nextContainer ? 'Set shape as container' : 'Release shape container',
+      );
+    },
     onQuickAdd,
   };
 }

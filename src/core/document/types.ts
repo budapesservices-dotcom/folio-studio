@@ -481,11 +481,19 @@ export interface FrameNode extends NodeBase {
 export interface RectNode extends NodeBase {
   type: 'rect';
   style: ShapeStyle;
+  /** When true, this shape acts as a Shape Container that owns child layers, bounds, and interaction hit area. */
+  isContainer?: boolean;
+  /** When isContainer is true, clips child layers to this shape's rounded rectangle bounds. */
+  clipContent?: boolean;
 }
 
 export interface EllipseNode extends NodeBase {
   type: 'ellipse';
   style: ShapeStyle;
+  /** When true, this shape acts as a Shape Container that owns child layers, bounds, and interaction hit area. */
+  isContainer?: boolean;
+  /** When isContainer is true, clips child layers to this shape's elliptical bounds. */
+  clipContent?: boolean;
 }
 
 export type VectorShapeMeta =
@@ -503,7 +511,13 @@ export interface PathNode extends NodeBase {
   subpaths?: VectorSubpath[];
   /** Optional parametric metadata for live on-canvas polygon/star Smart Handles. */
   shapeMeta?: VectorShapeMeta;
+  /** When true, this custom path acts as a Shape Container that owns child layers, bounds, and interaction hit area. */
+  isContainer?: boolean;
+  /** When isContainer is true, clips child layers to this custom vector path boundary. */
+  clipContent?: boolean;
 }
+
+export type ShapeContainerNode = (RectNode | EllipseNode | PathNode) & { isContainer: true };
 
 export type TextAlign = 'left' | 'center' | 'right' | 'justify';
 export type TextVerticalAlign = 'top' | 'middle' | 'bottom';

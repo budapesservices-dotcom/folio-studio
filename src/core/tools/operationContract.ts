@@ -414,8 +414,8 @@ const COMMON_NODE_KEYS = [
 ] as const;
 
 const FRAME_NODE_KEYS = [...COMMON_NODE_KEYS, 'style', 'clipContent', 'isSection'] as const;
-const SHAPE_NODE_KEYS = [...COMMON_NODE_KEYS, 'style'] as const;
-const PATH_NODE_KEYS = [...COMMON_NODE_KEYS, 'points', 'closed', 'style', 'pathKind', 'subpaths', 'shapeMeta'] as const;
+const SHAPE_NODE_KEYS = [...COMMON_NODE_KEYS, 'style', 'isContainer', 'clipContent'] as const;
+const PATH_NODE_KEYS = [...COMMON_NODE_KEYS, 'points', 'closed', 'style', 'pathKind', 'subpaths', 'shapeMeta', 'isContainer', 'clipContent'] as const;
 const TEXT_NODE_KEYS = [...COMMON_NODE_KEYS, 'text', 'style'] as const;
 const IMAGE_NODE_KEYS = [...COMMON_NODE_KEYS, 'assetId', 'alt', 'naturalWidth', 'naturalHeight', 'style'] as const;
 const INSTANCE_NODE_KEYS = [
@@ -932,6 +932,12 @@ export function validateDesignNodePayload(
     case 'ellipse': {
       const extra = findUnexpectedKey(value, SHAPE_NODE_KEYS);
       if (extra) return fail('INVALID_NODE', `Unexpected property "${extra}" on ${path}.`, `${path}.${extra}`);
+      if (value.isContainer !== undefined && typeof value.isContainer !== 'boolean') {
+        return fail('INVALID_NODE', `${path}.isContainer must be a boolean.`, `${path}.isContainer`);
+      }
+      if (value.clipContent !== undefined && typeof value.clipContent !== 'boolean') {
+        return fail('INVALID_NODE', `${path}.clipContent must be a boolean.`, `${path}.clipContent`);
+      }
       return validateShapeStyle(value.style, `${path}.style`);
     }
 
@@ -1082,6 +1088,12 @@ export function validateDesignNodePayload(
     case 'path': {
       const extra = findUnexpectedKey(value, PATH_NODE_KEYS);
       if (extra) return fail('INVALID_NODE', `Unexpected property "${extra}" on ${path}.`, `${path}.${extra}`);
+      if (value.isContainer !== undefined && typeof value.isContainer !== 'boolean') {
+        return fail('INVALID_NODE', `${path}.isContainer must be a boolean.`, `${path}.isContainer`);
+      }
+      if (value.clipContent !== undefined && typeof value.clipContent !== 'boolean') {
+        return fail('INVALID_NODE', `${path}.clipContent must be a boolean.`, `${path}.clipContent`);
+      }
       if (typeof value.closed !== 'boolean') {
         return fail('INVALID_NODE', `${path}.closed must be a boolean.`, `${path}.closed`);
       }

@@ -714,6 +714,7 @@ export interface ComponentCanvasWindowProps {
   minimized: boolean;
   closed: boolean;
   floating: boolean;
+  locked?: boolean;
   position: { x: number; y: number };
   size: { width: number; height: number };
   zIndex: number;
@@ -754,6 +755,7 @@ export interface ComponentCanvasWindowProps {
   onMinimize: () => void;
   onRestore: () => void;
   onToggleFloating: () => void;
+  onToggleLocked?: () => void;
   onClose: () => void;
   onCloseMinimized: () => void;
   onChangeToolOptions: (patch: Partial<CanvasToolOptions>) => void;
@@ -791,6 +793,7 @@ export function ComponentCanvasWindow({
   minimized,
   closed,
   floating,
+  locked = false,
   position,
   size,
   zIndex,
@@ -831,6 +834,7 @@ export function ComponentCanvasWindow({
   onMinimize,
   onRestore,
   onToggleFloating,
+  onToggleLocked,
   onClose,
   onCloseMinimized,
   onChangeToolOptions,
@@ -883,7 +887,8 @@ export function ComponentCanvasWindow({
           id="component-canvas"
           className={`workspace component-canvas-window${floating ? ' canvas-floating' : ' component-canvas-docked'}`}
           floating={floating}
-          draggable={floating}
+          draggable={floating && !locked}
+          locked={locked}
           position={position}
           size={size}
           zIndex={zIndex}
@@ -892,7 +897,7 @@ export function ComponentCanvasWindow({
           onFocus={onFocus}
           onMouseEnter={onHoverHint}
         >
-          <div class={`workspace-toolbar component-canvas-toolbar${floating ? ' workspace-toolbar-draggable' : ''}`}>
+          <div class={`workspace-toolbar component-canvas-toolbar${floating && !locked ? ' workspace-toolbar-draggable' : ''}`}>
             <div class="breadcrumb">
               <StudioIcon name="componentCanvas" />
               <strong>{editingComponent ? editingComponent.name + ' · Master' : 'Component Canvas'}</strong>
@@ -989,6 +994,19 @@ export function ComponentCanvasWindow({
                 </button>
               </div>
               <div class="workspace-window-controls" aria-label="Component Canvas window controls">
+                {onToggleLocked && (
+                  <button
+                    type="button"
+                    class={`window-control window-control-lock${locked ? ' is-locked' : ''}`}
+                    data-testid="component-canvas-lock-btn"
+                    title={locked ? 'Unlock Component Canvas panel size and position' : 'Lock Component Canvas panel size and position'}
+                    aria-label={locked ? 'Unlock Component Canvas panel' : 'Lock Component Canvas panel'}
+                    aria-pressed={locked}
+                    onClick={onToggleLocked}
+                  >
+                    <StudioIcon name={locked ? 'lock' : 'unlock'} />
+                  </button>
+                )}
                 <button
                   type="button"
                   class="window-control window-control-minimize"
@@ -1000,9 +1018,10 @@ export function ComponentCanvasWindow({
                 <button
                   type="button"
                   class="window-control"
-                  title={floating ? 'Dock Component Canvas' : 'Float Component Canvas'}
+                  title={locked ? 'Unlock panel to dock or float' : floating ? 'Dock Component Canvas' : 'Float Component Canvas'}
                   aria-label={floating ? 'Dock Component Canvas' : 'Float Component Canvas'}
                   aria-pressed={floating}
+                  disabled={locked}
                   onClick={onToggleFloating}
                 >
                   {floating ? '▣' : '□'}
@@ -1088,7 +1107,8 @@ export function ComponentCanvasWindow({
           id="component-canvas"
           className="canvas-minimized-window component-canvas-minimized"
           minimized
-          draggable
+          draggable={!locked}
+          locked={locked}
           position={position}
           size={size}
           zIndex={zIndex}
@@ -1129,6 +1149,7 @@ export interface NodeLogicWindowProps {
   } | null;
   ownerContext?: NodeLogicOwnerContext | null;
   onOwnerContextChange?: (next: NodeLogicOwnerContext) => void;
+  onOpenOwner?: (owner: NodeLogicOwnerContext) => void;
   onPositionChange: (position: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
   onFocus: () => void;
@@ -1162,6 +1183,7 @@ export function NodeLogicWindow({
   focusRequest = null,
   ownerContext = null,
   onOwnerContextChange,
+  onOpenOwner,
   onPositionChange,
   onSizeChange,
   onFocus,
@@ -1251,6 +1273,7 @@ export function NodeLogicWindow({
                 activePageId={activePageId}
                 ownerContext={resolvedOwner}
                 onOwnerContextChange={onOwnerContextChange}
+                onOpenOwner={onOpenOwner}
                 mainCommandClient={mainCommandClient}
                 onNotice={onNotice}
                 onOpenLivePreview={onOpenLivePreview}
