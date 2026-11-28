@@ -387,51 +387,115 @@ describe('Prototype Runtime — Update State List Remove & Other List Operations
     expect(rt.dispatchNodeEvent(btnReset.id, 'click').variables[listVar.id]).toEqual(['Ayu', 'Bima', 'Citra']);
   });
 
-  it('maintains Live Preview script parity for Remove by Index', () => {
-    const { project, page, btnId } = createListUpdateProject(['Ayu', 'Bima', 'Citra'], {
+  it('maintains Live Preview script parity for Remove by Index (Array preserved + String(array) text output)', () => {
+    const { project, page, btnId, varId } = createListUpdateProject(['Ayu', 'Bima', 'Citra'], {
       operation: 'remove',
       removeMode: 'index',
       value: 0,
     });
-    const script = buildLivePreviewLogicScript(project, page);
+
+    // Attach a JSON stringify inspection node + second text layer to prove the Live Preview
+    // state variable remains an actual Array (not a String), while action.set-layer displays
+    // arrays via String(array) identically to runtime.ts.
+    const jsonLabel = { ...createTextNode(1), id: 'txt-json', name: 'JsonOut', text: '' };
+    const graphWithJson = {
+      ...project.logicGraphs[0],
+      nodes: [
+        ...project.logicGraphs[0].nodes,
+        createLogicNode({ id: 'n-stringify', type: 'network.json', x: 460, y: 140, data: { mode: 'stringify' } }),
+        createLogicNode({
+          id: 'n-set-json',
+          type: 'action.set-layer',
+          x: 680,
+          y: 140,
+          data: { targetMode: 'override', targetNodeId: jsonLabel.id, property: 'text', text: '' },
+        }),
+      ],
+      connections: [
+        ...project.logicGraphs[0].connections,
+        createLogicConnection({
+          id: 'c-upd-str-data',
+          sourceNodeId: 'n-update',
+          sourcePortId: 'value',
+          targetNodeId: 'n-stringify',
+          targetPortId: 'input',
+        }),
+        createLogicConnection({
+          id: 'c-upd-set-json-exec',
+          sourceNodeId: 'n-update',
+          sourcePortId: 'next',
+          targetNodeId: 'n-set-json',
+          targetPortId: 'exec',
+        }),
+        createLogicConnection({
+          id: 'c-str-set-json-val',
+          sourceNodeId: 'n-stringify',
+          sourcePortId: 'result',
+          targetNodeId: 'n-set-json',
+          targetPortId: 'value',
+        }),
+      ],
+    };
+    const enrichedPage: FolioPage = {
+      ...page,
+      document: { ...page.document, nodes: [...page.document.nodes, jsonLabel] },
+    };
+    const enrichedProject: FolioProject = {
+      ...project,
+      pages: [enrichedPage],
+      logicGraphs: [graphWithJson],
+    };
+
+    // 1. Headless production runtime behavior
+    const headlessSnap = createPrototypeRuntime(enrichedProject).dispatchNodeEvent(btnId, 'click');
+    expect(Array.isArray(headlessSnap.variables[varId])).toBe(true);
+    expect(headlessSnap.variables[varId]).toEqual(['Bima', 'Citra']);
+    expect(headlessSnap.nodeOverrides['txt-out']?.text).toBe('Bima,Citra');
+    expect(headlessSnap.nodeOverrides['txt-json']?.text).toBe('["Bima","Citra"]');
+
+    // 2. Live Preview generated script behavior
+    const script = buildLivePreviewLogicScript(enrichedProject, enrichedPage);
     expect(script).not.toBeNull();
     expect(script).toContain('removeMode');
 
     const listeners: Record<string, Array<(ev: unknown) => void>> = {};
-    const outEl = {
+    const makeEl = (id: string, trackEvents = false) => ({
       textContent: '',
       style: {},
-      attributes: { 'data-folio-id': 'txt-out' } as Record<string, string>,
-      addEventListener: () => {},
-      getAttribute(k: string) { return this.attributes[k] ?? null; },
-      setAttribute(k: string, v: string) { this.attributes[k] = v; },
-      removeAttribute(k: string) { delete this.attributes[k]; },
-    };
-    const btnEl = {
-      textContent: '',
-      style: {},
-      attributes: { 'data-folio-id': btnId } as Record<string, string>,
+      attributes: { 'data-folio-id': id } as Record<string, string>,
       addEventListener(t: string, cb: (ev: unknown) => void) {
+        if (!trackEvents) return;
         if (!listeners[t]) listeners[t] = [];
         listeners[t].push(cb);
       },
       getAttribute(k: string) { return this.attributes[k] ?? null; },
       setAttribute(k: string, v: string) { this.attributes[k] = v; },
       removeAttribute(k: string) { delete this.attributes[k]; },
-    };
+    });
+    const btnEl = makeEl(btnId, true);
+    const outEl = makeEl('txt-out');
+    const jsonEl = makeEl('txt-json');
 
     const mockWin = { location: { origin: 'https://folio.local', href: 'https://folio.local/', hash: '' }, addEventListener: () => {}, setTimeout, clearTimeout, setInterval, clearInterval };
     const mockDoc = {
       readyState: 'complete',
       documentElement: { dataset: {}, style: {}, offsetWidth: 1440, classList: { add: () => {}, remove: () => {}, has: () => false }, setAttribute: () => {}, removeAttribute: () => {}, getAttribute: () => null },
       body: { appendChild: () => {}, style: {} },
-      querySelectorAll: (sel: string) => (sel === '[data-folio-id]' ? [btnEl, outEl] : []),
+      querySelectorAll: (sel: string) => (sel === '[data-folio-id]' ? [btnEl, outEl, jsonEl] : []),
       querySelector: () => null,
       addEventListener: () => {},
     };
 
     new Function('window', 'document', script!)(mockWin, mockDoc);
     for (const cb of listeners.click ?? []) cb({ target: btnEl, currentTarget: btnEl });
-    expect(outEl.textContent).toBe('["Bima","Citra"]');
+
+    // Matches production action.set-layer String(array) formatting
+    expect(outEl.textContent).toBe('Bima,Citra');
+    expect(outEl.textContent).toBe(headlessSnap.nodeOverrides['txt-out']?.text);
+
+    // Proves underlying List variable in Live Preview stayed a real Array, not a String
+    const parsedLiveList = JSON.parse(jsonEl.textContent) as unknown;
+    expect(Array.isArray(parsedLiveList)).toBe(true);
+    expect(parsedLiveList).toEqual(['Bima', 'Citra']);
   });
 });
