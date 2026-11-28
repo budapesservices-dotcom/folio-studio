@@ -1830,9 +1830,104 @@ export function createPrototypeRuntime(
         case 'action.set-variant': {
           let targetNodeId = resolvePipelineTargetLayerId(node, ctx);
           let astNode = resolveAstNodeById(targetNodeId, astNodesById, componentsById, tokens);
+          const rawTargetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId.trim() : '';
+          const nodeTargetMode = getNodeTargetMode(node);
+
+          // Component Master simulator mode: allow Set Variant targeting "This Component"
+          // (empty targetNodeId, targetComponent.id, or pipeline from an internal child layer).
+          const isMasterSelfTarget = Boolean(
+            targetComponent
+            && (!astNode || astNode.type !== 'component-instance')
+            && (
+              (nodeTargetMode !== 'pipeline' && (!rawTargetId || rawTargetId === targetComponent.id))
+              || nodeTargetMode === 'pipeline'
+            ),
+          );
+
+          if (isMasterSelfTarget && targetComponent) {
+            const axisId = typeof node.data.axisId === 'string' ? node.data.axisId : '';
+            const rawOpt = resolveInputValue(next.indexed, node, 'optionId', node.data.optionId ?? '', visiting, ctx, 'pipelineRef');
+            const optionId = typeof rawOpt === 'string' ? rawOpt : '';
+            const axis = targetComponent.variants?.find((item) => item.id === axisId);
+            if (!axis || !axis.options.some((opt) => opt.id === optionId)) {
+              warnings.push(`Set Variant "${node.id}" invalid axis "${axisId}" or option "${optionId}".`);
+              break;
+            }
+            const selfOverride = ensureNodeOverride(targetComponent.id);
+            const nextVariantSelection: Record<string, string> = {
+              ...(selfOverride.variantSelection ?? {}),
+              [axisId]: optionId,
+            };
+            selfOverride.variantSelection = nextVariantSelection;
+
+            // Mirror Live Preview behavior in Component Canvas simulator: apply the
+            // merged variant overrides onto internal master child nodes.
+            const affectedChildIds = new Set<string>();
+            const mergedOverrides = new Map<string, { visible?: boolean; fill?: string; text?: string }>();
+            for (const compAxis of targetComponent.variants ?? []) {
+              for (const opt of compAxis.options) {
+                for (const childId of Object.keys(opt.overrides)) {
+                  affectedChildIds.add(childId);
+                }
+              }
+              const activeOptId = nextVariantSelection[compAxis.id] ?? compAxis.defaultOptionId ?? compAxis.options[0]?.id;
+              const activeOpt = compAxis.options.find((opt) => opt.id === activeOptId) ?? compAxis.options[0];
+              if (!activeOpt) continue;
+              for (const [childId, patch] of Object.entries(activeOpt.overrides)) {
+                const prev = mergedOverrides.get(childId) ?? {};
+                mergedOverrides.set(childId, {
+                  ...prev,
+                  ...(patch.visible !== undefined ? { visible: patch.visible } : {}),
+                  ...(patch.fill !== undefined ? { fill: patch.fill } : {}),
+                  ...(patch.text !== undefined ? { text: patch.text } : {}),
+                });
+              }
+            }
+            for (const childId of affectedChildIds) {
+              const baseNode = astNodesById.get(childId);
+              const patch = mergedOverrides.get(childId);
+              const childOv = ensureNodeOverride(childId);
+              if (patch?.visible !== undefined) {
+                childOv.visible = patch.visible;
+              } else if (baseNode) {
+                childOv.visible = baseNode.visible;
+              }
+              if (patch?.fill !== undefined) {
+                childOv.fill = patch.fill;
+              } else if (
+                baseNode
+                && 'style' in baseNode
+                && baseNode.style
+                && 'fill' in baseNode.style
+                && baseNode.style.fill !== undefined
+              ) {
+                childOv.fill = baseNode.style.fill;
+              }
+              if (patch?.text !== undefined) {
+                childOv.text = patch.text;
+              } else if (baseNode && baseNode.type === 'text') {
+                childOv.text = baseNode.text;
+              }
+            }
+
+            const stepPayload: PipelineStepOutput = { targetNodeId: targetComponent.id, axisId, optionId };
+            const nextCtx = clonePipelineContextWithStep(ctx, node.id, stepPayload);
+            trace.push({
+              step: totalSteps,
+              graphId: next.indexed.graph.id,
+              nodeId: node.id,
+              nodeType: node.type,
+              detail: `Set variant(${targetComponent.id}, ${axisId}) = ${optionId}`,
+              originLayerId: ctx.origin?.layerId ?? null,
+              payload: stepPayload,
+            });
+            enqueueOutgoing(next.indexed, node.id, 'next', nextCtx);
+            break;
+          }
+
           if (
             (!astNode || astNode.type !== 'component-instance')
-            && getNodeTargetMode(node) === 'pipeline'
+            && nodeTargetMode === 'pipeline'
             && ctx.origin?.instanceId
           ) {
             const owningAst = resolveAstNodeById(ctx.origin.instanceId, astNodesById, componentsById, tokens);

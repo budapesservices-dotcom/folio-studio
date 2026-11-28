@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { getActiveApplication, getProjectApplications } from '../core/document/applications';
 import { getComponentOverrideTargets } from '../core/document/components';
@@ -8,6 +8,8 @@ import type { StudioClipboardPayload } from './nodeClipboard';
 import { getActiveEditorContext, type EditorTarget } from './editorContext';
 import { getWindowZIndex } from './windowManager';
 import { DEFAULT_TOOLBAR_HINT } from './ToolbarHintBar';
+import { mergeProjectAssets } from './renderSelectionToSvg';
+import type { NodeLogicOwnerContext } from './workspace/nodeLogicGraphHelpers';
 import { useWorkspaceStores } from './useWorkspaceStores';
 import { useWorkspaceWindows } from './workspace/useWorkspaceWindows';
 import { useWorkspaceToolState } from './workspace/useWorkspaceToolState';
@@ -246,11 +248,65 @@ export function App() {
     closeNewProjectDialog: dialogs.closeNewProjectDialog,
   });
 
+  const [nodeLogicOwnerContext, setNodeLogicOwnerContext] = useState<NodeLogicOwnerContext>(() => ({
+    scope: 'page',
+    pageId: activePageId,
+  }));
+
+  // Keep Node Logic owner context valid when switching pages, opening another master, or deleting components
+  useEffect(() => {
+    if (nodeLogicOwnerContext.scope === 'component') {
+      const stillExists = state.project.components.some(
+        (comp) => comp.id === nodeLogicOwnerContext.componentId,
+      );
+      if (!stillExists) {
+        setNodeLogicOwnerContext({ scope: 'page', pageId: activePageId });
+      }
+      return;
+    }
+    if (nodeLogicOwnerContext.scope === 'page' && nodeLogicOwnerContext.pageId !== activePageId) {
+      setNodeLogicOwnerContext({ scope: 'page', pageId: activePageId });
+    }
+  }, [nodeLogicOwnerContext, state.project.components, activePageId]);
+
+  // When switching to another Component Master while editing component logic, keep owner context synced
+  useEffect(() => {
+    if (
+      activeEditorId === 'component'
+      && componentMaster.editingComponentId
+      && nodeLogicOwnerContext.scope === 'component'
+      && nodeLogicOwnerContext.componentId !== componentMaster.editingComponentId
+    ) {
+      setNodeLogicOwnerContext({
+        scope: 'component',
+        componentId: componentMaster.editingComponentId,
+      });
+    }
+  }, [activeEditorId, componentMaster.editingComponentId, nodeLogicOwnerContext]);
+
+  const openNodeLogicForContext = useCallback(
+    (explicitOwner?: NodeLogicOwnerContext) => {
+      const resolvedOwner: NodeLogicOwnerContext =
+        explicitOwner
+        ?? (activeEditorId === 'component' && componentMaster.editingComponent
+          ? { scope: 'component', componentId: componentMaster.editingComponent.id }
+          : { scope: 'page', pageId: activePageId });
+      setNodeLogicOwnerContext(resolvedOwner);
+      windows.openNodeLogic({ preserveEditor: resolvedOwner.scope === 'component' });
+    },
+    [activeEditorId, componentMaster.editingComponent, activePageId, windows],
+  );
+
+  const mergedWorkspaceAssets = useMemo(
+    () => mergeProjectAssets(state.project.assets, componentState.project.assets),
+    [state.project.assets, componentState.project.assets],
+  );
+
   // Studio feature controllers
   const quickInteractions = useQuickInteractionActions({
     project: state.project,
     mainCommandClient,
-    openNodeLogic: windows.openNodeLogic,
+    openNodeLogic: openNodeLogicForContext,
     setNotice,
   });
 
@@ -259,7 +315,7 @@ export function App() {
     editingComponentId: componentMaster.editingComponentId, toolOptions: toolShell.toolOptions,
     onUpdateToolOptions: toolShell.updateToolOptions, focusedCommandClient, getCommandClient,
     selectionSourceRef, clipboardRef, setWorkspaceToolId: toolShell.setWorkspaceToolId,
-    setInspectorVisible: windows.setInspectorVisible, setNotice, openNodeLogic: windows.openNodeLogic,
+    setInspectorVisible: windows.setInspectorVisible, setNotice, openNodeLogic: openNodeLogicForContext,
   });
   const activeStudioActions = selectionActions.createStudioActionsForTarget(activeEditorId);
 
@@ -422,6 +478,7 @@ export function App() {
     setActiveEditorId,
     setCodeWorkspaceOpen: toolShell.setCodeWorkspaceOpen,
     onResetComponentView: () => windows.centerComponentCanvasView(componentDocument?.width ?? 420, componentDocument?.height ?? 280),
+    onOpenNodeLogic: () => openNodeLogicForContext(),
     onCommitProjectName: pageActions.commitProjectName,
     setNotice,
   });
@@ -687,6 +744,9 @@ export function App() {
         project={state.project}
         activePageId={activePageId}
         activeEditorId={activeEditorId}
+        componentAssets={mergedWorkspaceAssets}
+        nodeLogicOwnerContext={nodeLogicOwnerContext}
+        onNodeLogicOwnerContextChange={setNodeLogicOwnerContext}
         componentDocument={componentDocument}
         componentCanvasDocument={componentCanvasDocument}
         componentSelectedNodeIds={componentState.selectedNodeIds}
@@ -724,6 +784,7 @@ export function App() {
 
       <WorkspaceInspectorHost
         project={state.project}
+        assets={activeEditorId === 'component' ? mergedWorkspaceAssets : state.project.assets}
         activePageId={activePageId}
         focusedDocument={focusedDocument}
         activeEditorId={activeEditorId}
@@ -767,7 +828,7 @@ export function App() {
         panelRef={toolShell.componentRackRef} open={windows.componentRackOpen} components={ownedComponents}
         activeApplicationId={activeApplication.id} activeApplicationName={activeApplication.name}
         onSetComponentScope={componentMaster.setComponentScope}
-        designTokens={designSystem.designTokens} assets={state.project.assets} searchQuery={toolShell.componentRackSearch}
+        designTokens={designSystem.designTokens} assets={mergedWorkspaceAssets} searchQuery={toolShell.componentRackSearch}
         canSaveSelection={selectedNodes.length > 0} renamingComponentId={componentMaster.renamingComponentId}
         componentNameDraft={componentMaster.componentNameDraft} onSearchChange={toolShell.setComponentRackSearch}
         onCreateNewMaster={componentMaster.createNewMasterComponent}

@@ -1,9 +1,10 @@
-import type { FolioDocument, FolioProject } from '../../core/document/types';
+import type { AssetReference, FolioDocument, FolioProject } from '../../core/document/types';
 import type { CanvasContextMenuActions } from '../../engines/canvas/Canvas';
 import type { EditorTarget } from '../editorContext';
 import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
 import { getWindowZIndex } from '../windowManager';
 import { ComponentCanvasWindow, NodeLogicWindow } from './CanvasWindows';
+import type { NodeLogicOwnerContext } from './nodeLogicGraphHelpers';
 import type { CanvasPathStudioBridge } from './useCanvasPathStudioBridge';
 import type { MotionPlaybackController } from './useMotionPlayback';
 import type { useComponentMasterLifecycle } from './useComponentMasterLifecycle';
@@ -20,6 +21,9 @@ export interface WorkspaceSecondaryWindowsHostProps {
   project: FolioProject;
   activePageId: string;
   activeEditorId: EditorTarget;
+  componentAssets?: readonly AssetReference[];
+  nodeLogicOwnerContext?: NodeLogicOwnerContext | null;
+  onNodeLogicOwnerContextChange?: (next: NodeLogicOwnerContext) => void;
   componentDocument: FolioDocument | null;
   componentCanvasDocument: FolioDocument;
   componentSelectedNodeIds: string[];
@@ -60,6 +64,9 @@ export function WorkspaceSecondaryWindowsHost({
   project,
   activePageId,
   activeEditorId,
+  componentAssets,
+  nodeLogicOwnerContext = null,
+  onNodeLogicOwnerContextChange,
   componentDocument,
   componentCanvasDocument,
   componentSelectedNodeIds,
@@ -100,7 +107,7 @@ export function WorkspaceSecondaryWindowsHost({
         document={componentCanvasDocument}
         components={project.components}
         designTokens={designSystem.designTokens}
-        assets={project.assets}
+        assets={componentAssets ?? project.assets}
         editingComponent={componentMaster.editingComponent}
         selectedNodeIds={componentSelectedNodeIds}
         selectedComponentNodes={componentMaster.selectedComponentNodes}
@@ -221,11 +228,15 @@ export function WorkspaceSecondaryWindowsHost({
         onOpenLivePreview={toolShell.openLivePreviewForPage}
         onToggleComponentNodeLogic={designSystem.toggleComponentNodeLogic}
         focusRequest={quickInteractions.nodeLogicFocusRequest}
+        ownerContext={nodeLogicOwnerContext}
+        onOwnerContextChange={onNodeLogicOwnerContextChange}
         onPositionChange={windows.setNodeLogicPosition}
         onSizeChange={windows.setNodeLogicSize}
         onFocus={() => {
           windows.focusWindow('node-logic');
-          onSetActiveEditorId('main');
+          if (nodeLogicOwnerContext?.scope !== 'component') {
+            onSetActiveEditorId('main');
+          }
         }}
         onHoverHint={() =>
           toolShell.updateToolbarHint(
@@ -236,7 +247,9 @@ export function WorkspaceSecondaryWindowsHost({
         onMinimize={() => windows.setNodeLogicMinimized(true)}
         onRestore={() => {
           windows.setNodeLogicMinimized(false);
-          onSetActiveEditorId('main');
+          if (nodeLogicOwnerContext?.scope !== 'component') {
+            onSetActiveEditorId('main');
+          }
           windows.focusWindow('node-logic');
         }}
         onToggleFloating={() =>

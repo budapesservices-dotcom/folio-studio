@@ -19,6 +19,11 @@ import { isTransparentColor, parseColorWithAlpha } from '../../core/document/sty
 import type { StudioVectorActions } from './inspectorVectorHelpers';
 import type { ComponentRecoveryStatus } from './useComponentMasterLifecycle';
 import type { PrototypeNodeOverride, PrototypeRuntimeSnapshot } from '../../engines/prototype/runtime';
+import {
+  formatNodeLogicOwnerBreadcrumb,
+  resolveActiveLogicGraphForOwner,
+  type NodeLogicOwnerContext,
+} from './nodeLogicGraphHelpers';
 
 const CANVAS_BG_PRESETS = ['#FFFFFF', '#111827'] as const;
 const COMPONENT_SIZE_PRESETS = [
@@ -1122,6 +1127,8 @@ export interface NodeLogicWindowProps {
     readonly nodeIds: readonly string[];
     readonly nonce: number;
   } | null;
+  ownerContext?: NodeLogicOwnerContext | null;
+  onOwnerContextChange?: (next: NodeLogicOwnerContext) => void;
   onPositionChange: (position: { x: number; y: number }) => void;
   onSizeChange: (size: { width: number; height: number }) => void;
   onFocus: () => void;
@@ -1153,6 +1160,8 @@ export function NodeLogicWindow({
   onOpenLivePreview,
   onToggleComponentNodeLogic,
   focusRequest = null,
+  ownerContext = null,
+  onOwnerContextChange,
   onPositionChange,
   onSizeChange,
   onFocus,
@@ -1166,7 +1175,10 @@ export function NodeLogicWindow({
 }: NodeLogicWindowProps) {
   const [autoArrangeRequestNonce, setAutoArrangeRequestNonce] = useState(0);
   const [activeGraphNodeCount, setActiveGraphNodeCount] = useState<number | null>(null);
-  const effectiveNodeCount = activeGraphNodeCount ?? (project.logicGraphs[0]?.nodes.length ?? 0);
+  const resolvedOwner: NodeLogicOwnerContext = ownerContext ?? { scope: 'page', pageId: activePageId };
+  const ownerBreadcrumb = formatNodeLogicOwnerBreadcrumb(project, activePageId, resolvedOwner);
+  const fallbackScopedGraph = resolveActiveLogicGraphForOwner(project.logicGraphs, resolvedOwner, null);
+  const effectiveNodeCount = activeGraphNodeCount ?? (fallbackScopedGraph?.nodes.length ?? 0);
 
   return (
     <>
@@ -1186,8 +1198,12 @@ export function NodeLogicWindow({
           onMouseEnter={onHoverHint}
         >
           <div class={`workspace-toolbar${floating ? ' workspace-toolbar-draggable' : ''}`}>
-            <div class="breadcrumb">
+            <div class="breadcrumb" data-testid="node-logic-window-breadcrumb">
               <StudioIcon name="logicNodes" />
+              <span>{ownerBreadcrumb.scopeLabel}</span>
+              <span aria-hidden="true">&gt;</span>
+              <span>{ownerBreadcrumb.ownerName}</span>
+              <span aria-hidden="true">&gt;</span>
               <strong>Node Logic</strong>
             </div>
             <div class="canvas-window-tools">
@@ -1233,6 +1249,8 @@ export function NodeLogicWindow({
               <LazyNodeLogicWorkspace
                 project={project}
                 activePageId={activePageId}
+                ownerContext={resolvedOwner}
+                onOwnerContextChange={onOwnerContextChange}
                 mainCommandClient={mainCommandClient}
                 onNotice={onNotice}
                 onOpenLivePreview={onOpenLivePreview}

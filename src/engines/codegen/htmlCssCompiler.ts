@@ -1825,7 +1825,9 @@ export function compilePageHtmlCss(
         ? assetMode === 'portable'
           ? (resolvePortableAssetUrl(asset) ?? '')
           : assetMode === 'inline'
-            ? (resolveAssetDisplayUrl(asset) ?? '')
+            ? asset.mimeType === 'image/svg+xml'
+              ? (resolvePortableAssetUrl(asset) ?? resolveAssetDisplayUrl(asset) ?? '')
+              : (resolveAssetDisplayUrl(asset) ?? resolvePortableAssetUrl(asset) ?? '')
             : `../${getAssetBundlePath(asset)}`
         : '';
       const alt = node.alt ?? node.name;

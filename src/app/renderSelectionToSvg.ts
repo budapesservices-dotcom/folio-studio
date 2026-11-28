@@ -679,10 +679,10 @@ export async function executeRenderSelectionToSvg(args: {
   }
 
   if (target === 'component') {
-    const mainAlreadyHasAsset = mainProject.assets.some(
-      (item) => item.id === rendered.asset.id || (rendered.asset.sha256 && item.sha256 === rendered.asset.sha256),
+    const mainHasExactAssetId = mainProject.assets.some(
+      (item) => item.id === rendered.asset.id,
     );
-    if (!mainAlreadyHasAsset) {
+    if (!mainHasExactAssetId) {
       const mainAssetRes = mainCommandClient.upsertAsset(
         rendered.asset,
         `Register rendered SVG asset "${rendered.asset.name}"`,

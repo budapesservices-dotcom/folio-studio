@@ -808,9 +808,18 @@ function renderComponentInstanceNode(
     frameClipMap: new Map(),
   };
 
-  for (const child of resolved) {
-    if (!child.visible || child.type === 'group') continue;
-    renderRichNodeToContext2D(ctx, child, childContext, depth + 1, nextVisited);
+  const scaleX = component.document.width > 0 ? node.width / component.document.width : 1;
+  const scaleY = component.document.height > 0 ? node.height / component.document.height : 1;
+  ctx.save();
+  ctx.translate(node.x, node.y);
+  ctx.scale(scaleX, scaleY);
+  try {
+    for (const child of resolved) {
+      if (!child.visible || child.type === 'group') continue;
+      renderRichNodeToContext2D(ctx, child, childContext, depth + 1, nextVisited);
+    }
+  } finally {
+    ctx.restore();
   }
 }
 

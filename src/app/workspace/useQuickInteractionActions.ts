@@ -9,6 +9,10 @@ import {
   type QuickInteractionEntry,
   type QuickInteractionScopeContext,
 } from './quickInteractions';
+import {
+  deriveOwnerContextFromLogicGraph,
+  type NodeLogicOwnerContext,
+} from './nodeLogicGraphHelpers';
 
 export interface NodeLogicFocusRequest {
   readonly graphId: string;
@@ -19,7 +23,7 @@ export interface NodeLogicFocusRequest {
 export interface UseQuickInteractionActionsArgs {
   project: FolioProject;
   mainCommandClient: MainCanvasCommandClient;
-  openNodeLogic: () => void;
+  openNodeLogic: (ownerContext?: NodeLogicOwnerContext) => void;
   setNotice: (message: string) => void;
 }
 
@@ -81,7 +85,11 @@ export function useQuickInteractionActions({
 
   const openInteractionInNodeGraph = useCallback(
     (graphId: string, nodeIds: readonly string[]) => {
-      openNodeLogic();
+      const targetGraph = project.logicGraphs.find((g) => g.id === graphId);
+      const ownerContext = targetGraph
+        ? deriveOwnerContextFromLogicGraph(targetGraph, project.activePageId)
+        : undefined;
+      openNodeLogic(ownerContext);
       setNodeLogicFocusRequest((prev) => ({
         graphId,
         nodeIds: [...nodeIds],
@@ -89,7 +97,7 @@ export function useQuickInteractionActions({
       }));
       setNotice('Opened interaction in Node Graph.');
     },
-    [openNodeLogic, setNotice],
+    [project.logicGraphs, project.activePageId, openNodeLogic, setNotice],
   );
 
   return {

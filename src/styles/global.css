@@ -4999,30 +4999,72 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .nl-topbar {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px 8px;
   min-height: 40px;
   padding: 5px 10px;
   background: #161b26;
   border-bottom: 1px solid #283040;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.nl-topbar::-webkit-scrollbar {
-  display: none;
 }
 
 .nl-topbar-left,
 .nl-topbar-right {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
-  flex-shrink: 0;
+  min-width: 0;
+}
+
+.nl-owner-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 27px;
+  padding: 0 9px;
+  border: 1px solid #2d3648;
+  border-radius: 5px;
+  background: #11151f;
+  color: #aeb7c7;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.nl-owner-breadcrumb[data-owner-scope='component'] {
+  border-color: rgba(124, 109, 240, 0.55);
+  background: rgba(124, 109, 240, 0.14);
+}
+
+.nl-owner-scope-tag {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #b7adff;
+}
+
+.nl-owner-sep {
+  opacity: 0.5;
+}
+
+.nl-owner-name {
+  color: #eef2f8;
+  font-weight: 600;
+  max-width: 128px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nl-owner-leaf {
+  color: #9ba6b8;
+}
+
+.nl-scope-select {
+  max-width: 132px;
 }
 
 .nl-graph-select,
+.nl-scope-select,
 .nl-graph-rename-input,
 .nl-input {
   height: 27px;
@@ -5042,6 +5084,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 
 .nl-graph-select:focus,
+.nl-scope-select:focus,
 .nl-graph-rename-input:focus,
 .nl-input:focus {
   border-color: #7c6df0;

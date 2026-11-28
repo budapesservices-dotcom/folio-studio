@@ -73,8 +73,13 @@ export interface QuickInteractionMutationResult {
   readonly connectionId: string;
 }
 
+export const SELF_COMPONENT_VARIANT_TARGET = '__this_component__';
+
 export interface VariantTargetCandidate {
-  readonly node: DesignNode;
+  readonly id: string;
+  readonly label: string;
+  readonly isSelf?: boolean;
+  readonly node: DesignNode | null;
   readonly component: ComponentDefinition;
 }
 
@@ -102,15 +107,34 @@ function createQuickId(prefix: string): string {
 export function getVariantTargetCandidates(
   scopedNodes: readonly DesignNode[],
   components: readonly ComponentDefinition[],
+  ownerComponent?: ComponentDefinition | null,
 ): VariantTargetCandidate[] {
   const byId = new Map<string, ComponentDefinition>(components.map((comp) => [comp.id, comp]));
   const result: VariantTargetCandidate[] = [];
+  if (
+    ownerComponent
+    && ownerComponent.variants
+    && ownerComponent.variants.some((axis) => axis.options.length > 0)
+  ) {
+    result.push({
+      id: SELF_COMPONENT_VARIANT_TARGET,
+      label: `This Component (${ownerComponent.name} — Current Instance)`,
+      isSelf: true,
+      node: null,
+      component: ownerComponent,
+    });
+  }
   for (const node of scopedNodes) {
     if (node.type !== 'component-instance') continue;
     const comp = byId.get(node.componentId);
     if (!comp || !comp.variants || comp.variants.length === 0) continue;
     if (!comp.variants.some((axis) => axis.options.length > 0)) continue;
-    result.push({ node, component: comp });
+    result.push({
+      id: node.id,
+      label: `${node.name} (${comp.name})`,
+      node,
+      component: comp,
+    });
   }
   return result;
 }
@@ -158,11 +182,12 @@ export function createDefaultQuickInteractionConfig(options: {
   pages: readonly FolioPage[];
   activePageId: string;
   components: readonly ComponentDefinition[];
+  ownerComponent?: ComponentDefinition | null;
 }): QuickInteractionConfig {
-  const { selectedNode, scopedNodes, pages, activePageId, components } = options;
+  const { selectedNode, scopedNodes, pages, activePageId, components, ownerComponent } = options;
   const isFormLike =
     selectedNode.semanticTag === 'form' || /\bform\b/i.test(selectedNode.name);
-  const variantCandidates = getVariantTargetCandidates(scopedNodes, components);
+  const variantCandidates = getVariantTargetCandidates(scopedNodes, components, ownerComponent);
   const firstVariantCandidate = variantCandidates[0];
   const firstAxis = firstVariantCandidate?.component.variants?.find((a) => a.options.length > 0);
   const firstOption = firstAxis?.options[0];
@@ -198,9 +223,10 @@ export function adaptQuickInteractionConfigForActionKind(
     pages: readonly FolioPage[];
     activePageId: string;
     components: readonly ComponentDefinition[];
+    ownerComponent?: ComponentDefinition | null;
   },
 ): QuickInteractionConfig {
-  const { layerId, scopedNodes, pages, activePageId, components } = context;
+  const { layerId, scopedNodes, pages, activePageId, components, ownerComponent } = context;
   const next: QuickInteractionConfig = { ...current, actionKind: nextKind };
 
   if (nextKind === 'visibility') {
@@ -220,13 +246,13 @@ export function adaptQuickInteractionConfigForActionKind(
   }
 
   if (nextKind === 'set-variant') {
-    const candidates = getVariantTargetCandidates(scopedNodes, components);
+    const candidates = getVariantTargetCandidates(scopedNodes, components, ownerComponent);
     const matching =
-      candidates.find((c) => c.node.id === next.targetNodeId) ??
-      candidates.find((c) => c.node.id === layerId) ??
+      candidates.find((c) => c.id === next.targetNodeId) ??
+      candidates.find((c) => c.id === layerId) ??
       candidates[0];
     if (matching) {
-      next.targetNodeId = matching.node.id;
+      next.targetNodeId = matching.id;
       const axis =
         matching.component.variants?.find((a) => a.id === next.axisId && a.options.length > 0) ??
         matching.component.variants?.find((a) => a.options.length > 0);
@@ -267,9 +293,10 @@ export function validateQuickInteractionConfig(
   context: {
     scopedNodes: readonly DesignNode[];
     components: readonly ComponentDefinition[];
+    ownerComponent?: ComponentDefinition | null;
   },
 ): string | null {
-  const { scopedNodes, components } = context;
+  const { scopedNodes, components, ownerComponent } = context;
 
   if (config.actionKind === 'visibility' || config.actionKind === 'set-layer-property') {
     if (!config.targetNodeId || !scopedNodes.some((n) => n.id === config.targetNodeId)) {
@@ -300,11 +327,11 @@ export function validateQuickInteractionConfig(
   }
 
   if (config.actionKind === 'set-variant') {
-    const candidates = getVariantTargetCandidates(scopedNodes, components);
+    const candidates = getVariantTargetCandidates(scopedNodes, components, ownerComponent);
     if (candidates.length === 0) {
       return 'Add a component instance with variants on this canvas first.';
     }
-    const candidate = candidates.find((c) => c.node.id === config.targetNodeId);
+    const candidate = candidates.find((c) => c.id === config.targetNodeId);
     if (!candidate) return 'Choose a component instance with variants.';
     const axis = candidate.component.variants?.find((a) => a.id === config.axisId);
     if (!axis) return 'Choose a variant axis.';
@@ -394,7 +421,8 @@ function buildActionNodeSpec(
         type: 'action.set-variant',
         data: {
           targetMode: 'override',
-          targetNodeId: config.targetNodeId,
+          targetNodeId:
+            config.targetNodeId === SELF_COMPONENT_VARIANT_TARGET ? '' : config.targetNodeId,
           axisId: config.axisId,
           optionId: config.optionId,
         },
@@ -550,9 +578,13 @@ function parseActionNode(
   }
 
   if (node.type === 'action.set-variant') {
+    const rawTarget = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId.trim() : '';
     return {
       actionKind: 'set-variant',
-      targetNodeId: resolveEffectiveTarget(),
+      targetNodeId:
+        node.data.targetMode !== 'pipeline' && !rawTarget
+          ? SELF_COMPONENT_VARIANT_TARGET
+          : resolveEffectiveTarget(),
       axisId: typeof node.data.axisId === 'string' ? node.data.axisId : '',
       optionId: typeof node.data.optionId === 'string' ? node.data.optionId : '',
     };
@@ -594,6 +626,14 @@ function summarizeQuickAction(
       return `Navigate to ${page ? page.name : config.route || '/'}`;
     }
     case 'set-variant': {
+      if (config.targetNodeId === SELF_COMPONENT_VARIANT_TARGET) {
+        for (const comp of componentsById.values()) {
+          const axis = comp.variants?.find((a) => a.id === config.axisId);
+          const opt = axis?.options.find((o) => o.id === config.optionId);
+          if (axis && opt) return `This Component · ${axis.name} = ${opt.label}`;
+        }
+        return 'Set Variant on This Component';
+      }
       const targetNode = nodesById.get(config.targetNodeId);
       const comp =
         targetNode?.type === 'component-instance' ? componentsById.get(targetNode.componentId) : undefined;

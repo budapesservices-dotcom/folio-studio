@@ -8,6 +8,7 @@
 
 import { getProjectDesignTokens } from '../../core/document/tokens';
 import type {
+  ComponentDefinition,
   DesignNode,
   FolioPage,
   FolioProject,
@@ -1233,7 +1234,8 @@ export function getLogicNodeSummary(
   themes: readonly { id: string; name: string }[],
   animations: readonly { id: string; name: string }[] = [],
   pages: readonly { id: string; name: string; route: string }[] = [],
-  components: readonly { id: string; name: string }[] = [],
+  components: readonly ComponentDefinition[] = [],
+  graph?: LogicGraph | null,
 ): string {
   const findNodeName = (id: unknown) => {
     if (typeof id !== 'string' || !id) return 'Unbound layer';
@@ -1354,8 +1356,42 @@ export function getLogicNodeSummary(
       return findTargetLabel();
     case 'action.set-fill':
       return `${findTargetLabel()} · ${String(node.data.fill ?? '')}`;
-    case 'action.set-variant':
-      return findTargetLabel();
+    case 'action.set-variant': {
+      const rawTargetId = typeof node.data.targetNodeId === 'string' ? node.data.targetNodeId.trim() : '';
+      const axisId = typeof node.data.axisId === 'string' ? node.data.axisId.trim() : '';
+      const optionId = typeof node.data.optionId === 'string' ? node.data.optionId.trim() : '';
+      const isComponentGraph = graph?.scope === 'component';
+      const ownerComp = isComponentGraph && graph?.targetId
+        ? components.find((c) => c.id === graph.targetId)
+        : undefined;
+      const directAst = rawTargetId ? astNodes.find((item) => item.id === rawTargetId) : undefined;
+      const isSelfTarget = Boolean(
+        isComponentGraph
+        && (
+          (node.data.targetMode !== 'pipeline' && (!rawTargetId || rawTargetId === graph?.targetId))
+          || (node.data.targetMode === 'pipeline' && (!directAst || directAst.type !== 'component-instance'))
+        ),
+      );
+      const targetComp = isSelfTarget
+        ? ownerComp
+        : directAst?.type === 'component-instance'
+          ? components.find((c) => c.id === directAst.componentId)
+          : undefined;
+      const targetLabel = isSelfTarget
+        ? 'This Component'
+        : directAst?.type === 'component-instance'
+          ? directAst.name
+          : findTargetLabel();
+      const axis = targetComp?.variants?.find((item) => item.id === axisId);
+      const opt = axis?.options.find((item) => item.id === optionId);
+      if (axis && opt) {
+        return `${targetLabel} · ${axis.name} = ${opt.label}`;
+      }
+      if (axis) {
+        return `${targetLabel} · ${axis.name}`;
+      }
+      return targetLabel;
+    }
     case 'action.media-animation': {
       const clipId = typeof node.data.clipId === 'string' ? node.data.clipId : '';
       const name = animations.find((clip) => clip.id === clipId)?.name ?? (clipId || findTargetLabel());
@@ -2070,3 +2106,258 @@ export function autoArrangeLogicGraph(graph: LogicGraph): LogicGraph {
 export const LOGIC_CATALOG_LIST = Object.freeze(
   PRIMARY_LOGIC_NODE_TYPES.map((type) => LOGIC_NODE_CATALOG[type]),
 );
+
+/**
+ * Semantic ownership context for NodeLogicWorkspace so Component Master, Page,
+ * and Project logic graphs remain strictly isolated and never hijack one another.
+ */
+export type NodeLogicOwnerContext =
+  | { readonly scope: 'component'; readonly componentId: string }
+  | { readonly scope: 'page'; readonly pageId: string }
+  | { readonly scope: 'project' };
+
+export function resolveOwnerScopedLogicGraphs(
+  logicGraphs: readonly LogicGraph[],
+  ownerContext: NodeLogicOwnerContext,
+): LogicGraph[] {
+  if (ownerContext.scope === 'component') {
+    return logicGraphs.filter(
+      (graph) => graph.scope === 'component' && graph.targetId === ownerContext.componentId,
+    );
+  }
+  if (ownerContext.scope === 'project') {
+    return logicGraphs.filter((graph) => graph.scope === 'project');
+  }
+  return logicGraphs.filter(
+    (graph) => graph.scope === 'page' && (!graph.targetId || graph.targetId === ownerContext.pageId),
+  );
+}
+
+export function resolveActiveLogicGraphForOwner(
+  logicGraphs: readonly LogicGraph[],
+  ownerContext: NodeLogicOwnerContext,
+  preferredGraphId: string | null,
+): LogicGraph | null {
+  const scoped = resolveOwnerScopedLogicGraphs(logicGraphs, ownerContext);
+  if (preferredGraphId) {
+    const exact = scoped.find((graph) => graph.id === preferredGraphId);
+    if (exact) return exact;
+  }
+  return scoped[0] ?? null;
+}
+
+export function deriveOwnerContextFromLogicGraph(
+  graph: LogicGraph,
+  fallbackPageId: string,
+): NodeLogicOwnerContext {
+  if (graph.scope === 'component' && graph.targetId) {
+    return { scope: 'component', componentId: graph.targetId };
+  }
+  if (graph.scope === 'project') {
+    return { scope: 'project' };
+  }
+  return { scope: 'page', pageId: graph.targetId || fallbackPageId };
+}
+
+export function formatNodeLogicOwnerBreadcrumb(
+  project: FolioProject,
+  activePageId: string,
+  ownerContext: NodeLogicOwnerContext,
+): {
+  readonly scopeLabel: 'Component' | 'Page' | 'Project';
+  readonly ownerName: string;
+  readonly fullLabel: string;
+} {
+  if (ownerContext.scope === 'component') {
+    const comp = project.components.find((item) => item.id === ownerContext.componentId);
+    const ownerName = comp?.name ?? 'Component';
+    return {
+      scopeLabel: 'Component',
+      ownerName,
+      fullLabel: `Component > ${ownerName} > Node Logic`,
+    };
+  }
+  if (ownerContext.scope === 'project') {
+    const ownerName = project.metadata.name || 'Project';
+    return {
+      scopeLabel: 'Project',
+      ownerName,
+      fullLabel: `Project > ${ownerName} > Node Logic`,
+    };
+  }
+  const page = project.pages.find((item) => item.id === ownerContext.pageId)
+    ?? project.pages.find((item) => item.id === activePageId)
+    ?? project.pages[0];
+  const ownerName = page?.name ?? 'Main Page';
+  return {
+    scopeLabel: 'Page',
+    ownerName,
+    fullLabel: `Page > ${ownerName} > Node Logic`,
+  };
+}
+
+export function createOwnerScopedEmptyLogicGraph(
+  project: FolioProject,
+  activePage: FolioPage,
+  ownerContext: NodeLogicOwnerContext,
+  defaultSuffix?: string,
+): LogicGraph {
+  const existingScoped = resolveOwnerScopedLogicGraphs(project.logicGraphs, ownerContext);
+  const nextIndex = existingScoped.length + 1;
+
+  if (ownerContext.scope === 'component') {
+    const comp = project.components.find((item) => item.id === ownerContext.componentId);
+    const baseName = comp?.name ?? 'Component';
+    const name = defaultSuffix
+      ? `${baseName} ${defaultSuffix}`
+      : nextIndex === 1
+        ? `${baseName} Logic`
+        : `${baseName} Logic ${nextIndex}`;
+    return createLogicGraph({
+      id: createLogicId('lgraph'),
+      name,
+      scope: 'component',
+      targetId: ownerContext.componentId,
+      nodes: [],
+      connections: [],
+    });
+  }
+
+  if (ownerContext.scope === 'project') {
+    const name = defaultSuffix
+      ? `Project ${defaultSuffix}`
+      : nextIndex === 1
+        ? 'Project Logic'
+        : `Project Flow ${nextIndex}`;
+    return createLogicGraph({
+      id: createLogicId('lgraph'),
+      name,
+      scope: 'project',
+      targetId: null,
+      nodes: [],
+      connections: [],
+    });
+  }
+
+  const targetPage = project.pages.find((p) => p.id === ownerContext.pageId) ?? activePage;
+  const name = defaultSuffix
+    ? `${targetPage.name} ${defaultSuffix}`
+    : `${targetPage.name} Flow ${nextIndex}`;
+  return createLogicGraph({
+    id: createLogicId('lgraph'),
+    name,
+    scope: 'page',
+    targetId: targetPage.id,
+    nodes: [],
+    connections: [],
+  });
+}
+
+export function createComponentVariantToggleStarterGraph(
+  component: ComponentDefinition,
+): LogicGraph {
+  const triggerLayer =
+    component.document.nodes.find((n) => n.type !== 'group' && n.onCanvas !== false)
+    ?? component.document.nodes[0];
+  const firstAxis = component.variants?.find((axis) => axis.options.length >= 2)
+    ?? component.variants?.find((axis) => axis.options.length >= 1);
+
+  if (!triggerLayer || !firstAxis || firstAxis.options.length === 0) {
+    const clickNode = createLogicNode({
+      id: createLogicId('lnode'),
+      type: 'event.on-click',
+      x: 80,
+      y: 120,
+      data: {
+        targetNodeId: triggerLayer?.id ?? '',
+        mode: 'click',
+        once: false,
+        debounceMs: 0,
+        throttleMs: 0,
+      },
+    });
+    return createLogicGraph({
+      id: createLogicId('lgraph'),
+      name: `${component.name} Logic`,
+      scope: 'component',
+      targetId: component.id,
+      nodes: [clickNode],
+      connections: [],
+    });
+  }
+
+  const optA = firstAxis.options[0];
+  const optB = firstAxis.options[1] ?? firstAxis.options[0];
+
+  const nClick = createLogicNode({
+    id: createLogicId('lnode'),
+    type: 'event.on-click',
+    x: 60,
+    y: 140,
+    data: {
+      targetNodeId: triggerLayer.id,
+      mode: 'click',
+      once: false,
+      debounceMs: 0,
+      throttleMs: 0,
+    },
+  });
+  const nToggle = createLogicNode({
+    id: createLogicId('lnode'),
+    type: 'state.toggle',
+    x: 320,
+    y: 140,
+    data: {
+      variableId: '',
+      initialValue: false,
+    },
+  });
+  const nBranch = createLogicNode({
+    id: createLogicId('lnode'),
+    type: 'logic.branch',
+    x: 580,
+    y: 140,
+    data: {
+      mode: 'if-else',
+    },
+  });
+  const nSetTrue = createLogicNode({
+    id: createLogicId('lnode'),
+    type: 'action.set-variant',
+    x: 860,
+    y: 64,
+    data: {
+      targetMode: 'override',
+      targetNodeId: '',
+      axisId: firstAxis.id,
+      optionId: optB.id,
+    },
+  });
+  const nSetFalse = createLogicNode({
+    id: createLogicId('lnode'),
+    type: 'action.set-variant',
+    x: 860,
+    y: 224,
+    data: {
+      targetMode: 'override',
+      targetNodeId: '',
+      axisId: firstAxis.id,
+      optionId: optA.id,
+    },
+  });
+
+  return createLogicGraph({
+    id: createLogicId('lgraph'),
+    name: `${component.name} Logic`,
+    scope: 'component',
+    targetId: component.id,
+    nodes: [nClick, nToggle, nBranch, nSetTrue, nSetFalse],
+    connections: [
+      createLogicConnection({ id: createLogicId('lconn'), sourceNodeId: nClick.id, sourcePortId: 'exec', targetNodeId: nToggle.id, targetPortId: 'exec' }),
+      createLogicConnection({ id: createLogicId('lconn'), sourceNodeId: nToggle.id, sourcePortId: 'next', targetNodeId: nBranch.id, targetPortId: 'exec' }),
+      createLogicConnection({ id: createLogicId('lconn'), sourceNodeId: nToggle.id, sourcePortId: 'value', targetNodeId: nBranch.id, targetPortId: 'condition' }),
+      createLogicConnection({ id: createLogicId('lconn'), sourceNodeId: nBranch.id, sourcePortId: 'true', targetNodeId: nSetTrue.id, targetPortId: 'exec' }),
+      createLogicConnection({ id: createLogicId('lconn'), sourceNodeId: nBranch.id, sourcePortId: 'false', targetNodeId: nSetFalse.id, targetPortId: 'exec' }),
+    ],
+  });
+}

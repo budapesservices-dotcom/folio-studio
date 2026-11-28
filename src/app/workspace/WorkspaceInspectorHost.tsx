@@ -1,4 +1,5 @@
 import type {
+  AssetReference,
   ComponentDefinition,
   DesignNode,
   FolioDocument,
@@ -23,6 +24,7 @@ import type { useWorkspaceWindows } from './useWorkspaceWindows';
 
 export interface WorkspaceInspectorHostProps {
   project: FolioProject;
+  assets?: readonly AssetReference[];
   activePageId: string;
   focusedDocument: FolioDocument;
   activeEditorId: EditorTarget;
@@ -55,6 +57,7 @@ export interface WorkspaceInspectorHostProps {
 
 export function WorkspaceInspectorHost({
   project,
+  assets,
   activePageId,
   focusedDocument,
   activeEditorId,
@@ -100,7 +103,7 @@ export function WorkspaceInspectorHost({
       instanceOverrideTargets={instanceOverrideTargets}
       activeBreakpoint={designSystem.activeBreakpoint}
       designTokens={designSystem.designTokens}
-      assets={project.assets}
+      assets={assets ?? project.assets}
       defaultFillColor={toolOptions.fillColor}
       renderIcon={(name) => <StudioIcon name={name} />}
       onStartResize={panelResize.startPanelResize}

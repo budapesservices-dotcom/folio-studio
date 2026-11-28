@@ -8,6 +8,7 @@ import {
 import { getActiveApplication, getActiveApplicationId } from '../../core/document/applications';
 import { getActiveDocument } from '../../core/document/project';
 import type {
+  AssetReference,
   ComponentDefinition,
   ComponentScope,
   DesignNode,
@@ -22,6 +23,7 @@ import type { CanonicalEditorStore } from '../editorStore';
 import type { EditorState } from '../editorReducer';
 import type { MainCanvasCommandClient, WorkspaceCommandClient } from '../mainCanvasCommandClient';
 import type { EditorTarget } from '../editorContext';
+import { mergeProjectAssets } from '../renderSelectionToSvg';
 import type { WindowId } from '../windowManager';
 import {
   acknowledgeComponentCanvasMetadataUpdate,
@@ -153,6 +155,38 @@ export function useComponentMasterLifecycle({
     return () => componentAutosave.cancel();
   }, [componentState.project, componentReady, componentAutosave]);
 
+  const getLiveMergedComponentAssets = useCallback((): AssetReference[] => {
+    const latestMainAssets = canonicalStore.getSnapshot().editorState.project.assets;
+    return mergeProjectAssets(latestMainAssets, componentState.project.assets);
+  }, [canonicalStore, componentState.project.assets]);
+
+  const ensureReferencedAssetsInMainProject = useCallback(
+    (nodes: readonly DesignNode[], fallbackAssets: readonly AssetReference[]) => {
+      if (nodes.length === 0 || fallbackAssets.length === 0) return;
+      const latestMainAssets = canonicalStore.getSnapshot().editorState.project.assets;
+      const mainAssetIds = new Set(latestMainAssets.map((item) => item.id));
+      const fallbackById = new Map(fallbackAssets.map((item) => [item.id, item]));
+      const neededIds = new Set<string>();
+      for (const node of nodes) {
+        if (node.type === 'image' && node.assetId) {
+          neededIds.add(node.assetId);
+        }
+      }
+      for (const assetId of neededIds) {
+        if (mainAssetIds.has(assetId)) continue;
+        const missingAsset = fallbackById.get(assetId);
+        if (missingAsset) {
+          mainCommandClient.upsertAsset(
+            missingAsset,
+            `Register component asset "${missingAsset.name}"`,
+          );
+          mainAssetIds.add(assetId);
+        }
+      }
+    },
+    [canonicalStore, mainCommandClient],
+  );
+
   const saveNodesAsComponent = (
     nodes: DesignNode[],
     sourceNodes: readonly DesignNode[] = activeDocument.nodes,
@@ -164,6 +198,7 @@ export function useComponentMasterLifecycle({
       `Component ${ownedComponents.length + 1}`,
     );
     if (!component) return;
+    ensureReferencedAssetsInMainProject(component.document.nodes, componentState.project.assets);
     const includedIds = new Set(component.document.nodes.map((node) => node.id));
     const componentAnimations = extractComponentAnimationsFromClips(
       state.project.animations,
@@ -194,6 +229,7 @@ export function useComponentMasterLifecycle({
         setNotice('Resolve the active Component Canvas recovery state before updating this master.');
         return;
       }
+      ensureReferencedAssetsInMainProject(bufferDocument.nodes, componentState.project.assets);
       const syncAction = createComponentCanvasSyncAction(
         editingComponent,
         bufferDocument,
@@ -241,6 +277,7 @@ export function useComponentMasterLifecycle({
       `Component ${ownedComponents.length + 1}`,
     );
     if (!component) return;
+    ensureReferencedAssetsInMainProject(component.document.nodes, componentState.project.assets);
     const includedIds = new Set(component.document.nodes.map((node) => node.id));
     const componentAnimations = extractComponentAnimationsFromClips(
       componentState.project.animations,
@@ -252,11 +289,16 @@ export function useComponentMasterLifecycle({
       ? { ...component, animations: componentAnimations }
       : component;
     mainCommandClient.createComponent(componentToCreate, 'Create master component');
-    const committedMaster = canonicalStore.getSnapshot().editorState.project.components
+    const latestMainProject = canonicalStore.getSnapshot().editorState.project;
+    const committedMaster = latestMainProject.components
       .find((item) => item.id === componentToCreate.id) ?? componentToCreate;
     componentSyncSessionRef.current = createComponentCanvasSyncSession(committedMaster);
     componentCommandClient.replaceProject(
-      createComponentCanvasBufferProject(committedMaster, state.project.designTokens, state.project.assets),
+      createComponentCanvasBufferProject(
+        committedMaster,
+        latestMainProject.designTokens,
+        getLiveMergedComponentAssets(),
+      ),
       'Align Component Canvas buffer with saved master',
     );
     setEditingComponentId(committedMaster.id);
@@ -279,8 +321,13 @@ export function useComponentMasterLifecycle({
     componentSyncSessionRef.current = createComponentCanvasSyncSession(component);
     setPendingComponentOpenId(null);
     setComponentRecoveryStatus('none');
+    const latestMainProject = canonicalStore.getSnapshot().editorState.project;
     componentCommandClient.replaceProject(
-      createComponentCanvasBufferProject(component, state.project.designTokens, state.project.assets),
+      createComponentCanvasBufferProject(
+        component,
+        latestMainProject.designTokens,
+        getLiveMergedComponentAssets(),
+      ),
       'Load master component into Component Canvas',
     );
     setEditingComponentId(component.id);
@@ -688,9 +735,14 @@ export function useComponentMasterLifecycle({
       setNotice('The canonical master is still missing. The local Component Canvas buffer remains preserved.');
       return;
     }
+    const latestMainProject = canonicalStore.getSnapshot().editorState.project;
     componentSyncSessionRef.current = createComponentCanvasSyncSession(master);
     componentCommandClient.replaceProject(
-      createComponentCanvasBufferProject(master, state.project.designTokens, state.project.assets),
+      createComponentCanvasBufferProject(
+        master,
+        latestMainProject.designTokens,
+        getLiveMergedComponentAssets(),
+      ),
       'Reload recovered canonical component master',
     );
     setPendingComponentOpenId(null);
@@ -738,8 +790,13 @@ export function useComponentMasterLifecycle({
     if (!session || session.componentId !== master.id) {
       session = createComponentCanvasSyncSession(master);
       componentSyncSessionRef.current = session;
+      const latestMainProject = canonicalStore.getSnapshot().editorState.project;
       componentCommandClient.replaceProject(
-        createComponentCanvasBufferProject(master, state.project.designTokens, state.project.assets),
+        createComponentCanvasBufferProject(
+          master,
+          latestMainProject.designTokens,
+          getLiveMergedComponentAssets(),
+        ),
         'Initialize Component Canvas buffer',
       );
       return;
@@ -764,8 +821,13 @@ export function useComponentMasterLifecycle({
     if (reconciliation.status === 'reload-buffer') {
       componentSyncSessionRef.current = reconciliation.session;
       setComponentRecoveryStatus('none');
+      const latestMainProject = canonicalStore.getSnapshot().editorState.project;
       componentCommandClient.replaceProject(
-        createComponentCanvasBufferProject(master, state.project.designTokens, state.project.assets),
+        createComponentCanvasBufferProject(
+          master,
+          latestMainProject.designTokens,
+          getLiveMergedComponentAssets(),
+        ),
         'Reload Component Canvas buffer from canonical master',
       );
       return;
@@ -791,6 +853,8 @@ export function useComponentMasterLifecycle({
       componentState.project.animations,
     );
     if (!syncAction) return;
+
+    ensureReferencedAssetsInMainProject(editedDocument.nodes, componentState.project.assets);
 
     const syncResult = mainCommandClient.syncComponentDocument(
       {
@@ -820,6 +884,7 @@ export function useComponentMasterLifecycle({
   }, [
     componentState.project.pages,
     componentState.project.animations,
+    componentState.project.assets,
     editingComponentId,
     componentReady,
     state.project.components,
@@ -827,6 +892,8 @@ export function useComponentMasterLifecycle({
     canonicalStore,
     mainCommandClient,
     componentCommandClient,
+    ensureReferencedAssetsInMainProject,
+    getLiveMergedComponentAssets,
     setNotice,
   ]);
 

@@ -51,6 +51,7 @@ export interface UseWorkspaceChromeActionsOptions {
   setActiveEditorId: (target: EditorTarget) => void;
   setCodeWorkspaceOpen: (value: boolean | ((prev: boolean) => boolean)) => void;
   onResetComponentView?: () => void;
+  onOpenNodeLogic?: () => void;
   onCommitProjectName: (draft: string) => void;
   setNotice: (message: string) => void;
 }
@@ -72,6 +73,7 @@ export function useWorkspaceChromeActions(options: UseWorkspaceChromeActionsOpti
     setActiveEditorId,
     setCodeWorkspaceOpen,
     onResetComponentView,
+    onOpenNodeLogic,
     onCommitProjectName,
     setNotice,
   } = options;
@@ -219,8 +221,10 @@ export function useWorkspaceChromeActions(options: UseWorkspaceChromeActionsOpti
   };
 
   const toggleNodeLogic = () => {
-    if (windows.nodeLogicClosed || windows.nodeLogicMinimized) windows.openNodeLogic();
-    else {
+    if (windows.nodeLogicClosed || windows.nodeLogicMinimized) {
+      if (onOpenNodeLogic) onOpenNodeLogic();
+      else windows.openNodeLogic();
+    } else {
       windows.setNodeLogicClosed(true);
       windows.setNodeLogicMinimized(false);
     }

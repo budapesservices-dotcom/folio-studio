@@ -464,11 +464,13 @@ export function useWorkspaceWindows({
     focusWindow('component-canvas');
   }, [recoverWindow, setActiveEditorId, focusWindow]);
 
-  const openNodeLogic = useCallback(() => {
+  const openNodeLogic = useCallback((options?: { preserveEditor?: boolean }) => {
     recoverWindow('node-logic');
     setNodeLogicClosed(false);
     setNodeLogicMinimized(false);
-    setActiveEditorId('main');
+    if (!options?.preserveEditor) {
+      setActiveEditorId('main');
+    }
     focusWindow('node-logic');
   }, [recoverWindow, setActiveEditorId, focusWindow]);
 

@@ -1888,31 +1888,150 @@ export function NodeLogicNodeFields({
     }
 
     case 'action.set-variant': {
-      const effectiveTargetId =
+      const SELF_TARGET_OPTION = '__this_component__';
+      const isComponentScope = graph?.scope === 'component';
+      const ownerComponent = isComponentScope && graph?.targetId
+        ? components.find((comp) => comp.id === graph.targetId)
+        : undefined;
+      const trimmedTargetId = targetNodeId.trim();
+      const directResolved = trimmedTargetId
+        ? resolveAstNodeById(trimmedTargetId, astNodesById, componentsById)
+        : undefined;
+      const directInstance =
+        directResolved && directResolved.type === 'component-instance'
+          ? directResolved
+          : instanceNodes.find((item) => item.id === trimmedTargetId);
+
+      // In Component Master graphs, default/empty target (or legacy pipeline from an internal non-instance layer)
+      // resolves to This Component (Current Component Instance) rather than any plain shape.
+      const isTargetingSelf = Boolean(
+        isComponentScope
+        && ownerComponent
+        && (
+          (targetMode !== 'pipeline' && (!trimmedTargetId || trimmedTargetId === ownerComponent.id))
+          || (targetMode === 'pipeline' && !directInstance)
+        ),
+      );
+
+      // In Page/Project graphs, only allow Component Instances (never plain shapes/groups).
+      const upstreamInstanceId =
         targetMode === 'pipeline'
           ? (pipelineChildId || upstreamOrigins[0]?.layerId || '')
-          : targetNodeId;
-      const resolvedTarget = resolveAstNodeById(effectiveTargetId, astNodesById, componentsById);
-      const targetInstance =
-        resolvedTarget && resolvedTarget.type === 'component-instance'
-          ? resolvedTarget
-          : instanceNodes.find((item) => item.id === effectiveTargetId);
-      const master =
-        targetInstance && targetInstance.type === 'component-instance'
+          : '';
+      const upstreamResolved = upstreamInstanceId
+        ? resolveAstNodeById(upstreamInstanceId, astNodesById, componentsById)
+        : undefined;
+      const upstreamInstance =
+        upstreamResolved && upstreamResolved.type === 'component-instance'
+          ? upstreamResolved
+          : instanceNodes.find((item) => item.id === upstreamInstanceId);
+
+      const targetInstance = isTargetingSelf
+        ? undefined
+        : directInstance ?? (!isComponentScope ? upstreamInstance : undefined);
+
+      const master = isTargetingSelf
+        ? ownerComponent
+        : targetInstance
           ? components.find((comp) => comp.id === targetInstance.componentId)
           : undefined;
+
       const axes = master?.variants ?? [];
       const axisId = typeof node.data.axisId === 'string' ? node.data.axisId : '';
       const selectedAxis = axes.find((axis) => axis.id === axisId);
       const optionId = typeof node.data.optionId === 'string' ? node.data.optionId : '';
 
+      const selectValue = isTargetingSelf
+        ? SELF_TARGET_OPTION
+        : targetInstance
+          ? targetInstance.id
+          : '';
+
+      const eventOriginSummary = upstreamOrigins
+        .map((origin) => origin.name)
+        .filter((name, idx, arr) => Boolean(name) && arr.indexOf(name) === idx)
+        .join(', ');
+
       return (
         <>
-          {renderPipelineTargetField('Component instance', instanceNodes)}
+          <label class="nl-field">
+            <span>Variant target (Component Instance)</span>
+            <select
+              class="select-field"
+              aria-label="Variant target component instance"
+              data-testid="nl-set-variant-target-select"
+              value={selectValue}
+              onChange={(event) => {
+                const nextValue = event.currentTarget.value;
+                if (nextValue === SELF_TARGET_OPTION) {
+                  const firstAxis = ownerComponent?.variants?.find((a) => a.options.length > 0);
+                  const keepAxis = ownerComponent?.variants?.find((a) => a.id === axisId);
+                  onUpdateNodeData(node.id, {
+                    targetMode: 'override',
+                    targetNodeId: '',
+                    pipelineChildId: '',
+                    ...(keepAxis
+                      ? {}
+                      : {
+                          axisId: firstAxis?.id ?? '',
+                          optionId: firstAxis?.options[0]?.id ?? '',
+                        }),
+                  });
+                  return;
+                }
+                const nextInst = instanceNodes.find((item) => item.id === nextValue);
+                const nextComp = nextInst
+                  ? components.find((comp) => comp.id === nextInst.componentId)
+                  : undefined;
+                const firstAxis = nextComp?.variants?.find((a) => a.options.length > 0);
+                const keepAxis = nextComp?.variants?.find((a) => a.id === axisId);
+                onUpdateNodeData(node.id, {
+                  targetMode: 'override',
+                  targetNodeId: nextValue,
+                  pipelineChildId: '',
+                  ...(keepAxis
+                    ? {}
+                    : {
+                        axisId: firstAxis?.id ?? '',
+                        optionId: firstAxis?.options[0]?.id ?? '',
+                      }),
+                });
+              }}
+            >
+              {!isComponentScope && <option value="">Select component instance…</option>}
+              {isComponentScope && ownerComponent && (
+                <option value={SELF_TARGET_OPTION}>
+                  This Component ({ownerComponent.name} — Current Instance)
+                </option>
+              )}
+              {instanceNodes.map((inst) => {
+                const instMaster = components.find((comp) => comp.id === inst.componentId);
+                return (
+                  <option key={inst.id} value={inst.id}>
+                    {isComponentScope ? `Nested: ${inst.name}` : inst.name}
+                    {instMaster ? ` (${instMaster.name})` : ' (Component)'}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+          {isComponentScope && ownerComponent && (
+            <div class="nl-field-hint" data-testid="nl-set-variant-scope-hint">
+              {eventOriginSummary
+                ? `Event origin: ${eventOriginSummary}. Action target: ${
+                    isTargetingSelf
+                      ? `This Component (${ownerComponent.name} — Current Instance)`
+                      : targetInstance?.name ?? 'Select component instance'
+                  }.`
+                : 'Targets the Component Instance executing this logic, or an explicit nested Component Instance.'}
+            </div>
+          )}
           <label class="nl-field">
             <span>Variant axis</span>
             <select
               class="select-field"
+              aria-label="Variant axis"
+              data-testid="nl-set-variant-axis-select"
               value={axisId}
               onChange={(event) => {
                 const nextAxisId = event.currentTarget.value;
@@ -1933,6 +2052,8 @@ export function NodeLogicNodeFields({
             <span>Variant option</span>
             <select
               class="select-field"
+              aria-label="Variant option"
+              data-testid="nl-set-variant-option-select"
               value={optionId}
               onChange={(event) => onUpdateNodeData(node.id, { optionId: event.currentTarget.value })}
             >

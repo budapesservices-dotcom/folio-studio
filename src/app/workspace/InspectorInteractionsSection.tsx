@@ -91,6 +91,7 @@ interface InteractionFieldsProps {
   pages: readonly FolioPage[];
   activePageId: string;
   components: readonly ComponentDefinition[];
+  ownerComponent?: ComponentDefinition | null;
   idPrefix: string;
   onChange: (next: QuickInteractionConfig) => void;
 }
@@ -102,15 +103,16 @@ function InteractionConfigFields({
   pages,
   activePageId,
   components,
+  ownerComponent = null,
   idPrefix,
   onChange,
 }: InteractionFieldsProps) {
   const variantCandidates = useMemo(
-    () => getVariantTargetCandidates(scopedNodes, components),
-    [scopedNodes, components],
+    () => getVariantTargetCandidates(scopedNodes, components, ownerComponent),
+    [scopedNodes, components, ownerComponent],
   );
   const activeVariantCandidate = useMemo(
-    () => variantCandidates.find((c) => c.node.id === config.targetNodeId) ?? null,
+    () => variantCandidates.find((c) => c.id === config.targetNodeId) ?? null,
     [variantCandidates, config.targetNodeId],
   );
   const activeVariantAxes = useMemo(
@@ -192,6 +194,7 @@ function InteractionConfigFields({
                 pages,
                 activePageId,
                 components,
+                ownerComponent,
               }),
             );
           }}
@@ -348,7 +351,7 @@ function InteractionConfigFields({
                   value={config.targetNodeId}
                   onChange={(event) => {
                     const nextTargetId = event.currentTarget.value;
-                    const candidate = variantCandidates.find((c) => c.node.id === nextTargetId);
+                    const candidate = variantCandidates.find((c) => c.id === nextTargetId);
                     const firstAxis = candidate?.component.variants?.find((a) => a.options.length > 0);
                     onChange({
                       ...config,
@@ -358,9 +361,9 @@ function InteractionConfigFields({
                     });
                   }}
                 >
-                  {variantCandidates.map(({ node, component }) => (
-                    <option key={node.id} value={node.id}>
-                      {node.name} ({component.name})
+                  {variantCandidates.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.label}
                     </option>
                   ))}
                 </select>
@@ -618,6 +621,8 @@ export function InspectorInteractionsSection({
     [project, scope, scopeTargetId, selectedNode.id, scopedNodes],
   );
 
+  const ownerComponent = scope === 'component' ? editingMasterComponent : null;
+
   const [composerOpen, setComposerOpen] = useState(false);
   const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null);
   const [draftConfig, setDraftConfig] = useState<QuickInteractionConfig>(() =>
@@ -627,6 +632,7 @@ export function InspectorInteractionsSection({
       pages: project.pages,
       activePageId,
       components: project.components,
+      ownerComponent,
     }),
   );
 
@@ -641,8 +647,9 @@ export function InspectorInteractionsSection({
       validateQuickInteractionConfig(draftConfig, {
         scopedNodes,
         components: project.components,
+        ownerComponent,
       }),
-    [draftConfig, scopedNodes, project.components],
+    [draftConfig, scopedNodes, project.components, ownerComponent],
   );
 
   const handleOpenComposer = () => {
@@ -653,6 +660,7 @@ export function InspectorInteractionsSection({
         pages: project.pages,
         activePageId,
         components: project.components,
+        ownerComponent,
       }),
     );
     setComposerOpen(true);
@@ -711,6 +719,7 @@ export function InspectorInteractionsSection({
             pages={project.pages}
             activePageId={activePageId}
             components={project.components}
+            ownerComponent={ownerComponent}
             idPrefix="qi-new"
             onChange={setDraftConfig}
           />
@@ -754,6 +763,7 @@ export function InspectorInteractionsSection({
                 ? validateQuickInteractionConfig(entry.config, {
                     scopedNodes,
                     components: project.components,
+                    ownerComponent,
                   })
                 : null;
 
@@ -810,6 +820,7 @@ export function InspectorInteractionsSection({
                       pages={project.pages}
                       activePageId={activePageId}
                       components={project.components}
+                      ownerComponent={ownerComponent}
                       idPrefix={`qi-${entry.triggerNodeId}`}
                       onChange={(nextConfig) => {
                         onUpdateQuickInteraction(entry, selectedNode.id, nextConfig);

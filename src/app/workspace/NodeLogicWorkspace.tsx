@@ -21,7 +21,6 @@ import {
   BAKED_FRAME_NODE_WIDTH,
   bakeLogicFrame,
   createLogicFramePresetFromFrame,
-  createLogicGraph,
   createPrototypeRuntime,
   getLogicFrameColorPreset,
   getLogicNodeDefinition,
@@ -50,11 +49,15 @@ import {
   canConnectLogicPorts,
   computeFitViewTransform,
   computeNextNodePosition,
+  createComponentVariantToggleStarterGraph,
   createFrameInGraph,
   createLogicId,
   createLogicPresetGraph,
+  createOwnerScopedEmptyLogicGraph,
   createStarterMainPageLogicGraph,
+  deriveOwnerContextFromLogicGraph,
   findSnapLogicPort,
+  formatNodeLogicOwnerBreadcrumb,
   getLogicNodeCategory,
   getLogicNodeIdsInMarquee,
   getLogicNodePorts,
@@ -72,7 +75,9 @@ import {
   removeNodesFromGraph,
   removeVariableFromGraph,
   repatchConnectionInGraph,
+  resolveActiveLogicGraphForOwner,
   resolveLogicPortWorldPosition,
+  resolveOwnerScopedLogicGraphs,
   syncNodeFrameMembershipAfterDrag,
   touchLogicGraph,
   updateFrameInGraph,
@@ -82,6 +87,7 @@ import {
   type LogicPoint,
   type LogicPresetId,
   type LogicViewportTransform,
+  type NodeLogicOwnerContext,
   type SnapLogicPortMatch,
 } from './nodeLogicGraphHelpers';
 import { NodeLogicInspector, type NodeLogicInspectorTab } from './NodeLogicInspector';
@@ -96,6 +102,8 @@ import { StudioContextMenu, type StudioContextMenuItem } from './StudioContextMe
 export interface NodeLogicWorkspaceProps {
   project: FolioProject;
   activePageId: string;
+  ownerContext?: NodeLogicOwnerContext | null;
+  onOwnerContextChange?: (next: NodeLogicOwnerContext) => void;
   mainCommandClient: MainCanvasCommandClient;
   onNotice: (message: string) => void;
   onOpenLivePreview: (pageId?: string) => void;
@@ -200,6 +208,8 @@ const CATEGORY_MARKERS: Record<LogicNodeCategory | 'custom', { glyph: string; la
 export default function NodeLogicWorkspace({
   project,
   activePageId,
+  ownerContext = null,
+  onOwnerContextChange,
   mainCommandClient,
   onNotice,
   onOpenLivePreview,
@@ -215,9 +225,33 @@ export default function NodeLogicWorkspace({
   const presetsMenuRef = useRef<HTMLDivElement | null>(null);
   const lastHandledArrangeNonceRef = useRef<number>(0);
   const lastHandledFocusNonceRef = useRef<number>(0);
-  const [activeGraphId, setActiveGraphId] = useState<string | null>(
-    () => focusRequest?.graphId ?? project.logicGraphs[0]?.id ?? null,
+  const [internalOwnerContext, setInternalOwnerContext] = useState<NodeLogicOwnerContext>(() => {
+    if (ownerContext) return ownerContext;
+    if (focusRequest?.graphId) {
+      const focused = project.logicGraphs.find((g) => g.id === focusRequest.graphId);
+      if (focused) return deriveOwnerContextFromLogicGraph(focused, activePageId);
+    }
+    return { scope: 'page', pageId: activePageId };
+  });
+  const effectiveOwnerContext: NodeLogicOwnerContext = ownerContext ?? internalOwnerContext;
+  const setOwnerContext = useCallback(
+    (next: NodeLogicOwnerContext) => {
+      if (onOwnerContextChange) {
+        onOwnerContextChange(next);
+      } else {
+        setInternalOwnerContext(next);
+      }
+    },
+    [onOwnerContextChange],
   );
+  const [activeGraphId, setActiveGraphId] = useState<string | null>(() => {
+    const initialOwner: NodeLogicOwnerContext = ownerContext ?? { scope: 'page', pageId: activePageId };
+    return resolveActiveLogicGraphForOwner(
+      project.logicGraphs,
+      initialOwner,
+      focusRequest?.graphId ?? null,
+    )?.id ?? null;
+  });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
@@ -337,20 +371,40 @@ export default function NodeLogicWorkspace({
   );
   const designTokens = useMemo(() => getProjectDesignTokens(project), [project]);
 
-  // Keep activeGraphId synced with project.logicGraphs
+  const ownerComponent = useMemo(
+    () =>
+      effectiveOwnerContext.scope === 'component'
+        ? (project.components.find((comp) => comp.id === effectiveOwnerContext.componentId) ?? null)
+        : null,
+    [effectiveOwnerContext, project.components],
+  );
+
+  const ownerBreadcrumb = useMemo(
+    () => formatNodeLogicOwnerBreadcrumb(project, activePage.id, effectiveOwnerContext),
+    [project, activePage.id, effectiveOwnerContext],
+  );
+
+  const scopedGraphs = useMemo(
+    () => resolveOwnerScopedLogicGraphs(project.logicGraphs, effectiveOwnerContext),
+    [project.logicGraphs, effectiveOwnerContext],
+  );
+
+  // Keep activeGraphId strictly synced with the current owner context — never hijack project.logicGraphs[0].
   useEffect(() => {
-    if (project.logicGraphs.length === 0) {
-      if (activeGraphId !== null) setActiveGraphId(null);
-      return;
+    const resolved = resolveActiveLogicGraphForOwner(
+      project.logicGraphs,
+      effectiveOwnerContext,
+      activeGraphId,
+    );
+    const nextId = resolved?.id ?? null;
+    if (nextId !== activeGraphId) {
+      setActiveGraphId(nextId);
     }
-    if (!activeGraphId || !project.logicGraphs.some((g) => g.id === activeGraphId)) {
-      setActiveGraphId(project.logicGraphs[0].id);
-    }
-  }, [project.logicGraphs, activeGraphId]);
+  }, [project.logicGraphs, effectiveOwnerContext, activeGraphId]);
 
   const activeGraph: LogicGraph | null = useMemo(
-    () => project.logicGraphs.find((g) => g.id === activeGraphId) ?? project.logicGraphs[0] ?? null,
-    [project.logicGraphs, activeGraphId],
+    () => resolveActiveLogicGraphForOwner(project.logicGraphs, effectiveOwnerContext, activeGraphId),
+    [project.logicGraphs, effectiveOwnerContext, activeGraphId],
   );
 
   // Clean up stale selection when active graph changes
@@ -401,6 +455,7 @@ export default function NodeLogicWorkspace({
     if (!targetGraph) return;
     lastHandledFocusNonceRef.current = focusRequest.nonce;
     fittedGraphIdRef.current = targetGraph.id;
+    setOwnerContext(deriveOwnerContextFromLogicGraph(targetGraph, activePageId));
     setActiveGraphId(targetGraph.id);
 
     const validIds = new Set(targetGraph.nodes.map((n) => n.id));
@@ -432,23 +487,34 @@ export default function NodeLogicWorkspace({
       const rafId = requestAnimationFrame(applyFit);
       return () => cancelAnimationFrame(rafId);
     }
-  }, [focusRequest, project.logicGraphs]);
+  }, [focusRequest, project.logicGraphs, activePageId, setOwnerContext]);
 
   const scopedAstNodes: readonly DesignNode[] = useMemo(() => {
-    if (!activeGraph) return activePage.document.nodes;
-    if (activeGraph.scope === 'page') {
-      return (
-        project.pages.find((p) => p.id === activeGraph.targetId)?.document.nodes
-        ?? activePage.document.nodes
-      );
+    if (activeGraph) {
+      if (activeGraph.scope === 'page') {
+        return (
+          project.pages.find((p) => p.id === activeGraph.targetId)?.document.nodes
+          ?? activePage.document.nodes
+        );
+      }
+      if (activeGraph.scope === 'component') {
+        return (
+          project.components.find((c) => c.id === activeGraph.targetId)?.document.nodes ?? []
+        );
+      }
+      return project.pages.flatMap((p) => p.document.nodes);
     }
-    if (activeGraph.scope === 'component') {
-      return (
-        project.components.find((c) => c.id === activeGraph.targetId)?.document.nodes ?? []
-      );
+    if (effectiveOwnerContext.scope === 'component') {
+      return ownerComponent?.document.nodes ?? [];
     }
-    return project.pages.flatMap((p) => p.document.nodes);
-  }, [activeGraph, project.pages, project.components, activePage.document.nodes]);
+    if (effectiveOwnerContext.scope === 'project') {
+      return project.pages.flatMap((p) => p.document.nodes);
+    }
+    return (
+      project.pages.find((p) => p.id === effectiveOwnerContext.pageId)?.document.nodes
+      ?? activePage.document.nodes
+    );
+  }, [activeGraph, effectiveOwnerContext, ownerComponent, project.pages, project.components, activePage.document.nodes]);
 
   const availableVariables: readonly LogicVariableDefinition[] = useMemo(() => {
     if (!activeGraph) return [];
@@ -490,11 +556,15 @@ export default function NodeLogicWorkspace({
   const targetPageIdForRuntime =
     activeGraph?.scope === 'page' && activeGraph.targetId
       ? activeGraph.targetId
-      : activePage.id;
+      : effectiveOwnerContext.scope === 'page'
+        ? effectiveOwnerContext.pageId
+        : activePage.id;
   const targetComponentIdForRuntime =
     activeGraph?.scope === 'component' && activeGraph.targetId
       ? activeGraph.targetId
-      : undefined;
+      : effectiveOwnerContext.scope === 'component'
+        ? effectiveOwnerContext.componentId
+        : undefined;
 
   useEffect(() => {
     const nextRuntime = createPrototypeRuntime(project, {
@@ -506,7 +576,7 @@ export default function NodeLogicWorkspace({
   }, [project, targetPageIdForRuntime, targetComponentIdForRuntime]);
 
   useEffect(() => {
-    const scope = activeGraph?.scope ?? 'page';
+    const scope = activeGraph?.scope ?? effectiveOwnerContext.scope;
     const targetId =
       scope === 'component'
         ? targetComponentIdForRuntime
@@ -514,7 +584,7 @@ export default function NodeLogicWorkspace({
           ? targetPageIdForRuntime
           : undefined;
     onRuntimeSnapshotChange?.(runtimeSnapshot, scope, targetId);
-  }, [runtimeSnapshot, activeGraph?.scope, targetComponentIdForRuntime, targetPageIdForRuntime, onRuntimeSnapshotChange]);
+  }, [runtimeSnapshot, activeGraph?.scope, effectiveOwnerContext.scope, targetComponentIdForRuntime, targetPageIdForRuntime, onRuntimeSnapshotChange]);
 
   useEffect(() => () => {
     onRuntimeSnapshotChange?.(null, 'page', undefined);
@@ -527,30 +597,84 @@ export default function NodeLogicWorkspace({
     [mainCommandClient],
   );
 
+  const ensureComponentLogicEnabledIfOwned = () => {
+    if (
+      effectiveOwnerContext.scope === 'component'
+      && ownerComponent
+      && !ownerComponent.nodeLogicEnabled
+      && onToggleComponentNodeLogic
+    ) {
+      onToggleComponentNodeLogic(ownerComponent, true);
+    }
+  };
+
   const handleCreateEmptyGraph = () => {
-    const nextIndex = project.logicGraphs.length + 1;
-    const graph = createLogicGraph({
-      id: createLogicId('lgraph'),
-      name: `${activePage.name} Flow ${nextIndex}`,
-      scope: 'page',
-      targetId: activePage.id,
-      nodes: [],
-      connections: [],
-    });
+    const graph = createOwnerScopedEmptyLogicGraph(project, activePage, effectiveOwnerContext);
     const res = mainCommandClient.createLogicGraph(graph, `Create logic graph "${graph.name}"`);
     if (res.status === 'applied') {
+      ensureComponentLogicEnabledIfOwned();
       setActiveGraphId(graph.id);
       setSelectedNodeId(null);
       setSelectedConnectionId(null);
-      onNotice(`Created logic graph “${graph.name}”.`);
+      onNotice(`Created ${effectiveOwnerContext.scope} logic graph “${graph.name}”.`);
     }
   };
 
   const handleInsertPreset = (presetId: LogicPresetId) => {
-    const graph = createLogicPresetGraph(presetId, project, activePage);
+    let graph = createLogicPresetGraph(presetId, project, activePage);
+    if (effectiveOwnerContext.scope === 'component') {
+      const compName = ownerComponent?.name ?? 'Component';
+      const firstInteractive =
+        ownerComponent?.document.nodes.find((n) => n.type !== 'group' && n.onCanvas !== false)
+        ?? ownerComponent?.document.nodes[0];
+      const firstText = ownerComponent?.document.nodes.find((n) => n.type === 'text');
+      graph = {
+        ...graph,
+        name: `${compName} · ${graph.name}`,
+        scope: 'component',
+        targetId: effectiveOwnerContext.componentId,
+        nodes: graph.nodes.map((node) => {
+          if (node.type === 'action.set-variant') {
+            const firstAxis = ownerComponent?.variants?.find((a) => a.options.length > 0);
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                targetMode: 'override',
+                targetNodeId: '',
+                ...(firstAxis
+                  ? { axisId: firstAxis.id, optionId: firstAxis.options[0]?.id ?? '' }
+                  : {}),
+              },
+            };
+          }
+          if (typeof node.data.targetNodeId === 'string' && node.data.targetNodeId) {
+            const reboundId =
+              node.type === 'action.set-text'
+                ? (firstText?.id ?? firstInteractive?.id ?? '')
+                : (firstInteractive?.id ?? '');
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                targetNodeId: reboundId,
+              },
+            };
+          }
+          return node;
+        }),
+      };
+    } else if (effectiveOwnerContext.scope === 'project') {
+      graph = {
+        ...graph,
+        scope: 'project',
+        targetId: null,
+      };
+    }
     const res = mainCommandClient.createLogicGraph(graph, `Create preset graph "${graph.name}"`);
     setPresetsOpen(false);
     if (res.status === 'applied') {
+      ensureComponentLogicEnabledIfOwned();
       fittedGraphIdRef.current = null;
       setActiveGraphId(graph.id);
       setSelectedNodeId(null);
@@ -560,12 +684,27 @@ export default function NodeLogicWorkspace({
   };
 
   const handleLoadStarterFlow = () => {
-    const starter = createStarterMainPageLogicGraph(activePage);
-    const graph = starter
-      ? { ...starter, id: createLogicId('lgraph') }
-      : createLogicPresetGraph('click-counter', project, activePage);
+    let graph: LogicGraph;
+    if (effectiveOwnerContext.scope === 'component' && ownerComponent) {
+      graph = createComponentVariantToggleStarterGraph(ownerComponent);
+    } else if (effectiveOwnerContext.scope === 'project') {
+      graph = {
+        ...createLogicPresetGraph('click-counter', project, activePage),
+        scope: 'project',
+        targetId: null,
+      };
+    } else {
+      const targetPageId = effectiveOwnerContext.scope === 'page' ? effectiveOwnerContext.pageId : activePage.id;
+      const targetPage =
+        project.pages.find((p) => p.id === targetPageId) ?? activePage;
+      const starter = createStarterMainPageLogicGraph(targetPage);
+      graph = starter
+        ? { ...starter, id: createLogicId('lgraph') }
+        : createLogicPresetGraph('click-counter', project, targetPage);
+    }
     const res = mainCommandClient.createLogicGraph(graph, `Create starter graph "${graph.name}"`);
     if (res.status === 'applied') {
+      ensureComponentLogicEnabledIfOwned();
       fittedGraphIdRef.current = null;
       setActiveGraphId(graph.id);
       setSelectedNodeId(null);
@@ -608,16 +747,15 @@ export default function NodeLogicWorkspace({
   const handleAddNodeFromPalette = (type: BuiltInLogicNodeType) => {
     let targetGraph = activeGraph;
     if (!targetGraph) {
-      const created = createLogicGraph({
-        id: createLogicId('lgraph'),
-        name: `${activePage.name} Interactions`,
-        scope: 'page',
-        targetId: activePage.id,
-        nodes: [],
-        connections: [],
-      });
+      const created = createOwnerScopedEmptyLogicGraph(
+        project,
+        activePage,
+        effectiveOwnerContext,
+        effectiveOwnerContext.scope === 'component' ? 'Logic' : 'Interactions',
+      );
       const res = mainCommandClient.createLogicGraph(created, `Create logic graph "${created.name}"`);
       if (res.status !== 'applied') return;
+      ensureComponentLogicEnabledIfOwned();
       targetGraph = created;
       setActiveGraphId(created.id);
     }
@@ -663,12 +801,30 @@ export default function NodeLogicWorkspace({
       defaultExtras.themeId = designTokens.themes[0].id;
     } else if (type === 'action.navigate') {
       defaultExtras.route = activePage.route;
+    } else if (type === 'action.set-variant') {
+      defaultExtras.targetMode = 'override';
+      if (targetGraph.scope === 'component') {
+        const compMaster = project.components.find((comp) => comp.id === targetGraph.targetId);
+        const firstAxis = compMaster?.variants?.find((axis) => axis.options.length > 0);
+        defaultExtras.targetNodeId = '';
+        defaultExtras.axisId = firstAxis?.id ?? '';
+        defaultExtras.optionId = firstAxis?.options[0]?.id ?? '';
+      } else {
+        const firstInstance = scopedAstNodes.find((item) => item.type === 'component-instance');
+        const instMaster =
+          firstInstance && firstInstance.type === 'component-instance'
+            ? project.components.find((comp) => comp.id === firstInstance.componentId)
+            : undefined;
+        const firstAxis = instMaster?.variants?.find((axis) => axis.options.length > 0);
+        defaultExtras.targetNodeId = firstInstance?.id ?? '';
+        defaultExtras.axisId = firstAxis?.id ?? '';
+        defaultExtras.optionId = firstAxis?.options[0]?.id ?? '';
+      }
     } else if (
       type === 'action.set-layer'
       || type === 'action.set-visible'
       || type === 'action.set-fill'
       || type === 'action.set-text'
-      || type === 'action.set-variant'
       || type === 'action.media-animation'
     ) {
       defaultExtras.targetMode = 'pipeline';
@@ -1695,6 +1851,42 @@ export default function NodeLogicWorkspace({
       {/* Top Graph Control & Live Preview Bridge Bar */}
       <div ref={topbarRef} class="nl-topbar">
         <div class="nl-topbar-left">
+          <div
+            class="nl-owner-breadcrumb"
+            data-testid="nl-owner-breadcrumb"
+            data-owner-scope={effectiveOwnerContext.scope}
+            title={ownerBreadcrumb.fullLabel}
+          >
+            <span class="nl-owner-scope-tag">{ownerBreadcrumb.scopeLabel}</span>
+            <span class="nl-owner-sep" aria-hidden="true">&gt;</span>
+            <strong class="nl-owner-name">{ownerBreadcrumb.ownerName}</strong>
+            <span class="nl-owner-sep" aria-hidden="true">&gt;</span>
+            <span class="nl-owner-leaf">Node Logic</span>
+          </div>
+
+          {effectiveOwnerContext.scope !== 'component' && (
+            <select
+              class="select-field nl-scope-select"
+              aria-label="Node Logic owner scope"
+              data-testid="nl-owner-scope-select"
+              value={effectiveOwnerContext.scope}
+              onChange={(event) => {
+                const nextScope = event.currentTarget.value;
+                fittedGraphIdRef.current = null;
+                setSelectedNodeId(null);
+                setSelectedConnectionId(null);
+                if (nextScope === 'project') {
+                  setOwnerContext({ scope: 'project' });
+                } else {
+                  setOwnerContext({ scope: 'page', pageId: activePage.id });
+                }
+              }}
+            >
+              <option value="page">Page: {activePage.name}</option>
+              <option value="project">Project Scope</option>
+            </select>
+          )}
+
           {renamingGraph && activeGraph ? (
             <input
               class="nl-graph-rename-input"
@@ -1713,7 +1905,7 @@ export default function NodeLogicWorkspace({
               class="select-field nl-graph-select"
               aria-label="Active logic graph"
               value={activeGraph?.id ?? ''}
-              disabled={project.logicGraphs.length === 0}
+              disabled={scopedGraphs.length === 0}
               onChange={(event) => {
                 fittedGraphIdRef.current = null;
                 setActiveGraphId(event.currentTarget.value);
@@ -1723,10 +1915,10 @@ export default function NodeLogicWorkspace({
                 setWireLiftCandidate(null);
               }}
             >
-              {project.logicGraphs.length === 0 ? (
-                <option value="">No logic graphs</option>
+              {scopedGraphs.length === 0 ? (
+                <option value="">No logic graphs for {ownerBreadcrumb.ownerName}</option>
               ) : (
-                project.logicGraphs.map((graph) => (
+                scopedGraphs.map((graph) => (
                   <option key={graph.id} value={graph.id}>
                     {graph.name} ({graph.nodes.length} nodes)
                   </option>
@@ -2001,16 +2193,30 @@ export default function NodeLogicWorkspace({
           }}
         >
           {!activeGraph ? (
-            <div class="nl-empty-state">
+            <div class="nl-empty-state" data-testid="nl-empty-state">
               <div class="nl-empty-icon"><StudioIcon name="logicNodes" /></div>
-              <strong>No Logic Graphs in This Project</strong>
-              <p>Connect visual events, state variables, branches, and live actions over your .flop AST.</p>
+              <strong>
+                {effectiveOwnerContext.scope === 'component'
+                  ? `No Node Logic for Component “${ownerBreadcrumb.ownerName}”`
+                  : effectiveOwnerContext.scope === 'project'
+                    ? 'No Project Logic Graphs Yet'
+                    : `No Logic Graphs on Page “${ownerBreadcrumb.ownerName}”`}
+              </strong>
+              <p>
+                {effectiveOwnerContext.scope === 'component'
+                  ? `Logic created here belongs exclusively to Component “${ownerBreadcrumb.ownerName}” and runs independently per instance.`
+                  : 'Connect visual events, state variables, branches, and live actions over your .flop AST.'}
+              </p>
               <div class="nl-empty-actions">
                 <button type="button" class="nl-primary-btn" onClick={handleLoadStarterFlow}>
-                  Load Starter Interaction Flow
+                  {effectiveOwnerContext.scope === 'component'
+                    ? 'Create Component Starter Flow'
+                    : 'Load Starter Interaction Flow'}
                 </button>
                 <button type="button" class="nl-secondary-btn" onClick={handleCreateEmptyGraph}>
-                  Create Blank Graph
+                  {effectiveOwnerContext.scope === 'component'
+                    ? 'Create Blank Component Graph'
+                    : 'Create Blank Graph'}
                 </button>
               </div>
             </div>
@@ -2361,6 +2567,7 @@ export default function NodeLogicWorkspace({
                   project.animations ?? [],
                   project.pages,
                   project.components,
+                  activeGraph,
                 );
                 const isSourceNode = isSourceLogicNodeType(node.type);
                 const diagCounts = diagnosticsByNodeId.get(node.id);

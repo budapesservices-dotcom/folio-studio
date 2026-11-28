@@ -38,6 +38,7 @@ import {
   type StudioVectorActions,
 } from './inspectorVectorHelpers';
 import { executeRenderSelectionToSvg } from '../renderSelectionToSvg';
+import type { NodeLogicOwnerContext } from './nodeLogicGraphHelpers';
 
 export type { StudioVectorActions };
 
@@ -69,7 +70,7 @@ export interface UseSelectionAndVectorActionsOptions {
   setWorkspaceToolId: (target: EditorTarget, toolId: CanvasToolId) => void;
   setInspectorVisible: (visible: boolean) => void;
   setNotice: (message: string) => void;
-  openNodeLogic?: () => void;
+  openNodeLogic?: (ownerContext?: NodeLogicOwnerContext) => void;
 }
 
 export function useSelectionAndVectorActions({
@@ -921,7 +922,17 @@ export function useSelectionAndVectorActions({
     onSelectSimilar: (criterion) => selectSimilar(target, criterion),
     onSetDrawMode: (mode) => setDrawMode(target, mode),
     onPermanentSubtractOutside: () => permanentSubtractOutside(target),
-    ...(openNodeLogic ? { onOpenNodeLogic: openNodeLogic } : {}),
+    ...(openNodeLogic
+      ? {
+          onOpenNodeLogic: () => {
+            if (target === 'component' && editingComponentId) {
+              openNodeLogic({ scope: 'component', componentId: editingComponentId });
+            } else {
+              openNodeLogic({ scope: 'page', pageId: state.project.activePageId });
+            }
+          },
+        }
+      : {}),
   });
 
   return {
