@@ -4,10 +4,11 @@ name: Deploy FOLIO Studio
 on:
   push:
     branches:
-      - feat/canvas-pan-distribute
+      - main
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   pages: write
   id-token: write
@@ -27,11 +28,17 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check
+        run: npm run check
+
+      - name: Run test suite
+        run: npm test
 
       - name: Build FOLIO Studio
         run: npm run build

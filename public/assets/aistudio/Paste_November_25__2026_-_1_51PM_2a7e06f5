@@ -1,0 +1,751 @@
+Memproses selama 3m 29s
+
+### AUDIT TOTAL FOLIO STUDIO
+
+25 November 2026 · Berdasarkan kondisi repository dan commit terbaru yang dapat diperiksa
+
+Bos, aku sudah memeriksa struktur repository, arsitektur, source code, sistem Node Logic, Native Command Engine, Canvas, persistence, code generation, dokumentasi, Pull Request, dan hasil GitHub Actions.
+
+Kesimpulan utamanya: Folio sudah menjadi software dengan fondasi engineering yang nyata, bukan lagi sekadar mockup. Namun, kondisi kandidat terbaru belum layak disebut stabil atau siap rilis.
+
+Ada kemajuan besar di sisi fitur dan arsitektur, tetapi integrasi beberapa bagian mengalami masalah yang sekarang terlihat langsung di CI.
+
+### Status keseluruhan
+
+Fondasi arsitektur
+
+Kuat
+
+Implementasi fitur
+
+Luas
+
+Integrasi source code
+
+Ada blocker
+
+CI commit terbaru
+
+Gagal
+
+Kesiapan rilis
+
+Belum siap
+
+Penilaian tahap: Feature-rich engineering alpha, belum release candidate.
+
+### 1\. Kondisi repository dan branch
+
+Repository: [budapesservices-dotcom/folio-studio](https://github.com/budapesservices-dotcom/folio-studio?utm_source=chatgpt.com)
+
+Branch default saat audit
+
+codex/pr1-main-reconciliation-20261122
+
+HEAD: 093d3604a45284c8b68cd1c9ac9774f278514c91
+
+### 494
+
+Commit di depan `main`
+
+### 0
+
+Commit di belakang `main`
+
+Perbandingan terhadap main pada saat audit. PR #17 masih draft dan belum di-merge.
+
+Ini perlu diperhatikan. Branch yang menjadi default repository sekarang merupakan kandidat konsolidasi yang Pull Request-nya masih terbuka.
+
+PR yang aktif:
+
+| PR                                   | Status         | Temuan                          |
+| ------------------------------------ | -------------- | ------------------------------- |
+| #17 — Reconciliation                 | Draft, terbuka | Kandidat konsolidasi utama      |
+| #18 — Architecture & Node Logic docs | Draft, terbuka | mergeable: false saat diperiksa |
+
+Risiko: jangan menganggap branch default ini sudah setara dengan `main` yang stabil. Perlu keputusan jelas apakah branch tersebut memang sengaja menjadi basis development sementara atau seharusnya `main` tetap menjadi baseline stabil.
+
+PR #18 juga perlu direbase atau diselesaikan konfliknya sebelum diintegrasikan.
+
+### 2\. Audit fondasi arsitektur
+
+Aku justru melihat bagian ini sebagai salah satu pencapaian terbesar Folio.
+
+Source code sudah terorganisasi dalam sejumlah lapisan dengan tanggung jawab yang cukup jelas.
+
+### Peta arsitektur Folio
+
+CORE — Unified Project Model
+
+AST, document, project, validation, migration, stable IDs, Native Commands, persistence, asset storage.
+
+Canvas Engine
+
+SVG, vector, selection, geometry, drawing tools, GPU viewport.
+
+Layout Engine
+
+Flex, Grid, responsive layout, sizing, constraints.
+
+Node Logic Engine
+
+Graph, typed wires, variables, pipeline, runtime, frames.
+
+Motion Engine
+
+Keyframes, easing, interpolation, playback, CSS animation.
+
+Code Generation
+
+HTML, CSS, React TSX, preview, mapping, ZIP export.
+
+Diagnostics & History
+
+Project health, profiling, accessibility, delta history.
+
+APPLICATION & WORKSPACE
+
+Main Canvas, Component Canvas, Pages Rack, Component Rack, Layers, Inspector, Node Logic Workspace, Code Workspace, Motion Timeline, Floating Windows.
+
+Penilaian arsitektur: arahnya konsisten dengan keputusan Native Engine First dan Unified Project Model. Mesin-mesin utama tidak semuanya dibangun sebagai fitur UI yang berdiri sendiri.
+
+Hal penting yang sudah ada:
+
+* `src/core/document/ast.ts` untuk representasi dokumen dan identitas node.
+
+* `src/core/commands/` untuk kontrak Native Commands.
+
+* `src/app/nativeCommandExecutor.ts` untuk jalur mutasi terkontrol.
+
+* `src/app/editorStore.ts` untuk canonical editor state.
+
+* `src/engines/history/` untuk structural delta history.
+
+* `src/core/persistence/` untuk IndexedDB, `.flop`, dan asset portability.
+
+Ini fondasi yang tepat untuk software visual-development jangka panjang.
+
+### 3\. Audit fitur yang sudah diimplementasikan
+
+Berikut pemisahan fitur yang benar-benar terlihat dalam repository dengan fitur yang masih membutuhkan pengembangan.
+
+### A. Canvas & Visual Studio
+
+Implementasi luas
+
+![Mac Best Vector Graphic Apps | Amadine Useful Articles](https://images.openai.com/static-rsc-4/ZkoZZcp3TwEQixduGOgwW6fUIG1AoK4iehpFt4nMmsSVj-Iru08vuQAYLTBr9MUkjrRLk8ZIujoddBqo1ebKaE99fbtCZtZgsijoyPj2trB1h7PVbDm-FEFJniW1Tls15-pLcXUloN147x-3qryRVdWj2PPQZ1Y11iynvSG4mBlP2ymAtr88_uk6MUtfSvSp?purpose=fullsize)
+
+![Expressive Canvas - Vector graphics editor](https://images.openai.com/static-rsc-4/kgrIj7kHgwOFi3ANK67Oxjw9oruLyDd-N_MsorKqVlCB3ANe63lY65rHmy1D9WWlVlmFIduOzOyLdKYIgT0ep6-PIy_cwOKBh8e5jI8HMMbJe8A0uVe5Rcz4959KUQr9nbPdvEmV5MRvO1OYFarbwdAAK-kRPEhUDBGrCUKQ-4ZM4z5wVZ-ia3gvuZ4E2vik?purpose=fullsize)
+
+![Benjamin De Cock | Dribbble](https://images.openai.com/static-rsc-4/B_GRSWbMH5cZuHWH0T1W0bRbJWdoGt57lOE2ktAMJWb6tygTiurjrquCzfzuY_f5nRl8g-Ob2TanUb3cMaKWlvwv1MDN8RnqlLCii94sEWSj2d1qcfMItgCnoxs2dzchu-fNr68q_DmuDRtiQCzhgHfWJmdfWO6dDJuyiqP-SGWxbgmpdDmuDqQCu0WT7UxN?purpose=fullsize)
+
+![Master the Pen Tool in Your Coffee Break | Envato Tuts+](https://images.openai.com/static-rsc-4/D1oU5IWiVXw2ESm10Y-I9w_1pjPGnrAd1oVS_G0EDYq2yQ_VNWuGrsWyLSVofbr6RVvbWoZgdHf2BYBt20wCZSmRjMjALgBB89sjtnV6lK-G_PZ96jE2pdUarbCcrvD82u6xZErOh2JT29QVhcCPCTwM9d2mGiwwJ9z1MzZWRhORoFNyYDVIKnnz53HWRiIf?purpose=fullsize)
+
+![Fill and Stroke - Rive](https://images.openai.com/static-rsc-4/GCNgu57-W5wJIF9atJXvybAwhWCUusWuui2zgNHE3a9RDFcHt7OxYtLoJvm4EXZrRCcJ7Nrwq5PIRvDzIKM2OBkhJsNTEK3dre2ebbQznX2gVicA9HjT-tBwBnPJIagT4wgaqr2EpWow1VJ6H4Z3OtFrAWyEUWDg80jBWgnQcn2oks3tHnssKesyOT8BevDH?purpose=fullsize)
+
+![The Sketch Design Tool - UI Design for iOS, Android and Web in Sketch - Design+Code](https://images.openai.com/static-rsc-4/Hb_jCLX5Puqqsh9llSlwqJGfDdSxGPmDicfK0nsaU8a_8IyJraKOFa56gzuCpi9PTkGioVnpzYFa91xBReN5tHcrnSs9tMZcrtShVx45jXRNmuZ-wQ0EmB4JklmtItgIX1R9OgWJXKRE71IJfQxfsE4Ho9toTZcSWg7QdYLQCqkzSDRw4FuL5Yxj8efNjVIv?purpose=fullsize)
+
+![检查器 (Inspector) - Rive 编辑器 | Rive 中文文档](https://images.openai.com/static-rsc-4/tt006YUv7XS2BfNE05Oq5UNfbBII15MAv9Bg-Ul-EugMm5ctcdS9I6fZ3Uu5MF2ASHuyj2rE53rTflSiLCOj1MLnbTu4VTsNYeybEt_6Q_s6xU8ngvhc5Wswi1qix1l7NWw1EtSvbA1vONP9sRsesUGL8ul44XCUzUyRy0sedalYmmbhJXGs7ybMnl6OExdF?purpose=fullsize)
+
+![29 InVision Alternatives and Competitors in 2026 | Progsoft](https://images.openai.com/static-rsc-4/5Uj5EZXxgah8SjcEBPEx7z287qfEQLfFnN8ny5cx4M4eYZORKupRHvdKT3BzFAHALF_FdSnV6vnJxWENiHObbg87jY_xbB-4Vi-iDXtbn7fobj5l_jRcFjHPaUeA1iTWj8ytuNJg9yVgCspRJh9USc2OeZvlZFuywFX3L28i7VaZ5EWEz7Vzde-VmIOF61rI?purpose=fullsize)
+
+![Shape builder vs pathfinder](https://images.openai.com/static-rsc-4/UwKDmGMUBSOnknnPBTH5TQkJZS0srGnQ4hyEcVOav6bwnYpcSRGR6fXvMW2gFSk7h3TeLSmVGXqUUjqcTf8CsD8Jok84Z2cfM8CCqcTTcVKu-qpz-DepXHsjQ1s857vw_4Cc-jqj_xV2-29DUe3FMst7mNTfDJ238SQ7rdZhppNR2GrS0OdpP2TuoREXMUlA?purpose=fullsize)
+
+![Framer: AI website builder for professional sites](https://images.openai.com/static-rsc-4/gsj7LOUHecNSzSp8Y8TuFFHlI7rPh-bl6r5RIj2TH1nqC6UNmwCgFsrRT0lhgmSA0piOp0KbnJcoYHLb3JSoedEXWIbih1wllWrJdnHKKsRbMzcfIZwRjk1mNr4yFFacINh-Ftkm6DXOd5RFZT9eVtwiI92jwyMNCkjCQGVa1Tm661XnHlyifIU9USOyiRsF?purpose=fullsize)
+
+![Illustratorで作る力強い和風デザイン：勢いのある毛筆作字【100日チャレンジ DAY98】｜39](https://images.openai.com/static-rsc-4/KWlkYuMuAygJmJ3ffMELWdRrP88O03xMGg74rFbDNFiiIFwgtTmSCeiRECFdl-SxOkCNsPr-190w3YdoUC9qOo02tetPyBTS_kWVNvukcLJ5b9AwfB5NEURWGPB7a9ya1MisNbhXRx8BSHlfxiq7MWNRRtunT8q7j4VBe93EggFWVICbZmHxE1Pr9Dcee1Uk?purpose=fullsize)
+
+![Appear, Hover, Press, Loop and Drag Effects - Master No-Code Web Design with Framer - Design+Code](https://images.openai.com/static-rsc-4/75moB5ovch66JPzAWXmWAksmkJk2x0VY18Bogssky00lWsITl2fm9RnUCyYC-lL1-4G8qKktm8PczgLFOWEDCwmLd0ikSR6upAbHZ7WJ88rHgFw4tRS65jPkY43RDbwehQLV7qD-mKgMwfgg_42fiCVl2K2yMFLkt6DP2CpGD2uzD0HxTfbmm6YzckbuleqA?purpose=fullsize)
+
+![Four AI-UI tools that earned their place in my stack | by Legend Macaulay | Bootcamp | Feb, 2026 | Medium](https://images.openai.com/static-rsc-4/GynotFl3FFewNETIV4QJWS98V5SoqKXxdipUOzEEV8NENlZdVTQkqvnsZsfG4UNRzC3689EIwK9924ExSLON8qSYr8FjpQ2bg29quLKdCCumCYNjuNATwfS-Ih4GyoyljhmLDxVzJTtIJQfydAOrwUQXB5pzCTsnzax76znAs2bSTwKlETzy1x3LEF3h54CP?purpose=fullsize)
+
+Fitur yang sudah ada di codebase:
+
+* Main Canvas dan Component Canvas.
+
+* Mode `PAGE` dan `VECTOR`.
+
+* Tool registry dengan 29 tools.
+
+* Selection, multi-selection, transform, resize, rotate.
+
+* Pan, zoom, snapping, alignment, distribution.
+
+* Vector path dan cubic Bezier.
+
+* Pathfinder dan planar boolean operations.
+
+* Brush, eraser, paint bucket, eyedropper.
+
+* Lasso, magic wand, shape builder.
+
+* Layer management, visibility, lock dan operasi hierarki.
+
+Catatan: keberadaan tool dalam source tidak otomatis membuktikan semua interaksi sudah lolos pengujian end-to-end. Masih perlu validasi browser untuk tiap workflow penting.
+
+### B. Component System
+
+Fondasi sudah ada
+
+Sudah tersedia struktur:
+
+* Component Definition.
+
+* Component Instance.
+
+* Instance Overrides.
+
+* Variants.
+
+* Slots.
+
+* Design Tokens.
+
+* Component Master editing.
+
+* Main Canvas ↔ Component Canvas synchronization.
+
+* Component deletion dan recovery.
+
+* Nested component instances dengan perlindungan siklus.
+
+Salah satu hal yang bagus adalah sistem sinkronisasi menggunakan revision/CAS guard untuk menghindari perubahan master yang tertimpa secara tidak aman.
+
+Ini jauh lebih serius daripada sekadar fitur duplicate dan group.
+
+### C. Layout & Responsive Engine
+
+Implementasi ada, integrasi bermasalah
+
+Sudah ditemukan:
+
+* Flex Layout.
+
+* Grid Layout.
+
+* Fixed, Hug, Fill, Relative sizing.
+
+* Positioning constraints.
+
+* Gap dan padding.
+
+* Responsive breakpoint Desktop, Tablet, Mobile.
+
+* Grid template dan auto-fit.
+
+* Inspector layout controls.
+
+Namun justru bagian frame/layout yang baru diperluas menjadi salah satu sumber kegagalan TypeScript terbaru. Jadi fitur ini sudah punya fondasi, tetapi implementasi UI-nya belum sinkron dengan model kontraknya.
+
+### D. Node Logic Engine
+
+Mesin inti sudah berkembang jauh
+
+Ini bagian yang penting untuk eksperimen toggle yang sedang kita bahas.
+
+![Panels | Learn | TikTok Effect House](https://images.openai.com/static-rsc-4/VT-D_M7_FccMQUW4ZM19dGOMnCItRh92naaK6bxpCYvo6vjsMr1zA1xNlho5sjdHNMt1AxVz0LVMZ5x1Kkjn8hDw-3NNhDB2LPU9AhGmRe0Ox4sNZ-du04QrFPLBlKaOAfis6TmF0DJRALBmF7GJ-wUuyBoKA3Fy3gd6f7hVNsqCo4GUVJmO3-t4Hx0vgCGJ?purpose=fullsize)
+
+![Origami Studio — Create a Component](https://images.openai.com/static-rsc-4/1rFtBeZ6zopG8DJk-b3DHAzH9E6TkMDVOCijgS9xdWVgwO9HCjCXatdXk1MYUi4H5H5SFkK09A6WRAcz8pYq6_lMhaZgZm7_6gE12Sb2dHWuM7b-Z6fhiTNWYRaPYhd1cX1mYOt-hGw7lwH2GMgYF-2EGmbt2R3jKVz-FtQnrNhCeNS7W0IDmKEs6QhaiPcL?purpose=fullsize)
+
+![Connections | Flow-Like Docs](https://images.openai.com/static-rsc-4/iPqwFnnSpZWnPedgzCtejaNvGlkEIUVOVxE7TcANN6g-eO4GabYbPYus8LsJ9c-dqzIMxeTdR2dyti-ev121LimcJdQv7451hOyiC7KRniA2htdgLAyan5UuMI-SttqYEtbYcl4nB1JW5Oc8lvYBzRM_pDd7DUIB0dyo1hnStR6JiJW-GChc41__xdqU4Zvj?purpose=fullsize)
+
+![Kasper Andersson Brandt](https://images.openai.com/static-rsc-4/OZxdYFU5ReIH7ZTe9blf8gPSCLGZ-uH2ttOiSUqO6EmHJBJODGhQb0NmGUbjkROl-LaXtOoUoh7YRR9gpa4WMDU4BlOxC96m4JTpHrDgPPFzuc9xOl2glvxaXI339B8hwz2fkEA8U7Y2KZFK_QLFVOMh84IByUPTQAfhM_YMGbQk8SqzpFxQo1DivGHShsmu?purpose=fullsize)
+
+![ライブ編集 | Visual Scripting | 1.8.0-pre.1](https://images.openai.com/static-rsc-4/RJK8JHt5w0lbxIVmjdDtKRRtkcUFH16kmI03IJdcVswg3kv_trxM7cx_eWgq6c2xr2e_BZqFTS4xRn0XafvdmUcaa5dbd2lJy4EO-gq93Sd69HqnZXLv-ihuStVPwYxn_ncry4xCVwhtyD2ZcJq7f6-gGhSD3IepmtYmCNGDLeNNizEWgzDunbaCLpYkmvbR?purpose=fullsize)
+
+![Blazium Games](https://images.openai.com/static-rsc-4/eUR4Fb_BQbDisVprlkGNqzJzvuo6Rc8ikWzXKu0Ejl4Y5L4F90M1geZcf4RDBbnA679ki5uewa6iIhUMr_E7a2fOsf2FFoZk42W_cZoSFxQypEXXs_4AXsgd6iOCk5Y2ZiMMuzO77Qq7uRMfpZKU_C_YH_n_Y0PC6OXgPWcQqRpfJ_TuceKj9x1Gl58TfrjH?purpose=fullsize)
+
+![Sceneri | Deku Deals](https://images.openai.com/static-rsc-4/lc1AI4SvjfUEDS9nld8cL1JruHBQeysTBz4Z3fButchnPqRGynhYSzQfUGD3FHXGGvccTmibAdZqmQalFbxN1d60H7_8ecalB0YV9Q7eEtnnNQFBNRJxVkqc-T7P2lkOULqek6Wx13md5ckdGWfxENSMZfg1JZKhNnHaudniz_6U8AKa5sPzZHZV5uTpcPyM?purpose=fullsize)
+
+![Runtime Blueprint Editor for UE5 - Custom Blueprint System | Fab](https://images.openai.com/static-rsc-4/5XyDiBQyiXZnzKl27DbFLTpD58aiNmp1UQBnANwauGUpxdJxrBHeLH8NiKUU4AAI51y0k-z-DwN23YZbIXrAiM89xtnkzVn7gNy6Ky8V7NIfjsm-znrpYzUz1IQa4m1DfpBTM2T8AjLHxoMdd4NTcue3YccF1WHkAdIp_ZMt4BFS4_dNumOL-HlXZOhSvTBj?purpose=fullsize)
+
+![Collider Toggles with ... | VRCLibrary](https://images.openai.com/static-rsc-4/irYwzmmrHt0XKH7FiacDeFkV2snD3TQGcSPE3gizKihnCj-JqmVIjw3iViwQuH9L0Ggd_U0I7UQG-rftGSfeuJ_9jqAMztiR_1hGCyzyUT3a0-7d46vN21MAx_4610mDqATcqIJErWDcjxSrpbZtjNGzuZSBB-qD_MPJSFXM5nmTT6Ik5Xpih_2-3hlDkC43?purpose=fullsize)
+
+![Orchestrator: Unleashing Creativity with Visual Scripting - Godot Asset Library](https://images.openai.com/static-rsc-4/Jr63WrnhKeH9LMQRl5ykLti6jFvmbxm6gT9IBE6Tvl6mJgv_MJfvDxF6KEvr3PBtOTWMXb3iyuuWoqYh6ongn4PsoIB8IwVFYoae7YzmLk4NiY2iNOtmI1SNPKVhyeG_b9AR4xxAdj75Fy6lQjwf43vHgohb9FCaChlHLOJFRnNUjWixW_ZQTURdEgwjEhzG?purpose=fullsize)
+
+![IgorBox - Connected Control for Your Entire Show](https://images.openai.com/static-rsc-4/lSYWfn-3ZMYFvrDkPHW5JKyKdui1Qd7DIVm-I88i8b36oDf0pKdwgcejVnX9PyVIcgPXqPNXUl6MHvNq1bYTvzhoWsBUwaru5wVd7YKrnCWs74-LjgH5bK_o0x3JWWmP2K2krXplq3Fc4xMd9V7XpQv_K-2oY6oh5T_zf0sqomR5c33UlMExgIMPU5oQ2o-b?purpose=fullsize)
+
+![Flow-Like — Automatización con Control Total](https://images.openai.com/static-rsc-4/me1g75-1hfG6E0oO5icir6Lx8mJcJiFChu1k-Oy4yR-E3fmDke5OGKHZegMZM_R4OMFoHRvBI28bYJQSIgDUeJmcox0YA-icny6j0pEXHAjerzzO5MdgYaNlEqowQGBwMq7pwtEpm_HCjFCoVATzFxKL87Kf2WSq-kZ2H1L7UQkBEF1D8SsI0aT-td5nV5b6?purpose=fullsize)
+
+![グラフ | Visual Scripting | 1.8.0-pre.1](https://images.openai.com/static-rsc-4/9lx5Akg9MC628dpfdkso8irPnTBXdmRBpIw6gThAKAMJdATZfs2SLdJTBbyHHzDqAdmtdlq6LJHwwDyuxl-1uhHIe48RZH7BVFINKxv3Qf3nElKbiwN0HpHweTwyQOwhrwHpLU_h4nPFmRDmd0Jj7ujnxPMMbw1zveXaJ4MRC4ah4MMjux11byv-AW5MToVA?purpose=fullsize)
+
+![This engineering sandbox is already so complex you can build games inside its demo | PC Gamer](https://images.openai.com/static-rsc-4/MXO-REgSwsQaAIrCOQFKc1FJNymtaXAuXxqPt0VQowDP1USXbZZ9-NWvO5DxuHxBUoEADgaQ3V_liEJ-nlXgdMKkXOkAcVRBJxLnzunN1zhG2uLaV5glC9Lr-PAG6PvlUDkJQoHfbzh-sQyHjGX1RAm3wEEqNCUxBAOQ1ROG-8VZsQQ7-0C72D3LqMvEod5U?purpose=fullsize)
+
+![Dash - World Building Plugin for UE5](https://images.openai.com/static-rsc-4/I0-a5eFaN9tO_Z_HcYfBi_wOs2S1V-1PR5IjdaWvj9m8wdn8kWrZpEFN41DCCWCA1BqnlebSIZP3WbMq-7gDJ_mGR57sA1ukBEfw-4Zd4lPkKfBrUvsKEudPtvxAzdXmGjac9z42hPqnlFqD4Rg79ZRtixl2KYjM3eYVir8WWpvhwB1eex_K0LwsPyR4h0iT?purpose=fullsize)
+
+![CanvasMind v0.4.0 | CanvasMind](https://images.openai.com/static-rsc-4/Gpd_W9hOZHjZ4eACPjGl28i5UcvnwM7l4I8akPA1ySC03alT4yDxsAijp6qtlN5xFV-tKpngLNmeeFD21IOKDeCdYiFiFMl3iHrxtS6fFFWxrJZWkXAi5qkGlRQ8VPjpPyW7MiGap102oKQIdjMJOecrVJ76FpNtf3rVKfHJiYVXbx12NWj4VqB2up1yypKd?purpose=fullsize)
+
+![Clicker Game Template- Godot 4.2 Visual Scripting by Visual Coding Hub](https://images.openai.com/static-rsc-4/L3z6WldiCits5n4dnkYZRGq4snKpD2kJjilsl9PgR4lcBHLAd2O96QJrjq3KNv67wx5EbEfbejFLtjCUkRI4IPt-RgPCXGHmTMlYhxMh_e-98XinZny7TgDORxEaUx0AyuTF9xyzu4gce3QGrRhbhR-WsX4E2SltfaDzIKUB4OZgRh4-9vwjkdu1CALUhHF1?purpose=fullsize)
+
+Kondisi katalog saat ini:
+
+### 31
+
+Node utama
+
+7 kategori
+
+### 13
+
+Legacy nodes
+
+Untuk kompatibilitas proyek lama
+
+Dukungan 31 node utama lintas runtime
+
+Penuh di tiga runtime
+
+26 node
+
+Parsial / simulasi pada sebagian runtime
+
+2 node
+
+Simulasi di seluruh runtime
+
+3 node
+
+Angka berasal dari NODE_RUNTIME_PARITY_MATRIX di source, bukan hitungan node yang sekadar muncul di palette.
+
+Node Logic sudah memiliki:
+
+* Execution Wire dan Data Wire.
+
+* Port dengan tipe data.
+
+* Event, State, Logic, Action, Flow, Network.
+
+* Pipeline dan upstream data reference.
+
+* Target reference / Inherit from Pipeline.
+
+* Graph validation.
+
+* Dataflow cycle validation.
+
+* Component-scoped logic.
+
+* Isolasi state per instance/target.
+
+* Smart Logic Frames.
+
+* Bake dan Unbake.
+
+* Preset.
+
+* Native Command integration dan Undo/Redo.
+
+* Headless Prototype Runtime.
+
+* Live Preview runtime.
+
+* React code-generation bridge.
+
+* Inspector empat tab: Node, Variables, Simulate, Network.
+
+* Quick Interaction integration dari Inspector.
+
+Tetapi ada batas yang wajib dipahami:
+
+| Kemampuan         | Status                              |
+| ----------------- | ----------------------------------- |
+| 26 node utama     | Dukungan penuh lintas tiga runtime  |
+| flow.delay        | Simulasi pada headless dan React    |
+| flow.loop-timer   | Sebagian perilakunya masih simulasi |
+| source.external   | Simulasi                            |
+| network.http      | Simulasi, belum HTTP backend nyata  |
+| network.socket    | Simulasi, belum WebSocket nyata     |
+| variable.persist  | Metadata, belum dieksekusi          |
+| variable.computed | Metadata, belum dieksekusi          |
+
+Runtime headless juga memiliki batas eksekusi 256 langkah secara default dan hard cap 1.024 langkah.
+
+Jadi, Folio sudah memiliki mesin visual logic yang serius. Namun 31 node bukan berarti 31 node sudah sepenuhnya menjadi kemampuan produksi.
+
+Untuk eksperimen toggle tema, fondasi yang relevan sudah ada: `state.toggle`, `action.system-form`, serta integrasi Quick Interaction. Kita tidak perlu membuat engine baru untuk fitur sederhana itu.
+
+### E. Motion & Animation Engine
+
+Fondasi tersedia
+
+![Motion Tool Timeline Editor by Yasir Ekinci on Dribbble](https://images.openai.com/static-rsc-4/vH0VovemUMNf0UpSTfre3NGKVHvItYf89Kqfe4nBRREsmJWtVffgbrapQvkAuYDCOyiIbY9yoENCc49uxeLgkjidoGgm4_xmIUHPlH4fkb16Lp9Bdr1b3aXsNHWcR9e3sAhyyYr1QwYrT_8qCIbgZfJeYiXXR0b3zLBTT0g92hcpcixdnBy1nDRPjAxlygWW?purpose=fullsize)
+
+![Timeline Graph Editor by Guido Rosso for Rive on Dribbble](https://images.openai.com/static-rsc-4/VZ5Orf-iniTDCkM-9oMq4rJ4JSURQWeVyGsPrQlog2Q-PO4znucnLjo-vzERwUNLeIjJZD7s_SQcQpoWnbFOs3CXoDdgQTjemBTnIJMxYb2eW6aR8shw2DovjvQd46tuEfjgSdghYOg28isXnB8pQG3JVtaxh-6A5-0r8ZMlMG2xaYR1pQhTcgtFlpcfOcsj?purpose=fullsize)
+
+![Lottie Creator - Professional motion design for the web](https://images.openai.com/static-rsc-4/ahcS1BxdoFUnLVLn8OQIJCJJKkOjkG-01pBOS5i7ep7kJPVwH70CWE3HZL8ygbojZBc2tDVEXr6SCA_Wo2yoySZ-gReGr9avXfPW4zdRHvrthQ868UCZR7zX3szylAlq-KavHwQFkDS84UxPu3GTkI-rA0o-P1e3g50j-LZuZUYIBjC1niHg6qaRb98JIiBY?purpose=fullsize)
+
+![](https://images.openai.com/static-rsc-4/QK_CYShQgxxLR0HVQb8BN-3cVQw_JW4wSXjBa51cDxBB5hlWTofNNZgYgZTVkpujdczabWWu810RdFoRac9Ru45w8o5KkCEC-upefN0zN884yW68beILIJ_HKg5D3X6lzB3yjhp7oG2lxUX92qvguIplBj61kydPocGQubmyJiKEVphhhjVNJ8K-mon1C7p6?purpose=fullsize)
+
+![Rive App - Awwwards](https://images.openai.com/static-rsc-4/-coYhG8SQ3mRoEAz1d9f6Cnk2j366-nqmcDNj2ju29UNuaja9p2aM7XoCKoQmfqxW-sE4uFp8YPVcmW11HLy98o4gtGsCxmL-pq1fjbVTYhAO_2F4uEW-zkCw2dkqNtejHzXY3vUcHMwcAyWdrUu3e0l-kL9bllICXrckFVP02JmRBDl_khOqiN51tG96m8W?purpose=fullsize)
+
+![Graph Editor | Cavalry](https://images.openai.com/static-rsc-4/OI5ayrGcdFWU3yKs7IplsKcdnJSorQh82gkPs3rXclS29dEUs66KtssHGmOsDAI82TK5sOyi0LdjWdZ8Cb_s_OtR_mzzWrVBfE6F8IbXmJpcNMTRqiyn-S7P-Rs0LVoCiHpNtk9GIdBc2_NyLGk4zhYhk1zYi8TjzobiWKtzPyrv_yaXn4sZEMXPKfsb8aec?purpose=fullsize)
+
+![Canva Video 2022 | TechRadar](https://images.openai.com/static-rsc-4/reMthnKORvApw42F7rPOacNU51eWZfwO9WwoCceBF2GFCA7ugFaltCS4j3Dd52jidThsv-DjL3qUP0kyfvT6hWqXnFgO6dwHNrjhRMLYeJb395ByTAdr8zZAogwGTUt7M--teY2VRlNGns4S0OyPfcqT2Z7kLeHKRSG3wkDotD1-WF_yjIAtMdbhuhymtgRZ?purpose=fullsize)
+
+![Improve the animation Bezier editor · Issue #3141 · godotengine/godot-proposals · GitHub](https://images.openai.com/static-rsc-4/SSMP8z8JNWmMXKIOldHi8nfVDV2NbCtN0Z_rVnWy70CaEf0jasLxjrfgzFhatSxJGE8QTMXje-CGzR7qB2pkik8PY6cE8elISggwkZ7sD_eUpIu1wEm5dNRmvbltxDbKuuoX6VIpFHwSSmkIjPqa6aHi-UFJOEEHReb6YGK08zAt4L0CX0afS_3XhA48XGrj?purpose=fullsize)
+
+![Move Anchor Point 4 | After Effects Extension](https://images.openai.com/static-rsc-4/o3I_KhZY50AeeIsADFVNjK_C293G-K7zWRQOQ-mf08at8Y90PSg4w3YfemMdJ6twLNbUmbyx4uokBNitXHhM6Qwak2JFfVKLxKpci7surZwvUtjyjIUcgjGUufff2zJF-8BWuZ7RZd4U8d0l06QXp_LUFLX6mmv43MDn4Xd6ZIcEnh_PpuZFyJY9rzSPFfyc?purpose=fullsize)
+
+![高度なインタラクティブUIを作れるツール「Rive」を使ってみた｜SIFCA](https://images.openai.com/static-rsc-4/aG2OX4YzUZPtHsQEz4vIvJQUYREsCBMlclX2xuzmqL8nC9zPXqQPL4ClWg2rSQmtLkAjkFUhGigNFg3elhDlUW0T1gKSYOIOPZvqK0IigYFNl6kq6X-deO9h9xgZcdeSopJUFDMmosgWQ6_Mr1ny1oJGJ9_WGK66kD4t6sMoj08hIV2-eGAuJe3QxwmAnwLz?purpose=fullsize)
+
+![Media Kit](https://images.openai.com/static-rsc-4/q33y1l2Rg61Alk5McoQHz8gw1MPWxRe6aLc3MpcT6gIJ7Mfb3LJRpbIkB_h3HcqPzxlgx4jYc2GEWyStUm0ZHXHUhHYXl24pDKHzUZ_eVyECgPRUmpDt_QzymWsE1agXd8tAtLX_wR8ILK2uK8m3MNLdjh3sWh4keYHlxYvw5LYO4_UK4W1NlWkHqgn8ZeGA?purpose=fullsize)
+
+![windows - What tools yould you use to create animation for Youtube posts/videos like ByteByteGo? - Software Recommendations Stack Exchange](https://images.openai.com/static-rsc-4/pYJJy6OOEQzzXHGVx23-gAnL9gcKfcBkjtnuyw-5vEsqAJx6vCMnPoL0wBuIyBKjtQPKzQAbSxjfbJKird5exuf4X2OhGHJF5Kov8tw4YOTiW5Oo8u1YNxhDnN3R3vFgOJNTHF_MfpoijbpyR7lVR5AWmhtq-x9Ofp788QX-8Nbjn1gKM4-A-HzBzRITLUZm?purpose=fullsize)
+
+![2D Animation](https://images.openai.com/static-rsc-4/cEYb_zdNN2sC7WjS7wHm6N-VS7cWH2U7kW5e1r1BDEcKuN2xKaiCdcdT-vbo2CfYAa6hMWeTt_QRaFZiK-djxNUuh0NvqRY4YdWXvO-148qWjqfUvSORTVGpxvIM0ouBSBZSyts5EbjiEeGtnwly6FeqoJJxDDMbnG7ohQsF6TthtE32er3OlRE2sNryRbgk?purpose=fullsize)
+
+Sudah ada:
+
+* Animation Clip.
+
+* Animation Track.
+
+* Keyframe.
+
+* Cubic Bezier easing.
+
+* Spring easing.
+
+* Property interpolation.
+
+* Auto Key bridge.
+
+* Main Canvas playback.
+
+* Motion Timeline Studio.
+
+* CSS `@keyframes` generation.
+
+* `prefers-reduced-motion` support.
+
+* Node Logic animation triggers.
+
+Catatan: kemampuan animasi yang dapat diedit di editor dan kemampuan animasi yang dapat diekspor harus tetap diuji terpisah.
+
+### F. Code Studio & Export
+
+Implementasi nyata
+
+Fitur yang sudah ditemukan:
+
+* HTML/CSS compiler.
+
+* React TSX compiler.
+
+* Live Preview.
+
+* Code mapping.
+
+* Generated / Mapped / Custom / Extension categories.
+
+* Multi-file project export.
+
+* ZIP bundling.
+
+* Binary asset packaging.
+
+Batasannya: Folio belum mendukung round-trip visual penuh untuk sembarang source code eksternal. Custom code dan extension dapat dipertahankan, tetapi bukan berarti semuanya dapat diedit kembali lewat Canvas.
+
+### G. Persistence, `.flop`, dan Asset System
+
+Fondasi penting sudah tersedia
+
+| Bagian                   | Implementasi          |
+| ------------------------ | --------------------- |
+| Project format           | .flop v2              |
+| Format internal          | UTF-8 JSON            |
+| Local persistence        | IndexedDB             |
+| Migration                | v1 → v2               |
+| Validasi project         | Ada                   |
+| Asset storage            | SHA-256 deduplication |
+| Image per-file limit     | 10 MiB                |
+| Portable .flop limit     | 25 MiB                |
+| Asset portability checks | Ada                   |
+| Secret sanitization      | Ada                   |
+
+Sistem asset sudah punya sanitasi SVG dan penyimpanan terpisah untuk binary blobs. Ini penting untuk menjaga project file tetap ringan dan tidak membengkak tanpa kendali.
+
+Perlu diingat: `.flop` saat ini belum berupa ZIP project container. Yang ada adalah format JSON berversi dengan pengelolaan aset terintegrasi.
+
+### H. GPU, WASM, dan Performance
+
+Hybrid, belum seluruh engine dipercepat
+
+Sudah ada:
+
+* GPU viewport renderer.
+
+* WebGPU / WGSL.
+
+* WebGL2 fallback.
+
+* Canvas2D fallback.
+
+* Spatial indexing.
+
+* WASM spatial kernel.
+
+* Compute Web Worker.
+
+* Incremental project validation.
+
+* Delta History.
+
+* Benchmark suite.
+
+* Viewport culling.
+
+Namun jangan menganggap seluruh kalkulasi Folio sudah berjalan di GPU/WASM. Dari registry kernel yang diperiksa, spatial kernel dapat menggunakan WASM; beberapa kernel vector, layout, dan accessibility masih menggunakan implementasi TypeScript default.
+
+Untuk visi Folio yang ingin berjalan pada perangkat terbatas, ini arah yang bagus. Tetapi benchmark otomatis belum menggantikan pengujian nyata di laptop berspesifikasi rendah.
+
+### 4\. Temuan kritis: CI terbaru gagal
+
+P0 — harus dibereskan sebelum menambah fitur
+
+Ini temuan paling penting dari audit.
+
+GitHub Actions — FOLIO verification
+
+### FAILED
+
+Run #45560283768 · Commit 093d360 · 25 November 2026
+
+Install dependencies
+
+PASS
+
+Type-check
+
+FAIL
+
+Run tests
+
+SKIPPED
+
+Production build
+
+SKIPPED
+
+[Lihat hasil CI dan log lengkap](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/45560283768?utm_source=chatgpt.com)
+
+### Akar masalah yang ditemukan
+
+1\. `InspectorPanel.tsx` tidak cocok dengan kontrak core terbaru.
+
+Beberapa contoh:
+
+* Mengimpor `TextDecorationMode` dan `TextTransformMode` yang tidak tersedia.
+
+* Mengakses `onFlipHorizontal` dan `onFlipVertical` yang tidak ada dalam `StudioVectorActions`.
+
+* Menggunakan `align` pada tipe style yang tidak menyediakan properti tersebut.
+
+* Memakai `direct-select` yang bukan bagian dari `StudioCanvasToolId`.
+
+* Menggunakan konfigurasi transition yang tidak sesuai dengan `NodeTransitionConfig`.
+
+Source: [InspectorPanel.tsx](https://github.com/budapesservices-dotcom/folio-studio/blob/codex/pr1-main-reconciliation-20261122/src/app/InspectorPanel.tsx?utm_source=chatgpt.com).
+
+2\. `InspectorFrameLayoutSection.tsx` belum sinkron dengan model layout.
+
+Temuannya meliputi:
+
+* `NodeCursor`, `NodePointerEvents`, dan `NodeUserSelect` tidak ditemukan.
+
+* `gridMinColumnWidthUnit` tidak ada di `NodeLayoutConfig`.
+
+* Nilai angka diberikan pada properti bertipe `CssLengthValue`.
+
+* Beberapa object update tidak sesuai dengan `Partial<NodeLayoutConfig>`.
+
+Source: [InspectorFrameLayoutSection.tsx](https://github.com/budapesservices-dotcom/folio-studio/blob/codex/pr1-main-reconciliation-20261122/src/app/workspace/InspectorFrameLayoutSection.tsx?utm_source=chatgpt.com).
+
+3\. Test `dualModeFrameAndWebInspector.test.tsx` menggunakan API lama.
+
+Contoh ketidaksesuaian:
+
+* Memanggil `compileLivePreviewHtml`, padahal API yang tersedia adalah `buildLivePreviewHtml`.
+
+* Mengakses `CanonicalEditorStore.getState()`, padahal kontraknya menggunakan `getSnapshot()`.
+
+* Mengharapkan field `nextLayout`, `orderedChildIds`, dan `nodes` yang tidak sesuai dengan `FrameModeConversionResult` terkini.
+
+* Membuat Native Command envelope tanpa metadata protokol yang diwajibkan.
+
+* Tipe Node.js seperti `node:fs`, `node:path`, dan `process` tidak dikenali.
+
+Source: [dualModeFrameAndWebInspector.test.tsx](https://github.com/budapesservices-dotcom/folio-studio/blob/codex/pr1-main-reconciliation-20261122/tests/dualModeFrameAndWebInspector.test.tsx?utm_source=chatgpt.com).
+
+Artinya, masalahnya bukan sekadar CI sedang lambat. Ada ketidaksesuaian nyata di beberapa kontrak antarmodul.
+
+Jangan menyelesaikannya dengan mematikan strict TypeScript, menghapus test, atau mengecualikan file dari pemeriksaan hanya supaya CI hijau. Kontrak yang benar harus disesuaikan terlebih dahulu.
+
+### 5\. Audit kualitas pengujian
+
+Ada 72 file test di repository saat ini. Itu cukup menunjukkan bahwa Folio sudah memiliki lapisan pengujian yang luas.
+
+Tetapi kualitas pengujian harus dilihat dari hasil sebenarnya.
+
+Selain kegagalan type-check terbaru, dokumentasi PR #18 mencatat snapshot CI sebelumnya pada commit `8d5eaa8`:
+
+* 595 dari 597 pengujian lulus.
+
+* Dua assertion browser gagal.
+
+* Satu terkait nilai `clickCount` pada simulasi starter Node Logic.
+
+* Satu terkait Motion Timeline yang mengharapkan minimal empat track, tetapi mendapatkan tiga.
+
+Itu adalah snapshot lama, bukan hasil dari HEAD terbaru. Namun tetap penting karena dua masalah penerimaan browser tersebut belum boleh dianggap selesai hanya karena unit test tertentu lulus.
+
+Ada juga hal yang belum bisa kuverifikasi melalui repository saja: penerimaan manual menyeluruh di Windows dan pada perangkat target.
+
+### 6\. Audit keamanan dan ketahanan data
+
+Fondasi keamanan tersedia
+
+Hal yang sudah ditemukan:
+
+* Sanitasi secret pada project dan Node Logic.
+
+* Validasi environment/secret reference.
+
+* Pembersihan header sensitif.
+
+* Sanitasi credential pada URL.
+
+* Validasi JSON `.flop` yang aman terhadap prototype pollution.
+
+* Sanitasi SVG.
+
+* Batas ukuran asset dan project.
+
+* Pembatasan eksekusi graph.
+
+* Live Preview dengan sandbox-oriented runtime.
+
+* Pemeriksaan URL/CSS berbahaya.
+
+Ini fondasi yang baik. Namun belum berarti Folio sudah memiliki keamanan backend production, karena eksekusi HTTP, socket, autentikasi server, dan database production belum dibangun.
+
+Jangan pernah menaruh API key rahasia dalam project atau code frontend.
+
+### 7\. Fitur yang memang belum selesai dalam visi Folio
+
+Ini penting agar kita tidak salah mengira blueprint sebagai implementasi.
+
+| Fitur visi                                   | Status saat audit |
+| -------------------------------------------- | ----------------- |
+| Multi-Application project                    | Roadmap           |
+| Application-scoped Local Components          | Roadmap           |
+| ZIP-based .flop container                    | Roadmap           |
+| Full arbitrary-code visual round-trip        | Belum             |
+| Real backend/server functions                | Roadmap           |
+| Database dan auth runtime                    | Roadmap           |
+| Plugin runtime                               | Roadmap           |
+| AI yang mengontrol Canvas/Node               | Roadmap           |
+| Cloud project sync                           | Roadmap           |
+| Multiplayer collaboration                    | Roadmap           |
+| Hosting dan deployment adapters terintegrasi | Roadmap           |
+| Variable persistence dan computed expression | Belum             |
+
+Tidak ada yang salah dengan fitur tersebut belum tersedia. Yang penting adalah menjaga batas implementasi dan roadmap.
+
+### 8\. Audit dokumentasi dan konsistensi tim AI
+
+Secara positif, Folio sudah memiliki:
+
+* Manifesto.
+
+* Vision dan Mission.
+
+* Product Goals.
+
+* Architecture Blueprint.
+
+* Architecture implementation.
+
+* Acceptance Tests.
+
+* Native AST specification.
+
+* Native Command specification.
+
+* Workspace Architecture specification.
+
+* Engineering task guidance melalui `AGENTS.md`.
+
+Ini membantu menjaga arah proyek meskipun dikerjakan oleh beberapa AI.
+
+Tetapi ada masalah sinkronisasi:
+
+PR #18 berusaha memperbarui dokumentasi Node Logic berdasarkan kondisi source pada 24 November. Dokumentasinya mengungkap batas runtime dan kegagalan acceptance yang sebelumnya kurang terlihat. Namun PR itu masih draft dan `mergeable: false`.
+
+Dokumen Node Logic di PR #18 juga mengacu pada snapshot source yang lebih lama. Sementara source kandidat sekarang sudah berkembang, termasuk implementasi component graph expansion di `componentScope.ts`.
+
+Jadi dokumen tersebut perlu diperbarui lagi terhadap HEAD terbaru, bukan sekadar di-merge apa adanya.
+
+### 9\. Prioritas perbaikan yang aku rekomendasikan
+
+Menurutku, sekarang bukan waktunya menambah sepuluh node baru, engine baru, atau sistem besar baru.
+
+Folio perlu melewati satu fase stabilisasi dan integrasi.
+
+### P0 — Wajib sebelum pekerjaan fitur baru
+
+* Pulihkan TypeScript check
+
+    Bereskan kontrak `InspectorPanel` dan `InspectorFrameLayoutSection` terhadap core terbaru.
+
+* Perbaiki test yang tidak kompatibel
+
+    Sesuaikan `dualModeFrameAndWebInspector.test.tsx` dengan API terkini dan lengkapi dukungan tipe Node.js tanpa menghilangkan cakupan test.
+
+* Pulihkan CI penuh
+
+    Wajib lulus `npm run check`, `npm test`, serta `npm run build` pada commit yang sama.
+
+* Selesaikan strategi branch
+
+    Pastikan `main`, branch kandidat, dan PR #17/#18 punya hubungan yang jelas. Jangan menganggap draft sebagai baseline rilis.
+
+### P1 — Stabilisasi integrasi
+
+* Verifikasi Canvas ↔ Component Canvas ↔ Native Commands.
+
+* Verifikasi Quick Interactions ↔ Node Logic ↔ Live Preview.
+
+* Verifikasi Node Logic ↔ React code generation dengan matriks per node.
+
+* Uji Motion Timeline dan output animasinya.
+
+* Uji `.flop` export/import, assets, migration, serta recovery.
+
+* Jalankan manual acceptance pada browser dan perangkat target.
+
+### P2 — Lanjutkan pengembangan
+
+Setelah fondasi kembali hijau, barulah kita mengembangkan kemampuan lanjutan seperti runtime backend, variable persistence, multi-application, dan fitur deployment.
+
+### 10\. Jadi, sebenarnya Folio sudah sejauh apa?
+
+Menurutku ada tiga ukuran kemajuan yang harus dipisahkan:
+
+Fondasi teknis: sudah cukup matang untuk menjadi dasar pengembangan produk besar. Ada unified project model, AST, command system, persistence, canvas, Node Logic, motion, dan code generation.
+
+Cakupan fitur: sudah luas. Folio telah memiliki banyak kemampuan yang biasanya tersebar di beberapa aplikasi berbeda.
+
+Kesiapan produk: masih tertinggal dari cakupan fitur. Type-check gagal, test dan build terbaru belum dijalankan, ada konflik PR/dokumentasi, dan manual acceptance belum terbukti lengkap.
+
+Jadi jangan menyimpulkan bahwa Folio gagal hanya karena satu CI gagal. Tetapi jangan pula menganggap Folio sudah sempurna karena daftar fiturnya panjang.
+
+Verdict-ku: arsitektur Folio layak dipertahankan. Kita tidak perlu merombak semuanya. Yang perlu dilakukan sekarang adalah mengunci kontrak, memperbaiki ketidakcocokan antarmodul, lalu membuktikan seluruh fitur utama berjalan bersama.
+
+Dan yang terpenting: filosofi Folio sebagai taman bermain developer tetap masuk akal. Kita sudah membangun banyak bagian taman itu. Sekarang waktunya memastikan semua jalur, pintu, dan mesinnya benar-benar saling terhubung.
+
+Aku belum mengubah file, membuat commit, atau menggabungkan PR dalam audit ini.
+
+Rekomendasi langkah berikutnya: jadikan P0 TypeScript dan integrasi CI sebagai satu paket stabilisasi resmi, lalu audit ulang seluruh fitur setelah paket tersebut benar-benar hijau.
+
+Sumber utama: [Repository Folio](https://github.com/budapesservices-dotcom/folio-studio?utm_source=chatgpt.com) · [PR #17](https://github.com/budapesservices-dotcom/folio-studio/pull/17?utm_source=chatgpt.com) · [PR #18](https://github.com/budapesservices-dotcom/folio-studio/pull/18?utm_source=chatgpt.com) · [CI terbaru](https://github.com/budapesservices-dotcom/folio-studio/actions/runs/45560283768?utm_source=chatgpt.com).

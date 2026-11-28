@@ -1,15 +1,143 @@
 import {
   FOLIO_FORMAT,
   FOLIO_FORMAT_VERSION,
+  FOLIO_LEGACY_FORMAT_VERSION,
+  type ComponentDefinition,
   type DesignNode,
+  type DesignTokenCollection,
+  type FolioDocument,
   type FolioProject,
+  type FolioProjectV1,
 } from './types';
+import { isOverrideFieldCompatibleWithNodeType } from './components';
+import {
+  isCssLengthUnit,
+  isCssLengthValue,
+  isSafeCssAspectRatio,
+  isSafeCssGridTemplate,
+  isSafeHtmlClassName,
+  isSafeHtmlId,
+} from './cssUnits';
+import { isBlendMode, isFillPaint, isVisualEffect } from './styling';
+import { isValidPathMorphSnapshot } from './pathMorph';
+import { validateDesignTokenCollection, validateNodeTokenBindings } from './tokens';
 
 export interface ValidationResult {
   ok: boolean;
   project?: FolioProject;
   error?: string;
 }
+
+export interface LegacyValidationResult {
+  ok: boolean;
+  project?: FolioProjectV1;
+  error?: string;
+}
+
+/**
+ * Shared registry of objects deeply frozen by Folio's canonical freeze helper.
+ * Only objects present in this WeakSet are trusted for O(1) incremental
+ * validation memoization — unfrozen or shallowly frozen candidates always run
+ * full structural validation.
+ */
+const deeplyFrozenObjects = new WeakSet<object>();
+const validatedFrozenNodes = new WeakSet<object>();
+const validatedFrozenDocuments = new WeakSet<object>();
+const validatedFrozenTokens = new WeakSet<object>();
+const validatedFrozenCodeModules = new WeakSet<object>();
+const validatedFrozenLogicGraphsContext = new WeakMap<object, { pages: unknown; components: unknown }>();
+const validatedFrozenAnimationsContext = new WeakMap<object, unknown>();
+const validatedFrozenAssets = new WeakSet<object>();
+const validatedFrozenComponentsContext = new WeakMap<object, { tokens: unknown; components: unknown }>();
+const validatedFrozenPagesContext = new WeakMap<object, { tokens: unknown; components: unknown }>();
+
+export function isDeeplyFrozenGraph(value: unknown): boolean {
+  return value !== null && typeof value === 'object' && deeplyFrozenObjects.has(value as object);
+}
+
+/**
+ * Recursively freezes an immutable state/project graph while short-circuiting
+ * on subgraphs already registered in deeplyFrozenObjects (O(changed objects)).
+ */
+export function freezeImmutableGraph<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== 'object') return value;
+  const object = value as unknown as object;
+  if (deeplyFrozenObjects.has(object) || seen.has(object)) return value;
+  seen.add(object);
+  if (Array.isArray(object)) {
+    for (let i = 0; i < object.length; i += 1) {
+      freezeImmutableGraph(object[i], seen);
+    }
+  } else {
+    for (const key in object) {
+      if (Object.prototype.hasOwnProperty.call(object, key)) {
+        freezeImmutableGraph((object as Record<string, unknown>)[key], seen);
+      }
+    }
+  }
+  Object.freeze(object);
+  deeplyFrozenObjects.add(object);
+  return value;
+}
+
+function isValidatedDesignNode(value: unknown): value is DesignNode {
+  if (value !== null && typeof value === 'object' && deeplyFrozenObjects.has(value as object) && validatedFrozenNodes.has(value as object)) {
+    return true;
+  }
+  if (!isDesignNode(value)) return false;
+  if (value !== null && typeof value === 'object' && deeplyFrozenObjects.has(value as object)) {
+    validatedFrozenNodes.add(value as object);
+  }
+  return true;
+}
+
+export const SEMANTIC_HTML_TAGS = new Set([
+  'div', 'section', 'header', 'footer', 'nav', 'main', 'article', 'aside',
+  'button', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'ul', 'li', 'form', 'input', 'img',
+]);
+
+const TEXT_ALIGN_VALUES = new Set(['left', 'center', 'right', 'justify']);
+const TEXT_VERTICAL_ALIGN_VALUES = new Set(['top', 'middle', 'bottom']);
+const TEXT_WRAP_VALUES = new Set(['wrap', 'nowrap']);
+const TEXT_TRANSFORM_VALUES = new Set(['none', 'uppercase', 'lowercase', 'capitalize']);
+const TEXT_DECORATION_VALUES = new Set(['none', 'underline', 'line-through']);
+const IMAGE_FIT_VALUES = new Set(['cover', 'contain', 'fill']);
+const STROKE_ALIGN_VALUES = new Set(['inside', 'center', 'outside']);
+const BORDER_LINE_STYLES = new Set(['solid', 'dashed', 'dotted']);
+const CLIP_MASK_MODE_VALUES = new Set(['inside', 'outside']);
+const DRAW_MODE_VALUES = new Set(['normal', 'inside', 'outside']);
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/i;
+const MAX_COMPONENT_NESTING_DEPTH = 16;
+
+const BREAKPOINT_IDS = new Set(['desktop', 'tablet', 'mobile']);
+const LAYOUT_MODES = new Set(['none', 'flex', 'grid']);
+const LAYOUT_DIRECTIONS = new Set(['row', 'column', 'row-reverse', 'column-reverse']);
+const LAYOUT_WRAPS = new Set(['nowrap', 'wrap']);
+const LAYOUT_JUSTIFY = new Set(['start', 'center', 'end', 'space-between', 'space-around', 'space-evenly']);
+const LAYOUT_ALIGN = new Set(['start', 'center', 'end', 'stretch']);
+const LAYOUT_OVERFLOW_VALUES = new Set(['visible', 'hidden', 'scroll', 'scroll-y', 'scroll-x', 'auto']);
+const LAYOUT_PADDING_MODES = new Set(['uniform', 'per-side']);
+const GRID_COLUMNS_MODES = new Set(['fixed', 'auto-fit', 'custom']);
+const GRID_ROWS_MODES = new Set(['auto', 'fixed', 'custom']);
+const SCROLL_SNAP_TYPES = new Set(['none', 'x', 'y']);
+const SCROLL_SNAP_ALIGNS = new Set(['none', 'start', 'center', 'end']);
+const LAYOUT_SIZING_MODES = new Set(['fixed', 'hug', 'fill', 'relative']);
+const LAYOUT_CHILD_POSITIONS = new Set(['relative', 'absolute', 'fixed', 'sticky']);
+const ALIGN_SELF_VALUES = new Set(['auto', 'start', 'center', 'end', 'stretch']);
+const HORIZONTAL_CONSTRAINTS = new Set(['left', 'right', 'left-right', 'center', 'scale']);
+const VERTICAL_CONSTRAINTS = new Set(['top', 'bottom', 'top-bottom', 'center', 'scale']);
+const CURSOR_TYPES = new Set(['default', 'pointer', 'grab', 'text', 'not-allowed']);
+const AUTO_NONE_VALUES = new Set(['auto', 'none']);
+const LINK_TARGET_VALUES = new Set(['_self', '_blank']);
+const TRANSITION_PRESETS = new Set(['none', 'fast', 'smooth', 'bouncy']);
+const PSEUDO_STATE_KEYS = new Set(['hover', 'active', 'focus', 'disabled']);
+const SHADOW_PRESET_VALUES = new Set(['none', 'soft', 'medium', 'hard', 'neon-glow']);
+const FONT_SIZE_UNITS = new Set(['px', 'rem', 'em']);
+const LETTER_SPACING_UNITS = new Set(['px', 'em']);
+const LINE_HEIGHT_UNITS = new Set(['', 'px', '%']);
+const TOKEN_LAYERS = new Set(['primitive', 'semantic']);
+const TOKEN_CATEGORIES = new Set(['color', 'spacing', 'radius', 'typography']);
+const TOKEN_UNITS = new Set(['px', 'rem', '%', 'em']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -23,22 +151,374 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function isNodePadding(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.top) && value.top >= 0 &&
+    isFiniteNumber(value.right) && value.right >= 0 &&
+    isFiniteNumber(value.bottom) && value.bottom >= 0 &&
+    isFiniteNumber(value.left) && value.left >= 0
+  );
+}
+
+function isNodeInsetOffsets(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value.top === undefined || isCssLengthValue(value.top)) &&
+    (value.right === undefined || isCssLengthValue(value.right)) &&
+    (value.bottom === undefined || isCssLengthValue(value.bottom)) &&
+    (value.left === undefined || isCssLengthValue(value.left))
+  );
+}
+
+export function isBorderSideStyle(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isFiniteNumber(value.width) && value.width >= 0 && value.width <= 128 &&
+    (value.widthUnit === undefined || isCssLengthUnit(value.widthUnit)) &&
+    isString(value.color) && value.color.length <= 128 &&
+    (value.style === undefined || BORDER_LINE_STYLES.has(String(value.style)))
+  );
+}
+
+export function isBorderSidesConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value.top === undefined || isBorderSideStyle(value.top)) &&
+    (value.right === undefined || isBorderSideStyle(value.right)) &&
+    (value.bottom === undefined || isBorderSideStyle(value.bottom)) &&
+    (value.left === undefined || isBorderSideStyle(value.left))
+  );
+}
+
+export function isCornerRadiiConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isFiniteNumber(value.topLeft) && value.topLeft >= 0 &&
+    isFiniteNumber(value.topRight) && value.topRight >= 0 &&
+    isFiniteNumber(value.bottomRight) && value.bottomRight >= 0 &&
+    isFiniteNumber(value.bottomLeft) && value.bottomLeft >= 0
+  );
+}
+
+export function isNodeTransitionConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    TRANSITION_PRESETS.has(String(value.preset)) &&
+    (value.durationMs === undefined || (isFiniteNumber(value.durationMs) && value.durationMs >= 0 && value.durationMs <= 10000)) &&
+    (value.durationUnit === undefined || value.durationUnit === 'ms' || value.durationUnit === 's')
+  );
+}
+
+export function isNodeStateOverrides(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(([stateKey, override]) => {
+    if (!PSEUDO_STATE_KEYS.has(stateKey) || !isRecord(override)) return false;
+    return (
+      (override.fill === undefined || (isString(override.fill) && override.fill.length <= 128)) &&
+      (override.stroke === undefined || (isString(override.stroke) && override.stroke.length <= 128)) &&
+      (override.strokeWidth === undefined || (isFiniteNumber(override.strokeWidth) && override.strokeWidth >= 0 && override.strokeWidth <= 128)) &&
+      (override.opacity === undefined || (isFiniteNumber(override.opacity) && override.opacity >= 0 && override.opacity <= 1)) &&
+      (override.radius === undefined || (isFiniteNumber(override.radius) && override.radius >= 0 && override.radius <= 9999)) &&
+      (override.scale === undefined || (isFiniteNumber(override.scale) && override.scale >= 0.1 && override.scale <= 5)) &&
+      (override.translateY === undefined || (isFiniteNumber(override.translateY) && override.translateY >= -500 && override.translateY <= 500)) &&
+      (override.shadowPreset === undefined || SHADOW_PRESET_VALUES.has(String(override.shadowPreset)))
+    );
+  });
+}
+
+export function isNodeCssFilters(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value.brightness === undefined || (isFiniteNumber(value.brightness) && value.brightness >= 0 && value.brightness <= 300)) &&
+    (value.contrast === undefined || (isFiniteNumber(value.contrast) && value.contrast >= 0 && value.contrast <= 300)) &&
+    (value.saturate === undefined || (isFiniteNumber(value.saturate) && value.saturate >= 0 && value.saturate <= 300)) &&
+    (value.grayscale === undefined || (isFiniteNumber(value.grayscale) && value.grayscale >= 0 && value.grayscale <= 100))
+  );
+}
+
+export function isNodeLayoutConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    LAYOUT_MODES.has(String(value.mode)) &&
+    LAYOUT_DIRECTIONS.has(String(value.direction)) &&
+    (value.wrap === undefined || LAYOUT_WRAPS.has(String(value.wrap))) &&
+    (value.justifyContent === undefined || LAYOUT_JUSTIFY.has(String(value.justifyContent))) &&
+    (value.alignItems === undefined || LAYOUT_ALIGN.has(String(value.alignItems))) &&
+    isFiniteNumber(value.gap) && value.gap >= 0 &&
+    (value.columnGap === undefined || (isFiniteNumber(value.columnGap) && value.columnGap >= 0)) &&
+    (value.rowGap === undefined || (isFiniteNumber(value.rowGap) && value.rowGap >= 0)) &&
+    (value.gridColumns === undefined || (isFiniteNumber(value.gridColumns) && value.gridColumns >= 1 && value.gridColumns <= 24)) &&
+    (value.gridColumnsMode === undefined || GRID_COLUMNS_MODES.has(String(value.gridColumnsMode))) &&
+    (value.gridMinColumnWidth === undefined || (isCssLengthValue(value.gridMinColumnWidth) && value.gridMinColumnWidth.value > 0)) &&
+    (value.gridTemplateColumns === undefined || (isString(value.gridTemplateColumns) && (value.gridTemplateColumns.trim() === '' || isSafeCssGridTemplate(value.gridTemplateColumns)))) &&
+    (value.gridRowsMode === undefined || GRID_ROWS_MODES.has(String(value.gridRowsMode))) &&
+    (value.gridRows === undefined || (isFiniteNumber(value.gridRows) && value.gridRows >= 1 && value.gridRows <= 24)) &&
+    (value.gridTemplateRows === undefined || (isString(value.gridTemplateRows) && (value.gridTemplateRows.trim() === '' || isSafeCssGridTemplate(value.gridTemplateRows)))) &&
+    (value.overflow === undefined || LAYOUT_OVERFLOW_VALUES.has(String(value.overflow))) &&
+    (value.scrollSnapType === undefined || SCROLL_SNAP_TYPES.has(String(value.scrollSnapType))) &&
+    (value.paddingMode === undefined || LAYOUT_PADDING_MODES.has(String(value.paddingMode))) &&
+    (value.gapUnit === undefined || isCssLengthUnit(value.gapUnit)) &&
+    (value.columnGapUnit === undefined || isCssLengthUnit(value.columnGapUnit)) &&
+    (value.rowGapUnit === undefined || isCssLengthUnit(value.rowGapUnit)) &&
+    (value.paddingUnit === undefined || isCssLengthUnit(value.paddingUnit)) &&
+    isNodePadding(value.padding)
+  );
+}
+
+export function isNodeLayoutChildConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value.position === undefined || LAYOUT_CHILD_POSITIONS.has(String(value.position))) &&
+    (value.widthMode === undefined || LAYOUT_SIZING_MODES.has(String(value.widthMode))) &&
+    (value.heightMode === undefined || LAYOUT_SIZING_MODES.has(String(value.heightMode))) &&
+    (value.widthValue === undefined || (isCssLengthValue(value.widthValue) && value.widthValue.value >= 0)) &&
+    (value.heightValue === undefined || (isCssLengthValue(value.heightValue) && value.heightValue.value >= 0)) &&
+    (value.widthPercent === undefined || (isFiniteNumber(value.widthPercent) && value.widthPercent > 0 && value.widthPercent <= 1000)) &&
+    (value.heightPercent === undefined || (isFiniteNumber(value.heightPercent) && value.heightPercent > 0 && value.heightPercent <= 1000)) &&
+    (value.alignSelf === undefined || ALIGN_SELF_VALUES.has(String(value.alignSelf))) &&
+    (value.flexGrow === undefined || (isFiniteNumber(value.flexGrow) && value.flexGrow >= 0)) &&
+    (value.gridColumnSpan === undefined || (isFiniteNumber(value.gridColumnSpan) && value.gridColumnSpan >= 1 && value.gridColumnSpan <= 24)) &&
+    (value.gridColumnSpanFull === undefined || typeof value.gridColumnSpanFull === 'boolean') &&
+    (value.gridRowSpan === undefined || (isFiniteNumber(value.gridRowSpan) && value.gridRowSpan >= 1 && value.gridRowSpan <= 12)) &&
+    (value.scrollSnapAlign === undefined || SCROLL_SNAP_ALIGNS.has(String(value.scrollSnapAlign))) &&
+    (value.zIndex === undefined || (isFiniteNumber(value.zIndex) && value.zIndex >= -9999 && value.zIndex <= 9999)) &&
+    (value.minWidth === undefined || (isFiniteNumber(value.minWidth) && value.minWidth >= 0)) &&
+    (value.maxWidth === undefined || (isFiniteNumber(value.maxWidth) && value.maxWidth >= 0)) &&
+    (value.minHeight === undefined || (isFiniteNumber(value.minHeight) && value.minHeight >= 0)) &&
+    (value.maxHeight === undefined || (isFiniteNumber(value.maxHeight) && value.maxHeight >= 0)) &&
+    (value.minWidthValue === undefined || (isCssLengthValue(value.minWidthValue) && value.minWidthValue.value >= 0)) &&
+    (value.maxWidthValue === undefined || (isCssLengthValue(value.maxWidthValue) && value.maxWidthValue.value >= 0)) &&
+    (value.minHeightValue === undefined || (isCssLengthValue(value.minHeightValue) && value.minHeightValue.value >= 0)) &&
+    (value.maxHeightValue === undefined || (isCssLengthValue(value.maxHeightValue) && value.maxHeightValue.value >= 0)) &&
+    (value.aspectRatio === undefined || (isString(value.aspectRatio) && (value.aspectRatio.trim() === '' || isSafeCssAspectRatio(value.aspectRatio)))) &&
+    (value.inset === undefined || isNodeInsetOffsets(value.inset)) &&
+    (value.constraints === undefined || (
+      isRecord(value.constraints) &&
+      HORIZONTAL_CONSTRAINTS.has(String(value.constraints.horizontal)) &&
+      VERTICAL_CONSTRAINTS.has(String(value.constraints.vertical))
+    ))
+  );
+}
+
+export function isResponsiveOverrides(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(([bp, override]) => {
+    if (!BREAKPOINT_IDS.has(bp) || !isRecord(override)) return false;
+    return (
+      (override.visible === undefined || typeof override.visible === 'boolean') &&
+      (override.width === undefined || (isFiniteNumber(override.width) && override.width > 0)) &&
+      (override.height === undefined || (isFiniteNumber(override.height) && override.height > 0)) &&
+      (override.layoutDirection === undefined || LAYOUT_DIRECTIONS.has(String(override.layoutDirection))) &&
+      (override.gridColumns === undefined || (isFiniteNumber(override.gridColumns) && override.gridColumns >= 1 && override.gridColumns <= 24)) &&
+      (override.gap === undefined || (isFiniteNumber(override.gap) && override.gap >= 0)) &&
+      (override.padding === undefined || isNodePadding(override.padding))
+    );
+  });
+}
+
+export function isNodeTokenBindings(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const allowed = new Set(['fill', 'stroke', 'radius', 'gap', 'padding', 'fontSize']);
+  return Object.entries(value).every(([key, tokenId]) =>
+    allowed.has(key) && (tokenId === undefined || (isString(tokenId) && tokenId.length > 0)),
+  );
+}
+
+function isDesignTokenValue(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.kind === 'alias') {
+    return isString(value.tokenId) && value.tokenId.trim().length > 0;
+  }
+  if (value.kind === 'literal') {
+    const validRaw = isString(value.value) || isFiniteNumber(value.value);
+    const validUnit = value.unit === undefined || TOKEN_UNITS.has(String(value.unit));
+    return validRaw && validUnit;
+  }
+  return false;
+}
+
+export function isDesignTokenCollection(value: unknown): value is DesignTokenCollection {
+  if (!isRecord(value)) return false;
+  if (!isString(value.activeThemeId) || !value.activeThemeId.trim()) return false;
+  if (!Array.isArray(value.themes) || value.themes.length === 0) return false;
+  if (!Array.isArray(value.tokens)) return false;
+
+  for (const theme of value.themes) {
+    if (!isRecord(theme) || !isString(theme.id) || !theme.id.trim() || !isString(theme.name) || !theme.name.trim()) {
+      return false;
+    }
+  }
+
+  for (const token of value.tokens) {
+    if (
+      !isRecord(token) ||
+      !isString(token.id) || !token.id.trim() ||
+      !isString(token.name) || !token.name.trim() ||
+      !TOKEN_LAYERS.has(String(token.layer)) ||
+      !TOKEN_CATEGORIES.has(String(token.category)) ||
+      !isDesignTokenValue(token.value) ||
+      (token.description !== undefined && !isString(token.description))
+    ) {
+      return false;
+    }
+    if (token.themeValues !== undefined) {
+      if (!isRecord(token.themeValues)) return false;
+      for (const themeVal of Object.values(token.themeValues)) {
+        if (!isDesignTokenValue(themeVal)) return false;
+      }
+    }
+  }
+
+  return validateDesignTokenCollection(value as unknown as DesignTokenCollection).ok;
+}
+
+function isComponentVariantOverride(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    (value.fill === undefined || isString(value.fill)) &&
+    (value.stroke === undefined || isString(value.stroke)) &&
+    (value.text === undefined || isString(value.text)) &&
+    (value.visible === undefined || typeof value.visible === 'boolean')
+  );
+}
+
+export function isComponentVariantsList(
+  value: unknown,
+  validNodes?: ReadonlySet<string> | ReadonlyMap<string, DesignNode>,
+): boolean {
+  if (!Array.isArray(value)) return false;
+  const axisIds = new Set<string>();
+  for (const axis of value) {
+    if (
+      !isRecord(axis) ||
+      !isString(axis.id) || !axis.id.trim() ||
+      !isString(axis.name) || !axis.name.trim() ||
+      !isString(axis.defaultOptionId) || !axis.defaultOptionId.trim() ||
+      !Array.isArray(axis.options) || axis.options.length === 0
+    ) {
+      return false;
+    }
+    if (axisIds.has(axis.id)) return false;
+    axisIds.add(axis.id);
+
+    const optionIds = new Set<string>();
+    for (const option of axis.options) {
+      if (
+        !isRecord(option) ||
+        !isString(option.id) || !option.id.trim() ||
+        !isString(option.label) || !option.label.trim() ||
+        !isRecord(option.overrides)
+      ) {
+        return false;
+      }
+      if (optionIds.has(option.id)) return false;
+      optionIds.add(option.id);
+
+      for (const [nodeId, patch] of Object.entries(option.overrides)) {
+        if (!isString(nodeId) || !nodeId.trim() || !isComponentVariantOverride(patch)) return false;
+        if (validNodes) {
+          if (validNodes instanceof Map) {
+            const targetNode = validNodes.get(nodeId);
+            if (!targetNode) return false;
+            const typedPatch = patch as Record<string, unknown>;
+            if (typedPatch.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) return false;
+            if (typedPatch.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) return false;
+            if (typedPatch.stroke !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'stroke')) return false;
+          } else if (!validNodes.has(nodeId)) {
+            return false;
+          }
+        }
+      }
+    }
+    if (!optionIds.has(axis.defaultOptionId)) return false;
+  }
+  return true;
+}
+
+export function isComponentSlotsList(
+  value: unknown,
+  validNodes?: ReadonlySet<string> | ReadonlyMap<string, DesignNode>,
+): boolean {
+  if (!Array.isArray(value)) return false;
+  const slotIds = new Set<string>();
+  for (const slot of value) {
+    if (
+      !isRecord(slot) ||
+      !isString(slot.id) || !slot.id.trim() ||
+      !isString(slot.name) || !slot.name.trim() ||
+      !isString(slot.targetNodeId) || !slot.targetNodeId.trim() ||
+      (slot.description !== undefined && !isString(slot.description)) ||
+      (slot.defaultText !== undefined && !isString(slot.defaultText))
+    ) {
+      return false;
+    }
+    if (slotIds.has(slot.id)) return false;
+    slotIds.add(slot.id);
+    if (validNodes) {
+      if (validNodes instanceof Map) {
+        const targetNode = validNodes.get(slot.targetNodeId);
+        if (!targetNode) return false;
+        if (slot.defaultText !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
+          return false;
+        }
+      } else if (!validNodes.has(slot.targetNodeId)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 function isCommonNode(value: Record<string, unknown>): boolean {
   return (
-    isString(value.id) &&
+    isString(value.id) && value.id.length > 0 &&
     isString(value.name) &&
     isFiniteNumber(value.x) &&
     isFiniteNumber(value.y) &&
-    isFiniteNumber(value.width) &&
-    value.width >= 0 &&
-    isFiniteNumber(value.height) &&
-    value.height >= 0 &&
+    isFiniteNumber(value.width) && value.width >= 0 &&
+    isFiniteNumber(value.height) && value.height >= 0 &&
     isFiniteNumber(value.rotation) &&
-    isFiniteNumber(value.opacity) &&
-    value.opacity >= 0 &&
-    value.opacity <= 1 &&
+    isFiniteNumber(value.opacity) && value.opacity >= 0 && value.opacity <= 1 &&
     typeof value.visible === 'boolean' &&
-    typeof value.locked === 'boolean'
+    typeof value.locked === 'boolean' &&
+    (value.layerColor === undefined || isString(value.layerColor)) &&
+    (value.onCanvas === undefined || typeof value.onCanvas === 'boolean') &&
+    (value.parentId === undefined || value.parentId === null || (isString(value.parentId) && value.parentId.length > 0)) &&
+    (value.clipMaskBaseId === undefined || (isString(value.clipMaskBaseId) && value.clipMaskBaseId.length > 0)) &&
+    (value.clipMaskMode === undefined || CLIP_MASK_MODE_VALUES.has(String(value.clipMaskMode))) &&
+    (value.drawMode === undefined || DRAW_MODE_VALUES.has(String(value.drawMode))) &&
+    (value.semanticTag === undefined || SEMANTIC_HTML_TAGS.has(String(value.semanticTag))) &&
+    (value.ariaLabel === undefined || isString(value.ariaLabel)) &&
+    (value.href === undefined || isString(value.href)) &&
+    (value.linkTarget === undefined || LINK_TARGET_VALUES.has(String(value.linkTarget))) &&
+    (value.htmlId === undefined || (isString(value.htmlId) && isSafeHtmlId(value.htmlId))) &&
+    (value.className === undefined || (isString(value.className) && isSafeHtmlClassName(value.className))) &&
+    (value.layout === undefined || isNodeLayoutConfig(value.layout)) &&
+    (value.layoutChild === undefined || isNodeLayoutChildConfig(value.layoutChild)) &&
+    (value.responsive === undefined || isResponsiveOverrides(value.responsive)) &&
+    (value.tokenBindings === undefined || isNodeTokenBindings(value.tokenBindings)) &&
+    (value.blendMode === undefined || isBlendMode(value.blendMode)) &&
+    (value.effects === undefined || (Array.isArray(value.effects) && value.effects.length <= 16 && value.effects.every(isVisualEffect))) &&
+    (value.cssFilters === undefined || isNodeCssFilters(value.cssFilters)) &&
+    (value.cursor === undefined || CURSOR_TYPES.has(String(value.cursor))) &&
+    (value.pointerEvents === undefined || AUTO_NONE_VALUES.has(String(value.pointerEvents))) &&
+    (value.userSelect === undefined || AUTO_NONE_VALUES.has(String(value.userSelect))) &&
+    (value.transition === undefined || isNodeTransitionConfig(value.transition)) &&
+    (value.stateOverrides === undefined || isNodeStateOverrides(value.stateOverrides)) &&
+    (value.aspectRatioLocked === undefined || typeof value.aspectRatioLocked === 'boolean')
+  );
+}
+
+const TRIM_PATH_MODES = new Set(['simultaneous', 'sequential']);
+const MOTION_PATH_LOOP_MODES = new Set(['none', 'loop', 'ping-pong']);
+
+function isValidTrimFields(value: Record<string, unknown>): boolean {
+  return (
+    (value.trimStart === undefined || (isFiniteNumber(value.trimStart) && value.trimStart >= 0 && value.trimStart <= 100)) &&
+    (value.trimEnd === undefined || (isFiniteNumber(value.trimEnd) && value.trimEnd >= 0 && value.trimEnd <= 100)) &&
+    (value.trimOffset === undefined || (isFiniteNumber(value.trimOffset) && value.trimOffset >= -1000 && value.trimOffset <= 1000)) &&
+    (value.trimMode === undefined || TRIM_PATH_MODES.has(String(value.trimMode)))
   );
 }
 
@@ -47,16 +527,115 @@ function isShapeStyle(value: unknown): boolean {
   return (
     isString(value.fill) &&
     isString(value.stroke) &&
-    isFiniteNumber(value.strokeWidth) &&
-    (value.radius === undefined || isFiniteNumber(value.radius))
+    isFiniteNumber(value.strokeWidth) && value.strokeWidth >= 0 &&
+    (value.strokeWidthUnit === undefined || isCssLengthUnit(value.strokeWidthUnit)) &&
+    (value.strokeStyle === undefined || BORDER_LINE_STYLES.has(String(value.strokeStyle))) &&
+    (value.strokeDasharray === undefined || isString(value.strokeDasharray)) &&
+    (value.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(value.strokeAlign))) &&
+    (value.borderSides === undefined || isBorderSidesConfig(value.borderSides)) &&
+    (value.radius === undefined || (isFiniteNumber(value.radius) && value.radius >= 0)) &&
+    (value.radiusUnit === undefined || isCssLengthUnit(value.radiusUnit)) &&
+    (value.cornerRadii === undefined || isCornerRadiiConfig(value.cornerRadii)) &&
+    (value.fills === undefined || (Array.isArray(value.fills) && value.fills.length <= 16 && value.fills.every(isFillPaint))) &&
+    isValidTrimFields(value)
+  );
+}
+
+function isVectorHandle(value: unknown): boolean {
+  return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.y);
+}
+
+function isVectorAnchorPoint(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.id) && value.id.length > 0 &&
+    isFiniteNumber(value.x) &&
+    isFiniteNumber(value.y) &&
+    (value.handleIn === undefined || isVectorHandle(value.handleIn)) &&
+    (value.handleOut === undefined || isVectorHandle(value.handleOut)) &&
+    (value.pointType === 'corner' || value.pointType === 'smooth' || value.pointType === 'symmetric') &&
+    (value.cornerRadius === undefined || (isFiniteNumber(value.cornerRadius) && value.cornerRadius >= 0 && value.cornerRadius <= 2000))
+  );
+}
+
+function isVectorSubpath(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.closed === 'boolean' &&
+    Array.isArray(value.points) &&
+    value.points.length > 0 &&
+    value.points.every(isVectorAnchorPoint)
+  );
+}
+
+function isPathStyle(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.fill) &&
+    isString(value.stroke) &&
+    isFiniteNumber(value.strokeWidth) && value.strokeWidth >= 0 &&
+    (value.strokeLinecap === undefined || ['butt', 'round', 'square'].includes(String(value.strokeLinecap))) &&
+    (value.strokeLinejoin === undefined || ['miter', 'round', 'bevel'].includes(String(value.strokeLinejoin))) &&
+    (value.strokeDasharray === undefined || isString(value.strokeDasharray)) &&
+    (value.strokeAlign === undefined || STROKE_ALIGN_VALUES.has(String(value.strokeAlign))) &&
+    (value.fillRule === undefined || value.fillRule === 'nonzero' || value.fillRule === 'evenodd') &&
+    (value.arrowStart === undefined || typeof value.arrowStart === 'boolean') &&
+    (value.arrowEnd === undefined || typeof value.arrowEnd === 'boolean') &&
+    (value.fills === undefined || (Array.isArray(value.fills) && value.fills.length <= 16 && value.fills.every(isFillPaint))) &&
+    isValidTrimFields(value)
   );
 }
 
 function isDesignNode(value: unknown): value is DesignNode {
   if (!isRecord(value) || !isCommonNode(value)) return false;
 
+  if (value.type === 'group') return true;
+
+  if (value.type === 'frame') {
+    return (
+      isShapeStyle(value.style) &&
+      (value.clipContent === undefined || typeof value.clipContent === 'boolean') &&
+      (value.isSection === undefined || typeof value.isSection === 'boolean')
+    );
+  }
+
   if (value.type === 'rect' || value.type === 'ellipse') {
-    return isShapeStyle(value.style);
+    return (
+      isShapeStyle(value.style) &&
+      (value.isContainer === undefined || typeof value.isContainer === 'boolean') &&
+      (value.clipContent === undefined || typeof value.clipContent === 'boolean')
+    );
+  }
+
+  if (value.type === 'path') {
+    const validShapeMeta =
+      value.shapeMeta === undefined ||
+      (isRecord(value.shapeMeta) &&
+        (value.shapeMeta.kind === 'triangle' ||
+          (value.shapeMeta.kind === 'polygon' &&
+            isFiniteNumber(value.shapeMeta.sides) &&
+            value.shapeMeta.sides >= 3 &&
+            value.shapeMeta.sides <= 32) ||
+          (value.shapeMeta.kind === 'star' &&
+            isFiniteNumber(value.shapeMeta.spikes) &&
+            value.shapeMeta.spikes >= 3 &&
+            value.shapeMeta.spikes <= 32 &&
+            isFiniteNumber(value.shapeMeta.innerRatio) &&
+            value.shapeMeta.innerRatio >= 0.1 &&
+            value.shapeMeta.innerRatio <= 0.95)));
+    return (
+      Array.isArray(value.points) &&
+      value.points.length > 0 &&
+      value.points.every(isVectorAnchorPoint) &&
+      typeof value.closed === 'boolean' &&
+      isPathStyle(value.style) &&
+      (value.pathKind === undefined ||
+        ['pen', 'curvature', 'pencil', 'line', 'arrow', 'triangle', 'polygon', 'star', 'boolean', 'outline'].includes(String(value.pathKind))) &&
+      (value.subpaths === undefined || (Array.isArray(value.subpaths) && value.subpaths.every(isVectorSubpath))) &&
+      (value.isContainer === undefined || typeof value.isContainer === 'boolean') &&
+      (value.clipContent === undefined || typeof value.clipContent === 'boolean') &&
+      validShapeMeta
+    );
   }
 
   if (value.type === 'text') {
@@ -64,79 +643,1492 @@ function isDesignNode(value: unknown): value is DesignNode {
     const style = value.style;
     return (
       isString(style.fill) &&
-      isFiniteNumber(style.fontSize) &&
+      isFiniteNumber(style.fontSize) && style.fontSize > 0 &&
+      (style.fontSizeUnit === undefined || FONT_SIZE_UNITS.has(String(style.fontSizeUnit))) &&
       isString(style.fontFamily) &&
       isFiniteNumber(style.fontWeight) &&
       isFiniteNumber(style.letterSpacing) &&
-      isFiniteNumber(style.lineHeight)
+      (style.letterSpacingUnit === undefined || LETTER_SPACING_UNITS.has(String(style.letterSpacingUnit))) &&
+      isFiniteNumber(style.lineHeight) && style.lineHeight > 0 &&
+      (style.lineHeightUnit === undefined || LINE_HEIGHT_UNITS.has(String(style.lineHeightUnit))) &&
+      (style.textAlign === undefined || TEXT_ALIGN_VALUES.has(String(style.textAlign))) &&
+      (style.verticalAlign === undefined || TEXT_VERTICAL_ALIGN_VALUES.has(String(style.verticalAlign))) &&
+      (style.textWrap === undefined || TEXT_WRAP_VALUES.has(String(style.textWrap))) &&
+      (style.textTransform === undefined || TEXT_TRANSFORM_VALUES.has(String(style.textTransform))) &&
+      (style.textDecoration === undefined || TEXT_DECORATION_VALUES.has(String(style.textDecoration)))
     );
+  }
+
+  if (value.type === 'image') {
+    if (
+      !isString(value.assetId) || !value.assetId.trim() ||
+      (value.alt !== undefined && !isString(value.alt)) ||
+      (value.naturalWidth !== undefined && (!isFiniteNumber(value.naturalWidth) || value.naturalWidth <= 0)) ||
+      (value.naturalHeight !== undefined && (!isFiniteNumber(value.naturalHeight) || value.naturalHeight <= 0)) ||
+      !isRecord(value.style)
+    ) {
+      return false;
+    }
+    const style = value.style;
+    return (
+      IMAGE_FIT_VALUES.has(String(style.fit)) &&
+      (style.radius === undefined || (isFiniteNumber(style.radius) && style.radius >= 0)) &&
+      (style.radiusUnit === undefined || isCssLengthUnit(style.radiusUnit)) &&
+      (style.cornerRadii === undefined || isCornerRadiiConfig(style.cornerRadii)) &&
+      (style.stroke === undefined || isString(style.stroke)) &&
+      (style.strokeWidth === undefined || (isFiniteNumber(style.strokeWidth) && style.strokeWidth >= 0)) &&
+      (style.strokeWidthUnit === undefined || isCssLengthUnit(style.strokeWidthUnit)) &&
+      (style.strokeStyle === undefined || BORDER_LINE_STYLES.has(String(style.strokeStyle))) &&
+      (style.borderSides === undefined || isBorderSidesConfig(style.borderSides))
+    );
+  }
+
+  if (value.type === 'component-instance') {
+    if (!isString(value.componentId) || !value.componentId || !isRecord(value.overrides) ||
+        !isFiniteNumber(value.width) || value.width <= 0 ||
+        !isFiniteNumber(value.height) || value.height <= 0) return false;
+    const validOverrides = Object.values(value.overrides).every((override) =>
+      isRecord(override) &&
+      (override.fill === undefined || isString(override.fill)) &&
+      (override.text === undefined || isString(override.text)),
+    );
+    if (!validOverrides) return false;
+    if (value.variantSelection !== undefined) {
+      if (!isRecord(value.variantSelection)) return false;
+      const validSelection = Object.entries(value.variantSelection).every(([axisId, optionId]) =>
+        isString(axisId) && axisId.length > 0 && isString(optionId) && optionId.length > 0,
+      );
+      if (!validSelection) return false;
+    }
+    if (value.slotAssignments !== undefined) {
+      if (!isRecord(value.slotAssignments)) return false;
+      const validSlots = Object.entries(value.slotAssignments).every(([slotId, assignment]) =>
+        isString(slotId) && slotId.length > 0 &&
+        isRecord(assignment) &&
+        (assignment.text === undefined || isString(assignment.text)) &&
+        (assignment.fill === undefined || isString(assignment.fill)) &&
+        (assignment.visible === undefined || typeof assignment.visible === 'boolean'),
+      );
+      if (!validSlots) return false;
+    }
+    return true;
   }
 
   return false;
 }
 
+function isValidLayerHierarchy(nodes: readonly DesignNode[]): boolean {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  for (const node of nodes) {
+    let parentId = node.parentId ?? undefined;
+    const visited = new Set<string>([node.id]);
+    while (parentId) {
+      if (visited.has(parentId) || !nodeById.has(parentId)) return false;
+      visited.add(parentId);
+      parentId = nodeById.get(parentId)?.parentId ?? undefined;
+    }
+    if (node.clipMaskBaseId !== undefined) {
+      if (node.clipMaskBaseId === node.id || !nodeById.has(node.clipMaskBaseId)) return false;
+    }
+  }
+  return true;
+}
+
+function isDocument(value: unknown): value is FolioDocument {
+  if (value !== null && typeof value === 'object' && deeplyFrozenObjects.has(value as object) && validatedFrozenDocuments.has(value as object)) {
+    return true;
+  }
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.length === 0 ||
+    !isString(value.name) ||
+    !isFiniteNumber(value.width) || value.width <= 0 ||
+    !isFiniteNumber(value.height) || value.height <= 0 ||
+    !isString(value.background) ||
+    !Array.isArray(value.nodes)
+  ) return false;
+
+  for (let i = 0; i < value.nodes.length; i += 1) {
+    if (!isValidatedDesignNode(value.nodes[i])) return false;
+  }
+
+  const nodes = value.nodes as DesignNode[];
+  const ids = new Set<string>();
+  for (let i = 0; i < nodes.length; i += 1) {
+    const id = nodes[i].id;
+    if (ids.has(id)) return false;
+    ids.add(id);
+  }
+  if (!isValidLayerHierarchy(nodes)) return false;
+  if (deeplyFrozenObjects.has(value as object)) {
+    validatedFrozenDocuments.add(value as object);
+  }
+  return true;
+}
+
+function isMetadata(value: unknown): value is FolioProject['metadata'] {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.id) && value.id.length > 0 &&
+    isString(value.name) && value.name.trim().length > 0 &&
+    isString(value.createdAt) &&
+    isString(value.updatedAt)
+  );
+}
+
+function validateEnvelope(input: unknown): string | null {
+  if (!isRecord(input)) return 'The file does not contain a Folio project object.';
+  if (input.format !== FOLIO_FORMAT) return 'This file is not a supported Folio project.';
+  if (!isMetadata(input.metadata) || !isString(input.appVersion)) return 'Project metadata is incomplete or invalid.';
+  return null;
+}
+
+export function validateProjectV1(input: unknown): LegacyValidationResult {
+  const envelopeError = validateEnvelope(input);
+  if (envelopeError) return { ok: false, error: envelopeError };
+  if (!isRecord(input) || input.formatVersion !== FOLIO_LEGACY_FORMAT_VERSION) {
+    return { ok: false, error: 'The file is not a supported version 1 Folio project.' };
+  }
+  if (!isDocument(input.document)) {
+    return { ok: false, error: 'Legacy document dimensions, background or node list is invalid.' };
+  }
+  return { ok: true, project: input as unknown as FolioProjectV1 };
+}
+
+const LOGIC_VALUE_TYPES = new Set(['string', 'number', 'boolean', 'list', 'object']);
+const LOGIC_VARIABLE_SCOPES = new Set(['local', 'global']);
+const LOGIC_VARIABLE_PERSISTS = new Set(['none', 'local', 'session']);
+
+export function isLogicVariableDefinition(value: unknown): value is import('./types').LogicVariableDefinition {
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.trim().length === 0 || value.id.length > 128 ||
+    !isString(value.name) || value.name.trim().length === 0 || value.name.length > 128 ||
+    !isString(value.valueType) || !LOGIC_VALUE_TYPES.has(value.valueType)
+  ) {
+    return false;
+  }
+  if (value.description !== undefined && (!isString(value.description) || value.description.length > 512)) {
+    return false;
+  }
+  if (value.scope !== undefined && (!isString(value.scope) || !LOGIC_VARIABLE_SCOPES.has(value.scope))) {
+    return false;
+  }
+  if (value.persist !== undefined && (!isString(value.persist) || !LOGIC_VARIABLE_PERSISTS.has(value.persist))) {
+    return false;
+  }
+  if (value.computed !== undefined && typeof value.computed !== 'boolean') {
+    return false;
+  }
+  if (value.computedExpression !== undefined && (!isString(value.computedExpression) || value.computedExpression.length > 1024)) {
+    return false;
+  }
+  if (value.valueType === 'string') return typeof value.initialValue === 'string';
+  if (value.valueType === 'number') return isFiniteNumber(value.initialValue);
+  if (value.valueType === 'boolean') return typeof value.initialValue === 'boolean';
+  if (value.valueType === 'list') {
+    return Array.isArray(value.initialValue) || typeof value.initialValue === 'string';
+  }
+  return isRecord(value.initialValue) || typeof value.initialValue === 'string';
+}
+
+export function isLogicNetworkSettings(value: unknown): value is import('./types').LogicNetworkSettings {
+  if (!isRecord(value)) return false;
+  if (Object.prototype.hasOwnProperty.call(value, 'authToken')) return false;
+  return (
+    isString(value.baseUrl) && value.baseUrl.length <= 2048 &&
+    isString(value.globalHeaders) && value.globalHeaders.length <= 8192 &&
+    isString(value.authSecretRef) && value.authSecretRef.length <= 128
+  );
+}
+
+export function isLogicGraph(value: unknown): value is import('./types').LogicGraph {
+  if (!isRecord(value) || !isString(value.id) || value.id.trim().length === 0 || !isString(value.name) || value.name.trim().length === 0) return false;
+  if (!['project', 'page', 'component'].includes(String(value.scope))) return false;
+  if (value.scope === 'project') {
+    if (value.targetId !== null) return false;
+  } else if (!isString(value.targetId) || value.targetId.trim().length === 0) {
+    return false;
+  }
+  if (!isString(value.createdAt) || !isString(value.updatedAt)) return false;
+  if (!Array.isArray(value.nodes) || !Array.isArray(value.connections)) return false;
+
+  if (value.networkSettings !== undefined && !isLogicNetworkSettings(value.networkSettings)) {
+    return false;
+  }
+
+  if (value.variables !== undefined) {
+    if (!Array.isArray(value.variables)) return false;
+    const variableIds = new Set<string>();
+    const variableNames = new Set<string>();
+    for (const variable of value.variables) {
+      if (!isLogicVariableDefinition(variable)) return false;
+      const normalizedName = variable.name.trim().toLowerCase();
+      if (variableIds.has(variable.id) || variableNames.has(normalizedName)) return false;
+      variableIds.add(variable.id);
+      variableNames.add(normalizedName);
+    }
+  }
+
+  const nodeIds = new Set<string>();
+  for (const node of value.nodes) {
+    if (!isRecord(node) || !isString(node.id) || node.id.trim().length === 0 ||
+        !isString(node.type) || node.type.trim().length === 0 ||
+        !isFiniteNumber(node.x) || !isFiniteNumber(node.y) || !isRecord(node.data)) return false;
+    if (nodeIds.has(node.id)) return false;
+    nodeIds.add(node.id);
+    if (!Object.values(node.data).every((item) =>
+      item === null ||
+      typeof item === 'string' ||
+      typeof item === 'boolean' ||
+      isFiniteNumber(item),
+    )) return false;
+  }
+
+  const connectionIds = new Set<string>();
+  for (const connection of value.connections) {
+    if (!isRecord(connection) || !isString(connection.id) || connection.id.trim().length === 0 ||
+        !isString(connection.sourceNodeId) || !isString(connection.sourcePortId) || connection.sourcePortId.trim().length === 0 ||
+        !isString(connection.targetNodeId) || !isString(connection.targetPortId) || connection.targetPortId.trim().length === 0 ||
+        !nodeIds.has(connection.sourceNodeId) || !nodeIds.has(connection.targetNodeId)) return false;
+    if (connectionIds.has(connection.id)) return false;
+    connectionIds.add(connection.id);
+  }
+
+  if (value.frames !== undefined) {
+    if (!Array.isArray(value.frames) || value.frames.length > 256) return false;
+    const frameIds = new Set<string>();
+    for (const frame of value.frames) {
+      if (!isLogicFrame(frame, nodeIds)) return false;
+      if (frameIds.has(frame.id)) return false;
+      frameIds.add(frame.id);
+    }
+  }
+  return true;
+}
+
+const LOGIC_FRAME_PARAM_TYPES = new Set(['string', 'number', 'boolean', 'color', 'select']);
+
+function isLogicFrameExposedParam(value: unknown): value is import('./types').LogicFrameExposedParam {
+  return (
+    isRecord(value) &&
+    isString(value.paramId) && value.paramId.trim().length > 0 &&
+    isString(value.nodeId) && value.nodeId.trim().length > 0 &&
+    isString(value.field) && value.field.trim().length > 0 &&
+    isString(value.label) && value.label.trim().length > 0 &&
+    isString(value.type) && LOGIC_FRAME_PARAM_TYPES.has(value.type)
+  );
+}
+
+function isLogicFrameBakedData(value: unknown): value is import('./types').LogicFrameBakedData {
+  if (!isRecord(value)) return false;
+  if (
+    !Array.isArray(value.exposedInputs) ||
+    !Array.isArray(value.exposedOutputs) ||
+    !Array.isArray(value.exposedParams) ||
+    !isRecord(value.compiledPlan)
+  ) {
+    return false;
+  }
+  for (const inp of value.exposedInputs) {
+    if (
+      !isRecord(inp) ||
+      !isString(inp.portId) || inp.portId.trim().length === 0 ||
+      !isString(inp.targetNodeId) || inp.targetNodeId.trim().length === 0 ||
+      !isString(inp.targetPort) || inp.targetPort.trim().length === 0 ||
+      !isString(inp.label) ||
+      (inp.kind !== 'exec' && inp.kind !== 'data') ||
+      (inp.dataType !== undefined && !isString(inp.dataType))
+    ) {
+      return false;
+    }
+  }
+  for (const outp of value.exposedOutputs) {
+    if (
+      !isRecord(outp) ||
+      !isString(outp.portId) || outp.portId.trim().length === 0 ||
+      !isString(outp.sourceNodeId) || outp.sourceNodeId.trim().length === 0 ||
+      !isString(outp.sourcePort) || outp.sourcePort.trim().length === 0 ||
+      !isString(outp.label) ||
+      (outp.kind !== 'exec' && outp.kind !== 'data') ||
+      (outp.dataType !== undefined && !isString(outp.dataType))
+    ) {
+      return false;
+    }
+  }
+  for (const param of value.exposedParams) {
+    if (!isLogicFrameExposedParam(param)) return false;
+  }
+  const plan = value.compiledPlan;
+  if (
+    plan.version !== 1 ||
+    !Array.isArray(plan.internalNodeIds) ||
+    !plan.internalNodeIds.every((id) => isString(id) && id.trim().length > 0) ||
+    !isRecord(plan.entryRoutes) ||
+    !Array.isArray(plan.steps)
+  ) {
+    return false;
+  }
+  for (const step of plan.steps) {
+    if (
+      !isRecord(step) ||
+      !isString(step.nodeId) || step.nodeId.trim().length === 0 ||
+      !isFiniteNumber(step.order) ||
+      !isRecord(step.nextByPort) ||
+      !isRecord(step.dataInputs) ||
+      !isRecord(step.externalExitsByPort)
+    ) {
+      return false;
+    }
+  }
+  if (value.bakedAt !== undefined && !isString(value.bakedAt)) return false;
+  return true;
+}
+
+export function isLogicFrame(
+  value: unknown,
+  validNodeIds?: ReadonlySet<string>,
+): value is import('./types').LogicFrame {
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.trim().length === 0 || value.id.length > 128 ||
+    !isString(value.title) || value.title.trim().length === 0 || value.title.length > 128 ||
+    !isString(value.color) || value.color.trim().length === 0 || value.color.length > 64 ||
+    typeof value.isBaked !== 'boolean' ||
+    !isRecord(value.bounds) ||
+    !isFiniteNumber(value.bounds.x) ||
+    !isFiniteNumber(value.bounds.y) ||
+    !isFiniteNumber(value.bounds.width) || value.bounds.width < 40 ||
+    !isFiniteNumber(value.bounds.height) || value.bounds.height < 40 ||
+    !Array.isArray(value.childNodeIds)
+  ) {
+    return false;
+  }
+  const childSeen = new Set<string>();
+  for (const cid of value.childNodeIds) {
+    if (!isString(cid) || cid.trim().length === 0 || childSeen.has(cid)) return false;
+    if (validNodeIds && !validNodeIds.has(cid)) return false;
+    childSeen.add(cid);
+  }
+  if (value.exposedParams !== undefined) {
+    if (!Array.isArray(value.exposedParams)) return false;
+    for (const param of value.exposedParams) {
+      if (!isLogicFrameExposedParam(param)) return false;
+    }
+  }
+  if (value.bakedData !== undefined && !isLogicFrameBakedData(value.bakedData)) {
+    return false;
+  }
+  return true;
+}
+
+export function isLogicFramePreset(value: unknown): value is import('./types').LogicFramePreset {
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.trim().length === 0 || value.id.length > 128 ||
+    !isString(value.name) || value.name.trim().length === 0 || value.name.length > 128 ||
+    (value.description !== undefined && (!isString(value.description) || value.description.length > 512)) ||
+    !isString(value.color) || value.color.trim().length === 0 ||
+    !isString(value.createdAt) || value.createdAt.trim().length === 0 ||
+    !Array.isArray(value.nodes) ||
+    !Array.isArray(value.connections)
+  ) {
+    return false;
+  }
+  const nodeIds = new Set<string>();
+  for (const node of value.nodes) {
+    if (
+      !isRecord(node) || !isString(node.id) || node.id.trim().length === 0 ||
+      !isString(node.type) || node.type.trim().length === 0 ||
+      !isFiniteNumber(node.x) || !isFiniteNumber(node.y) || !isRecord(node.data)
+    ) {
+      return false;
+    }
+    if (nodeIds.has(node.id)) return false;
+    nodeIds.add(node.id);
+    if (!Object.values(node.data).every((item) =>
+      item === null || typeof item === 'string' || typeof item === 'boolean' || isFiniteNumber(item),
+    )) {
+      return false;
+    }
+  }
+  const connIds = new Set<string>();
+  for (const conn of value.connections) {
+    if (
+      !isRecord(conn) || !isString(conn.id) || conn.id.trim().length === 0 ||
+      !isString(conn.sourceNodeId) || !isString(conn.sourcePortId) || conn.sourcePortId.trim().length === 0 ||
+      !isString(conn.targetNodeId) || !isString(conn.targetPortId) || conn.targetPortId.trim().length === 0 ||
+      !nodeIds.has(conn.sourceNodeId) || !nodeIds.has(conn.targetNodeId)
+    ) {
+      return false;
+    }
+    if (connIds.has(conn.id)) return false;
+    connIds.add(conn.id);
+  }
+  return isLogicFrame(value.frame, nodeIds);
+}
+
+const SAFE_IMAGE_ASSET_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+  'image/svg+xml',
+]);
+
+const SAFE_FONT_ASSET_MIMES = new Set([
+  'font/woff2',
+  'font/woff',
+  'font/ttf',
+  'font/otf',
+  'application/font-woff',
+  'application/font-woff2',
+  'application/x-font-ttf',
+  'application/x-font-otf',
+  'application/octet-stream',
+]);
+
+const SAFE_FILE_ASSET_MIMES = new Set([
+  'application/octet-stream',
+  'application/pdf',
+  'application/json',
+  'text/plain',
+  'text/csv',
+]);
+
+const DISALLOWED_ACTIVE_ASSET_MIMES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'text/javascript',
+  'application/javascript',
+  'text/ecmascript',
+  'application/ecmascript',
+  'text/xml',
+  'application/xml',
+]);
+
+function decodeSvgEntitiesSafe(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);?/gi, (_m, hex: string) => {
+      const cp = parseInt(hex, 16);
+      return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+    })
+    .replace(/&#(\d+);?/g, (_m, dec: string) => {
+      const cp = parseInt(dec, 10);
+      return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+    })
+    .replace(/&colon;/gi, ':')
+    .replace(/&tab;/gi, '\t')
+    .replace(/&newline;/gi, '\n');
+}
+
+const SAFE_SVG_HREF_DATA_PATTERN = /^data:image\/(?:png|jpeg|jpg|webp|gif);base64,/i;
+const SAFE_ASSET_BLOB_URL_PATTERN = /^blob:(?:https?:\/\/[a-zA-Z0-9.:\[\]-]+|null)\/[a-zA-Z0-9._-]+$/i;
+const SAFE_FOLIO_ASSET_URI_PATTERN = /^(?:folio-)?asset:\/\/[a-zA-Z0-9._-]+$/i;
+
+function isSafeSvgAttributeHref(rawValue: string): boolean {
+  const decoded = decodeSvgEntitiesSafe(rawValue)
+    .replace(/[\u0000-\u0020\u007f-\u009f]+/g, '')
+    .toLowerCase();
+  if (!decoded || decoded.startsWith('#')) return true;
+  if (SAFE_SVG_HREF_DATA_PATTERN.test(decoded)) return true;
+  return false;
+}
+
+function isSafeSvgDataUri(trimmed: string): boolean {
+  const commaIdx = trimmed.indexOf(',');
+  if (commaIdx < 0) return false;
+  const header = trimmed.slice(0, commaIdx).toLowerCase();
+  const payload = trimmed.slice(commaIdx + 1);
+  let decoded = '';
+  try {
+    if (header.includes(';base64')) {
+      const normalized = payload.replace(/\s+/g, '');
+      decoded = atob(normalized);
+    } else {
+      decoded = decodeURIComponent(payload);
+    }
+  } catch {
+    return false;
+  }
+
+  const entityDecoded = decodeSvgEntitiesSafe(decoded);
+  const disallowedTagPattern =
+    /<\s*\/?\s*(?:[a-z_][a-z0-9_.-]*:)?(?:script|foreignobject|iframe|object|embed|applet|meta|link|style|animate|animatetransform|animatemotion|set|handler|listener)\b/i;
+  const eventHandlerPattern = /(?:[\s/]+)(?:[a-z_][a-z0-9_.-]*:)?on[a-z0-9_-]+\s*=/i;
+
+  if (
+    disallowedTagPattern.test(decoded) ||
+    disallowedTagPattern.test(entityDecoded) ||
+    eventHandlerPattern.test(decoded) ||
+    eventHandlerPattern.test(entityDecoded)
+  ) {
+    return false;
+  }
+
+  const hrefAttrPattern = /(?:[\s/]+)(?:[a-z_][a-z0-9_.-]*:)?(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gi;
+  for (const sourceText of [decoded, entityDecoded]) {
+    hrefAttrPattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = hrefAttrPattern.exec(sourceText)) !== null) {
+      const val = match[1] ?? match[2] ?? match[3] ?? '';
+      if (!isSafeSvgAttributeHref(val)) {
+        return false;
+      }
+    }
+  }
+
+  const collapsed = entityDecoded.replace(/[\u0000-\u0020\u007f-\u009f]+/g, '');
+  if (
+    /(?:javascript|vbscript):/i.test(collapsed) ||
+    /data:(?:text\/html|application\/xhtml\+xml|text\/javascript|application\/javascript|image\/svg\+xml)/i.test(collapsed) ||
+    /(?:expression\s*\(|@import|behavior\s*:)/i.test(collapsed) ||
+    /url\s*\(\s*['"]?(?!#)/i.test(collapsed)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function isSafeAssetMimeType(kind: string, rawMimeType: string): boolean {
+  const trimmed = rawMimeType.trim();
+  if (!trimmed || trimmed.length > 128) return false;
+  if (/[\u0000-\u001F\u007F;,\s]/.test(trimmed)) return false;
+  const normalized = trimmed.toLowerCase();
+  if (DISALLOWED_ACTIVE_ASSET_MIMES.has(normalized)) return false;
+  if (kind === 'image') return SAFE_IMAGE_ASSET_MIMES.has(normalized);
+  if (kind === 'font') return SAFE_FONT_ASSET_MIMES.has(normalized);
+  if (kind === 'file') return SAFE_FILE_ASSET_MIMES.has(normalized);
+  return false;
+}
+
+function isSafeAssetSource(source: string, kind: string, declaredMimeType: string): boolean {
+  const trimmed = source.replace(/[\u0000-\u001F\u007F]/g, '').trim();
+  if (!trimmed) return true;
+  if (trimmed.startsWith('//')) return false;
+
+  if (/^data:/i.test(trimmed)) {
+    const dataMatch = /^data:\s*([^;,]*)(?:;[^,]*)?,/i.exec(trimmed);
+    if (!dataMatch) return false;
+    const dataMime = (dataMatch[1].trim() || 'text/plain').toLowerCase();
+    const declaredMime = declaredMimeType.trim().toLowerCase();
+
+    if (DISALLOWED_ACTIVE_ASSET_MIMES.has(dataMime)) {
+      return false;
+    }
+    if (!isSafeAssetMimeType(kind, dataMime)) {
+      return false;
+    }
+    if (declaredMime === 'image/svg+xml' && dataMime !== 'image/svg+xml') {
+      return false;
+    }
+    if (dataMime === 'image/svg+xml' || declaredMime === 'image/svg+xml') {
+      return isSafeSvgDataUri(trimmed);
+    }
+    return true;
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return !/\s/.test(trimmed);
+  }
+  if (SAFE_FOLIO_ASSET_URI_PATTERN.test(trimmed)) {
+    return true;
+  }
+  if (SAFE_ASSET_BLOB_URL_PATTERN.test(trimmed)) {
+    return true;
+  }
+
+  // Reject any non-allowlisted URI scheme (e.g., javascript:, vbscript:, file:, ftp:, filesystem:, blob:javascript:)
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+    return false;
+  }
+  // Allow only clean relative paths without path traversal or backslashes
+  if (trimmed.includes('..') || trimmed.includes('\\') || /\s/.test(trimmed)) {
+    return false;
+  }
+  return true;
+}
+
+function isAssetReference(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const kind = String(value.kind);
+  return (
+    isString(value.id) && value.id.trim().length > 0 &&
+    isString(value.name) &&
+    (kind === 'image' || kind === 'font' || kind === 'file') &&
+    isString(value.mimeType) && isSafeAssetMimeType(kind, value.mimeType) &&
+    isString(value.source) && isSafeAssetSource(value.source, kind, value.mimeType) &&
+    isString(value.createdAt) &&
+    (value.sha256 === undefined || (isString(value.sha256) && SHA256_HEX_PATTERN.test(value.sha256))) &&
+    (value.byteLength === undefined || (isFiniteNumber(value.byteLength) && value.byteLength >= 0)) &&
+    (value.width === undefined || (isFiniteNumber(value.width) && value.width > 0)) &&
+    (value.height === undefined || (isFiniteNumber(value.height) && value.height > 0))
+  );
+}
+
+const CODE_MODULE_LANGUAGES = new Set(['html', 'css', 'tsx', 'ts', 'js']);
+const CODE_MODULE_PATH_PATTERN = /^[a-zA-Z0-9._/-]+$/;
+
+export function isCodeModuleRecord(value: unknown): value is import('./types').CodeModuleRecord {
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.trim().length === 0 || value.id.length > 128 ||
+    !isString(value.path) || value.path.trim().length === 0 || value.path.length > 240 ||
+    value.path.includes('..') || value.path.startsWith('/') || !CODE_MODULE_PATH_PATTERN.test(value.path) ||
+    !isString(value.language) || !CODE_MODULE_LANGUAGES.has(value.language) ||
+    (value.mapping !== 'custom' && value.mapping !== 'extension') ||
+    !isString(value.content) || value.content.length > 200_000 ||
+    !isString(value.updatedAt) || value.updatedAt.trim().length === 0
+  ) {
+    return false;
+  }
+  if (value.targetNodeId !== undefined && (!isString(value.targetNodeId) || value.targetNodeId.trim().length === 0)) {
+    return false;
+  }
+  if (value.targetPageId !== undefined && (!isString(value.targetPageId) || value.targetPageId.trim().length === 0)) {
+    return false;
+  }
+  if (value.description !== undefined && (!isString(value.description) || value.description.length > 512)) {
+    return false;
+  }
+  return true;
+}
+
+export function isCodeModuleList(value: unknown): value is import('./types').CodeModuleRecord[] {
+  if (!Array.isArray(value) || value.length > 100) return false;
+  const ids = new Set<string>();
+  const paths = new Set<string>();
+  for (const item of value) {
+    if (!isCodeModuleRecord(item)) return false;
+    if (ids.has(item.id) || paths.has(item.path)) return false;
+    ids.add(item.id);
+    paths.add(item.path);
+  }
+  return true;
+}
+
+const ANIMATION_EASINGS_SET = new Set([
+  'linear',
+  'ease',
+  'ease-in',
+  'ease-out',
+  'ease-in-out',
+  'spring',
+  // Standard Penner families
+  'ease-in-sine',
+  'ease-out-sine',
+  'ease-in-out-sine',
+  'ease-in-quad',
+  'ease-out-quad',
+  'ease-in-out-quad',
+  'ease-in-cubic',
+  'ease-out-cubic',
+  'ease-in-out-cubic',
+  'ease-in-quart',
+  'ease-out-quart',
+  'ease-in-out-quart',
+  // UI & Design System curves
+  'apple-ease',
+  'ios-sheet',
+  'material-standard',
+  'material-emphasized',
+  'material-decelerate',
+  'material-accelerate',
+  'fluent-standard',
+  'fluent-decelerate',
+  'fluent-accelerate',
+  'framer-smooth',
+  'snappy-ui',
+  'swift-out',
+  // Dynamic & High-contrast curves
+  'ease-in-quint',
+  'ease-out-quint',
+  'ease-in-out-quint',
+  'ease-in-expo',
+  'ease-out-expo',
+  'ease-in-out-expo',
+  'ease-in-circ',
+  'ease-out-circ',
+  'ease-in-out-circ',
+  'fast-slow-fast',
+  'slow-fast-slow',
+  'whip-in-out',
+  // Physics (Springs & Bounces)
+  'spring-gentle',
+  'spring-snappy',
+  'spring-bouncy',
+  'spring-stiff',
+  'spring-wobbly',
+  'spring-heavy',
+  'bounce-in',
+  'bounce-out',
+  'bounce-in-out',
+  'bounce-soft',
+  // Expressive (Overshoot, Anticipation, Elastic)
+  'overshoot-out',
+  'overshoot-soft',
+  'overshoot-bold',
+  'back-in',
+  'back-in-out',
+  'anticipation-snap',
+  'elastic-in',
+  'elastic-out',
+  'elastic-in-out',
+  'elastic-soft',
+  // Stepped & Quantized
+  'steps-2',
+  'steps-4',
+  'steps-6',
+  'steps-8',
+  'steps-12',
+  'step-end',
+]);
+const ANIMATABLE_PROPERTIES_SET = new Set([
+  'x',
+  'y',
+  'width',
+  'height',
+  'opacity',
+  'rotation',
+  'scale',
+  'radius',
+  'fill',
+  'stroke',
+  'strokeWidth',
+  'pathMorph',
+  'motionPathProgress',
+  'motionPathStart',
+  'motionPathEnd',
+  'motionPathOffset',
+  'trimStart',
+  'trimEnd',
+  'trimOffset',
+  'layerBlur',
+  'backdropBlur',
+  'shadowOffsetX',
+  'shadowOffsetY',
+  'shadowBlur',
+  'shadowSpread',
+  'shadowOpacity',
+  'brightness',
+  'contrast',
+  'saturate',
+  'grayscale',
+]);
+const SAFE_HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+const SAFE_FUNC_COLOR_PATTERN = /^(?:rgba?|hsla?)\(\s*[0-9.%\s,/+-]+\s*\)$/i;
+
+export function isAnimationEasing(value: unknown): value is import('./types').AnimationEasing {
+  if (isString(value)) {
+    return ANIMATION_EASINGS_SET.has(value);
+  }
+  if (!isRecord(value)) return false;
+  if (value.type === 'cubic-bezier') {
+    const p1 = value.p1;
+    const p2 = value.p2;
+    if (!Array.isArray(p1) || p1.length !== 2 || !Array.isArray(p2) || p2.length !== 2) {
+      return false;
+    }
+    const [x1, y1] = p1;
+    const [x2, y2] = p2;
+    return (
+      isFiniteNumber(x1) && x1 >= 0 && x1 <= 1 &&
+      isFiniteNumber(x2) && x2 >= 0 && x2 <= 1 &&
+      isFiniteNumber(y1) && y1 >= -2 && y1 <= 3 &&
+      isFiniteNumber(y2) && y2 >= -2 && y2 <= 3
+    );
+  }
+  if (value.type === 'multi-point') {
+    const points = value.points;
+    if (!Array.isArray(points) || points.length < 2 || points.length > 16) return false;
+    let prevX = -1;
+    for (const pt of points) {
+      if (
+        !isRecord(pt) ||
+        !isFiniteNumber(pt.x) || pt.x < 0 || pt.x > 1 ||
+        !isFiniteNumber(pt.y) || pt.y < -2 || pt.y > 3 ||
+        pt.x < prevX
+      ) {
+        return false;
+      }
+      prevX = pt.x;
+    }
+    return true;
+  }
+  return false;
+}
+
+export function isCustomEasingPresetList(
+  value: unknown,
+): value is import('./types').CustomEasingPreset[] {
+  if (!Array.isArray(value) || value.length > 64) return false;
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      !isString(item.id) || item.id.trim().length === 0 || item.id.length > 128 ||
+      !isString(item.name) || item.name.trim().length === 0 || item.name.length > 64 ||
+      !isAnimationEasing(item.easing)
+    ) {
+      return false;
+    }
+    if (ids.has(item.id)) return false;
+    ids.add(item.id);
+  }
+  return true;
+}
+
+export function isSafeAnimationColorValue(value: unknown): value is string {
+  if (!isString(value)) return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 64) return false;
+  if (trimmed === 'transparent') return true;
+  return SAFE_HEX_COLOR_PATTERN.test(trimmed) || SAFE_FUNC_COLOR_PATTERN.test(trimmed);
+}
+
+export function isAnimationClip(value: unknown): value is import('./types').AnimationClip {
+  if (!isRecord(value)) return false;
+  if (
+    !isString(value.id) || value.id.trim().length === 0 || value.id.length > 128 ||
+    !isString(value.name) || value.name.trim().length === 0 || value.name.length > 128 ||
+    !isString(value.pageId) || value.pageId.trim().length === 0 || value.pageId.length > 128 ||
+    !isFiniteNumber(value.durationMs) || value.durationMs < 100 || value.durationMs > 60_000 ||
+    typeof value.loop !== 'boolean' ||
+    typeof value.autoplay !== 'boolean' ||
+    !Array.isArray(value.tracks) || value.tracks.length > 256 ||
+    !isString(value.createdAt) || value.createdAt.trim().length === 0 ||
+    !isString(value.updatedAt) || value.updatedAt.trim().length === 0
+  ) {
+    return false;
+  }
+
+  const trackIds = new Set<string>();
+  const trackKeys = new Set<string>();
+  for (const track of value.tracks) {
+    if (
+      !isRecord(track) ||
+      !isString(track.id) || track.id.trim().length === 0 || track.id.length > 128 ||
+      !isString(track.targetNodeId) || track.targetNodeId.trim().length === 0 || track.targetNodeId.length > 128 ||
+      !isString(track.property) || !ANIMATABLE_PROPERTIES_SET.has(track.property) ||
+      (track.trimMode !== undefined && !TRIM_PATH_MODES.has(String(track.trimMode))) ||
+      !Array.isArray(track.keyframes) || track.keyframes.length > 256
+    ) {
+      return false;
+    }
+    const pairKey = `${track.targetNodeId}:${track.property}`;
+    if (trackIds.has(track.id) || trackKeys.has(pairKey)) return false;
+    trackIds.add(track.id);
+    trackKeys.add(pairKey);
+
+    const keyframeIds = new Set<string>();
+    for (const kf of track.keyframes) {
+      if (
+        !isRecord(kf) ||
+        !isString(kf.id) || kf.id.trim().length === 0 || kf.id.length > 128 ||
+        !isFiniteNumber(kf.timeMs) || kf.timeMs < 0 || kf.timeMs > value.durationMs ||
+        !isAnimationEasing(kf.easing)
+      ) {
+        return false;
+      }
+      if (keyframeIds.has(kf.id)) return false;
+      keyframeIds.add(kf.id);
+
+      if (track.property === 'fill' || track.property === 'stroke') {
+        if (!isSafeAnimationColorValue(kf.value)) return false;
+      } else if (track.property === 'pathMorph') {
+        if (!isValidPathMorphSnapshot(kf.value)) return false;
+      } else {
+        if (!isFiniteNumber(kf.value)) return false;
+        if ((track.property === 'opacity' || track.property === 'shadowOpacity') && (kf.value < 0 || kf.value > 1)) return false;
+        if (track.property === 'scale' && (kf.value < 0.05 || kf.value > 10)) return false;
+        if ((track.property === 'width' || track.property === 'height') && (kf.value < 1 || kf.value > 20000)) return false;
+        if ((track.property === 'radius' || track.property === 'strokeWidth') && (kf.value < 0 || kf.value > 2000)) return false;
+        if ((track.property === 'trimStart' || track.property === 'trimEnd') && (kf.value < 0 || kf.value > 100)) return false;
+        if (track.property === 'trimOffset' && (kf.value < -1000 || kf.value > 1000)) return false;
+        if (track.property === 'motionPathProgress' && (kf.value < -1000 || kf.value > 1000)) return false;
+        if ((track.property === 'motionPathStart' || track.property === 'motionPathEnd') && (kf.value < 0 || kf.value > 100)) return false;
+        if (track.property === 'motionPathOffset' && (kf.value < -4000 || kf.value > 4000)) return false;
+        if ((track.property === 'layerBlur' || track.property === 'backdropBlur' || track.property === 'shadowBlur') && (kf.value < 0 || kf.value > 200)) return false;
+        if ((track.property === 'shadowOffsetX' || track.property === 'shadowOffsetY') && (kf.value < -500 || kf.value > 500)) return false;
+        if (track.property === 'shadowSpread' && (kf.value < -100 || kf.value > 100)) return false;
+        if ((track.property === 'brightness' || track.property === 'contrast' || track.property === 'saturate') && (kf.value < 0 || kf.value > 300)) return false;
+        if (track.property === 'grayscale' && (kf.value < 0 || kf.value > 100)) return false;
+      }
+    }
+  }
+
+  if (value.motionPaths !== undefined) {
+    if (!Array.isArray(value.motionPaths) || value.motionPaths.length > 64) return false;
+    const mpIds = new Set<string>();
+    const mpTargets = new Set<string>();
+    for (const mp of value.motionPaths) {
+      if (
+        !isRecord(mp) ||
+        !isString(mp.id) || mp.id.trim().length === 0 || mp.id.length > 128 ||
+        !isString(mp.targetNodeId) || mp.targetNodeId.trim().length === 0 || mp.targetNodeId.length > 128 ||
+        !Array.isArray(mp.points) || mp.points.length < 2 || mp.points.length > 500 ||
+        !mp.points.every(isVectorAnchorPoint) ||
+        typeof mp.closed !== 'boolean' ||
+        (mp.sourcePathNodeId !== undefined && (!isString(mp.sourcePathNodeId) || mp.sourcePathNodeId.trim().length === 0 || mp.sourcePathNodeId.length > 128)) ||
+        typeof mp.autoOrient !== 'boolean' ||
+        (mp.orientOffsetDeg !== undefined && (!isFiniteNumber(mp.orientOffsetDeg) || mp.orientOffsetDeg < -3600 || mp.orientOffsetDeg > 3600)) ||
+        typeof mp.reverse !== 'boolean' ||
+        !isFiniteNumber(mp.startPct) || mp.startPct < 0 || mp.startPct > 100 ||
+        !isFiniteNumber(mp.endPct) || mp.endPct < 0 || mp.endPct > 100 ||
+        !isFiniteNumber(mp.offsetPx) || mp.offsetPx < -2000 || mp.offsetPx > 2000 ||
+        typeof mp.constantSpeed !== 'boolean' ||
+        !MOTION_PATH_LOOP_MODES.has(String(mp.loopMode)) ||
+        (mp.visible !== undefined && typeof mp.visible !== 'boolean')
+      ) {
+        return false;
+      }
+      if (mp.pathKeyframes !== undefined) {
+        if (!Array.isArray(mp.pathKeyframes) || mp.pathKeyframes.length > 128) return false;
+        const pkfIds = new Set<string>();
+        for (const pkf of mp.pathKeyframes) {
+          if (
+            !isRecord(pkf) ||
+            !isString(pkf.id) || pkf.id.trim().length === 0 || pkf.id.length > 128 ||
+            !isFiniteNumber(pkf.timeMs) || pkf.timeMs < 0 || pkf.timeMs > value.durationMs ||
+            !Array.isArray(pkf.points) || pkf.points.length < 2 || pkf.points.length > 500 ||
+            !pkf.points.every(isVectorAnchorPoint) ||
+            (pkf.easing !== undefined && !isAnimationEasing(pkf.easing))
+          ) {
+            return false;
+          }
+          if (pkfIds.has(pkf.id)) return false;
+          pkfIds.add(pkf.id);
+        }
+      }
+      if (mpIds.has(mp.id) || mpTargets.has(mp.targetNodeId)) return false;
+      mpIds.add(mp.id);
+      mpTargets.add(mp.targetNodeId);
+    }
+  }
+  return true;
+}
+
+export function isAnimationClipList(value: unknown): value is import('./types').AnimationClip[] {
+  if (!Array.isArray(value) || value.length > 128) return false;
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!isAnimationClip(item)) return false;
+    if (ids.has(item.id)) return false;
+    ids.add(item.id);
+  }
+  return true;
+}
+
+function validateComponentInstanceReference(
+  node: Extract<DesignNode, { type: 'component-instance' }>,
+  ownerLabel: string,
+  componentsById: ReadonlyMap<string, ComponentDefinition>,
+  masterNodesCache: Map<string, Map<string, DesignNode>>,
+): string | null {
+  const master = componentsById.get(node.componentId);
+  if (!master) {
+    return `${ownerLabel} references missing component: ${node.componentId}.`;
+  }
+  let masterNodesById = masterNodesCache.get(master.id);
+  if (!masterNodesById) {
+    masterNodesById = new Map(master.document.nodes.map((child) => [child.id, child]));
+    masterNodesCache.set(master.id, masterNodesById);
+  }
+  for (const [childId, override] of Object.entries(node.overrides)) {
+    const targetNode = masterNodesById.get(childId);
+    if (!targetNode) {
+      return `An instance of ${node.componentId} contains an override for a missing master layer.`;
+    }
+    if (override.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
+      return `An instance of ${node.componentId} overrides "text" on incompatible ${targetNode.type} layer "${targetNode.name}".`;
+    }
+    if (override.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
+      return `An instance of ${node.componentId} overrides "fill" on incompatible ${targetNode.type} layer "${targetNode.name}".`;
+    }
+  }
+  if (node.variantSelection) {
+    const axisById = new Map((master.variants ?? []).map((axis) => [axis.id, axis]));
+    for (const [axisId, optionId] of Object.entries(node.variantSelection)) {
+      const axis = axisById.get(axisId);
+      if (!axis) {
+        return `An instance of ${node.componentId} selects unknown variant axis "${axisId}".`;
+      }
+      if (!axis.options.some((opt) => opt.id === optionId)) {
+        return `An instance of ${node.componentId} selects unknown option "${optionId}" for variant axis "${axis.name}".`;
+      }
+    }
+  }
+  if (node.slotAssignments) {
+    const slotById = new Map((master.slots ?? []).map((slot) => [slot.id, slot]));
+    for (const [slotId, assignment] of Object.entries(node.slotAssignments)) {
+      const slot = slotById.get(slotId);
+      if (!slot) {
+        return `An instance of ${node.componentId} assigns unknown slot "${slotId}".`;
+      }
+      const targetNode = masterNodesById.get(slot.targetNodeId);
+      if (!targetNode) {
+        return `Slot "${slot.name}" on ${node.componentId} references missing master layer "${slot.targetNodeId}".`;
+      }
+      if (assignment.text !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'text')) {
+        return `Slot "${slot.name}" on ${node.componentId} cannot assign "text" to ${targetNode.type} layer "${targetNode.name}".`;
+      }
+      if (assignment.fill !== undefined && !isOverrideFieldCompatibleWithNodeType(targetNode.type, 'fill')) {
+        return `Slot "${slot.name}" on ${node.componentId} cannot assign "fill" to ${targetNode.type} layer "${targetNode.name}".`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Enforces that nested component instances form a strict Directed Acyclic Graph (DAG)
+ * with bounded nesting depth (<= MAX_COMPONENT_NESTING_DEPTH).
+ */
+export function validateComponentGraphAcyclic(
+  components: readonly ComponentDefinition[],
+): string | null {
+  const byId = new Map(components.map((c) => [c.id, c]));
+  // 0 = unvisited, 1 = visiting (active recursion stack), 2 = verified acyclic
+  const state = new Map<string, number>();
+
+  const dfs = (compId: string, depth: number, chain: string[]): string | null => {
+    if (depth > MAX_COMPONENT_NESTING_DEPTH) {
+      return `Component nesting exceeds maximum allowed depth (${MAX_COMPONENT_NESTING_DEPTH}): ${chain.join(' -> ')}.`;
+    }
+    const status = state.get(compId) ?? 0;
+    if (status === 1) {
+      return `Circular component nesting detected: ${[...chain, compId].join(' -> ')}.`;
+    }
+    if (status === 2) return null;
+
+    state.set(compId, 1);
+    const comp = byId.get(compId);
+    if (comp) {
+      for (const node of comp.document.nodes) {
+        if (node.type === 'component-instance') {
+          if (node.componentId === compId) {
+            return `Circular component nesting detected: component "${comp.name}" cannot contain an instance of itself.`;
+          }
+          const err = dfs(node.componentId, depth + 1, [...chain, compId]);
+          if (err) return err;
+        }
+      }
+    }
+    state.set(compId, 2);
+    return null;
+  };
+
+  for (const comp of components) {
+    const err = dfs(comp.id, 0, []);
+    if (err) return err;
+  }
+  return null;
+}
+
+function validateComponentCrossChecks(
+  component: ComponentDefinition,
+  projectDesignTokens: DesignTokenCollection | undefined,
+  componentsRef: readonly ComponentDefinition[],
+  componentsById: ReadonlyMap<string, ComponentDefinition>,
+  masterNodesCache: Map<string, Map<string, DesignNode>>,
+): string | null {
+  const tokenKey = projectDesignTokens ?? null;
+  const isFrozen = deeplyFrozenObjects.has(component as unknown as object);
+  const tokensFrozen = projectDesignTokens === undefined || deeplyFrozenObjects.has(projectDesignTokens as unknown as object);
+  const componentsFrozen = deeplyFrozenObjects.has(componentsRef as unknown as object);
+  if (isFrozen && tokensFrozen && componentsFrozen) {
+    const cached = validatedFrozenComponentsContext.get(component as unknown as object);
+    if (cached && cached.tokens === tokenKey && cached.components === componentsRef) {
+      return null;
+    }
+  }
+
+  for (let i = 0; i < component.document.nodes.length; i += 1) {
+    const node = component.document.nodes[i];
+    if (node.type === 'component-instance') {
+      const refErr = validateComponentInstanceReference(
+        node,
+        `Component "${component.name}"`,
+        componentsById,
+        masterNodesCache,
+      );
+      if (refErr) return refErr;
+    }
+    const tokenCheck = validateNodeTokenBindings(node, projectDesignTokens);
+    if (!tokenCheck.ok) {
+      return `Component "${component.name}": ${tokenCheck.error}`;
+    }
+  }
+
+  if (isFrozen && tokensFrozen && componentsFrozen) {
+    validatedFrozenComponentsContext.set(component as unknown as object, {
+      tokens: tokenKey,
+      components: componentsRef,
+    });
+  }
+  return null;
+}
+
+function validatePageCrossChecks(
+  page: { name: string; document: FolioDocument },
+  projectDesignTokens: DesignTokenCollection | undefined,
+  componentsRef: readonly ComponentDefinition[],
+  componentsById: ReadonlyMap<string, ComponentDefinition>,
+  masterNodesCache: Map<string, Map<string, DesignNode>>,
+): string | null {
+  const tokenKey = projectDesignTokens ?? null;
+  const pageFrozen = deeplyFrozenObjects.has(page as unknown as object);
+  const tokensFrozen = projectDesignTokens === undefined || deeplyFrozenObjects.has(projectDesignTokens as unknown as object);
+  const componentsFrozen = deeplyFrozenObjects.has(componentsRef as unknown as object);
+  if (pageFrozen && tokensFrozen && componentsFrozen) {
+    const cached = validatedFrozenPagesContext.get(page as unknown as object);
+    if (cached && cached.tokens === tokenKey && cached.components === componentsRef) {
+      return null;
+    }
+  }
+
+  const nodes = page.document.nodes;
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i];
+    if (node.tokenBindings !== undefined) {
+      const tokenCheck = validateNodeTokenBindings(node, projectDesignTokens);
+      if (!tokenCheck.ok) {
+        return `Page "${page.name}": ${tokenCheck.error}`;
+      }
+    }
+    if (node.type === 'component-instance') {
+      const refErr = validateComponentInstanceReference(
+        node,
+        'A page',
+        componentsById,
+        masterNodesCache,
+      );
+      if (refErr) return refErr;
+    }
+  }
+
+  if (pageFrozen && tokensFrozen && componentsFrozen) {
+    validatedFrozenPagesContext.set(page as unknown as object, {
+      tokens: tokenKey,
+      components: componentsRef,
+    });
+  }
+  return null;
+}
+
 export function validateProject(input: unknown): ValidationResult {
-  if (!isRecord(input)) {
-    return { ok: false, error: 'The file does not contain a Folio project object.' };
-  }
+  const envelopeError = validateEnvelope(input);
+  if (envelopeError) return { ok: false, error: envelopeError };
 
-  if (input.format !== FOLIO_FORMAT) {
-    return { ok: false, error: 'This file is not a supported Folio project.' };
-  }
-
-  if (input.formatVersion !== FOLIO_FORMAT_VERSION) {
+  if (!isRecord(input) || input.formatVersion !== FOLIO_FORMAT_VERSION) {
     return {
       ok: false,
-      error: `Unsupported .flop format version: ${String(input.formatVersion)}. This build supports version ${FOLIO_FORMAT_VERSION}.`,
+      error: `Unsupported .flop format version: ${String(isRecord(input) ? input.formatVersion : 'unknown')}. This build supports version ${FOLIO_FORMAT_VERSION}.`,
     };
   }
 
-  if (!isRecord(input.metadata) || !isRecord(input.document)) {
-    return { ok: false, error: 'Project metadata or document data is missing.' };
+  if (!isString(input.activePageId) ||
+      !Array.isArray(input.pages) || input.pages.length === 0 ||
+      !Array.isArray(input.components) ||
+      !Array.isArray(input.logicGraphs) ||
+      !Array.isArray(input.assets)) {
+    return { ok: false, error: 'Project pages, components, logic graphs or assets are missing.' };
   }
 
-  const metadata = input.metadata;
-  const document = input.document;
-
-  if (
-    !isString(metadata.id) ||
-    !isString(metadata.name) ||
-    !isString(metadata.createdAt) ||
-    !isString(metadata.updatedAt) ||
-    !isString(input.appVersion)
-  ) {
-    return { ok: false, error: 'Project metadata is incomplete or invalid.' };
+  if (input.designTokens !== undefined) {
+    const tokensFrozen = deeplyFrozenObjects.has(input.designTokens as object);
+    if (!(tokensFrozen && validatedFrozenTokens.has(input.designTokens as object))) {
+      if (!isDesignTokenCollection(input.designTokens)) {
+        return { ok: false, error: 'Project design tokens contain invalid values, missing themes, or cyclic/incompatible aliases.' };
+      }
+      if (tokensFrozen) validatedFrozenTokens.add(input.designTokens as object);
+    }
   }
 
-  if (
-    !isString(document.id) ||
-    !isString(document.name) ||
-    !isFiniteNumber(document.width) ||
-    document.width <= 0 ||
-    !isFiniteNumber(document.height) ||
-    document.height <= 0 ||
-    !isString(document.background) ||
-    !Array.isArray(document.nodes)
-  ) {
-    return { ok: false, error: 'Document dimensions, background or node list is invalid.' };
+  if (input.codeModules !== undefined) {
+    const modulesFrozen = deeplyFrozenObjects.has(input.codeModules as object);
+    if (!(modulesFrozen && validatedFrozenCodeModules.has(input.codeModules as object))) {
+      if (!isCodeModuleList(input.codeModules)) {
+        return { ok: false, error: 'Project code modules contain invalid paths, duplicate IDs, or unsupported mappings.' };
+      }
+      if (modulesFrozen) validatedFrozenCodeModules.add(input.codeModules as object);
+    }
   }
 
-  if (!document.nodes.every(isDesignNode)) {
-    return { ok: false, error: 'One or more layers contain unsupported or invalid data.' };
+  let applicationIds: Set<string> | null = null;
+  if (input.applications !== undefined) {
+    if (!Array.isArray(input.applications) || input.applications.length === 0 || input.applications.length > 100) {
+      return { ok: false, error: 'Project applications must be a non-empty array of valid application definitions.' };
+    }
+    applicationIds = new Set<string>();
+    const appSlugs = new Set<string>();
+    for (const app of input.applications) {
+      if (
+        !isRecord(app) ||
+        !isString(app.id) || !app.id.trim() || app.id.length > 128 ||
+        !isString(app.name) || !app.name.trim() || app.name.length > 160 ||
+        !isString(app.slug) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(app.slug) ||
+        !isString(app.basePath) || !app.basePath.startsWith('/') || /[\u0000-\u001F\u007F\u2028\u2029]/.test(app.basePath)
+      ) {
+        return { ok: false, error: 'One or more project application definitions are invalid.' };
+      }
+      if (applicationIds.has(app.id)) {
+        return { ok: false, error: 'Application IDs must be unique within a project.' };
+      }
+      if (appSlugs.has(app.slug)) {
+        return { ok: false, error: 'Application slugs must be unique within a project.' };
+      }
+      applicationIds.add(app.id);
+      appSlugs.add(app.slug);
+    }
+    if (input.activeApplicationId !== undefined) {
+      if (!isString(input.activeApplicationId) || !applicationIds.has(input.activeApplicationId)) {
+        return { ok: false, error: 'The active application ID does not belong to this project.' };
+      }
+    }
+  } else if (input.activeApplicationId !== undefined && (!isString(input.activeApplicationId) || !input.activeApplicationId.trim())) {
+    return { ok: false, error: 'The active application ID must be a non-empty string.' };
   }
 
-  const ids = (document.nodes as DesignNode[]).map((node) => node.id);
-  if (new Set(ids).size !== ids.length) {
-    return { ok: false, error: 'Layer IDs must be unique within a document.' };
+  const pageIds = new Set<string>();
+  const routes = new Set<string>();
+  for (let i = 0; i < input.pages.length; i += 1) {
+    const page = input.pages[i];
+    if (!isRecord(page) || !isString(page.id) || !page.id ||
+        !isString(page.name) || !page.name.trim() ||
+        !isString(page.route) || !page.route.startsWith('/') || /[\u0000-\u001F\u007F\u2028\u2029]/.test(page.route) ||
+        (page.applicationId !== undefined && (!isString(page.applicationId) || !page.applicationId.trim())) ||
+        !isDocument(page.document)) {
+      return { ok: false, error: 'One or more pages contain invalid route or document data.' };
+    }
+    if (applicationIds && page.applicationId !== undefined && !applicationIds.has(page.applicationId)) {
+      return { ok: false, error: `Page "${page.name}" references unknown application "${page.applicationId}".` };
+    }
+    if (pageIds.has(page.id)) return { ok: false, error: 'Page IDs must be unique within a project.' };
+    if (routes.has(page.route)) return { ok: false, error: 'Page routes must be unique within a project.' };
+    pageIds.add(page.id);
+    routes.add(page.route);
+  }
+
+  if (!pageIds.has(input.activePageId)) {
+    return { ok: false, error: 'The active page ID does not belong to this project.' };
+  }
+
+  const componentIds = new Set<string>();
+  const componentsArray = input.components as unknown as ComponentDefinition[];
+  const projectDesignTokens = input.designTokens as DesignTokenCollection | undefined;
+  const masterNodesCache = new Map<string, Map<string, DesignNode>>();
+
+  for (let i = 0; i < input.components.length; i += 1) {
+    const component = input.components[i];
+    if (!isRecord(component) || !isString(component.id) || !component.id ||
+        !isString(component.name) || !component.name.trim() ||
+        !isString(component.createdAt) || !isString(component.updatedAt) ||
+        !isDocument(component.document)) {
+      return { ok: false, error: 'One or more component definitions are invalid.' };
+    }
+    if (componentIds.has(component.id)) return { ok: false, error: 'Component IDs must be unique within a project.' };
+
+    const compFrozen = deeplyFrozenObjects.has(component as object);
+    const tokensFrozen = projectDesignTokens === undefined || deeplyFrozenObjects.has(projectDesignTokens as unknown as object);
+    const componentsFrozen = deeplyFrozenObjects.has(componentsArray as unknown as object);
+    const cachedCompEntry = compFrozen ? validatedFrozenComponentsContext.get(component as object) : undefined;
+    const cachedCompValid = Boolean(
+      compFrozen &&
+      tokensFrozen &&
+      componentsFrozen &&
+      cachedCompEntry &&
+      cachedCompEntry.tokens === (projectDesignTokens ?? null) &&
+      cachedCompEntry.components === componentsArray,
+    );
+
+    if (!cachedCompValid) {
+      const masterNodesById = new Map((component.document as FolioDocument).nodes.map((node) => [node.id, node]));
+      masterNodesCache.set(component.id, masterNodesById);
+      if (component.variants !== undefined && !isComponentVariantsList(component.variants, masterNodesById)) {
+        return { ok: false, error: `Component "${component.name}" contains invalid variant definitions.` };
+      }
+      if (component.slots !== undefined && !isComponentSlotsList(component.slots, masterNodesById)) {
+        return { ok: false, error: `Component "${component.name}" contains invalid slot definitions.` };
+      }
+      if (component.nodeLogicEnabled !== undefined && typeof component.nodeLogicEnabled !== 'boolean') {
+        return { ok: false, error: `Component "${component.name}" contains an invalid nodeLogicEnabled flag.` };
+      }
+      if (component.animations !== undefined && !isAnimationClipList(component.animations)) {
+        return { ok: false, error: `Component "${component.name}" contains invalid animation clips.` };
+      }
+      if (component.scope !== undefined && component.scope !== 'global' && component.scope !== 'local') {
+        return { ok: false, error: `Component "${component.name}" contains an invalid scope.` };
+      }
+      if (component.applicationId !== undefined && (!isString(component.applicationId) || !component.applicationId.trim())) {
+        return { ok: false, error: `Component "${component.name}" contains an invalid applicationId.` };
+      }
+      if (component.scope === 'local' && (!isString(component.applicationId) || !component.applicationId.trim())) {
+        return { ok: false, error: `Local component "${component.name}" must specify an owning applicationId.` };
+      }
+      if (applicationIds && component.applicationId !== undefined && !applicationIds.has(component.applicationId)) {
+        return { ok: false, error: `Component "${component.name}" references unknown application "${component.applicationId}".` };
+      }
+    }
+    componentIds.add(component.id);
+  }
+
+  const componentsById = new Map(componentsArray.map((component) => [component.id, component]));
+  for (let i = 0; i < componentsArray.length; i += 1) {
+    const compErr = validateComponentCrossChecks(
+      componentsArray[i],
+      projectDesignTokens,
+      componentsArray,
+      componentsById,
+      masterNodesCache,
+    );
+    if (compErr) return { ok: false, error: compErr };
+  }
+
+  const dagError = validateComponentGraphAcyclic(componentsArray);
+  if (dagError) return { ok: false, error: dagError };
+
+  const pagesArray = input.pages as Array<{ name: string; document: FolioDocument }>;
+  for (let i = 0; i < pagesArray.length; i += 1) {
+    const pageErr = validatePageCrossChecks(
+      pagesArray[i],
+      projectDesignTokens,
+      componentsArray,
+      componentsById,
+      masterNodesCache,
+    );
+    if (pageErr) return { ok: false, error: pageErr };
+  }
+
+  const logicFrozen = deeplyFrozenObjects.has(input.logicGraphs as object);
+  const pagesFrozen = deeplyFrozenObjects.has(input.pages as object);
+  const componentsFrozenForLogic = deeplyFrozenObjects.has(input.components as object);
+  const cachedLogicCtx = logicFrozen
+    ? validatedFrozenLogicGraphsContext.get(input.logicGraphs as object)
+    : undefined;
+  const logicContextValid = Boolean(
+    logicFrozen &&
+    pagesFrozen &&
+    componentsFrozenForLogic &&
+    cachedLogicCtx &&
+    cachedLogicCtx.pages === input.pages &&
+    cachedLogicCtx.components === input.components,
+  );
+  if (!logicContextValid) {
+    const graphIds = new Set<string>();
+    for (const graph of input.logicGraphs) {
+      if (!isLogicGraph(graph)) {
+        return { ok: false, error: 'One or more logic graphs contain invalid variables, nodes, or connections.' };
+      }
+      if (graphIds.has(graph.id)) {
+        return { ok: false, error: 'Logic graph IDs must be unique within a project.' };
+      }
+      graphIds.add(graph.id);
+      if (graph.scope === 'page' && (!graph.targetId || !pageIds.has(graph.targetId))) {
+        return { ok: false, error: `Logic graph "${graph.name}" references missing page "${String(graph.targetId)}".` };
+      }
+      if (graph.scope === 'component' && (!graph.targetId || !componentIds.has(graph.targetId))) {
+        return { ok: false, error: `Logic graph "${graph.name}" references missing component "${String(graph.targetId)}".` };
+      }
+    }
+    if (logicFrozen && pagesFrozen && componentsFrozenForLogic) {
+      validatedFrozenLogicGraphsContext.set(input.logicGraphs as object, {
+        pages: input.pages,
+        components: input.components,
+      });
+    }
+  }
+
+  if (input.animations !== undefined) {
+    const animFrozen = deeplyFrozenObjects.has(input.animations as object);
+    const animContextValid = Boolean(
+      animFrozen &&
+      pagesFrozen &&
+      validatedFrozenAnimationsContext.get(input.animations as object) === input.pages,
+    );
+    if (!animContextValid) {
+      if (!isAnimationClipList(input.animations)) {
+        return { ok: false, error: 'Project animations contain invalid clip timing, tracks, keyframes, or duplicate IDs.' };
+      }
+      for (const clip of input.animations) {
+        if (!pageIds.has(clip.pageId)) {
+          return { ok: false, error: `Animation clip "${clip.name}" references missing page "${clip.pageId}".` };
+        }
+      }
+      if (animFrozen && pagesFrozen) {
+        validatedFrozenAnimationsContext.set(input.animations as object, input.pages);
+      }
+    }
+  }
+
+  if (input.customEasings !== undefined) {
+    if (!isCustomEasingPresetList(input.customEasings)) {
+      return { ok: false, error: 'Project custom easing presets contain invalid curve definitions or duplicate IDs.' };
+    }
+  }
+
+  if (input.logicFramePresets !== undefined) {
+    if (!Array.isArray(input.logicFramePresets) || input.logicFramePresets.length > 128) {
+      return { ok: false, error: 'Project logic frame presets must be an array of valid frame presets.' };
+    }
+    const presetIds = new Set<string>();
+    for (const preset of input.logicFramePresets) {
+      if (!isLogicFramePreset(preset)) {
+        return { ok: false, error: 'One or more saved logic frame presets contain invalid data.' };
+      }
+      if (presetIds.has(preset.id)) {
+        return { ok: false, error: 'Logic frame preset IDs must be unique within a project.' };
+      }
+      presetIds.add(preset.id);
+    }
+  }
+
+  const assetsFrozen = deeplyFrozenObjects.has(input.assets as object);
+  if (!(assetsFrozen && validatedFrozenAssets.has(input.assets as object))) {
+    if (!input.assets.every(isAssetReference)) {
+      return { ok: false, error: 'One or more asset references are invalid.' };
+    }
+    if (assetsFrozen) validatedFrozenAssets.add(input.assets as object);
   }
 
   return { ok: true, project: input as unknown as FolioProject };
+}
+
+/**
+ * Incremental project validator against a previously validated, deeply frozen
+ * canonical project. Unchanged deeply frozen pages, components, tokens, code
+ * modules, and nodes bypass redundant O(N) re-validation while maintaining
+ * 100% equivalence with full validateProject().
+ */
+export function validateProjectIncremental(
+  previousValidProject: FolioProject | null | undefined,
+  candidateInput: unknown,
+): ValidationResult {
+  if (
+    previousValidProject &&
+    candidateInput === previousValidProject &&
+    deeplyFrozenObjects.has(previousValidProject as unknown as object)
+  ) {
+    return { ok: true, project: previousValidProject };
+  }
+  return validateProject(candidateInput);
 }
 
 export function requireValidProject(input: unknown): FolioProject {
   const result = validateProject(input);
   if (!result.ok || !result.project) {
     throw new Error(result.error ?? 'Invalid Folio project.');
+  }
+  return result.project;
+}
+
+export function requireValidProjectV1(input: unknown): FolioProjectV1 {
+  const result = validateProjectV1(input);
+  if (!result.ok || !result.project) {
+    throw new Error(result.error ?? 'Invalid legacy Folio project.');
   }
   return result.project;
 }

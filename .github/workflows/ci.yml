@@ -2,7 +2,7 @@ name: FOLIO verification
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/canvas-pan-distribute]
   pull_request:
   workflow_dispatch:
 
@@ -15,12 +15,13 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 26
+          node-version-file: .nvmrc
+          cache: npm
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Type-check
         run: npm run check
       - name: Run tests
-        run: npm run test
+        run: npm test
       - name: Build production bundle
         run: npm run build

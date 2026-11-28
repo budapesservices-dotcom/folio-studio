@@ -1,29 +1,124 @@
-import type { DesignNode, FolioProject } from '../core/document/types';
+import type {
+  AnimationClip,
+  AssetReference,
+  CodeModuleRecord,
+  ComponentDefinition,
+  ComponentScope,
+  ComponentSlotDefinition,
+  ComponentVariantAxis,
+  CustomEasingPreset,
+  DesignNode,
+  DesignTokenCollection,
+  FolioApplication,
+  FolioDocument,
+  FolioPage,
+  FolioProject,
+  LogicGraph,
+  NodeTokenBindings,
+} from '../core/document/types';
+import { getPageApplicationId, getProjectApplications } from '../core/document/applications';
+import { pruneLogicGraphsForDeletedComponent } from '../engines/prototype/validator';
+import { getActiveDocument, updateActiveDocument } from '../core/document/project';
+import { areDocumentsStructurallyEqual } from '../core/document/equality';
+import { classifyNodeChange } from '../core/document/nodeChanges';
+import {
+  detachComponentInstanceWithAnimations,
+  pruneComponentContractForDocument,
+  pruneComponentInstanceContractsInDocument,
+  replaceComponentInstancesInDocument,
+} from '../core/document/components';
+import { moveLayer, moveLayers, removeLayersAndPromoteChildren, groupLayers, ungroupLayers, expandSelectedLayerIds, createClippingMask, removeClippingMask, collapseLegacyCanvasInstances, type LayerDropPosition } from '../core/document/layers';
+import { cleanupDeletedNodeReferences } from '../core/document/nodeReferenceCleanup';
+import {
+  applyProjectDelta,
+  computeProjectDelta,
+  DEFAULT_DELTA_HISTORY_LIMIT,
+  isProjectDeltaEmpty,
+  type ProjectDelta,
+} from '../engines/history/deltaHistory';
 
-const HISTORY_LIMIT = 60;
+export const EDITOR_HISTORY_LIMIT = DEFAULT_DELTA_HISTORY_LIMIT;
 
 export interface EditorState {
   project: FolioProject;
-  past: FolioProject[];
-  future: FolioProject[];
+  past: ProjectDelta[];
+  future: ProjectDelta[];
   selectedNodeId: string | null;
   selectedNodeIds: string[];
+  historyGroup: string | null;
 }
 
 export type EditorAction =
   | { type: 'select-node'; nodeId: string | null }
   | { type: 'select-nodes'; nodeIds: string[] }
   | { type: 'add-node'; node: DesignNode }
+  | { type: 'add-nodes'; nodes: DesignNode[] }
   | { type: 'replace-node'; node: DesignNode }
+  | { type: 'set-nodes-properties'; nodeIds: string[]; properties: Partial<Pick<DesignNode, 'visible' | 'locked' | 'layerColor'>> }
+  | { type: 'rename-nodes'; updates: Array<{ nodeId: string; name: string }> }
+  | { type: 'replace-node-with-nodes'; nodeId: string; nodes: DesignNode[] }
+  | { type: 'replace-nodes'; removeIds: string[]; insertNodes: DesignNode[]; selectIds?: string[] }
+  | { type: 'edit-node'; node: DesignNode; coalesceKey: string }
+  | { type: 'commit-edit' }
+  | { type: 'delete-nodes'; nodeIds: string[] }
+  | { type: 'set-nodes-canvas-state'; nodeIds: string[]; onCanvas: boolean }
   | { type: 'transform-nodes'; nodes: DesignNode[] }
   | { type: 'delete-node'; nodeId: string }
+  | { type: 'move-layer'; nodeId: string; targetId: string; position: LayerDropPosition }
+  | { type: 'move-layers'; nodeIds: string[]; targetId: string; position: LayerDropPosition }
+  | { type: 'group-layers'; nodeIds: string[] }
+  | { type: 'ungroup-layers'; nodeIds: string[] }
+  | { type: 'mask-layer'; nodeId: string }
+  | { type: 'unmask-layer'; nodeId: string }
   | { type: 'rename-project'; name: string }
+  | { type: 'add-page'; page: FolioPage }
+  | { type: 'set-active-page'; pageId: string }
+  | { type: 'create-app'; application: FolioApplication; homePage: FolioPage }
+  | { type: 'set-active-app'; applicationId: string }
+  | { type: 'rename-app'; applicationId: string; name: string }
+  | { type: 'set-document-background'; background: string }
+  | { type: 'set-document-size'; width: number; height: number }
+  | { type: 'add-component'; component: ComponentDefinition }
+  | { type: 'sync-component-document'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; document: FolioDocument; animations?: AnimationClip[]; updatedAt: string }
+  | { type: 'rename-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; name: string }
+  | { type: 'delete-component'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string }
+  | { type: 'update-component-contract'; componentId: string; expectedMasterDocument: FolioDocument; expectedUpdatedAt: string; variants?: ComponentVariantAxis[]; slots?: ComponentSlotDefinition[]; nodeLogicEnabled?: boolean }
+  | { type: 'set-component-scope'; componentId: string; scope: ComponentScope; applicationId?: string }
+  | { type: 'update-design-tokens'; designTokens: DesignTokenCollection; unbindTokenIds?: string[] }
+  | { type: 'update-code-modules'; codeModules: CodeModuleRecord[]; coalesceKey?: string }
+  | { type: 'create-logic-graph'; graph: LogicGraph }
+  | { type: 'update-logic-graph'; graph: LogicGraph }
+  | { type: 'delete-logic-graph'; graphId: string }
+  | { type: 'create-animation-clip'; clip: AnimationClip }
+  | { type: 'update-animation-clip'; clip: AnimationClip; coalesceKey?: string }
+  | { type: 'delete-animation-clip'; clipId: string }
+  | { type: 'update-custom-easings'; customEasings: CustomEasingPreset[] }
+  | { type: 'upsert-asset'; asset: AssetReference }
   | { type: 'replace-project'; project: FolioProject }
   | { type: 'undo' }
   | { type: 'redo' };
 
 export function createEditorState(project: FolioProject): EditorState {
-  return { project, past: [], future: [], selectedNodeId: null, selectedNodeIds: [] };
+  return { project: normalizeProjectLayerDocuments(project), past: [], future: [], selectedNodeId: null, selectedNodeIds: [], historyGroup: null };
+}
+
+function pushDeltaToPast(
+  state: EditorState,
+  nextProject: FolioProject,
+  coalesceKey: string | null = null,
+): ProjectDelta[] {
+  if (coalesceKey && state.historyGroup === coalesceKey && state.past.length > 0) {
+    const previousDelta = state.past[state.past.length - 1];
+    const baselineProject = applyProjectDelta(state.project, previousDelta, 'backward');
+    const mergedDelta = computeProjectDelta(baselineProject, nextProject, { coalesceKey });
+    if (isProjectDeltaEmpty(mergedDelta)) {
+      return state.past.slice(0, -1);
+    }
+    return [...state.past.slice(0, -1), mergedDelta];
+  }
+  const delta = computeProjectDelta(state.project, nextProject, { coalesceKey });
+  if (isProjectDeltaEmpty(delta)) return state.past;
+  return [...state.past, delta].slice(-EDITOR_HISTORY_LIMIT);
 }
 
 function withSnapshot(
@@ -34,10 +129,11 @@ function withSnapshot(
 ): EditorState {
   return {
     project: nextProject,
-    past: [...state.past, state.project].slice(-HISTORY_LIMIT),
+    past: pushDeltaToPast(state, nextProject, null),
     future: [],
     selectedNodeId,
     selectedNodeIds,
+    historyGroup: null,
   };
 }
 
@@ -48,90 +144,374 @@ function touch(project: FolioProject): FolioProject {
   };
 }
 
+function normalizeProjectLayerDocuments(project: FolioProject): FolioProject {
+  return {
+    ...project,
+    pages: project.pages.map((page) => ({
+      ...page,
+      document: { ...page.document, nodes: collapseLegacyCanvasInstances(page.document.nodes) },
+    })),
+    components: project.components.map((component) => ({
+      ...component,
+      document: { ...component.document, nodes: collapseLegacyCanvasInstances(component.document.nodes) },
+    })),
+  };
+}
+
+function removeNodesFromLayers(nodes: DesignNode[], requestedIds: Iterable<string>): DesignNode[] {
+  const remaining = removeLayersAndPromoteChildren(nodes, requestedIds);
+  const remainingIds = new Set(remaining.map((node) => node.id));
+  return remaining.map((node) => {
+    if (!node.clipMaskBaseId || remainingIds.has(node.clipMaskBaseId)) return node;
+    const { clipMaskBaseId: _clipMaskBaseId, ...unmasked } = node;
+    return unmasked as DesignNode;
+  });
+}
+
+function unbindTokenIdsFromNodes(nodes: DesignNode[], removeSet: ReadonlySet<string>): DesignNode[] {
+  if (removeSet.size === 0) return nodes;
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (!node.tokenBindings) return node;
+    let nodeChanged = false;
+    const cleaned: NodeTokenBindings = {};
+    for (const [key, tokenId] of Object.entries(node.tokenBindings) as Array<[keyof NodeTokenBindings, string | undefined]>) {
+      if (!tokenId) continue;
+      if (removeSet.has(tokenId)) {
+        nodeChanged = true;
+      } else {
+        cleaned[key] = tokenId;
+      }
+    }
+    if (!nodeChanged) return node;
+    changed = true;
+    const nextNode = { ...node };
+    if (Object.keys(cleaned).length > 0) {
+      nextNode.tokenBindings = cleaned;
+    } else {
+      delete nextNode.tokenBindings;
+    }
+    return nextNode;
+  });
+  return changed ? next : nodes;
+}
+
 function existingSelection(project: FolioProject, ids: string[]): string[] {
-  const available = new Set(project.document.nodes.map((node) => node.id));
+  const available = new Set(getActiveDocument(project).nodes.map((node) => node.id));
   return [...new Set(ids)].filter((id) => available.has(id));
 }
 
+export function normalizePositiveDimension(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
+  const document = getActiveDocument(state.project);
+
   switch (action.type) {
     case 'select-node': {
       const ids = action.nodeId ? existingSelection(state.project, [action.nodeId]) : [];
-      return {
-        ...state,
-        selectedNodeId: ids[0] ?? null,
-        selectedNodeIds: ids,
-      };
+      return { ...state, selectedNodeId: ids[0] ?? null, selectedNodeIds: ids };
     }
 
     case 'select-nodes': {
       const ids = existingSelection(state.project, action.nodeIds);
+      const nextSelectedNodeId = ids.length === 1 ? ids[0] : null;
+      if (
+        nextSelectedNodeId === state.selectedNodeId &&
+        ids.length === state.selectedNodeIds.length &&
+        ids.every((id, index) => id === state.selectedNodeIds[index])
+      ) {
+        return state;
+      }
       return {
         ...state,
-        selectedNodeId: ids.length === 1 ? ids[0] : null,
+        selectedNodeId: nextSelectedNodeId,
         selectedNodeIds: ids,
       };
     }
 
-    case 'add-node': {
-      const next = touch({
-        ...state.project,
-        document: {
-          ...state.project.document,
-          nodes: [...state.project.document.nodes, action.node],
-        },
+    case 'add-node':
+      return editorReducer(state, { type: 'add-nodes', nodes: [action.node] });
+
+    case 'add-nodes': {
+      if (action.nodes.length === 0) return state;
+      const nextDocument = {
+        ...document,
+        nodes: [...document.nodes, ...action.nodes],
+      };
+      const next = touch(updateActiveDocument(state.project, nextDocument));
+      const ids = action.nodes.map((node) => node.id);
+      return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
+    }
+
+    case 'replace-node-with-nodes': {
+      const targetIndex = document.nodes.findIndex((node) => node.id === action.nodeId);
+      if (targetIndex === -1) return state;
+      const insertedIds = new Set(action.nodes.map((node) => node.id));
+      const targetRemoved = !insertedIds.has(action.nodeId);
+
+      let nodes: DesignNode[];
+      if (targetRemoved) {
+        const cleaned = removeNodesFromLayers(document.nodes, [action.nodeId]);
+        const targetParentId = document.nodes[targetIndex].parentId;
+        const sanitizedInserted = action.nodes.map((node) => {
+          let nextNode = node;
+          if (nextNode.parentId === action.nodeId) {
+            if (targetParentId) {
+              nextNode = { ...nextNode, parentId: targetParentId };
+            } else {
+              const { parentId: _parentId, ...promoted } = nextNode;
+              nextNode = promoted as DesignNode;
+            }
+          }
+          if (nextNode.clipMaskBaseId === action.nodeId) {
+            const { clipMaskBaseId: _clipMaskBaseId, ...unmasked } = nextNode;
+            nextNode = unmasked as DesignNode;
+          }
+          return nextNode;
+        });
+        nodes = [
+          ...cleaned.slice(0, targetIndex),
+          ...sanitizedInserted,
+          ...cleaned.slice(targetIndex),
+        ];
+      } else {
+        nodes = document.nodes.flatMap((node) => (node.id === action.nodeId ? action.nodes : [node]));
+      }
+
+      const updatedProject = updateActiveDocument(state.project, { ...document, nodes });
+      const cleanedProject = targetRemoved
+        ? cleanupDeletedNodeReferences(updatedProject, new Set([action.nodeId]), state.project.activePageId).project
+        : updatedProject;
+      const next = touch(cleanedProject);
+      const ids = existingSelection(next, action.nodes.map((node) => node.id));
+      return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
+    }
+
+    case 'replace-nodes': {
+      const removeSet = new Set(action.removeIds);
+      if (removeSet.size === 0 && action.insertNodes.length === 0) return state;
+      let insertIndex = -1;
+      document.nodes.forEach((node, idx) => {
+        if (removeSet.has(node.id)) insertIndex = idx;
       });
-      return withSnapshot(state, next, action.node.id, [action.node.id]);
+      if (removeSet.size > 0 && insertIndex === -1 && action.insertNodes.length === 0) return state;
+
+      // Remove targeted nodes (preserving children & cleaning broken clip masks for
+      // IDs that are not re-inserted), then insert replacement nodes at the exact
+      // z-index slot and clean up dangling cross-studio references in ONE atomic undo step.
+      const insertIdSet = new Set(action.insertNodes.map((node) => node.id));
+      const trulyRemovedIds = new Set([...removeSet].filter((id) => !insertIdSet.has(id)));
+      const survivingBeforeSlot: DesignNode[] = [];
+      const survivingAfterSlot: DesignNode[] = [];
+      const cleaned = removeNodesFromLayers(document.nodes, trulyRemovedIds).filter(
+        (node) => !removeSet.has(node.id),
+      );
+      const originalIndexById = new Map(document.nodes.map((n, idx) => [n.id, idx]));
+      for (const node of cleaned) {
+        const origIdx = originalIndexById.get(node.id) ?? 0;
+        if (insertIndex === -1 || origIdx <= insertIndex) survivingBeforeSlot.push(node);
+        else survivingAfterSlot.push(node);
+      }
+      const nodes = [...survivingBeforeSlot, ...action.insertNodes, ...survivingAfterSlot];
+      const finalIds = new Set(nodes.map((node) => node.id));
+      const actuallyRemovedIds = new Set(
+        document.nodes.filter((node) => !finalIds.has(node.id)).map((node) => node.id),
+      );
+      const updatedProject = updateActiveDocument(state.project, { ...document, nodes });
+      const cleanedProject = actuallyRemovedIds.size > 0
+        ? cleanupDeletedNodeReferences(updatedProject, actuallyRemovedIds, state.project.activePageId).project
+        : updatedProject;
+      const next = touch(cleanedProject);
+      const ids = existingSelection(
+        next,
+        action.selectIds ?? action.insertNodes.map((node) => node.id),
+      );
+      return withSnapshot(state, next, ids.length === 1 ? ids[0] : null, ids);
+    }
+
+    case 'edit-node': {
+      const exists = document.nodes.some((node) => node.id === action.node.id);
+      if (!exists) return state;
+      const nextDocument = {
+        ...document,
+        nodes: document.nodes.map((node) => (node.id === action.node.id ? action.node : node)),
+      };
+      const nextProject = touch(updateActiveDocument(state.project, nextDocument));
+      const past = pushDeltaToPast(state, nextProject, action.coalesceKey);
+      const nextHistoryGroup =
+        action.coalesceKey && past.length > 0 && past[past.length - 1].coalesceKey === action.coalesceKey
+          ? action.coalesceKey
+          : null;
+      return {
+        ...state,
+        project: nextProject,
+        past,
+        future: [],
+        historyGroup: nextHistoryGroup,
+      };
+    }
+
+    case 'commit-edit':
+      return state.historyGroup ? { ...state, historyGroup: null } : state;
+
+    case 'set-nodes-properties': {
+      const ids = new Set(action.nodeIds);
+      if (ids.size === 0) return state;
+      const nodes = document.nodes.map((node) => {
+        if (!ids.has(node.id)) return node;
+        const next = { ...node, ...action.properties };
+        return next.visible === node.visible
+          && next.locked === node.locked
+          && next.layerColor === node.layerColor
+          ? node
+          : next;
+      });
+      if (nodes.every((node, index) => node === document.nodes[index])) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
+    case 'rename-nodes': {
+      const updates = new Map(action.updates.map((item) => [item.nodeId, item.name]));
+      if (updates.size === 0) return state;
+      let changed = false;
+      const nodes = document.nodes.map((node) => {
+        const name = updates.get(node.id);
+        if (name === undefined || name === node.name) return node;
+        changed = true;
+        return { ...node, name };
+      });
+      if (!changed) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
     }
 
     case 'replace-node': {
-      const exists = state.project.document.nodes.some((node) => node.id === action.node.id);
-      if (!exists) return state;
-      const next = touch({
-        ...state.project,
-        document: {
-          ...state.project.document,
-          nodes: state.project.document.nodes.map((node) => (node.id === action.node.id ? action.node : node)),
-        },
-      });
-      return withSnapshot(state, next);
+      const existing = document.nodes.find((node) => node.id === action.node.id);
+      if (!existing || !classifyNodeChange(existing, action.node).hasAnyChange) return state;
+      const nextDocument = {
+        ...document,
+        nodes: document.nodes.map((node) => (node.id === action.node.id ? action.node : node)),
+      };
+      return withSnapshot(state, touch(updateActiveDocument(state.project, nextDocument)));
     }
 
     case 'transform-nodes': {
       const updates = new Map(action.nodes.map((node) => [node.id, node] as const));
       let changed = false;
-      const nodes = state.project.document.nodes.map((node) => {
+      const nodes = document.nodes.map((node) => {
         const replacement = updates.get(node.id);
         if (!replacement) return node;
-        if (
-          replacement.x === node.x &&
-          replacement.y === node.y &&
-          replacement.width === node.width &&
-          replacement.height === node.height &&
-          (node.type !== 'text' || replacement.type !== 'text' || replacement.style.fontSize === node.style.fontSize)
-        ) {
-          return node;
-        }
+        if (!classifyNodeChange(node, replacement).hasAnyChange) return node;
         changed = true;
         return replacement;
       });
       if (!changed) return state;
+      return withSnapshot(
+        state,
+        touch(updateActiveDocument(state.project, { ...document, nodes })),
+      );
+    }
 
-      const next = touch({
-        ...state.project,
-        document: { ...state.project.document, nodes },
+    case 'move-layer': {
+      const nodes = moveLayer(document.nodes, action.nodeId, action.targetId, action.position);
+      if (nodes === document.nodes) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
+    case 'move-layers': {
+      const nodes = moveLayers(document.nodes, action.nodeIds, action.targetId, action.position);
+      if (nodes === document.nodes) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
+    case 'group-layers': {
+      const nodes = groupLayers(document.nodes, action.nodeIds);
+      if (nodes === document.nodes) return state;
+      const group = nodes.find((node) => node.type === 'group' && !document.nodes.some((old) => old.id === node.id));
+      const next = touch(updateActiveDocument(state.project, { ...document, nodes }));
+      const selectedIds = group ? expandSelectedLayerIds(nodes, [group.id]) : [];
+      return withSnapshot(state, next, selectedIds.length === 1 ? selectedIds[0] : null, selectedIds);
+    }
+
+    case 'ungroup-layers': {
+      const nodes = ungroupLayers(document.nodes, action.nodeIds);
+      if (nodes === document.nodes) return state;
+      const nextById = new Map(nodes.map((node) => [node.id, node]));
+      const removedGroupIds = new Set(
+        document.nodes.filter((node) => !nextById.has(node.id)).map((node) => node.id),
+      );
+      const promotedIds = document.nodes
+        .filter((node) => {
+          const nextNode = nextById.get(node.id);
+          return nextNode && nextNode.parentId !== node.parentId;
+        })
+        .map((node) => node.id);
+      const updatedProject = updateActiveDocument(state.project, { ...document, nodes });
+      const cleanedProject = removedGroupIds.size > 0
+        ? cleanupDeletedNodeReferences(updatedProject, removedGroupIds, state.project.activePageId).project
+        : updatedProject;
+      const next = touch(cleanedProject);
+      return withSnapshot(state, next, promotedIds.length === 1 ? promotedIds[0] : null, promotedIds);
+    }
+
+    case 'mask-layer': {
+      const nodes = createClippingMask(document.nodes, action.nodeId);
+      if (nodes === document.nodes) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
+    case 'unmask-layer': {
+      const nodes = removeClippingMask(document.nodes, action.nodeId);
+      if (nodes === document.nodes) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
+    case 'set-nodes-canvas-state': {
+      const ids = new Set(action.nodeIds);
+      if (ids.size === 0) return state;
+      let changed = false;
+      const nodes = document.nodes.map((node) => {
+        if (!ids.has(node.id) || (node.onCanvas !== false) === action.onCanvas) return node;
+        changed = true;
+        return { ...node, onCanvas: action.onCanvas };
       });
-      return withSnapshot(state, next);
+      if (!changed) return state;
+      return withSnapshot(state, touch(updateActiveDocument(state.project, { ...document, nodes })));
+    }
+
+    case 'delete-nodes': {
+      const ids = new Set(action.nodeIds);
+      const nodes = removeNodesFromLayers(document.nodes, ids);
+      if (nodes.length === document.nodes.length) return state;
+      const remainingIds = new Set(nodes.map((node) => node.id));
+      const actuallyRemovedIds = new Set(
+        document.nodes.filter((node) => !remainingIds.has(node.id)).map((node) => node.id),
+      );
+      const cleanedProject = cleanupDeletedNodeReferences(
+        updateActiveDocument(state.project, { ...document, nodes }),
+        actuallyRemovedIds,
+        state.project.activePageId,
+      ).project;
+      const next = touch(cleanedProject);
+      const selected = state.selectedNodeIds.filter((id) => remainingIds.has(id));
+      return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
     }
 
     case 'delete-node': {
-      const nodes = state.project.document.nodes.filter((node) => node.id !== action.nodeId);
-      if (nodes.length === state.project.document.nodes.length) return state;
-      const next = touch({
-        ...state.project,
-        document: { ...state.project.document, nodes },
-      });
-      const selected = state.selectedNodeIds.filter((id) => id !== action.nodeId);
+      const nodes = removeNodesFromLayers(document.nodes, [action.nodeId]);
+      if (nodes.length === document.nodes.length) return state;
+      const remainingIds = new Set(nodes.map((node) => node.id));
+      const actuallyRemovedIds = new Set(
+        document.nodes.filter((node) => !remainingIds.has(node.id)).map((node) => node.id),
+      );
+      const cleanedProject = cleanupDeletedNodeReferences(
+        updateActiveDocument(state.project, { ...document, nodes }),
+        actuallyRemovedIds,
+        state.project.activePageId,
+      ).project;
+      const next = touch(cleanedProject);
+      const selected = state.selectedNodeIds.filter((id) => remainingIds.has(id));
       return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
     }
 
@@ -145,32 +525,596 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return withSnapshot(state, next);
     }
 
+    case 'add-page': {
+      if (state.project.pages.some((page) => page.id === action.page.id || page.route === action.page.route)) return state;
+      const nextActiveAppId = action.page.applicationId ?? state.project.activeApplicationId;
+      const next = touch({
+        ...state.project,
+        ...(nextActiveAppId !== undefined ? { activeApplicationId: nextActiveAppId } : {}),
+        activePageId: action.page.id,
+        pages: [...state.project.pages, action.page],
+      });
+      return withSnapshot(state, next, null, []);
+    }
+
+    case 'set-active-page': {
+      const targetPage = state.project.pages.find((page) => page.id === action.pageId);
+      if (!targetPage) return state;
+      const targetAppId = state.project.applications ? getPageApplicationId(state.project, targetPage) : state.project.activeApplicationId;
+      if (state.project.activePageId === action.pageId && state.project.activeApplicationId === targetAppId) return state;
+      const next = touch({
+        ...state.project,
+        activePageId: action.pageId,
+        ...(targetAppId !== undefined ? { activeApplicationId: targetAppId } : {}),
+      });
+      return withSnapshot(state, next, null, []);
+    }
+
+    case 'create-app': {
+      const existingApps = [...getProjectApplications(state.project)];
+      if (
+        existingApps.some((app) => app.id === action.application.id || app.slug === action.application.slug) ||
+        state.project.pages.some((page) => page.id === action.homePage.id || page.route === action.homePage.route)
+      ) {
+        return state;
+      }
+      const defaultAppId = existingApps[0].id;
+      const normalizedExistingPages = state.project.pages.map((page) =>
+        page.applicationId ? page : { ...page, applicationId: defaultAppId },
+      );
+      const homePage: FolioPage = {
+        ...action.homePage,
+        applicationId: action.application.id,
+      };
+      const next = touch({
+        ...state.project,
+        applications: [...existingApps, action.application],
+        activeApplicationId: action.application.id,
+        activePageId: homePage.id,
+        pages: [...normalizedExistingPages, homePage],
+      });
+      return withSnapshot(state, next, null, []);
+    }
+
+    case 'set-active-app': {
+      const apps = getProjectApplications(state.project);
+      if (!apps.some((app) => app.id === action.applicationId)) return state;
+      const appPages = state.project.pages.filter(
+        (page) => getPageApplicationId(state.project, page) === action.applicationId,
+      );
+      const nextActivePageId = appPages.some((page) => page.id === state.project.activePageId)
+        ? state.project.activePageId
+        : (appPages[0]?.id ?? state.project.activePageId);
+      if (state.project.activeApplicationId === action.applicationId && state.project.activePageId === nextActivePageId) {
+        return state;
+      }
+      const next = touch({
+        ...state.project,
+        applications: [...apps],
+        activeApplicationId: action.applicationId,
+        activePageId: nextActivePageId,
+      });
+      return withSnapshot(state, next, null, []);
+    }
+
+    case 'rename-app': {
+      const trimmed = action.name.trim();
+      if (!trimmed) return state;
+      const apps = getProjectApplications(state.project);
+      const target = apps.find((app) => app.id === action.applicationId);
+      if (!target || target.name === trimmed) return state;
+      const nextApps = apps.map((app) => (app.id === action.applicationId ? { ...app, name: trimmed } : app));
+      const next = touch({
+        ...state.project,
+        applications: nextApps,
+        activeApplicationId: state.project.activeApplicationId ?? apps[0].id,
+      });
+      return withSnapshot(state, next);
+    }
+
+    case 'set-document-background': {
+      const currentDoc = getActiveDocument(state.project);
+      if (currentDoc.background === action.background) return state;
+      const next = updateActiveDocument(state.project, {
+        ...currentDoc,
+        background: action.background,
+      });
+      return withSnapshot(state, next);
+    }
+
+    case 'set-document-size': {
+      const currentDoc = getActiveDocument(state.project);
+      const nextWidth = Math.max(64, Math.min(8192, Math.round(action.width)));
+      const nextHeight = Math.max(64, Math.min(8192, Math.round(action.height)));
+      if (!Number.isFinite(nextWidth) || !Number.isFinite(nextHeight)) return state;
+      if (currentDoc.width === nextWidth && currentDoc.height === nextHeight) return state;
+      const next = touch(updateActiveDocument(state.project, {
+        ...currentDoc,
+        width: nextWidth,
+        height: nextHeight,
+      }));
+      return withSnapshot(state, next);
+    }
+
+    case 'add-component': {
+      if (state.project.components.some((component) => component.id === action.component.id)) return state;
+      return withSnapshot(state, touch({
+        ...state.project,
+        components: [...state.project.components, action.component],
+      }));
+    }
+
+    case 'sync-component-document': {
+      const currentComponent = state.project.components.find((component) => component.id === action.componentId);
+      if (!currentComponent || currentComponent.document !== action.expectedMasterDocument ||
+          currentComponent.updatedAt !== action.expectedUpdatedAt) return state;
+      const docsEqual = areDocumentsStructurallyEqual(currentComponent.document, action.document);
+      const nextAnimations = action.animations !== undefined
+        ? (action.animations.length > 0 ? action.animations : undefined)
+        : currentComponent.animations;
+      const animationsEqual = JSON.stringify(currentComponent.animations ?? []) === JSON.stringify(nextAnimations ?? []);
+      if (docsEqual && animationsEqual) return state;
+      const nextNodeIds = new Set(action.document.nodes.map((node) => node.id));
+      const removedMasterNodeIds = new Set<string>();
+      for (const prevNode of currentComponent.document.nodes) {
+        if (!nextNodeIds.has(prevNode.id)) {
+          removedMasterNodeIds.add(prevNode.id);
+        }
+      }
+      const prunedBase = pruneComponentContractForDocument(currentComponent, action.document);
+      const prunedComponent: ComponentDefinition = {
+        ...prunedBase,
+        document: action.document,
+        updatedAt: action.updatedAt,
+      };
+      if (nextAnimations && nextAnimations.length > 0) {
+        prunedComponent.animations = nextAnimations;
+      } else {
+        delete prunedComponent.animations;
+      }
+      const components = state.project.components.map((component) => {
+        if (component.id === action.componentId) return prunedComponent;
+        const nextDoc = pruneComponentInstanceContractsInDocument(component.document, prunedComponent);
+        return nextDoc === component.document ? component : { ...component, document: nextDoc };
+      });
+      const pages = state.project.pages.map((page) => {
+        const document = pruneComponentInstanceContractsInDocument(page.document, prunedComponent);
+        return document === page.document ? page : { ...page, document };
+      });
+      let logicGraphs = state.project.logicGraphs;
+      if (removedMasterNodeIds.size > 0 && logicGraphs && logicGraphs.length > 0) {
+        let graphsChanged = false;
+        const nextGraphs = logicGraphs.map((graph) => {
+          if (graph.scope !== 'component' || graph.targetId !== action.componentId) return graph;
+          let modified = false;
+          const nextNodes = graph.nodes.map((logicNode) => {
+            const targetRef = logicNode.data?.targetNodeId;
+            if (typeof targetRef === 'string' && targetRef.length > 0 && removedMasterNodeIds.has(targetRef)) {
+              modified = true;
+              return { ...logicNode, data: { ...logicNode.data, targetNodeId: '' } };
+            }
+            return logicNode;
+          });
+          if (!modified) return graph;
+          graphsChanged = true;
+          return { ...graph, nodes: nextNodes, updatedAt: action.updatedAt };
+        });
+        if (graphsChanged) logicGraphs = nextGraphs;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          pages,
+          components,
+          ...(logicGraphs !== state.project.logicGraphs ? { logicGraphs } : {}),
+        }),
+      );
+    }
+
+    case 'rename-component': {
+      const name = action.name.trim();
+      const target = state.project.components.find((component) => component.id === action.componentId);
+      if (!target || target.document !== action.expectedMasterDocument ||
+          target.updatedAt !== action.expectedUpdatedAt || !name || target.name === name) return state;
+      const now = new Date().toISOString();
+      const components = state.project.components.map((component) =>
+        component.id === action.componentId ? { ...component, name, updatedAt: now, document: { ...component.document, name } } : component);
+      return withSnapshot(state, touch({ ...state.project, components }));
+    }
+
+    case 'delete-component': {
+      const target = state.project.components.find((component) => component.id === action.componentId);
+      if (!target || target.document !== action.expectedMasterDocument ||
+          target.updatedAt !== action.expectedUpdatedAt) return state;
+      const removedInstanceIdsByPage = new Map<string, Set<string>>();
+      for (const page of state.project.pages) {
+        const pageRemovedIds = new Set<string>();
+        for (const node of page.document.nodes) {
+          if (node.type === 'component-instance' && node.componentId === action.componentId) {
+            pageRemovedIds.add(node.id);
+          }
+        }
+        if (pageRemovedIds.size > 0) {
+          removedInstanceIdsByPage.set(page.id, pageRemovedIds);
+        }
+      }
+      const removedInstanceIdsByComponent = new Map<string, Set<string>>();
+      for (const component of state.project.components) {
+        if (component.id === action.componentId) continue;
+        const compRemovedIds = new Set<string>();
+        for (const node of component.document.nodes) {
+          if (node.type === 'component-instance' && node.componentId === action.componentId) {
+            compRemovedIds.add(node.id);
+          }
+        }
+        if (compRemovedIds.size > 0) {
+          removedInstanceIdsByComponent.set(component.id, compRemovedIds);
+        }
+      }
+      // Detach all page AND nested component instances so deleting a master never leaves broken references,
+      // while preserving any embedded component animations onto the detached page layers.
+      const unpackedAnimations: AnimationClip[] = [];
+      if (target.animations && target.animations.length > 0) {
+        for (const page of state.project.pages) {
+          for (const node of page.document.nodes) {
+            if (node.type === 'component-instance' && node.componentId === action.componentId) {
+              const { animations: detachedClips } = detachComponentInstanceWithAnimations(
+                node,
+                target,
+                page.id,
+                state.project.designTokens,
+              );
+              unpackedAnimations.push(...detachedClips);
+            }
+          }
+        }
+      }
+      const pages = state.project.pages.map((page) => ({
+        ...page, document: replaceComponentInstancesInDocument(page.document, target, state.project.designTokens),
+      }));
+      const components = state.project.components
+        .filter((component) => component.id !== action.componentId)
+        .map((component) => {
+          const nextDoc = replaceComponentInstancesInDocument(component.document, target, state.project.designTokens);
+          return nextDoc === component.document ? component : { ...component, document: nextDoc };
+        });
+      let logicGraphs = pruneLogicGraphsForDeletedComponent(state.project.logicGraphs, action.componentId);
+      if (removedInstanceIdsByComponent.size > 0) {
+        const now = new Date().toISOString();
+        logicGraphs = logicGraphs.map((graph) => {
+          if (graph.scope !== 'component' || !graph.targetId) return graph;
+          const removedIds = removedInstanceIdsByComponent.get(graph.targetId);
+          if (!removedIds) return graph;
+          let modified = false;
+          const nextNodes = graph.nodes.map((logicNode) => {
+            const targetRef = logicNode.data?.targetNodeId;
+            if (typeof targetRef === 'string' && targetRef.length > 0 && removedIds.has(targetRef)) {
+              modified = true;
+              return { ...logicNode, data: { ...logicNode.data, targetNodeId: '' } };
+            }
+            return logicNode;
+          });
+          return modified ? { ...graph, nodes: nextNodes, updatedAt: now } : graph;
+        });
+      }
+      let cleanedProject: FolioProject = {
+        ...state.project,
+        pages,
+        components,
+        logicGraphs,
+        ...(unpackedAnimations.length > 0
+          ? { animations: [...(state.project.animations ?? []), ...unpackedAnimations] }
+          : {}),
+      };
+      for (const [pageId, removedIds] of removedInstanceIdsByPage) {
+        cleanedProject = cleanupDeletedNodeReferences(cleanedProject, removedIds, pageId).project;
+      }
+      const next = touch(cleanedProject);
+      const selected = existingSelection(next, state.selectedNodeIds);
+      return withSnapshot(state, next, selected.length === 1 ? selected[0] : null, selected);
+    }
+
+    case 'update-component-contract': {
+      const target = state.project.components.find((component) => component.id === action.componentId);
+      if (!target || target.document !== action.expectedMasterDocument ||
+          target.updatedAt !== action.expectedUpdatedAt) return state;
+      const nextVariants = action.variants !== undefined ? action.variants : target.variants;
+      const nextSlots = action.slots !== undefined ? action.slots : target.slots;
+      const nextNodeLogicEnabled =
+        action.nodeLogicEnabled !== undefined ? action.nodeLogicEnabled : Boolean(target.nodeLogicEnabled);
+      if (
+        JSON.stringify(target.variants ?? []) === JSON.stringify(nextVariants ?? []) &&
+        JSON.stringify(target.slots ?? []) === JSON.stringify(nextSlots ?? []) &&
+        Boolean(target.nodeLogicEnabled) === nextNodeLogicEnabled
+      ) {
+        return state;
+      }
+      const now = new Date().toISOString();
+      const updatedComponent: ComponentDefinition = { ...target, updatedAt: now };
+      if (nextVariants && nextVariants.length > 0) updatedComponent.variants = nextVariants;
+      else delete updatedComponent.variants;
+      if (nextSlots && nextSlots.length > 0) updatedComponent.slots = nextSlots;
+      else delete updatedComponent.slots;
+      if (nextNodeLogicEnabled) updatedComponent.nodeLogicEnabled = true;
+      else delete updatedComponent.nodeLogicEnabled;
+
+      const components = state.project.components.map((component) => {
+        if (component.id === action.componentId) return updatedComponent;
+        const nextDoc = pruneComponentInstanceContractsInDocument(component.document, updatedComponent);
+        return nextDoc === component.document ? component : { ...component, document: nextDoc };
+      });
+      const pages = state.project.pages.map((page) => {
+        const document = pruneComponentInstanceContractsInDocument(page.document, updatedComponent);
+        return document === page.document ? page : { ...page, document };
+      });
+      return withSnapshot(state, touch({ ...state.project, pages, components }));
+    }
+
+    case 'set-component-scope': {
+      const target = state.project.components.find((component) => component.id === action.componentId);
+      if (!target) return state;
+      const nextScope = action.scope;
+      const apps = getProjectApplications(state.project);
+      const nextAppId = nextScope === 'local'
+        ? (action.applicationId && apps.some((app) => app.id === action.applicationId) ? action.applicationId : apps[0].id)
+        : undefined;
+      if ((target.scope ?? 'global') === nextScope && target.applicationId === nextAppId) {
+        return state;
+      }
+      const now = new Date().toISOString();
+      const updatedComponent: ComponentDefinition = {
+        ...target,
+        scope: nextScope,
+        updatedAt: now,
+      };
+      if (nextScope === 'local' && nextAppId) {
+        updatedComponent.applicationId = nextAppId;
+      } else {
+        delete updatedComponent.applicationId;
+      }
+      const components = state.project.components.map((component) =>
+        component.id === action.componentId ? updatedComponent : component,
+      );
+      const shouldEnsureApps = nextScope === 'local' && !state.project.applications;
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          ...(shouldEnsureApps ? { applications: [...apps], activeApplicationId: apps[0].id } : {}),
+          components,
+        }),
+      );
+    }
+
+    case 'update-design-tokens': {
+      const nextTokenIds = new Set(action.designTokens.tokens.map((token) => token.id));
+      const removeSet = new Set(action.unbindTokenIds ?? []);
+      for (const prevToken of state.project.designTokens?.tokens ?? []) {
+        if (!nextTokenIds.has(prevToken.id)) {
+          removeSet.add(prevToken.id);
+        }
+      }
+      const tokensChanged = JSON.stringify(state.project.designTokens ?? null) !== JSON.stringify(action.designTokens);
+      const pages = removeSet.size === 0
+        ? state.project.pages
+        : state.project.pages.map((page) => {
+            const nodes = unbindTokenIdsFromNodes(page.document.nodes, removeSet);
+            return nodes === page.document.nodes ? page : { ...page, document: { ...page.document, nodes } };
+          });
+      const components = removeSet.size === 0
+        ? state.project.components
+        : state.project.components.map((component) => {
+            const nodes = unbindTokenIdsFromNodes(component.document.nodes, removeSet);
+            return nodes === component.document.nodes ? component : { ...component, document: { ...component.document, nodes } };
+          });
+      const bindingsChanged = pages !== state.project.pages || components !== state.project.components;
+      if (!tokensChanged && !bindingsChanged) return state;
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          pages,
+          components,
+          designTokens: action.designTokens,
+        }),
+      );
+    }
+
+    case 'update-code-modules': {
+      const currentModules = state.project.codeModules ?? [];
+      if (JSON.stringify(currentModules) === JSON.stringify(action.codeModules)) {
+        return state;
+      }
+      const nextProject: FolioProject = { ...state.project };
+      if (action.codeModules.length > 0) {
+        nextProject.codeModules = action.codeModules;
+      } else {
+        delete nextProject.codeModules;
+      }
+      const touched = touch(nextProject);
+      if (action.coalesceKey) {
+        const past = pushDeltaToPast(state, touched, action.coalesceKey);
+        const nextHistoryGroup =
+          past.length > 0 && past[past.length - 1].coalesceKey === action.coalesceKey
+            ? action.coalesceKey
+            : null;
+        return {
+          ...state,
+          project: touched,
+          past,
+          future: [],
+          historyGroup: nextHistoryGroup,
+        };
+      }
+      return withSnapshot(state, touched);
+    }
+
+    case 'create-logic-graph': {
+      if (state.project.logicGraphs.some((graph) => graph.id === action.graph.id)) {
+        return state;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          logicGraphs: [...state.project.logicGraphs, action.graph],
+        }),
+      );
+    }
+
+    case 'update-logic-graph': {
+      const existing = state.project.logicGraphs.find((graph) => graph.id === action.graph.id);
+      if (!existing) return state;
+      if (JSON.stringify(existing) === JSON.stringify(action.graph)) {
+        return state;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          logicGraphs: state.project.logicGraphs.map((graph) =>
+            graph.id === action.graph.id ? action.graph : graph,
+          ),
+        }),
+      );
+    }
+
+    case 'delete-logic-graph': {
+      if (!state.project.logicGraphs.some((graph) => graph.id === action.graphId)) {
+        return state;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          logicGraphs: state.project.logicGraphs.filter((graph) => graph.id !== action.graphId),
+        }),
+      );
+    }
+
+    case 'create-animation-clip': {
+      const currentClips = state.project.animations ?? [];
+      if (currentClips.some((clip) => clip.id === action.clip.id)) {
+        return state;
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          animations: [...currentClips, action.clip],
+        }),
+      );
+    }
+
+    case 'update-animation-clip': {
+      const currentClips = state.project.animations ?? [];
+      const existing = currentClips.find((clip) => clip.id === action.clip.id);
+      if (!existing) return state;
+      if (JSON.stringify(existing) === JSON.stringify(action.clip)) {
+        return state;
+      }
+      const touched = touch({
+        ...state.project,
+        animations: currentClips.map((clip) => (clip.id === action.clip.id ? action.clip : clip)),
+      });
+      if (action.coalesceKey) {
+        const past = pushDeltaToPast(state, touched, action.coalesceKey);
+        const nextHistoryGroup =
+          past.length > 0 && past[past.length - 1].coalesceKey === action.coalesceKey
+            ? action.coalesceKey
+            : null;
+        return {
+          ...state,
+          project: touched,
+          past,
+          future: [],
+          historyGroup: nextHistoryGroup,
+        };
+      }
+      return withSnapshot(state, touched);
+    }
+
+    case 'delete-animation-clip': {
+      const currentClips = state.project.animations ?? [];
+      if (!currentClips.some((clip) => clip.id === action.clipId)) {
+        return state;
+      }
+      const remaining = currentClips.filter((clip) => clip.id !== action.clipId);
+      const nextProject: FolioProject = { ...state.project };
+      if (remaining.length > 0) {
+        nextProject.animations = remaining;
+      } else {
+        delete nextProject.animations;
+      }
+      return withSnapshot(state, touch(nextProject));
+    }
+
+    case 'update-custom-easings': {
+      const currentEasings = state.project.customEasings ?? [];
+      if (JSON.stringify(currentEasings) === JSON.stringify(action.customEasings)) {
+        return state;
+      }
+      const nextProject: FolioProject = { ...state.project };
+      if (action.customEasings.length > 0) {
+        nextProject.customEasings = action.customEasings;
+      } else {
+        delete nextProject.customEasings;
+      }
+      return withSnapshot(state, touch(nextProject));
+    }
+
+    case 'upsert-asset': {
+      const existingIndex = state.project.assets.findIndex(
+        (item) => item.id === action.asset.id || (action.asset.sha256 && item.sha256 === action.asset.sha256),
+      );
+      if (existingIndex >= 0) {
+        const current = state.project.assets[existingIndex];
+        if (JSON.stringify(current) === JSON.stringify(action.asset)) {
+          return state;
+        }
+        const nextAssets = state.project.assets.map((item, idx) => (idx === existingIndex ? action.asset : item));
+        return withSnapshot(state, touch({ ...state.project, assets: nextAssets }));
+      }
+      return withSnapshot(
+        state,
+        touch({
+          ...state.project,
+          assets: [...state.project.assets, action.asset],
+        }),
+      );
+    }
+
     case 'replace-project':
-      return createEditorState(touch(action.project));
+      return createEditorState(action.project);
 
     case 'undo': {
       if (state.past.length === 0) return state;
-      const previous = state.past[state.past.length - 1];
+      const lastDelta = state.past[state.past.length - 1];
+      const previous = applyProjectDelta(state.project, lastDelta, 'backward');
       const selected = existingSelection(previous, state.selectedNodeIds);
       return {
         project: touch(previous),
         past: state.past.slice(0, -1),
-        future: [state.project, ...state.future].slice(0, HISTORY_LIMIT),
+        future: [lastDelta, ...state.future].slice(0, EDITOR_HISTORY_LIMIT),
         selectedNodeId: selected.length === 1 ? selected[0] : null,
         selectedNodeIds: selected,
+        historyGroup: null,
       };
     }
 
     case 'redo': {
       if (state.future.length === 0) return state;
-      const next = state.future[0];
+      const nextDelta = state.future[0];
+      const next = applyProjectDelta(state.project, nextDelta, 'forward');
       const selected = existingSelection(next, state.selectedNodeIds);
       return {
         project: touch(next),
-        past: [...state.past, state.project].slice(-HISTORY_LIMIT),
+        past: [...state.past, nextDelta].slice(-EDITOR_HISTORY_LIMIT),
         future: state.future.slice(1),
         selectedNodeId: selected.length === 1 ? selected[0] : null,
         selectedNodeIds: selected,
+        historyGroup: null,
       };
     }
 

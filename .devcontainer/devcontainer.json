@@ -3,7 +3,7 @@
   "image": "mcr.microsoft.com/devcontainers/base:bookworm",
   "features": {
     "ghcr.io/devcontainers/features/node:2": {
-      "version": "26"
+      "version": "24"
     }
   },
   "forwardPorts": [5173, 4173],
@@ -19,7 +19,7 @@
       "visibility": "private"
     }
   },
-  "postCreateCommand": "npm install",
+  "postCreateCommand": "npm ci",
   "customizations": {
     "vscode": {
       "settings": {

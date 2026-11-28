@@ -6,57 +6,168 @@
 .canvas-node {
   user-select: none;
 }
-.canvas-selection-outline {
+.canvas-selection-contour {
   fill: none;
-  stroke: #8b7cf6;
-  stroke-width: 2;
-  stroke-dasharray: 7 4;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.75;
+  stroke-dasharray: 5 3;
+  stroke-linecap: round;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
-.canvas-resize-handle {
-  fill: #f8f7ff;
-  stroke: #806ff0;
+.canvas-selection-contour.is-draw-inside {
+  stroke: var(--accent, #4c8dff);
   stroke-width: 2;
+  stroke-dasharray: 6 3;
+}
+.canvas-selection-contour.is-draw-outside {
+  stroke: var(--studio-amber, #e09834);
+  stroke-width: 2;
+  stroke-dasharray: 6 3;
+}
+.canvas-selection-outline {
+  fill: none;
+  stroke: var(--accent, #4c8dff);
+  stroke-opacity: 0.78;
+  stroke-width: 1.25;
+  stroke-dasharray: 6 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.canvas-selection-outline.is-scale {
+  stroke: var(--accent, #4c8dff);
+  stroke-opacity: 1;
+  stroke-dasharray: 4 3;
+}
+.artboard[data-workspace="component"] .canvas-selection-outline {
+  stroke: var(--studio-amber, #e09834);
+  stroke-opacity: 0.85;
+}
+.canvas-resize-handle {
+  fill: #ffffff;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.75;
   vector-effect: non-scaling-stroke;
   pointer-events: all;
 }
+.canvas-resize-handle.is-scale {
+  stroke: var(--accent, #4c8dff);
+}
+.artboard[data-workspace="component"] .canvas-resize-handle {
+  stroke: var(--studio-amber, #e09834);
+}
+.canvas-rotate-zone {
+  fill: transparent;
+  stroke: transparent;
+  cursor: alias;
+}
 .canvas-guide {
-  stroke: #a494ff;
-  stroke-width: 1.5;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.25;
   stroke-dasharray: 5 4;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
+.canvas-guide.is-geometry {
+  stroke: #22d3ee;
+  stroke-width: 1.35;
+  stroke-dasharray: none;
+}
+.canvas-guide.is-diagonal {
+  stroke: #a855f7;
+  stroke-width: 1.35;
+  stroke-dasharray: 6 3;
+}
+.canvas-guide.is-fractional {
+  stroke: rgba(76, 141, 255, 0.72);
+  stroke-width: 1.1;
+  stroke-dasharray: 4 4;
+}
+.canvas-guide.is-spacing,
+.canvas-guide.is-mirror-padding {
+  stroke: #f43f5e;
+  stroke-width: 1.25;
+  stroke-dasharray: 3 3;
+}
+.artboard[data-workspace="component"] .canvas-guide {
+  stroke: var(--studio-amber, #e09834);
+}
+.artboard[data-workspace="component"] .canvas-guide.is-geometry {
+  stroke: #38bdf8;
+}
+.artboard[data-workspace="component"] .canvas-guide.is-diagonal {
+  stroke: #c084fc;
+}
+.artboard[data-workspace="component"] .canvas-guide.is-spacing,
+.artboard[data-workspace="component"] .canvas-guide.is-mirror-padding {
+  stroke: #f43f5e;
+}
+.canvas-guide-marker {
+  fill: #ffffff;
+  stroke: #22d3ee;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.canvas-guide-spacing-line {
+  stroke: #f43f5e;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.canvas-guide-spacing-tick {
+  stroke: #f43f5e;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.canvas-guide-chip {
+  pointer-events: none;
+}
+.canvas-guide-chip rect {
+  fill: #e11d48;
+}
+.canvas-guide-chip.is-fractional rect {
+  fill: rgba(30, 41, 59, 0.92);
+  stroke: rgba(76, 141, 255, 0.75);
+  stroke-width: 0.9;
+}
+.canvas-guide-chip text {
+  fill: #ffffff;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
 .alignment-tools {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   margin-left: auto;
   margin-right: 10px;
-  padding: 3px;
-  border: 1px solid #303746;
-  border-radius: 7px;
-  background: #131821;
+  padding: 2px;
+  border: 1px solid var(--control-border, #343842);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--control-bg, #15161a);
 }
 .alignment-tools button {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 25px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 4px;
-  color: #a7afbe;
+  border-radius: var(--radius-xs, 3px);
+  color: var(--text-secondary, #9ba1ae);
   background: transparent;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1;
   cursor: pointer;
 }
 .alignment-tools button:hover {
-  border-color: #514976;
-  color: #f0edff;
-  background: #302b4b;
+  border-color: var(--accent-border, rgba(76, 141, 255, 0.36));
+  color: var(--accent-bright, #74a8ff);
+  background: var(--accent-soft, rgba(76, 141, 255, 0.14));
 }
 @media (max-width: 1060px) {
   .alignment-tools {
@@ -67,3 +178,954 @@
     width: 22px;
   }
 }
+
+.canvas-pan-ready,
+.canvas-panning {
+  user-select: none;
+}
+.canvas-pan-ready {
+  cursor: grab;
+}
+.canvas-panning {
+  cursor: grabbing;
+}
+.canvas-pan-ready .artboard,
+.canvas-pan-ready .canvas-node,
+.canvas-panning .artboard,
+.canvas-panning .canvas-node {
+  cursor: inherit !important;
+}
+
+.canvas-marquee {
+  fill: rgba(76, 141, 255, 0.11);
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.25;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+}
+.artboard[data-workspace="component"] .canvas-marquee {
+  fill: rgba(224, 152, 52, 0.12);
+  stroke: var(--studio-amber, #e09834);
+}
+
+/* Selection handles communicate the active transform before dragging. */
+.canvas-node {
+  cursor: move;
+}
+.artboard[data-tool^="draw-"] .canvas-node,
+.artboard[data-tool="frame"] .canvas-node,
+.artboard[data-tool="section"] .canvas-node,
+.artboard[data-tool="pen"] .canvas-node,
+.artboard[data-tool="curvature"] .canvas-node,
+.artboard[data-tool="pencil"] .canvas-node,
+.artboard[data-tool="brush"] .canvas-node,
+.artboard[data-tool="eraser"] .canvas-node,
+.artboard[data-tool="paint-bucket"] .canvas-node,
+.artboard[data-tool="smooth"] .canvas-node,
+.artboard[data-tool="scissors"] .canvas-node,
+.artboard[data-tool="shape-builder"] .canvas-node,
+.artboard[data-tool="eyedropper"] .canvas-node,
+.artboard[data-tool="measure"] .canvas-node {
+  cursor: inherit;
+}
+.canvas-resize-handle {
+  cursor: move;
+}
+.canvas-resize-handle[data-resize-handle="nw"],
+.canvas-resize-handle[data-resize-handle="se"] {
+  cursor: nwse-resize;
+}
+.canvas-resize-handle[data-resize-handle="ne"],
+.canvas-resize-handle[data-resize-handle="sw"] {
+  cursor: nesw-resize;
+}
+.canvas-resize-handle[data-resize-handle="n"],
+.canvas-resize-handle[data-resize-handle="s"] {
+  cursor: ns-resize;
+}
+.canvas-resize-handle[data-resize-handle="e"],
+.canvas-resize-handle[data-resize-handle="w"] {
+  cursor: ew-resize;
+}
+
+.canvas-lasso {
+  fill: rgba(76, 141, 255, 0.08);
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Draw preview & HUD badges */
+.canvas-draw-preview-box {
+  fill: none;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+.artboard[data-workspace="component"] .canvas-draw-preview-box {
+  stroke: var(--studio-amber, #e09834);
+}
+
+.canvas-hud-badge rect {
+  fill: #151923;
+  stroke: #3c465a;
+  stroke-width: 1;
+}
+.canvas-hud-badge.is-measure rect {
+  fill: #1a1420;
+  stroke: #e16565;
+}
+.canvas-hud-badge.is-rotate rect {
+  fill: #1d1812;
+  stroke: #e59a4c;
+}
+.canvas-hud-badge.is-spacing rect {
+  fill: #24121b;
+  stroke: #f43f5e;
+}
+.canvas-hud-badge text {
+  fill: #f0f3fa;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* On-Canvas Auto-Layout Direct Manipulation Handles & Drag-to-Reorder Indicator */
+.canvas-al-spacing-zone {
+  stroke: rgba(244, 63, 94, 0.35);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-al-handle {
+  opacity: 0.72;
+  transition: opacity 110ms ease-out;
+}
+.canvas-al-handle:hover,
+.canvas-al-handle.is-active {
+  opacity: 1;
+}
+.canvas-al-handle.is-padding.is-horizontal,
+.canvas-al-handle.is-gap.is-horizontal {
+  cursor: ns-resize;
+}
+.canvas-al-handle.is-padding.is-vertical,
+.canvas-al-handle.is-gap.is-vertical {
+  cursor: ew-resize;
+}
+.canvas-al-handle-casing {
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.65;
+}
+.canvas-al-handle:hover .canvas-al-handle-casing,
+.canvas-al-handle.is-active .canvas-al-handle-casing {
+  stroke-width: 5.5;
+  opacity: 1;
+}
+.canvas-al-handle-bar {
+  stroke: #f43f5e;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-al-handle:hover .canvas-al-handle-bar,
+.canvas-al-handle.is-active .canvas-al-handle-bar {
+  stroke: #e11d48;
+  stroke-width: 3;
+}
+.canvas-al-reorder-container {
+  fill: rgba(76, 141, 255, 0.05);
+  stroke: var(--accent, #4c8dff);
+  stroke-opacity: 0.6;
+  stroke-width: 1.25;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-al-reorder-line {
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-al-reorder-cap {
+  fill: #18191d;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Precision Vector Anchor & Bezier Handle Overlays */
+.canvas-vector-wireframe {
+  fill: none;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.35;
+  vector-effect: non-scaling-stroke;
+}
+.artboard[data-workspace="component"] .canvas-vector-wireframe {
+  stroke: var(--studio-amber, #e09834);
+}
+.canvas-bezier-tangent {
+  stroke: #8a93a6;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-bezier-handle {
+  fill: #18191d;
+  stroke: var(--accent-bright, #74a8ff);
+  stroke-width: 1.75;
+  cursor: pointer;
+  vector-effect: non-scaling-stroke;
+}
+.artboard[data-workspace="component"] .canvas-bezier-handle {
+  stroke: var(--studio-amber-bright, #f0b254);
+}
+.canvas-vector-anchor {
+  fill: #ffffff;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.75;
+  cursor: pointer;
+  vector-effect: non-scaling-stroke;
+}
+.artboard[data-workspace="component"] .canvas-vector-anchor {
+  stroke: var(--studio-amber, #e09834);
+}
+.canvas-vector-anchor.is-active,
+.canvas-vector-anchor.is-origin {
+  fill: var(--accent, #4c8dff);
+  stroke: #ffffff;
+}
+.artboard[data-workspace="component"] .canvas-vector-anchor.is-active,
+.artboard[data-workspace="component"] .canvas-vector-anchor.is-origin {
+  fill: var(--studio-amber, #e09834);
+}
+
+/* Pen & Curvature live draft */
+.canvas-pen-draft-path {
+  fill: none;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.85;
+  vector-effect: non-scaling-stroke;
+}
+.artboard[data-workspace="component"] .canvas-pen-draft-path {
+  stroke: var(--studio-amber, #e09834);
+}
+.canvas-pen-rubberband {
+  fill: none;
+  stroke: var(--accent-bright, #74a8ff);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+.artboard[data-workspace="component"] .canvas-pen-rubberband {
+  stroke: var(--studio-amber-bright, #f0b254);
+}
+.canvas-pen-close-ring {
+  fill: rgba(76, 141, 255, 0.16);
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+.artboard[data-workspace="component"] .canvas-pen-close-ring {
+  fill: rgba(224, 152, 52, 0.18);
+  stroke: var(--studio-amber, #e09834);
+}
+
+/* Pencil & Smooth freehand preview */
+.canvas-freehand-preview {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-freehand-preview.is-pencil {
+  stroke: var(--accent, #4c8dff);
+}
+.artboard[data-workspace="component"] .canvas-freehand-preview.is-pencil {
+  stroke: var(--studio-amber, #e09834);
+}
+.canvas-freehand-preview.is-smooth {
+  stroke: #f59e0b;
+  stroke-dasharray: 4 3;
+}
+.canvas-freehand-preview.is-brush {
+  vector-effect: none;
+  stroke-opacity: 0.78;
+}
+.canvas-freehand-preview.is-eraser {
+  fill: none;
+  stroke: rgba(244, 63, 94, 0.16);
+  vector-effect: none;
+  stroke-opacity: 1;
+}
+
+/* Rotate overlay */
+.canvas-rotate-circle {
+  fill: none;
+  stroke: #e59a4c;
+  stroke-width: 1.25;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-rotate-crosshair {
+  stroke: #e59a4c;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Precision Measure redline */
+.canvas-measure-line {
+  stroke: #ef5350;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-measure-guide {
+  stroke: rgba(239, 83, 80, 0.45);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-measure-dot {
+  fill: #ffffff;
+  stroke: #ef5350;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Inline double-click text editing */
+.canvas-inline-text-editor {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 2px 4px;
+  border: 1.5px solid var(--accent, #4c8dff);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.94);
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+}
+
+/* On-Canvas Smart Handles (Corner Radius & Star Inner Ratio) */
+.canvas-smart-handle {
+  cursor: pointer;
+}
+.canvas-smart-handle-hit {
+  fill: transparent;
+  stroke: none;
+}
+.canvas-smart-handle-ring {
+  fill: #ffffff;
+  stroke: var(--accent, #4c8dff);
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-smart-handle-dot {
+  fill: var(--accent, #4c8dff);
+}
+.artboard[data-workspace="component"] .canvas-smart-handle-ring {
+  stroke: var(--studio-amber, #e09834);
+}
+.artboard[data-workspace="component"] .canvas-smart-handle-dot {
+  fill: var(--studio-amber, #e09834);
+}
+.canvas-smart-handle-diamond {
+  fill: #ffffff;
+  stroke: var(--studio-amber, #e09834);
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Draggable Custom Rotation Pivot Crosshair */
+.canvas-pivot-handle {
+  cursor: grab;
+}
+.canvas-pivot-ring {
+  fill: rgba(21, 25, 35, 0.72);
+  stroke: #f59e0b;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-pivot-tick {
+  stroke: #f59e0b;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-pivot-dot {
+  fill: #ffffff;
+  stroke: #f59e0b;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Alt-Hover Spacing Redlines */
+.canvas-redline-target {
+  fill: none;
+  stroke: rgba(244, 63, 94, 0.55);
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-redline-ext {
+  stroke: rgba(244, 63, 94, 0.45);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-redline-line {
+  stroke: #f43f5e;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-redline-chip rect {
+  fill: #e11d48;
+}
+.canvas-redline-chip text {
+  fill: #ffffff;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Measure Magnetic Snap Ring */
+.canvas-measure-snap-ring {
+  fill: rgba(239, 83, 80, 0.14);
+  stroke: #ef5350;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Interactive Shape Builder Regions */
+.canvas-sb-face {
+  fill: rgba(15, 23, 42, 0.04);
+  stroke: rgba(15, 23, 42, 0.45);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 2.5;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-sb-face.is-merge {
+  stroke: #0ea5e9;
+  stroke-width: 2.25;
+  stroke-dasharray: none;
+}
+.artboard[data-workspace="component"] .canvas-sb-face.is-merge {
+  stroke: #f59e0b;
+}
+.canvas-sb-face.is-punch {
+  stroke: #f43f5e;
+  stroke-width: 2.25;
+  stroke-dasharray: 5 2.5;
+}
+.canvas-sb-stroke {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-sb-stroke.is-merge {
+  stroke: #38bdf8;
+}
+.canvas-sb-stroke.is-punch {
+  stroke: #fb7185;
+  stroke-dasharray: 4 3;
+}
+.canvas-sb-glyph circle {
+  fill: #0f172a;
+  stroke: #38bdf8;
+  stroke-width: 1.8;
+}
+.canvas-sb-glyph.is-punch circle {
+  stroke: #f43f5e;
+}
+.canvas-sb-glyph text {
+  fill: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+/* Path-Snap Hover Indicator */
+.canvas-snap-ring {
+  fill: rgba(56, 189, 248, 0.14);
+  stroke: #38bdf8;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-snap-dot {
+  fill: #ffffff;
+  stroke: #38bdf8;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Live Eyedropper Circular Magnifier Loupe */
+.canvas-loupe-reticle {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 1.4;
+}
+.canvas-loupe-outer-shadow {
+  fill: rgba(15, 23, 42, 0.88);
+  stroke: #0f172a;
+  stroke-width: 1.5;
+}
+.canvas-loupe-ring-rim {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 2.5;
+}
+.canvas-loupe-ring-inner {
+  fill: none;
+  stroke: rgba(15, 23, 42, 0.65);
+  stroke-width: 1;
+}
+.canvas-loupe-cross {
+  stroke: #ffffff;
+  stroke-width: 1.2;
+}
+.canvas-loupe-card {
+  fill: rgba(17, 22, 32, 0.94);
+  stroke: #3c465a;
+  stroke-width: 1;
+}
+.canvas-loupe-swatch {
+  stroke: #ffffff;
+  stroke-width: 1.5;
+}
+.canvas-loupe-hex {
+  fill: #f0f3fa;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+.canvas-loupe-meta {
+  fill: #94a3b8;
+  font-size: 8.5px;
+  font-weight: 600;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+/* Measure single-click layer bounds highlight */
+.canvas-measure-box {
+  fill: rgba(239, 83, 80, 0.08);
+  stroke: #ef5350;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Live Smooth, Vector Brush, and Vector Eraser cursor rings */
+.canvas-smooth-brush {
+  fill: rgba(245, 158, 11, 0.08);
+  stroke: #f59e0b;
+  stroke-width: 1.25;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-brush-cursor-ring {
+  fill: rgba(139, 124, 246, 0.08);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-eraser-cursor-halo {
+  fill: rgba(244, 63, 94, 0.06);
+  stroke: rgba(15, 23, 42, 0.72);
+  stroke-width: 2.6;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-eraser-cursor-ring {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 1.35;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-eraser-cursor-dot {
+  fill: #fb7185;
+  stroke: rgba(15, 23, 42, 0.75);
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+.canvas-eraser-cursor-group.is-erasing .canvas-eraser-cursor-halo {
+  fill: rgba(244, 63, 94, 0.1);
+  stroke: rgba(15, 23, 42, 0.85);
+}
+.canvas-eraser-cursor-group.is-erasing .canvas-eraser-cursor-ring {
+  stroke: #fb7185;
+  stroke-width: 1.5;
+}
+
+/* Image file drag-and-drop highlight on canvas viewport */
+.canvas-scroll-area.is-file-drop-active {
+  outline: 2px dashed var(--accent, #4c8dff);
+  outline-offset: -6px;
+  background-color: var(--accent-soft, rgba(76, 141, 255, 0.12));
+}
+
+/* Hybrid GPU Viewport (WebGL2/WebGPU SDF Instancing + 512x512 LRU Tile Cache) */
+.artboard-stack {
+  position: relative;
+  width: 100%;
+}
+
+.gpu-viewport-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+  background-color: var(--checker-b, #1a1c21);
+  background-image:
+    linear-gradient(45deg, var(--checker-a, #24272e) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker-a, #24272e) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--checker-a, #24272e) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--checker-a, #24272e) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.gpu-viewport-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.gpu-instanced-layer {
+  z-index: 0;
+}
+
+.gpu-tile-layer {
+  z-index: 1;
+}
+
+.artboard.is-gpu-hybrid {
+  position: relative;
+  z-index: 2;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+.renderer-mode-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  margin-left: 6px;
+  border: 1px solid var(--control-border, #343842);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--control-bg, #15161a);
+}
+
+.renderer-mode-btn {
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs, 3px);
+  background: transparent;
+  color: var(--text-secondary, #9ba1ae);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.renderer-mode-btn:hover {
+  color: var(--text-primary, #eef0f4);
+  background: var(--surface-hover, #262930);
+}
+
+.renderer-mode-btn.is-active {
+  color: var(--accent-bright, #74a8ff);
+  background: var(--accent-soft, rgba(76, 141, 255, 0.14));
+  border-color: var(--accent-border, rgba(76, 141, 255, 0.36));
+}
+
+.renderer-mode-telemetry {
+  margin-left: 4px;
+  padding-right: 4px;
+  color: var(--status-ok, #2fb37c);
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-mono, ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Canvas Right-Click Selection & Draw Mode Context Menu */
+@keyframes canvasContextMenuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.canvas-context-menu {
+  position: fixed;
+  z-index: 1600;
+  min-width: 232px;
+  max-width: 268px;
+  padding: 4px;
+  border: 1px solid var(--line-strong, #3b3f4a);
+  border-radius: var(--radius-md, 6px);
+  background: var(--panel-elevated, #24272d);
+  box-shadow: var(--shadow-popover, 0 12px 28px rgba(0, 0, 0, 0.45));
+  color: var(--text, #d6dae2);
+  font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  user-select: none;
+  animation: canvasContextMenuIn 90ms ease-out;
+}
+
+.canvas-context-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px 4px;
+  color: var(--muted, #6b788e);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  user-select: none;
+}
+
+.canvas-context-menu-header:first-child {
+  padding-top: 4px;
+}
+
+.canvas-context-menu-meta {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary, #9aa6ba);
+  opacity: 0.85;
+}
+
+.canvas-context-menu-item {
+  appearance: none;
+  -webkit-appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text, #f1f5f9);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+.canvas-context-menu-item-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1;
+}
+
+.canvas-context-menu-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: var(--text-secondary, #9aa6ba);
+  opacity: 0.88;
+  transition: color 100ms ease, opacity 100ms ease;
+}
+
+.canvas-context-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-context-menu-item:hover:not(:disabled) {
+  background: var(--accent-soft, rgba(59, 130, 246, 0.16));
+  color: var(--accent-bright, #60a5fa);
+}
+
+.canvas-context-menu-item:hover:not(:disabled) .canvas-context-menu-icon {
+  color: var(--accent-bright, #60a5fa);
+  opacity: 1;
+}
+
+.canvas-context-menu-item:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: -2px;
+}
+
+.canvas-context-menu-item.is-active {
+  background: var(--surface-active, rgba(59, 130, 246, 0.16));
+  color: var(--accent-bright, #60a5fa);
+  font-weight: 600;
+}
+
+.canvas-context-menu-item.is-active .canvas-context-menu-icon {
+  color: var(--accent-bright, #60a5fa);
+  opacity: 1;
+}
+
+.canvas-context-menu-item.is-accent {
+  color: var(--studio-amber-bright, #fbbf24);
+}
+
+.canvas-context-menu-item.is-accent .canvas-context-menu-icon {
+  color: var(--studio-amber-bright, #fbbf24);
+  opacity: 0.95;
+}
+
+.canvas-context-menu-item.is-accent:hover:not(:disabled) {
+  background: var(--studio-amber-soft, rgba(245, 158, 11, 0.16));
+  color: var(--studio-amber-bright, #fbbf24);
+}
+
+.canvas-context-menu-item.is-accent:hover:not(:disabled) .canvas-context-menu-icon {
+  color: var(--studio-amber-bright, #fbbf24);
+}
+
+.canvas-context-menu-item:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.canvas-context-menu-item kbd {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  border-radius: 4px;
+  background: var(--control-bg, #0d1118);
+  color: var(--muted, #6b788e);
+  font-family: var(--font-mono, ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+  transition: color 100ms ease, border-color 100ms ease, background-color 100ms ease;
+}
+
+.canvas-context-menu-item:hover:not(:disabled) kbd {
+  color: var(--accent-bright, #60a5fa);
+  border-color: var(--accent-ring, rgba(59, 130, 246, 0.38));
+  background: transparent;
+}
+
+.canvas-context-menu-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--accent-bright, #60a5fa);
+}
+
+.canvas-context-menu-divider {
+  height: 1px;
+  margin: 5px 6px;
+  background: var(--line, rgba(255, 255, 255, 0.08));
+}
+
+/* FOLIO Path Studio — On-Canvas Motion Path Overlay */
+.canvas-motion-path-backdrop {
+  stroke: rgba(10, 14, 22, 0.42);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.canvas-motion-path-curve {
+  stroke: rgba(56, 189, 248, 0.56);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.canvas-motion-path-curve.is-active {
+  stroke: #06b6d4;
+}
+.canvas-motion-path-hit {
+  cursor: copy;
+}
+.canvas-motion-path-chevron {
+  stroke: rgba(56, 189, 248, 0.65);
+}
+.canvas-motion-path-chevron.is-active {
+  stroke: #0891b2;
+}
+.canvas-motion-path-offset-line {
+  stroke: #f59e0b;
+  stroke-opacity: 0.85;
+}
+.canvas-motion-path-offset-dot {
+  fill: #f59e0b;
+}
+.canvas-motion-path-range-dot {
+  fill: #ffffff;
+  stroke: #06b6d4;
+}
+.canvas-motion-path-range-dot.is-start {
+  stroke: #10b981;
+}
+.canvas-motion-path-range-dot.is-end {
+  stroke: #f43f5e;
+}
+.canvas-motion-path-handle-line {
+  stroke: rgba(6, 182, 212, 0.72);
+}
+.canvas-motion-path-handle {
+  fill: #ffffff;
+  stroke: #0891b2;
+  cursor: grab;
+}
+.canvas-motion-path-handle:hover,
+.canvas-motion-path-handle.is-selected {
+  fill: #22d3ee;
+  stroke: #0f172a;
+}
+.canvas-motion-path-anchor {
+  fill: #ffffff;
+  stroke: #06b6d4;
+  cursor: move;
+}
+.canvas-motion-path-anchor.is-start {
+  stroke: #10b981;
+}
+.canvas-motion-path-anchor.is-end {
+  stroke: #f43f5e;
+}
+.canvas-motion-path-anchor.is-selected {
+  fill: #06b6d4;
+  stroke: #ffffff;
+}
+.canvas-motion-path-anchor-ring {
+  stroke: rgba(6, 182, 212, 0.75);
+}
+

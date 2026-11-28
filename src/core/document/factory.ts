@@ -3,10 +3,23 @@ import {
   FOLIO_FORMAT_VERSION,
   type DesignNode,
   type EllipseNode,
+  type FolioDocument,
   type FolioProject,
+  type FrameNode,
+  type PathNode,
   type RectNode,
   type TextNode,
+  type VectorAnchorPoint,
+  type VectorPathKind,
 } from './types';
+import {
+  createLinePathPoints,
+  createPolygonPathPoints,
+  createStarPathPoints,
+  createTrianglePathPoints,
+  normalizePathNode,
+} from './vector';
+import { createDefaultDesignTokens } from './tokens';
 
 function createId(prefix: string): string {
   const randomId = globalThis.crypto?.randomUUID?.();
@@ -25,6 +38,7 @@ function baseNode(name: string, x: number, y: number, width: number, height: num
     opacity: 1,
     visible: true,
     locked: false,
+    onCanvas: true,
   };
 }
 
@@ -34,6 +48,162 @@ export function createRectNode(index = 0): RectNode {
     type: 'rect',
     style: { fill: '#8B7CF6', stroke: '#00000000', strokeWidth: 0, radius: 18 },
   };
+}
+
+export function createFrameNode(
+  x = 240,
+  y = 180,
+  width = 360,
+  height = 240,
+  options: { name?: string; isSection?: boolean } = {},
+): FrameNode {
+  const isSection = Boolean(options.isSection);
+  return {
+    ...baseNode(options.name ?? (isSection ? 'Section' : 'Frame'), x, y, Math.max(16, width), Math.max(16, height)),
+    type: 'frame',
+    clipContent: !isSection,
+    ...(isSection ? { isSection: true } : {}),
+    style: isSection
+      ? { fill: 'rgba(139, 124, 246, 0.08)', stroke: '#8B7CF6', strokeWidth: 1.5, radius: 12 }
+      : { fill: '#FFFFFF', stroke: '#D4CFC7', strokeWidth: 1, radius: 0 },
+  };
+}
+
+export function createTriangleNode(x: number, y: number, width: number, height: number): PathNode {
+  const w = Math.max(8, width);
+  const h = Math.max(8, height);
+  return normalizePathNode({
+    ...baseNode('Triangle', x, y, w, h),
+    type: 'path',
+    points: createTrianglePathPoints(w, h),
+    closed: true,
+    pathKind: 'triangle',
+    shapeMeta: { kind: 'triangle' },
+    style: {
+      fill: '#5AC4A8',
+      stroke: '#00000000',
+      strokeWidth: 0,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+    },
+  });
+}
+
+export function createPolygonNode(x: number, y: number, width: number, height: number, sides = 6): PathNode {
+  const w = Math.max(8, width);
+  const h = Math.max(8, height);
+  const safeSides = Math.max(3, Math.min(24, Math.round(sides)));
+  return normalizePathNode({
+    ...baseNode(`Polygon ${safeSides}`, x, y, w, h),
+    type: 'path',
+    points: createPolygonPathPoints(w, h, safeSides),
+    closed: true,
+    pathKind: 'polygon',
+    shapeMeta: { kind: 'polygon', sides: safeSides },
+    style: {
+      fill: '#6E8EFB',
+      stroke: '#00000000',
+      strokeWidth: 0,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+    },
+  });
+}
+
+export function createStarNode(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  pointsCount = 5,
+  innerRatio = 0.44,
+): PathNode {
+  const w = Math.max(8, width);
+  const h = Math.max(8, height);
+  const safeSpikes = Math.max(3, Math.min(24, Math.round(pointsCount)));
+  const safeRatio = Math.max(0.15, Math.min(0.9, innerRatio));
+  return normalizePathNode({
+    ...baseNode('Star', x, y, w, h),
+    type: 'path',
+    points: createStarPathPoints(w, h, safeSpikes, safeRatio),
+    closed: true,
+    pathKind: 'star',
+    shapeMeta: { kind: 'star', spikes: safeSpikes, innerRatio: safeRatio },
+    style: {
+      fill: '#F2B56B',
+      stroke: '#00000000',
+      strokeWidth: 0,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+    },
+  });
+}
+
+export function createLineNode(
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  options: { arrowEnd?: boolean; stroke?: string; strokeWidth?: number } = {},
+): PathNode {
+  const line = createLinePathPoints(endX - startX, endY - startY);
+  const arrowEnd = Boolean(options.arrowEnd);
+  return {
+    ...baseNode(arrowEnd ? 'Arrow' : 'Line', startX + line.offsetX, startY + line.offsetY, line.width, line.height),
+    type: 'path',
+    points: line.points,
+    closed: false,
+    pathKind: arrowEnd ? 'arrow' : 'line',
+    style: {
+      fill: 'none',
+      stroke: options.stroke ?? '#20212A',
+      strokeWidth: options.strokeWidth ?? 3,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+      ...(arrowEnd ? { arrowEnd: true } : {}),
+    },
+  };
+}
+
+export function createVectorPathNode(
+  worldPoints: VectorAnchorPoint[],
+  options: {
+    id?: string;
+    name?: string;
+    closed?: boolean;
+    pathKind?: VectorPathKind;
+    fill?: string;
+    stroke?: string;
+    strokeWidth?: number;
+    strokeLinecap?: 'butt' | 'round' | 'square';
+    strokeLinejoin?: 'miter' | 'round' | 'bevel';
+    strokeDasharray?: string;
+    fillRule?: 'nonzero' | 'evenodd';
+  } = {},
+): PathNode {
+  const closed = Boolean(options.closed);
+  const base = baseNode(options.name ?? 'Vector Path', 0, 0, 1, 1);
+  return normalizePathNode({
+    ...base,
+    ...(options.id ? { id: options.id } : {}),
+    type: 'path',
+    points: worldPoints,
+    closed,
+    pathKind: options.pathKind ?? 'pen',
+    style: {
+      fill: options.fill ?? (closed ? '#8B7CF6' : 'none'),
+      stroke: options.stroke ?? '#20212A',
+      strokeWidth: options.strokeWidth ?? (closed ? 0 : 3),
+      strokeLinecap: options.strokeLinecap ?? 'round',
+      strokeLinejoin: options.strokeLinejoin ?? 'round',
+      ...(options.strokeDasharray ? { strokeDasharray: options.strokeDasharray } : {}),
+      fillRule: options.fillRule ?? 'nonzero',
+    },
+  });
 }
 
 export function createEllipseNode(index = 0): EllipseNode {
@@ -60,7 +230,7 @@ export function createTextNode(index = 0): TextNode {
   };
 }
 
-export function createNode(type: DesignNode['type'], index = 0): DesignNode {
+export function createNode(type: 'rect' | 'ellipse' | 'text', index = 0): Exclude<DesignNode, { type: 'component-instance' }> {
   switch (type) {
     case 'rect':
       return createRectNode(index);
@@ -69,6 +239,101 @@ export function createNode(type: DesignNode['type'], index = 0): DesignNode {
     case 'text':
       return createTextNode(index);
   }
+}
+
+/**
+ * Creates a new primitive node positioned and sized cleanly inside the target
+ * document's artboard coordinate system. Standard desktop pages retain classic
+ * placement; compact artboards (such as Component Canvas) center and fit shapes
+ * inside the visible frame with a small deterministic stagger.
+ */
+export function createNodeForDocument(
+  type: 'rect' | 'ellipse' | 'text',
+  document: Pick<FolioDocument, 'width' | 'height' | 'nodes'> & Partial<Pick<FolioDocument, 'background'>>,
+): Exclude<DesignNode, { type: 'component-instance' }> {
+  const index = Array.isArray(document?.nodes) ? document.nodes.length : 0;
+  const node = createNode(type, index);
+  const docWidth = Math.max(1, document.width);
+  const docHeight = Math.max(1, document.height);
+  const margin = Math.min(24, Math.floor(Math.min(docWidth, docHeight) * 0.08));
+  const maxWidth = Math.max(16, docWidth - margin * 2);
+  const maxHeight = Math.max(16, docHeight - margin * 2);
+
+  const fitsNaturally =
+    node.x >= 0 &&
+    node.y >= 0 &&
+    node.x + node.width <= docWidth &&
+    node.y + node.height <= docHeight;
+
+  if (fitsNaturally && docWidth >= 900 && docHeight >= 600) {
+    return node;
+  }
+
+  let width = node.width;
+  let height = node.height;
+  if (type === 'rect') {
+    width = Math.min(node.width, Math.max(48, Math.round(docWidth * 0.56)), maxWidth);
+    height = Math.min(node.height, Math.max(36, Math.round(docHeight * 0.48)), maxHeight);
+  } else if (type === 'ellipse') {
+    const diameter = Math.min(node.width, Math.max(48, Math.round(Math.min(docWidth, docHeight) * 0.52)), maxWidth, maxHeight);
+    width = diameter;
+    height = diameter;
+  } else {
+    width = Math.min(node.width, Math.max(80, Math.round(docWidth * 0.78)), maxWidth);
+    height = Math.min(node.height, Math.max(32, Math.round(docHeight * 0.24)), maxHeight);
+  }
+
+  const stagger = (index % 5) * Math.min(14, Math.max(4, Math.floor(margin * 0.6)));
+  const centeredX = Math.round((docWidth - width) / 2) + stagger;
+  const centeredY = Math.round((docHeight - height) / 2) + stagger;
+  const maxX = Math.max(0, docWidth - width);
+  const maxY = Math.max(0, docHeight - height);
+  const x = Math.min(maxX, Math.max(Math.min(margin, maxX), centeredX));
+  const y = Math.min(maxY, Math.max(Math.min(margin, maxY), centeredY));
+
+  if (node.type === 'text') {
+    const scale = Math.min(1, width / 840, height / 180);
+    const fontSize = Math.max(16, Math.min(20, Math.round(node.style.fontSize * scale)));
+    return {
+      ...node,
+      x,
+      y,
+      width,
+      height,
+      style: {
+        ...node.style,
+        fontSize,
+        letterSpacing: Number((node.style.letterSpacing * scale).toFixed(2)),
+      },
+    };
+  }
+
+  if (node.type === 'rect' && node.style.radius !== undefined) {
+    return {
+      ...node,
+      x,
+      y,
+      width,
+      height,
+      style: {
+        ...node.style,
+        radius: Math.min(node.style.radius, Math.floor(Math.min(width, height) / 3)),
+      },
+    };
+  }
+
+  return { ...node, x, y, width, height };
+}
+
+export function createEmptyDocument(name = 'Main Page', width = 1440, height = 900): FolioDocument {
+  return {
+    id: createId('document'),
+    name,
+    width,
+    height,
+    background: '#00000000',
+    nodes: [],
+  };
 }
 
 export function createInitialProject(name = 'Untitled project'): FolioProject {
@@ -157,13 +422,50 @@ export function createInitialProject(name = 'Untitled project'): FolioProject {
       createdAt: now,
       updatedAt: now,
     },
-    document: {
-      id: createId('document'),
-      name: 'Page 1',
-      width: 1440,
-      height: 900,
-      background: '#F5F2EC',
-      nodes: [visualCard, orbit, sun, eyebrow, title, description, cardCaption],
+    activePageId: 'page-main',
+    pages: [{
+      id: 'page-main',
+      name: 'Main Page',
+      route: '/',
+      document: {
+        id: createId('document'),
+        name: 'Main Page',
+        width: 1440,
+        height: 900,
+        background: '#00000000',
+        nodes: [visualCard, orbit, sun, eyebrow, title, description, cardCaption],
+      },
+    }],
+    components: [],
+    logicGraphs: [],
+    assets: [],
+    designTokens: createDefaultDesignTokens(),
+  };
+}
+
+export function createBlankProject(name = 'Untitled project'): FolioProject {
+  const now = new Date().toISOString();
+  const trimmedName = name.trim() || 'Untitled project';
+  return {
+    format: FOLIO_FORMAT,
+    formatVersion: FOLIO_FORMAT_VERSION,
+    appVersion: '0.1.0',
+    metadata: {
+      id: createId('project'),
+      name: trimmedName,
+      createdAt: now,
+      updatedAt: now,
     },
+    activePageId: 'page-main',
+    pages: [{
+      id: 'page-main',
+      name: 'Main Page',
+      route: '/',
+      document: createEmptyDocument('Main Page', 1440, 900),
+    }],
+    components: [],
+    logicGraphs: [],
+    assets: [],
+    designTokens: createDefaultDesignTokens(),
   };
 }

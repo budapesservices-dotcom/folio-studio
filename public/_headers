@@ -1,0 +1,16 @@
+# Cloudflare Pages cache-control rules for Folio Studio
+# Always revalidate HTML entrypoints so deployments never serve stale builds.
+/
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+
+# Content-hashed Vite bundles are safe to cache immutably at the edge.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Never cache server-side proxy API responses at the edge or browser.
+/api/*
+  Cache-Control: no-store
+  X-Content-Type-Options: nosniff

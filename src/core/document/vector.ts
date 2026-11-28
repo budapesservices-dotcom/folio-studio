@@ -1,0 +1,1886 @@
+/**
+ * Pure, framework-independent vector geometry, cubic Bezier serialization,
+ * Illustrator-grade path editing, and Pathfinder Boolean operations.
+ */
+
+import type {
+  CornerRadiiConfig,
+  DesignNode,
+  EllipseNode,
+  FrameNode,
+  PathNode,
+  RectNode,
+  VectorAnchorPoint,
+  VectorPointHandle,
+  VectorShapeMeta,
+  VectorSubpath,
+} from './types';
+import {
+  applyMergedColorBlendToPathNode,
+  type ShapeColorBlendMode,
+} from './colorBlend';
+import {
+  assembleFacesToContours,
+  buildPlanarArrangement,
+  hitTestPlanarFace,
+  hitTestPlanarFacesAlongStroke,
+  type AssembledContour,
+  type PlanarArrangement,
+  type PlanarFace,
+  type PlanarPoint,
+  type PlanarShapeInput,
+} from './planarBoolean';
+
+export type { PlanarArrangement, PlanarFace, PlanarPoint, ShapeColorBlendMode };
+export { hitTestPlanarFace, hitTestPlanarFacesAlongStroke };
+
+export interface Point2D {
+  x: number;
+  y: number;
+}
+
+export type PathfinderOperation = 'unite' | 'subtract' | 'minus-back' | 'intersect' | 'exclude';
+
+const KAPPA = 0.5522847498307936;
+const EPS = 1e-6;
+
+let anchorCounter = 0;
+
+export function createAnchorId(prefix = 'pt'): string {
+  anchorCounter += 1;
+  const rand = globalThis.crypto?.randomUUID?.()?.slice(0, 8) ?? `${Date.now().toString(36)}-${anchorCounter}`;
+  return `${prefix}-${rand}-${anchorCounter}`;
+}
+
+function roundCoord(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/**
+ * Expands sharp corner vertices that carry `cornerRadius > 0` into tangent
+ * cubic Bezier fillet arcs so ANY vector shape (triangle, polygon, star, pen,
+ * boolean path, combined path) can be rounded non-destructively per corner point.
+ */
+export function applyCornerRoundingToAnchors(
+  points: readonly VectorAnchorPoint[],
+  closed: boolean,
+): VectorAnchorPoint[] {
+  const n = points.length;
+  if (n < 3) return points as VectorAnchorPoint[];
+  const hasAnyRounding = points.some(
+    (pt) => typeof pt.cornerRadius === 'number' && Number.isFinite(pt.cornerRadius) && pt.cornerRadius > 0.01,
+  );
+  if (!hasAnyRounding) return points as VectorAnchorPoint[];
+
+  const expanded: VectorAnchorPoint[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const curr = points[i];
+    const r = typeof curr.cornerRadius === 'number' && Number.isFinite(curr.cornerRadius) ? curr.cornerRadius : 0;
+    const isEndpointOfOpen = !closed && (i === 0 || i === n - 1);
+    const hasExplicitHandles = Boolean(curr.handleIn || curr.handleOut);
+
+    if (r <= 0.01 || isEndpointOfOpen || hasExplicitHandles || curr.pointType !== 'corner') {
+      expanded.push(curr);
+      continue;
+    }
+
+    const prev = points[(i - 1 + n) % n];
+    const next = points[(i + 1) % n];
+    const vPrevX = prev.x - curr.x;
+    const vPrevY = prev.y - curr.y;
+    const vNextX = next.x - curr.x;
+    const vNextY = next.y - curr.y;
+    const lenPrev = Math.hypot(vPrevX, vPrevY);
+    const lenNext = Math.hypot(vNextX, vNextY);
+
+    if (lenPrev < 0.1 || lenNext < 0.1) {
+      expanded.push(curr);
+      continue;
+    }
+
+    const d = Math.min(r, lenPrev * 0.48, lenNext * 0.48);
+    if (d <= 0.05) {
+      expanded.push(curr);
+      continue;
+    }
+
+    const entryX = curr.x + (vPrevX / lenPrev) * d;
+    const entryY = curr.y + (vPrevY / lenPrev) * d;
+    const exitX = curr.x + (vNextX / lenNext) * d;
+    const exitY = curr.y + (vNextY / lenNext) * d;
+
+    const c1X = entryX + (curr.x - entryX) * KAPPA;
+    const c1Y = entryY + (curr.y - entryY) * KAPPA;
+    const c2X = exitX + (curr.x - exitX) * KAPPA;
+    const c2Y = exitY + (curr.y - exitY) * KAPPA;
+
+    expanded.push({
+      id: `${curr.id}-r0`,
+      x: roundCoord(entryX),
+      y: roundCoord(entryY),
+      handleOut: { x: roundCoord(c1X), y: roundCoord(c1Y) },
+      pointType: 'corner',
+    });
+    expanded.push({
+      id: `${curr.id}-r1`,
+      x: roundCoord(exitX),
+      y: roundCoord(exitY),
+      handleIn: { x: roundCoord(c2X), y: roundCoord(c2Y) },
+      pointType: 'corner',
+    });
+  }
+  return expanded;
+}
+
+/**
+ * Builds an exact SVG path string for a rectangle with independent per-corner radii
+ * `[topLeft, topRight, bottomRight, bottomLeft]`, clamping per CSS/SVG spec so
+ * adjacent corner arcs never overlap.
+ */
+export function buildRoundedRectSvgPath(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radii: CornerRadiiConfig | readonly [number, number, number, number],
+): string {
+  const w = Math.max(0, width);
+  const h = Math.max(0, height);
+  const isTuple = Array.isArray(radii);
+  let tl = isTuple ? radii[0] : (radii as CornerRadiiConfig).topLeft;
+  let tr = isTuple ? radii[1] : (radii as CornerRadiiConfig).topRight;
+  let br = isTuple ? radii[2] : (radii as CornerRadiiConfig).bottomRight;
+  let bl = isTuple ? radii[3] : (radii as CornerRadiiConfig).bottomLeft;
+  tl = Math.max(0, Number.isFinite(tl) ? tl : 0);
+  tr = Math.max(0, Number.isFinite(tr) ? tr : 0);
+  br = Math.max(0, Number.isFinite(br) ? br : 0);
+  bl = Math.max(0, Number.isFinite(bl) ? bl : 0);
+
+  const scale = Math.min(
+    1,
+    tl + tr > 0 ? w / (tl + tr) : 1,
+    bl + br > 0 ? w / (bl + br) : 1,
+    tl + bl > 0 ? h / (tl + bl) : 1,
+    tr + br > 0 ? h / (tr + br) : 1,
+  );
+  tl *= scale;
+  tr *= scale;
+  br *= scale;
+  bl *= scale;
+
+  const r = roundCoord;
+  const x0 = x;
+  const y0 = y;
+  const x1 = x + w;
+  const y1 = y + h;
+
+  const parts: string[] = [`M ${r(x0 + tl)} ${r(y0)}`];
+  parts.push(`L ${r(x1 - tr)} ${r(y0)}`);
+  if (tr > 0.01) {
+    parts.push(`A ${r(tr)} ${r(tr)} 0 0 1 ${r(x1)} ${r(y0 + tr)}`);
+  }
+  parts.push(`L ${r(x1)} ${r(y1 - br)}`);
+  if (br > 0.01) {
+    parts.push(`A ${r(br)} ${r(br)} 0 0 1 ${r(x1 - br)} ${r(y1)}`);
+  }
+  parts.push(`L ${r(x0 + bl)} ${r(y1)}`);
+  if (bl > 0.01) {
+    parts.push(`A ${r(bl)} ${r(bl)} 0 0 1 ${r(x0)} ${r(y1 - bl)}`);
+  }
+  parts.push(`L ${r(x0)} ${r(y0 + tl)}`);
+  if (tl > 0.01) {
+    parts.push(`A ${r(tl)} ${r(tl)} 0 0 1 ${r(x0 + tl)} ${r(y0)}`);
+  }
+  parts.push('Z');
+  return parts.join(' ');
+}
+
+function serializeSubpathD(rawPoints: readonly VectorAnchorPoint[], closed: boolean): string {
+  const points = applyCornerRoundingToAnchors(rawPoints, closed);
+  if (points.length === 0) return '';
+  const parts: string[] = [`M ${roundCoord(points[0].x)} ${roundCoord(points[0].y)}`];
+  const segmentCount = closed ? points.length : points.length - 1;
+  for (let i = 0; i < segmentCount; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const hOut = a.handleOut;
+    const hIn = b.handleIn;
+    if (hOut || hIn) {
+      const c1 = hOut ?? { x: a.x, y: a.y };
+      const c2 = hIn ?? { x: b.x, y: b.y };
+      parts.push(
+        `C ${roundCoord(c1.x)} ${roundCoord(c1.y)} ${roundCoord(c2.x)} ${roundCoord(c2.y)} ${roundCoord(b.x)} ${roundCoord(b.y)}`,
+      );
+    } else {
+      parts.push(`L ${roundCoord(b.x)} ${roundCoord(b.y)}`);
+    }
+  }
+  if (closed) parts.push('Z');
+  return parts.join(' ');
+}
+
+export function serializePathPointsToSvgD(
+  points: readonly VectorAnchorPoint[],
+  closed: boolean,
+  subpaths?: readonly VectorSubpath[],
+): string {
+  const segments: string[] = [];
+  const main = serializeSubpathD(points, closed);
+  if (main) segments.push(main);
+  if (subpaths) {
+    for (const subpath of subpaths) {
+      const d = serializeSubpathD(subpath.points, subpath.closed);
+      if (d) segments.push(d);
+    }
+  }
+  return segments.join(' ');
+}
+
+export function evaluateCubicBezier(
+  p0: Point2D,
+  p1: Point2D,
+  p2: Point2D,
+  p3: Point2D,
+  t: number,
+): Point2D {
+  const u = 1 - t;
+  const tt = t * t;
+  const uu = u * u;
+  const uuu = uu * u;
+  const ttt = tt * t;
+  return {
+    x: uuu * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + ttt * p3.x,
+    y: uuu * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + ttt * p3.y,
+  };
+}
+
+export function sampleSubpathToPolygon(
+  rawPoints: readonly VectorAnchorPoint[],
+  closed: boolean,
+  stepsPerCurve = 12,
+): Point2D[] {
+  const points = applyCornerRoundingToAnchors(rawPoints, closed);
+  if (points.length === 0) return [];
+  const out: Point2D[] = [];
+  const segmentCount = closed ? points.length : points.length - 1;
+  for (let i = 0; i < segmentCount; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    if (i === 0) out.push({ x: a.x, y: a.y });
+    if (a.handleOut || b.handleIn) {
+      const c1 = a.handleOut ?? { x: a.x, y: a.y };
+      const c2 = b.handleIn ?? { x: b.x, y: b.y };
+      for (let step = 1; step <= stepsPerCurve; step += 1) {
+        out.push(evaluateCubicBezier(a, c1, c2, b, step / stepsPerCurve));
+      }
+    } else {
+      out.push({ x: b.x, y: b.y });
+    }
+  }
+  if (closed && out.length > 1) {
+    const first = out[0];
+    const last = out[out.length - 1];
+    if (Math.hypot(first.x - last.x, first.y - last.y) < 0.01) {
+      out.pop();
+    }
+  }
+  return out;
+}
+
+function computeSubpathBounds(points: readonly VectorAnchorPoint[], closed: boolean): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} | null {
+  if (points.length === 0) return null;
+  const sampled = sampleSubpathToPolygon(points, closed, 16);
+  const allPoints = sampled.length > 0 ? sampled : points.map((pt) => ({ x: pt.x, y: pt.y }));
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const pt of allPoints) {
+    if (pt.x < minX) minX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y > maxY) maxY = pt.y;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function shiftAnchorPoint(pt: VectorAnchorPoint, dx: number, dy: number): VectorAnchorPoint {
+  const next: VectorAnchorPoint = {
+    id: pt.id,
+    x: roundCoord(pt.x + dx),
+    y: roundCoord(pt.y + dy),
+    pointType: pt.pointType,
+  };
+  if (pt.handleIn) {
+    next.handleIn = { x: roundCoord(pt.handleIn.x + dx), y: roundCoord(pt.handleIn.y + dy) };
+  }
+  if (pt.handleOut) {
+    next.handleOut = { x: roundCoord(pt.handleOut.x + dx), y: roundCoord(pt.handleOut.y + dy) };
+  }
+  if (typeof pt.cornerRadius === 'number' && pt.cornerRadius > 0) {
+    next.cornerRadius = roundCoord(pt.cornerRadius);
+  }
+  return next;
+}
+
+function scaleAnchorPoint(pt: VectorAnchorPoint, scaleX: number, scaleY: number): VectorAnchorPoint {
+  const next: VectorAnchorPoint = {
+    id: pt.id,
+    x: roundCoord(pt.x * scaleX),
+    y: roundCoord(pt.y * scaleY),
+    pointType: pt.pointType,
+  };
+  if (pt.handleIn) {
+    next.handleIn = { x: roundCoord(pt.handleIn.x * scaleX), y: roundCoord(pt.handleIn.y * scaleY) };
+  }
+  if (pt.handleOut) {
+    next.handleOut = { x: roundCoord(pt.handleOut.x * scaleX), y: roundCoord(pt.handleOut.y * scaleY) };
+  }
+  if (typeof pt.cornerRadius === 'number' && pt.cornerRadius > 0) {
+    const rScale = Math.min(Math.abs(scaleX), Math.abs(scaleY));
+    next.cornerRadius = roundCoord(pt.cornerRadius * rScale);
+  }
+  return next;
+}
+
+function rotatePointAround(pt: Point2D, center: Point2D, degrees: number): Point2D {
+  if (!degrees) return pt;
+  const rad = (degrees * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = pt.x - center.x;
+  const dy = pt.y - center.y;
+  return { x: center.x + dx * cos - dy * sin, y: center.y + dx * sin + dy * cos };
+}
+
+/** Transforms a world/canvas point into a node's unrotated local coordinate space. */
+export function worldPointToNodeLocal(
+  node: Pick<DesignNode, 'x' | 'y' | 'width' | 'height' | 'rotation'>,
+  worldPt: Point2D,
+): Point2D {
+  const center = { x: node.x + node.width / 2, y: node.y + node.height / 2 };
+  const unrotated = rotatePointAround(worldPt, center, -(node.rotation || 0));
+  return { x: unrotated.x - node.x, y: unrotated.y - node.y };
+}
+
+/** Transforms a node-local point into world/canvas coordinates accounting for rotation. */
+export function nodeLocalPointToWorld(
+  node: Pick<DesignNode, 'x' | 'y' | 'width' | 'height' | 'rotation'>,
+  localPt: Point2D,
+): Point2D {
+  const center = { x: node.x + node.width / 2, y: node.y + node.height / 2 };
+  return rotatePointAround({ x: node.x + localPt.x, y: node.y + localPt.y }, center, node.rotation || 0);
+}
+
+/** Rotates a world-space drag delta into a node's rotated local axes. */
+export function worldDeltaToNodeLocalDelta(rotation: number, dx: number, dy: number): Point2D {
+  if (!rotation) return { x: dx, y: dy };
+  const rad = (-rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
+}
+
+/**
+ * Re-normalizes a PathNode so its local anchor points start at (0, 0) and
+ * its (x, y, width, height) match the true sampled curve bounds.
+ * Compensates world position for `node.rotation` so editing a rotated path never jumps!
+ */
+export function normalizePathNode(node: PathNode): PathNode {
+  const boundsList = [
+    computeSubpathBounds(node.points, node.closed),
+    ...(node.subpaths ?? []).map((sp) => computeSubpathBounds(sp.points, sp.closed)),
+  ].filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+  if (boundsList.length === 0) {
+    return { ...node, width: Math.max(1, node.width), height: Math.max(1, node.height) };
+  }
+
+  const minX = Math.min(...boundsList.map((b) => b.minX));
+  const minY = Math.min(...boundsList.map((b) => b.minY));
+  const maxX = Math.max(...boundsList.map((b) => b.maxX));
+  const maxY = Math.max(...boundsList.map((b) => b.maxY));
+
+  const shiftX = -minX;
+  const shiftY = -minY;
+  const width = Math.max(1, roundCoord(maxX - minX));
+  const height = Math.max(1, roundCoord(maxY - minY));
+
+  let nextX = roundCoord(node.x + minX);
+  let nextY = roundCoord(node.y + minY);
+  if (node.rotation) {
+    // Rotate local center shift by +node.rotation so visual world anchors stay pinned in place!
+    const oldCenterX = node.x + node.width / 2;
+    const oldCenterY = node.y + node.height / 2;
+    const dcx = minX + width / 2 - node.width / 2;
+    const dcy = minY + height / 2 - node.height / 2;
+    const rad = (node.rotation * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const nextCenterX = oldCenterX + dcx * cos - dcy * sin;
+    const nextCenterY = oldCenterY + dcx * sin + dcy * cos;
+    nextX = roundCoord(nextCenterX - width / 2);
+    nextY = roundCoord(nextCenterY - height / 2);
+  }
+
+  const next: PathNode = {
+    ...node,
+    x: nextX,
+    y: nextY,
+    width,
+    height,
+    points: node.points.map((pt) => shiftAnchorPoint(pt, shiftX, shiftY)),
+  };
+  if (node.subpaths && node.subpaths.length > 0) {
+    next.subpaths = node.subpaths.map((sp) => ({
+      closed: sp.closed,
+      points: sp.points.map((pt) => shiftAnchorPoint(pt, shiftX, shiftY)),
+    }));
+  }
+  return next;
+}
+
+export function scalePathNodeGeometry(
+  node: PathNode,
+  nextX: number,
+  nextY: number,
+  nextWidth: number,
+  nextHeight: number,
+  uniformStrokeScale?: number,
+): PathNode {
+  const scaleX = nextWidth / Math.max(1, node.width);
+  const scaleY = nextHeight / Math.max(1, node.height);
+  const next: PathNode = {
+    ...node,
+    x: roundCoord(nextX),
+    y: roundCoord(nextY),
+    width: Math.max(1, roundCoord(nextWidth)),
+    height: Math.max(1, roundCoord(nextHeight)),
+    points: node.points.map((pt) => scaleAnchorPoint(pt, scaleX, scaleY)),
+    style: uniformStrokeScale !== undefined
+      ? { ...node.style, strokeWidth: Math.max(0, roundCoord(node.style.strokeWidth * uniformStrokeScale)) }
+      : node.style,
+  };
+  if (node.subpaths && node.subpaths.length > 0) {
+    next.subpaths = node.subpaths.map((sp) => ({
+      closed: sp.closed,
+      points: sp.points.map((pt) => scaleAnchorPoint(pt, scaleX, scaleY)),
+    }));
+  }
+  return next;
+}
+
+export function createTrianglePathPoints(width: number, height: number): VectorAnchorPoint[] {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  return [
+    { id: createAnchorId('tri'), x: roundCoord(w / 2), y: 0, pointType: 'corner' },
+    { id: createAnchorId('tri'), x: roundCoord(w), y: roundCoord(h), pointType: 'corner' },
+    { id: createAnchorId('tri'), x: 0, y: roundCoord(h), pointType: 'corner' },
+  ];
+}
+
+export function setAnchorCornerRadius(node: PathNode, pointIndex: number, radius: number): PathNode {
+  if (pointIndex < 0 || pointIndex >= node.points.length) return node;
+  const clamped = Math.max(0, Math.min(2000, roundCoord(radius)));
+  const nextPoints = node.points.map((pt, idx) => {
+    if (idx !== pointIndex) return pt;
+    const copy: VectorAnchorPoint = { ...pt };
+    if (clamped > 0) {
+      copy.cornerRadius = clamped;
+      copy.pointType = 'corner';
+      delete copy.handleIn;
+      delete copy.handleOut;
+    } else {
+      delete copy.cornerRadius;
+    }
+    return copy;
+  });
+  return { ...node, points: nextPoints };
+}
+
+export function setAllPathCornerRadii(node: PathNode, radius: number): PathNode {
+  const clamped = Math.max(0, Math.min(2000, roundCoord(radius)));
+  const updateList = (pts: readonly VectorAnchorPoint[], closed: boolean): VectorAnchorPoint[] =>
+    pts.map((pt, idx) => {
+      if (!closed && (idx === 0 || idx === pts.length - 1)) return pt;
+      if (pt.pointType !== 'corner' || pt.handleIn || pt.handleOut) return pt;
+      const copy: VectorAnchorPoint = { ...pt };
+      if (clamped > 0) {
+        copy.cornerRadius = clamped;
+      } else {
+        delete copy.cornerRadius;
+      }
+      return copy;
+    });
+
+  return {
+    ...node,
+    points: updateList(node.points, node.closed),
+    ...(node.subpaths
+      ? {
+          subpaths: node.subpaths.map((sp) => ({
+            closed: sp.closed,
+            points: updateList(sp.points, sp.closed),
+          })),
+        }
+      : {}),
+  };
+}
+
+export function createPolygonPathPoints(width: number, height: number, sides = 6): VectorAnchorPoint[] {
+  const safeSides = Math.max(3, Math.min(24, Math.round(sides)));
+  const rx = Math.max(1, width) / 2;
+  const ry = Math.max(1, height) / 2;
+  const cx = rx;
+  const cy = ry;
+  const points: VectorAnchorPoint[] = [];
+  for (let i = 0; i < safeSides; i += 1) {
+    const angle = -Math.PI / 2 + (i * Math.PI * 2) / safeSides;
+    points.push({
+      id: createAnchorId('poly'),
+      x: roundCoord(cx + Math.cos(angle) * rx),
+      y: roundCoord(cy + Math.sin(angle) * ry),
+      pointType: 'corner',
+    });
+  }
+  return points;
+}
+
+export function createStarPathPoints(
+  width: number,
+  height: number,
+  pointsCount = 5,
+  innerRatio = 0.44,
+): VectorAnchorPoint[] {
+  const spikes = Math.max(3, Math.min(24, Math.round(pointsCount)));
+  const ratio = Math.max(0.15, Math.min(0.9, innerRatio));
+  const rx = Math.max(1, width) / 2;
+  const ry = Math.max(1, height) / 2;
+  const cx = rx;
+  const cy = ry;
+  const total = spikes * 2;
+  const points: VectorAnchorPoint[] = [];
+  for (let i = 0; i < total; i += 1) {
+    const angle = -Math.PI / 2 + (i * Math.PI) / spikes;
+    const radiusScale = i % 2 === 0 ? 1 : ratio;
+    points.push({
+      id: createAnchorId('star'),
+      x: roundCoord(cx + Math.cos(angle) * rx * radiusScale),
+      y: roundCoord(cy + Math.sin(angle) * ry * radiusScale),
+      pointType: 'corner',
+    });
+  }
+  return points;
+}
+
+export function createLinePathPoints(dx: number, dy: number): {
+  points: VectorAnchorPoint[];
+  offsetX: number;
+  offsetY: number;
+  width: number;
+  height: number;
+} {
+  const minX = Math.min(0, dx);
+  const minY = Math.min(0, dy);
+  const width = Math.max(1, Math.abs(dx));
+  const height = Math.max(1, Math.abs(dy));
+  return {
+    offsetX: minX,
+    offsetY: minY,
+    width,
+    height,
+    points: [
+      { id: createAnchorId('ln'), x: roundCoord(-minX), y: roundCoord(-minY), pointType: 'corner' },
+      { id: createAnchorId('ln'), x: roundCoord(dx - minX), y: roundCoord(dy - minY), pointType: 'corner' },
+    ],
+  };
+}
+
+/**
+ * Fits smooth Catmull-Rom-derived cubic Bezier handles through a sequence of
+ * points (powers the Adobe Illustrator-style Curvature Tool and Pencil smoothing).
+ */
+export function fitCatmullRomToBezier(
+  rawPoints: readonly (Point2D & { corner?: boolean })[],
+  closed: boolean,
+  tension = 0.25,
+): VectorAnchorPoint[] {
+  const n = rawPoints.length;
+  if (n === 0) return [];
+  if (n === 1) {
+    return [{ id: createAnchorId('cv'), x: roundCoord(rawPoints[0].x), y: roundCoord(rawPoints[0].y), pointType: 'corner' }];
+  }
+
+  return rawPoints.map((pt, i) => {
+    const anchor: VectorAnchorPoint = {
+      id: createAnchorId('cv'),
+      x: roundCoord(pt.x),
+      y: roundCoord(pt.y),
+      pointType: pt.corner ? 'corner' : 'smooth',
+    };
+    if (pt.corner) return anchor;
+
+    const prev = i > 0 ? rawPoints[i - 1] : (closed ? rawPoints[n - 1] : rawPoints[0]);
+    const next = i < n - 1 ? rawPoints[i + 1] : (closed ? rawPoints[0] : rawPoints[n - 1]);
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+
+    if (closed || i > 0) {
+      anchor.handleIn = {
+        x: roundCoord(pt.x - dx * tension),
+        y: roundCoord(pt.y - dy * tension),
+      };
+    }
+    if (closed || i < n - 1) {
+      anchor.handleOut = {
+        x: roundCoord(pt.x + dx * tension),
+        y: roundCoord(pt.y + dy * tension),
+      };
+    }
+    return anchor;
+  });
+}
+
+function perpendicularDistance(point: Point2D, start: Point2D, end: Point2D): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < EPS) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lenSq));
+  const projX = start.x + t * dx;
+  const projY = start.y + t * dy;
+  return Math.hypot(point.x - projX, point.y - projY);
+}
+
+/** Ramer-Douglas-Peucker polyline simplification for clean freehand Pencil strokes. */
+export function simplifyPolyline(points: readonly Point2D[], tolerance = 3.5): Point2D[] {
+  if (points.length <= 2) return [...points];
+  let maxDist = 0;
+  let index = 0;
+  const end = points.length - 1;
+  for (let i = 1; i < end; i += 1) {
+    const dist = perpendicularDistance(points[i], points[0], points[end]);
+    if (dist > maxDist) {
+      maxDist = dist;
+      index = i;
+    }
+  }
+  if (maxDist > tolerance) {
+    const left = simplifyPolyline(points.slice(0, index + 1), tolerance);
+    const right = simplifyPolyline(points.slice(index), tolerance);
+    return [...left.slice(0, -1), ...right];
+  }
+  return [points[0], points[end]];
+}
+
+export function simplifyFreehandToPathPoints(
+  rawPoints: readonly Point2D[],
+  tolerance = 4,
+): { points: VectorAnchorPoint[]; closed: boolean } {
+  if (rawPoints.length < 2) {
+    return {
+      points: rawPoints.map((pt) => ({ id: createAnchorId('pen'), x: roundCoord(pt.x), y: roundCoord(pt.y), pointType: 'corner' })),
+      closed: false,
+    };
+  }
+  const first = rawPoints[0];
+  const last = rawPoints[rawPoints.length - 1];
+  const closed = rawPoints.length > 6 && Math.hypot(last.x - first.x, last.y - first.y) <= 18;
+  const trimmed = closed ? rawPoints.slice(0, -1) : rawPoints;
+  const simplified = simplifyPolyline(trimmed, tolerance);
+  const points = fitCatmullRomToBezier(simplified, closed, 0.22);
+  return { points, closed };
+}
+
+/**
+ * Illustrator Smooth Tool: locally relaxes anchor points and recomputes smooth
+ * tangent handles for anchors within the brush radius of a stroke (rotation-safe).
+ */
+export function smoothPathAnchors(
+  node: PathNode,
+  brushPoints: readonly Point2D[],
+  radius = 36,
+): PathNode {
+  if (node.points.length < 3 || brushPoints.length === 0) return node;
+  const nextPoints = node.points.map((pt) => ({ ...pt }));
+  const n = nextPoints.length;
+
+  for (let i = 0; i < n; i += 1) {
+    if (!node.closed && (i === 0 || i === n - 1)) continue;
+    const worldPt = nodeLocalPointToWorld(node, nextPoints[i]);
+    const nearBrush = brushPoints.some((bp) => Math.hypot(bp.x - worldPt.x, bp.y - worldPt.y) <= radius);
+    if (!nearBrush) continue;
+
+    const prev = node.points[(i - 1 + n) % n];
+    const next = node.points[(i + 1) % n];
+    const avgX = (prev.x + node.points[i].x * 2 + next.x) / 4;
+    const avgY = (prev.y + node.points[i].y * 2 + next.y) / 4;
+    const tx = (next.x - prev.x) * 0.22;
+    const ty = (next.y - prev.y) * 0.22;
+    nextPoints[i] = {
+      id: nextPoints[i].id,
+      x: roundCoord(avgX),
+      y: roundCoord(avgY),
+      handleIn: { x: roundCoord(avgX - tx), y: roundCoord(avgY - ty) },
+      handleOut: { x: roundCoord(avgX + tx), y: roundCoord(avgY + ty) },
+      pointType: 'smooth',
+    };
+  }
+
+  return normalizePathNode({ ...node, points: nextPoints, shapeMeta: undefined });
+}
+
+/**
+ * Deletes an anchor point cleanly from a PathNode while preserving minimum
+ * contour validity (2 points open, 3 points closed).
+ */
+export function deleteAnchorPoint(node: PathNode, anchorIndex: number): PathNode | null {
+  const minPoints = node.closed ? 3 : 2;
+  if (node.points.length <= minPoints) return null;
+  if (anchorIndex < 0 || anchorIndex >= node.points.length) return null;
+  const nextPoints = node.points.filter((_, idx) => idx !== anchorIndex);
+  return normalizePathNode({ ...node, points: nextPoints, shapeMeta: undefined });
+}
+
+/**
+ * Updates parametric Polygon or Star geometry in-place while preserving visual center,
+ * bounding box size, rotation, and style (powers On-Canvas Smart Handles).
+ */
+export function updateParametricPathNode(node: PathNode, meta: VectorShapeMeta): PathNode {
+  const w = Math.max(8, node.width);
+  const h = Math.max(8, node.height);
+  if (meta.kind === 'triangle') {
+    return {
+      ...node,
+      points: createTrianglePathPoints(w, h),
+      closed: true,
+      pathKind: 'triangle',
+      shapeMeta: { kind: 'triangle' },
+    };
+  }
+  if (meta.kind === 'polygon') {
+    const sides = Math.max(3, Math.min(24, Math.round(meta.sides)));
+    return {
+      ...node,
+      points: createPolygonPathPoints(w, h, sides),
+      closed: true,
+      pathKind: 'polygon',
+      shapeMeta: { kind: 'polygon', sides },
+    };
+  }
+  const spikes = Math.max(3, Math.min(24, Math.round(meta.spikes)));
+  const innerRatio = Math.max(0.15, Math.min(0.9, Math.round(meta.innerRatio * 100) / 100));
+  return {
+    ...node,
+    points: createStarPathPoints(w, h, spikes, innerRatio),
+    closed: true,
+    pathKind: 'star',
+    shapeMeta: { kind: 'star', spikes, innerRatio },
+  };
+}
+
+/**
+ * Illustrator Simplify Path action: reduces point density on complex paths
+ * while keeping smooth curves intact.
+ */
+export function simplifyPathNode(node: PathNode, tolerance = 6): PathNode {
+  if (node.points.length <= 3) return node;
+  const sampled = sampleSubpathToPolygon(node.points, node.closed, 6);
+  const reduced = simplifyPolyline(sampled, tolerance);
+  if (reduced.length < 2) return node;
+  const fitted = fitCatmullRomToBezier(reduced, node.closed, 0.22);
+  return normalizePathNode({ ...node, points: fitted });
+}
+
+/**
+ * Finds the nearest segment on a PathNode to a local point and splits the cubic
+ * Bezier cleanly using de Casteljau subdivision.
+ */
+export function findNearestSegmentHit(
+  node: PathNode,
+  localPoint: Point2D,
+  maxDistance = 16,
+): { segmentIndex: number; t: number; point: Point2D; distance: number } | null {
+  const pts = node.points;
+  const segCount = node.closed ? pts.length : pts.length - 1;
+  let best: { segmentIndex: number; t: number; point: Point2D; distance: number } | null = null;
+
+  for (let i = 0; i < segCount; i += 1) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    const c1 = a.handleOut ?? { x: a.x, y: a.y };
+    const c2 = b.handleIn ?? { x: b.x, y: b.y };
+    const steps = 20;
+    for (let s = 0; s <= steps; s += 1) {
+      const t = s / steps;
+      const sample = evaluateCubicBezier(a, c1, c2, b, t);
+      const dist = Math.hypot(sample.x - localPoint.x, sample.y - localPoint.y);
+      if (dist <= maxDistance && (!best || dist < best.distance)) {
+        best = { segmentIndex: i, t, point: sample, distance: dist };
+      }
+    }
+  }
+  return best;
+}
+
+function lerpPoint(a: Point2D, b: Point2D, t: number): Point2D {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+/** Inserts an anchor point cleanly on a PathNode segment using de Casteljau subdivision. */
+export function insertAnchorOnPathSegment(
+  node: PathNode,
+  segmentIndex: number,
+  t: number,
+): { node: PathNode; insertedIndex: number } {
+  const pts = node.points.map((pt) => ({
+    ...pt,
+    ...(pt.handleIn ? { handleIn: { ...pt.handleIn } } : {}),
+    ...(pt.handleOut ? { handleOut: { ...pt.handleOut } } : {}),
+  }));
+  const clampedT = Math.max(0.05, Math.min(0.95, t));
+  const nextIndex = (segmentIndex + 1) % pts.length;
+  const a = pts[segmentIndex];
+  const b = pts[nextIndex];
+
+  const isCurved = Boolean(a.handleOut || b.handleIn);
+  let inserted: VectorAnchorPoint;
+
+  if (isCurved) {
+    const p0 = { x: a.x, y: a.y };
+    const p1 = a.handleOut ?? p0;
+    const p3 = { x: b.x, y: b.y };
+    const p2 = b.handleIn ?? p3;
+
+    const q0 = lerpPoint(p0, p1, clampedT);
+    const q1 = lerpPoint(p1, p2, clampedT);
+    const q2 = lerpPoint(p2, p3, clampedT);
+    const r0 = lerpPoint(q0, q1, clampedT);
+    const r1 = lerpPoint(q1, q2, clampedT);
+    const s = lerpPoint(r0, r1, clampedT);
+
+    a.handleOut = { x: roundCoord(q0.x), y: roundCoord(q0.y) };
+    b.handleIn = { x: roundCoord(q2.x), y: roundCoord(q2.y) };
+    inserted = {
+      id: createAnchorId('pt'),
+      x: roundCoord(s.x),
+      y: roundCoord(s.y),
+      handleIn: { x: roundCoord(r0.x), y: roundCoord(r0.y) },
+      handleOut: { x: roundCoord(r1.x), y: roundCoord(r1.y) },
+      pointType: 'smooth',
+    };
+  } else {
+    const pos = lerpPoint(a, b, clampedT);
+    inserted = {
+      id: createAnchorId('pt'),
+      x: roundCoord(pos.x),
+      y: roundCoord(pos.y),
+      pointType: 'corner',
+    };
+  }
+
+  const insertAt = segmentIndex + 1;
+  pts.splice(insertAt, 0, inserted);
+  return {
+    node: normalizePathNode({ ...node, points: pts }),
+    insertedIndex: insertAt,
+  };
+}
+
+/**
+ * Illustrator Anchor Point Convert Tool: toggles an anchor between sharp corner
+ * (no handles) and smooth symmetric Bezier handles inferred from its neighbors.
+ */
+export function toggleAnchorPointType(node: PathNode, anchorIndex: number): PathNode {
+  if (anchorIndex < 0 || anchorIndex >= node.points.length) return node;
+  const pts = node.points.map((pt) => ({ ...pt }));
+  const current = pts[anchorIndex];
+  const hasHandles = Boolean(current.handleIn || current.handleOut);
+
+  if (hasHandles) {
+    const nextPt: VectorAnchorPoint = {
+      id: current.id,
+      x: current.x,
+      y: current.y,
+      pointType: 'corner',
+    };
+    pts[anchorIndex] = nextPt;
+  } else {
+    const n = pts.length;
+    const prev = anchorIndex > 0 ? pts[anchorIndex - 1] : (node.closed ? pts[n - 1] : pts[0]);
+    const next = anchorIndex < n - 1 ? pts[anchorIndex + 1] : (node.closed ? pts[0] : pts[n - 1]);
+    const dx = (next.x - prev.x) * 0.25;
+    const dy = (next.y - prev.y) * 0.25;
+    const fallback = Math.hypot(dx, dy) < 1 ? { x: 24, y: 0 } : { x: dx, y: dy };
+    pts[anchorIndex] = {
+      id: current.id,
+      x: current.x,
+      y: current.y,
+      handleIn: { x: roundCoord(current.x - fallback.x), y: roundCoord(current.y - fallback.y) },
+      handleOut: { x: roundCoord(current.x + fallback.x), y: roundCoord(current.y + fallback.y) },
+      pointType: 'symmetric',
+    };
+  }
+  return normalizePathNode({ ...node, points: pts });
+}
+
+/**
+ * Illustrator Scissors Tool: splits a PathNode at the clicked segment or anchor.
+ * - Closed path -> opens cleanly at the cut point (returns 1 open PathNode).
+ * - Open path -> splits into 2 separate editable PathNodes!
+ */
+export function splitPathAtLocalPoint(
+  node: PathNode,
+  localPoint: Point2D,
+  createNewId: () => string,
+  tolerance = 18,
+): PathNode[] | null {
+  if (node.points.length < 2) return null;
+  const hit = findNearestSegmentHit(node, localPoint, tolerance);
+  if (!hit) return null;
+
+  const { node: subdivided, insertedIndex } = insertAnchorOnPathSegment(node, hit.segmentIndex, hit.t);
+  const pts = subdivided.points;
+
+  if (subdivided.closed) {
+    // Re-order points starting at the cut point and open the path
+    const cutStart = { ...pts[insertedIndex], handleIn: undefined };
+    const cutEnd = { ...pts[insertedIndex], id: createAnchorId('cut'), handleOut: undefined };
+    const reordered = [
+      cutStart,
+      ...pts.slice(insertedIndex + 1),
+      ...pts.slice(0, insertedIndex),
+      cutEnd,
+    ];
+    return [
+      normalizePathNode({
+        ...subdivided,
+        closed: false,
+        points: reordered,
+        style: {
+          ...subdivided.style,
+          fill: 'none',
+          stroke: subdivided.style.stroke === 'none' || subdivided.style.stroke === '#00000000'
+            ? (subdivided.style.fill !== 'none' ? subdivided.style.fill : '#20212A')
+            : subdivided.style.stroke,
+          strokeWidth: Math.max(2, subdivided.style.strokeWidth),
+        },
+      }),
+    ];
+  }
+
+  // Open path -> split into two independent PathNodes
+  const firstPts = pts.slice(0, insertedIndex + 1).map((pt, idx, arr) =>
+    idx === arr.length - 1 ? { ...pt, handleOut: undefined } : pt,
+  );
+  const secondPts = pts.slice(insertedIndex).map((pt, idx) =>
+    idx === 0 ? { ...pt, id: createAnchorId('cut'), handleIn: undefined } : pt,
+  );
+  if (firstPts.length < 2 || secondPts.length < 2) return null;
+
+  const first = normalizePathNode({ ...subdivided, points: firstPts, closed: false });
+  const second = normalizePathNode({
+    ...subdivided,
+    id: createNewId(),
+    name: `${subdivided.name} Split`,
+    points: secondPts,
+    closed: false,
+  });
+  return [first, second];
+}
+
+/**
+ * Converts a RectNode, FrameNode, or EllipseNode into a fully editable cubic
+ * Bezier PathNode (exact kappa ellipse & rounded-rectangle Bezier arcs!).
+ */
+export function convertShapeToPathNode(
+  node: RectNode | FrameNode | EllipseNode,
+): PathNode {
+  const w = Math.max(1, node.width);
+  const h = Math.max(1, node.height);
+  let points: VectorAnchorPoint[];
+
+  if (node.type === 'ellipse') {
+    const rx = w / 2;
+    const ry = h / 2;
+    const kx = rx * KAPPA;
+    const ky = ry * KAPPA;
+    points = [
+      {
+        id: createAnchorId('el'),
+        x: roundCoord(rx),
+        y: 0,
+        handleIn: { x: roundCoord(rx - kx), y: 0 },
+        handleOut: { x: roundCoord(rx + kx), y: 0 },
+        pointType: 'symmetric',
+      },
+      {
+        id: createAnchorId('el'),
+        x: roundCoord(w),
+        y: roundCoord(ry),
+        handleIn: { x: roundCoord(w), y: roundCoord(ry - ky) },
+        handleOut: { x: roundCoord(w), y: roundCoord(ry + ky) },
+        pointType: 'symmetric',
+      },
+      {
+        id: createAnchorId('el'),
+        x: roundCoord(rx),
+        y: roundCoord(h),
+        handleIn: { x: roundCoord(rx + kx), y: roundCoord(h) },
+        handleOut: { x: roundCoord(rx - kx), y: roundCoord(h) },
+        pointType: 'symmetric',
+      },
+      {
+        id: createAnchorId('el'),
+        x: 0,
+        y: roundCoord(ry),
+        handleIn: { x: 0, y: roundCoord(ry + ky) },
+        handleOut: { x: 0, y: roundCoord(ry - ky) },
+        pointType: 'symmetric',
+      },
+    ];
+  } else {
+    const r = Math.min(Math.max(0, node.style.radius ?? 0), w / 2, h / 2);
+    if (r < 0.5) {
+      points = [
+        { id: createAnchorId('rc'), x: 0, y: 0, pointType: 'corner' },
+        { id: createAnchorId('rc'), x: roundCoord(w), y: 0, pointType: 'corner' },
+        { id: createAnchorId('rc'), x: roundCoord(w), y: roundCoord(h), pointType: 'corner' },
+        { id: createAnchorId('rc'), x: 0, y: roundCoord(h), pointType: 'corner' },
+      ];
+    } else {
+      const k = r * KAPPA;
+      points = [
+        { id: createAnchorId('rc'), x: roundCoord(r), y: 0, handleIn: { x: roundCoord(r - k), y: 0 }, pointType: 'corner' },
+        { id: createAnchorId('rc'), x: roundCoord(w - r), y: 0, handleOut: { x: roundCoord(w - r + k), y: 0 }, pointType: 'corner' },
+        { id: createAnchorId('rc'), x: roundCoord(w), y: roundCoord(r), handleIn: { x: roundCoord(w), y: roundCoord(r - k) }, pointType: 'corner' },
+        { id: createAnchorId('rc'), x: roundCoord(w), y: roundCoord(h - r), handleOut: { x: roundCoord(w), y: roundCoord(h - r + k) }, pointType: 'corner' },
+        { id: createAnchorId('rc'), x: roundCoord(w - r), y: roundCoord(h), handleIn: { x: roundCoord(w - r + k), y: roundCoord(h) }, pointType: 'corner' },
+        { id: createAnchorId('rc'), x: roundCoord(r), y: roundCoord(h), handleOut: { x: roundCoord(r - k), y: roundCoord(h) }, pointType: 'corner' },
+        { id: createAnchorId('rc'), x: 0, y: roundCoord(h - r), handleIn: { x: 0, y: roundCoord(h - r + k) }, pointType: 'corner' },
+        { id: createAnchorId('rc'), x: 0, y: roundCoord(r), handleOut: { x: 0, y: roundCoord(r - k) }, pointType: 'corner' },
+      ];
+    }
+  }
+
+  return {
+    id: node.id,
+    name: `${node.name} Path`,
+    type: 'path',
+    x: node.x,
+    y: node.y,
+    width: w,
+    height: h,
+    rotation: node.rotation,
+    opacity: node.opacity,
+    visible: node.visible,
+    locked: node.locked,
+    ...(node.layerColor ? { layerColor: node.layerColor } : {}),
+    ...(node.parentId !== undefined ? { parentId: node.parentId } : {}),
+    ...(node.onCanvas !== undefined ? { onCanvas: node.onCanvas } : {}),
+    ...(node.clipMaskBaseId ? { clipMaskBaseId: node.clipMaskBaseId } : {}),
+    points,
+    closed: true,
+    pathKind: 'outline',
+    style: {
+      fill: node.style.fill,
+      stroke: node.style.stroke,
+      strokeWidth: node.style.strokeWidth,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+    },
+  };
+}
+
+export function flipPathNode(node: PathNode, axis: 'horizontal' | 'vertical'): PathNode {
+  const flipPt = (pt: VectorAnchorPoint): VectorAnchorPoint => {
+    const flipHandle = (h?: VectorPointHandle): VectorPointHandle | undefined =>
+      h
+        ? {
+            x: axis === 'horizontal' ? roundCoord(node.width - h.x) : h.x,
+            y: axis === 'vertical' ? roundCoord(node.height - h.y) : h.y,
+          }
+        : undefined;
+    const next: VectorAnchorPoint = {
+      id: pt.id,
+      x: axis === 'horizontal' ? roundCoord(node.width - pt.x) : pt.x,
+      y: axis === 'vertical' ? roundCoord(node.height - pt.y) : pt.y,
+      pointType: pt.pointType,
+    };
+    const hIn = flipHandle(pt.handleIn);
+    const hOut = flipHandle(pt.handleOut);
+    if (hIn) next.handleIn = hIn;
+    if (hOut) next.handleOut = hOut;
+    if (typeof pt.cornerRadius === 'number' && pt.cornerRadius > 0) next.cornerRadius = pt.cornerRadius;
+    return next;
+  };
+  return {
+    ...node,
+    points: node.points.map(flipPt),
+    ...(node.subpaths
+      ? { subpaths: node.subpaths.map((sp) => ({ closed: sp.closed, points: sp.points.map(flipPt) })) }
+      : {}),
+  };
+}
+
+/**
+ * Reverses the winding / point order of a PathNode and swaps each anchor's
+ * incoming and outgoing Bezier handles (Illustrator / CorelDRAW Reverse Path).
+ */
+export function reversePathNode(node: PathNode): PathNode {
+  const reversePoints = (pts: readonly VectorAnchorPoint[]): VectorAnchorPoint[] =>
+    [...pts].reverse().map((pt) => {
+      const next: VectorAnchorPoint = {
+        id: pt.id,
+        x: pt.x,
+        y: pt.y,
+        pointType: pt.pointType,
+      };
+      if (pt.handleOut) next.handleIn = { ...pt.handleOut };
+      if (pt.handleIn) next.handleOut = { ...pt.handleIn };
+      if (typeof pt.cornerRadius === 'number' && pt.cornerRadius > 0) next.cornerRadius = pt.cornerRadius;
+      return next;
+    });
+
+  return {
+    ...node,
+    points: reversePoints(node.points),
+    ...(node.subpaths
+      ? { subpaths: node.subpaths.map((sp) => ({ closed: sp.closed, points: reversePoints(sp.points) })) }
+      : {}),
+  };
+}
+
+/**
+ * Converts every anchor point on a PathNode to either smooth Catmull-Rom Bezier
+ * curves or crisp sharp corners (CorelDRAW Shape Tool / Illustrator Smooth & Corner).
+ */
+export function convertAllPathAnchors(node: PathNode, mode: 'smooth' | 'corner'): PathNode {
+  const transformSubpath = (pts: readonly VectorAnchorPoint[], closed: boolean): VectorAnchorPoint[] => {
+    if (mode === 'corner') {
+      return pts.map((pt) => ({
+        id: pt.id,
+        x: pt.x,
+        y: pt.y,
+        pointType: 'corner',
+      }));
+    }
+    const fitted = fitCatmullRomToBezier(
+      pts.map((pt) => ({ x: pt.x, y: pt.y })),
+      closed,
+      0.24,
+    );
+    return fitted.map((pt, idx) => ({
+      ...pt,
+      id: pts[idx]?.id ?? pt.id,
+    }));
+  };
+
+  return normalizePathNode({
+    ...node,
+    shapeMeta: undefined,
+    points: transformSubpath(node.points, node.closed),
+    ...(node.subpaths
+      ? {
+          subpaths: node.subpaths.map((sp) => ({
+            closed: sp.closed,
+            points: transformSubpath(sp.points, sp.closed),
+          })),
+        }
+      : {}),
+  });
+}
+
+function offsetSimplePolygon(poly: readonly Point2D[], distance: number, miterLimit = 3.5): Point2D[] {
+  const n = poly.length;
+  if (n < 3 || Math.abs(distance) < 0.05) return [...poly];
+
+  // Ensure signed area sign is known (screen Y-down: positive signedArea = clockwise visual winding)
+  let twiceArea = 0;
+  for (let i = 0; i < n; i += 1) {
+    const a = poly[i];
+    const b = poly[(i + 1) % n];
+    twiceArea += a.x * b.y - b.x * a.y;
+  }
+  const orientation = twiceArea >= 0 ? 1 : -1;
+  const result: Point2D[] = [];
+
+  for (let i = 0; i < n; i += 1) {
+    const prev = poly[(i - 1 + n) % n];
+    const curr = poly[i];
+    const next = poly[(i + 1) % n];
+
+    const e1x = curr.x - prev.x;
+    const e1y = curr.y - prev.y;
+    const e2x = next.x - curr.x;
+    const e2y = next.y - curr.y;
+    const len1 = Math.hypot(e1x, e1y);
+    const len2 = Math.hypot(e2x, e2y);
+    if (len1 < EPS || len2 < EPS) {
+      result.push({ x: curr.x, y: curr.y });
+      continue;
+    }
+
+    // Outward unit normal in Y-down coordinates for CW polygon (orientation=+1): (dy, -dx)/len
+    const n1x = (e1y / len1) * orientation;
+    const n1y = (-e1x / len1) * orientation;
+    const n2x = (e2y / len2) * orientation;
+    const n2y = (-e2x / len2) * orientation;
+
+    const bx = n1x + n2x;
+    const by = n1y + n2y;
+    const bLen = Math.hypot(bx, by);
+    if (bLen < EPS) {
+      result.push({ x: curr.x + n1x * distance, y: curr.y + n1y * distance });
+      continue;
+    }
+
+    const ux = bx / bLen;
+    const uy = by / bLen;
+    const dot = Math.max(0.25, ux * n1x + uy * n1y);
+    const rawScale = distance / dot;
+    const clampedScale = Math.sign(rawScale) * Math.min(Math.abs(rawScale), Math.abs(distance) * miterLimit);
+    result.push({
+      x: roundCoord(curr.x + ux * clampedScale),
+      y: roundCoord(curr.y + uy * clampedScale),
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Illustrator Offset Path / CorelDRAW Contour Tool:
+ * Offsets any Rect, Ellipse, Frame, or Path contour outward (distance > 0) or
+ * inward (distance < 0) with miter-clamped corner joins.
+ */
+export function offsetPathNode(
+  node: DesignNode,
+  distancePx: number,
+  newId: string,
+): PathNode | null {
+  if (!Number.isFinite(distancePx) || Math.abs(distancePx) < 0.5) return null;
+  const world = toWorldPath(node);
+  if (!world) return null;
+
+  const sampledMain = sampleSubpathToPolygon(world.points, true, 14);
+  if (sampledMain.length < 3) return null;
+
+  // Compute original bounding box to reject inward offsets that exceed half-thickness
+  let origMinX = Infinity;
+  let origMaxX = -Infinity;
+  let origMinY = Infinity;
+  let origMaxY = -Infinity;
+  for (const pt of sampledMain) {
+    if (pt.x < origMinX) origMinX = pt.x;
+    if (pt.x > origMaxX) origMaxX = pt.x;
+    if (pt.y < origMinY) origMinY = pt.y;
+    if (pt.y > origMaxY) origMaxY = pt.y;
+  }
+  const origW = origMaxX - origMinX;
+  const origH = origMaxY - origMinY;
+  if (distancePx < 0 && Math.abs(distancePx) >= Math.min(origW, origH) / 2 - 0.5) {
+    return null;
+  }
+
+  const offsetMain = offsetSimplePolygon(sampledMain, distancePx);
+  if (offsetMain.length < 3) return null;
+
+  // Reject collapsed inward offset whose signed area vanished, flipped, or inverted edge directions
+  let origArea = 0;
+  let nextArea = 0;
+  let invertedEdges = 0;
+  for (let i = 0; i < sampledMain.length; i += 1) {
+    const a = sampledMain[i];
+    const b = sampledMain[(i + 1) % sampledMain.length];
+    const oa = offsetMain[i];
+    const ob = offsetMain[(i + 1) % offsetMain.length];
+    origArea += a.x * b.y - b.x * a.y;
+    nextArea += oa.x * ob.y - ob.x * oa.y;
+    const dot = (b.x - a.x) * (ob.x - oa.x) + (b.y - a.y) * (ob.y - oa.y);
+    if (dot < 0) invertedEdges += 1;
+  }
+  if (
+    Math.abs(nextArea) < 4 ||
+    origArea * nextArea < 0 ||
+    (distancePx < 0 && (Math.abs(nextArea) >= Math.abs(origArea) || invertedEdges > sampledMain.length / 2))
+  ) {
+    return null;
+  }
+
+  const mainAnchors = polygonToAnchors(offsetMain);
+  const subpaths: VectorSubpath[] = [];
+  if (world.subpaths) {
+    for (const sp of world.subpaths) {
+      const spPoly = sampleSubpathToPolygon(sp.points, true, 14);
+      if (spPoly.length >= 3) {
+        const offsetSp = offsetSimplePolygon(spPoly, -distancePx);
+        if (offsetSp.length >= 3) {
+          subpaths.push({ points: polygonToAnchors(offsetSp), closed: true });
+        }
+      }
+    }
+  }
+
+  const baseStyle = getBaseStyle(node);
+  return normalizePathNode({
+    id: newId,
+    name: `${node.name} Offset (${distancePx > 0 ? '+' : ''}${Math.round(distancePx)}px)`,
+    type: 'path',
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    rotation: 0,
+    opacity: node.opacity,
+    visible: true,
+    locked: false,
+    onCanvas: true,
+    ...(node.parentId !== undefined ? { parentId: node.parentId } : {}),
+    points: mainAnchors,
+    closed: true,
+    ...(subpaths.length > 0 ? { subpaths } : {}),
+    pathKind: 'outline',
+    style: {
+      ...baseStyle,
+      fillRule: subpaths.length > 0 ? 'evenodd' : baseStyle.fillRule,
+    },
+  });
+}
+
+// ============================================================================
+// Concave-Safe 2D Planar Pathfinder & Interactive Shape Builder Engine
+// ============================================================================
+
+function toWorldPath(node: DesignNode): { points: VectorAnchorPoint[]; closed: boolean; subpaths?: VectorSubpath[] } | null {
+  let pathNode: PathNode | null = null;
+  if (node.type === 'path') {
+    pathNode = node;
+  } else if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame') {
+    pathNode = convertShapeToPathNode(node);
+  }
+  if (!pathNode) return null;
+
+  const center = { x: pathNode.x + pathNode.width / 2, y: pathNode.y + pathNode.height / 2 };
+  const mapAnchor = (pt: VectorAnchorPoint): VectorAnchorPoint => {
+    const worldPos = rotatePointAround({ x: pathNode!.x + pt.x, y: pathNode!.y + pt.y }, center, pathNode!.rotation);
+    const next: VectorAnchorPoint = {
+      id: createAnchorId('bool'),
+      x: roundCoord(worldPos.x),
+      y: roundCoord(worldPos.y),
+      pointType: pt.pointType,
+    };
+    if (pt.handleIn) {
+      const hIn = rotatePointAround({ x: pathNode!.x + pt.handleIn.x, y: pathNode!.y + pt.handleIn.y }, center, pathNode!.rotation);
+      next.handleIn = { x: roundCoord(hIn.x), y: roundCoord(hIn.y) };
+    }
+    if (pt.handleOut) {
+      const hOut = rotatePointAround({ x: pathNode!.x + pt.handleOut.x, y: pathNode!.y + pt.handleOut.y }, center, pathNode!.rotation);
+      next.handleOut = { x: roundCoord(hOut.x), y: roundCoord(hOut.y) };
+    }
+    if (typeof pt.cornerRadius === 'number' && pt.cornerRadius > 0) {
+      next.cornerRadius = pt.cornerRadius;
+    }
+    return next;
+  };
+
+  return {
+    points: pathNode.points.map(mapAnchor),
+    closed: pathNode.closed,
+    subpaths: pathNode.subpaths?.map((sp) => ({
+      closed: sp.closed,
+      points: sp.points.map(mapAnchor),
+    })),
+  };
+}
+
+function worldPathToPlanarShape(world: { points: VectorAnchorPoint[]; closed: boolean; subpaths?: VectorSubpath[] }): PlanarShapeInput {
+  const contours: PlanarPoint[][] = [];
+  const mainPoly = sampleSubpathToPolygon(world.points, true, 14);
+  if (mainPoly.length >= 3) contours.push(mainPoly);
+  if (world.subpaths) {
+    for (const sp of world.subpaths) {
+      const spPoly = sampleSubpathToPolygon(sp.points, true, 14);
+      if (spPoly.length >= 3) contours.push(spPoly);
+    }
+  }
+  return { contours };
+}
+
+function polygonToAnchors(poly: readonly Point2D[]): VectorAnchorPoint[] {
+  const simplified = simplifyPolyline([...poly, poly[0]], 0.45);
+  if (simplified.length > 1) simplified.pop();
+  const source = simplified.length >= 3 ? simplified : poly;
+  return source.map((pt) => ({
+    id: createAnchorId('pf'),
+    x: roundCoord(pt.x),
+    y: roundCoord(pt.y),
+    pointType: 'corner',
+  }));
+}
+
+function getBaseStyle(node: DesignNode): PathNode['style'] {
+  if (node.type === 'path') return { ...node.style };
+  if (node.type === 'rect' || node.type === 'ellipse' || node.type === 'frame') {
+    return {
+      fill: node.style.fill,
+      ...(node.style.fills ? { fills: node.style.fills } : {}),
+      stroke: node.style.stroke,
+      strokeWidth: node.style.strokeWidth,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fillRule: 'nonzero',
+    };
+  }
+  return {
+    fill: '#8B7CF6',
+    stroke: '#00000000',
+    strokeWidth: 0,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    fillRule: 'nonzero',
+  };
+}
+
+function isPointInsidePolygonRing(pt: PlanarPoint, ring: readonly PlanarPoint[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i].x;
+    const yi = ring[i].y;
+    const xj = ring[j].x;
+    const yj = ring[j].y;
+    const intersects = (yi > pt.y) !== (yj > pt.y)
+      && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi + EPS) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function polygonAbsArea(ring: readonly PlanarPoint[]): number {
+  if (ring.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < ring.length; i += 1) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(sum) * 0.5;
+}
+
+/**
+ * Removes redundant non-hole contours that lie completely inside a strictly larger non-hole
+ * contour (unless separated by a real hole contour), so uniting/combining nested shapes never
+ * punches unintended evenodd holes or leaves phantom internal seams.
+ */
+function pruneAbsorbedNestedOuterContours(contours: readonly AssembledContour[]): AssembledContour[] {
+  if (contours.length <= 1) return [...contours];
+  const outerEntries = contours
+    .filter((c) => !c.isHole && c.points.length >= 3)
+    .map((contour) => ({ contour, area: polygonAbsArea(contour.points) }));
+  const holeContours = contours.filter((c) => c.isHole && c.points.length >= 3);
+  if (outerEntries.length <= 1) return [...contours];
+
+  const areaByContour = new Map<AssembledContour, number>();
+  for (const entry of outerEntries) areaByContour.set(entry.contour, entry.area);
+
+  return contours.filter((contour) => {
+    if (contour.isHole || contour.points.length < 3) return true;
+    const selfArea = areaByContour.get(contour) ?? 0;
+    const sample = contour.points[0];
+    const containingOuters = outerEntries.filter(
+      (other) =>
+        other.contour !== contour
+        && other.area > selfArea + EPS
+        && isPointInsidePolygonRing(sample, other.contour.points),
+    );
+    if (containingOuters.length === 0) return true;
+    const containingHoles = holeContours.filter(
+      (hole) => isPointInsidePolygonRing(sample, hole.points),
+    );
+    // Keep only if this island lives inside a genuine hole (donut island); otherwise it's absorbed!
+    return containingHoles.length >= containingOuters.length;
+  });
+}
+
+function buildPathNodeFromFaces(
+  faces: readonly PlanarFace[],
+  templateNode: DesignNode,
+  newId: string,
+  name: string,
+  fillRule: 'nonzero' | 'evenodd' = 'evenodd',
+): PathNode | null {
+  const rawContours = assembleFacesToContours(faces);
+  const contours = fillRule === 'nonzero'
+    ? pruneAbsorbedNestedOuterContours(rawContours)
+    : rawContours;
+  if (contours.length === 0) return null;
+  const hasRealHole = contours.some((contour) => contour.isHole);
+  const anchorLoops = contours
+    .map((contour) => polygonToAnchors(contour.points))
+    .filter((pts) => pts.length >= 3);
+  if (anchorLoops.length === 0) return null;
+
+  const baseStyle = getBaseStyle(templateNode);
+  const [mainPoints, ...extraLoops] = anchorLoops;
+  const subpaths: VectorSubpath[] = extraLoops.map((pts) => ({ points: pts, closed: true }));
+
+  return normalizePathNode({
+    id: newId,
+    name,
+    type: 'path',
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    rotation: 0,
+    opacity: templateNode.opacity,
+    visible: true,
+    locked: false,
+    onCanvas: true,
+    ...(templateNode.parentId !== undefined ? { parentId: templateNode.parentId } : {}),
+    points: mainPoints,
+    closed: true,
+    ...(subpaths.length > 0 ? { subpaths } : {}),
+    pathKind: 'boolean',
+    style: {
+      ...baseStyle,
+      fillRule: hasRealHole ? 'evenodd' : fillRule,
+    },
+  });
+}
+
+/**
+ * Executes concave-safe 2D Planar Pathfinder operations on 2+ vector/shape nodes:
+ * - `unite`: dissolves internal overlapping seams into clean outer silhouette(s) & true holes.
+ * - `subtract` (Minus Front): punches front shapes cleanly out of base shape (concave-safe!).
+ * - `intersect`: computes the exact overlapping geometric region (works on Stars & concave paths!).
+ * - `exclude`: computes the crisp symmetric XOR region (`odd` parity faces).
+ */
+export interface PathfinderOperationOptions {
+  readonly colorBlendMode?: ShapeColorBlendMode;
+}
+
+export function applyPathfinderOperation(
+  nodes: readonly DesignNode[],
+  operation: PathfinderOperation,
+  newId: string,
+  options?: PathfinderOperationOptions,
+): PathNode | null {
+  const vectorNodes = nodes
+    .map((node) => ({ node, world: toWorldPath(node) }))
+    .filter((item): item is { node: DesignNode; world: NonNullable<ReturnType<typeof toWorldPath>> } => item.world !== null);
+
+  if (vectorNodes.length < 2) return null;
+
+  const baseNode = vectorNodes[0].node;
+  const topNode = vectorNodes[vectorNodes.length - 1].node;
+  const opLabels: Record<PathfinderOperation, string> = {
+    unite: 'United Path',
+    subtract: 'Subtracted Path',
+    'minus-back': 'Minus Back Path',
+    intersect: 'Intersected Path',
+    exclude: 'Excluded Path',
+  };
+
+  const planarShapes = vectorNodes.map((item) => worldPathToPlanarShape(item.world));
+  const arrangement = buildPlanarArrangement(planarShapes);
+  const totalCount = vectorNodes.length;
+
+  let selectedFaces: PlanarFace[];
+  let styleTemplate: DesignNode = baseNode;
+  if (operation === 'unite') {
+    selectedFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length >= 1);
+  } else if (operation === 'subtract') {
+    selectedFaces = arrangement.faces.filter(
+      (face) => face.memberShapeIndices.length === 1 && face.memberShapeIndices[0] === 0,
+    );
+  } else if (operation === 'minus-back') {
+    const topIndex = totalCount - 1;
+    styleTemplate = topNode;
+    selectedFaces = arrangement.faces.filter(
+      (face) => face.memberShapeIndices.length === 1 && face.memberShapeIndices[0] === topIndex,
+    );
+  } else if (operation === 'intersect') {
+    selectedFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length === totalCount);
+  } else {
+    selectedFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length % 2 === 1);
+  }
+
+  const built = buildPathNodeFromFaces(
+    selectedFaces,
+    styleTemplate,
+    newId,
+    opLabels[operation],
+    operation === 'unite' ? 'nonzero' : 'evenodd',
+  );
+  if (!built) return null;
+
+  const colorBlendMode = options?.colorBlendMode ?? 'linear';
+  if (operation === 'unite' && colorBlendMode !== 'single') {
+    return applyMergedColorBlendToPathNode(
+      built,
+      vectorNodes.map((item) => item.node),
+      colorBlendMode,
+    );
+  }
+  return built;
+}
+
+export interface CombineNodesOptions {
+  readonly colorBlendMode?: ShapeColorBlendMode;
+  readonly name?: string;
+}
+
+/**
+ * Combines 2+ vector/shape nodes (overlapping AND/OR separated, closed OR open)
+ * into a single unified PathNode with optional multi-color blending (Linear or Sharp Split).
+ */
+export function combineNodesIntoSingleObject(
+  nodes: readonly DesignNode[],
+  newId: string,
+  options?: CombineNodesOptions,
+): PathNode | null {
+  const vectorItems = nodes
+    .map((node) => ({ node, world: toWorldPath(node) }))
+    .filter((item): item is { node: DesignNode; world: NonNullable<ReturnType<typeof toWorldPath>> } => item.world !== null);
+
+  if (vectorItems.length < 2) return null;
+
+  const closedItems = vectorItems.filter((item) => item.world.closed);
+  const openItems = vectorItems.filter((item) => !item.world.closed);
+
+  const subpaths: VectorSubpath[] = [];
+  let hasRealHole = false;
+
+  if (closedItems.length >= 2) {
+    const arrangement = buildPlanarArrangement(closedItems.map((item) => worldPathToPlanarShape(item.world)));
+    const allFaces = arrangement.faces.filter((face) => face.memberShapeIndices.length >= 1);
+    const contours = pruneAbsorbedNestedOuterContours(assembleFacesToContours(allFaces));
+    hasRealHole = contours.some((contour) => contour.isHole);
+    for (const contour of contours) {
+      const anchors = polygonToAnchors(contour.points);
+      if (anchors.length >= 3) {
+        subpaths.push({ points: anchors, closed: true });
+      }
+    }
+  } else if (closedItems.length === 1) {
+    const single = closedItems[0].world;
+    if (single.points.length >= 2) {
+      subpaths.push({ points: single.points, closed: true });
+    }
+    if (single.subpaths) {
+      for (const sp of single.subpaths) {
+        if (sp.points.length >= 2) {
+          subpaths.push({ points: sp.points, closed: sp.closed });
+        }
+      }
+    }
+  }
+
+  for (const openItem of openItems) {
+    if (openItem.world.points.length >= 2) {
+      subpaths.push({ points: openItem.world.points, closed: false });
+    }
+    if (openItem.world.subpaths) {
+      for (const sp of openItem.world.subpaths) {
+        if (sp.points.length >= 2) {
+          subpaths.push({ points: sp.points, closed: sp.closed });
+        }
+      }
+    }
+  }
+
+  if (subpaths.length === 0) return null;
+
+  const templateNode = vectorItems[0].node;
+  const baseStyle = getBaseStyle(templateNode);
+  const [firstSubpath, ...restSubpaths] = subpaths;
+
+  const sharedParentId = vectorItems.every(
+    (item) => (item.node.parentId ?? null) === (templateNode.parentId ?? null),
+  )
+    ? templateNode.parentId
+    : undefined;
+
+  const normalized = normalizePathNode({
+    id: newId,
+    name: options?.name ?? 'Combined Object',
+    type: 'path',
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    rotation: 0,
+    opacity: templateNode.opacity,
+    visible: true,
+    locked: false,
+    onCanvas: true,
+    ...(sharedParentId !== undefined ? { parentId: sharedParentId } : {}),
+    points: firstSubpath.points,
+    closed: firstSubpath.closed,
+    ...(restSubpaths.length > 0 ? { subpaths: restSubpaths } : {}),
+    pathKind: 'boolean',
+    style: {
+      ...baseStyle,
+      fillRule: hasRealHole ? 'evenodd' : 'nonzero',
+    },
+  });
+
+  const colorBlendMode = options?.colorBlendMode ?? 'linear';
+  if (colorBlendMode !== 'single' && closedItems.length >= 2) {
+    return applyMergedColorBlendToPathNode(
+      normalized,
+      closedItems.map((item) => item.node),
+      colorBlendMode,
+    );
+  }
+  return normalized;
+}
+
+/**
+ * Illustrator Pathfinder Divide / CorelDRAW Break Overlapping Shapes:
+ * Splits 2+ overlapping shapes into individual atomic planar PathNodes,
+ * each inheriting the style of its topmost contributing source shape.
+ */
+export function divideNodesWithPathfinder(
+  nodes: readonly DesignNode[],
+  createNewId: () => string,
+): PathNode[] | null {
+  const vectorNodes = nodes
+    .map((node) => ({ node, world: toWorldPath(node) }))
+    .filter((item): item is { node: DesignNode; world: NonNullable<ReturnType<typeof toWorldPath>> } => item.world !== null);
+
+  if (vectorNodes.length < 2) return null;
+  const arrangement = buildPlanarArrangement(vectorNodes.map((item) => worldPathToPlanarShape(item.world)));
+  if (arrangement.faces.length === 0) return null;
+
+  const divided: PathNode[] = [];
+  arrangement.faces.forEach((face, idx) => {
+    const topIdx = face.memberShapeIndices[face.memberShapeIndices.length - 1] ?? 0;
+    const template = vectorNodes[topIdx]?.node ?? vectorNodes[0].node;
+    const built = buildPathNodeFromFaces(
+      [face],
+      template,
+      createNewId(),
+      `${template.name} Part ${idx + 1}`,
+      'nonzero',
+    );
+    if (built) divided.push(built);
+  });
+
+  return divided.length > 0 ? divided : null;
+}
+
+/**
+ * Decomposes 2+ selected shape/path nodes into atomic planar faces for the
+ * interactive Shape Builder tool (`Shift+M`).
+ */
+export function decomposeNodesForShapeBuilder(nodes: readonly DesignNode[]): {
+  candidates: DesignNode[];
+  arrangement: PlanarArrangement;
+} {
+  const items = nodes
+    .map((node) => ({ node, world: toWorldPath(node) }))
+    .filter((item): item is { node: DesignNode; world: NonNullable<ReturnType<typeof toWorldPath>> } => item.world !== null);
+  if (items.length < 2) {
+    return { candidates: items.map((i) => i.node), arrangement: { vertices: [], faces: [] } };
+  }
+  const arrangement = buildPlanarArrangement(items.map((item) => worldPathToPlanarShape(item.world)));
+  return { candidates: items.map((item) => item.node), arrangement };
+}
+
+/**
+ * Resolves an interactive Shape Builder gesture (merge touched faces OR Alt-punch
+ * touched faces) into the resulting replacement PathNodes for a single atomic undo step.
+ */
+export interface ShapeBuilderActionOptions {
+  readonly colorBlendMode?: ShapeColorBlendMode;
+}
+
+export function applyShapeBuilderAction(
+  candidates: readonly DesignNode[],
+  arrangement: PlanarArrangement,
+  touchedFaceIds: readonly number[],
+  mode: 'merge' | 'punch',
+  createNewId: () => string,
+  options?: ShapeBuilderActionOptions,
+): PathNode[] | null {
+  if (candidates.length === 0 || arrangement.faces.length === 0 || touchedFaceIds.length === 0) {
+    return null;
+  }
+  const touchedSet = new Set(touchedFaceIds);
+  const touchedFaces = arrangement.faces.filter((f) => touchedSet.has(f.id));
+  if (touchedFaces.length === 0) return null;
+
+  const resultNodes: PathNode[] = [];
+
+  if (mode === 'merge') {
+    // 1. Merge all touched faces into a single unified PathNode styled after the contributing source shapes
+    const firstFace = touchedFaces[0];
+    const styleSourceIdx = firstFace.memberShapeIndices[firstFace.memberShapeIndices.length - 1] ?? 0;
+    const styleTemplate = candidates[styleSourceIdx] ?? candidates[0];
+    const builtMerged = buildPathNodeFromFaces(touchedFaces, styleTemplate, createNewId(), 'Built Shape', 'nonzero');
+    if (!builtMerged) return null;
+
+    // Collect every distinct source shape that contributed to the merged regions
+    const contributingIndices = new Set<number>();
+    for (const face of touchedFaces) {
+      for (const idx of face.memberShapeIndices) {
+        if (idx >= 0 && idx < candidates.length) {
+          contributingIndices.add(idx);
+        }
+      }
+    }
+    const contributingSources = [...contributingIndices]
+      .sort((a, b) => a - b)
+      .map((idx) => candidates[idx]);
+
+    const colorBlendMode = options?.colorBlendMode ?? 'linear';
+    const merged =
+      colorBlendMode !== 'single' && contributingSources.length >= 2
+        ? applyMergedColorBlendToPathNode(builtMerged, contributingSources, colorBlendMode)
+        : builtMerged;
+
+    // 2. Preserve untouched remaining faces grouped by their top contributing shape
+    const remainingByTopShape = new Map<number, PlanarFace[]>();
+    for (const face of arrangement.faces) {
+      if (touchedSet.has(face.id)) continue;
+      const topIdx = face.memberShapeIndices[face.memberShapeIndices.length - 1] ?? 0;
+      const bucket = remainingByTopShape.get(topIdx);
+      if (bucket) bucket.push(face);
+      else remainingByTopShape.set(topIdx, [face]);
+    }
+
+    for (const [shapeIdx, faces] of remainingByTopShape.entries()) {
+      const source = candidates[shapeIdx] ?? candidates[0];
+      const built = buildPathNodeFromFaces(faces, source, createNewId(), `${source.name} Part`, 'evenodd');
+      if (built) resultNodes.push(built);
+    }
+    resultNodes.push(merged);
+    return resultNodes;
+  }
+
+  // `punch` (Alt+Click / Alt+Drag): delete touched faces and rebuild surviving regions cleanly
+  const survivingByTopShape = new Map<number, PlanarFace[]>();
+  for (const face of arrangement.faces) {
+    if (touchedSet.has(face.id)) continue;
+    const topIdx = face.memberShapeIndices[face.memberShapeIndices.length - 1] ?? 0;
+    const bucket = survivingByTopShape.get(topIdx);
+    if (bucket) bucket.push(face);
+    else survivingByTopShape.set(topIdx, [face]);
+  }
+
+  for (const [shapeIdx, faces] of survivingByTopShape.entries()) {
+    const source = candidates[shapeIdx] ?? candidates[0];
+    const built = buildPathNodeFromFaces(faces, source, createNewId(), `${source.name} Carved`, 'evenodd');
+    if (built) resultNodes.push(built);
+  }
+  return resultNodes;
+}

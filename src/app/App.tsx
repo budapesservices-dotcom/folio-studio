@@ -1,393 +1,919 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
-import { createInitialProject, createNode } from '../core/document/factory';
-import type { DesignNode } from '../core/document/types';
-import { loadMostRecentProject, saveProject } from '../core/persistence/indexedDb';
-import { downloadProject, readProjectFile } from '../core/persistence/projectFile';
-import { Canvas } from '../engines/canvas/Canvas';
-import { alignNodes, type Alignment } from '../engines/canvas/geometry';
-import { createEditorState, editorReducer } from './editorReducer';
-
-function Icon({ name }: { name: string }) {
-  const paths: Record<string, string> = {
-    cursor: 'M5 3l14 9-6 1.5L10 20 5 3z',
-    rect: 'M4 5h16v14H4z',
-    ellipse: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z',
-    text: 'M4 5h16M12 5v14M8 19h8',
-    layers: 'M12 3 3 8l9 5 9-5-9-5zM3 12l9 5 9-5M3 16l9 5 9-5',
-    export: 'M12 3v12m0-12 4 4m-4-4-4 4M5 14v6h14v-6',
-    import: 'M12 15V3m0 12 4-4m-4 4-4-4M5 14v6h14v-6',
-    undo: 'M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-2',
-    redo: 'm15 14 5-5-5-5m5 5H10a6 6 0 0 0 0 12h2',
-    trash: 'M4 7h16M10 11v6m4-6v6M6 7l1 14h10l1-14M9 7V4h6v3',
-    plus: 'M12 5v14M5 12h14',
-    minus: 'M5 12h14',
-    chevron: 'm9 18 6-6-6-6',
-    save: 'M5 4h12l3 3v13H4V4h1zm2 0v6h10V4M8 20v-7h8v7',
-  };
-
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" class="icon-svg">
-      <path d={paths[name] ?? paths.layers} />
-    </svg>
-  );
-}
-
-function LayerIcon({ type }: { type: DesignNode['type'] }) {
-  return <span class={`layer-type layer-type-${type}`}>{type === 'text' ? 'T' : type === 'ellipse' ? '○' : '□'}</span>;
-}
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { JSX } from 'preact';
+import { getActiveApplication, getProjectApplications } from '../core/document/applications';
+import { getComponentOverrideTargets } from '../core/document/components';
+import { getActiveDocument, getActivePage } from '../core/document/project';
+import { getStudioTool } from '../engines/canvas/tools/studioRegistry';
+import type { StudioClipboardPayload } from './nodeClipboard';
+import { getActiveEditorContext, type EditorTarget } from './editorContext';
+import { getWindowZIndex } from './windowManager';
+import { DEFAULT_TOOLBAR_HINT } from './ToolbarHintBar';
+import { mergeProjectAssets } from './renderSelectionToSvg';
+import type { NodeLogicOwnerContext } from './workspace/nodeLogicGraphHelpers';
+import { useWorkspaceStores } from './useWorkspaceStores';
+import { useWorkspaceWindows } from './workspace/useWorkspaceWindows';
+import { useWorkspaceToolState } from './workspace/useWorkspaceToolState';
+import { useWorkspaceChromeEffects } from './workspace/useWorkspaceChromeEffects';
+import { useWorkspaceChromeActions } from './workspace/useWorkspaceChromeActions';
+import { useWorkspaceDialogs } from './workspace/useWorkspaceDialogs';
+import { useWorkspaceMotionBridge } from './workspace/useWorkspaceMotionBridge';
+import { usePanelResizeController } from './workspace/usePanelResizeController';
+import { useComponentMasterLifecycle } from './workspace/useComponentMasterLifecycle';
+import { useWorkspaceShortcuts } from './workspace/useWorkspaceShortcuts';
+import { useLayerPanelController } from './workspace/useLayerPanelController';
+import { useSelectionAndVectorActions } from './workspace/useSelectionAndVectorActions';
+import { useProjectFileLifecycle } from './workspace/useProjectFileLifecycle';
+import { usePageAndTemplateActions } from './workspace/usePageAndTemplateActions';
+import { useDesignSystemActions } from './workspace/useDesignSystemActions';
+import { useMediaAndFontsLifecycle } from './workspace/useMediaAndFontsLifecycle';
+import { useWorkspaceDerivedActions } from './workspace/useWorkspaceDerivedActions';
+import { useCanvasPathStudioBridge } from './workspace/useCanvasPathStudioBridge';
+import { useQuickInteractionActions } from './workspace/useQuickInteractionActions';
+import { GlobalToolbar, WorkspacePreferencesRecoveryBanner } from './workspace/GlobalToolbar';
+import { ToolRail } from './workspace/ToolRail';
+import { LayersPanel } from './workspace/LayersPanel';
+import { MainCanvasWindow } from './workspace/CanvasWindows';
+import { PagesRackPanel } from './workspace/PagesRackPanel';
+import { ComponentRackPanel } from './workspace/ComponentRackPanel';
+import { StatusBar } from './workspace/StatusBar';
+import { WorkspaceInspectorHost } from './workspace/WorkspaceInspectorHost';
+import { WorkspaceSecondaryWindowsHost } from './workspace/WorkspaceSecondaryWindowsHost';
+import { WorkspaceShellOverlays } from './workspace/WorkspaceShellOverlays';
+import type { PrototypeNodeOverride, PrototypeRuntimeSnapshot } from '../engines/prototype/runtime';
 
 export function App() {
-  const initialEditorState = useMemo(() => createEditorState(createInitialProject('First canvas')), []);
-  const [state, dispatch] = useReducer(editorReducer, initialEditorState);
-  const [projectNameDraft, setProjectNameDraft] = useState(state.project.metadata.name);
-  const [ready, setReady] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
+  const [activeEditorId, setActiveEditorId] = useState<EditorTarget>('main');
   const [notice, setNotice] = useState('');
-  const [zoom, setZoom] = useState(0.82);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    setProjectNameDraft(state.project.metadata.name);
-  }, [state.project.metadata.id, state.project.metadata.name]);
-
-  useEffect(() => {
-    let active = true;
-    loadMostRecentProject()
-      .then((project) => {
-        if (active && project) dispatch({ type: 'replace-project', project });
-      })
-      .catch((error: unknown) => {
-        console.warn('Folio could not read local autosave:', error);
-        if (active) setNotice('Local storage is unavailable. You can still export .flop files.');
-      })
-      .finally(() => {
-        if (active) setReady(true);
+  const [logicRuntimeState, setLogicRuntimeState] = useState<{
+    readonly scope: 'page' | 'component' | 'project';
+    readonly targetId?: string;
+    readonly nodeOverrides: Readonly<Record<string, PrototypeNodeOverride>>;
+  } | null>(null);
+  const handleLogicRuntimeSnapshotChange = useCallback(
+    (
+      snapshot: PrototypeRuntimeSnapshot | null,
+      scope: 'page' | 'component' | 'project',
+      targetId?: string,
+    ) => {
+      if (!snapshot || Object.keys(snapshot.nodeOverrides).length === 0) {
+        setLogicRuntimeState(null);
+        return;
+      }
+      setLogicRuntimeState({
+        scope,
+        targetId,
+        nodeOverrides: snapshot.nodeOverrides,
       });
+    },
+    [],
+  );
+  const appShellRef = useRef<HTMLDivElement | null>(null);
+  const selectionSourceRef = useRef<'layers' | 'canvas'>('canvas');
+  const clipboardRef = useRef<StudioClipboardPayload | null>(null);
+  const setProjectNameEditingRef = useRef<(editing: boolean) => void>(() => {});
+  const chromeActionsRef = useRef<ReturnType<typeof useWorkspaceChromeActions> | null>(null);
+  const editingComponentIdRef = useRef<string | null>(null);
+  const resetEditingComponentRef = useRef<() => void>(() => {});
+  const activeBreakpointRef = useRef<'desktop' | 'tablet' | 'mobile'>('desktop');
 
-    return () => { active = false; };
-  }, []);
+  // Canonical & component editor stores + Native Command Engine clients
+  const {
+    canonicalStore,
+    componentStore,
+    state,
+    componentState,
+    componentInitialProject,
+    mainCommandClient,
+    componentCommandClient,
+    getCommandClient,
+    getCanonicalRevision,
+    getCanonicalProject,
+    subscribeCanonicalStore,
+  } = useWorkspaceStores({ onRejectedNotice: setNotice });
 
+  // Workspace windows, panel resize & shell tool/menu/rack state
+  const windows = useWorkspaceWindows({ setActiveEditorId, setNotice });
+  const panelResize = usePanelResizeController({
+    appShellRef,
+    layersVisible: windows.layersVisible,
+    inspectorVisible: windows.inspectorVisible,
+  });
+  const toolShell = useWorkspaceToolState({
+    activeEditorId,
+    resizingPanelRef: panelResize.resizingPanelRef,
+    setActiveEditorId,
+    setPagesRackOpen: windows.setPagesRackOpen,
+    setComponentRackOpen: windows.setComponentRackOpen,
+  });
+
+  const activeDocument = getActiveDocument(state.project);
+  const componentDocument = getActiveDocument(componentState.project);
+  const getEditingComponentId = useCallback(() => editingComponentIdRef.current, []);
+  const resetEditingComponent = useCallback(() => resetEditingComponentRef.current(), []);
+  const getActiveBreakpoint = useCallback(() => activeBreakpointRef.current, []);
+
+  // Project hydration, revision-fenced autosave & .flop / SVG / PNG export
+  const fileLifecycle = useProjectFileLifecycle({
+    project: state.project,
+    componentProject: componentState.project,
+    componentDocument,
+    activeEditorId,
+    getActiveBreakpoint,
+    getEditingComponentId,
+    onResetEditingComponent: resetEditingComponent,
+    mainCommandClient,
+    getCanonicalRevision,
+    getCanonicalProject,
+    subscribeCanonicalStore,
+    setActiveEditorId,
+    setComponentCanvasClosed: windows.setComponentCanvasClosed,
+    setComponentCanvasMinimized: windows.setComponentCanvasMinimized,
+    setFileMenuOpen: (open) => toolShell.setOpenMenu(open ? 'file' : null),
+    setNotice,
+  });
+
+  // Component Canvas master sync, buffer protection & durable deletion lifecycle
+  const componentMaster = useComponentMasterLifecycle({
+    canonicalStore,
+    mainCommandClient,
+    componentCommandClient,
+    state,
+    componentState,
+    componentInitialProject,
+    isProjectLoaded: fileLifecycle.isProjectLoaded,
+    appShellRef,
+    focusWindow: windows.focusWindow,
+    setActiveEditorId,
+    setComponentCanvasClosed: windows.setComponentCanvasClosed,
+    setComponentCanvasMinimized: windows.setComponentCanvasMinimized,
+    setInspectorVisible: windows.setInspectorVisible,
+    setComponentRackOpen: windows.setComponentRackOpen,
+    closePagesRack: toolShell.closePagesRack,
+    closeComponentRack: toolShell.closeComponentRack,
+    onCenterComponentCanvas: windows.centerComponentCanvasView,
+    setNotice,
+  });
+  editingComponentIdRef.current = componentMaster.editingComponentId;
+  resetEditingComponentRef.current = () => componentMaster.setEditingComponentId(null);
+
+  // Derived active workspace context
+  const isHydrating = !fileLifecycle.isProjectLoaded || !componentMaster.componentReady;
+  const pages = state.project.pages;
+  const activePageId = state.project.activePageId;
+  const activePage = getActivePage(state.project);
+  const projectApplications = getProjectApplications(state.project);
+  const activeApplication = getActiveApplication(state.project);
+  const ownedComponents = state.project.components;
+  const focusedEditor = getActiveEditorContext(activeEditorId, state, componentState);
+  const focusedDocument = focusedEditor.document;
+  const focusedPage = activeEditorId === 'main' ? activePage : null;
+  const layerContextName = focusedPage?.name ?? componentMaster.editingComponent?.name ?? componentDocument.name;
+  const layerContextLabel = focusedPage ? `EDITING: ${focusedPage.name}` : `COMPONENT: ${layerContextName}`;
+  const layerContextTitle = focusedPage
+    ? `Editing page ${focusedPage.name} (${focusedPage.route})`
+    : `Editing component ${layerContextName}`;
+  const selectedNode = focusedEditor.selectedNode;
+  const selectedNodes = focusedEditor.selectedNodes;
+  const selectedInstance = selectedNode?.type === 'component-instance' ? selectedNode : null;
+  const selectedInstanceComponent = selectedInstance
+    ? state.project.components.find((component) => component.id === selectedInstance.componentId) ?? null
+    : null;
+  const instanceOverrideTargets = selectedInstanceComponent
+    ? getComponentOverrideTargets(selectedInstanceComponent)
+    : null;
+  const focusedCommandClient = getCommandClient(activeEditorId);
+
+  // Layers panel controller
+  const layers = useLayerPanelController({
+    activeEditorId,
+    state,
+    componentState,
+    activeDocument,
+    componentDocument,
+    focusedDocument,
+    focusedSelectedNodeIds: focusedEditor.state.selectedNodeIds,
+    focusedCommandClient,
+    getCommandClient,
+    selectionSourceRef,
+    setActiveEditorId,
+    setInspectorVisible: windows.setInspectorVisible,
+    setNotice,
+  });
+
+  // Dialogs & global chrome side effects
+  const dismissPopoversForDialog = useCallback(() => {
+    toolShell.setOpenMenu(null);
+    toolShell.setToolRackOpen(null);
+    layers.setLayerContextMenu(null);
+  }, [toolShell.setOpenMenu, toolShell.setToolRackOpen, layers.setLayerContextMenu]);
+
+  const handleAfterNewProjectReset = useCallback(() => {
+    toolShell.setCodeWorkspaceOpen(false);
+    toolShell.setMotionExportOpen(false);
+    setProjectNameEditingRef.current(false);
+    windows.openMainCanvas();
+  }, [toolShell.setCodeWorkspaceOpen, toolShell.setMotionExportOpen, windows]);
+
+  const dialogs = useWorkspaceDialogs({
+    isHydrating,
+    onDismissPopovers: dismissPopoversForDialog,
+    onCreateNewProject: fileLifecycle.createNewProject,
+    onAfterNewProjectReset: handleAfterNewProjectReset,
+  });
+
+  useWorkspaceChromeEffects({
+    notice,
+    setNotice,
+    openMenu: toolShell.openMenu,
+    setOpenMenu: toolShell.setOpenMenu,
+    menuBarRef: toolShell.menuBarRef,
+    toolRackOpen: toolShell.toolRackOpen,
+    setToolRackOpen: toolShell.setToolRackOpen,
+    toolRailRef: toolShell.toolRailRef,
+    recoverWindow: windows.recoverWindow,
+    clampCurrentPanelWidths: panelResize.clampCurrentPanelWidths,
+    shortcutsModalOpen: dialogs.shortcutsModalOpen,
+    shortcutsMountTick: dialogs.shortcutsMountTick,
+    componentDeletionDialogOpen: componentMaster.componentDeletionDialogOpen,
+    appShellRef,
+    shortcutsModalHostRef: dialogs.shortcutsModalHostRef,
+    shortcutsDialogRef: dialogs.shortcutsDialogRef,
+    shortcutsFocusReturnRef: dialogs.shortcutsFocusReturnRef,
+    closeShortcutsModal: dialogs.closeShortcutsModal,
+    newProjectDialogOpen: dialogs.newProjectDialogOpen,
+    newProjectBusy: dialogs.newProjectBusyMode !== null,
+    newProjectModalHostRef: dialogs.newProjectModalHostRef,
+    newProjectDialogRef: dialogs.newProjectDialogRef,
+    newProjectFocusReturnRef: dialogs.newProjectFocusReturnRef,
+    closeNewProjectDialog: dialogs.closeNewProjectDialog,
+  });
+
+  const [nodeLogicOwnerContext, setNodeLogicOwnerContext] = useState<NodeLogicOwnerContext>(() => ({
+    scope: 'page',
+    pageId: activePageId,
+  }));
+
+  // Keep Node Logic owner context valid when switching pages, opening another master, or deleting components
   useEffect(() => {
-    if (!ready) return;
-    setSaveStatus('saving');
-    const timer = window.setTimeout(() => {
-      saveProject(state.project)
-        .then(() => setSaveStatus('saved'))
-        .catch((error: unknown) => {
-          console.error('Folio autosave failed:', error);
-          setSaveStatus('error');
-        });
-    }, 450);
-    return () => window.clearTimeout(timer);
-  }, [state.project, ready]);
+    if (nodeLogicOwnerContext.scope === 'component') {
+      const stillExists = state.project.components.some(
+        (comp) => comp.id === nodeLogicOwnerContext.componentId,
+      );
+      if (!stillExists) {
+        setNodeLogicOwnerContext({ scope: 'page', pageId: activePageId });
+      }
+      return;
+    }
+    if (nodeLogicOwnerContext.scope === 'page' && nodeLogicOwnerContext.pageId !== activePageId) {
+      setNodeLogicOwnerContext({ scope: 'page', pageId: activePageId });
+    }
+  }, [nodeLogicOwnerContext, state.project.components, activePageId]);
 
+  // When switching to another Component Master while editing component logic, keep owner context synced
   useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 4200);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
+    if (
+      activeEditorId === 'component'
+      && componentMaster.editingComponentId
+      && nodeLogicOwnerContext.scope === 'component'
+      && nodeLogicOwnerContext.componentId !== componentMaster.editingComponentId
+    ) {
+      setNodeLogicOwnerContext({
+        scope: 'component',
+        componentId: componentMaster.editingComponentId,
+      });
+    }
+  }, [activeEditorId, componentMaster.editingComponentId, nodeLogicOwnerContext]);
 
-  const selectedNode = useMemo(
-    () => state.project.document.nodes.find((node) => node.id === state.selectedNodeId) ?? null,
-    [state.project.document.nodes, state.selectedNodeId],
+  const openNodeLogicForContext = useCallback(
+    (explicitOwner?: NodeLogicOwnerContext) => {
+      const resolvedOwner: NodeLogicOwnerContext =
+        explicitOwner
+        ?? (activeEditorId === 'component' && componentMaster.editingComponent
+          ? { scope: 'component', componentId: componentMaster.editingComponent.id }
+          : { scope: 'page', pageId: activePageId });
+      setNodeLogicOwnerContext(resolvedOwner);
+      windows.openNodeLogic({ preserveEditor: resolvedOwner.scope === 'component' });
+    },
+    [activeEditorId, componentMaster.editingComponent, activePageId, windows],
   );
 
-  const addNode = (type: DesignNode['type']) => {
-    dispatch({ type: 'add-node', node: createNode(type, state.project.document.nodes.length) });
-  };
+  const mergedWorkspaceAssets = useMemo(
+    () => mergeProjectAssets(state.project.assets, componentState.project.assets),
+    [state.project.assets, componentState.project.assets],
+  );
 
-  const updateSelected = (patch: Partial<DesignNode>) => {
-    if (!selectedNode) return;
-    dispatch({ type: 'replace-node', node: { ...selectedNode, ...patch } as DesignNode });
-  };
+  // Studio feature controllers
+  const quickInteractions = useQuickInteractionActions({
+    project: state.project,
+    mainCommandClient,
+    openNodeLogic: openNodeLogicForContext,
+    setNotice,
+  });
 
-  const updateSelectedStyle = (patch: Record<string, string | number>) => {
-    if (!selectedNode) return;
-    dispatch({
-      type: 'replace-node',
-      node: { ...selectedNode, style: { ...selectedNode.style, ...patch } } as DesignNode,
-    });
-  };
+  const selectionActions = useSelectionAndVectorActions({
+    activeEditorId, isHydrating, state, componentState, selectedNode, selectedNodes,
+    editingComponentId: componentMaster.editingComponentId, toolOptions: toolShell.toolOptions,
+    onUpdateToolOptions: toolShell.updateToolOptions, focusedCommandClient, getCommandClient,
+    selectionSourceRef, clipboardRef, setWorkspaceToolId: toolShell.setWorkspaceToolId,
+    setInspectorVisible: windows.setInspectorVisible, setNotice, openNodeLogic: openNodeLogicForContext,
+  });
+  const activeStudioActions = selectionActions.createStudioActionsForTarget(activeEditorId);
 
-  const alignSelection = (alignment: Alignment) => {
-    const selected = state.project.document.nodes.filter((node) => state.selectedNodeIds.includes(node.id));
-    if (selected.length < 2) return;
-    dispatch({ type: 'transform-nodes', nodes: alignNodes(selected, alignment) });
-  };
+  const pageActions = usePageAndTemplateActions({
+    project: state.project,
+    activeEditorId,
+    editingComponentId: componentMaster.editingComponentId,
+    activeDocument,
+    focusedDocument,
+    isHydrating,
+    mainCommandClient,
+    focusedCommandClient,
+    setActiveEditorId,
+    setWorkspaceTools: toolShell.setWorkspaceTools,
+    setToolRackOpen: toolShell.setToolRackOpen,
+    setInspectorVisible: windows.setInspectorVisible,
+    openMainCanvas: windows.openMainCanvas,
+    closePagesRack: toolShell.closePagesRack,
+    setNotice,
+  });
 
-  const handleImport = async (event: Event) => {
-    const input = event.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    try {
-      const project = await readProjectFile(file);
-      dispatch({ type: 'replace-project', project });
-      setNotice(`Opened ${file.name}`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Could not open this project file.');
-    } finally {
-      input.value = '';
-    }
-  };
+  const { handleInsertImageFiles, handleImportFontFiles } = useMediaAndFontsLifecycle({
+    project: state.project,
+    activeEditorId,
+    isHydrating,
+    canonicalStore,
+    componentStore,
+    mainCommandClient,
+    componentCommandClient,
+    selectionSourceRef,
+    setInspectorVisible: windows.setInspectorVisible,
+    setNotice,
+  });
 
-  const handleNewProject = () => {
-    dispatch({ type: 'replace-project', project: createInitialProject('Untitled project') });
-  };
+  useWorkspaceShortcuts({
+    activeEditorId, editingComponentId: componentMaster.editingComponentId, state, componentState, isHydrating,
+    componentDeletionDialogOpen: componentMaster.componentDeletionDialogOpen,
+    shortcutsModalOpen: dialogs.shortcutsModalOpen, newProjectDialogOpen: dialogs.newProjectDialogOpen,
+    diagnosticsModalOpen: dialogs.diagnosticsModalOpen, projectLibraryOpen: dialogs.projectLibraryOpen,
+    motionExportOpen: toolShell.motionExportOpen, selectionSourceRef, clipboardRef, getCommandClient,
+    openShortcutsModal: dialogs.openShortcutsModal,
+    copySelection: selectionActions.copySelection, cutSelection: selectionActions.cutSelection,
+    pasteSelection: selectionActions.pasteSelection, duplicateSelection: selectionActions.duplicateSelection,
+    chooseCanvasTool: toolShell.chooseCanvasTool, setNotice,
+    onZoomStep: (target, action) => chromeActionsRef.current?.stepWorkspaceZoom(target, action),
+    onArrangeOrder: (target, action) => selectionActions.handleArrangeOrder(target, action),
+    onToggleSelectedProperty: (target, property) => {
+      const primaryId = (target === 'main' ? state : componentState).selectedNodeIds[0];
+      if (primaryId) layers.toggleLayerPropertyFromRow(primaryId, property);
+    },
+    onBeginLayerRename: (nodeId) => { if (!windows.layersVisible) windows.setLayersVisible(true); layers.beginLayerRename(nodeId, false); },
+    onToggleFocusCanvas: () => chromeActionsRef.current?.toggleFocusCanvas(),
+    onToggleStudioPanel: (panel) => chromeActionsRef.current?.toggleStudioPanel(panel),
+  });
 
-  const statusLabel = saveStatus === 'loading'
-    ? 'LOADING'
-    : saveStatus === 'saving'
-      ? 'SAVING…'
-      : saveStatus === 'error'
-        ? 'SAVE ERROR'
-        : 'ALL CHANGES SAVED';
+  const designSystem = useDesignSystemActions({
+    project: state.project,
+    focusedDocument,
+    selectedNode,
+    mainCommandClient,
+    focusedCommandClient,
+    componentCommandClient,
+    setNotice,
+    onMasterMetadataUpdated: componentMaster.acknowledgeMasterMetadataUpdate,
+  });
+  activeBreakpointRef.current = designSystem.activeBreakpoint;
+
+  // Derived tool executors, safe layer deletion & menu/context action builders
+  const {
+    mainToolOperationExecutor,
+    componentToolOperationExecutor,
+    deleteLayersSafely,
+    globalMenuActions,
+    mainCanvasContextMenuExtras,
+    componentCanvasContextMenuExtras,
+  } = useWorkspaceDerivedActions({
+    project: state.project,
+    activePage,
+    activeDocument,
+    componentDocument,
+    focusedDocument,
+    activeEditorId,
+    activeCanvasToolId: toolShell.activeCanvasToolId,
+    mainSelectedNodeIds: state.selectedNodeIds,
+    componentSelectedNodeIds: componentState.selectedNodeIds,
+    focusedSelectedNodeIds: focusedEditor.state.selectedNodeIds,
+    focusedSelectedNodes: focusedEditor.selectedNodes,
+    canUndo: focusedEditor.state.past.length > 0,
+    canRedo: focusedEditor.state.future.length > 0,
+    hasClipboard: clipboardRef.current !== null,
+    isHydrating,
+    designTokens: designSystem.designTokens,
+    mainCommandClient,
+    componentCommandClient,
+    focusedCommandClient,
+    getCommandClient,
+    selectionSourceRef,
+    windows,
+    layers,
+    selectionActions,
+    pageActions,
+    componentMaster,
+    chooseCanvasTool: toolShell.chooseCanvasTool,
+    applySampledColorOption: toolShell.applySampledColorOption,
+    onUpdateDesignTokens: designSystem.updateDesignTokens,
+    setNotice,
+  });
+
+  // Motion Timeline, Auto-Key bridge & Path Studio canvas bridge
+  const activeMotionSelectedNodeIds = focusedEditor.state.selectedNodeIds;
+  const {
+    activeMotionProject,
+    activeMotionPage,
+    motionExportProject,
+    motion,
+    inspectorSelectedNode,
+    inspectorSelectedNodes,
+    motionAutoKeyBridge,
+    hasAnimatedComponentsOnMain,
+    componentAnimPlaying,
+    toggleComponentAnimPlaying,
+    effectiveMainAnimationTimeMs,
+    mainCanvasDocument,
+    componentCanvasDocument,
+  } = useWorkspaceMotionBridge({
+    activeEditorId,
+    mainProject: state.project,
+    componentProject: componentState.project,
+    activeDocument,
+    componentDocument,
+    editingComponentName: componentMaster.editingComponent?.name,
+    selectedNode,
+    selectedNodes: focusedEditor.selectedNodes,
+    selectedNodeIds: activeMotionSelectedNodeIds,
+    focusedCommandClient,
+    mainToolOperationExecutor,
+    componentToolOperationExecutor,
+    onUpdateSelectedFallback: selectionActions.updateSelected,
+    onUpdateSelectedStyleFallback: selectionActions.updateSelectedStyle,
+    onSampledColorOption: toolShell.applySampledColorOption,
+    onCanvasInteraction: () => { selectionSourceRef.current = 'canvas'; },
+    onNotice: setNotice,
+  });
+
+  const pathStudio = useCanvasPathStudioBridge({ motion, inspectorSelectedNode, setNotice });
+
+  const chromeActions = useWorkspaceChromeActions({
+    projectName: state.project.metadata.name,
+    windows,
+    tokensRackOpen: designSystem.tokensRackOpen,
+    setTokensRackOpen: designSystem.setTokensRackOpen,
+    closeTokensRack: designSystem.closeTokensRack,
+    closePagesRack: toolShell.closePagesRack,
+    closeComponentRack: toolShell.closeComponentRack,
+    resetAllPanelWidths: panelResize.resetAllPanelWidths,
+    motionOpen: motion.motionOpen,
+    toggleMotionOpen: motion.toggleMotionOpen,
+    setOpenMenu: toolShell.setOpenMenu,
+    setToolRackOpen: toolShell.setToolRackOpen,
+    setActiveEditorId,
+    setCodeWorkspaceOpen: toolShell.setCodeWorkspaceOpen,
+    onResetComponentView: () => windows.centerComponentCanvasView(componentDocument?.width ?? 420, componentDocument?.height ?? 280),
+    onOpenNodeLogic: () => openNodeLogicForContext(),
+    onCommitProjectName: pageActions.commitProjectName,
+    setNotice,
+  });
+  chromeActionsRef.current = chromeActions;
+  setProjectNameEditingRef.current = chromeActions.setProjectNameEditing;
+
+  // Window visibility computation
+  const mainCanvasVisible = !windows.canvasClosed && !windows.canvasMinimized
+    && !(windows.componentCanvasOpen && !windows.componentCanvasFloating && !windows.canvasFloating)
+    && !(windows.nodeLogicOpen && !windows.nodeLogicFloating && !windows.canvasFloating);
+  const nodeLogicCoversDockedComponent = windows.nodeLogicOpen && !windows.nodeLogicFloating
+    && !windows.componentCanvasFloating
+    && getWindowZIndex(windows.windowOrder, 'node-logic') > getWindowZIndex(windows.windowOrder, 'component-canvas');
+  const componentCanvasVisible = !windows.componentCanvasClosed && !windows.componentCanvasMinimized && !nodeLogicCoversDockedComponent;
+  const pendingOpenComponentName = componentMaster.pendingComponentOpenId
+    ? (state.project.components.find((item) => item.id === componentMaster.pendingComponentOpenId)?.name ?? 'another master')
+    : null;
 
   return (
-    <div class="app-shell">
-      <header class="topbar">
-        <div class="brand-lockup">
-          <div class="brand-mark">F</div>
-          <div class="brand-name">FOLIO<span>STUDIO</span></div>
-          <span class="beta-tag">EARLY ACCESS</span>
-        </div>
+    <div
+      ref={appShellRef}
+      class={`app-shell ${windows.layersVisible ? '' : 'layers-hidden'} ${windows.inspectorVisible ? '' : 'inspector-hidden'} ${motion.motionOpen ? 'has-motion-timeline' : ''} ${isHydrating ? 'is-hydrating' : ''} ${panelResize.resizingPanel ? 'is-resizing-panel' : ''}`}
+      style={{
+        '--layers-panel-width': `${panelResize.panelWidthsRef.current.layers}px`,
+        '--inspector-panel-width': `${panelResize.panelWidthsRef.current.inspector}px`,
+      } as JSX.CSSProperties}
+      data-active-window={windows.activeWindowId}
+      aria-busy={isHydrating}
+      onMouseLeave={() => {
+        if (panelResize.resizingPanelRef.current === null) toolShell.toolbarHintStore.setHint(DEFAULT_TOOLBAR_HINT);
+      }}
+      onKeyDown={(event) => {
+        if (isHydrating) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+    >
+      <GlobalToolbar
+        projectName={state.project.metadata.name}
+        isHydrating={isHydrating}
+        openMenu={toolShell.openMenu}
+        menuActions={globalMenuActions}
+        menuBarRef={toolShell.menuBarRef}
+        projectFileInputRef={toolShell.projectFileInputRef}
+        pagesRackToggleRef={toolShell.pagesRackToggleRef}
+        componentRackToggleRef={toolShell.componentRackToggleRef}
+        tokensRackToggleRef={designSystem.tokensRackToggleRef}
+        projectNameEditing={chromeActions.projectNameEditing}
+        projectNameDraft={chromeActions.projectNameDraft}
+        pagesRackOpen={windows.pagesRackOpen}
+        componentRackOpen={windows.componentRackOpen}
+        tokensRackOpen={designSystem.tokensRackOpen}
+        layersVisible={windows.layersVisible}
+        inspectorVisible={windows.inspectorVisible}
+        canvasClosed={windows.canvasClosed}
+        canvasMinimized={windows.canvasMinimized}
+        componentCanvasOpen={windows.componentCanvasOpen}
+        componentCanvasClosed={windows.componentCanvasClosed}
+        componentCanvasMinimized={windows.componentCanvasMinimized}
+        nodeLogicOpen={windows.nodeLogicOpen}
+        nodeLogicClosed={windows.nodeLogicClosed}
+        nodeLogicMinimized={windows.nodeLogicMinimized}
+        codeWorkspaceOpen={toolShell.codeWorkspaceOpen}
+        motionTimelineOpen={motion.motionOpen}
+        shortcutsModalOpen={dialogs.shortcutsModalOpen}
+        projectLibraryOpen={dialogs.projectLibraryOpen}
+        toolbarHintStore={toolShell.toolbarHintStore}
+        onToggleMenu={(menu) => { toolShell.setOpenMenu((current) => (current === menu ? null : menu)); toolShell.setToolRackOpen(null); }}
+        onCloseMenus={() => toolShell.setOpenMenu(null)}
+        onRequestNewProject={dialogs.openNewProjectDialog}
+        onOpenProjectPicker={() => { if (isHydrating) return; toolShell.setOpenMenu(null); toolShell.projectFileInputRef.current?.click(); }}
+        onProjectFileSelected={fileLifecycle.handleProjectFileSelected}
+        onExportCurrentProject={() => { void fileLifecycle.exportCurrentProject(isHydrating); }}
+        onExportCurrentProjectArchive={() => { void fileLifecycle.exportCurrentProjectArchive(isHydrating); }}
+        onOpenProjectLibrary={dialogs.openProjectLibrary}
+        onExportActiveCanvasSvg={() => { void fileLifecycle.exportActiveCanvasSvg(isHydrating); }}
+        onExportActiveCanvasPng={() => { void fileLifecycle.exportActiveCanvasPng(isHydrating); }}
+        onOpenMotionExport={() => toolShell.setMotionExportOpen(true)}
+        onResetWindowLayout={chromeActions.resetWindowLayout}
+        onOpenShortcutsModal={dialogs.openShortcutsModal}
+        onOpenDiagnosticsModal={() => dialogs.setDiagnosticsModalOpen(true)}
+        onStartProjectRename={chromeActions.startProjectRename}
+        onProjectNameDraftChange={chromeActions.setProjectNameDraft}
+        onCommitProjectRename={chromeActions.commitProjectRename}
+        onCancelProjectRename={chromeActions.cancelProjectRename}
+        onTogglePagesRack={chromeActions.togglePagesRack}
+        onToggleComponentRack={chromeActions.toggleComponentRack}
+        onToggleTokensRack={chromeActions.toggleTokensRack}
+        onToggleLayersVisible={() => windows.setLayersVisible((value) => !value)}
+        onToggleInspectorVisible={() => windows.setInspectorVisible((value) => !value)}
+        onToggleMainCanvas={chromeActions.toggleMainCanvas}
+        onToggleComponentCanvas={chromeActions.toggleComponentCanvas}
+        onToggleNodeLogic={chromeActions.toggleNodeLogic}
+        onToggleCodeWorkspace={() => toolShell.setCodeWorkspaceOpen((open) => { if (!open) setActiveEditorId('main'); return !open; })}
+        onToggleMotionTimeline={chromeActions.toggleMotionTimeline}
+        onEnterFullscreen={chromeActions.enterFullscreen}
+        onUpdateToolbarHint={toolShell.updateToolbarHint}
+      />
 
-        <div class="project-title-wrap">
-          <input
-            class="project-title-input"
-            aria-label="Project name"
-            value={projectNameDraft}
-            onChange={(event) => setProjectNameDraft(event.currentTarget.value)}
-            onBlur={() => dispatch({ type: 'rename-project', name: projectNameDraft })}
-          />
-          <span class="project-extension">.flop</span>
-        </div>
+      <WorkspacePreferencesRecoveryBanner
+        status={windows.initialWorkspacePreferences.status}
+        reviewRequired={windows.workspacePreferencesReviewRequired}
+        onApprove={windows.approveWorkspacePreferencesReview}
+      />
 
-        <div class="topbar-spacer" />
+      <ToolRail
+        toolRailRef={toolShell.toolRailRef}
+        activeEditorId={activeEditorId}
+        activeCanvasToolId={toolShell.activeCanvasToolId}
+        toolGroups={toolShell.activeToolGroups}
+        resolveTool={getStudioTool}
+        toolRackOpen={toolShell.toolRackOpen}
+        templateInsertMode={pageActions.templateInsertMode}
+        canUndo={focusedEditor.state.past.length > 0}
+        canRedo={focusedEditor.state.future.length > 0}
+        colorSwatch={{
+          fillColor: toolShell.toolOptions.fillColor,
+          strokeColor: toolShell.toolOptions.strokeColor,
+          strokeWidth: toolShell.toolOptions.strokeWidth,
+          onChangeFill: (color) => activeStudioActions.onApplySwatch(color, 'fill'),
+          onChangeStroke: (color) => activeStudioActions.onApplySwatch(color, 'stroke'),
+          onSwap: activeStudioActions.onSwapFillAndStroke,
+          onResetDefault: activeStudioActions.onResetDefaultColors,
+        }}
+        onCloseTopMenus={() => toolShell.setOpenMenu(null)}
+        onToggleToolRack={toolShell.setToolRackOpen}
+        onChooseTool={(toolId) => toolShell.chooseCanvasTool(toolId, activeEditorId)}
+        onTemplateInsertModeChange={pageActions.setTemplateInsertMode}
+        onInsertTemplate={pageActions.insertTemplate}
+        onUndo={() => focusedCommandClient.undo()}
+        onRedo={() => focusedCommandClient.redo()}
+        onUpdateToolbarHint={toolShell.updateToolbarHint}
+      />
 
-        <div class={`save-indicator save-${saveStatus}`}>
-          <span class="save-dot" />
-          {statusLabel}
-        </div>
-        <div class="topbar-divider" />
-        <button class="top-button subtle" onClick={handleNewProject} title="Create new project">
-          <Icon name="plus" /> <span>New</span>
-        </button>
-        <button class="top-button subtle" onClick={() => fileInputRef.current?.click()} title="Open .flop project">
-          <Icon name="import" /> <span>Open</span>
-        </button>
-        <button class="top-button primary" onClick={() => downloadProject(state.project)} title="Export .flop project">
-          <Icon name="export" /> <span>Export</span>
-        </button>
-        <input
-          ref={fileInputRef}
-          class="visually-hidden"
-          type="file"
-          accept=".flop,application/json"
-          onChange={handleImport}
-        />
-      </header>
-
-      <nav class="tool-rail" aria-label="Insert tools">
-        <button class="tool-button active" title="Select layer" aria-label="Select layer" onClick={() => dispatch({ type: 'select-node', nodeId: null })}>
-          <Icon name="cursor" />
-        </button>
-        <div class="rail-separator" />
-        <button class="tool-button" title="Add rectangle" aria-label="Add rectangle" onClick={() => addNode('rect')}>
-          <Icon name="rect" />
-        </button>
-        <button class="tool-button" title="Add ellipse" aria-label="Add ellipse" onClick={() => addNode('ellipse')}>
-          <Icon name="ellipse" />
-        </button>
-        <button class="tool-button" title="Add text" aria-label="Add text" onClick={() => addNode('text')}>
-          <Icon name="text" />
-        </button>
-        <div class="rail-bottom">
-          <button class="tool-button" title="Undo" aria-label="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}>
-            <Icon name="undo" />
-          </button>
-          <button class="tool-button" title="Redo" aria-label="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}>
-            <Icon name="redo" />
-          </button>
-        </div>
-      </nav>
-
-      <aside class="layers-panel">
-        <div class="panel-heading">
-          <div>
-            <span class="panel-kicker">DOCUMENT</span>
-            <h2>Layers</h2>
-          </div>
-          <button class="icon-button" title="Add rectangle" onClick={() => addNode('rect')}><Icon name="plus" /></button>
-        </div>
-        <div class="page-row">
-          <span class="page-indicator" />
-          <span>{state.project.document.name}</span>
-          <span class="page-size">{state.project.document.width} × {state.project.document.height}</span>
-        </div>
-        <div class="layer-list-heading">
-          <span>LAYERS</span>
-          <span>{state.project.document.nodes.length}</span>
-        </div>
-        <div class="layer-list">
-          {[...state.project.document.nodes].reverse().map((node) => (
-            <button
-              key={node.id}
-              class={"layer-row " + (state.selectedNodeIds.includes(node.id) ? "selected " : "") + (node.visible ? "" : "layer-hidden")}
-              onClick={(event) => {
-                const selected = state.selectedNodeIds;
-                if (event.shiftKey || event.metaKey || event.ctrlKey) {
-                  const next = selected.includes(node.id)
-                    ? selected.filter((id) => id !== node.id)
-                    : [...selected, node.id];
-                  dispatch({ type: 'select-nodes', nodeIds: next });
-                } else {
-                  dispatch({ type: 'select-node', nodeId: node.id });
-                }
-              }}
-              title={`Select ${node.name}`}
-            >
-              <LayerIcon type={node.type} />
-              <span class="layer-name">{node.name}</span>
-              <span class="layer-eye">{node.visible ? '◉' : '○'}</span>
-            </button>
-          ))}
-          {state.project.document.nodes.length === 0 && (
-            <div class="empty-layers">Your layers will appear here.</div>
-          )}
-        </div>
-        <div class="layers-footnote">
-          <span class="footnote-dot" />
-          <span>Document is stored locally</span>
-        </div>
-      </aside>
-
-      <main class="workspace">
-        <div class="workspace-toolbar">
-          <div class="breadcrumb"><span>Canvas</span><Icon name="chevron" /><strong>{state.project.document.name}</strong></div>
-          {state.selectedNodeIds.length > 1 && (
-            <div class="alignment-tools" aria-label="Align selected layers">
-              <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}>⇤</button>
-              <button title="Align horizontal center" aria-label="Align horizontal center" onClick={() => alignSelection('horizontal-center')}>↔</button>
-              <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}>⇥</button>
-              <button title="Align top" aria-label="Align top" onClick={() => alignSelection('top')}>⇡</button>
-              <button title="Align vertical center" aria-label="Align vertical center" onClick={() => alignSelection('vertical-center')}>↕</button>
-              <button title="Align bottom" aria-label="Align bottom" onClick={() => alignSelection('bottom')}>⇣</button>
-            </div>
-          )}
-          <div class="workspace-tools">
-            <button class="history-button" title="Undo" disabled={state.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><Icon name="undo" /></button>
-            <button class="history-button" title="Redo" disabled={state.future.length === 0} onClick={() => dispatch({ type: 'redo' })}><Icon name="redo" /></button>
-            <span class="workspace-divider" />
-            <button class="zoom-button" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}><Icon name="minus" /></button>
-            <span class="zoom-value">{Math.round(zoom * 100)}%</span>
-            <button class="zoom-button" title="Zoom in" onClick={() => setZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(2))))}><Icon name="plus" /></button>
-          </div>
-        </div>
-        <div class="canvas-workspace">
-          <Canvas
-            document={state.project.document}
-            selectedNodeIds={state.selectedNodeIds}
-            zoom={zoom}
-            onSelectionChange={(nodeIds) => dispatch({ type: 'select-nodes', nodeIds })}
-            onTransformCommit={(nodes) => dispatch({ type: 'transform-nodes', nodes })}
-          />
-          <div class="canvas-hint">DRAG TO MOVE · RESIZE WITH HANDLES · SHIFT-CLICK TO MULTI-SELECT</div>
-        </div>
-      </main>
-
-      <aside class="inspector-panel">
-        <div class="panel-heading inspector-heading">
-          <div>
-            <span class="panel-kicker">PROPERTIES</span>
-            <h2>Inspector</h2>
-          </div>
-          {selectedNode && <button class="icon-button danger" title="Delete selected layer" onClick={() => dispatch({ type: 'delete-node', nodeId: selectedNode.id })}><Icon name="trash" /></button>}
-        </div>
-
-        {selectedNode ? (
-          <div class="inspector-content">
-            <section class="property-section">
-              <div class="section-title">Layer</div>
-              <label class="field-label">Name</label>
-              <input
-                class="text-field"
-                value={selectedNode.name}
-                onChange={(event) => updateSelected({ name: event.currentTarget.value })}
-              />
-            </section>
-
-            <section class="property-section">
-              <div class="section-title">Position</div>
-              <div class="field-grid">
-                <label class="field-label">X<input class="number-field" type="number" value={Math.round(selectedNode.x)} onChange={(event) => updateSelected({ x: Number(event.currentTarget.value) || 0 })} /></label>
-                <label class="field-label">Y<input class="number-field" type="number" value={Math.round(selectedNode.y)} onChange={(event) => updateSelected({ y: Number(event.currentTarget.value) || 0 })} /></label>
-                <label class="field-label">W<input class="number-field" type="number" min="1" value={Math.round(selectedNode.width)} onChange={(event) => updateSelected({ width: Math.max(1, Number(event.currentTarget.value) || 1) })} /></label>
-                <label class="field-label">H<input class="number-field" type="number" min="1" value={Math.round(selectedNode.height)} onChange={(event) => updateSelected({ height: Math.max(1, Number(event.currentTarget.value) || 1) })} /></label>
-              </div>
-              <label class="field-label rotation-field">Rotation<input class="number-field" type="number" value={selectedNode.rotation} onChange={(event) => updateSelected({ rotation: Number(event.currentTarget.value) || 0 })} /></label>
-            </section>
-
-            <section class="property-section">
-              <div class="section-title">Appearance</div>
-              <label class="field-label">Fill</label>
-              <div class="color-field-wrap">
-                <input
-                  class="color-swatch"
-                  type="color"
-                  value={selectedNode.style.fill.startsWith('#') && selectedNode.style.fill.length === 7 ? selectedNode.style.fill : '#8B7CF6'}
-                  onChange={(event) => updateSelectedStyle({ fill: event.currentTarget.value })}
-                />
-                <span class="color-value">{selectedNode.style.fill.toUpperCase()}</span>
-              </div>
-              {selectedNode.type === 'rect' && (
-                <label class="field-label range-label">Corner radius
-                  <input class="number-field" type="number" min="0" value={selectedNode.style.radius ?? 0} onChange={(event) => updateSelectedStyle({ radius: Math.max(0, Number(event.currentTarget.value) || 0) })} />
-                </label>
-              )}
-              {selectedNode.type === 'text' && (
-                <>
-                  <label class="field-label text-content-label">Text content</label>
-                  <textarea class="text-area-field" rows={3} value={selectedNode.text} onChange={(event) => updateSelected({ text: event.currentTarget.value })} />
-                  <div class="field-grid single-row">
-                    <label class="field-label">Font size<input class="number-field" type="number" min="1" value={selectedNode.style.fontSize} onChange={(event) => updateSelectedStyle({ fontSize: Math.max(1, Number(event.currentTarget.value) || 1) })} /></label>
-                    <label class="field-label">Weight<input class="number-field" type="number" min="100" max="900" step="100" value={selectedNode.style.fontWeight} onChange={(event) => updateSelectedStyle({ fontWeight: Math.min(900, Math.max(100, Number(event.currentTarget.value) || 400)) })} /></label>
-                  </div>
-                </>
-              )}
-            </section>
-
-            <section class="property-section last-section">
-              <div class="section-title">Layer options</div>
-              <label class="toggle-row"><span>Visible</span><input type="checkbox" checked={selectedNode.visible} onChange={(event) => updateSelected({ visible: event.currentTarget.checked })} /></label>
-              <label class="toggle-row"><span>Locked</span><input type="checkbox" checked={selectedNode.locked} onChange={(event) => updateSelected({ locked: event.currentTarget.checked })} /></label>
-            </section>
-          </div>
-        ) : state.selectedNodeIds.length > 1 ? (
-          <div class="inspector-empty multi-inspector">
-            <div class="empty-icon"><Icon name="layers" /></div>
-            <strong>{state.selectedNodeIds.length} layers selected</strong>
-            <p>Drag to move the group, use the resize handles, or choose an alignment control above the canvas.</p>
-          </div>
-        ) : (
-          <div class="inspector-empty">
-            <div class="empty-icon"><Icon name="cursor" /></div>
-            <strong>Nothing selected</strong>
-            <p>Select a layer on the canvas or in the Layers panel to edit its properties.</p>
-            <div class="quick-add">
-              <button onClick={() => addNode('rect')}>+ Rectangle</button>
-              <button onClick={() => addNode('text')}>+ Text</button>
-            </div>
-          </div>
+      <LayersPanel
+        visible={windows.layersVisible}
+        width={panelResize.panelWidths.layers}
+        isResizing={panelResize.resizingPanel === 'layers'}
+        resizeHandleRef={panelResize.layersResizeHandleRef}
+        activeEditorId={activeEditorId}
+        focusedPageId={focusedPage?.id ?? undefined}
+        layerContextLabel={layerContextLabel}
+        layerContextTitle={layerContextTitle}
+        layerSourceNodes={layers.layerSourceNodes}
+        layerRows={layers.layerRows}
+        layerEffectiveStates={layers.layerEffectiveStates}
+        selectedNodeIds={focusedEditor.state.selectedNodeIds}
+        collapsedLayerIds={layers.activeCollapsedLayers ?? []}
+        layerDropTarget={layers.layerDropTarget}
+        layerRename={layers.layerRename}
+        layerRenameInputRef={layers.layerRenameInputRef}
+        layerColorPickerKey={layers.layerColorPickerKey}
+        searchQuery={layers.layerSearchQuery}
+        isSearchActive={layers.isSearchActive}
+        searchMatchedIds={layers.searchMatchedIds}
+        searchMatchCount={layers.searchMatchCount}
+        onSearchQueryChange={layers.setLayerSearchQuery}
+        onStartResize={panelResize.startPanelResize}
+        onResizeDoubleClick={panelResize.handlePanelResizeDoubleClick}
+        onResizeKeyDown={panelResize.handlePanelResizeKeyDown}
+        onHoverHint={() => toolShell.updateToolbarHint(
+          'LAYERS',
+          'Each Layer is one object. Drag an object that is off Canvas to restore it; an object already on Canvas cannot be duplicated by dragging.',
+          ['CTRL/CMD + M: MASK', 'CTRL/CMD + SHIFT + M: UNMASK'],
         )}
-      </aside>
+        onSelectLayer={layers.selectLayerFromPanel}
+        onOpenContextMenu={layers.openLayerContextMenu}
+        onStartDrag={layers.startLayerDrag}
+        onDragOver={layers.updateLayerDropTarget}
+        onDrop={layers.dropLayer}
+        onDragEnd={layers.endLayerDrag}
+        onDragLeave={layers.clearLayerDropTarget}
+        onToggleCollapsed={layers.toggleLayerCollapsed}
+        onUpdateRenameDraft={layers.updateLayerRenameDraft}
+        onFinishRename={layers.finishLayerRename}
+        onToggleColorPicker={layers.toggleLayerColorPicker}
+        onToggleLayerProperty={layers.toggleLayerPropertyFromRow}
+        components={state.project.components}
+        onUnpackComponentInstance={(nodeId) => selectionActions.unpackComponentInstance(activeEditorId, nodeId)}
+        canPaste={clipboardRef.current !== null}
+        onPasteLayers={() => selectionActions.pasteSelection(activeEditorId)}
+        onSelectAllLayers={() => focusedCommandClient.selectNodes(focusedDocument.nodes.map((node) => node.id), 'Select all layers')}
+        onQuickAddLayer={(kind) => pageActions.addNode(kind)}
+      />
 
-      <footer class="statusbar">
-        <div><span class="status-brand">F</span><span>Folio Studio <b>0.1.0</b></span></div>
-        <div class="status-center">{state.project.document.nodes.length} LAYERS <span>·</span> {state.project.document.width} × {state.project.document.height} PX</div>
-        <div class="status-right"><span class="status-ready-dot" /> LOCAL WORKSPACE</div>
-      </footer>
+      <MainCanvasWindow
+        visible={mainCanvasVisible}
+        minimized={windows.canvasMinimized}
+        closed={windows.canvasClosed}
+        floating={windows.canvasFloating}
+        position={windows.canvasPosition}
+        size={windows.canvasSize}
+        zIndex={getWindowZIndex(windows.windowOrder, 'main-canvas')}
+        document={mainCanvasDocument}
+        components={state.project.components}
+        designTokens={designSystem.designTokens}
+        assets={state.project.assets}
+        activeBreakpoint={designSystem.activeBreakpoint}
+        onChangeBreakpoint={designSystem.setActiveBreakpoint}
+        selectedNodeIds={state.selectedNodeIds}
+        selectedNodes={activeDocument.nodes.filter((node) => state.selectedNodeIds.includes(node.id))}
+        toolId={toolShell.workspaceTools.main}
+        toolOptions={toolShell.toolOptions}
+        zoom={windows.zoom}
+        pan={windows.mainView.pan}
+        canUndo={focusedEditor.state.past.length > 0}
+        canRedo={focusedEditor.state.future.length > 0}
+        onPositionChange={windows.setCanvasPosition}
+        onSizeChange={windows.setCanvasSize}
+        onFocus={() => { windows.focusWindow('main-canvas'); setActiveEditorId('main'); selectionSourceRef.current = 'canvas'; }}
+        onFocusMinimized={() => { windows.focusWindow('main-canvas'); setActiveEditorId('main'); }}
+        onHoverHint={() => toolShell.updateToolbarHint('CANVAS', 'Scroll to pan vertically; Shift + scroll to pan horizontally; Ctrl/Cmd + scroll to zoom at pointer.', ['SCROLL: PAN Y', 'SHIFT + SCROLL: PAN X', 'CTRL/CMD + SCROLL: ZOOM'])}
+        onAlign={(alignment) => selectionActions.alignSelection(alignment, 'main')}
+        onDistribute={(axis) => selectionActions.distributeSelection(axis, 'main')}
+        onUndo={() => focusedCommandClient.undo()}
+        onRedo={() => focusedCommandClient.redo()}
+        onZoomChange={windows.setZoom}
+        onResetView={windows.resetMainView}
+        onMinimize={() => windows.setCanvasMinimized(true)}
+        onRestore={() => windows.setCanvasMinimized(false)}
+        onToggleFloating={() => windows.setCanvasWindowMode(windows.canvasFloating ? 'docked' : 'floating')}
+        onClose={() => { windows.setCanvasClosed(true); windows.setCanvasMinimized(false); windows.setCanvasWindowMode('docked'); }}
+        onCloseMinimized={() => { windows.setCanvasClosed(true); windows.setCanvasMinimized(false); }}
+        onChangeToolOptions={toolShell.updateToolOptions}
+        onPathfinder={(op) => selectionActions.handlePathfinder('main', op)}
+        onConvertToPath={() => selectionActions.handleConvertToPath('main')}
+        onFlip={(axis) => selectionActions.handleFlipSelection('main', axis)}
+        onRotate90={() => selectionActions.handleRotate90('main')}
+        onSimplifyPath={() => selectionActions.handleSimplifyPath('main')}
+        onTogglePathClosed={() => selectionActions.handleTogglePathClosed('main')}
+        onSelectTool={(nextTool) => toolShell.chooseCanvasTool(nextTool, 'main')}
+        onToolOperation={(operation) => motionAutoKeyBridge.executeMainToolOperations([operation])}
+        onToolOperationBatch={(operations) => motionAutoKeyBridge.executeMainToolOperations(operations)}
+        onLayerDrop={(nodeIds) => layers.dropLayersOnCanvas(nodeIds, 'main')}
+        onDropImageFiles={(files, point) => { void handleInsertImageFiles(files, 'main', point); }}
+        onChangeBackground={(background) => { mainCommandClient.setDocumentBackground(background); }}
+        animationTimeMs={effectiveMainAnimationTimeMs}
+        hasAnimatedComponents={hasAnimatedComponentsOnMain}
+        componentAnimPlaying={componentAnimPlaying}
+        onToggleComponentAnimPlaying={toggleComponentAnimPlaying}
+        studioActions={selectionActions.createStudioActionsForTarget('main')}
+        canvasContextMenuExtras={mainCanvasContextMenuExtras}
+        motionPaths={activeEditorId === 'main' ? pathStudio.activeCanvasMotionPaths : undefined}
+        motionPathSpacingDotsByNodeId={activeEditorId === 'main' ? pathStudio.motionPathSpacingDotsByNodeId : undefined}
+        selectedMotionPathPoint={activeEditorId === 'main' ? pathStudio.selectedMotionPathPoint : null}
+        onSelectMotionPathPoint={pathStudio.setSelectedMotionPathPoint}
+        onUpdateMotionPath={activeEditorId === 'main' ? pathStudio.handleUpdateCanvasMotionPath : undefined}
+        showMorphCorrespondence={activeEditorId === 'main' && motion.motionOpen && pathStudio.showMorphCorrespondence}
+        morphCorrespondenceMetaByNodeId={activeEditorId === 'main' ? pathStudio.morphCorrespondenceMetaByNodeId : undefined}
+        onPickMorphStartVertex={activeEditorId === 'main' && motion.motionOpen ? pathStudio.handlePickMorphStartVertex : undefined}
+        nodeOverrides={
+          logicRuntimeState &&
+          (logicRuntimeState.scope === 'project' ||
+            (logicRuntimeState.scope === 'page' &&
+              (!logicRuntimeState.targetId || logicRuntimeState.targetId === activePageId)))
+            ? logicRuntimeState.nodeOverrides
+            : undefined
+        }
+      />
 
-      {notice && <div class="toast" role="status">{notice}</div>}
+      <WorkspaceSecondaryWindowsHost
+        project={state.project}
+        activePageId={activePageId}
+        activeEditorId={activeEditorId}
+        componentAssets={mergedWorkspaceAssets}
+        nodeLogicOwnerContext={nodeLogicOwnerContext}
+        onNodeLogicOwnerContextChange={setNodeLogicOwnerContext}
+        onOpenNodeLogicOwner={(owner) => {
+          if (owner.scope === 'component') {
+            const comp = state.project.components.find((c) => c.id === owner.componentId);
+            if (comp) {
+              componentMaster.openMasterComponent(comp);
+              setNotice(`Opened Component Master “${comp.name}”.`);
+            } else {
+              setNotice('Owning component was not found.');
+            }
+            return;
+          }
+          if (owner.scope === 'page') {
+            const targetPage = state.project.pages.find((p) => p.id === owner.pageId);
+            if (targetPage && targetPage.id !== activePageId) {
+              pageActions.switchPage(targetPage);
+            }
+            windows.openMainCanvas();
+            if (targetPage) setNotice(`Opened Page “${targetPage.name}”.`);
+            return;
+          }
+          windows.openMainCanvas();
+        }}
+        componentDocument={componentDocument}
+        componentCanvasDocument={componentCanvasDocument}
+        componentSelectedNodeIds={componentState.selectedNodeIds}
+        componentCanUndo={componentState.past.length > 0}
+        componentCanRedo={componentState.future.length > 0}
+        componentCanvasVisible={componentCanvasVisible}
+        pendingOpenComponentName={pendingOpenComponentName}
+        mainCommandClient={mainCommandClient}
+        componentCommandClient={componentCommandClient}
+        selectionSourceRef={selectionSourceRef}
+        windows={windows}
+        toolShell={toolShell}
+        designSystem={designSystem}
+        layers={layers}
+        selectionActions={selectionActions}
+        componentMaster={componentMaster}
+        quickInteractions={quickInteractions}
+        motion={motion}
+        motionAutoKeyBridge={motionAutoKeyBridge}
+        pathStudio={pathStudio}
+        componentCanvasContextMenuExtras={componentCanvasContextMenuExtras}
+        onSetActiveEditorId={setActiveEditorId}
+        onInsertImageFiles={handleInsertImageFiles}
+        onNotice={setNotice}
+        componentNodeOverrides={
+          logicRuntimeState &&
+          logicRuntimeState.scope === 'component' &&
+          componentMaster.editingComponent &&
+          componentMaster.editingComponent.id === logicRuntimeState.targetId
+            ? logicRuntimeState.nodeOverrides
+            : undefined
+        }
+        onRuntimeSnapshotChange={handleLogicRuntimeSnapshotChange}
+      />
+
+      <WorkspaceInspectorHost
+        project={state.project}
+        assets={activeEditorId === 'component' ? mergedWorkspaceAssets : state.project.assets}
+        activePageId={activePageId}
+        focusedDocument={focusedDocument}
+        activeEditorId={activeEditorId}
+        inspectorSelectedNode={inspectorSelectedNode}
+        inspectorSelectedNodes={inspectorSelectedNodes}
+        selectedInstanceComponent={selectedInstanceComponent}
+        instanceOverrideTargets={instanceOverrideTargets}
+        canRemoveFromCanvas={selectionSourceRef.current !== 'layers'}
+        toolOptions={toolShell.toolOptions}
+        mainCommandClient={mainCommandClient}
+        componentCommandClient={componentCommandClient}
+        focusedCommandClient={focusedCommandClient}
+        windows={windows}
+        panelResize={panelResize}
+        designSystem={designSystem}
+        selectionActions={selectionActions}
+        pageActions={pageActions}
+        componentMaster={componentMaster}
+        quickInteractions={quickInteractions}
+        motion={motion}
+        motionAutoKeyBridge={motionAutoKeyBridge}
+        pathStudio={pathStudio}
+        activeStudioActions={activeStudioActions}
+        onChooseTool={toolShell.chooseCanvasTool}
+        onUpdateToolOptions={toolShell.updateToolOptions}
+        onUpdateToolbarHint={toolShell.updateToolbarHint}
+        onInsertImageFiles={handleInsertImageFiles}
+        onImportFontFiles={handleImportFontFiles}
+      />
+
+      <PagesRackPanel
+        panelRef={toolShell.pagesRackRef} open={windows.pagesRackOpen} pages={pages} activePageId={activePageId}
+        applications={projectApplications} activeApplicationId={activeApplication.id}
+        onSelectApplication={pageActions.switchApplication} onCreateApplication={pageActions.addApplication}
+        pageNameDraft={pageActions.pageNameDraft} onFocus={() => windows.focusWindow('pages')}
+        onPageNameDraftChange={pageActions.setPageNameDraft} onAddPage={pageActions.addPage}
+        onSwitchPage={pageActions.switchPage} onClose={toolShell.closePagesRack} onNotice={setNotice}
+      />
+
+      <ComponentRackPanel
+        panelRef={toolShell.componentRackRef} open={windows.componentRackOpen} components={ownedComponents}
+        activeApplicationId={activeApplication.id} activeApplicationName={activeApplication.name}
+        onSetComponentScope={componentMaster.setComponentScope}
+        designTokens={designSystem.designTokens} assets={mergedWorkspaceAssets} searchQuery={toolShell.componentRackSearch}
+        canSaveSelection={selectedNodes.length > 0} renamingComponentId={componentMaster.renamingComponentId}
+        componentNameDraft={componentMaster.componentNameDraft} onSearchChange={toolShell.setComponentRackSearch}
+        onCreateNewMaster={componentMaster.createNewMasterComponent}
+        onSaveSelection={() => componentMaster.saveNodesAsComponent(focusedEditor.selectedNodes, focusedDocument.nodes)}
+        onClose={toolShell.closeComponentRack} onInsertComponent={pageActions.insertOwnedComponent}
+        onEditMaster={componentMaster.openMasterComponent}
+        onStartRename={(c) => { componentMaster.setRenamingComponentId(c.id); componentMaster.setComponentNameDraft(c.name); }}
+        onRenameDraftChange={componentMaster.setComponentNameDraft} onCommitRename={componentMaster.renameComponent}
+        onCancelRename={() => componentMaster.setRenamingComponentId(null)} onDuplicateComponent={componentMaster.duplicateComponent}
+        onDeleteComponent={(component) => { void componentMaster.deleteComponent(component); }}
+        onToggleNodeLogic={(component) => designSystem.toggleComponentNodeLogic(component)}
+      />
+
+      <StatusBar
+        layerCount={activeDocument.nodes.length}
+        documentWidth={activeDocument.width}
+        documentHeight={activeDocument.height}
+        isHydrating={isHydrating}
+        saveStatus={fileLifecycle.saveStatus}
+        componentSaveStatus={componentMaster.componentSaveStatus}
+        componentSaveError={componentMaster.componentSaveError}
+        componentCleanupPending={componentMaster.componentCleanupPending}
+        onRetryComponentSave={componentMaster.retryComponentCanvasSave}
+        onRetryComponentCleanup={() => { void componentMaster.retryComponentBufferCleanup(); }}
+      />
+
+      <WorkspaceShellOverlays
+        project={state.project}
+        activePage={activePage}
+        pages={pages}
+        activeDocument={activeDocument}
+        componentDocument={componentDocument}
+        activeEditorId={activeEditorId}
+        selectedMainNodeId={state.selectedNodeId}
+        mainSelectedNodeIds={state.selectedNodeIds}
+        componentSelectedNodeIds={componentState.selectedNodeIds}
+        historyUndoCount={state.past.length}
+        historyRedoCount={state.future.length}
+        isHydrating={isHydrating}
+        canPaste={clipboardRef.current !== null}
+        notice={notice}
+        mainCommandClient={mainCommandClient}
+        focusedCommandClient={focusedCommandClient}
+        getCommandClient={getCommandClient}
+        selectionSourceRef={selectionSourceRef}
+        activeMotionPage={activeMotionPage}
+        activeMotionProject={activeMotionProject}
+        motionExportProject={motionExportProject}
+        activeMotionSelectedNodeIds={activeMotionSelectedNodeIds}
+        windows={windows}
+        toolShell={toolShell}
+        designSystem={designSystem}
+        layers={layers}
+        selectionActions={selectionActions}
+        componentMaster={componentMaster}
+        dialogs={dialogs}
+        fileLifecycle={fileLifecycle}
+        motion={motion}
+        pathStudio={pathStudio}
+        onSetActiveEditorId={setActiveEditorId}
+        onDeleteLayersSafely={deleteLayersSafely}
+        onNotice={setNotice}
+      />
     </div>
   );
 }

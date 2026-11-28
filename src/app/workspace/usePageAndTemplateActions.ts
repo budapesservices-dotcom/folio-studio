@@ -1,0 +1,306 @@
+import { useRef, useState } from 'preact/hooks';
+import {
+  createApplicationWithHomePage,
+  getActiveApplication,
+  getActiveApplicationId,
+  getProjectApplications,
+} from '../../core/document/applications';
+import { createEmptyDocument, createFrameNode, createNodeForDocument, createTriangleNode } from '../../core/document/factory';
+import { createComponentInstance, wouldCreateComponentCycle } from '../../core/document/components';
+import type { ComponentDefinition, FolioDocument, FolioPage, FolioProject } from '../../core/document/types';
+import type { StudioTemplateDefinition, TemplateInsertMode } from '../../core/document/templates';
+import type { CanvasToolId } from '../../engines/canvas/tools/types';
+import type { EditorTarget } from '../editorContext';
+import type { MainCanvasCommandClient } from '../mainCanvasCommandClient';
+
+let cachedTemplatesModule: typeof import('../../core/document/templates') | null = null;
+
+export interface UsePageAndTemplateActionsOptions {
+  project: FolioProject;
+  activeEditorId: EditorTarget;
+  editingComponentId?: string | null;
+  activeDocument: FolioDocument;
+  focusedDocument: FolioDocument;
+  isHydrating: boolean;
+  mainCommandClient: MainCanvasCommandClient;
+  focusedCommandClient: MainCanvasCommandClient;
+  setActiveEditorId: (target: EditorTarget) => void;
+  setWorkspaceTools: (updater: (current: Record<EditorTarget, CanvasToolId>) => Record<EditorTarget, CanvasToolId>) => void;
+  setToolRackOpen: (rack: string | null) => void;
+  setInspectorVisible: (visible: boolean) => void;
+  openMainCanvas: () => void;
+  closePagesRack: () => void;
+  setNotice: (message: string) => void;
+}
+
+export function usePageAndTemplateActions({
+  project,
+  activeEditorId,
+  editingComponentId = null,
+  activeDocument,
+  focusedDocument,
+  isHydrating,
+  mainCommandClient,
+  focusedCommandClient,
+  setActiveEditorId,
+  setWorkspaceTools,
+  setToolRackOpen,
+  setInspectorVisible,
+  openMainCanvas,
+  closePagesRack,
+  setNotice,
+}: UsePageAndTemplateActionsOptions) {
+  const [templateInsertMode, setTemplateInsertMode] = useState<TemplateInsertMode>('nodes');
+  const templateInsertCountRef = useRef(0);
+  const [pageNameDraft, setPageNameDraft] = useState('');
+
+  const addNode = (type: 'rect' | 'ellipse' | 'triangle' | 'text' | 'frame') => {
+    if (isHydrating || !focusedDocument) return;
+    const idx = focusedDocument.nodes.length;
+    const stagger = (idx % 5) * 18;
+    const node =
+      type === 'triangle'
+        ? createTriangleNode(
+            Math.max(24, Math.round(focusedDocument.width / 2 - 90) + stagger),
+            Math.max(24, Math.round(focusedDocument.height / 2 - 80) + stagger),
+            Math.min(180, Math.max(64, Math.round(focusedDocument.width * 0.4))),
+            Math.min(160, Math.max(64, Math.round(focusedDocument.height * 0.4))),
+          )
+        : type === 'frame'
+          ? createFrameNode(
+              Math.max(24, Math.round(focusedDocument.width / 2 - 160) + stagger),
+              Math.max(24, Math.round(focusedDocument.height / 2 - 110) + stagger),
+              Math.min(320, Math.max(80, Math.round(focusedDocument.width * 0.6))),
+              Math.min(220, Math.max(80, Math.round(focusedDocument.height * 0.5))),
+            )
+          : createNodeForDocument(type, focusedDocument);
+    focusedCommandClient.createNodes([node], `Create ${type} node`);
+    setInspectorVisible(true);
+  };
+
+  const insertTemplate = (template: StudioTemplateDefinition, requestedMode: TemplateInsertMode) => {
+    if (isHydrating) return;
+    const effectiveMode: TemplateInsertMode = activeEditorId === 'component' ? 'nodes' : requestedMode;
+    const staggerIndex = templateInsertCountRef.current;
+    templateInsertCountRef.current += 1;
+
+    const executeInsert = ({
+      buildTemplateComponentAndInstance,
+      buildTemplatePageBundle,
+      computeTemplateInsertionOrigin,
+      instantiateTemplateBundle,
+      instantiateTemplateNodes,
+    }: typeof import('../../core/document/templates')) => {
+      if (effectiveMode === 'page' && activeEditorId === 'main') {
+        const { page: rawPage, logicGraph } = buildTemplatePageBundle(template, project.pages);
+        const page: FolioPage = project.applications && project.applications.length > 0
+          ? { ...rawPage, applicationId: getActiveApplicationId(project) }
+          : rawPage;
+        const txResult = mainCommandClient.createPageWithLogic(
+          page,
+          logicGraph,
+          `Create page from "${template.name}"`,
+        );
+        if (txResult.status === 'applied') {
+          setWorkspaceTools((current) => ({ ...current, main: 'select' }));
+          setToolRackOpen(null);
+          closePagesRack();
+          openMainCanvas();
+          setInspectorVisible(true);
+          const logicSummary = logicGraph ? ` · ${logicGraph.nodes.length} logic nodes ready` : '';
+          setNotice(`Created page “${page.name}” (${page.document.nodes.length} layers${logicSummary}).`);
+        }
+        return;
+      }
+
+      const origin = computeTemplateInsertionOrigin(focusedDocument, template, staggerIndex);
+
+      if (effectiveMode === 'component' && activeEditorId === 'main') {
+        const existingNames = project.components.map((item) => item.name);
+        const { component, instance, componentLogicGraph } = buildTemplateComponentAndInstance(
+          template,
+          origin,
+          existingNames,
+        );
+        const txResult = mainCommandClient.createComponentWithInstance(
+          component,
+          instance,
+          `Insert "${template.name}" as component`,
+          componentLogicGraph,
+        );
+        if (txResult.status === 'applied') {
+          mainCommandClient.selectNodes([instance.id], `Select inserted ${component.name} instance`);
+          setWorkspaceTools((current) => ({ ...current, main: 'select' }));
+          setToolRackOpen(null);
+          setInspectorVisible(true);
+          const logicSummary = componentLogicGraph
+            ? ` + ${componentLogicGraph.nodes.length} logic nodes`
+            : '';
+          setNotice(`Inserted “${component.name}” as Master Component + linked Instance${logicSummary}.`);
+        }
+        return;
+      }
+
+      if (activeEditorId === 'main') {
+        const { nodes, logicGraph, logicNodeCount } = instantiateTemplateBundle(template, origin, {
+          scope: 'page',
+          targetId: project.activePageId,
+        });
+        const result = logicGraph
+          ? mainCommandClient.insertTemplateWithLogic(nodes, logicGraph, `Insert "${template.name}" template`)
+          : mainCommandClient.createNodes(nodes, `Insert "${template.name}" template`);
+        if (result.status === 'applied') {
+          const rootIds = nodes.filter((node) => !node.parentId).map((node) => node.id);
+          mainCommandClient.selectNodes(rootIds.length > 0 ? rootIds : [nodes[0].id], `Select inserted ${template.name}`);
+          setWorkspaceTools((current) => ({ ...current, main: 'select' }));
+          setToolRackOpen(null);
+          setInspectorVisible(true);
+          const logicSummary = logicNodeCount > 0 ? ` · ${logicNodeCount} logic nodes ready` : '';
+          setNotice(`Inserted “${template.name}” (${nodes.length} layers${logicSummary}).`);
+        }
+        return;
+      }
+
+      const nodes = instantiateTemplateNodes(template, origin);
+      const result = focusedCommandClient.createNodes(nodes, `Insert "${template.name}" template`);
+      if (result.status === 'applied') {
+        const rootIds = nodes.filter((node) => !node.parentId).map((node) => node.id);
+        focusedCommandClient.selectNodes(rootIds.length > 0 ? rootIds : [nodes[0].id], `Select inserted ${template.name}`);
+        setWorkspaceTools((current) => ({ ...current, [activeEditorId]: 'select' }));
+        setToolRackOpen(null);
+        setInspectorVisible(true);
+        setNotice(`Inserted “${template.name}” (${nodes.length} layers).`);
+      }
+    };
+
+    if (cachedTemplatesModule) {
+      executeInsert(cachedTemplatesModule);
+      return;
+    }
+
+    void import('../../core/document/templates')
+      .then((mod) => {
+        cachedTemplatesModule = mod;
+        executeInsert(mod);
+      })
+      .catch((error: unknown) => {
+        console.error('Folio could not instantiate the selected template:', error);
+        setNotice('Unable to insert template.');
+      });
+  };
+
+  const switchPage = (page: FolioPage) => {
+    if (isHydrating || page.id === project.activePageId) return;
+    setActiveEditorId('main');
+    mainCommandClient.setActivePage(page.id, 'Switch active page');
+    closePagesRack();
+    setInspectorVisible(true);
+    setNotice(`Switched to ${page.name}.`);
+  };
+
+  const addPage = () => {
+    if (isHydrating) return;
+    const name = pageNameDraft.trim();
+    if (!name) return;
+    const activeApp = getActiveApplication(project);
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `page-${project.pages.length + 1}`;
+    const routePrefix = activeApp.basePath !== '/' ? activeApp.basePath.replace(/\/+$/, '') : '';
+    const route = `${routePrefix}/${slug}`;
+    if (project.pages.some((page) => page.route === route)) {
+      setNotice('A page with this route already exists.');
+      return;
+    }
+    const id = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}`;
+    const document = {
+      ...createEmptyDocument(name, activeDocument.width, activeDocument.height),
+      background: activeDocument.background,
+    };
+    const nextPage: FolioPage = project.applications && project.applications.length > 0
+      ? { id, name, route, applicationId: activeApp.id, document }
+      : { id, name, route, document };
+    mainCommandClient.createPage(nextPage, 'Create page');
+    setPageNameDraft('');
+    closePagesRack();
+    setInspectorVisible(true);
+    setNotice(`Created ${name}.`);
+  };
+
+  const addApplication = (rawName: string) => {
+    if (isHydrating) return;
+    const name = rawName.trim();
+    if (!name) return;
+    const { application, homePage } = createApplicationWithHomePage(project, name, {
+      width: activeDocument.width,
+      height: activeDocument.height,
+      background: activeDocument.background,
+    });
+    const result = mainCommandClient.createApplication(application, homePage, `Create application "${application.name}"`);
+    if (result.status === 'applied') {
+      setActiveEditorId('main');
+      openMainCanvas();
+      setInspectorVisible(true);
+      setNotice(`Created application “${application.name}” (${application.basePath}).`);
+    }
+  };
+
+  const switchApplication = (applicationId: string) => {
+    if (isHydrating) return;
+    const currentActiveId = getActiveApplicationId(project);
+    if (applicationId === currentActiveId) return;
+    const targetApp = getProjectApplications(project).find((app) => app.id === applicationId);
+    if (!targetApp) return;
+    const result = mainCommandClient.setActiveApplication(applicationId, `Switch to ${targetApp.name}`);
+    if (result.status === 'applied') {
+      setActiveEditorId('main');
+      openMainCanvas();
+      setNotice(`Switched to application “${targetApp.name}”.`);
+    }
+  };
+
+  const commitProjectName = (value: string) => {
+    if (isHydrating) return;
+    const name = value.trim();
+    if (name && name !== project.metadata.name) {
+      mainCommandClient.renameProject(name);
+    }
+  };
+
+  const insertOwnedComponent = (component: ComponentDefinition) => {
+    if (isHydrating) return;
+    if (activeEditorId === 'component' && editingComponentId && editingComponentId !== component.id) {
+      if (wouldCreateComponentCycle(project.components, editingComponentId, component.id)) {
+        setNotice(`Cannot nest “${component.name}” here: circular component dependency detected.`);
+        return;
+      }
+      const offset = focusedDocument.nodes.length;
+      const instance = createComponentInstance(component, 24 + (offset % 4) * 20, 24 + (offset % 4) * 20);
+      const result = focusedCommandClient.createNodes([instance], 'Insert nested component instance');
+      if (result.status !== 'applied') return;
+      setInspectorVisible(true);
+      setNotice(`Nested instance of “${component.name}” added to Component Canvas.`);
+      return;
+    }
+    const offset = project.pages.find((page) => page.id === project.activePageId)?.document.nodes.length ?? 0;
+    const instance = createComponentInstance(component, 150 + (offset % 4) * 28, 130 + (offset % 4) * 28);
+    const result = mainCommandClient.createNodes([instance], 'Insert component instance');
+    if (result.status !== 'applied') return;
+    openMainCanvas();
+    setInspectorVisible(true);
+    setNotice(`Linked instance of “${component.name}” added to Main Canvas.`);
+  };
+
+  return {
+    templateInsertMode,
+    setTemplateInsertMode,
+    pageNameDraft,
+    setPageNameDraft,
+    addNode,
+    insertTemplate,
+    switchPage,
+    addPage,
+    addApplication,
+    switchApplication,
+    commitProjectName,
+    insertOwnedComponent,
+  };
+}
