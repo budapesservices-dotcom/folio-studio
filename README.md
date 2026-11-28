@@ -15,7 +15,7 @@ Open `http://127.0.0.1:5173`.
 
 On Windows, `RUN-FOLIO.bat` checks the supported Node.js range, installs dependencies when needed, and starts the development server.
 
-## GitHub Codespaces
+## GitHub Codespaces.
 
 1. Open the repository on GitHub.
 2. Choose **Code → Codespaces → Create codespace on main**.
