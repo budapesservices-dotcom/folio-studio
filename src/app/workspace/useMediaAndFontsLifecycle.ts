@@ -97,9 +97,15 @@ export function useMediaAndFontsLifecycle({
         });
 
         if (targetEditor === 'component') {
-          mainCommandClient.upsertAsset(ingested.asset, `Register asset "${ingested.asset.name}"`);
-          const res = componentCommandClient.createNodes([imageNode], `Insert image "${imageNode.name}"`);
-          if (res.status === 'applied') insertedCount += 1;
+          const res = componentCommandClient.insertImageWithAsset(
+            ingested.asset,
+            imageNode,
+            `Insert image "${imageNode.name}"`,
+          );
+          if (res.status === 'applied') {
+            mainCommandClient.upsertAsset(ingested.asset, `Register asset "${ingested.asset.name}"`);
+            insertedCount += 1;
+          }
         } else {
           const res = mainCommandClient.insertImageWithAsset(
             ingested.asset,

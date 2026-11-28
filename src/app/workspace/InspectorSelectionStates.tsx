@@ -69,9 +69,9 @@ export function InspectorMultiSelectionView({
             class="inspector-combine-btn"
             data-testid="inspector-combine-btn"
             onClick={studioActions.onCombineSelection}
-            title="Unify all selected objects into 1 single object"
+            title="Render selected layers into 1 standalone SVG image"
           >
-            Combine into 1 Object ({effectiveSelectedCount})
+            Render to SVG ({effectiveSelectedCount})
           </button>
         )}
         {(hasConvertibleInMulti || hasPathsInMulti) && (

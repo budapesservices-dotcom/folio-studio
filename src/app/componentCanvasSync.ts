@@ -2,6 +2,7 @@ import { createInitialProject } from '../core/document/factory';
 import { areDocumentsStructurallyEqual } from '../core/document/equality';
 import type {
   AnimationClip,
+  AssetReference,
   ComponentDefinition,
   DesignTokenCollection,
   FolioDocument,
@@ -136,6 +137,7 @@ export function reconcileComponentCanvasSyncSession(
 export function createComponentCanvasBufferProject(
   master: ComponentDefinition,
   designTokens?: DesignTokenCollection,
+  assets?: readonly AssetReference[],
 ): FolioProject {
   const project = createInitialProject(master.name);
   project.metadata.id = 'folio-component-canvas';
@@ -156,6 +158,9 @@ export function createComponentCanvasBufferProject(
   }
   if (designTokens) {
     project.designTokens = designTokens;
+  }
+  if (assets && assets.length > 0) {
+    project.assets = assets.map((asset) => ({ ...asset }));
   }
   return project;
 }

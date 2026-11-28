@@ -26,7 +26,11 @@ import {
 } from '../core/document/styling';
 import { getSvgTextAnchorAndX, wrapTextLines } from '../core/document/typography';
 import { serializePathPointsToSvgD } from '../core/document/vector';
-import { resolvePortableAssetUrl } from '../core/persistence/assetStore';
+import {
+  extractAssetBinaryBytesSync,
+  resolvePortableAssetUrl,
+  sanitizeSvgMarkup,
+} from '../core/persistence/assetStore';
 import {
   buildFrameClipAncestorMap,
   buildLayerClipMaskMap,
@@ -55,6 +59,13 @@ export interface VisualExportOptions {
   embedAnimations?: boolean;
   /** Optional active animation clip for the root document when `embedAnimations` is true. */
   activeClip?: AnimationClip | null;
+  /** Optional custom SVG viewBox (used for cropped selection rendering with exact coordinates). */
+  viewBox?: { x: number; y: number; width: number; height: number };
+  /**
+   * Optional allow-list of node IDs to emit as visible artwork while keeping all other
+   * document nodes (e.g. unselected clip mask bases and frame clip ancestors) available for `<defs>`.
+   */
+  renderOnlyNodeIds?: ReadonlySet<string>;
 }
 
 function escapeXml(value: string): string {
@@ -145,6 +156,44 @@ function imageFitToPreserveAspectRatio(fit: ImageFitMode): string {
   if (fit === 'contain') return 'xMidYMid meet';
   if (fit === 'fill') return 'none';
   return 'xMidYMid slice';
+}
+
+function parseInlineSvgImage(
+  asset: AssetReference,
+  idPrefix: string,
+): { viewBox: string; innerMarkup: string } | null {
+  const bytes = extractAssetBinaryBytesSync(asset);
+  if (!bytes || bytes.byteLength === 0) return null;
+  const raw = new TextDecoder().decode(bytes);
+  const sanitized = sanitizeSvgMarkup(raw).trim();
+  const openTagMatch = /<svg\b([^>]*)>([\s\S]*?)<\/svg>/i.exec(sanitized);
+  if (!openTagMatch) return null;
+  const attrs = openTagMatch[1] ?? '';
+  let inner = (openTagMatch[2] ?? '').trim();
+
+  const vbMatch = /\bviewBox\s*=\s*["']([^"']+)["']/i.exec(attrs);
+  const widthMatch = /\bwidth\s*=\s*["']([0-9.]+)(?:px)?["']/i.exec(attrs);
+  const heightMatch = /\bheight\s*=\s*["']([0-9.]+)(?:px)?["']/i.exec(attrs);
+  const fallbackW = Math.max(1, Number(widthMatch?.[1]) || asset.width || 100);
+  const fallbackH = Math.max(1, Number(heightMatch?.[1]) || asset.height || 100);
+  const viewBox = vbMatch?.[1]?.trim() || `0 0 ${fallbackW} ${fallbackH}`;
+
+  // Namespace internal IDs to prevent <defs> collisions when nesting SVGs.
+  const collectedIds = new Set<string>();
+  const idScan = /\bid\s*=\s*["']([^"']+)["']/gi;
+  let idMatch: RegExpExecArray | null = null;
+  while ((idMatch = idScan.exec(inner)) !== null) {
+    if (idMatch[1]) collectedIds.add(idMatch[1]);
+  }
+  if (collectedIds.size > 0) {
+    const remap = (id: string) => (collectedIds.has(id) ? `${idPrefix}${id}` : id);
+    inner = inner
+      .replace(/\bid\s*=\s*(["'])([^"']+)\1/gi, (_m, q: string, id: string) => `id=${q}${remap(id)}${q}`)
+      .replace(/url\(\s*#([^)\s'"]+)\s*\)/gi, (_m, id: string) => `url(#${remap(id)})`)
+      .replace(/(\b(?:xlink:)?href\s*=\s*)(["'])#([^"']+)\2/gi, (_m, attr: string, q: string, id: string) => `${attr}${q}#${remap(id)}${q}`);
+  }
+
+  return { viewBox, innerMarkup: inner };
 }
 
 function formatRotationTransform(node: Pick<DesignNode, 'x' | 'y' | 'width' | 'height' | 'rotation'>): string {
@@ -488,11 +537,18 @@ function serializePrimitiveNode(
         : `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="${maskFill}" />`;
     } else {
       const asset = assetById.get(imgNode.assetId);
-      const href = resolvePortableAssetUrl(asset);
+      const isSvgAsset = Boolean(asset && asset.mimeType.trim().toLowerCase() === 'image/svg+xml');
+      const inlineSvg = isSvgAsset && asset
+        ? parseInlineSvgImage(asset, `${prefix}-svgimg-${sanitizeIdSegment(imgNode.id)}-`)
+        : null;
+      const href = inlineSvg ? null : resolvePortableAssetUrl(asset);
       const clipAttr = hasRadiusClip ? ` clip-path="url(#${imageClipId(prefix, imgNode.id)})"` : '';
-      const imgMarkup = href
-        ? `<image href="${escapeXml(href)}" x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}" preserveAspectRatio="${imageFitToPreserveAspectRatio(imgNode.style.fit)}"${clipAttr} />`
-        : `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="#1E2534" stroke="#4B5A78" stroke-width="1.5" stroke-dasharray="6 4" />`;
+      const preserveRatio = imageFitToPreserveAspectRatio(imgNode.style.fit);
+      const imgMarkup = inlineSvg
+        ? `<svg x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}" viewBox="${escapeXml(inlineSvg.viewBox)}" preserveAspectRatio="${preserveRatio}"${clipAttr}>${inlineSvg.innerMarkup}</svg>`
+        : href
+          ? `<image href="${escapeXml(href)}" x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}" preserveAspectRatio="${preserveRatio}"${clipAttr} />`
+          : `<rect x="${imgNode.x}" y="${imgNode.y}" width="${imgNode.width}" height="${imgNode.height}"${rxAttr} fill="#1E2534" stroke="#4B5A78" stroke-width="1.5" stroke-dasharray="6 4" />`;
       const strokeMarkup = imgNode.style.stroke && imgNode.style.stroke !== 'none' && (imgNode.style.strokeWidth ?? 0) > 0
         ? usePerCornerPath && radii
           ? `<path d="${escapeXml(buildRoundedRectPathD(imgNode.x, imgNode.y, imgNode.width, imgNode.height, radii.topLeft, radii.topRight, radii.bottomRight, radii.bottomLeft))}" fill="none" stroke="${escapeXml(imgNode.style.stroke)}" stroke-width="${imgNode.style.strokeWidth}" />`
@@ -585,6 +641,8 @@ function serializeClipMaskArtwork(
 
 function serializeDefs(
   nodes: readonly DesignNode[],
+  maskX: number,
+  maskY: number,
   width: number,
   height: number,
   componentById: ReadonlyMap<string, ComponentDefinition>,
@@ -644,7 +702,7 @@ function serializeDefs(
     if (!base) continue;
     const artwork = serializeClipMaskArtwork(base, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, '#fff', animationTimeMs);
     defsParts.push(
-      `<mask id="${maskId(prefix, baseId)}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}"><rect x="0" y="0" width="${width}" height="${height}" fill="#000" />${artwork}</mask>`,
+      `<mask id="${maskId(prefix, baseId)}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="${maskX}" y="${maskY}" width="${width}" height="${height}"><rect x="${maskX}" y="${maskY}" width="${width}" height="${height}" fill="#000" />${artwork}</mask>`,
     );
   }
 
@@ -653,7 +711,7 @@ function serializeDefs(
     if (!base) continue;
     const artwork = serializeClipMaskArtwork(base, nodes, componentById, assetById, prefix, nodeById, tokens, visitedComponentIds, depth, '#000', animationTimeMs);
     defsParts.push(
-      `<mask id="${outsideMaskId(prefix, baseId)}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width="${width}" height="${height}"><rect x="0" y="0" width="${width}" height="${height}" fill="#fff" />${artwork}</mask>`,
+      `<mask id="${outsideMaskId(prefix, baseId)}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="${maskX}" y="${maskY}" width="${width}" height="${height}"><rect x="${maskX}" y="${maskY}" width="${width}" height="${height}" fill="#fff" />${artwork}</mask>`,
     );
   }
 
@@ -704,6 +762,9 @@ function serializeNodesBlock(
   animationTimeMs?: number,
   embedAnimations = false,
   activeClip: AnimationClip | null = null,
+  maskOriginX = 0,
+  maskOriginY = 0,
+  renderOnlyNodeIds?: ReadonlySet<string>,
 ): string {
   const nodeById = new Map(canvasNodes.map((node) => [node.id, node]));
   const clipMaskMap = buildLayerClipMaskMap(canvasNodes, nodeById);
@@ -712,6 +773,8 @@ function serializeNodesBlock(
 
   const defs = serializeDefs(
     canvasNodes,
+    maskOriginX,
+    maskOriginY,
     width,
     height,
     componentById,
@@ -730,6 +793,7 @@ function serializeNodesBlock(
   const renderedNodes = getLayerRenderOrder(canvasNodes)
     .filter((node) => {
       if (node.type === 'group') return false;
+      if (renderOnlyNodeIds && !renderOnlyNodeIds.has(node.id)) return false;
       const state = states.get(node.id);
       if (!state?.visible) return false;
       const maskIds = clipMaskMap.get(node.id) ?? [];
@@ -851,6 +915,10 @@ export function serializeDocumentToSvgString(
   const effectiveDocWidth = getBreakpointCanvasWidth(doc.width, breakpoint);
   const width = Math.max(1, Math.round(effectiveDocWidth));
   const height = Math.max(1, Math.round(doc.height));
+  const vbX = options.viewBox ? options.viewBox.x : 0;
+  const vbY = options.viewBox ? options.viewBox.y : 0;
+  const vbWidth = options.viewBox ? Math.max(1, options.viewBox.width) : width;
+  const vbHeight = options.viewBox ? Math.max(1, options.viewBox.height) : height;
   const resolvedNodes = computeAutoLayoutNodes(doc.nodes, {
     breakpoint,
     tokens: options.designTokens,
@@ -869,13 +937,13 @@ export function serializeDocumentToSvgString(
     doc.background !== '#00000000',
   );
   const bgMarkup = hasBackground
-    ? `<rect x="0" y="0" width="${width}" height="${height}" fill="${escapeXml(doc.background)}" />`
+    ? `<rect x="${vbX}" y="${vbY}" width="${vbWidth}" height="${vbHeight}" fill="${escapeXml(doc.background)}" />`
     : '';
 
   const content = serializeNodesBlock(
     canvasNodes,
-    width,
-    height,
+    vbWidth,
+    vbHeight,
     componentById,
     assetById,
     prefix,
@@ -888,11 +956,14 @@ export function serializeDocumentToSvgString(
     options.animationTimeMs,
     Boolean(options.embedAnimations),
     options.activeClip ?? null,
+    vbX,
+    vbY,
+    options.renderOnlyNodeIds,
   );
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${vbWidth}" height="${vbHeight}" viewBox="${vbX} ${vbY} ${vbWidth} ${vbHeight}">`,
     titleMarkup,
     bgMarkup,
     content,

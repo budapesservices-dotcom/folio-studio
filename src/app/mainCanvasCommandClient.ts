@@ -244,6 +244,13 @@ export interface MainCanvasCommandClient {
     description?: string,
     selectIds?: readonly string[],
   ): NativeCommandResult;
+  replaceNodesWithAsset(
+    asset: AssetReference,
+    removeIds: readonly string[],
+    insertNodes: readonly DesignNode[],
+    description?: string,
+    selectIds?: readonly string[],
+  ): NativeCommandTransactionResult;
   replaceNodeWithNodes(
     nodeId: string,
     nodes: readonly DesignNode[],
@@ -852,6 +859,54 @@ export function createWorkspaceCommandClient(
         },
         description,
       );
+    },
+
+    replaceNodesWithAsset(
+      asset,
+      removeIds,
+      insertNodes,
+      description = 'Render selection to SVG',
+      selectIds,
+    ) {
+      const astView = getActiveAstView();
+      const project = store.getSnapshot().editorState.project;
+      const projectId = project.metadata.id;
+      const transactionId = createCommandId();
+      const alreadyExists = project.assets.some(
+        (item) => item.id === asset.id || (asset.sha256 && item.sha256 === asset.sha256),
+      );
+      const commands: NativeCommandEnvelope<string, unknown>[] = [];
+      if (!alreadyExists) {
+        commands.push(
+          createEnvelope(
+            'asset.upsert',
+            { kind: 'project', projectId },
+            { asset: stripUndefinedEntries(asset) },
+            description,
+            transactionId,
+          ),
+        );
+      }
+      const cleanInsert = insertNodes.map((node) => stripUndefinedEntries(node));
+      commands.push(
+        createEnvelope(
+          'node.replace-many',
+          { kind: 'document', address: astView.address },
+          {
+            removeIds: [...removeIds],
+            insertNodes: cleanInsert,
+            ...(selectIds !== undefined ? { selectIds: [...selectIds] } : {}),
+          },
+          description,
+          transactionId,
+        ),
+      );
+      const result = executeNativeCommandTransaction(store, commands, buildContext());
+      if (result.status === 'rejected' && result.commandResults.length > 0) {
+        const failed = result.commandResults[result.failedCommandIndex ?? result.commandResults.length - 1];
+        if (failed) options.onRejected?.(failed);
+      }
+      return result;
     },
 
     replaceNodeWithNodes(nodeId, nodes, description = 'Replace node with nodes', animationClips) {

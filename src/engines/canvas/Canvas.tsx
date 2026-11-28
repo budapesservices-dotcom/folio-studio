@@ -2119,7 +2119,7 @@ export function Canvas({
             entries.push({
               kind: 'item',
               id: 'combine',
-              label: 'Combine into 1 Object',
+              label: 'Render to SVG',
               tone: 'accent',
               testId: 'canvas-context-combine-btn',
               onSelect: contextMenuActions.onCombineSelection,

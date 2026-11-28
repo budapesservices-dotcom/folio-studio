@@ -1098,12 +1098,17 @@ export async function ingestFontFile(
   );
 }
 
-/** Creates an ImageNode neatly fitted within maxDimension while preserving aspect ratio. */
+/** Creates an ImageNode neatly fitted within maxDimension (or exact bounds when specified) while preserving aspect ratio. */
 export function createImageNodeFromAsset(
   asset: AssetReference,
   options: {
     x: number;
     y: number;
+    width?: number;
+    height?: number;
+    fit?: ImageNode['style']['fit'];
+    parentId?: string;
+    preserveExactGeometry?: boolean;
     maxDimension?: number;
     id?: string;
     name?: string;
@@ -1111,22 +1116,41 @@ export function createImageNodeFromAsset(
 ): ImageNode {
   const natW = Math.max(1, asset.width ?? 360);
   const natH = Math.max(1, asset.height ?? 240);
-  const maxDim = options.maxDimension ?? 480;
-  const scale = Math.min(1, maxDim / Math.max(natW, natH));
-  const width = Math.max(24, Math.round(natW * scale));
-  const height = Math.max(24, Math.round(natH * scale));
+  const hasExplicitDimensions =
+    typeof options.width === 'number' &&
+    Number.isFinite(options.width) &&
+    options.width > 0 &&
+    typeof options.height === 'number' &&
+    Number.isFinite(options.height) &&
+    options.height > 0;
+  let width: number;
+  let height: number;
+  if (hasExplicitDimensions) {
+    width = options.preserveExactGeometry
+      ? Math.max(1, Math.round(options.width! * 100) / 100)
+      : Math.max(1, Math.round(options.width!));
+    height = options.preserveExactGeometry
+      ? Math.max(1, Math.round(options.height! * 100) / 100)
+      : Math.max(1, Math.round(options.height!));
+  } else {
+    const maxDim = options.maxDimension ?? 480;
+    const scale = Math.min(1, maxDim / Math.max(natW, natH));
+    width = Math.max(24, Math.round(natW * scale));
+    height = Math.max(24, Math.round(natH * scale));
+  }
   const baseName = (options.name ?? asset.name).replace(/\.[^.]+$/, '').trim() || 'Image';
 
   return {
     id: options.id ?? (globalThis.crypto?.randomUUID?.() ?? `image-${Date.now()}`),
     type: 'image',
     name: baseName,
+    ...(options.parentId ? { parentId: options.parentId } : {}),
     assetId: asset.id,
     alt: baseName,
     naturalWidth: natW,
     naturalHeight: natH,
-    x: Math.round(options.x),
-    y: Math.round(options.y),
+    x: options.preserveExactGeometry ? Math.round(options.x * 100) / 100 : Math.round(options.x),
+    y: options.preserveExactGeometry ? Math.round(options.y * 100) / 100 : Math.round(options.y),
     width,
     height,
     rotation: 0,
@@ -1135,7 +1159,7 @@ export function createImageNodeFromAsset(
     locked: false,
     onCanvas: true,
     style: {
-      fit: 'cover',
+      fit: options.fit ?? 'cover',
       radius: 0,
       stroke: 'none',
       strokeWidth: 0,

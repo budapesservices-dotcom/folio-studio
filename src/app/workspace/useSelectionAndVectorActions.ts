@@ -5,7 +5,6 @@ import { detachComponentInstanceWithAnimations } from '../../core/document/compo
 import { getActiveDocument } from '../../core/document/project';
 import { getProjectDesignTokens } from '../../core/document/tokens';
 import {
-  combineNodesIntoSingleObject,
   convertAllPathAnchors,
   convertShapeToPathNode,
   divideNodesWithPathfinder,
@@ -38,8 +37,11 @@ import {
   type StepAndRepeatConfig,
   type StudioVectorActions,
 } from './inspectorVectorHelpers';
+import { executeRenderSelectionToSvg } from '../renderSelectionToSvg';
 
 export type { StudioVectorActions };
+
+let renderSelectionToSvgInFlight = false;
 
 function clampPositiveDimension(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -290,93 +292,36 @@ export function useSelectionAndVectorActions({
   };
 
   const handleCombineSelection = (target: EditorTarget = activeEditorId) => {
-    if (isHydrating) return;
+    if (isHydrating || renderSelectionToSvgInFlight) return;
     const editor = target === 'main' ? state : componentState;
-    const doc = getActiveDocument(editor.project);
-    const layerStates = getEffectiveLayerStates(doc.nodes);
-    const selectedSet = new Set(editor.selectedNodeIds);
-
-    // Filter to top-level selected roots (ignore children whose parent is also selected)
-    const selectedRoots = doc.nodes.filter((node) => {
-      if (!selectedSet.has(node.id)) return false;
-      if (node.parentId && selectedSet.has(node.parentId)) return false;
-      const effective = layerStates.get(node.id);
-      return Boolean(effective?.visible && !effective.locked);
-    });
-
-    if (selectedRoots.length < 2) {
-      setNotice('Select at least 2 objects to combine into 1 object.');
+    if (editor.selectedNodeIds.length < 2) {
+      setNotice('Select at least 2 layers to render to SVG.');
       return;
     }
-
-    // Collect descendant leaf nodes to determine whether everything selected can be merged into 1 single vector PathNode
-    const childrenByParent = new Map<string, DesignNode[]>();
-    for (const node of doc.nodes) {
-      if (node.parentId) {
-        const list = childrenByParent.get(node.parentId);
-        if (list) list.push(node);
-        else childrenByParent.set(node.parentId, [node]);
-      }
-    }
-
-    const leafVectorNodes: DesignNode[] = [];
-    const removeIds: string[] = [];
-    let allVectorCombinable = true;
-
-    const collectSubtree = (node: DesignNode) => {
-      removeIds.push(node.id);
-      const children = childrenByParent.get(node.id) ?? [];
-      if (node.type === 'group') {
-        if (children.length === 0) return;
-        for (const child of children) collectSubtree(child);
-        return;
-      }
-      if (
-        node.type === 'rect' ||
-        node.type === 'ellipse' ||
-        node.type === 'path' ||
-        (node.type === 'frame' && children.length === 0)
-      ) {
-        leafVectorNodes.push(node);
-        return;
-      }
-      allVectorCombinable = false;
-    };
-
-    for (const root of selectedRoots) {
-      collectSubtree(root);
-    }
-
-    if (allVectorCombinable && leafVectorNodes.length >= 2) {
-      const colorBlendMode = toolOptions.colorBlendMode ?? 'linear';
-      const combined = combineNodesIntoSingleObject(leafVectorNodes, createStudioVectorId('combined'), {
-        colorBlendMode,
-        name: 'Combined Object',
-      });
-      if (combined) {
+    renderSelectionToSvgInFlight = true;
+    void executeRenderSelectionToSvg({
+      target,
+      mainProject: state.project,
+      componentProject: componentState.project,
+      selectedIds: editor.selectedNodeIds,
+      mainCommandClient: getCommandClient('main'),
+      componentCommandClient: getCommandClient('component'),
+    })
+      .then((outcome) => {
+        if (!outcome.ok) {
+          setNotice(outcome.error);
+          return;
+        }
         selectionSourceRef.current = 'canvas';
-        getCommandClient(target).replaceNodes(
-          removeIds,
-          [combined],
-          `Combine ${selectedRoots.length} objects into 1 object`,
-          [combined.id],
-        );
-        const blendTag =
-          colorBlendMode === 'linear'
-            ? 'Linear color blend'
-            : colorBlendMode === 'hard'
-              ? 'Sharp Split colors'
-              : 'Single fill';
-        setNotice(`Combined ${selectedRoots.length} objects into 1 unified object (${blendTag}).`);
-        return;
-      }
-    }
-
-    // Mixed selection (e.g. text, image, component instance, or populated frames): unify into 1 single group object
-    const rootIds = selectedRoots.map((node) => node.id);
-    selectionSourceRef.current = 'canvas';
-    getCommandClient(target).groupLayers(rootIds);
-    setNotice(`Combined ${selectedRoots.length} objects into 1 unified group object.`);
+        setInspectorVisible(true);
+        setNotice(outcome.notice);
+      })
+      .catch((error: unknown) => {
+        setNotice(error instanceof Error ? error.message : 'Failed to render selection to SVG.');
+      })
+      .finally(() => {
+        renderSelectionToSvgInFlight = false;
+      });
   };
 
   const handleDividePathfinder = (target: EditorTarget) => {

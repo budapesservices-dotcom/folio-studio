@@ -14,6 +14,7 @@ import type {
   FolioDocument,
   FolioProject,
 } from '../../core/document/types';
+import { hydrateProjectAssetsToStore } from '../../core/persistence/assetStore';
 import { loadProjectById, saveProject, withProjectWriteLock } from '../../core/persistence/indexedDb';
 import { createDebouncedAutosave } from '../debouncedAutosave';
 import { activateModalDialog, trapModalDialogKeydown } from '../modalFocus';
@@ -129,8 +130,10 @@ export function useComponentMasterLifecycle({
   useEffect(() => {
     let active = true;
     loadProjectById('folio-component-canvas')
-      .then((project) => {
+      .then(async (project) => {
         if (active && project) {
+          await hydrateProjectAssetsToStore(project).catch(() => {});
+          if (!active) return;
           componentCommandClient.replaceProject(project, 'Restore Component Canvas buffer');
         }
       })
@@ -253,7 +256,7 @@ export function useComponentMasterLifecycle({
       .find((item) => item.id === componentToCreate.id) ?? componentToCreate;
     componentSyncSessionRef.current = createComponentCanvasSyncSession(committedMaster);
     componentCommandClient.replaceProject(
-      createComponentCanvasBufferProject(committedMaster, state.project.designTokens),
+      createComponentCanvasBufferProject(committedMaster, state.project.designTokens, state.project.assets),
       'Align Component Canvas buffer with saved master',
     );
     setEditingComponentId(committedMaster.id);
@@ -277,7 +280,7 @@ export function useComponentMasterLifecycle({
     setPendingComponentOpenId(null);
     setComponentRecoveryStatus('none');
     componentCommandClient.replaceProject(
-      createComponentCanvasBufferProject(component, state.project.designTokens),
+      createComponentCanvasBufferProject(component, state.project.designTokens, state.project.assets),
       'Load master component into Component Canvas',
     );
     setEditingComponentId(component.id);
@@ -687,7 +690,7 @@ export function useComponentMasterLifecycle({
     }
     componentSyncSessionRef.current = createComponentCanvasSyncSession(master);
     componentCommandClient.replaceProject(
-      createComponentCanvasBufferProject(master, state.project.designTokens),
+      createComponentCanvasBufferProject(master, state.project.designTokens, state.project.assets),
       'Reload recovered canonical component master',
     );
     setPendingComponentOpenId(null);
@@ -736,7 +739,7 @@ export function useComponentMasterLifecycle({
       session = createComponentCanvasSyncSession(master);
       componentSyncSessionRef.current = session;
       componentCommandClient.replaceProject(
-        createComponentCanvasBufferProject(master, state.project.designTokens),
+        createComponentCanvasBufferProject(master, state.project.designTokens, state.project.assets),
         'Initialize Component Canvas buffer',
       );
       return;
@@ -762,7 +765,7 @@ export function useComponentMasterLifecycle({
       componentSyncSessionRef.current = reconciliation.session;
       setComponentRecoveryStatus('none');
       componentCommandClient.replaceProject(
-        createComponentCanvasBufferProject(master, state.project.designTokens),
+        createComponentCanvasBufferProject(master, state.project.designTokens, state.project.assets),
         'Reload Component Canvas buffer from canonical master',
       );
       return;

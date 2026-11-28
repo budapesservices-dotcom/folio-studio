@@ -254,7 +254,7 @@ export function LayerContextMenu({
           class="studio-context-menu-item is-accent"
           onClick={() => onCombineSelection(menu.editorId)}
         >
-          <span class="studio-context-menu-label">Combine into 1 Object</span>
+          <span class="studio-context-menu-label">Render to SVG</span>
         </button>
       )}
       {capabilities.canMask && (

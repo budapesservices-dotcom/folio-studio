@@ -405,7 +405,7 @@ export function GlobalToolbar({
                       disabled={isHydrating || !menuActions.canCombine}
                       onClick={() => runMenuAction(menuActions.onCombine!)}
                     >
-                      Combine into 1 Object
+                      Render to SVG
                     </button>
                   )}
                   <button type="button" role="menuitem" class="global-menu-item-with-shortcut" disabled={isHydrating || !menuActions.canUngroup} onClick={() => runMenuAction(menuActions.onUngroup)}>
@@ -526,7 +526,7 @@ export function GlobalToolbar({
                       disabled={isHydrating || !menuActions.canCombine}
                       onClick={() => runMenuAction(menuActions.onCombine!)}
                     >
-                      Combine into 1 Object
+                      Render to SVG
                     </button>
                   )}
                   <button type="button" role="menuitem" disabled={isHydrating || !menuActions.canPathfinder} onClick={() => runMenuAction(() => menuActions.onPathfinder('unite'))}>

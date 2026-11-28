@@ -459,10 +459,10 @@ export function ToolOptionsBar({
               data-testid="toolbar-combine-btn"
               disabled={!canCombine}
               onClick={studioActions.onCombineSelection}
-              title="Combine into 1 Object — unify all selected objects into one single object"
+              title="Render to SVG — render selected layers into one standalone SVG image"
             >
               <PathfinderIcon op="unite" />
-              <span>Combine</span>
+              <span>Render to SVG</span>
             </button>
           )}
 
@@ -484,16 +484,16 @@ export function ToolOptionsBar({
       )}
 
       {!canPathfinder && workspace !== 'component' && canCombine && studioActions?.onCombineSelection && (
-        <div class="studio-options-group" role="group" aria-label="Combine selected objects">
+        <div class="studio-options-group" role="group" aria-label="Render selected layers to SVG">
           <button
             type="button"
             class="studio-opt-btn is-combine-btn"
             data-testid="toolbar-combine-btn"
             onClick={studioActions.onCombineSelection}
-            title="Combine into 1 Object — unify all selected objects into one single object"
+            title="Render to SVG — render selected layers into one standalone SVG image"
           >
             <PathfinderIcon op="unite" />
-            <span>Combine into 1 Object</span>
+            <span>Render to SVG</span>
           </button>
         </div>
       )}

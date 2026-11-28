@@ -709,7 +709,9 @@ export function InspectorVectorShapingSection({
   const firstPath = selectedNode?.type === 'path' ? selectedNode : (pathNodes[0] ?? null);
   const canOffset = booleanCandidates.length > 0;
 
-  if (!canPathfinder && !canOffset && pathNodes.length === 0) return null;
+  const canRenderToSvg = selectedNodes.length >= 2 && Boolean(studioActions.onCombineSelection);
+
+  if (!canPathfinder && !canOffset && pathNodes.length === 0 && !canRenderToSvg) return null;
 
   return (
     <section class="property-section" aria-label="Vector Shaping and Path Craft">
@@ -797,14 +799,26 @@ export function InspectorVectorShapingSection({
               type="button"
               class="inspector-studio-secondary-btn"
               disabled={selectedNodes.length < 2}
-              title="Combine into 1 Object — unify all selected objects into a single object"
+              title="Render to SVG — render selected layers into one standalone SVG image"
               onClick={studioActions.onCombineSelection}
             >
               <ShapingGlyph op="unite" />
-              <span>Combine into 1 Object</span>
+              <span>Render to SVG</span>
             </button>
           )}
         </>
+      )}
+
+      {!canPathfinder && activeEditorId !== 'component' && canRenderToSvg && studioActions.onCombineSelection && (
+        <button
+          type="button"
+          class="inspector-studio-secondary-btn"
+          title="Render to SVG — render selected layers into one standalone SVG image"
+          onClick={studioActions.onCombineSelection}
+        >
+          <ShapingGlyph op="unite" />
+          <span>Render to SVG</span>
+        </button>
       )}
 
       {selectedNode?.type === 'path' && selectedNode.shapeMeta && (
